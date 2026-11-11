@@ -10,17 +10,17 @@ use crate::client::peer_directory::RemovalCause;
 use crate::client::DesktopPaths;
 use defra_p2p_adapter::P2pDocumentRequest;
 use defra_p2p_adapter::TransportPeerId;
-use gents::runtime::agent::p2p_reconcile::enrollment_candidate::{
+use gents_p2p::p2p_reconcile::enrollment_candidate::{
     enrollment_request_input, sign_enrollment_request,
 };
-use gents::runtime::agent::p2p_reconcile::enrollment_member_authority::EnrollmentAuthorityOutcome;
-use gents::runtime::agent::p2p_reconcile::enrollment_member_authority::{
+use gents_p2p::p2p_reconcile::enrollment_member_authority::EnrollmentAuthorityOutcome;
+use gents_p2p::p2p_reconcile::enrollment_member_authority::{
     apply_current_generational_conflicts, raw_authority_targets, scoped_authority_outcomes,
 };
-use gents::runtime::agent::p2p_reconcile::enrollment_projection::{
+use gents_p2p::p2p_reconcile::enrollment_projection::{
     project_desktop_approval, ApprovedStatusEnrollment, DesktopApprovalProjection,
 };
-use gents::runtime::agent::p2p_reconcile::enrollment_rows::{
+use gents_p2p::p2p_reconcile::enrollment_rows::{
     EnrollmentRevisionRow, EnrollmentRouteReceiptRow, STATUS_ENROLLMENT_QUERY,
 };
 use gents_protocol::enrollment::derive_enrollment_id;
@@ -38,8 +38,8 @@ use std::time::Duration;
 #[serde(deny_unknown_fields)]
 struct PendingRequestCase {
     name: String,
-    requested: gents::runtime::agent::p2p_reconcile::enrollment::EnrollmentRequestAuthority,
-    current: gents::runtime::agent::p2p_reconcile::enrollment::EnrollmentRequestAuthority,
+    requested: gents_p2p::p2p_reconcile::enrollment::EnrollmentRequestAuthority,
+    current: gents_p2p::p2p_reconcile::enrollment::EnrollmentRequestAuthority,
     has_decision: bool,
     current_approval: bool,
     route_applied: bool,
@@ -61,7 +61,7 @@ fn generated_pending_request_satisfaction_matches_lean() {
     assert!(!cases.is_empty());
     for case in cases {
         assert_eq!(
-            gents::runtime::agent::p2p_reconcile::enrollment::pending_request_satisfied(
+            gents_p2p::p2p_reconcile::enrollment::pending_request_satisfied(
                 &case.requested,
                 &case.current,
                 case.has_decision,
@@ -146,7 +146,7 @@ async fn managed_enrollment_discovers_restarted_endpoint_without_changing_author
         )
         .unwrap();
         std::fs::write(
-            home.join(gents::store::local::home::RUNTIME_STATE_FILE_NAME),
+            home.join(gents_store::local::home::RUNTIME_STATE_FILE_NAME),
             json!({
                 "node_name": "managed", "node_did": live_owner,
                 "graphql": graphql, "p2p_transport": "iroh", "p2p_peer_id": live_peer,
@@ -1169,13 +1169,13 @@ fn signed_enrollment_authority_with_owner_at(
 }
 
 async fn commit_document(core: &ClientCore, stage: &'static str, mutation: &str) {
-    gents::store::config_client::ConfigAccess::write_local(&core.node_arc(), stage, mutation)
+    gents_store::config_client::ConfigAccess::write_local(&core.node_arc(), stage, mutation)
         .await
         .expect("commit enrollment authority document");
 }
 
 async fn commit_admin_pin(core: &ClientCore, authority: &SignedEnrollmentAuthority) {
-    gents::runtime::agent::p2p_reconcile::enrollment_candidate::confirm_network_admin_pin(
+    gents_p2p::p2p_reconcile::enrollment_candidate::confirm_network_admin_pin(
         &core.node_arc(),
         &authority.offer,
     )
@@ -2400,7 +2400,7 @@ async fn a_retirement_survives_an_absent_route_receipt_while_authority_is_curren
 
 #[tokio::test]
 async fn desired_materialization_rechecks_signed_authority_before_writing() {
-    use gents::store::config_client::ConfigAccess;
+    use gents_store::config_client::ConfigAccess;
     let temp = tempfile::tempdir().unwrap();
     let core = start_unsupervised_core(temp.path().join("desktop")).await;
     let admin = PrincipalIdentity::load_or_create(&crate::client::paths::DesktopPaths::from_root(
@@ -2466,9 +2466,9 @@ async fn desired_materialization_rechecks_signed_authority_before_writing() {
 
 #[tokio::test]
 async fn signed_http_advertisement_activates_an_iroh_only_runtime_endpoint() {
-    use gents::runtime::agent::p2p_reconcile::peer_registry_endpoint_upsert_mutation;
-    use gents::store::config_client::ConfigAccess;
+    use gents_p2p::p2p_reconcile::peer_registry_endpoint_upsert_mutation;
     use gents_protocol::network_token::EndpointRecord;
+    use gents_store::config_client::ConfigAccess;
 
     let temp = tempfile::tempdir().unwrap();
     let core = start_unsupervised_core(temp.path().join("desktop")).await;
@@ -2538,7 +2538,7 @@ async fn signed_http_advertisement_activates_an_iroh_only_runtime_endpoint() {
 #[tokio::test]
 async fn thin_client_publishes_signed_enrollment_without_a_node_document() -> Result<()> {
     use gents::defra_node::{AcpIdentity, DocumentPermission};
-    use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
+    use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
 
     let directory = tempfile::tempdir()?;
     let address = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?;
@@ -2709,9 +2709,9 @@ async fn thin_client_publishes_signed_enrollment_without_a_node_document() -> Re
 #[tokio::test]
 async fn thin_client_automatically_publishes_received_decision_reader() -> Result<()> {
     use gents::defra_node::{AcpIdentity, DocumentPermission, NodePermission};
-    use gents::runtime::agent::p2p_reconcile::EnrollmentOfferIssuer;
-    use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
+    use gents_p2p::p2p_reconcile::EnrollmentOfferIssuer;
     use gents_protocol::enrollment::derive_decision_id;
+    use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
 
     let directory = tempfile::tempdir()?;
     let sender = Arc::new(start_unsupervised_core(directory.path().join("server")).await);
@@ -2829,7 +2829,7 @@ async fn thin_client_automatically_publishes_received_decision_reader() -> Resul
             })
         })
         .await?;
-    let mut arrivals = gents::store::subscription_source::subscribe_collections(
+    let mut arrivals = gents_store::subscription_source::subscribe_collections(
         receiver.node.as_ref(),
         ["NetworkEnrollmentDecision"],
     )?;

@@ -82,7 +82,7 @@ async fn generated_rendered_capture_cases_fence_persist_before_send() {
         ]);
         let stream = run_loop_stream(
             model.clone(),
-            None::<crate::tools::call::hook::DefraSessionHook>,
+            None::<gents_toolcalls::call::hook::DefraSessionHook>,
             TaggedMessage::unassociated(Message::user("hi")),
             Vec::new(),
             Arc::new(Vec::new()),
@@ -169,7 +169,7 @@ async fn capture_seam_reports_distinct_attempts_and_the_repair_build_path() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("use the echo tool")),
         Vec::new(),
         Arc::new(vec![echo_tool()]),
@@ -262,7 +262,7 @@ async fn capture_seam_reports_distinct_attempts_and_the_repair_build_path() {
     }));
     let poll_result = collect_scripted_stream(run_loop_stream(
         poll_model,
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("repair the first poll")),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -332,7 +332,7 @@ async fn a_turn_after_a_repair_still_carries_the_effective_message_list() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("use the echo tool")),
         Vec::new(),
         Arc::new(vec![echo_tool()]),
@@ -387,7 +387,7 @@ async fn capture_trace_retains_ephemeral_request_context() {
 
     let collected = collect_scripted_stream(run_loop_stream(
         model,
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("hi")),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -410,8 +410,8 @@ async fn capture_trace_retains_ephemeral_request_context() {
 /// must fail the turn. `ScriptedModel` stands in for exactly that mis-wiring.
 #[tokio::test(start_paused = true)]
 async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
-    use crate::inference::rendered_request::scope::{scope_request, test_scope, CaptureScopeKind};
-    use crate::inference::rendered_request::{RenderedRequestCaptureSink, RenderedRequestContext};
+    use gents_inference::rendered_request::scope::{scope_request, test_scope, CaptureScopeKind};
+    use gents_inference::rendered_request::{RenderedRequestCaptureSink, RenderedRequestContext};
 
     for (request_id, session_id, choices) in [
         (
@@ -444,13 +444,13 @@ async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
 
         let mut loop_config = config(0);
         loop_config.on_rendered_request = Some(
-            crate::inference::rendered_request::scope::ambient_arming_sink(CaptureScopeKind::Inference),
+            gents_inference::rendered_request::scope::ambient_arming_sink(CaptureScopeKind::Inference),
         );
 
         let collected = scope_request(scope, async {
             let stream = run_loop_stream(
                 model.clone(),
-                None::<crate::tools::call::hook::DefraSessionHook>,
+                None::<gents_toolcalls::call::hook::DefraSessionHook>,
                 TaggedMessage::unassociated(Message::user("hi")),
                 Vec::new(),
                 Arc::new(Vec::new()),
@@ -477,9 +477,9 @@ async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
 
 #[tokio::test]
 async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
-    use crate::store::graphql::escape_graphql_string;
-    use crate::inference::rendered_request::capture_key as derive_capture_key;
-    use crate::inference::rendered_request::{
+    use gents_store::graphql::escape_graphql_string;
+    use gents_inference::rendered_request::capture_key as derive_capture_key;
+    use gents_inference::rendered_request::{
         DefraRenderedRequestSink, ProvenanceManifest, RenderedRequestSource, CAPTURE_VERSION,
     };
 
@@ -488,7 +488,7 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
 
     // Captures are owned by the capturing Agent, so they are read as it.
     async fn rendered_rows(
-        reader: &crate::ConfigAccess,
+        reader: &gents_store::config_client::ConfigAccess,
         capture_key: &str,
     ) -> Vec<serde_json::Value> {
         let query = format!(
@@ -506,8 +506,8 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
         // the captures. The node DID, Agent and session are real, so the sink's
         // signer and session-binding checks run unchanged.
         let key_dir = tempfile::tempdir().unwrap();
-        let root: Arc<dyn crate::NodeIdentity> = Arc::new(
-            crate::KeyIdentity::load_or_create(key_dir.path().join("node.key"), None).unwrap(),
+        let root: Arc<dyn gents_store::identity::NodeIdentity> = Arc::new(
+            gents_store::identity::KeyIdentity::load_or_create(key_dir.path().join("node.key"), None).unwrap(),
         );
         // The Lean node witness only distinguishes cases; each case's held root
         // already gives it a distinct, real node DID.
@@ -520,12 +520,12 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
                 .await
                 .unwrap(),
         );
-        crate::ensure_runtime_schemas(&node).await.unwrap();
-        let binding = crate::store::identity::provision_agent_identity(root.as_ref()).unwrap();
+        gents_store::schema::ensure_runtime_schemas(&node).await.unwrap();
+        let binding = gents_store::identity::provision_agent_identity(root.as_ref()).unwrap();
         let agent =
-            crate::store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
+            gents_store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
         let agent_did = binding.agent_did.clone();
-        crate::test_support::inference::install_test_agent_binding(
+        gents_inference::test_support::install_test_agent_binding(
             &node,
             &node_did,
             "Capture test agent",
@@ -535,7 +535,7 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
         let session_id = format!("session-{}", case.session_id);
         // The Agent creates the session it later captures into, so its own
         // reads see the physical row (a node-created row is not visible to it).
-        let agent_access = crate::store::config_client::ConfigAccess::local_managed_agent(
+        let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
             node.clone(),
             ::identity::Did::new(&agent_did).unwrap(),
             agent.as_ref(),
@@ -546,7 +546,7 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
         agent_access
             .transact_write("test.capture.session", |txn| {
                 Box::pin(async {
-                    crate::session::ensure_session_in_txn(
+                    gents_session::session::ensure_session_in_txn(
                         txn,
                         &session_id,
                         &node_did,
@@ -565,16 +565,16 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
         let sink = DefraRenderedRequestSink::new_managed(node.clone(), agent.as_ref()).unwrap();
 
         let rendered_for_witness =
-            |witness: u64| -> crate::inference::rendered_request::RenderedCompletionRequest {
+            |witness: u64| -> gents_inference::rendered_request::RenderedCompletionRequest {
                 let node_did = node_did.clone();
                 let session_id = session_id.clone();
                 let request_doc_id = format!("bae-request-doc-{}", case.request_id);
                 let assembly_trace =
-                    crate::inference::rendered_request::AssemblyTrace::from_effective_messages(
-                        crate::inference::rendered_request::AssemblyBuildPath::Budgeted,
+                    gents_inference::rendered_request::AssemblyTrace::from_effective_messages(
+                        gents_inference::rendered_request::AssemblyBuildPath::Budgeted,
                         Vec::new(),
                     );
-                crate::inference::rendered_request::RenderedCompletionRequest {
+                gents_inference::rendered_request::RenderedCompletionRequest {
                     capture_key: derive_capture_key(
                         &node_did,
                         &session_id,
@@ -649,11 +649,11 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
                 .and_then(|value| u32::try_from(value).ok())
                 .expect("numeric capture version");
             Some(
-                crate::inference::rendered_request::decode_capture_json(
+                gents_inference::rendered_request::decode_capture_json(
                     &agent_access,
                     version,
                     row["request_json"].as_str().expect("request_json string"),
-                    crate::inference::rendered_request::CapturePayloadKind::RequestBody,
+                    gents_inference::rendered_request::CapturePayloadKind::RequestBody,
                 )
                 .await
                 .expect("stored request_json decodes"),
@@ -711,8 +711,8 @@ async fn codex_affinity_survives_retry_tool_continuation_and_nested_compaction()
     }));
     let mut cfg = owned_config(4);
     cfg.provider_input_counter = Arc::new(crate::turn::provider_input::ProviderInputCounter::new(
-        crate::BackendProviderKind::ChatGptCodex,
-        crate::OpenAiWireApi::Responses,
+        gents_inference::backends::provider::BackendProviderKind::ChatGptCodex,
+        gents_loop::openai_wire::OpenAiWireApi::Responses,
         "gpt-5-codex",
     ));
     cfg.max_tokens = Some(6_000);

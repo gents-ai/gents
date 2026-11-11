@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use gents::observe::log_rate::{RateLimitConfig, RateLimitFilter};
+use gents_session::log_rate::{RateLimitConfig, RateLimitFilter};
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 fn log_rate_ceiling() -> RateLimitFilter {

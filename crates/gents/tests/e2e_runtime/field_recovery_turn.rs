@@ -7,8 +7,9 @@ use crate::support::{
     streaming_backend::StreamChunk,
     test_db,
 };
-use gents::documents::{DatastoreTools, QueryToolDecl, SurfaceToolDecl, Tools};
-use gents::{Collection, DatastoreToolSurfaceDocument, NodeIdentity};
+use gents_documents::DatastoreToolSurfaceDocument;
+use gents_documents::{DatastoreTools, QueryToolDecl, SurfaceToolDecl, Tools};
+use gents_store::{collection::Collection, identity::NodeIdentity};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{sync::Arc, time::Duration};
@@ -26,11 +27,11 @@ async fn writer_recovers_complete_large_task_contract_in_provider_input() {
     access.add_collection(READER_WORK_SDL).await.unwrap();
     let instructions = "é".repeat(2436);
     let owned_files = format!("[\"{}\"]", "x".repeat(2920));
-    let doc = gents::store::config_client::create_authored_document(
+    let doc = gents_store::config_client::create_authored_document(
         &access,
         "ReaderWork",
         &json!({"instructions": instructions, "owned_files": owned_files}),
-        gents::store::config_client::DocumentSchemaSource::UserAuthored,
+        gents_store::config_client::DocumentSchemaSource::UserAuthored,
         READER_WORK_SDL,
     )
     .await

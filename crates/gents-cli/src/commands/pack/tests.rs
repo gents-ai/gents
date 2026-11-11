@@ -5,8 +5,8 @@ use super::scope::resolve_plugin_slot_owner;
 use super::source::names_a_directory;
 use super::*;
 use crate::packs::EditedDocuments;
-use gents::pack::{PackChangeError, PackKind, PackManifest};
-use gents::plugin::authority::GrantError;
+use gents_pack::pack::{PackChangeError, PackKind, PackManifest};
+use gents_pack::plugin::authority::GrantError;
 
 #[tokio::test]
 async fn a_bare_subject_spec_is_a_pack_name_even_when_the_cwd_has_that_directory() {
@@ -44,7 +44,7 @@ fn scenario_cache_lease_excludes_pruning() {
     let home = tempfile::tempdir().unwrap();
     let pack = test_support::fixture_pack_source("documents_fixture", home.path());
     let (root, lease) = materialize_cached_pack(home.path(), &pack).unwrap();
-    let exclusive = gents::pack::materialize::cache_lock(root.parent().unwrap()).unwrap();
+    let exclusive = gents_pack::pack::materialize::cache_lock(root.parent().unwrap()).unwrap();
     assert!(exclusive.try_lock().is_err());
     drop(lease);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -64,10 +64,10 @@ fn a_document_pack_materializes_a_valid_configuration() {
     let home = tempfile::tempdir().unwrap();
     let pack = test_support::fixture_pack_source("documents_fixture", home.path());
     let root = tempfile::tempdir().unwrap();
-    gents::pack::materialize::materialize(pack.archive(), root.path()).unwrap();
-    let config = gents::pack::load_pack_authoring_config(
+    gents_pack::pack::materialize::materialize(pack.archive(), root.path()).unwrap();
+    let config = gents_pack::pack::load_pack_authoring_config(
         pack.manifest(),
-        &gents::pack::PackInstallOptions {
+        &gents_pack::pack::PackInstallOptions {
             node_did: "did:key:zPackCatalogValidationOwner".into(),
         },
         &|path| pack.asset(path).map(Vec::from),
@@ -75,7 +75,7 @@ fn a_document_pack_materializes_a_valid_configuration() {
     )
     .unwrap();
     assert!(config.agent("fixture-worker").is_some());
-    gents::documents::DesiredStateApplyPlan::from_pack_config(&config.documents).unwrap();
+    gents_documents::DesiredStateApplyPlan::from_pack_config(&config.documents).unwrap();
 }
 
 #[tokio::test]
@@ -192,10 +192,11 @@ fn document_pack_preview_shows_the_install_variable_and_its_target() {
     config["tasks"] =
         json!([{ "task_id": "research", "prompt_template": "${GENTS_TEST_3317_UNSET:-fallback}" }]);
     std::fs::write(config_path, serde_json::to_vec(&config).unwrap()).unwrap();
-    let (bytes, _) = gents::pack::archive::pack_dir(dir.path()).unwrap();
-    let archive = gents::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
+    let (bytes, _) = gents_pack::pack::archive::pack_dir(dir.path()).unwrap();
+    let archive = gents_pack::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
     let source =
-        super::source::PackSource::received(archive, gents::pack::PackSource::Installed).unwrap();
+        super::source::PackSource::received(archive, gents_pack::pack::PackSource::Installed)
+            .unwrap();
     let preview = super::install::install_variable_preview(&source, "did:key:node").unwrap();
     assert_eq!(preview["kind"], "install_literal");
     assert_eq!(preview["uses"][0]["path"], "/node/node_did");
@@ -234,13 +235,13 @@ fn dependency_preview_reads_installed_literals_instead_of_the_current_environmen
         serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
     authored["tools"][0]["display_name"] = json!("${DISPLAY_LABEL:-fallback}");
     std::fs::write(config_path, serde_json::to_vec(&authored).unwrap()).unwrap();
-    let (bytes, _) = gents::pack::archive::pack_dir(dir.path()).unwrap();
+    let (bytes, _) = gents_pack::pack::archive::pack_dir(dir.path()).unwrap();
     let source = super::source::PackSource::received(
-        gents::pack::archive::PackArchive::from_bytes(&bytes).unwrap(),
-        gents::pack::PackSource::Installed,
+        gents_pack::pack::archive::PackArchive::from_bytes(&bytes).unwrap(),
+        gents_pack::pack::PackSource::Installed,
     )
     .unwrap();
-    let config: gents::documents::PackConfig = serde_json::from_value(json!({
+    let config: gents_documents::PackConfig = serde_json::from_value(json!({
         "node": {"node_did": "did:key:node"},
         "tools": [{"node_did": "did:key:node", "tools_id": "demo-tools", "display_name": "installed value"}]
     })).unwrap();
@@ -412,7 +413,7 @@ async fn documents_command_closes_its_owned_store_on_success_and_failure() {
                 "{error:#}"
             );
         }
-        let after = gents::store::config_client::ConfigAccess::local(retained_node.clone())
+        let after = gents_store::config_client::ConfigAccess::local(retained_node.clone())
             .execute(query)
             .await;
         assert!(
@@ -441,13 +442,13 @@ async fn documents_install_writes_an_operator_home_record() {
         .await
         .unwrap();
 
-    let record = gents::pack::read_home_install(home.path(), "gents/demo_pack")
+    let record = gents_pack::pack::read_home_install(home.path(), "gents/demo_pack")
         .unwrap()
         .expect("a documents install records itself in the home");
     assert_eq!(record.kind, PackKind::Documents);
     assert_eq!(
         record.installed_via,
-        Some(gents::pack::InstalledVia::Operator)
+        Some(gents_pack::pack::InstalledVia::Operator)
     );
 
     let staged = documents_pack_dir("1.1.0");
@@ -486,14 +487,14 @@ async fn edit_demo_tools(home: &std::path::Path) {
         .transact_write("test.edit_pack_document", |txn| {
             let node_did = &node_did;
             Box::pin(async move {
-                use gents::documents::apply_desired_state_plan;
-                use gents::documents::{
+                use gents_documents::apply_desired_state_plan;
+                use gents_documents::{
                     read_desired_state_record_in_txn, DesiredStateApplyDocument,
                     DesiredStateApplyPlan,
                 };
                 let (_, mut tools) = read_desired_state_record_in_txn(
                     txn,
-                    gents::Collection::Tools,
+                    gents_store::collection::Collection::Tools,
                     node_did,
                     "demo-tools",
                 )
@@ -501,14 +502,14 @@ async fn edit_demo_tools(home: &std::path::Path) {
                 .expect("installed pack tools");
                 tools["display_name"] = "edited".into();
                 let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                    collection: gents::Collection::Tools,
+                    collection: gents_store::collection::Collection::Tools,
                     add: tools.clone(),
                     update: tools,
                 }])?;
                 apply_desired_state_plan(
                     txn,
                     &plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
                 .map(|_| ())
@@ -531,7 +532,7 @@ async fn documents_install_rolls_back_its_record_on_failure() {
     install_from(home.path(), first.path(), Vec::new())
         .await
         .unwrap();
-    let before = gents::pack::read_home_install(home.path(), "gents/demo_pack")
+    let before = gents_pack::pack::read_home_install(home.path(), "gents/demo_pack")
         .unwrap()
         .unwrap();
     edit_demo_tools(home.path()).await;
@@ -547,7 +548,7 @@ async fn documents_install_rolls_back_its_record_on_failure() {
     assert!(format!("{error:#}").contains("were edited"), "{error:#}");
 
     assert_eq!(
-        gents::pack::read_home_install(home.path(), "gents/demo_pack").unwrap(),
+        gents_pack::pack::read_home_install(home.path(), "gents/demo_pack").unwrap(),
         Some(before)
     );
 }
@@ -603,7 +604,7 @@ async fn a_plugins_pack_asking_for_authority_is_a_typed_refusal() {
         ),
         "{error:#}"
     );
-    assert!(gents::plugin::store::list_records(home.path())
+    assert!(gents_pack::plugin::store::list_records(home.path())
         .unwrap()
         .is_empty());
     install(true)
@@ -620,7 +621,7 @@ async fn update_returns_the_edited_refusal_for_one_package() {
         .unwrap();
     edit_demo_tools(home.path()).await;
     let newer = documents_pack_dir("1.1.0");
-    let (bytes, _) = gents::pack::archive::pack_dir(newer.path()).unwrap();
+    let (bytes, _) = gents_pack::pack::archive::pack_dir(newer.path()).unwrap();
     let digest = {
         use sha2::Digest;
         format!("{:x}", sha2::Sha256::digest(&bytes))
@@ -696,11 +697,13 @@ async fn dependency_install_keeps_an_existing_operator_record() {
     let installed = install_from(home.path(), &fixture, Vec::new())
         .await
         .unwrap();
-    let record: gents::pack::HomePackInstall =
+    let record: gents_pack::pack::HomePackInstall =
         serde_json::from_value(installed["record"].clone()).unwrap();
-    let via =
-        gents::pack::home_install::recorded_provenance(record.kind, Some(record.installed_via));
-    assert_eq!(via, gents::pack::InstalledVia::Operator);
+    let via = gents_pack::pack::home_install::recorded_provenance(
+        record.kind,
+        Some(record.installed_via),
+    );
+    assert_eq!(via, gents_pack::pack::InstalledVia::Operator);
 }
 
 #[test]
@@ -717,7 +720,7 @@ fn local_publication_failure_restores_exactly_the_previous_records() {
     };
 
     let v1 = plugin_manifest("acme", "widget", "echo", "1.0.0");
-    gents::plugin::install::install_pack_plugins_with_bindings(
+    gents_pack::plugin::install::install_pack_plugins_with_bindings(
         home.path(),
         &v1,
         "sha256:v1",
@@ -742,7 +745,7 @@ fn local_publication_failure_restores_exactly_the_previous_records() {
             .context("unexpected asset")
     };
     let v2 = plugin_manifest("acme", "widget", "echo", "1.1.0");
-    let error = gents::plugin::install::install_pack_plugins_with_bindings(
+    let error = gents_pack::plugin::install::install_pack_plugins_with_bindings(
         home.path(),
         &v2,
         "sha256:v2",
@@ -769,7 +772,7 @@ fn local_publication_failure_restores_exactly_the_previous_records() {
             .context("unexpected asset")
     };
     let first_time = plugin_manifest("acme", "brand_new", "brandnew", "1.0.0");
-    let error = gents::plugin::install::install_pack_plugins_with_bindings(
+    let error = gents_pack::plugin::install::install_pack_plugins_with_bindings(
         home.path(),
         &first_time,
         "sha256:new",

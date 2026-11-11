@@ -15,7 +15,7 @@ const MAX_CANONICAL_DEPENDENCY_ROWS: usize = 2_048;
 #[derive(Clone, Copy)]
 pub(super) enum TranscriptAccess<'a> {
     Local(&'a EmbeddedNode),
-    Config(&'a gents::store::config_client::ConfigAccess),
+    Config(&'a gents_store::config_client::ConfigAccess),
 }
 
 impl TranscriptAccess<'_> {
@@ -49,7 +49,7 @@ pub(super) async fn read_request_documents(
         rapidhash::RapidHashSet::with_capacity_and_hasher(unique_doc_ids.len(), Default::default());
     for batch in unique_doc_ids.chunks(BATCH_SIZE) {
         let ids =
-            gents::store::graphql::graphql_string_list_literal(batch.iter().map(String::as_str));
+            gents_store::graphql::graphql_string_list_literal(batch.iter().map(String::as_str));
         let query =
             format!(r#"{{ {AGENT_REQUEST_NAME}(docIDs: {ids}) {{ {AGENT_REQUEST_FIELDS} }} }}"#);
         let data = access.execute(&query, operation).await?;
@@ -81,8 +81,8 @@ async fn read_legacy_question_sources<'a>(
         .filter_map(|request| {
             let input = request.input.as_ref();
             if !matches!(
-                gents::request::lifecycle::request_origin(request),
-                gents::request::lifecycle::RequestOrigin::Person
+                gents_session::request::lifecycle::request_origin(request),
+                gents_session::request::lifecycle::RequestOrigin::Person
             ) || input.is_some_and(|input| input.question_reply.is_some())
             {
                 return None;
@@ -100,7 +100,7 @@ async fn read_legacy_question_sources<'a>(
     let mut query_count = 0;
     for batch in ids.chunks(128) {
         let list =
-            gents::store::graphql::graphql_string_list_literal(batch.iter().map(String::as_str));
+            gents_store::graphql::graphql_string_list_literal(batch.iter().map(String::as_str));
         let query = format!("query DesktopQuestionSources {{ {MAILBOX_ITEM_NAME}(docIDs: {list}) {{ {MAILBOX_ITEM_FIELDS} }} }}");
         query_count += 1;
         match tokio::time::timeout(
@@ -126,7 +126,7 @@ async fn read_legacy_question_sources<'a>(
 #[cfg(test)]
 mod question_source_tests {
     use super::*;
-    use gents::store::config_client::ConfigAccess;
+    use gents_store::config_client::ConfigAccess;
     use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
@@ -732,7 +732,7 @@ pub async fn load_session_transcript_page(
 }
 
 pub async fn load_session_transcript_page_on(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     session_id: &str,
     node_did: Option<&str>,
     requester_did: Option<&str>,
@@ -771,7 +771,7 @@ pub async fn load_session_transcript_window(
 }
 
 pub async fn load_session_transcript_window_on(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     session_id: &str,
     node_did: Option<&str>,
     requester_did: Option<&str>,
@@ -993,7 +993,7 @@ async fn load_session_transcript_window_with_access(
             .chain(unanswered.iter().filter_map(|row| row.message_sequence))
             .max()
             .unwrap_or_default();
-        let owners = gents::store::graphql::graphql_string_list_literal(
+        let owners = gents_store::graphql::graphql_string_list_literal(
             unanswered
                 .iter()
                 .filter_map(|row| row.request_doc_id.as_deref())
@@ -1172,7 +1172,7 @@ pub async fn load_session_context_store(
 }
 
 pub async fn load_session_context_store_on(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     session_id: &str,
     node_did: Option<&str>,
     requester_did: Option<&str>,
@@ -1259,7 +1259,7 @@ pub async fn load_session_compaction_entries(
 }
 
 pub async fn load_session_compaction_entries_on(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
@@ -1318,7 +1318,7 @@ pub async fn load_session_diagnostics_store(
 }
 
 pub async fn load_session_diagnostics_store_on(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     session_id: &str,
     node_did: Option<&str>,
     requester_did: Option<&str>,
@@ -1399,7 +1399,7 @@ mod dependency_identity_tests {
     #[tokio::test]
     async fn context_compactions_keep_the_exact_requester_scope() -> Result<()> {
         let node = std::sync::Arc::new(crate::test_support::node_builder().build().await?);
-        gents::ensure_runtime_schemas(&node).await?;
+        gents_store::schema::ensure_runtime_schemas(&node).await?;
         for (key, owner, requester) in [
             ("mine", "did:owner", Some("did:requester")),
             ("another-requester", "did:owner", Some("did:other")),
@@ -1414,7 +1414,7 @@ mod dependency_identity_tests {
             let mutation = format!(
                 "mutation {{ create_CompactionEntry(input: {{ compaction_key: \"{key}\", session_id: \"session\", node_did: \"{owner}\", requester_did: {requester}, sequence: 1, summary: \"retained\" }}) {{ _docID }} }}"
             );
-            gents::store::config_client::ConfigAccess::write_local(
+            gents_store::config_client::ConfigAccess::write_local(
                 &node,
                 "test.context.compaction",
                 &mutation,

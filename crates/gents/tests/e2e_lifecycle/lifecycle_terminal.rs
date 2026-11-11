@@ -1,5 +1,5 @@
-use gents::request::lifecycle::ClaimOutcome;
-use gents::request::lifecycle::RequestTerminalOutcome;
+use gents_session::request::lifecycle::ClaimOutcome;
+use gents_session::request::lifecycle::RequestTerminalOutcome;
 
 use crate::support::{first_row, test_db};
 
@@ -28,7 +28,7 @@ async fn missing_session_observation_does_not_block_terminal_request() {
     let mut lifecycle = actors.lifecycle(
         request,
         300,
-        gents::request::lifecycle::ExecutionOrigin::Interactive,
+        gents_session::request::lifecycle::ExecutionOrigin::Interactive,
         "",
     );
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
@@ -93,7 +93,7 @@ async fn complete_does_not_overwrite_session_observation_for_newer_request() {
     let mut lifecycle = actors.lifecycle(
         first_request,
         300,
-        gents::request::lifecycle::ExecutionOrigin::Interactive,
+        gents_session::request::lifecycle::ExecutionOrigin::Interactive,
         "",
     );
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);

@@ -1,11 +1,11 @@
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
-use gents::request::lifecycle::{ExecutionOrigin, DEFAULT_REQUEST_MAX_RETRIES};
-use gents::store::config_client::ConfigAccess;
-use gents::{RequestIdentity, RequestSigner, RequestSpec, RetryLink};
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
+use gents_session::request::lifecycle::{ExecutionOrigin, DEFAULT_REQUEST_MAX_RETRIES};
+use gents_session::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec, RetryLink};
+use gents_store::config_client::ConfigAccess;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -23,7 +23,7 @@ pub async fn retry_request(
     store: &ClientStore,
     parent: &AgentRequestRow,
     requester_did: &str,
-    signer: &dyn gents::NodeIdentity,
+    signer: &dyn gents_store::identity::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
 ) -> Result<SubmittedRequest> {
     retry_request_with_request_id(
@@ -47,7 +47,7 @@ pub(super) async fn retry_request_with_request_id(
     store: &ClientStore,
     parent: &AgentRequestRow,
     requester_did: &str,
-    signer: &dyn gents::NodeIdentity,
+    signer: &dyn gents_store::identity::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
     request_id: String,
 ) -> Result<SubmittedRequest> {
@@ -86,7 +86,7 @@ pub(super) async fn retry_request_with_request_id(
         node_did: node_did.to_string(),
         agent_did: binding.agent_did.clone(),
     };
-    if let Some(existing) = gents::request::lifecycle::reconcile_client_retry(
+    if let Some(existing) = gents_session::request::lifecycle::reconcile_client_retry(
         access,
         node_did,
         parent_session_id,
@@ -134,7 +134,7 @@ pub(super) async fn retry_request_with_request_id(
     let retry_root_request = normalize_optional_string(parent.retry_root_request.as_deref())
         .unwrap_or(parent_request_id);
     let created_at = canonical_request_created_at_after(parent.created_at.as_deref())?;
-    let create = gents::request::lifecycle::build_signed_client_request(
+    let create = gents_session::request::lifecycle::build_signed_client_request(
         access,
         RequestSpec {
             retry: Some(RetryLink {
@@ -164,7 +164,7 @@ pub(super) async fn retry_request_with_request_id(
         RequestSigner::Identity(signer),
     )
     .await?;
-    let held = gents::request::lifecycle::send_client_retry(access, &create).await?;
+    let held = gents_session::request::lifecycle::send_client_retry(access, &create).await?;
     Ok(submitted(held))
 }
 

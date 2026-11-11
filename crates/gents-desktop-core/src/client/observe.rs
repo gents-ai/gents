@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::store::config_client::ConfigAccess;
+use gents_store::config_client::ConfigAccess;
 use tokio::sync::{mpsc, watch};
 use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::Instant;
@@ -314,7 +314,7 @@ fn clear_node(store: &ObservedStore, node: &str) {
 pub fn spawn_observer(
     store: Arc<ObservedStore>,
     configured_peers: ClientSyncStateOwner,
-    capability: gents::store::config_client::ClientSigningCapability,
+    capability: gents_store::config_client::ClientSigningCapability,
 ) -> ObserverHandle {
     let (stop_tx, mut stop_rx) = watch::channel(false);
     let metrics = Arc::new(ObserverMetrics::default());

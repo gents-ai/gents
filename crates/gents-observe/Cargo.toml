@@ -1,0 +1,56 @@
+[package]
+name = "gents-observe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Run timelines, trace export and file inventory for Gents"
+
+[features]
+default = ["defra-node/http", "defra-node/p2p", "defra-node/wasmtime-runtime"]
+typescript = ["gents-loop/typescript", "gents-protocol/typescript", "gents-store/typescript", "gents-documents/typescript", "gents-inference/typescript", "gents-p2p/typescript", "gents-session/typescript", "gents-toolcalls/typescript", "gents-automation/typescript"]
+live-e2e = ["gents-store/live-e2e", "gents-documents/live-e2e", "gents-inference/live-e2e", "gents-p2p/live-e2e", "gents-session/live-e2e", "gents-toolcalls/live-e2e", "gents-automation/live-e2e"]
+test-home-guard = ["gents-store/test-home-guard", "gents-documents/test-home-guard", "gents-inference/test-home-guard", "gents-p2p/test-home-guard", "gents-session/test-home-guard", "gents-toolcalls/test-home-guard", "gents-automation/test-home-guard"]
+test-fixtures = ["test-home-guard", "axum/ws", "gents-store/test-fixtures", "gents-documents/test-fixtures", "gents-inference/test-fixtures", "gents-p2p/test-fixtures", "gents-session/test-fixtures", "gents-toolcalls/test-fixtures", "gents-automation/test-fixtures"]
+
+[dependencies]
+gents-store.workspace = true
+gents-documents.workspace = true
+gents-inference.workspace = true
+gents-p2p.workspace = true
+gents-session.workspace = true
+gents-toolcalls.workspace = true
+gents-automation.workspace = true
+schema.workspace = true
+rapidhash = { workspace = true }
+anyhow.workspace = true
+axum = "0.8"
+base64.workspace = true
+bs58 = "0.5"
+chrono.workspace = true
+gents-loop = { workspace = true, features = ["native"] }
+gents-protocol.workspace = true
+defra-node.workspace = true
+identity.workspace = true
+query.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+jsonschema = { version = "0.46.5", default-features = false }
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+tempfile = "3"
+
+[dev-dependencies]
+gents-store = { workspace = true, features = ["test-fixtures"] }
+gents-documents = { workspace = true, features = ["test-fixtures"] }
+gents-inference = { workspace = true, features = ["test-fixtures"] }
+gents-p2p = { workspace = true, features = ["test-fixtures"] }
+gents-session = { workspace = true, features = ["test-fixtures"] }
+gents-toolcalls = { workspace = true, features = ["test-fixtures"] }
+gents-automation = { workspace = true, features = ["test-fixtures"] }
+axum = { version = "0.8", features = ["ws"] }
+gents-lean-contract.workspace = true
+gents-lean-vocab.workspace = true

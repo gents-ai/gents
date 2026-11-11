@@ -9,12 +9,12 @@ use super::{
     permits_natural_finish, request, verify_request_at_claim_boundary, AgentDaemon,
     RequestInterruptionSource,
 };
-use crate::inference::llm::rig_compat::ProviderModel;
-use crate::observe::runtime_trace::record_current_failure_class;
-use crate::request::lifecycle::RequestLifecycle;
-use crate::request::streaming::DefraStreamWriter;
 use crate::runtime::agent::worker_capacity::RequestGuard;
+use gents_inference::llm::rig_compat::ProviderModel;
+use gents_observe::observe::runtime_trace::record_current_failure_class;
 use gents_protocol::row::AgentRequest;
+use gents_session::request::lifecycle::RequestLifecycle;
+use gents_session::request::streaming::DefraStreamWriter;
 
 mod claim;
 mod finish;
@@ -64,7 +64,7 @@ where
         else {
             return Ok(());
         };
-        let execution_origin = crate::request::lifecycle::ExecutionOrigin::from_persisted(
+        let execution_origin = gents_session::request::lifecycle::ExecutionOrigin::from_persisted(
             request.execution_origin.as_deref(),
         )
         .expect("fresh request admission requires a canonical execution_origin");
@@ -111,10 +111,11 @@ where
             return Ok(());
         }
 
-        let (interrupt_tx, mut interrupt_rx) =
-            tokio::sync::watch::channel::<Option<crate::request::interrupt::InterruptIntent>>(None);
+        let (interrupt_tx, mut interrupt_rx) = tokio::sync::watch::channel::<
+            Option<gents_session::request::interrupt::InterruptIntent>,
+        >(None);
         let observer = tokio_util::task::AbortOnDropHandle::new(
-            crate::request::interrupt::spawn_request_interrupt_observer(
+            gents_session::request::interrupt::spawn_request_interrupt_observer(
                 self.node.clone(),
                 lifecycle.access()?,
                 request.doc_id.clone(),
@@ -132,7 +133,7 @@ where
 
         let sealed = request::prepare_unless_interrupted(
             &mut interrupt_rx,
-            crate::workspace::writer_request_already_sealed_with_identity(
+            gents_session::workspace::writer_request_already_sealed_with_identity(
                 &self.node,
                 self.agent_config.agent_identity.as_ref(),
                 &request,
@@ -157,7 +158,7 @@ where
                 record_current_failure_class(&error);
                 tracing::error!(
                     request_id = %request.request_id,
-                    error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
+                    error = %gents_protocol::failure_text::BoundedErrorChain(error.as_ref()),
                     "failed to inspect writer workspace seal state"
                 );
                 self.finalize_failure_before_work(
@@ -205,7 +206,7 @@ where
         lifecycle.allow_natural_finish(permits_natural_finish(&request, task_owned));
 
         let ownership_lost = lifecycle.ownership_lost();
-        let hook_cancellation = crate::tools::call::task_hooks::TaskHookCancellation::default();
+        let hook_cancellation = gents_toolcalls::call::task_hooks::TaskHookCancellation::default();
         let hook_cancellation_follower = (!hooks.is_empty()).then(|| {
             hook_cancellation.follow(
                 interrupt_rx.clone(),
@@ -213,20 +214,22 @@ where
                 ownership_lost.clone(),
             )
         });
-        let hook_exec =
-            crate::tools::call::task_hooks::ManagedTaskHookExec::new(hook_cwd, hook_cancellation)
-                .with_record(hook_record.clone())
-                .with_execution_lease(
-                    self.node.clone(),
-                    request.doc_id.clone(),
-                    crate::request::lifecycle::RequestExecutionLease::new(
-                        lifecycle.execution_generation()?.to_owned(),
-                        lifecycle.actor_did()?,
-                    ),
-                );
+        let hook_exec = gents_toolcalls::call::task_hooks::ManagedTaskHookExec::new(
+            hook_cwd,
+            hook_cancellation,
+        )
+        .with_record(hook_record.clone())
+        .with_execution_lease(
+            self.node.clone(),
+            request.doc_id.clone(),
+            gents_session::request::lifecycle::RequestExecutionLease::new(
+                lifecycle.execution_generation()?.to_owned(),
+                lifecycle.actor_did()?,
+            ),
+        );
 
         let mut owned_work = None;
-        let run = crate::tools::call::task_hooks::run_task_hooks_with_before(
+        let run = gents_toolcalls::call::task_hooks::run_task_hooks_with_before(
             &hooks,
             &hook_exec,
             recorded_before,
@@ -234,7 +237,7 @@ where
                 if let Some(record) = &hook_record {
                     if let Err(error) = record.work_started().await {
                         let outcome = OwnedWorkOutcome::observed(
-                            crate::tools::call::task_hooks::TaskAgentResult::Failure,
+                            gents_toolcalls::call::task_hooks::TaskAgentResult::Failure,
                             Some(format!("could not record task hook state: {error}")),
                             true,
                         );
@@ -262,7 +265,8 @@ where
         if let Some(follower) = hook_cancellation_follower {
             follower.abort();
         }
-        let parked = run.final_outcome() == crate::tools::call::task_hooks::TaskHookOutcome::Parked;
+        let parked =
+            run.final_outcome() == gents_toolcalls::call::task_hooks::TaskHookOutcome::Parked;
         if !parked {
             if let Some(record) = &hook_record {
                 record.release().await;

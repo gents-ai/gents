@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{ensure, Context, Result};
 use clap::Parser as _;
-use gents::store::local::home::remember_home;
-use gents::tools::surface::refuse_too_broad_root;
+use gents_store::local::home::remember_home;
+use gents_tools::surface::refuse_too_broad_root;
 
 use crate::cli::args::{InitArgs, StoreKeyCustodyArg};
 use crate::cli::{Cli, Command};

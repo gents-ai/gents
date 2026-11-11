@@ -2,8 +2,8 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use gents::documents::template::catalog::{default_catalog, Site};
 use gents::eval::documents::default_breaker_threshold;
+use gents_documents::template::catalog::{default_catalog, Site};
 use gents_eval::checks::CheckRegistry;
 use gents_eval::optimization::target::JobTarget;
 use gents_eval::optimization::{
@@ -125,7 +125,7 @@ async fn behavior_proposer(
     let agent_slot = proposer_agent_slot(pack, slot, agent)?;
     let config = pack_config(&resolved, &ctx.owner)?;
     ensure_tool_less(&config, &ctx.owner, &agent_slot)?;
-    let gents::ConfigAccess::Graphql(graphql) = &ctx.access else {
+    let gents_store::config_client::ConfigAccess::Graphql(graphql) = &ctx.access else {
         anyhow::bail!(
             "start `gents runtime server` for this home and retry: an agent proposer runs on a served home"
         );
@@ -158,7 +158,7 @@ async fn behavior_proposer(
 }
 
 fn ensure_tool_less(
-    authored: &gents::pack::AuthoredPackConfig,
+    authored: &gents_pack::pack::AuthoredPackConfig,
     owner: &str,
     agent_did: &str,
 ) -> Result<()> {
@@ -173,7 +173,7 @@ fn ensure_tool_less(
             .find(|context| context.context_id == id)
     });
     let tools_id = context.and_then(|context| context.tools_id.as_deref());
-    let no_tools = gents::documents::Tools::default();
+    let no_tools = gents_documents::Tools::default();
     let tools = match tools_id {
         Some(id) => config
             .tools
@@ -195,16 +195,16 @@ fn ensure_tool_less(
                 .map(|target| target.agent_did.clone()),
         )
         .collect();
-    let mut names = gents::AgentToolSurfaceConfig::from_tools_documents(
+    let mut names = gents_tools::surface::AgentToolSurfaceConfig::from_tools_documents(
         agent_did,
         tools,
         &config.datastore_tool_surfaces,
         &config.agent_targets,
-        &gents::ToolCeiling::readonly(),
+        &gents_tools::surface::ToolCeiling::readonly(),
         Vec::new(),
     )?
     .explain_with_runtime_availability(
-        gents::tools::surface::RuntimeToolAvailability::all(),
+        gents_tools::surface::RuntimeToolAvailability::all(),
         owner,
         &active,
     )
@@ -249,7 +249,7 @@ fn subject_preamble(subject_dir: &Path, agent_did: &str, target: &JobTarget) -> 
 
 fn proposer_agent_slot(
     pack: &str,
-    slot: &gents::pack::PackInferenceSlot,
+    slot: &gents_pack::pack::PackInferenceSlot,
     agent: Option<&str>,
 ) -> Result<String> {
     match agent {

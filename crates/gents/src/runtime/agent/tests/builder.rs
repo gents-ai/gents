@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use super::super::*;
 use super::support::*;
-use crate::tools::surface::ToolCeiling;
+use gents_tools::surface::ToolCeiling;
 
 #[tokio::test]
 async fn builder_requires_backend_admission_before_checking_node_identity() {
@@ -40,7 +40,7 @@ async fn builder_includes_custom_tools_in_resolved_tool_surface() {
     )
     .await;
 
-    let binding = crate::store::identity::provision_agent_identity_authorized(
+    let binding = gents_store::identity::provision_agent_identity_authorized(
         &node,
         identity.as_ref(),
         &identity::Did::new(owner.actor_did().expect("signed fixture owner")).unwrap(),
@@ -76,7 +76,7 @@ async fn builder_includes_custom_tools_in_resolved_tool_surface() {
         .resolve(
             &node,
             identity.did(),
-            &crate::tools::plugin_host::NoPluginHost,
+            &gents_tools::plugin_host::NoPluginHost,
         )
         .await
         .unwrap();
@@ -123,11 +123,11 @@ async fn builder_rejects_backend_vetoed_by_measured_health() {
     )
     .await;
 
-    let backend_health = crate::inference::backends::health::BackendHealthMap::new();
+    let backend_health = gents_inference::backends::health::BackendHealthMap::new();
     backend_health
         .set_for_test(
             "builder-vetoed-backend",
-            crate::inference::backends::health::BackendHealthState::Unhealthy,
+            gents_inference::backends::health::BackendHealthState::Unhealthy,
             3,
         )
         .await;

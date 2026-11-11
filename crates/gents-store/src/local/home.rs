@@ -1,0 +1,436 @@
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+
+mod init_config;
+mod lock;
+mod retire;
+mod test_guard;
+
+pub use init_config::{
+    default_key_path, ensure_home_identity_can_serve, init_config_path, keys_dir, read_init_config,
+    write_init_config, StoredInitConfig, SECURE_ENCLAVE_IDENTITY_BACKEND,
+};
+pub use lock::{
+    lock_home_store, lock_store, lock_store_at, reserve_runtime_startup, wait_for_store_release,
+    RuntimeStartupReservation, StoreLock, StoreLockHeld,
+};
+pub use retire::{
+    archive_preflight, home_entries, retire_entries, HomeEntries, RetireDisposition, RetireGroup,
+};
+pub use test_guard::refuse_real_gents_home;
+const INIT_CONFIG_FILE_NAME: &str = "init.json";
+
+#[derive(Debug, thiserror::Error)]
+pub enum HomeError {
+    #[error("unable to resolve the user's home directory; set GENTS_HOME")]
+    HomeDirUnresolved,
+    #[error("reading the remembered home file {}", path.display())]
+    RememberedHomeRead {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("the remembered home file {} must hold one absolute path", path.display())]
+    RememberedHomeInvalid { path: PathBuf },
+    #[error("writing the remembered home file {}", path.display())]
+    RememberedHomeWrite {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error(transparent)]
+    LockHeld(#[from] StoreLockHeld),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("resolving data directory {}", path.display())]
+    ResolveDataDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("data directory {} cannot be the filesystem root", path.display())]
+    DataDirRoot { path: PathBuf },
+    #[error("resolving {}", path.display())]
+    ResolveParent {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("inspecting data directory {}", path.display())]
+    InspectDataDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("opening runtime lock {}", path.display())]
+    OpenLock {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("inspecting runtime lock {}", path.display())]
+    InspectLock {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("runtime lock {} is not a regular file", path.display())]
+    LockNotRegular { path: PathBuf },
+    #[error("runtime startup waiter stopped before completing")]
+    StartupWaiterStopped(#[source] tokio::sync::oneshot::error::RecvError),
+    #[error("starting runtime startup waiter")]
+    StartStartupWaiter(#[source] std::io::Error),
+    #[error("resolving runtime home {}", path.display())]
+    ResolveRuntimeHome {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("reserving runtime startup")]
+    ReserveStartup(#[source] std::io::Error),
+    #[error("store release waiter stopped before completing")]
+    ReleaseWaiterStopped(#[source] tokio::sync::oneshot::error::RecvError),
+    #[error("starting store release waiter")]
+    StartReleaseWaiter(#[source] std::io::Error),
+    #[error("waiting for store lock {}", path.display())]
+    WaitForLock {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("locking {}", path.display())]
+    Lock {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("creating home directory {}", path.display())]
+    CreateHome {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("encoding local init config JSON")]
+    EncodeInitConfig(#[source] serde_json::Error),
+    #[error("staging init config {}", path.display())]
+    StageInitConfig {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("writing init config {}", path.display())]
+    WriteInitConfig {
+        path: PathBuf,
+        #[source]
+        source: Box<tempfile::PersistError>,
+    },
+    #[error("reading init config {}", path.display())]
+    ReadInitConfig {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("decoding init config {}", path.display())]
+    DecodeInitConfig {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error(
+        "home {} uses the {SECURE_ENCLAVE_IDENTITY_BACKEND} identity backend, whose key cannot own the served node's access control; re-initialize the home with a file or macos-keychain identity (`gents init --home {} --dangerously-overwrite --identity-backend file`) to serve it",
+        home.display(),
+        home.display()
+    )]
+    SecureEnclaveHome { home: PathBuf },
+    #[error("listing home {}", home.display())]
+    ListHome {
+        home: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("backup {} has no parent directory", backup.display())]
+    BackupWithoutParent { backup: PathBuf },
+    #[error("inspecting {}", path.display())]
+    Inspect {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{} is on a different filesystem than the backup location {}; nothing was changed", entry.display(), parent.display())]
+    CrossFilesystem { entry: PathBuf, parent: PathBuf },
+    #[error("creating backup {}", path.display())]
+    CreateBackup {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("creating {}", path.display())]
+    CreateDirectory {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{} has no file name to archive", path.display())]
+    NoFileName { path: PathBuf },
+    #[error("moving {} to {}", from.display(), to.display())]
+    Move {
+        from: PathBuf,
+        to: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("archiving was rolled back; nothing was moved")]
+    ArchiveRolledBack {
+        #[source]
+        source: Box<HomeError>,
+    },
+    #[error("archiving failed and these entries could not be moved back: {entries}")]
+    ArchiveUnrestored {
+        entries: String,
+        #[source]
+        source: Box<HomeError>,
+    },
+    #[error("deleting stopped after deleting [{removed}]")]
+    DeleteStopped {
+        removed: String,
+        #[source]
+        source: Box<HomeError>,
+    },
+    #[error("deleting {} failed after deleting [{removed}]", path.display())]
+    DeleteFailed {
+        path: PathBuf,
+        removed: String,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
+impl HomeError {
+    pub fn lock_held(&self) -> Option<&StoreLockHeld> {
+        match self {
+            Self::LockHeld(held) => Some(held),
+            _ => None,
+        }
+    }
+}
+
+/// The store lock contention anywhere in an application error's chain,
+/// including through the owners that wrap [`HomeError`] transparently.
+pub fn store_lock_held<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a StoreLockHeld> {
+    gents_protocol::error_chain::find_map_source(error, |cause| {
+        cause
+            .downcast_ref::<StoreLockHeld>()
+            .or_else(|| cause.downcast_ref::<HomeError>()?.lock_held())
+            .or_else(|| {
+                cause
+                    .downcast_ref::<crate::local::store_key::StoreKeyError>()?
+                    .lock_held()
+            })
+    })
+}
+
+type Result<T, E = HomeError> = std::result::Result<T, E>;
+
+pub fn default_home_dir() -> Result<PathBuf> {
+    let home = default_home_from(
+        std::env::var_os(GENTS_HOME_ENV),
+        dirs::config_dir().as_deref(),
+        dirs::home_dir().as_deref(),
+    )?;
+    refuse_real_gents_home(&home, GENTS_HOME_ENV);
+    Ok(home)
+}
+
+pub const GENTS_HOME_ENV: &str = "GENTS_HOME";
+
+/// An unreadable remembered file is an error: falling back to `~/.gents` would
+/// open the wrong data.
+fn default_home_from(
+    env_home: Option<OsString>,
+    config_dir: Option<&Path>,
+    user_home: Option<&Path>,
+) -> Result<PathBuf> {
+    if let Some(home) = env_home.filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(home));
+    }
+    if let Some(home) = config_dir.map(read_remembered_home).transpose()?.flatten() {
+        return Ok(home);
+    }
+    Ok(user_home
+        .ok_or(HomeError::HomeDirUnresolved)?
+        .join(".gents"))
+}
+
+/// Outside any home, so resetting a home cannot remove it.
+fn remembered_home_dir(config_dir: &Path) -> PathBuf {
+    config_dir.join("gents")
+}
+
+const REMEMBERED_HOME_FILE_NAME: &str = "home";
+
+/// Only the trailing newline is trimmed; other whitespace belongs to the path. A
+/// further line break means this is not the one line `remember_home` writes.
+fn read_remembered_home(config_dir: &Path) -> Result<Option<PathBuf>> {
+    let path = remembered_home_dir(config_dir).join(REMEMBERED_HOME_FILE_NAME);
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(HomeError::RememberedHomeRead { path, source }),
+    };
+    let home = contents.strip_suffix('\n').unwrap_or(&contents);
+    if home.contains(['\n', '\r']) || !Path::new(home).is_absolute() {
+        return Err(HomeError::RememberedHomeInvalid { path });
+    }
+    Ok(Some(PathBuf::from(home)))
+}
+
+/// Makes `chosen` the default home for later commands, or forgets any earlier
+/// choice when `chosen` is `~/.gents`. Only setup calls this: a one-off `--home`
+/// or `GENTS_HOME` never changes what is remembered.
+pub fn remember_home(chosen: &Path) -> Result<()> {
+    let config_dir = dirs::config_dir().ok_or(HomeError::HomeDirUnresolved)?;
+    refuse_real_gents_home(&remembered_home_dir(&config_dir), GENTS_HOME_ENV);
+    remember_home_in(
+        &config_dir,
+        &dirs::home_dir().ok_or(HomeError::HomeDirUnresolved)?,
+        chosen,
+    )
+}
+
+fn remember_home_in(config_dir: &Path, user_home: &Path, chosen: &Path) -> Result<()> {
+    let dir = remembered_home_dir(config_dir);
+    let path = dir.join(REMEMBERED_HOME_FILE_NAME);
+    write_remembered_home(&dir, &path, user_home, chosen)
+        .map_err(|source| HomeError::RememberedHomeWrite { path, source })
+}
+
+fn write_remembered_home(
+    dir: &Path,
+    path: &Path,
+    user_home: &Path,
+    chosen: &Path,
+) -> std::io::Result<()> {
+    let chosen = std::path::absolute(chosen)?;
+    if chosen == user_home.join(".gents") {
+        return match std::fs::remove_file(path) {
+            Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+            _ => Ok(()),
+        };
+    }
+    let chosen = chosen
+        .to_str()
+        .filter(|chosen| !chosen.contains(['\n', '\r']))
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "the home path must be UTF-8 with no line break",
+            )
+        })?;
+    std::fs::create_dir_all(dir)?;
+    let staged = tempfile::NamedTempFile::new_in(dir)?;
+    use std::io::Write as _;
+    writeln!(staged.as_file(), "{chosen}")?;
+    staged.as_file().sync_all()?;
+    staged.persist(path).map_err(|error| error.error)?;
+    #[cfg(unix)]
+    std::fs::File::open(dir)?.sync_all()?;
+    Ok(())
+}
+
+const DATA_DIR_NAME: &str = "data";
+const KEYS_DIR_NAME: &str = "keys";
+pub const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
+pub const RUNTIME_STARTUP_LOCK_FILE_NAME: &str = "runtime-startup.lock";
+/// Host-local listen addresses for `gents runtime server`; binding precedes opening
+/// the store, so they cannot live in a document.
+pub const NETWORK_CONFIG_FILE_NAME: &str = "network.json";
+/// Where `gents config client set` chose the interface before the built-in shell was the only
+/// one; `gents` names a file left here and ignores it.
+pub const CLIENT_CONFIG_FILE_NAME: &str = "client.json";
+/// The built-in shell's own client-local choices, such as its key set.
+pub const SHELL_CONFIG_FILE_NAME: &str = "shell.json";
+pub const P2P_SECRET_KEY_FILE_NAME: &str = "p2p-secret-key";
+pub const PACKS_DIR_NAME: &str = "packs";
+pub const ALLOWED_DIRS_FILE_NAME: &str = "allowed-dirs.json";
+pub const ALLOWED_DIRS_LOCK_FILE_NAME: &str = "allowed-dirs.lock";
+pub const WORKSPACE_APPROVALS_FILE_NAME: &str = "workspace-approvals.json";
+pub const WORKSPACE_APPROVALS_LOCK_FILE_NAME: &str = "workspace-approvals.lock";
+pub const PERMISSION_STAGING_DIR_NAME: &str = ".permission-staging";
+pub const PLUGIN_APPROVALS_DIR_NAME: &str = "plugin-approvals";
+pub const PLUGIN_APPROVALS_LOCK_FILE_NAME: &str = ".plugin-approvals.lock";
+pub const PLUGINS_DIR_NAME: &str = "plugins";
+pub const PLUGIN_SERVICES_DIR_NAME: &str = "plugin-services";
+pub const REGISTRY_DIR_NAME: &str = "registry";
+/// The removed Codex app-server's state; listed so retiring a home still removes it.
+pub const CODEX_UI_DIR_NAME: &str = "codex-ui";
+pub const SERVICE_UPDATES_DIR_NAME: &str = "service-updates";
+pub const EVAL_DIR_NAME: &str = "eval";
+pub const PACK_INSTALLS_DIR_NAME: &str = "pack-installs";
+/// UX plugins dropped in by hand for development (`<id>/plugin.js`); the
+/// desktop's dev door. Installed packs keep theirs in the pack store.
+pub const UX_PLUGINS_DIR_NAME: &str = "ux-plugins";
+/// Scratch pack directories `config plugin build` materializes from
+/// `PluginSource` documents, one per plugin; each is its build's sandbox root.
+pub const PLUGIN_BUILDS_DIR_NAME: &str = "plugin-builds";
+/// Screenshots and `report.json` that `config ux preview` writes, one
+/// directory per previewed page; each preview replaces its own.
+pub const UX_PREVIEW_DIR_NAME: &str = "ux-preview";
+/// Present from when `init` records key custody until it publishes configuration. A home in
+/// that window has `init.json` but no default agent, and a service started on it exits at once
+/// and is restarted forever.
+pub const INIT_PENDING_FILE_NAME: &str = "init-pending";
+
+pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
+    DATA_DIR_NAME,
+    INIT_CONFIG_FILE_NAME,
+    INIT_PENDING_FILE_NAME,
+    KEYS_DIR_NAME,
+    RUNTIME_STATE_FILE_NAME,
+    NETWORK_CONFIG_FILE_NAME,
+    CLIENT_CONFIG_FILE_NAME,
+    SHELL_CONFIG_FILE_NAME,
+    P2P_SECRET_KEY_FILE_NAME,
+    PACKS_DIR_NAME,
+    PLUGINS_DIR_NAME,
+    PLUGIN_SERVICES_DIR_NAME,
+    ALLOWED_DIRS_FILE_NAME,
+    WORKSPACE_APPROVALS_FILE_NAME,
+    PERMISSION_STAGING_DIR_NAME,
+    PLUGIN_APPROVALS_DIR_NAME,
+    REGISTRY_DIR_NAME,
+    CODEX_UI_DIR_NAME,
+    EVAL_DIR_NAME,
+    PACK_INSTALLS_DIR_NAME,
+    UX_PLUGINS_DIR_NAME,
+    PLUGIN_BUILDS_DIR_NAME,
+    UX_PREVIEW_DIR_NAME,
+];
+
+/// Lock files stay in place when state is retired: replacing a held lock file
+/// would let another writer acquire a different lock for the same resource.
+/// A custom data directory's store lock lives beside that directory instead.
+pub const RUNTIME_HOME_LOCK_FILES: &[&str] = &[
+    "data.lock",
+    RUNTIME_STARTUP_LOCK_FILE_NAME,
+    ALLOWED_DIRS_LOCK_FILE_NAME,
+    WORKSPACE_APPROVALS_LOCK_FILE_NAME,
+    PLUGIN_APPROVALS_LOCK_FILE_NAME,
+];
+
+/// Independently supervised maintenance retains its receipts, executables and
+/// cold backups across retirement of live node state. Moving these paths on
+/// reset would strand a running helper; it authenticates the node/build again
+/// before retirement, so retained receipts confer no authority on a fresh node.
+/// The node bootstrap marker stays across retirement, so a retired home cannot
+/// become a fresh bootstrap attempt; the CLI writes it outside this owner.
+pub const RUNTIME_HOME_RETAINED_ENTRIES: &[&str] =
+    &[SERVICE_UPDATES_DIR_NAME, ".node-bootstrap-consumed"];
+
+pub fn default_data_dir(home_dir: &Path) -> PathBuf {
+    home_dir.join(DATA_DIR_NAME)
+}
+
+#[cfg(test)]
+mod tests;

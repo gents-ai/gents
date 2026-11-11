@@ -18,7 +18,7 @@ pub async fn load_session_tip_store(
 }
 
 pub async fn load_session_tip_store_on(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     request: &AgentRequestRow,
 ) -> Result<ClientStore> {
     let query = tip_query(request, false)?;
@@ -36,7 +36,7 @@ pub async fn load_session_live_store(
 }
 
 pub async fn load_session_live_store_on(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     request: &AgentRequestRow,
 ) -> Result<ClientStore> {
     let query = tip_query(request, true)?;
@@ -48,7 +48,7 @@ pub async fn load_session_live_store_on(
 /// request of `session_id` on `node_did` and the session's requester made it;
 /// an empty store otherwise.
 pub async fn load_session_request_live_store_on(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     observed: &ClientStore,
     session_id: &str,
     node_did: &str,
@@ -81,7 +81,7 @@ pub async fn load_session_request_live_store_on(
 /// `node_did` in `observed`, read over `access`; `None` once that request is
 /// terminal or while it has no live output.
 pub async fn load_session_live_text_on(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     observed: &ClientStore,
     session_id: &str,
     node_did: &str,
@@ -141,7 +141,7 @@ pub struct RequestPromptFact {
 }
 
 fn input_owner(request: &AgentRequestRow) -> Result<(String, String, bool)> {
-    let (owner, key) = gents::request::lifecycle::input_message_owner(request)
+    let (owner, key) = gents_session::request::lifecycle::input_message_owner(request)
         .context("prompt lookup lacks physical request")?;
     let own = request.doc_id.as_deref() == Some(owner.as_str());
     Ok((owner, key, own))
@@ -168,7 +168,7 @@ pub async fn load_request_prompt_ownership(
 }
 
 pub async fn load_request_prompt_ownership_on(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     requests: &[AgentRequestRow],
 ) -> Result<RequestPromptOwnership> {
     let mut facts = RequestPromptOwnership::default();
@@ -363,7 +363,7 @@ fn decode_prompt_ownership(
                     .first()
                     .filter(|row| {
                         let input = request.input.clone().unwrap_or_default();
-                        !gents::request::lifecycle::is_runtime_control_message(
+                        !gents_session::request::lifecycle::is_runtime_control_message(
                             &input,
                             row["message_key"].as_str().unwrap_or_default(),
                         )
@@ -501,8 +501,8 @@ fn tip_rows(data: &Value, request: &AgentRequestRow) -> Result<ClientStoreRows> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::store::config_client::ConfigAccess;
     use gents_protocol::request_lifecycle::RequestLifecycleState;
+    use gents_store::config_client::ConfigAccess;
 
     #[tokio::test]
     async fn reopening_completed_request_reads_only_its_prompt_and_active_reads_stay_request_scoped(
@@ -652,7 +652,7 @@ mod tests {
             ),
             superseded_by_request: Some("req-head".into()),
             superseded_by_request_doc_id: Some("head".into()),
-            failure_reason: Some(gents::request::lifecycle::FOLDED_REASON.into()),
+            failure_reason: Some(gents_session::request::lifecycle::FOLDED_REASON.into()),
             ..request("folded")
         };
         let requests = [request("head"), folded];
@@ -746,7 +746,7 @@ mod tests {
             input: queue("head"),
             superseded_by_request: Some("head".into()),
             superseded_by_request_doc_id: Some("doc-head".into()),
-            failure_reason: Some(gents::request::lifecycle::FOLDED_REASON.into()),
+            failure_reason: Some(gents_session::request::lifecycle::FOLDED_REASON.into()),
             ..row("folded", RequestLifecycleState::Superseded, "reader")
         };
         let foreign = AgentRequestRow {

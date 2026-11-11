@@ -3,12 +3,13 @@
 use std::path::Path;
 use std::time::Duration;
 
-use gents::inference::llm::message::{Message, Text, ToolResultContent, UserContent};
-use gents::tools::background::job::job::{
+use gents::DocumentRuntimeOptions;
+use gents_inference::llm::message::{Message, Text, ToolResultContent, UserContent};
+use gents_toolcalls::background::job::job::{
     JobChildState, JobReadError, JobSpawn, JobState, JobStepOutput, JobView,
 };
-use gents::tools::background::job::view::{load_job_view, JobKey};
-use gents::{DocumentRuntimeOptions, ToolCeiling};
+use gents_toolcalls::background::job::view::{load_job_view, JobKey};
+use gents_tools::surface::ToolCeiling;
 use serde_json::{json, Value};
 
 use crate::plugin_job_support::{
@@ -112,7 +113,7 @@ async fn child_requests(h: &JobHarness, row_doc_id: &str) -> usize {
     let response = h.actors.fixture.access.clone()
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ caused_by_parent_tool_call_doc_id: {{ _eq: "{}" }} }}) {{ node_did }} }}"#,
-            gents::store::graphql::escape_graphql_string(row_doc_id),
+            gents_store::graphql::escape_graphql_string(row_doc_id),
         ))
         .await
         .expect("read the child requests");
@@ -127,8 +128,8 @@ async fn failed_row(h: &JobHarness, tool_call_id: &str) -> Option<String> {
     let response = h.actors.fixture.access.clone()
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{}" }}, tool_call_id: {{ _eq: "{}" }} }}) {{ _docID lifecycle_state }} }}"#,
-            gents::store::graphql::escape_graphql_string(&h.session_id),
-            gents::store::graphql::escape_graphql_string(tool_call_id),
+            gents_store::graphql::escape_graphql_string(&h.session_id),
+            gents_store::graphql::escape_graphql_string(tool_call_id),
         ))
         .await
         .expect("read the call row");
@@ -358,7 +359,7 @@ async fn child_cwd_outside_the_operator_root_is_refused_by_the_child_admission()
     let response = h.actors.fixture.access.clone()
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ caused_by_parent_tool_call_doc_id: {{ _eq: "{}" }} }}) {{ lifecycle_state failure_reason }} }}"#,
-            gents::store::graphql::escape_graphql_string(&view.row_doc_id),
+            gents_store::graphql::escape_graphql_string(&view.row_doc_id),
         ))
         .await
         .expect("read the child requests");

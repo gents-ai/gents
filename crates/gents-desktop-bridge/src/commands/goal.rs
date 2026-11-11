@@ -7,7 +7,7 @@ use crate::types::{
     GoalControlAction, GoalControlRequest, GoalControlResult, GoalControlView, SessionGoalState,
     SessionGoalView,
 };
-use gents::goal::SessionGoalObservationState;
+use gents_automation::goal::SessionGoalObservationState;
 use gents_protocol::goal_control::SessionGoalObservation;
 
 pub async fn session_goal(
@@ -35,7 +35,7 @@ fn session_goal_state(
         SessionGoalObservationState::Unknown(cause) => SessionGoalState::Unknown {
             cause,
             next,
-            reason: gents::goal::GoalInputRefused::from(cause).to_string(),
+            reason: gents_automation::goal::GoalInputRefused::from(cause).to_string(),
         },
         SessionGoalObservationState::Observed(observation) => SessionGoalState::Observed {
             observation: Box::new(view(*observation)),
@@ -58,7 +58,7 @@ fn waiting_question_ids(
     });
     let source = sessions.next().filter(|_| sessions.next().is_none())?;
     let latest = source.observation.as_ref()?.latest_request.as_ref()?;
-    let ids = gents::goal::awaiting_goal_question_ids(
+    let ids = gents_automation::goal::awaiting_goal_question_ids(
         observation,
         latest,
         &snapshot.requests,
@@ -291,8 +291,8 @@ pub(super) fn goal_control_result(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::store::config_client::agent_session::AgentSessionRowRead;
     use gents_protocol::goal_control::{GoalRevision, ObservedGoal};
+    use gents_store::config_client::agent_session::AgentSessionRowRead;
     use serde_json::{json, Value};
 
     fn modeled_observation(goal: &Value) -> SessionGoalObservation {
@@ -305,12 +305,13 @@ mod tests {
             requester_did: Some("did:key:user".into()),
             observed_at: "2026-11-08T00:00:00Z".into(),
             goal: (!goal.is_null()).then(|| {
-                let document: gents::goal::GoalDocument = serde_json::from_value(json!({
-                    "_docID": "goal-document", "node_did": "did:key:node", "session_id": "chat",
-                    "goal_id": format!("goal:{}", goal["goal"]), "objective": "Modeled",
-                    "status": "active"
-                }))
-                .unwrap();
+                let document: gents_automation::goal::GoalDocument =
+                    serde_json::from_value(json!({
+                        "_docID": "goal-document", "node_did": "did:key:node", "session_id": "chat",
+                        "goal_id": format!("goal:{}", goal["goal"]), "objective": "Modeled",
+                        "status": "active"
+                    }))
+                    .unwrap();
                 ObservedGoal {
                     assignment_root_request_doc_id: goal["root"]
                         .as_u64()
@@ -319,7 +320,7 @@ mod tests {
                         document: document.doc_id.clone(),
                         composite: "composite".into(),
                     },
-                    snapshot: gents::goal::snapshot(&document, chrono::Utc::now()),
+                    snapshot: gents_automation::goal::snapshot(&document, chrono::Utc::now()),
                 }
             }),
             signature: Vec::new(),
@@ -379,14 +380,14 @@ mod tests {
                 other => panic!("unmodeled session read {other}"),
             };
             let projection = match case["projection"]["kind"].as_str().unwrap() {
-                "missing" => gents::goal::SessionGoalProjectionRead::Missing,
-                "unverified" => gents::goal::SessionGoalProjectionRead::Unverified,
-                "verified" => gents::goal::SessionGoalProjectionRead::Verified(Box::new(
-                    modeled_observation(&case["projection"]["goal"]),
-                )),
+                "missing" => gents_automation::goal::SessionGoalProjectionRead::Missing,
+                "unverified" => gents_automation::goal::SessionGoalProjectionRead::Unverified,
+                "verified" => gents_automation::goal::SessionGoalProjectionRead::Verified(
+                    Box::new(modeled_observation(&case["projection"]["goal"])),
+                ),
                 other => panic!("unmodeled projection read {other}"),
             };
-            let state = gents::goal::observe_session_goal(&session, projection);
+            let state = gents_automation::goal::observe_session_goal(&session, projection);
             let dto = serde_json::to_value(session_goal_state(state, |observation| {
                 goal_view(observation, None)
             }))
@@ -411,11 +412,11 @@ mod tests {
                 "unavailable" => {
                     assert_eq!(dto["kind"], "unknown", "{case}");
                     assert_eq!(dto["cause"], view["cause"], "{case}");
-                    let refused: gents::goal::SessionGoalUnknownCause =
+                    let refused: gents_automation::goal::SessionGoalUnknownCause =
                         serde_json::from_value(view["cause"].clone()).unwrap();
                     assert_eq!(
                         dto["reason"],
-                        gents::goal::GoalInputRefused::from(refused).to_string(),
+                        gents_automation::goal::GoalInputRefused::from(refused).to_string(),
                         "the view's reason is the refusal a send returns: {case}"
                     );
                 }

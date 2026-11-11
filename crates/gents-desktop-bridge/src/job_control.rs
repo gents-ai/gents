@@ -14,7 +14,7 @@ pub async fn job_control(
     let access = core
         .operator_access(&request.node_did)
         .map_err(BridgeError::classify_transport_error)?;
-    gents::tools::call::control::client::send::control_job(
+    gents_toolcalls::call::control::client::send::control_job(
         &access,
         core.node_identity(),
         &request.node_did,

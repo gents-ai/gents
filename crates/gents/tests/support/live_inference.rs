@@ -2,22 +2,22 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use gents::documents::DesiredStateApplyPlan;
-use gents::documents::{Agent, InferenceProfile, Node};
-use gents::store::graphql::escape_graphql_string;
-use gents::{
-    default_inference_profile_id_for_agent, Collection, DocumentRuntimeOptions, Gents,
-    NodeIdentity, ToolCeiling,
-};
+use gents::{DocumentRuntimeOptions, Gents};
+use gents_documents::default_inference_profile_id_for_agent;
+use gents_documents::DesiredStateApplyPlan;
+use gents_documents::{Agent, InferenceProfile, Node};
 use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegment};
 use gents_protocol::output::{OutputSegment, TranscriptMessage};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_store::graphql::escape_graphql_string;
+use gents_store::{collection::Collection, identity::NodeIdentity};
+use gents_tools::surface::ToolCeiling;
 use serde::Deserialize;
 
-use crate::support::agent_requests::RequestActors;
-use crate::support::interrupt::BootedAgent;
-use crate::support::snapshots::SnapshotReader;
-use crate::support::TestDb;
+use gents::support::agent_requests::RequestActors;
+use gents::support::interrupt::BootedAgent;
+use gents::support::snapshots::SnapshotReader;
+use gents::support::TestDb;
 
 #[path = "inference_target.rs"]
 pub mod inference_target;
@@ -33,8 +33,8 @@ pub fn live_target() -> InferenceTarget {
 /// and the Agent's inference documents. Requests and reads go through the
 /// returned actors.
 pub async fn bind_target(db: &TestDb, target: &InferenceTarget) -> RequestActors {
-    let fixture = crate::support::managed_agent_fixture(db).await;
-    crate::support::grant_household_owner(db, &fixture.user).await;
+    let fixture = gents::support::managed_agent_fixture(db).await;
+    gents::support::grant_household_owner(db, &fixture.user).await;
     let node_did = db.node_identity.did().to_owned();
     let agent_did = fixture.binding.agent_did.clone();
     let profile_id = default_inference_profile_id_for_agent(&agent_did);
@@ -47,8 +47,8 @@ pub async fn bind_target(db: &TestDb, target: &InferenceTarget) -> RequestActors
     fixture
         .access
         .transact_write("test.bind_live_backend", |txn| {
-            use gents::documents::apply_desired_state_plan;
-            use gents::documents::{
+            use gents_documents::apply_desired_state_plan;
+            use gents_documents::{
                 read_desired_state_record_in_txn as read, DesiredStateApplyDocument,
             };
             let node_did = &node_did;
@@ -94,7 +94,7 @@ pub async fn bind_target(db: &TestDb, target: &InferenceTarget) -> RequestActors
                 apply_desired_state_plan(
                     txn,
                     &plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
                 .map(|_| ())
@@ -340,8 +340,8 @@ where
 pub struct LiveUser {
     pub db_node: Arc<gents::defra_node::Node>,
     pub runtime: Arc<dyn NodeIdentity>,
-    pub user: gents::KeyIdentity,
-    pub access: gents::ConfigAccess,
+    pub user: gents_store::identity::KeyIdentity,
+    pub access: gents_store::config_client::ConfigAccess,
     pub node_did: String,
 }
 
@@ -358,8 +358,8 @@ impl LiveUser {
     /// Makes the node's fixture User its household owner, then writes the
     /// Node document and the target's backend as that User.
     pub async fn install(db: &TestDb, target: &InferenceTarget) -> Self {
-        let user = crate::support::managed_fixture_user(db).await;
-        crate::support::grant_household_owner(db, &user).await;
+        let user = gents::support::managed_fixture_user(db).await;
+        gents::support::grant_household_owner(db, &user).await;
         let access = db.client_access(&user);
         let node_did = db.node_identity.did().to_owned();
         let live = Self {
@@ -397,8 +397,8 @@ impl LiveUser {
         operation: &'static str,
         documents: Vec<(Collection, serde_json::Value)>,
     ) {
-        use gents::documents::apply_desired_state_plan;
-        use gents::documents::DesiredStateApplyDocument;
+        use gents_documents::apply_desired_state_plan;
+        use gents_documents::DesiredStateApplyDocument;
         let plan = DesiredStateApplyPlan::new(
             documents
                 .into_iter()
@@ -417,7 +417,7 @@ impl LiveUser {
                     apply_desired_state_plan(
                         txn,
                         plan,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await
                     .map(|_| ())
@@ -430,9 +430,9 @@ impl LiveUser {
     /// Provisions one managed Agent under the User and configures its
     /// high-effort live profile, sampling and context. Returns its DID.
     pub async fn agent(&self, target: &InferenceTarget, spec: LiveAgentSpec<'_>) -> String {
-        use gents::documents::AgentContext;
+        use gents_documents::AgentContext;
         let user_did = ::identity::Did::new(self.user.did()).expect("valid User DID");
-        let binding = gents::store::identity::provision_agent_identity_authorized(
+        let binding = gents_store::identity::provision_agent_identity_authorized(
             &self.db_node,
             self.runtime.as_ref(),
             &user_did,
@@ -444,7 +444,7 @@ impl LiveUser {
         let profile = InferenceProfile {
             profile_id: spec.inference_profile_id.to_string(),
             sampling_id: Some(sampling_id.clone()),
-            reasoning_effort: Some(gents::ReasoningEffort::High),
+            reasoning_effort: Some(gents_documents::inference_defaults::ReasoningEffort::High),
             ..target.profile(&self.node_did)
         };
         let context = AgentContext {
@@ -468,7 +468,7 @@ impl LiveUser {
             inference_profile_id: spec.inference_profile_id.to_string(),
             enabled: true,
             tags: Vec::new(),
-            created_at: Some(crate::support::agent_requests::canonical_now()),
+            created_at: Some(gents::support::agent_requests::canonical_now()),
         };
         let mut documents = vec![
             (
@@ -501,9 +501,9 @@ impl LiveUser {
         self.apply("test.live_user.agent", documents).await;
         // Production projects the baseline from the live Agent document;
         // fixtures with no projection pass grant the same set as the node admin.
-        gents::store::identity::GrantSet::AgentBaseline
+        gents_store::identity::GrantSet::AgentBaseline
             .grant(
-                &gents::ConfigAccess::local_as(
+                &gents_store::config_client::ConfigAccess::local_as(
                     self.db_node.clone(),
                     ::identity::Did::new(&self.node_did).expect("valid runtime DID"),
                 ),
@@ -523,7 +523,7 @@ impl LiveUser {
         session_id: &str,
         content: &str,
     ) -> String {
-        crate::support::agent_requests::submit_user_request_to(
+        gents::support::agent_requests::submit_user_request_to(
             &self.access,
             &self.user,
             &self.node_did,
@@ -543,7 +543,7 @@ impl LiveUser {
             .transact_readonly("test.live_user.read_node", |txn| {
                 let node_did = &node_did;
                 Box::pin(async move {
-                    let (_, node) = gents::documents::read_desired_state_record_in_txn(
+                    let (_, node) = gents_documents::read_desired_state_record_in_txn(
                         txn,
                         Collection::Node,
                         node_did,
@@ -573,10 +573,10 @@ impl LiveUser {
             session_id,
             "",
             "interactive",
-            crate::support::agent_requests::canonical_now(),
+            gents::support::agent_requests::canonical_now(),
             AgentRequestAdmissionRecord::client(self.user.did()),
         );
-        gents::request::lifecycle::reserve_goal_session(&self.access, &request)
+        gents_session::request::lifecycle::reserve_goal_session(&self.access, &request)
             .await
             .expect("reserve the User's session")
     }

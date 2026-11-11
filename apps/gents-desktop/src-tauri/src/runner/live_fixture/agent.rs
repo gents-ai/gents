@@ -3,12 +3,11 @@ mod inference;
 
 use anyhow::{Context, Result};
 use gents::runtime::embedded::EmbeddedHome;
-use gents::{
-    cli_tool, default_inference_profile_id_for_agent, DocumentRuntimeOptions, Gents,
-    InferenceBackend, ToolCeiling,
-};
+use gents::{DocumentRuntimeOptions, Gents};
 use gents_desktop_core::client::PrincipalIdentity;
+use gents_documents::{default_inference_profile_id_for_agent, InferenceBackend};
 use gents_protocol::row::{decode_node_readiness_snapshot, NodeReadinessRow};
+use gents_tools::{surface::cli_tool, surface::ToolCeiling};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -53,7 +52,8 @@ pub(super) async fn spawn_live_node(
     std::fs::create_dir_all(&tool_root)
         .with_context(|| format!("creating live tool root {}", tool_root.display()))?;
     seed_repo_workspace(&tool_root)?;
-    let tool_root = gents::workspace::root_resolution::resolve_configured_tool_root(&tool_root)?;
+    let tool_root =
+        gents_session::workspace::root_resolution::resolve_configured_tool_root(&tool_root)?;
 
     let node_did = home.identity.did().to_string();
     let docs = seed_live_agent_documents(
@@ -103,12 +103,12 @@ async fn seed_live_agent_documents(
     backend: &LiveBackendConfig,
     target_backend: Option<&LiveBackendConfig>,
 ) -> Result<LiveAgentDocs> {
-    use gents::documents::apply_desired_state_plan;
-    use gents::documents::PackConfig;
-    use gents::documents::{
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::PackConfig;
+    use gents_documents::{
         load_inference_backend_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
-    use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
+    use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
     use serde_json::json;
     let inference = inference::LiveInferenceSettings::from_env()?;
     let tool_root = tool_root
@@ -128,10 +128,10 @@ async fn seed_live_agent_documents(
     // projects the Agent's baseline grants, which only an authorized actor
     // may do.
     let runtime_access = ConfigAccess::local_as(home.node.clone(), node_did.parse()?);
-    gents::store::identity::GrantSet::HouseholdOwner
+    gents_store::identity::GrantSet::HouseholdOwner
         .grant(&runtime_access, &actor_did)
         .await?;
-    let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+    let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
         config_actor.private_key_bytes(),
     )?;
     let access = ConfigAccess::Graphql(
@@ -146,7 +146,7 @@ async fn seed_live_agent_documents(
     let node_input =
         json!({"node_did":node_did,"display_name":agent_name,"created_by":config_actor_did});
     let initial = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: gents::Collection::Node,
+        collection: gents_store::collection::Collection::Node,
         add: node_input.clone(),
         update: node_input,
     }])?;
@@ -157,19 +157,19 @@ async fn seed_live_agent_documents(
                 apply_desired_state_plan(
                     txn,
                     initial,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
         })
         .await?;
-    let binding = gents::store::identity::provision_agent_identity_authorized(
+    let binding = gents_store::identity::provision_agent_identity_authorized(
         &home.node,
         home.identity.as_ref(),
         &actor_did,
     )
     .await?;
-    let target_binding = gents::store::identity::provision_agent_identity_authorized(
+    let target_binding = gents_store::identity::provision_agent_identity_authorized(
         &home.node,
         home.identity.as_ref(),
         &actor_did,
@@ -256,14 +256,14 @@ async fn seed_live_agent_documents(
                 apply_desired_state_plan(
                     txn,
                     &plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await?;
                 Ok::<_, anyhow::Error>(())
             })
         })
         .await?;
-    gents::tools::surface::set_workspace_root_with_readers(
+    gents_tools::surface::set_workspace_root_with_readers(
         &access,
         node_did,
         tool_root,
@@ -289,7 +289,7 @@ fn live_backend_candidate(
     backend_id: &str,
     backend: &LiveBackendConfig,
 ) -> Result<InferenceBackend> {
-    use gents::documents::BackendAuth;
+    use gents_documents::BackendAuth;
     let auth = match (&backend.api_key, &backend.api_key_env_var) {
         (Some(_), Some(_)) => anyhow::bail!("live backend must select one credential source"),
         (Some(key), None) => BackendAuth::ApiKey { key: key.clone() },
@@ -331,10 +331,11 @@ fn live_backend_candidate(
 }
 
 async fn wait_for_runtime_process_state(home: &EmbeddedHome, node_did: &str) -> Result<()> {
-    let access = gents::ConfigAccess::local_as(home.node.clone(), node_did.parse()?);
+    let access =
+        gents_store::config_client::ConfigAccess::local_as(home.node.clone(), node_did.parse()?);
     let query = format!(
         r#"{{ NodeReadiness(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{ node_did snapshot_json updated_at }} }}"#,
-        gents::store::graphql::escape_graphql_string(node_did)
+        gents_store::graphql::escape_graphql_string(node_did)
     );
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {

@@ -1,12 +1,12 @@
 use super::*;
-use gents::request::lifecycle::RequestTerminalOutcome;
 use gents_protocol::output::TerminalOutput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_session::request::lifecycle::RequestTerminalOutcome;
 
 #[tokio::test]
 async fn fork_does_not_transition_parent_lifecycle_state() {
-    use gents::session::{fork_on, ForkParams};
     use gents_protocol::output::MessageRole;
+    use gents_session::session::{fork_on, ForkParams};
     use support::agent_transcript;
 
     let db = test_db("fork-no-lifecycle-transition").await;
@@ -31,7 +31,7 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
         &actors.agent_access,
         ForkParams {
             source_session_id: &parent_session,
-            boundary: gents::session::ForkBoundary::UserTurn(0),
+            boundary: gents_session::session::ForkBoundary::UserTurn(0),
             caller_node_did: actors.node_did(),
             caller_requester_did: Some(actors.agent_did()),
             target_agent_did: None,
@@ -180,7 +180,7 @@ async fn fail_after_interrupt_latch_prefers_interrupted() {
 #[tokio::test]
 async fn interrupt_request_errors_on_unknown_request_id() {
     let db = test_db("interrupt-unknown").await;
-    let err = gents::interrupt_request(
+    let err = gents_session::request::interrupt::interrupt_request(
         &db.node,
         support::managed_agent(&db).await.as_ref(),
         "bogus-id-that-does-not-exist",
@@ -373,7 +373,7 @@ fn conformance_interrupted_lifecycle_maps_to_interrupted_client_turn() {
 async fn manual_run_preserves_lineage_through_claim_transition() {
     let db = test_db("manual-run-lineage-through-claim").await;
     let agent = support::managed_agent(&db).await;
-    let agent_access = gents::ConfigAccess::local_managed_agent(
+    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         db.node.clone(),
         agent.did().parse().unwrap(),
         agent.as_ref(),
@@ -384,7 +384,7 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
         &db.node,
         ::identity::Did::new(agent.did()).expect("fixture creator DID"),
         agent.as_ref(),
-        gents::request::lifecycle::ManualRequestTarget {
+        gents_session::request::lifecycle::ManualRequestTarget {
             node_did: db.node_identity.did(),
             agent_did: agent.did(),
             task_id: "task-manual-claim",
@@ -511,7 +511,7 @@ async fn interrupt_request_drains_automated_wakeups_in_owner_scope() {
     let foreign = tokio::task::spawn_blocking(|| support::fixtures::test_identity("foreign-drain"))
         .await
         .unwrap();
-    let foreign_node_did = gents::NodeIdentity::did(&foreign).to_owned();
+    let foreign_node_did = gents_store::identity::NodeIdentity::did(&foreign).to_owned();
     let foreign_node_did = foreign_node_did.as_str();
     let wakeup_input = format!(
         r#"{{"queue":{{"source":"background_completion","policy":"coalesce","key":"background_completion:{session_id}","queued_after_request_id":null}}}}"#
@@ -573,9 +573,13 @@ async fn interrupt_request_drains_automated_wakeups_in_owner_scope() {
     )
     .await;
 
-    gents::interrupt_request(&db.node, actors.agent().as_ref(), "drain-parent")
-        .await
-        .expect("interrupt_request should latch and drain");
+    gents_session::request::interrupt::interrupt_request(
+        &db.node,
+        actors.agent().as_ref(),
+        "drain-parent",
+    )
+    .await
+    .expect("interrupt_request should latch and drain");
 
     let latched = actors
         .request_row(&parent_doc, "interrupt_requested_at")
@@ -651,7 +655,7 @@ async fn create_pending_queue_row(
         "max_retries": 3,
     });
     let agent = ::identity::Did::new(actors.agent_did()).unwrap();
-    gents::ConfigAccess::local_as(
+    gents_store::config_client::ConfigAccess::local_as(
         db.node.clone(),
         ::identity::Did::new(db.node_identity.did()).unwrap(),
     )
@@ -664,7 +668,7 @@ async fn create_pending_queue_row(
                     &json!({"input": value}),
                 )
                 .await?;
-            let doc = gents::store::graphql::created_doc_id(&response, "AgentRequest")?;
+            let doc = gents_store::graphql::created_doc_id(&response, "AgentRequest")?;
             txn.add_actor_relationship("AgentRequest", &doc, "working_agent", agent)
                 .await?;
             Ok::<_, anyhow::Error>(doc)

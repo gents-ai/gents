@@ -452,16 +452,16 @@ fn binding_value(value: &str) -> String {
     match value {
         "@session" => session(Some("probe")),
         "@session-absent" => session(None),
-        "@public-session" => gents::session::public_request_filter(&session(Some("probe"))),
-        "@public-session-absent" => gents::session::public_request_filter(&session(None)),
-        "@public-keyset" => gents::session::public_request_filter(&format!(
+        "@public-session" => gents_session::session::public_request_filter(&session(Some("probe"))),
+        "@public-session-absent" => gents_session::session::public_request_filter(&session(None)),
+        "@public-keyset" => gents_session::session::public_request_filter(&format!(
             "{}, request_id: {{_gt: \"probe\"}}",
             session(Some("probe"))
         )),
-        "@public-node-keyset" => gents::session::public_request_filter(
+        "@public-node-keyset" => gents_session::session::public_request_filter(
             "node_did: {_eq: \"probe\"}, requester_did: {_eq: \"probe\"}, request_id: {_gt: \"probe\"}",
         ),
-        "@public-created-keyset" => gents::session::public_request_filter(&format!(
+        "@public-created-keyset" => gents_session::session::public_request_filter(&format!(
             "{}, created_at: {{_gte: \"2026-10-16T00:00:00Z\"}}, request_id: {{_gt: \"probe\"}}",
             session(Some("probe"))
         )),
@@ -668,16 +668,20 @@ async fn ordered_bounded_reads_keep_filtering_above_unbounded_scans() {
         serde_json::to_string_pretty(&removed).unwrap()
     );
     let dir = tempfile::tempdir().unwrap();
-    let identity = gents::KeyIdentity::load_or_create(dir.path().join("node.key"), None).unwrap();
+    let identity =
+        gents_store::identity::KeyIdentity::load_or_create(dir.path().join("node.key"), None)
+            .unwrap();
     let node = gents::defra_node::Node::builder()
-        .with_node_identity_did(gents::NodeIdentity::did(&identity))
+        .with_node_identity_did(gents_store::identity::NodeIdentity::did(&identity))
         .data_path(dir.path().join("db"))
         .build()
         .await
         .unwrap();
-    gents::ensure_runtime_schemas(&node).await.unwrap();
+    gents_store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     let unsafe_query = r#"query @explain { AgentRequest(filter: {request_id: {_eq: "probe"}, content: {_eq: "probe"}}, order: {request_id: ASC}, limit: 1) {_docID} }"#;
-    let unsafe_plan = gents::store::graphql::graphql_with_transaction_retry(
+    let unsafe_plan = gents_store::graphql::graphql_with_transaction_retry(
         &node,
         unsafe_query,
         "checking query screen discrimination",
@@ -733,7 +737,7 @@ async fn ordered_bounded_reads_keep_filtering_above_unbounded_scans() {
                 screen.read
             );
             let query = format!("query @explain {{ {collection}({arguments}) {{ _docID }} }}");
-            let response = gents::store::graphql::graphql_with_transaction_retry(
+            let response = gents_store::graphql::graphql_with_transaction_retry(
                 &node,
                 &query,
                 "screening ordered read plans",

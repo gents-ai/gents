@@ -20,7 +20,7 @@ pub(crate) struct CodexLoginOptions {
 }
 
 pub(crate) struct CodexLoginOutcome {
-    pub(crate) sign_in: gents::inference::auth::credential::SignIn,
+    pub(crate) sign_in: gents_inference::auth::credential::SignIn,
 }
 
 pub(crate) async fn codex_login(args: CodexLoginArgs) -> Result<()> {
@@ -56,7 +56,7 @@ pub(crate) async fn run_codex_login<O>(
 where
     O: FnOnce(&str),
 {
-    let provider = gents::inference::clients::chatgpt_codex::normalize_provider(&opts.provider);
+    let provider = gents_inference::clients::chatgpt_codex::normalize_provider(&opts.provider);
     let mut login_options = LoginOptions {
         client_id: opts
             .client_id
@@ -102,7 +102,7 @@ where
         .await?
     };
 
-    let credential = gents::inference::auth::credential::OAuthCredential::from_login_tokens(
+    let credential = gents_inference::auth::credential::OAuthCredential::from_login_tokens(
         node_did,
         &provider,
         &tokens.id_token,
@@ -110,12 +110,9 @@ where
         tokens.refresh_token,
         chrono::Utc::now(),
     );
-    let sign_in = gents::inference::auth::credential::store_sign_in(
-        access,
-        credential,
-        opts.label.as_deref(),
-    )
-    .await?;
+    let sign_in =
+        gents_inference::auth::credential::store_sign_in(access, credential, opts.label.as_deref())
+            .await?;
     Ok(CodexLoginOutcome { sign_in })
 }
 
@@ -123,7 +120,7 @@ pub(crate) fn codex_login_result_json(outcome: &CodexLoginOutcome) -> Value {
     let credential = &outcome.sign_in.credential;
     json!({
         "doc_id": outcome.sign_in.doc_id,
-        "label": gents::inference::auth::credential::effective_account_label(credential),
+        "label": gents_inference::auth::credential::effective_account_label(credential),
         "result": outcome.sign_in.result,
         "profiles": outcome.sign_in.profiles,
         "credential_id": credential.credential_id,
@@ -147,7 +144,7 @@ mod tests {
 
     #[test]
     fn result_json_redacts_tokens_and_reports_the_account() {
-        let mut credential = gents::inference::auth::credential::OAuthCredential::from_login_tokens(
+        let mut credential = gents_inference::auth::credential::OAuthCredential::from_login_tokens(
             "did:key:z6MkTest",
             "chatgpt-codex",
             "id-SECRET",
@@ -157,10 +154,10 @@ mod tests {
         );
         credential.label = Some("Work".into());
         let json = codex_login_result_json(&CodexLoginOutcome {
-            sign_in: gents::inference::auth::credential::SignIn {
+            sign_in: gents_inference::auth::credential::SignIn {
                 doc_id: "bae-1".into(),
                 credential,
-                result: gents::inference::auth::credential::SignInResult::Refreshed,
+                result: gents_inference::auth::credential::SignInResult::Refreshed,
                 identity_matched: true,
                 profiles: Vec::new(),
             },

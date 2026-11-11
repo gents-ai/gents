@@ -1,7 +1,7 @@
 use super::fake_llm::{ChatAction, FakeLlm};
 use anyhow::{ensure, Context, Result};
-use gents::ConfigAccess;
 use gents_protocol::{request_input::RequestAttachment, request_lifecycle::RequestLifecycleState};
+use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -88,8 +88,8 @@ pub async fn verify(
     for (session, content) in cases {
         let rows = access.execute(&format!(
         r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, purpose: {{_eq: "normal"}}}}) {{ {} }} }}"#,
-        gents::store::graphql::escape_graphql_string(node),
-        gents::store::graphql::escape_graphql_string(session),
+        gents_store::graphql::escape_graphql_string(node),
+        gents_store::graphql::escape_graphql_string(session),
         gents::SIGNED_REQUEST_FIELDS,
     )).await?;
         let rows: Vec<gents_protocol::row::AgentRequestRow> =
@@ -107,7 +107,7 @@ pub async fn verify(
             "images must belong to exactly one submitted request"
         );
         let row = captured[0];
-        gents::verify_request_receipt_signature(row)?;
+        gents_store::identity::request_receipt::verify_request_receipt_signature(row)?;
         ensure!(
             row.lifecycle_state == Some(RequestLifecycleState::Completed)
                 && row.admission_signer_did.as_deref() == Some(author)

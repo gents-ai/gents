@@ -131,7 +131,7 @@ async fn managed_config_write_never_falls_back_to_the_desktop_replica() -> Resul
     )
     .await?;
 
-    let tools: gents::Tools = serde_json::from_value(serde_json::json!({
+    let tools: gents_documents::Tools = serde_json::from_value(serde_json::json!({
         "node_did": node_did,
         "tools_id": "must-not-be-local",
         "host": { "files": { "mode": "ReadOnly" } }
@@ -149,7 +149,7 @@ async fn managed_config_write_never_falls_back_to_the_desktop_replica() -> Resul
         .node()
         .execute(&format!(
             r#"{{ Tools(filter: {{ node_did: {{ _eq: "{}" }}, tools_id: {{ _eq: "must-not-be-local" }} }}) {{ _docID }} }}"#,
-            gents::store::graphql::escape_graphql_string(node_did)
+            gents_store::graphql::escape_graphql_string(node_did)
         ))
         .await;
     assert!(

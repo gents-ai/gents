@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use gents::documents::inference_defaults::ReasoningEffort;
-use gents::inference::auth::credential::{resolve_oauth_credential, AccountPick};
-use gents::inference::backends::setup::{
+use gents_documents::inference_defaults::ReasoningEffort;
+use gents_inference::auth::credential::{resolve_oauth_credential, AccountPick};
+use gents_inference::backends::setup::{
     connection_spec, model_option, InferenceModelOption, InferenceProviderId,
     RecommendedNumberControl, RecommendedReasoningControl,
 };
@@ -59,7 +59,7 @@ pub(super) async fn choose(
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(10))
         .build()?;
-    let scanned = gents::discover_backend_models(
+    let scanned = gents_inference::backends::provider::discover_models(
         &client,
         spec.provider_kind,
         &spec.endpoint,

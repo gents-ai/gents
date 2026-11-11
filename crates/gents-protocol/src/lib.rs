@@ -54,3 +54,4 @@ pub mod wait_status;
 pub const ENGINEER_PROMPT: &str = include_str!("../prompts/engineer.md");
 
 pub const ENGINEER_SELF_CONFIG_JSON: &str = include_str!("../presets/engineer-self-config.json");
+pub mod failure_text;

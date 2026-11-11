@@ -1,8 +1,10 @@
 use std::time::Duration;
 
-use gents::store::graphql::escape_graphql_string;
-use gents::{ConfigAccess, DocumentRuntimeOptions, Gents, ToolCeiling};
+use gents::{DocumentRuntimeOptions, Gents};
 use gents_protocol::row::AgentRequestRow;
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
+use gents_tools::surface::ToolCeiling;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -27,10 +29,10 @@ const WEBHOOK_EVENT_SDL: &str = r#"
 "#;
 
 async fn register_webhook_event_schema(access: &ConfigAccess) {
-    let plan = gents::store::config_client::preview_schema_install(access, WEBHOOK_EVENT_SDL)
+    let plan = gents_store::config_client::preview_schema_install(access, WEBHOOK_EVENT_SDL)
         .await
         .expect("preview WebhookEvent schema");
-    gents::store::config_client::apply_schema_install(
+    gents_store::config_client::apply_schema_install(
         access,
         WEBHOOK_EVENT_SDL,
         &plan.artifact_digest,
@@ -39,8 +41,11 @@ async fn register_webhook_event_schema(access: &ConfigAccess) {
     .expect("install WebhookEvent schema");
 }
 
-async fn apply_documents(access: &ConfigAccess, documents: Vec<(gents::Collection, Value)>) {
-    use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+async fn apply_documents(
+    access: &ConfigAccess,
+    documents: Vec<(gents_store::collection::Collection, Value)>,
+) {
+    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     let plan = DesiredStateApplyPlan::new(
         documents
             .into_iter()
@@ -56,10 +61,10 @@ async fn apply_documents(access: &ConfigAccess, documents: Vec<(gents::Collectio
         .transact_write("test.event_trigger_configuration", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                gents::documents::apply_desired_state_plan(
+                gents_documents::apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
@@ -78,7 +83,7 @@ async fn create_task(
     apply_documents(
         access,
         vec![(
-            gents::Collection::Task,
+            gents_store::collection::Collection::Task,
             serde_json::json!({
                 "node_did": owner, "task_id": task_id, "display_name": task_id,
                 "agent_did": agent_did, "prompt_template": prompt_template, "enabled": true,
@@ -98,11 +103,11 @@ async fn create_event_trigger_with_filter(
     filter: &str,
 ) {
     apply_documents(access, vec![
-        (gents::Collection::EventSource, serde_json::json!({
+        (gents_store::collection::Collection::EventSource, serde_json::json!({
             "event_source_id": trigger_id, "node_did": owner,
             "source_collection": source_collection, "event_kind": event_kind, "filter": filter,
         })),
-        (gents::Collection::Trigger, serde_json::json!({
+        (gents_store::collection::Collection::Trigger, serde_json::json!({
             "trigger_id": trigger_id, "node_did": owner, "task_id": task_id,
             "source": {"kind": "event", "event_source_id": trigger_id},
             "enabled": true, "concurrency": "serial",
@@ -231,11 +236,11 @@ async fn fetch_event_trigger(access: &ConfigAccess, trigger_id: &str) -> EventTr
 }
 
 async fn write_webhook_event(access: &ConfigAccess, external_id: &str, kind: &str) -> String {
-    gents::store::config_client::create_authored_document(
+    gents_store::config_client::create_authored_document(
         access,
         "WebhookEvent",
         &serde_json::json!({"external_id": external_id, "payload": "{}", "kind": kind}),
-        gents::store::config_client::DocumentSchemaSource::UserAuthored,
+        gents_store::config_client::DocumentSchemaSource::UserAuthored,
         WEBHOOK_EVENT_SDL,
     )
     .await

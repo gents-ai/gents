@@ -5,16 +5,16 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use gents::store::config_client::ConfigAccess;
-use gents::tools::background::job::dispatch::split_address;
-use gents::tools::background::job::view::{
-    list_jobs, load_job_view, JobFilter, JobKey, StateFilter,
-};
-use gents::tools::call::control::client::send::ControlSendError;
 use gents_protocol::job::{
     JobChildState, JobControlKind, JobControlOutcome, JobOrigin, JobPauseReason, JobPhaseState,
     JobReadError, JobState, JobView,
 };
+use gents_store::config_client::ConfigAccess;
+use gents_toolcalls::background::job::dispatch::split_address;
+use gents_toolcalls::background::job::view::{
+    list_jobs, load_job_view, JobFilter, JobKey, StateFilter,
+};
+use gents_toolcalls::call::control::client::send::ControlSendError;
 
 use serde_json::{json, Value};
 
@@ -363,9 +363,9 @@ async fn control_job_remote(
     kind: JobControlKind,
 ) -> std::result::Result<JobControlOutcome, ControlSendError> {
     let actor = access.actor_did().ok_or(ControlSendError::NotAuthorized)?;
-    let signer = gents::store::identity::RegisteredIdentity::from_registered_did(&actor, None)
+    let signer = gents_store::identity::RegisteredIdentity::from_registered_did(&actor, None)
         .map_err(|error| ControlSendError::Unavailable(error.into()))?;
-    gents::tools::call::control::client::send::control_job(
+    gents_toolcalls::call::control::client::send::control_job(
         access,
         &signer,
         &view.scope.node_did,
@@ -785,12 +785,12 @@ fn print_table(views: &[JobView], now_ms: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::tools::background::job::admit::Refusal;
-    use gents::tools::background::job::dispatch::split_address;
     use gents_protocol::job::{
         JobBudget, JobChildRow, JobChildState, JobOutcome, JobPauseReason, JobPhase, JobPhaseState,
         JobPinSummary, JobProgress, JobScope, JobState, JobUsage, JobView,
     };
+    use gents_toolcalls::background::job::admit::Refusal;
+    use gents_toolcalls::background::job::dispatch::split_address;
 
     const ACTOR: &str = "did:key:actor";
 

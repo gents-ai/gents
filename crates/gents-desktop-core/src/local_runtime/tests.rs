@@ -60,7 +60,7 @@ fn configured_runtime_missing_key_is_not_created_by_desktop_read() {
 fn configured_runtime_wrong_existing_key_is_preserved() {
     let tempdir = tempfile::tempdir().unwrap();
     let key_path = tempdir.path().join("existing.key");
-    gents::store::identity::KeyIdentity::load_or_create(&key_path, None).unwrap();
+    gents_store::identity::KeyIdentity::load_or_create(&key_path, None).unwrap();
     let original = std::fs::read(&key_path).unwrap();
     std::fs::write(
         tempdir.path().join("init.json"),
@@ -447,12 +447,12 @@ async fn discovery_fails_at_once_for_a_runtime_that_predates_readiness() {
 const HOSTED_GRAPHQL: &str = "http://127.0.0.1:9191/api/v0/graphql";
 
 fn hosted_home(dir: &std::path::Path) -> (std::path::PathBuf, String) {
-    use gents::store::identity::NodeIdentity as _;
+    use gents_store::identity::NodeIdentity as _;
 
     let home = dir.join("node");
     std::fs::create_dir_all(&home).unwrap();
     let key_path = home.join("node.key");
-    let identity = gents::store::identity::KeyIdentity::load_or_create(&key_path, None).unwrap();
+    let identity = gents_store::identity::KeyIdentity::load_or_create(&key_path, None).unwrap();
     let did = identity.did().to_string();
     seed_home(&home, &did, HOSTED_GRAPHQL);
     std::fs::write(
@@ -477,7 +477,7 @@ fn cached_runtime_operator_endpoint_does_not_load_a_cold_runtime_key() {
     let tempdir = tempfile::tempdir().unwrap();
     let home = tempdir.path();
     let key_path = home.join("node.key");
-    let identity = gents::store::identity::load_or_create_file_identity(&key_path).unwrap();
+    let identity = gents_store::identity::load_or_create_file_identity(&key_path).unwrap();
     let did = identity.did().unwrap().to_string();
     seed_home(home, &did, HOSTED_GRAPHQL);
     std::fs::write(
@@ -486,14 +486,14 @@ fn cached_runtime_operator_endpoint_does_not_load_a_cold_runtime_key() {
     )
     .unwrap();
     let record = hosted_record(home, &did, HOSTED_GRAPHQL);
-    assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
+    assert!(!gents_store::identity::can_mint_defradb_bearer(&did));
     assert_eq!(
         cached_runtime_operator_endpoint(&record),
-        Some(gents::store::config_client::GraphqlEndpoint::anonymous(
+        Some(gents_store::config_client::GraphqlEndpoint::anonymous(
             HOSTED_GRAPHQL
         ))
     );
-    assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
+    assert!(!gents_store::identity::can_mint_defradb_bearer(&did));
 
     let unlocked = super::OperatorIdentityInteraction::default()
         .runtime_endpoint(&record)
@@ -503,7 +503,7 @@ fn cached_runtime_operator_endpoint_does_not_load_a_cold_runtime_key() {
     std::fs::remove_file(key_path).unwrap();
     assert_eq!(
         cached_runtime_operator_endpoint(&record),
-        Some(gents::store::config_client::GraphqlEndpoint::anonymous(
+        Some(gents_store::config_client::GraphqlEndpoint::anonymous(
             HOSTED_GRAPHQL
         ))
     );
@@ -515,14 +515,14 @@ fn cached_runtime_operator_endpoint_does_not_infer_authority_from_registry() {
     let (home, did) = hosted_home(tempdir.path());
     assert_eq!(
         cached_runtime_operator_endpoint(&hosted_record(&home, &did, HOSTED_GRAPHQL)),
-        Some(gents::store::config_client::GraphqlEndpoint::anonymous(
+        Some(gents_store::config_client::GraphqlEndpoint::anonymous(
             HOSTED_GRAPHQL
         ))
     );
     let elsewhere = "http://127.0.0.1:9999/api/v0/graphql";
     assert_eq!(
         cached_runtime_operator_endpoint(&hosted_record(&home, &did, elsewhere)),
-        Some(gents::store::config_client::GraphqlEndpoint::anonymous(
+        Some(gents_store::config_client::GraphqlEndpoint::anonymous(
             elsewhere
         ))
     );
@@ -530,7 +530,7 @@ fn cached_runtime_operator_endpoint_does_not_infer_authority_from_registry() {
     record.local_node_home = None;
     assert_eq!(
         cached_runtime_operator_endpoint(&record),
-        Some(gents::store::config_client::GraphqlEndpoint::anonymous(
+        Some(gents_store::config_client::GraphqlEndpoint::anonymous(
             HOSTED_GRAPHQL
         ))
     );
@@ -576,7 +576,7 @@ async fn hosted_runtime_status_reads_as_the_user_and_never_loads_the_node_key() 
     let home = directory.path().join("node");
     std::fs::create_dir_all(&home).unwrap();
     let key_path = home.join("node.key");
-    let node = gents::store::identity::load_or_create_file_identity(&key_path).unwrap();
+    let node = gents_store::identity::load_or_create_file_identity(&key_path).unwrap();
     let did = node.did().unwrap().to_string();
     let server = MockServer::start().await;
     let graphql = format!("{}/api/v0/graphql", server.uri());
@@ -586,7 +586,9 @@ async fn hosted_runtime_status_reads_as_the_user_and_never_loads_the_node_key() 
         json!({ "node_name": "Local", "node_did": did, "key_path": key_path }).to_string(),
     )
     .unwrap();
-    let user = gents::KeyIdentity::load_or_create(directory.path().join("user.key"), None).unwrap();
+    let user =
+        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("user.key"), None)
+            .unwrap();
     let capability = user.client_signing_capability().unwrap();
     let record = hosted_record(&home, &did, &graphql);
     Mock::given(method("GET"))
@@ -602,7 +604,7 @@ async fn hosted_runtime_status_reads_as_the_user_and_never_loads_the_node_key() 
         .unwrap()
         .unwrap();
     assert_eq!(payload["tool_root"], "/w");
-    assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
+    assert!(!gents_store::identity::can_mint_defradb_bearer(&did));
     let requests = server.received_requests().await.unwrap();
     let bearer = requests[0]
         .headers
@@ -618,7 +620,7 @@ async fn hosted_runtime_status_reads_as_the_user_and_never_loads_the_node_key() 
             .did()
             .unwrap()
             .to_string(),
-        gents::NodeIdentity::did(&user)
+        gents_store::identity::NodeIdentity::did(&user)
     );
 
     Mock::given(method("GET"))
@@ -636,7 +638,7 @@ async fn hosted_runtime_status_reads_as_the_user_and_never_loads_the_node_key() 
         ),
         "{error:#}"
     );
-    assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
+    assert!(!gents_store::identity::can_mint_defradb_bearer(&did));
     assert!(server
         .received_requests()
         .await
@@ -729,8 +731,11 @@ async fn managed_readiness_status_rejects_redirects_without_forwarding_authority
         .expect(0)
         .mount(&server)
         .await;
-    let caller =
-        gents::KeyIdentity::load_or_create(directory.path().join("caller.key"), None).unwrap();
+    let caller = gents_store::identity::KeyIdentity::load_or_create(
+        directory.path().join("caller.key"),
+        None,
+    )
+    .unwrap();
     let error = super::fetch_hosted_runtime_status(
         &hosted_record(&home, &did, &graphql),
         Some(&caller.client_signing_capability().unwrap()),
@@ -744,26 +749,32 @@ async fn managed_readiness_status_rejects_redirects_without_forwarding_authority
 fn document_operator_endpoint_preserves_client_without_loading_runtime_key() {
     let directory = tempfile::tempdir().unwrap();
     let runtime = "did:key:unloaded-runtime";
-    let caller =
-        gents::KeyIdentity::load_or_create(directory.path().join("caller.key"), None).unwrap();
+    let caller = gents_store::identity::KeyIdentity::load_or_create(
+        directory.path().join("caller.key"),
+        None,
+    )
+    .unwrap();
     let record = hosted_record(directory.path(), runtime, HOSTED_GRAPHQL);
     let capability = caller.client_signing_capability().unwrap();
     let endpoint = super::operator_endpoint(&record, &capability).unwrap();
     assert!(endpoint.authorization().unwrap().is_some());
-    assert!(!gents::store::identity::can_mint_defradb_bearer(runtime));
+    assert!(!gents_store::identity::can_mint_defradb_bearer(runtime));
 }
 
 #[tokio::test]
 async fn runtime_status_uses_the_caller_and_rejects_another_node() {
-    use gents::NodeIdentity as _;
+    use gents_store::identity::NodeIdentity as _;
     use identity::Identity as _;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
     let directory = tempfile::tempdir().unwrap();
-    let caller =
-        gents::KeyIdentity::load_or_create(directory.path().join("caller.key"), None).unwrap();
+    let caller = gents_store::identity::KeyIdentity::load_or_create(
+        directory.path().join("caller.key"),
+        None,
+    )
+    .unwrap();
     let server = MockServer::start().await;
-    let endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(
+    let endpoint = gents_store::config_client::GraphqlEndpoint::as_principal(
         format!("{}/api/v0/graphql", server.uri()),
         caller.did(),
     )

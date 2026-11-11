@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 #[cfg(test)]
-use gents::pack::archive::PackArchive;
+use gents_pack::pack::archive::PackArchive;
 #[cfg(test)]
-use gents::pack::registry::verify_pack_coordinate;
-pub(crate) use gents::pack::registry::{
+use gents_pack::pack::registry::verify_pack_coordinate;
+pub(crate) use gents_pack::pack::registry::{
     fetch_pack, resolve_pack_coordinate, resolve_registry_url, RegistryClient,
 };
 #[cfg(test)]
@@ -75,9 +75,9 @@ pub(crate) async fn fetch(args: PackFetchArgs) -> Result<()> {
         computed
     };
     verify_digest_hex(&computed, &coordinate.artifact_digest, &coordinate.version)?;
-    let header = gents::pack::archive::read_pack(
+    let header = gents_pack::pack::archive::read_pack(
         std::io::BufReader::new(std::fs::File::open(staged.path())?),
-        gents::pack::archive::Bounds::default(),
+        gents_pack::pack::archive::Bounds::default(),
         |_, _| Ok(()),
     )
     .with_context(|| format!("{namespace}/{name} from the registry is not a readable pack"))?
@@ -124,16 +124,16 @@ async fn fetch_into_store(args: PackFetchArgs) -> Result<()> {
         Some(version) => format!("{}@{version}", args.package),
         None => args.package.clone(),
     };
-    let options = gents::pack::resolve::ResolveOptions {
+    let options = gents_pack::pack::resolve::ResolveOptions {
         home: Some(&home),
         registry_url: resolve_registry_url(args.registry.as_deref()),
         installed: &[],
     };
-    let resolved = gents::pack::resolve::resolve_named(&spec, &options).await?;
+    let resolved = gents_pack::pack::resolve::resolve_named(&spec, &options).await?;
     let source = match resolved.from {
-        gents::pack::resolve::ResolvedFrom::Installed
-        | gents::pack::resolve::ResolvedFrom::Store => "store",
-        gents::pack::resolve::ResolvedFrom::Registry { .. } => "registry",
+        gents_pack::pack::resolve::ResolvedFrom::Installed
+        | gents_pack::pack::resolve::ResolvedFrom::Store => "store",
+        gents_pack::pack::resolve::ResolvedFrom::Registry { .. } => "registry",
     };
     let manifest = resolved.archive.manifest();
     crate::print_json(&serde_json::json!({
@@ -249,7 +249,7 @@ pub(crate) mod tests {
             format!("{error:#}").contains("gents config pack login"),
             "{error:#}"
         );
-        gents::pack::registry::credentials::set(home.path(), registry, "gcpat_saved").unwrap();
+        gents_pack::pack::registry::credentials::set(home.path(), registry, "gcpat_saved").unwrap();
         assert_eq!(resolve(None).unwrap(), "gcpat_saved");
         guard.set(REGISTRY_TOKEN_ENV_VAR, "gcpat_env");
         assert_eq!(resolve(None).unwrap(), "gcpat_env");
@@ -293,7 +293,7 @@ pub(crate) mod tests {
     }
 
     async fn fake_oversized_download() -> Response {
-        let body = vec![0_u8; gents::pack::archive::MAX_PACK_BYTES + 1];
+        let body = vec![0_u8; gents_pack::pack::archive::MAX_PACK_BYTES + 1];
         Response::builder()
             .status(StatusCode::OK)
             .header(axum::http::header::CONTENT_LENGTH, body.len().to_string())
@@ -421,7 +421,7 @@ pub(crate) mod tests {
             serde_json::to_vec_pretty(&manifest).unwrap(),
         )
         .unwrap();
-        let (bytes, _) = gents::pack::archive::pack_dir(&root).unwrap();
+        let (bytes, _) = gents_pack::pack::archive::pack_dir(&root).unwrap();
         let digest = {
             use sha2::Digest;
             format!("{:x}", sha2::Sha256::digest(&bytes))
@@ -476,7 +476,7 @@ pub(crate) mod tests {
         assert_eq!(first.name, "plain_pack");
         assert_eq!(first.version, "1.0.0");
         assert_eq!(state.downloads.load(Ordering::SeqCst), 1);
-        assert!(gents::pack::store::PackStore::new(home.path())
+        assert!(gents_pack::pack::store::PackStore::new(home.path())
             .contains(&first.digest)
             .unwrap());
 

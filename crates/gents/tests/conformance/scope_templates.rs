@@ -1,9 +1,9 @@
 use std::collections::BTreeSet;
 
-use gents::runtime::agent::p2p_reconcile::templates::{
+use gents_p2p::p2p_reconcile::templates::{
     builtin_templates, resolve_template, single_string_eq, Delivery,
 };
-use gents::runtime::agent::p2p_reconcile::{
+use gents_p2p::p2p_reconcile::{
     client_route_collections, resolve_template_filters, PairingDirection, CLIENT_TEMPLATE,
 };
 

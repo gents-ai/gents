@@ -14,7 +14,7 @@ use crate::report::build::SlotVerdict;
 use crate::report::compare::{CaseComparison, Comparison, PairedTrial};
 use crate::report::refused;
 use crate::scoring::SCORE_BP_MAX;
-use gents::documents::EvalTier;
+use gents_documents::EvalTier;
 
 /// One check's paired difference, candidate minus baseline, across cases.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

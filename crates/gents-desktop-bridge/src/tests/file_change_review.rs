@@ -1,10 +1,10 @@
-use gents::store::config_client::ConfigAccess;
-use gents::store::graphql::escape_graphql_string;
 use gents_protocol::file_changes::{
     FileChangeImages, FileImage, FilePermissions, ToolFileChanges, FILE_CHANGES_VERSION,
     MAX_FILE_IMAGE_BYTES,
 };
 use gents_protocol::job::{JobBudget, JobProgress, JobState};
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
 
 use super::operations_job_control::seed_admission_for_node;
 use super::support::{create_session, seed_job_row_for_node, OPERATOR};

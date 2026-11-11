@@ -53,7 +53,7 @@ pub(super) async fn grant_pending_root_readers(
         .to_str()
         .with_context(|| format!("{} is not UTF-8", workspace.display()))?;
     for agent_did in &pending {
-        gents::tools::surface::grant_workspace_root_reader(&access, root, agent_did)
+        gents_tools::surface::grant_workspace_root_reader(&access, root, agent_did)
             .await
             .with_context(|| format!("the trial User granting {agent_did} the trial root"))?;
         granted.insert(agent_did.clone());

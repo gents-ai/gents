@@ -99,7 +99,7 @@ async fn fresh_enrolled_client_receives_node_administration_and_creates_agent() 
     let node_identity = identity_from_init(&init)?;
     let data = runtime_home.join("data");
     let node = Arc::new(
-        gents::store::local::store_key::open_home_store_key(&runtime_home, &data)
+        gents_store::local::store_key::open_home_store_key(&runtime_home, &data)
             .await?
             .encrypt(
                 gents::defra_node::Node::builder()
@@ -110,9 +110,9 @@ async fn fresh_enrolled_client_receives_node_administration_and_creates_agent() 
             .build()
             .await?,
     );
-    let access = gents::store::config_client::ConfigAccess::local_as(
+    let access = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
-        gents::NodeIdentity::did(&node_identity).parse()?,
+        gents_store::identity::NodeIdentity::did(&node_identity).parse()?,
     );
     let owners = access.transact_readonly("test.household.owners", |txn| {
         let node_did = node_did.clone();
@@ -157,7 +157,7 @@ async fn fresh_enrolled_client_receives_node_administration_and_creates_agent() 
         ("default Agent", &owners.5, owner_identity.did()),
         ("enrolled client's Agent", &owners.2, client_did.as_str()),
     ] {
-        let commits = gents::store::graphql::composite_commits(
+        let commits = gents_store::graphql::composite_commits(
             &node,
             doc_id,
             "test.household.creation_commits",
@@ -189,10 +189,10 @@ async fn fresh_enrolled_client_receives_node_administration_and_creates_agent() 
 /// approval never committed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn desktop_approve_admits_the_member_and_deny_grants_nothing() -> Result<()> {
-    use gents::store::identity::{load_enrollment_grant_receipts, GrantSet};
     use gents_server::server_host::{
         admit_managed_enrollment_as, decide_managed_enrollment, ManagedEnrollmentDecision,
     };
+    use gents_store::identity::{load_enrollment_grant_receipts, GrantSet};
     let _guard = enrollment_e2e_lock().lock().await;
     let model = FakeLlm::start(
         "admission",
@@ -229,12 +229,12 @@ async fn desktop_approve_admits_the_member_and_deny_grants_nothing() -> Result<(
     let node_did = node_did_from_init(&init)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
-    let owner = gents::store::config_client::GraphqlEndpoint::as_principal(
+    let owner = gents_store::config_client::GraphqlEndpoint::as_principal(
         graphql.clone(),
         owner_identity.did(),
     )
     .with_client_signing_capability(
-        gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+        gents_store::config_client::ClientSigningCapability::from_ed25519_key(
             owner_identity.private_key_bytes(),
         )?,
     )?
@@ -336,7 +336,7 @@ async fn desktop_approve_admits_the_member_and_deny_grants_nothing() -> Result<(
     let node_identity = identity_from_init(&init)?;
     let data = runtime_home.join("data");
     let node = Arc::new(
-        gents::store::local::store_key::open_home_store_key(&runtime_home, &data)
+        gents_store::local::store_key::open_home_store_key(&runtime_home, &data)
             .await?
             .encrypt(
                 gents::defra_node::Node::builder()
@@ -347,9 +347,9 @@ async fn desktop_approve_admits_the_member_and_deny_grants_nothing() -> Result<(
             .build()
             .await?,
     );
-    let runtime = gents::store::config_client::ConfigAccess::local_as(
+    let runtime = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
-        gents::NodeIdentity::did(&node_identity).parse()?,
+        gents_store::identity::NodeIdentity::did(&node_identity).parse()?,
     );
     let holds = |did: &str| {
         let node = node.clone();
@@ -384,7 +384,7 @@ async fn desktop_approve_admits_the_member_and_deny_grants_nothing() -> Result<(
     assert!(!approved_receipts[0].withdrawn);
     assert_eq!(
         approved_receipts[0].tuples.iter().map(|tuple| tuple.name()).collect::<Vec<_>>(),
-        gents::store::identity::EnrollmentGrantTuple::derived().iter().map(|tuple| tuple.name()).collect::<Vec<_>>(),
+        gents_store::identity::EnrollmentGrantTuple::derived().iter().map(|tuple| tuple.name()).collect::<Vec<_>>(),
         "the receipt accounts for the Node administrator relation and every enrolled-User permission",
     );
     assert!(holds(&denied).await.is_empty(), "Deny grants nothing");

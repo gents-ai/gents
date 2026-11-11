@@ -1,13 +1,13 @@
 use super::*;
-use crate::request::lifecycle::{
-    ClaimOutcome, ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome,
-};
-use crate::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
 use gents_protocol::request_input::{GoalAssignmentInput, QueuePolicy, QueueSource, RequestQueue};
 use gents_protocol::row::AgentRequestRow;
+use gents_session::request::lifecycle::{
+    ClaimOutcome, ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome,
+};
+use gents_store::identity::{KeyIdentity, NodeIdentity};
 use std::{collections::BTreeMap, sync::Arc};
 
 fn key(id: u64) -> String {
@@ -27,10 +27,10 @@ struct ScopeFixture {
 
 impl ScopeFixture {
     async fn new(name: &str) -> Self {
-        use crate::store::config_client::NodePermission;
+        use gents_store::config_client::NodePermission;
         let (db, user, client, binding) = crate::test_support::root::signed_test_node(name).await;
         let agent =
-            crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+            gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
                 .unwrap();
         let admin = ConfigAccess::local_as(
             db.node.clone(),
@@ -64,7 +64,7 @@ impl ScopeFixture {
 
 async fn write_request(fixture: &ScopeFixture, mut create: AgentRequestCreate) -> AgentRequestRow {
     create.session_doc_id = Some(
-        crate::request::lifecycle::reserve_goal_session(&fixture.client, &create)
+        gents_session::request::lifecycle::reserve_goal_session(&fixture.client, &create)
             .await
             .unwrap(),
     );
@@ -80,10 +80,10 @@ async fn write_request(fixture: &ScopeFixture, mut create: AgentRequestCreate) -
         panic!("one selected agent")
     };
     create.agent_doc_id = Some(agent["_docID"].as_str().unwrap().to_owned());
-    crate::sign_agent_request_create(&fixture.user, &mut create)
+    gents_session::request::admission::sign_agent_request_create(&fixture.user, &mut create)
         .await
         .unwrap();
-    crate::request::lifecycle::submit_client_request(&fixture.client, &create)
+    gents_session::request::lifecycle::submit_client_request(&fixture.client, &create)
         .await
         .unwrap();
     let request_id = escape_graphql_string(&create.request_id);
@@ -97,16 +97,16 @@ async fn write_request(fixture: &ScopeFixture, mut create: AgentRequestCreate) -
         .unwrap();
     let row: AgentRequestRow =
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-    crate::verify_request_receipt_signature(&row).unwrap();
+    gents_store::identity::request_receipt::verify_request_receipt_signature(&row).unwrap();
     row
 }
 
 async fn terminal_source(fixture: &ScopeFixture, row: &AgentRequestRow) {
     let request: crate::AgentRequest = row.clone().try_into().unwrap();
-    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+    let verifier = gents_session::request::admission::AgentRequestAdmissionVerifier::new(
         fixture.db.node.clone(),
         fixture.db.node_identity.clone(),
-        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+        gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
     );
     let (request, admission) = verifier
         .verify_fresh_for_claim_with_identity(&request, fixture.agent.as_ref())
@@ -128,7 +128,7 @@ async fn terminal_source(fixture: &ScopeFixture, row: &AgentRequestRow) {
         lifecycle.claim_with_identity().await.unwrap(),
         ClaimOutcome::Claimed
     );
-    let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+    let writer = gents_session::request::streaming::DefraStreamWriter::new_for_lifecycle(
         fixture.db.node.clone(),
         &lifecycle,
         std::time::Duration::ZERO,
@@ -226,9 +226,12 @@ async fn wake(
     }
     create.session_doc_id = parent.session_doc_id.clone();
     create.agent_doc_id = parent.agent_doc_id.clone();
-    crate::sign_agent_request_create(fixture.agent.as_ref(), &mut create)
-        .await
-        .unwrap();
+    gents_session::request::admission::sign_agent_request_create(
+        fixture.agent.as_ref(),
+        &mut create,
+    )
+    .await
+    .unwrap();
     let mutation = create.graphql_mutation().unwrap();
     let session_doc = create.session_doc_id.as_deref().unwrap();
     let agent_doc = create.agent_doc_id.as_deref().unwrap();
@@ -240,7 +243,7 @@ async fn wake(
             let agent_did = &agent_did;
             Box::pin(async move {
                 let result = txn.execute(mutation).await?;
-                let doc = crate::store::graphql::created_doc_id(&result, "AgentRequest")?;
+                let doc = gents_store::graphql::created_doc_id(&result, "AgentRequest")?;
                 txn.add_resource_relationship("AgentRequest", &doc, "parent", "agents", agent_doc)
                     .await?;
                 txn.add_resource_relationship(
@@ -269,7 +272,7 @@ async fn wake(
         .unwrap();
     let row: AgentRequestRow =
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-    crate::verify_request_receipt_signature(&row).unwrap();
+    gents_store::identity::request_receipt::verify_request_receipt_signature(&row).unwrap();
     row.try_into().unwrap()
 }
 
@@ -281,13 +284,13 @@ async fn append_through(
     appended: &mut u64,
     cutoff: u64,
 ) {
-    use crate::store::config_client::session_children::{
-        output_segment_bound_variables, transcript_message_bound_variables,
-    };
     use gents_protocol::output::rows::{
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
     use gents_protocol::output::*;
+    use gents_store::config_client::session_children::{
+        output_segment_bound_variables, transcript_message_bound_variables,
+    };
     for row in notifications {
         let sequence = row["sequence"].as_u64().unwrap();
         if sequence <= *appended || sequence > cutoff {
@@ -339,7 +342,7 @@ async fn append_through(
                         .execute_with_variables(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION, &vars)
                         .await?;
                     let close_doc_id =
-                        crate::store::graphql::created_doc_id(&response, "AgentOutputSegment")?;
+                        gents_store::graphql::created_doc_id(&response, "AgentOutputSegment")?;
                     let header = TranscriptMessage {
                         native_request_id: None,
                         message_key: message_key.clone(),
@@ -373,7 +376,7 @@ async fn append_through(
             })
             .await
             .unwrap();
-        crate::store::config_client::session_children::publish_agent_session_child_relationships_with_access(
+        gents_store::config_client::session_children::publish_agent_session_child_relationships_with_access(
             &fixture.access,
             fixture.db.node_identity.did(),
             &identity::Did::new(fixture.agent.did()).unwrap(),
@@ -386,10 +389,10 @@ async fn append_through(
 }
 
 async fn claim(fixture: &ScopeFixture, request: crate::AgentRequest) -> RequestLifecycle {
-    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+    let verifier = gents_session::request::admission::AgentRequestAdmissionVerifier::new(
         fixture.db.node.clone(),
         fixture.db.node_identity.clone(),
-        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+        gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
     );
     let (request, admission) = verifier
         .verify_fresh_for_claim_with_identity(&request, fixture.agent.as_ref())
@@ -410,7 +413,7 @@ async fn claim(fixture: &ScopeFixture, request: crate::AgentRequest) -> RequestL
         lifecycle.claim_with_identity().await.unwrap(),
         ClaimOutcome::Claimed
     );
-    let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+    let writer = gents_session::request::streaming::DefraStreamWriter::new_for_lifecycle(
         fixture.db.node.clone(),
         &lifecycle,
         std::time::Duration::ZERO,
@@ -484,7 +487,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
             if case["superseded_origins"] == true {
                 create.request_id = format!("source-{id}-replacement");
                 let replacement = write_request(&fixture, create).await;
-                let mutation = crate::request::lifecycle::queue::supersede_pending_mutation(
+                let mutation = gents_session::request::lifecycle::queue::supersede_pending_mutation(
                     row.doc_id.as_deref().unwrap(),
                     fixture.db.node_identity.did(),
                     &replacement.request_id,
@@ -496,7 +499,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
                     .await
                     .unwrap();
                 assert_eq!(
-                    crate::store::graphql::mutation_documents(&result, "update_AgentRequest")
+                    gents_store::graphql::mutation_documents(&result, "update_AgentRequest")
                         .unwrap()
                         .unwrap()
                         .len(),
@@ -532,7 +535,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
                     ).await
                 })
             }).await.unwrap();
-            crate::store::config_client::session_children::publish_agent_session_child_relationships_with_access(
+            gents_store::config_client::session_children::publish_agent_session_child_relationships_with_access(
                 access,
                 fixture.db.node_identity.did(),
                 &identity::Did::new(fixture.agent.did()).unwrap(),
@@ -549,11 +552,12 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
                 .iter()
                 .all(|notice| notice["scope"]["kind"] == "referenced")
         {
-            assert!(
-                crate::goal::load_request_assignment(access, sources.values().next().unwrap())
-                    .await
-                    .is_err()
-            );
+            assert!(gents_automation::goal::load_request_assignment(
+                access,
+                sources.values().next().unwrap()
+            )
+            .await
+            .is_err());
         }
         let mut appended = 0;
         let mut retry_parent = None;
@@ -582,7 +586,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
                     .unwrap();
                 let caller: AgentRequestRow =
                     serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-                let created = crate::goal::create_goal_for_request_from_access(
+                let created = gents_automation::goal::create_goal_for_request_from_access(
                     &node,
                     Some(access),
                     &caller,
@@ -706,13 +710,13 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
 
 #[tokio::test]
 async fn claimed_background_wake_reads_user_session_as_selected_agent() {
-    use crate::request::lifecycle::queue::persist_background_completion_with_message_waking_with_access;
-    use crate::request::lifecycle::RequestTerminalOutcome;
-    use crate::tools::call::lifecycle::admission_fixture::{
-        published_admission_with_owner, PublishedAdmissionOptions,
-    };
     use gents_protocol::request_lifecycle::RequestHopCause;
     use gents_protocol::tool_call::AwaitMode;
+    use gents_session::request::lifecycle::queue::persist_background_completion_with_message_waking_with_access;
+    use gents_session::request::lifecycle::RequestTerminalOutcome;
+    use gents_toolcalls::call::lifecycle::admission_fixture::{
+        published_admission_with_owner, PublishedAdmissionOptions,
+    };
 
     let (fixture, mut parent) = published_admission_with_owner(PublishedAdmissionOptions {
         name: "wake-agent-observation".into(),
@@ -738,7 +742,7 @@ async fn claimed_background_wake_reads_user_session_as_selected_agent() {
     let binding: gents_protocol::agent_identity::AgentIdentityBinding =
         serde_json::from_value(agent_row.clone()).unwrap();
     let agent =
-        crate::store::identity::resolve_agent_identity(fixture.runtime.as_ref(), &binding).unwrap();
+        gents_store::identity::resolve_agent_identity(fixture.runtime.as_ref(), &binding).unwrap();
     let agent_access = ConfigAccess::local_managed_agent(
         node.clone(),
         identity::Did::new(agent.did()).unwrap(),
@@ -798,8 +802,8 @@ async fn claimed_background_wake_reads_user_session_as_selected_agent() {
     };
     let row: AgentRequestRow = serde_json::from_value(row.clone()).unwrap();
     let request: crate::AgentRequest = row.try_into().unwrap();
-    let (_owner, authority) = crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
-    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+    let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
+    let verifier = gents_session::request::admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
         fixture.runtime.clone(),
         authority,
@@ -821,7 +825,7 @@ async fn claimed_background_wake_reads_user_session_as_selected_agent() {
         lifecycle.claim_with_identity().await.unwrap(),
         ClaimOutcome::Claimed
     );
-    let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+    let writer = gents_session::request::streaming::DefraStreamWriter::new_for_lifecycle(
         node.clone(),
         &lifecycle,
         std::time::Duration::ZERO,
@@ -855,14 +859,14 @@ async fn claimed_background_wake_reads_user_session_as_selected_agent() {
     );
     assert!(actual[0].physical_header.is_some());
 
-    let other_binding = crate::store::identity::provision_agent_identity_authorized(
+    let other_binding = gents_store::identity::provision_agent_identity_authorized(
         &node,
         fixture.runtime.as_ref(),
         &identity::Did::new(fixture.requester_identity.did()).unwrap(),
     )
     .await
     .unwrap();
-    crate::test_support::inference::install_test_agent_binding_with_access(
+    gents_inference::test_support::install_test_agent_binding_with_access(
         fixture.runtime.did(),
         "Other Agent",
         &other_binding,
@@ -870,7 +874,7 @@ async fn claimed_background_wake_reads_user_session_as_selected_agent() {
     )
     .await;
     let other =
-        crate::store::identity::resolve_agent_identity(fixture.runtime.as_ref(), &other_binding)
+        gents_store::identity::resolve_agent_identity(fixture.runtime.as_ref(), &other_binding)
             .unwrap();
     let other_access = ConfigAccess::local_managed_agent(
         node.clone(),

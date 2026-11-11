@@ -2,8 +2,8 @@ use super::*;
 use crate::runner::embedded::executor::install::{apply, desired};
 use crate::runner::embedded::home::EmbeddedHome;
 use crate::OutcomeKind;
-use gents::documents::DesiredStateApplyPlan;
-use gents::{Collection, ConfigAccess};
+use gents_documents::DesiredStateApplyPlan;
+use gents_store::{collection::Collection, config_client::ConfigAccess};
 
 use serde_json::json;
 
@@ -221,7 +221,7 @@ fn generated_document_capture_cases_match_lean() {
     assert!(!cases.is_empty());
     for case in cases {
         let mut filter_fields = Vec::new();
-        gents::tools::builtin::defra_query::collect_filter_field_keys(
+        gents_tools::builtin::defra_query::collect_filter_field_keys(
             &case.filter,
             &mut filter_fields,
         );
@@ -242,7 +242,7 @@ async fn l1_backend_capture_grades_metadata_without_retaining_auth() {
         .await
         .unwrap();
     let evaluator = crate::runner::embedded::home::bind_test_evaluator(&mut home);
-    let evaluator_did = gents::NodeIdentity::did(evaluator.as_ref());
+    let evaluator_did = gents_store::identity::NodeIdentity::did(evaluator.as_ref());
     crate::runner::embedded::executor::install::grant_trial_operations(&home, evaluator_did)
         .await
         .unwrap();
@@ -467,8 +467,8 @@ fn capture_filters_bind_only_the_selected_subject() {
 
 #[tokio::test]
 async fn retained_capture_uses_the_evaluator_actor_for_document_access() {
-    use gents::store::config_client::NodePermission;
-    use gents::store::identity::{KeyIdentity, NodeIdentity};
+    use gents_store::config_client::NodePermission;
+    use gents_store::identity::{KeyIdentity, NodeIdentity};
 
     let home = EmbeddedHome::create_temp("capture-evaluator-acp")
         .await
@@ -621,9 +621,10 @@ async fn logical_backend_capture_and_live_counts_use_held_user_metadata() {
     write_slot_pack(&pack, "gents:inference-slot:primary");
     let mut home = EmbeddedHome::create_temp("backend-capture").await.unwrap();
     let evaluator = Arc::new(
-        gents::KeyIdentity::load_or_create(dir.path().join("evaluator.key"), None).unwrap(),
+        gents_store::identity::KeyIdentity::load_or_create(dir.path().join("evaluator.key"), None)
+            .unwrap(),
     );
-    let evaluator_did = gents::NodeIdentity::did(evaluator.as_ref()).to_owned();
+    let evaluator_did = gents_store::identity::NodeIdentity::did(evaluator.as_ref()).to_owned();
     let capability = evaluator.client_signing_capability().unwrap();
     home.set_evaluator(evaluator, capability);
     let spec = TrialSpec {

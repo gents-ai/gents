@@ -3,15 +3,15 @@ use super::install::{install, read_pack};
 use super::*;
 use crate::runner::executor::{InferenceBinding, StageSpec};
 use crate::OutcomeKind;
-use gents::pack::digest_declared_assets;
-use gents::store::graphql::escape_graphql_string;
-use gents::NodeIdentity;
+use gents_pack::pack::digest_declared_assets;
+use gents_store::graphql::escape_graphql_string;
+use gents_store::identity::NodeIdentity;
 use serde_json::{json, Value};
 
 pub(super) fn bind_test_evaluator(
     spec: &mut TrialSpec,
     home: &mut EmbeddedHome,
-) -> std::sync::Arc<gents::KeyIdentity> {
+) -> std::sync::Arc<gents_store::identity::KeyIdentity> {
     let identity = super::super::home::bind_test_evaluator(home);
     spec.evaluator_did = identity.did().to_owned();
     identity
@@ -70,7 +70,7 @@ fn a_trial_ceiling_grants_bash_only_when_the_definition_asks_for_it() {
         )
     );
     assert_eq!(
-        gents::test_support::tools::tool_policy(&with)
+        gents_tools::test_support::tool_policy(&with)
             .bash
             .execution_mode,
         CommandExecutionMode::WorkspaceWrite
@@ -249,7 +249,7 @@ async fn trial_usage_includes_child_requests_and_preserves_unknown_tokens() {
         .unwrap();
     for (id, input, output) in [("stage-call", 11, 7), ("automation-call", 101, 13)] {
         let id = escape_graphql_string(id);
-        gents::store::config_client::ConfigAccess::write_local(
+        gents_store::config_client::ConfigAccess::write_local(
             &home.node,
             "eval.test.usage",
             &format!(r#"mutation {{ create_InferenceCall(input: {{ call_id: "{id}", request_id: "{id}", call_seq: 0, call_state: "completed", prompt_tokens: {input}, completion_tokens: {output} }}) {{ _docID }} }}"#),
@@ -258,7 +258,7 @@ async fn trial_usage_includes_child_requests_and_preserves_unknown_tokens() {
     let total = home_usage(&home.node).await;
     assert_eq!(total.input_tokens, Some(112));
     assert_eq!(total.output_tokens, Some(20));
-    gents::store::config_client::ConfigAccess::write_local(
+    gents_store::config_client::ConfigAccess::write_local(
         &home.node,
         "eval.test.usage_missing",
         r#"mutation { create_InferenceCall(input: { call_id: "unreported", request_id: "child", call_seq: 1, call_state: "failed", prompt_tokens: null, completion_tokens: 3 }) { _docID } }"#,
@@ -347,8 +347,8 @@ async fn recollect_preserves_missing_terminal_evidence_as_infrastructure() {
     )
     .unwrap();
     let agent =
-        gents::store::identity::resolve_agent_identity(home.identity.as_ref(), &binding).unwrap();
-    let agent_access = gents::ConfigAccess::local_managed_agent(
+        gents_store::identity::resolve_agent_identity(home.identity.as_ref(), &binding).unwrap();
+    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         home.node.clone(),
         ::identity::Did::new(&agent_did).unwrap(),
         agent.as_ref(),
@@ -361,7 +361,7 @@ async fn recollect_preserves_missing_terminal_evidence_as_infrastructure() {
     let row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
     let request = row.try_into().unwrap();
-    let mut lifecycle = gents::test_support::session::admitted_client_lifecycle(
+    let mut lifecycle = gents_session::test_support::admitted_client_lifecycle(
         home.node.clone(),
         home.identity.clone(),
         &request,
@@ -371,7 +371,7 @@ async fn recollect_preserves_missing_terminal_evidence_as_infrastructure() {
     .unwrap();
     assert_eq!(
         lifecycle.claim_with_identity().await.unwrap(),
-        gents::request::lifecycle::ClaimOutcome::Claimed
+        gents_session::request::lifecycle::ClaimOutcome::Claimed
     );
     drop(lifecycle);
     drop(agent_access);
@@ -591,9 +591,13 @@ pub(super) async fn seed_trigger(
     let mutation = format!(
         r#"mutation {{ create_Trigger(input: {{ trigger_id: "{trigger_id}", node_did: "{node_did}", task_id: "task", enabled: true, last_status: "{status}", last_error: {last_error}, last_attempt_at: "{last_attempt_at}" }}) {{ _docID }} }}"#
     );
-    gents::ConfigAccess::write_local(&home.node, "eval.test.trigger", &mutation)
-        .await
-        .unwrap();
+    gents_store::config_client::ConfigAccess::write_local(
+        &home.node,
+        "eval.test.trigger",
+        &mutation,
+    )
+    .await
+    .unwrap();
 }
 
 pub(super) async fn seed_request_with_state(home: &EmbeddedHome, request_id: &str, state: &str) {

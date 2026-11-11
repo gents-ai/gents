@@ -2,24 +2,26 @@ use rapidhash::{HashMapExt, RapidHashMap};
 use std::fs;
 
 use anyhow::{Context, Result};
-use gents::observe::adapter_projection::{
+use gents_observe::observe::adapter_projection::{
     adapter_projection_eval_jsonl_record_schema, adapter_projection_eval_jsonl_records,
     adapter_projection_json_schema, adapter_projection_jsonl_record_schema,
     adapter_projection_jsonl_records, adapter_projection_native_json,
     adapter_projection_native_json_schema, build_adapter_projection,
     validate_adapter_projection_contract, ProjectionContext, ProjectionRedactionMode,
 };
-use gents::observe::run_timeline::{build_run_timeline, RunTimelineRows, TimelineToolCallRow};
-use gents::observe::run_timeline_fetch::{
+use gents_observe::observe::run_timeline::{
+    build_run_timeline, RunTimelineRows, TimelineToolCallRow,
+};
+use gents_observe::observe::run_timeline_fetch::{
     load_run_timeline, load_settled_run_timeline_rows, RUN_TIMELINE_SETTLE_BOUND,
 };
-use gents::observe::trace_export::{
+use gents_observe::observe::trace_export::{
     analyze_request_failure, analyze_tool_call_with_persisted_outcome, extract_raw_tool_call_json,
     latency_ms, raw_message_json, AmyToolCallTraceRecord,
 };
-use gents::session::tool_call_state::ToolCallState;
-use gents::store::graphql::escape_graphql_string;
 use gents_protocol::adapter_projection_kind::AdapterProjectionKind;
+use gents_session::session::tool_call_state::ToolCallState;
+use gents_store::graphql::escape_graphql_string;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -110,7 +112,7 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
     let mut entries = raw_rows
         .into_iter()
         .map(|raw| {
-            let row: gents::observe::run_timeline::TimelineRenderedRequestRow =
+            let row: gents_observe::observe::run_timeline::TimelineRenderedRequestRow =
                 serde_json::from_value(raw.clone()).context("decoding RenderedRequest row")?;
             Ok((row, raw))
         })
@@ -130,7 +132,7 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
                 None
             } else {
                 Some(
-                    gents::inference::rendered_request::decode_capture_pair(
+                    gents_inference::rendered_request::decode_capture_pair(
                         &access, version, &stored,
                     )
                     .await?,
@@ -139,16 +141,16 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
             let request = match decoded_pair.as_ref() {
                 Some((request, _)) => request.clone(),
                 None => {
-                    gents::inference::rendered_request::decode_capture_json(
+                    gents_inference::rendered_request::decode_capture_json(
                         &access,
                         version,
                         &stored,
-                        gents::inference::rendered_request::CapturePayloadKind::RequestBody,
+                        gents_inference::rendered_request::CapturePayloadKind::RequestBody,
                     )
                     .await?
                 }
             };
-            raw["request_json"] = json!(gents::inference::rendered_request::canonical_json_string(
+            raw["request_json"] = json!(gents_inference::rendered_request::canonical_json_string(
                 &request
             )?);
             if version == 1 {
@@ -158,7 +160,7 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
                         .context("legacy capture has no provenance")?,
                 )?;
                 raw["provenance_payload_json"] =
-                    json!(gents::inference::rendered_request::canonical_json_string(
+                    json!(gents_inference::rendered_request::canonical_json_string(
                         &provenance["assembly_trace"],
                     )?);
             } else {
@@ -167,7 +169,7 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
                     .context("missing decoded capture pair")?
                     .1;
                 raw["provenance_payload_json"] = json!(
-                    gents::inference::rendered_request::canonical_json_string(payload)?
+                    gents_inference::rendered_request::canonical_json_string(payload)?
                 );
             }
         }
@@ -215,7 +217,7 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
     let mut value = capture_metadata_value(row, raw, args.include_body);
     let commit = match row.doc_id.as_deref() {
         Some(doc_id) => {
-            gents::inference::rendered_request::commits::request_json_commit(&access, doc_id)
+            gents_inference::rendered_request::commits::request_json_commit(&access, doc_id)
                 .await?
                 .map(|commit| {
                     json!({
@@ -236,11 +238,11 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
 }
 
 fn capture_metadata_value(
-    row: &gents::observe::run_timeline::TimelineRenderedRequestRow,
+    row: &gents_observe::observe::run_timeline::TimelineRenderedRequestRow,
     raw: &Value,
     include_body: bool,
 ) -> Value {
-    let event = gents::observe::run_timeline::rendered_request_event(row);
+    let event = gents_observe::observe::run_timeline::rendered_request_event(row);
     let mut value = serde_json::to_value(&event).unwrap_or_else(|_| json!({}));
     value["doc_id"] = json!(row.doc_id);
     if include_body {
@@ -254,7 +256,9 @@ fn capture_metadata_value(
     value
 }
 
-fn capture_order_padded(row: &gents::observe::run_timeline::TimelineRenderedRequestRow) -> String {
+fn capture_order_padded(
+    row: &gents_observe::observe::run_timeline::TimelineRenderedRequestRow,
+) -> String {
     use gents_protocol::rendered_request::{CaptureOrderKey, CaptureScope};
 
     let scope = row
@@ -542,7 +546,7 @@ fn build_record(
     let model_name = rows
         .map(|rows| build_run_timeline(rows.clone()))
         .as_ref()
-        .and_then(gents::observe::adapter_projection::root_observed_model);
+        .and_then(gents_observe::observe::adapter_projection::root_observed_model);
     let backend_id = rows.and_then(|rows| {
         let mut observed = rows.inference_calls.iter().filter(|call| {
             call.request_doc_id == rows.request.doc_id && call.request_id == rows.request.request_id

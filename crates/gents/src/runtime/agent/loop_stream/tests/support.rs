@@ -121,7 +121,7 @@ impl CompletionModel for ScriptedModel {
             gate.release.notified().await;
         }
         if self.capture_requests {
-            crate::test_support::inference::capture_scripted_provider_request(
+            gents_inference::test_support::capture_scripted_provider_request(
                 &request,
                 "test-model",
             )
@@ -132,7 +132,7 @@ impl CompletionModel for ScriptedModel {
             request
                 .chat_history
                 .iter()
-                .map(crate::inference::llm::rig_compat::from_rig_message)
+                .map(gents_inference::llm::rig_compat::from_rig_message)
                 .collect(),
         );
         self.seen_tools
@@ -244,15 +244,15 @@ impl CompletionModel for UsageScriptedModel {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        crate::test_support::inference::capture_scripted_provider_request(&request, "test-model")
+        gents_inference::test_support::capture_scripted_provider_request(&request, "test-model")
             .await?;
         self.seen_dispatches.lock().await.push((
             u64::try_from(
                 completion_request_input_components(
                     &request,
                     &crate::turn::provider_input::ProviderInputCounter::new(
-                        crate::BackendProviderKind::OpenAiCompatible,
-                        crate::OpenAiWireApi::ChatCompletions,
+                        gents_inference::backends::provider::BackendProviderKind::OpenAiCompatible,
+                        gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
                         "test-model",
                     ),
                 )
@@ -397,8 +397,8 @@ pub(super) fn config(max_turns: usize) -> LoopConfig {
         replay: LoopReplayInput::default(),
         provider_input_counter: std::sync::Arc::new(
             crate::turn::provider_input::ProviderInputCounter::new(
-                crate::BackendProviderKind::OpenAiCompatible,
-                crate::OpenAiWireApi::ChatCompletions,
+                gents_inference::backends::provider::BackendProviderKind::OpenAiCompatible,
+                gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
                 "test-model",
             ),
         ),
@@ -417,11 +417,10 @@ pub(super) fn config(max_turns: usize) -> LoopConfig {
         reduction_chain_keys: Vec::new(),
         initial_turn_index: 0,
         resume_from_history: false,
-        context_window: crate::inference::resolved::DEFAULT_CONTEXT_WINDOW,
-        compaction_threshold: crate::inference::resolved::DEFAULT_COMPACTION_THRESHOLD,
+        context_window: gents_inference::resolved::DEFAULT_CONTEXT_WINDOW,
+        compaction_threshold: gents_inference::resolved::DEFAULT_COMPACTION_THRESHOLD,
         context_calibration: Default::default(),
-        retry_policy:
-            crate::runtime::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
+        retry_policy: gents_loop::completion_retry::CompletionRetryPolicy::scheduled_default(),
         provider_idle_timeout: None,
         deadline: None,
         max_turns,
@@ -434,8 +433,8 @@ pub(super) fn config(max_turns: usize) -> LoopConfig {
 pub(super) fn owned_config(max_turns: usize) -> LoopConfig {
     let mut config = config(max_turns);
     config.on_rendered_request = Some(
-        crate::inference::rendered_request::scope::ambient_arming_sink(
-            crate::inference::rendered_request::scope::CaptureScopeKind::Inference,
+        gents_inference::rendered_request::scope::ambient_arming_sink(
+            gents_inference::rendered_request::scope::CaptureScopeKind::Inference,
         ),
     );
     config
@@ -461,7 +460,7 @@ pub(super) struct CollectedScriptedStream {
 
 pub(super) async fn collect_scripted_stream<S>(stream: S) -> CollectedScriptedStream
 where
-    S: Stream<Item = Result<LoopStreamItem, crate::error::LoopStreamError>>,
+    S: Stream<Item = Result<LoopStreamItem, gents_loop::error::LoopStreamError>>,
 {
     futures::pin_mut!(stream);
     let mut collected = CollectedScriptedStream::default();
@@ -512,12 +511,12 @@ where
 pub(super) async fn collect_owned_scripted_stream<S>(
     stream: S,
     hook: &DefraSessionHook,
-    writer: &crate::request::streaming::DefraStreamWriter,
-    lifecycle: &mut crate::request::lifecycle::RequestLifecycle,
+    writer: &gents_session::request::streaming::DefraStreamWriter,
+    lifecycle: &mut gents_session::request::lifecycle::RequestLifecycle,
     profile: gents_loop::provider_input::ProviderInputProfile,
 ) -> CollectedScriptedStream
 where
-    S: Stream<Item = Result<LoopStreamItem, crate::error::LoopStreamError>>,
+    S: Stream<Item = Result<LoopStreamItem, gents_loop::error::LoopStreamError>>,
 {
     collect_owned_scripted_stream_with_capture_scope(stream, hook, writer, lifecycle, profile, None)
         .await
@@ -526,22 +525,22 @@ where
 pub(super) async fn collect_owned_scripted_stream_with_capture_scope<S>(
     stream: S,
     hook: &DefraSessionHook,
-    writer: &crate::request::streaming::DefraStreamWriter,
-    lifecycle: &mut crate::request::lifecycle::RequestLifecycle,
+    writer: &gents_session::request::streaming::DefraStreamWriter,
+    lifecycle: &mut gents_session::request::lifecycle::RequestLifecycle,
     profile: gents_loop::provider_input::ProviderInputProfile,
-    capture_scope: Option<Arc<crate::inference::rendered_request::scope::RequestCaptureScope>>,
+    capture_scope: Option<Arc<gents_inference::rendered_request::scope::RequestCaptureScope>>,
 ) -> CollectedScriptedStream
 where
-    S: Stream<Item = Result<LoopStreamItem, crate::error::LoopStreamError>>,
+    S: Stream<Item = Result<LoopStreamItem, gents_loop::error::LoopStreamError>>,
 {
     let scope = capture_scope.unwrap_or_else(|| {
-        let context = crate::inference::rendered_request::context_for_claimed_request(
+        let context = gents_inference::rendered_request::context_for_claimed_request(
             lifecycle.request(),
             "",
             "test-model".into(),
             None,
         );
-        crate::inference::rendered_request::scope::test_scope(
+        gents_inference::rendered_request::scope::test_scope(
             context,
             Arc::new(|_| Box::pin(async { Ok(()) })),
         )
@@ -553,8 +552,8 @@ where
     let node_did = request.node_did.clone();
     let agent_did = request.agent_did.clone();
     let request_id = request.request_id.clone();
-    let inherited = crate::tools::runtime_context::current_tool_runtime_context().is_some();
-    let collection = crate::inference::rendered_request::scope::scope_request(scope, async move {
+    let inherited = gents_tools::runtime_context::current_tool_runtime_context().is_some();
+    let collection = gents_inference::rendered_request::scope::scope_request(scope, async move {
         futures::pin_mut!(stream);
         let doc_id = lifecycle.request().doc_id.clone();
         let mut processor = crate::runtime::agent::stream_processor::StreamProcessor::new(
@@ -598,12 +597,12 @@ where
     if inherited {
         collection.await
     } else {
-        crate::tools::runtime_context::scope_tool_request_identity(
+        gents_loop::tool_call_lifecycle::runtime::scope_tool_request_identity(
             requester_did,
             Some(node_did),
             Some(agent_did),
             Some(request_id),
-            crate::tools::runtime_context::scope_request_tool_execution_with_session(
+            gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session(
                 deadline,
                 tokio_util::sync::CancellationToken::new(),
                 None,
@@ -619,8 +618,8 @@ where
 pub(super) async fn owned_test_hook() -> (
     Arc<defra_node::Node>,
     DefraSessionHook,
-    crate::request::streaming::DefraStreamWriter,
-    crate::request::lifecycle::RequestLifecycle,
+    gents_session::request::streaming::DefraStreamWriter,
+    gents_session::request::lifecycle::RequestLifecycle,
 ) {
     owned_test_hook_with_policy(FailurePolicy::default()).await
 }
@@ -630,8 +629,8 @@ pub(super) async fn owned_test_hook_with_policy(
 ) -> (
     Arc<defra_node::Node>,
     DefraSessionHook,
-    crate::request::streaming::DefraStreamWriter,
-    crate::request::lifecycle::RequestLifecycle,
+    gents_session::request::streaming::DefraStreamWriter,
+    gents_session::request::lifecycle::RequestLifecycle,
 ) {
     let (node, hook, writer, lifecycle, _) =
         owned_test_hook_with_identity_policy(None, policy, None, RequestSignature::Valid).await;
@@ -643,8 +642,8 @@ pub(super) async fn owned_test_hook_with_policy(
 pub(super) async fn owned_test_hook_with_unattributable_request() -> (
     Arc<defra_node::Node>,
     DefraSessionHook,
-    crate::request::streaming::DefraStreamWriter,
-    crate::request::lifecycle::RequestLifecycle,
+    gents_session::request::streaming::DefraStreamWriter,
+    gents_session::request::lifecycle::RequestLifecycle,
 ) {
     let (node, hook, writer, lifecycle, _) = owned_test_hook_with_identity_policy(
         None,
@@ -663,12 +662,12 @@ enum RequestSignature {
 }
 
 pub(super) async fn owned_test_hook_with_identity(
-    identity: Arc<dyn crate::NodeIdentity>,
+    identity: Arc<dyn gents_store::identity::NodeIdentity>,
 ) -> (
     Arc<defra_node::Node>,
     DefraSessionHook,
-    crate::request::streaming::DefraStreamWriter,
-    crate::request::lifecycle::RequestLifecycle,
+    gents_session::request::streaming::DefraStreamWriter,
+    gents_session::request::lifecycle::RequestLifecycle,
 ) {
     let (node, hook, writer, lifecycle, _) = owned_test_hook_with_identity_policy(
         Some(identity),
@@ -685,17 +684,14 @@ pub(super) async fn owned_test_hook_with_folded_case(
 ) -> (
     Arc<defra_node::Node>,
     DefraSessionHook,
-    crate::request::streaming::DefraStreamWriter,
-    crate::request::lifecycle::RequestLifecycle,
+    gents_session::request::streaming::DefraStreamWriter,
+    gents_session::request::lifecycle::RequestLifecycle,
     rapidhash::RapidHashMap<u64, String>,
 ) {
     let key_dir = tempfile::tempdir().unwrap();
     let identity = Arc::new(
-        crate::store::identity::KeyIdentity::load_or_create(
-            key_dir.path().join("folded.key"),
-            None,
-        )
-        .unwrap(),
+        gents_store::identity::KeyIdentity::load_or_create(key_dir.path().join("folded.key"), None)
+            .unwrap(),
     );
     owned_test_hook_with_identity_policy(
         Some(identity),
@@ -709,16 +705,16 @@ pub(super) async fn owned_test_hook_with_folded_case(
 /// Writes one signed request through its managed Agent, the actor that owns the
 /// row, and returns its document id with the row read back through the same access.
 async fn write_signed_owned_request(
-    access: &crate::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> (String, gents_protocol::row::AgentRequestRow) {
     let (doc_id, row) = write_owned_request(access, create).await;
-    crate::store::identity::request_receipt::verify_request_receipt_signature(&row).unwrap();
+    gents_store::identity::request_receipt::verify_request_receipt_signature(&row).unwrap();
     (doc_id, row)
 }
 
 async fn write_owned_request(
-    access: &crate::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> (String, gents_protocol::row::AgentRequestRow) {
     let result = access
@@ -732,7 +728,7 @@ async fn write_owned_request(
     let loaded = access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
-            crate::store::graphql::escape_graphql_string(&doc_id),
+            gents_store::graphql::escape_graphql_string(&doc_id),
             gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ))
         .await
@@ -743,26 +739,29 @@ async fn write_owned_request(
 }
 
 async fn owned_test_hook_with_identity_policy(
-    identity: Option<Arc<dyn crate::NodeIdentity>>,
+    identity: Option<Arc<dyn gents_store::identity::NodeIdentity>>,
     policy: FailurePolicy,
     folded_case: Option<&gents_lean_vocab::LeanFoldTurnInputCase>,
     signature: RequestSignature,
 ) -> (
     Arc<defra_node::Node>,
     DefraSessionHook,
-    crate::request::streaming::DefraStreamWriter,
-    crate::request::lifecycle::RequestLifecycle,
+    gents_session::request::streaming::DefraStreamWriter,
+    gents_session::request::lifecycle::RequestLifecycle,
     rapidhash::RapidHashMap<u64, String>,
 ) {
     // Every fixture runs under a held node root. An unsigned fixture gets a
     // fresh root instead of the literal DID the identity crate rejects, so the
     // Agent, its requests and its loop writes are all signed actors.
     let unsigned_node_key_dir = tempfile::tempdir().unwrap();
-    let root: Arc<dyn crate::NodeIdentity> = match identity.clone() {
+    let root: Arc<dyn gents_store::identity::NodeIdentity> = match identity.clone() {
         Some(identity) => identity,
         None => Arc::new(
-            crate::KeyIdentity::load_or_create(unsigned_node_key_dir.path().join("node.key"), None)
-                .unwrap(),
+            gents_store::identity::KeyIdentity::load_or_create(
+                unsigned_node_key_dir.path().join("node.key"),
+                None,
+            )
+            .unwrap(),
         ),
     };
     let node_did_owned = root.did().to_owned();
@@ -772,18 +771,18 @@ async fn owned_test_hook_with_identity_policy(
     let builder = defra_node::Node::builder().with_node_identity_did(node_did);
     let node = Arc::new(builder.data_path(&data_path).build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
-    let binding = crate::store::identity::provision_agent_identity(root.as_ref()).unwrap();
+    let binding = gents_store::identity::provision_agent_identity(root.as_ref()).unwrap();
     let agent_identity =
-        crate::store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
+        gents_store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
     let agent_did = binding.agent_did.clone();
-    crate::test_support::inference::install_test_agent_binding(
+    gents_inference::test_support::install_test_agent_binding(
         &node,
         node_did,
         "Owned loop test agent",
         &binding,
     )
     .await;
-    let agent_access = crate::store::config_client::ConfigAccess::local_managed_agent(
+    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         ::identity::Did::new(&agent_did).unwrap(),
         agent_identity.as_ref(),
@@ -792,24 +791,24 @@ async fn owned_test_hook_with_identity_policy(
     let session_id = uuid::Uuid::new_v4().to_string();
     let request_id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let mut create = crate::request::lifecycle::build_signed_request(
-        crate::request::lifecycle::RequestSpec::new(
+    let mut create = gents_session::request::lifecycle::build_signed_request(
+        gents_session::request::lifecycle::RequestSpec::new(
             gents_protocol::request_admission::RequestPurpose::Normal,
-            crate::request::lifecycle::RequestIdentity {
+            gents_session::request::lifecycle::RequestIdentity {
                 requester_did: requester_did.map(str::to_owned),
                 request_id: request_id.clone(),
                 node_did: node_did.to_owned(),
                 agent_did: agent_did.clone(),
                 session_id: session_id.clone(),
                 content: "owned loop test".to_owned(),
-                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                execution_origin: gents_session::request::lifecycle::ExecutionOrigin::Interactive,
                 created_at: now,
             },
             gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
                 agent_did.clone(),
             ),
         ),
-        crate::request::lifecycle::RequestSigner::Identity(agent_identity.as_ref()),
+        gents_session::request::lifecycle::RequestSigner::Identity(agent_identity.as_ref()),
     )
     .await
     .unwrap();
@@ -819,7 +818,7 @@ async fn owned_test_hook_with_identity_policy(
             create.content.push_str(" changed after signing");
             let written = write_owned_request(&agent_access, &create).await;
             assert!(
-                crate::store::identity::request_receipt::verify_request_receipt_signature(
+                gents_store::identity::request_receipt::verify_request_receipt_signature(
                     &written.1
                 )
                 .is_err()
@@ -832,16 +831,17 @@ async fn owned_test_hook_with_identity_policy(
         let mut predecessor = request_id.clone();
         for folded in &case.folded {
             let id = format!("{request_id}-folded-{}", folded.request_id);
-            let mut spec = crate::request::lifecycle::RequestSpec::new(
+            let mut spec = gents_session::request::lifecycle::RequestSpec::new(
                 gents_protocol::request_admission::RequestPurpose::Normal,
-                crate::request::lifecycle::RequestIdentity {
+                gents_session::request::lifecycle::RequestIdentity {
                     requester_did: Some(node_did.to_owned()),
                     request_id: id.clone(),
                     node_did: node_did.to_owned(),
                     agent_did: agent_did.clone(),
                     session_id: session_id.clone(),
                     content: folded.content.clone(),
-                    execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                    execution_origin:
+                        gents_session::request::lifecycle::ExecutionOrigin::Interactive,
                     created_at: chrono::Utc::now()
                         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                 },
@@ -861,9 +861,9 @@ async fn owned_test_hook_with_identity_policy(
                 interrupted_request_id: None,
                 background_completion_wake_version: None,
             });
-            let create = crate::request::lifecycle::build_signed_request(
+            let create = gents_session::request::lifecycle::build_signed_request(
                 spec,
-                crate::request::lifecycle::RequestSigner::Identity(agent_identity.as_ref()),
+                gents_session::request::lifecycle::RequestSigner::Identity(agent_identity.as_ref()),
             )
             .await
             .unwrap();
@@ -872,7 +872,7 @@ async fn owned_test_hook_with_identity_policy(
             predecessor = id;
         }
     }
-    let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
+    let mut lifecycle = gents_session::request::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
         row.try_into().unwrap(),
         60,
@@ -890,7 +890,7 @@ async fn owned_test_hook_with_identity_policy(
     }
     assert_eq!(
         lifecycle.claim().await.unwrap(),
-        crate::request::lifecycle::ClaimOutcome::Claimed
+        gents_session::request::lifecycle::ClaimOutcome::Claimed
     );
     // The claim projects the session as the admitted Agent, exactly as the
     // daemon does; the hook then resumes and writes as that Agent.
@@ -921,7 +921,7 @@ async fn owned_test_hook_with_identity_policy(
     hook.set_request_deadline_at(lifecycle.claimed_deadline_at())
         .await;
     // The loop's writes to the agent-owned request run as the claimed Agent.
-    let writer = crate::request::streaming::DefraStreamWriter::new_for_lifecycle(
+    let writer = gents_session::request::streaming::DefraStreamWriter::new_for_lifecycle(
         node.clone(),
         &lifecycle,
         Duration::ZERO,
@@ -933,7 +933,10 @@ async fn owned_test_hook_with_identity_policy(
 
 /// The loop's rows are owned by the claimed Agent and invisible to the node
 /// identity, so fixture observations read them as that Agent.
-pub(super) async fn agent_query(reader: &crate::ConfigAccess, query: &str) -> serde_json::Value {
+pub(super) async fn agent_query(
+    reader: &gents_store::config_client::ConfigAccess,
+    query: &str,
+) -> serde_json::Value {
     reader
         .execute(query)
         .await
@@ -942,7 +945,7 @@ pub(super) async fn agent_query(reader: &crate::ConfigAccess, query: &str) -> se
 
 /// [`agent_query`] in the node's response shape for fixtures that inspect it.
 pub(super) async fn agent_response(
-    reader: &crate::ConfigAccess,
+    reader: &gents_store::config_client::ConfigAccess,
     query: &str,
 ) -> defra_node::QueryResponse {
     defra_node::QueryResponse::success(agent_query(reader, query).await["data"].clone())
@@ -951,11 +954,11 @@ pub(super) async fn agent_response(
 /// Canonical tool output for one call, read as the claimed Agent in the
 /// request's own requester scope.
 pub(super) async fn agent_tool_output(
-    lifecycle: &crate::request::lifecycle::RequestLifecycle,
+    lifecycle: &gents_session::request::lifecycle::RequestLifecycle,
     tool_doc_id: &str,
 ) -> String {
     let request = lifecycle.request();
-    crate::session::tool_output_rows::observe_canonical_tool_output_with_access(
+    gents_session::session::tool_output_rows::observe_canonical_tool_output_with_access(
         &lifecycle.access().expect("claimed Agent access"),
         tool_doc_id,
         &request.doc_id,

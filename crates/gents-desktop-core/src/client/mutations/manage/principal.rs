@@ -1,11 +1,11 @@
 use anyhow::Result;
 mod editor;
 pub use editor::*;
-use gents::documents::apply_desired_state_plan;
-use gents::documents::Node;
-use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::store::collection::Collection;
-use gents::store::config_client::ConfigAccess;
+use gents_documents::apply_desired_state_plan;
+use gents_documents::Node;
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents_store::collection::Collection;
+use gents_store::config_client::ConfigAccess;
 
 pub async fn upsert_node_on(access: &ConfigAccess, document: &Node) -> Result<()> {
     let value = serde_json::to_value(document)?;
@@ -32,12 +32,12 @@ pub async fn set_default_agent_on(
 }
 
 async fn set_default_agent_in_txn(
-    txn: &gents::store::config_client::ConfigApplyTxn<'_>,
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     agent_did: &str,
 ) -> Result<()> {
     use anyhow::Context;
-    use gents::documents::read_desired_state_record_in_txn;
+    use gents_documents::read_desired_state_record_in_txn;
     let (_, mut node) = read_desired_state_record_in_txn(txn, Collection::Node, node_did, node_did)
         .await?
         .context("default agent requires an existing node")?;
@@ -60,7 +60,7 @@ async fn set_default_agent_in_txn(
     apply_desired_state_plan(
         txn,
         &plan,
-        &gents::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await?;
     Ok(())
@@ -69,7 +69,7 @@ async fn set_default_agent_in_txn(
 #[cfg(test)]
 pub async fn apply_config_components(
     access: &ConfigAccess,
-    document: &gents::documents::PackConfig,
+    document: &gents_documents::PackConfig,
 ) -> Result<()> {
     let (owner, plan) = config_components_plan(document)?;
     access
@@ -85,7 +85,7 @@ pub async fn apply_config_components(
 /// `apply_config_components_with_publication_on` and its observer.
 pub async fn apply_config_components_on(
     access: &ConfigAccess,
-    document: &gents::documents::PackConfig,
+    document: &gents_documents::PackConfig,
 ) -> Result<()> {
     let (owner, plan) = config_components_plan(document)?;
     anyhow::ensure!(
@@ -105,8 +105,8 @@ pub async fn apply_config_components_on(
 
 pub(crate) async fn apply_config_components_with_publication_on(
     access: &ConfigAccess,
-    document: &gents::documents::PackConfig,
-    observer: std::sync::Arc<dyn gents::store::config_client::AgentPublicationObserver>,
+    document: &gents_documents::PackConfig,
+    observer: std::sync::Arc<dyn gents_store::config_client::AgentPublicationObserver>,
 ) -> Result<()> {
     let (owner, plan) = config_components_plan(document)?;
     access
@@ -119,25 +119,20 @@ pub(crate) async fn apply_config_components_with_publication_on(
 }
 
 async fn apply_config_components_in_txn(
-    txn: &gents::store::config_client::ConfigApplyTxn<'_>,
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     owner: &str,
     plan: &DesiredStateApplyPlan,
 ) -> Result<()> {
     use anyhow::Context;
-    gents::documents::read_desired_state_record_in_txn(txn, Collection::Node, owner, owner)
+    gents_documents::read_desired_state_record_in_txn(txn, Collection::Node, owner, owner)
         .await?
         .context("component apply requires an existing node")?;
-    apply_desired_state_plan(
-        txn,
-        plan,
-        &gents::inference::resolved::ProviderProfilePolicy,
-    )
-    .await?;
+    apply_desired_state_plan(txn, plan, &gents_inference::resolved::ProviderProfilePolicy).await?;
     Ok(())
 }
 
 fn config_components_plan(
-    document: &gents::documents::PackConfig,
+    document: &gents_documents::PackConfig,
 ) -> Result<(String, DesiredStateApplyPlan)> {
     let owner = document.node.node_did.clone();
     let scope: Node = serde_json::from_value(serde_json::json!({"node_did":owner}))?;
@@ -170,9 +165,9 @@ pub async fn patch_config_components_on(
     access: &ConfigAccess,
     node_did: &str,
     patches: &[(
-        gents::documents::patch::SelfConfigTarget,
+        gents_documents::patch::SelfConfigTarget,
         String,
-        gents::documents::patch::SelfConfigPatch,
+        gents_documents::patch::SelfConfigPatch,
     )],
 ) -> Result<()> {
     patch_config_components_with(access, node_did, patches).await
@@ -182,9 +177,9 @@ async fn patch_config_components_with(
     access: &ConfigAccess,
     node_did: &str,
     patches: &[(
-        gents::documents::patch::SelfConfigTarget,
+        gents_documents::patch::SelfConfigTarget,
         String,
-        gents::documents::patch::SelfConfigPatch,
+        gents_documents::patch::SelfConfigPatch,
     )],
 ) -> Result<()> {
     access
@@ -195,16 +190,16 @@ async fn patch_config_components_with(
 }
 
 async fn patch_config_components_in_txn(
-    txn: &gents::store::config_client::ConfigApplyTxn<'_>,
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     patches: &[(
-        gents::documents::patch::SelfConfigTarget,
+        gents_documents::patch::SelfConfigTarget,
         String,
-        gents::documents::patch::SelfConfigPatch,
+        gents_documents::patch::SelfConfigPatch,
     )],
 ) -> Result<()> {
     use anyhow::Context;
-    use gents::documents::{
+    use gents_documents::{
         patch::{apply_patch, ensure_admissible},
         read_desired_state_record_in_txn,
     };
@@ -253,7 +248,7 @@ async fn patch_config_components_in_txn(
     apply_desired_state_plan(
         txn,
         &plan,
-        &gents::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await?;
     Ok(())
@@ -263,7 +258,7 @@ async fn patch_config_components_in_txn(
 mod tests {
     use super::*;
     use crate::test_fixtures::ServedRuntimeHome;
-    use gents::documents::read_desired_state_record_in_txn;
+    use gents_documents::read_desired_state_record_in_txn;
     use serde_json::json;
 
     #[tokio::test]
@@ -273,7 +268,7 @@ mod tests {
         let other = runtime.node_did();
         let default = runtime.provision_agent().await;
         let target = runtime.fresh_did().await;
-        let config: gents::documents::PackConfig = serde_json::from_value(json!({
+        let config: gents_documents::PackConfig = serde_json::from_value(json!({
             "node":{"node_did":other},
             "inference_backends":[{"node_did":other,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"node_did":other,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
@@ -287,7 +282,7 @@ mod tests {
                     apply_desired_state_plan(
                         txn,
                         plan,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await?;
                     Ok::<_, anyhow::Error>(())
@@ -328,7 +323,7 @@ mod tests {
         let owner = runtime.node_did();
         let first = runtime.provision_agent().await;
         let second = runtime.provision_agent().await;
-        let seed: gents::documents::PackConfig = serde_json::from_value(json!({
+        let seed: gents_documents::PackConfig = serde_json::from_value(json!({
             "node":{"node_did":owner,"default_agent_did":first.agent_did,"avatar":"12","tags":["keep"]},
             "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
@@ -345,7 +340,7 @@ mod tests {
                     apply_desired_state_plan(
                         txn,
                         plan,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await?;
                     Ok::<_, anyhow::Error>(())
@@ -363,8 +358,8 @@ mod tests {
                         filter: {{ node_did: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }} }},
                         input: {{ enabled: false }}
                     ) {{ _docID }} }}"#,
-                    gents::store::graphql::escape_graphql_string(owner),
-                    gents::store::graphql::escape_graphql_string(&first.agent_did),
+                    gents_store::graphql::escape_graphql_string(owner),
+                    gents_store::graphql::escape_graphql_string(&first.agent_did),
                 ),
             )
             .await?;
@@ -408,7 +403,7 @@ mod tests {
         let agent = runtime.provision_agent().await;
         let missing = runtime.fresh_did().await;
         let missing = missing.as_str();
-        let seed: gents::documents::PackConfig = serde_json::from_value(json!({
+        let seed: gents_documents::PackConfig = serde_json::from_value(json!({
             "node":{"node_did":owner,"display_name":"Keep name","avatar":"12","default_agent_did":agent.agent_did,"created_at":"2026-01-01T00:00:00Z","created_by":"did:test:creator","tags":["keep"]},
             "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
@@ -423,7 +418,7 @@ mod tests {
                     apply_desired_state_plan(
                         txn,
                         plan,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await?;
                     Ok::<_, anyhow::Error>(())
@@ -526,7 +521,7 @@ mod tests {
     #[tokio::test]
     async fn component_patch_preserves_hidden_auth_and_rolls_back_invalid_companion() -> Result<()>
     {
-        use gents::documents::patch::SelfConfigTarget;
+        use gents_documents::patch::SelfConfigTarget;
         let runtime = ServedRuntimeHome::start().await;
         let access = runtime.user_access();
         let owner = runtime.node_did();
@@ -534,7 +529,7 @@ mod tests {
         let other_patch = other_patch.as_str();
         let absent = runtime.fresh_did().await;
         for scope in [owner, other_patch] {
-            let config: gents::documents::PackConfig = serde_json::from_value(json!({
+            let config: gents_documents::PackConfig = serde_json::from_value(json!({
                 "node":{"node_did":scope},
                 "inference_backends":[{"node_did":scope,"backend_id":" backend ","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"api_key","key":"secret-retained"},"connect_timeout_secs":7,"discovery_timeout_secs":8,"max_queue_depth":0,"tags":["retained"]}],
                 "inference_profiles":[{"node_did":scope,"profile_id":"profile","backend_id":" backend ","model_name":"initial"}]
@@ -547,7 +542,7 @@ mod tests {
                         apply_desired_state_plan(
                             txn,
                             plan,
-                            &gents::inference::resolved::ProviderProfilePolicy,
+                            &gents_inference::resolved::ProviderProfilePolicy,
                         )
                         .await?;
                         Ok::<_, anyhow::Error>(())

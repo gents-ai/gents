@@ -86,7 +86,7 @@ const DEFAULT_LOG_FILTER: &str = concat!(
     "gents::triggers::engine=info"
 );
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
-const RUNTIME_STATE_FILE_NAME: &str = gents::store::local::home::RUNTIME_STATE_FILE_NAME;
+const RUNTIME_STATE_FILE_NAME: &str = gents_store::local::home::RUNTIME_STATE_FILE_NAME;
 const ROOT_HELP_TEMPLATE: &str = "\
 {about-with-newline}
 {usage-heading} {usage}
@@ -408,7 +408,7 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Some(Command::Shell(args)) => return commands::start::shell(args, runtime).await,
         Some(command) => command,
     };
-    gents::enable_self_runner();
+    gents_tools::native::enable_self_runner();
     if let Command::Utils {
         command: UtilsCommand::Eval { command },
     } = &command
@@ -641,7 +641,7 @@ pub(crate) async fn resolve_config_access(
 /// under that guard instead of contending with it.
 pub(crate) async fn resolve_config_access_under_plugin_store(
     home: &Path,
-    guard: &gents::plugin::store::StoreGuard,
+    guard: &gents_pack::plugin::store::StoreGuard,
 ) -> Result<(ConfigAccess, PathBuf)> {
     let (access, home, _) =
         resolve_config_access_inner(Some(home), None, false, Some(guard)).await?;
@@ -654,7 +654,7 @@ pub(crate) async fn resolve_pack_config_access(
 ) -> Result<(
     ConfigAccess,
     PathBuf,
-    Option<gents::store::config_client::GraphqlEndpoint>,
+    Option<gents_store::config_client::GraphqlEndpoint>,
 )> {
     resolve_config_access_inner(home, explicit_graphql, true, None).await
 }
@@ -663,13 +663,13 @@ async fn resolve_config_access_inner(
     home: Option<&Path>,
     explicit_graphql: Option<&str>,
     local_http: bool,
-    plugin_guard: Option<&gents::plugin::store::StoreGuard>,
+    plugin_guard: Option<&gents_pack::plugin::store::StoreGuard>,
 ) -> Result<(
     ConfigAccess,
     PathBuf,
-    Option<gents::store::config_client::GraphqlEndpoint>,
+    Option<gents_store::config_client::GraphqlEndpoint>,
 )> {
-    use gents::NodeIdentity as _;
+    use gents_store::identity::NodeIdentity as _;
     let home_dir = resolve_home_dir(home);
     if let Some(guard) = plugin_guard {
         guard.for_home(&home_dir)?;
@@ -705,7 +705,7 @@ async fn resolve_config_access_inner(
         "the initialized data directory {} is unavailable",
         data_dir.display()
     );
-    let claim = gents::store::local::home::lock_store(&home_dir, &data_dir).map_err(|error| {
+    let claim = gents_store::local::home::lock_store(&home_dir, &data_dir).map_err(|error| {
         let held = error.lock_held().is_some();
         let error = anyhow::Error::from(error);
         if held {
@@ -717,8 +717,8 @@ async fn resolve_config_access_inner(
         }
     })?;
     let store_key =
-        gents::store::local::store_key::open_home_store_key(&home_dir, &data_dir).await?;
-    let protected = gents::store::local::backend_protection::ProtectedBackendStore::open(
+        gents_store::local::store_key::open_home_store_key(&home_dir, &data_dir).await?;
+    let protected = gents_store::local::backend_protection::ProtectedBackendStore::open(
         &data_dir, &store_key, &claim,
     )
     .await?;
@@ -735,7 +735,7 @@ async fn resolve_config_access_inner(
         Ok((listener, address))
     })
     .await??;
-    let endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(
+    let endpoint = gents_store::config_client::GraphqlEndpoint::as_principal(
         format!("http://{address}/api/v0/graphql"),
         client_identity.did(),
     )
@@ -750,7 +750,7 @@ async fn resolve_config_access_inner(
                 runtime_identity.clone(),
                 http,
                 None,
-                gents::tools::surface::ToolCeiling::meta_only(),
+                gents_tools::surface::ToolCeiling::meta_only(),
                 guard,
             )
             .await?
@@ -762,7 +762,7 @@ async fn resolve_config_access_inner(
                 runtime_identity.clone(),
                 http,
                 None,
-                gents::tools::surface::ToolCeiling::meta_only(),
+                gents_tools::surface::ToolCeiling::meta_only(),
                 &home_dir,
             )
             .await?
@@ -776,12 +776,12 @@ async fn resolve_config_access_inner(
     )?
     .with_client_signed_writes_through(endpoint.clone())?;
     let local_endpoint = local_http.then_some(endpoint);
-    gents::store::schema::migration::ensure_all_runtime_migrations(migration_node)
+    gents_store::schema::migration::ensure_all_runtime_migrations(migration_node)
         .await
         .map_err(|error| {
-            gents::store::local::storage_backend::classify_store_error(error, &data_dir)
+            gents_store::local::storage_backend::classify_store_error(error, &data_dir)
         })?;
-    gents::store::local::store_key::upgrade::finish(&data_dir)?;
+    gents_store::local::store_key::upgrade::finish(&data_dir)?;
     Ok((access, home_dir, local_endpoint))
 }
 
@@ -790,9 +790,9 @@ pub(crate) async fn persistent_node_builder(
     home_dir: &Path,
     data_dir: &Path,
 ) -> Result<NodeBuilder> {
-    gents::store::local::storage_backend::reject_legacy_store(data_dir)?;
-    let key = gents::store::local::store_key::open_home_store_key(home_dir, data_dir).await?;
-    Ok(gents::store::local::store_key::persistent_builder(
+    gents_store::local::storage_backend::reject_legacy_store(data_dir)?;
+    let key = gents_store::local::store_key::open_home_store_key(home_dir, data_dir).await?;
+    Ok(gents_store::local::store_key::persistent_builder(
         data_dir, &key,
     )?)
 }
@@ -915,7 +915,7 @@ pub(crate) fn server_start_failure_hint(home_dir: &Path) -> String {
 mod tests {
     use super::*;
     use crate::shared::StoredInitConfig;
-    use gents::NodeIdentity as _;
+    use gents_store::identity::NodeIdentity as _;
 
     #[tokio::test]
     async fn initialized_offline_node_reuses_the_home_signer() {
@@ -924,7 +924,7 @@ mod tests {
         let data = default_data_dir(&home);
         let key_path = default_key_path(&home, "default");
         std::fs::create_dir_all(key_path.parent().unwrap()).unwrap();
-        let identity = gents::KeyIdentity::load_or_create(&key_path, None).unwrap();
+        let identity = gents_store::identity::KeyIdentity::load_or_create(&key_path, None).unwrap();
         let did = identity.did().to_string();
         write_init_config(
             &home,
@@ -940,9 +940,9 @@ mod tests {
                 tool_ceiling: ToolCeilingArg::Readonly,
                 tool_root: None,
                 store_encryption: Some(
-                    gents::store::local::store_key::StoreEncryption::prepare(
-                        gents::store::local::store_key::StoreKeyCustodyChoice::File,
-                        &gents::store::local::store_key::home_key_file(&home),
+                    gents_store::local::store_key::StoreEncryption::prepare(
+                        gents_store::local::store_key::StoreKeyCustodyChoice::File,
+                        &gents_store::local::store_key::home_key_file(&home),
                         &default_data_dir(&home),
                     )
                     .unwrap(),
@@ -968,7 +968,7 @@ mod tests {
         config.store_encryption = None;
         write_init_config(&home, &config).unwrap();
         let data = default_data_dir(&home);
-        let key_file = gents::store::local::store_key::home_key_file(&home);
+        let key_file = gents_store::local::store_key::home_key_file(&home);
         let before = std::fs::read(&key_file).unwrap();
 
         let error = match persistent_node_builder_with_stored_identity(&home, &data).await {
@@ -984,7 +984,7 @@ mod tests {
         let home = temp.join("home");
         let key_path = default_key_path(&home, "default");
         std::fs::create_dir_all(key_path.parent().unwrap()).unwrap();
-        let identity = gents::KeyIdentity::load_or_create(&key_path, None).unwrap();
+        let identity = gents_store::identity::KeyIdentity::load_or_create(&key_path, None).unwrap();
         write_init_config(
             &home,
             &StoredInitConfig {
@@ -999,9 +999,9 @@ mod tests {
                 tool_ceiling: ToolCeilingArg::Readonly,
                 tool_root: None,
                 store_encryption: Some(
-                    gents::store::local::store_key::StoreEncryption::prepare(
-                        gents::store::local::store_key::StoreKeyCustodyChoice::File,
-                        &gents::store::local::store_key::home_key_file(&home),
+                    gents_store::local::store_key::StoreEncryption::prepare(
+                        gents_store::local::store_key::StoreKeyCustodyChoice::File,
+                        &gents_store::local::store_key::home_key_file(&home),
                         &default_data_dir(&home),
                     )
                     .unwrap(),
@@ -1015,7 +1015,7 @@ mod tests {
             .store_encryption
             .unwrap()
             .initialize(
-                &gents::store::local::store_key::home_key_file(&home),
+                &gents_store::local::store_key::home_key_file(&home),
                 &default_data_dir(&home),
             )
             .unwrap();
@@ -1030,11 +1030,11 @@ mod tests {
         let identity = load_initialized_home_identity(&home, &config).unwrap();
         let data = default_data_dir(&home);
         std::fs::create_dir_all(&data).unwrap();
-        let key = gents::store::local::store_key::open_home_store_key(&home, &data)
+        let key = gents_store::local::store_key::open_home_store_key(&home, &data)
             .await
             .unwrap();
-        let lock = gents::store::local::home::lock_store(&home, &data).unwrap();
-        gents::store::local::backend_protection::FreshBackendStore::observe(&data, &lock)
+        let lock = gents_store::local::home::lock_store(&home, &data).unwrap();
+        gents_store::local::backend_protection::FreshBackendStore::observe(&data, &lock)
             .await
             .unwrap()
             .initialize(&key, Some(identity.did()))
@@ -1055,7 +1055,7 @@ mod tests {
             .expect("an offline home opens its store");
         let node = std::sync::Arc::downgrade(node);
 
-        let error = gents::store::local::home::lock_store(&home, &default_data_dir(&home))
+        let error = gents_store::local::home::lock_store(&home, &default_data_dir(&home))
             .expect_err("an opened store excludes another runtime");
         assert!(
             error.lock_held().is_some(),
@@ -1087,7 +1087,7 @@ mod tests {
     async fn an_offline_access_names_the_holder_of_a_claimed_store() {
         let temp = tempfile::tempdir().unwrap();
         let home = initialized_home_with_store(temp.path()).await;
-        let _held = gents::store::local::home::lock_home_store(&home).unwrap();
+        let _held = gents_store::local::home::lock_home_store(&home).unwrap();
 
         let error = match resolve_config_access(Some(&home), None).await {
             Ok(_) => panic!("a claimed store must not be opened a second time"),
@@ -1095,7 +1095,7 @@ mod tests {
         };
 
         assert!(
-            gents::store::local::home::store_lock_held(error.as_ref()).is_some(),
+            gents_store::local::home::store_lock_held(error.as_ref()).is_some(),
             "{error:#}"
         );
     }
@@ -1126,8 +1126,8 @@ mod tests {
             let mut input = service.clone();
             input[field] = value;
             assert!(
-                gents::documents::config_projection(
-                    gents::Collection::ToolServiceRegistry,
+                gents_documents::config_projection(
+                    gents_store::collection::Collection::ToolServiceRegistry,
                     Some(&input)
                 )
                 .is_err(),
@@ -1139,8 +1139,8 @@ mod tests {
     #[test]
     fn canonical_service_import_preserves_optional_endpoint_and_exact_values() {
         let input = serde_json::json!({"node_did":"owner","service_id":"mcp","hostname":"host","mcp_path":null});
-        let projected = gents::documents::config_projection(
-            gents::Collection::ToolServiceRegistry,
+        let projected = gents_documents::config_projection(
+            gents_store::collection::Collection::ToolServiceRegistry,
             Some(&input),
         )
         .unwrap()
@@ -1152,8 +1152,8 @@ mod tests {
         assert_eq!(projected["node_did"], "owner");
         let mut missing_owner = input;
         missing_owner.as_object_mut().unwrap().remove("node_did");
-        assert!(gents::documents::config_projection(
-            gents::Collection::ToolServiceRegistry,
+        assert!(gents_documents::config_projection(
+            gents_store::collection::Collection::ToolServiceRegistry,
             Some(&missing_owner)
         )
         .is_err());

@@ -1,10 +1,6 @@
 use std::time::{Duration, Instant};
 
-use gents::request::lifecycle::{prepare_pending_user_edit, PendingMessageEdit, PendingQueueEdit};
 use gents::runtime::agent::session_commands::run_session_command_reconciler;
-use gents::store::config_client::ConfigAccess;
-use gents::store::graphql::escape_graphql_string;
-use gents::NodeIdentity as _;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -12,6 +8,12 @@ use gents_protocol::request_input::{QueueDelivery, QueuePolicy, QueueSource, Req
 use gents_protocol::session_input_edit::{
     SessionInputEdit, SessionInputEditOutcome, SessionInputEditReceipt, SESSION_INPUT_EDIT_VERSION,
 };
+use gents_session::request::lifecycle::{
+    prepare_pending_user_edit, PendingMessageEdit, PendingQueueEdit,
+};
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
+use gents_store::identity::NodeIdentity as _;
 use rapidhash::RapidHashMap;
 use tokio_util::sync::CancellationToken;
 
@@ -77,7 +79,7 @@ async fn wait_row_as(
 
 async fn signed_edit_targets(
     db: &TestDb,
-    signer: &dyn gents::store::identity::NodeIdentity,
+    signer: &dyn gents_store::identity::NodeIdentity,
     node_did: &str,
     session_id: &str,
     replacements: &[AgentRequestCreate],
@@ -88,14 +90,14 @@ async fn signed_edit_targets(
         .transact_readonly("test.input_edit.targets", |txn| {
             Box::pin(async move {
                 let session =
-                    gents::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                    gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
                         txn, node_did, session_id,
                     )
                     .await?
                     .expect("session exists");
-                let (agent_doc, _) = gents::documents::read_desired_state_record_in_txn(
+                let (agent_doc, _) = gents_documents::read_desired_state_record_in_txn(
                     txn,
-                    gents::Collection::Agent,
+                    gents_store::collection::Collection::Agent,
                     node_did,
                     &session.session.agent_did,
                 )
@@ -109,9 +111,9 @@ async fn signed_edit_targets(
     let mut evidence = Vec::with_capacity(replacements.len());
     for replacement in replacements {
         evidence.push(
-            gents::store::config_client::prepare_request_evidence(
+            gents_store::config_client::prepare_request_evidence(
                 signer,
-                gents::store::config_client::client_request_input(replacement).unwrap(),
+                gents_store::config_client::client_request_input(replacement).unwrap(),
             )
             .await
             .unwrap(),
@@ -152,7 +154,7 @@ struct SeededSession {
 /// the signed client endpoint, and concurrency is two authors racing there.
 struct EndpointEdits {
     db: TestDb,
-    user: gents::KeyIdentity,
+    user: gents_store::identity::KeyIdentity,
     client: ConfigAccess,
     agent_did: String,
     agent_doc: String,
@@ -175,9 +177,9 @@ impl EndpointEdits {
                 let agent_did = &agent_did;
                 Box::pin(async move {
                     Ok::<_, anyhow::Error>(
-                        gents::documents::read_desired_state_record_in_txn(
+                        gents_documents::read_desired_state_record_in_txn(
                             txn,
-                            gents::Collection::Agent,
+                            gents_store::collection::Collection::Agent,
                             did,
                             agent_did,
                         )
@@ -258,17 +260,17 @@ impl EndpointEdits {
             });
             if session_doc.is_none() {
                 session_doc = Some(
-                    gents::request::lifecycle::reserve_goal_session(&self.client, &create)
+                    gents_session::request::lifecycle::reserve_goal_session(&self.client, &create)
                         .await
                         .unwrap(),
                 );
             }
             create.session_doc_id = session_doc.clone();
             create.agent_doc_id = Some(self.agent_doc.clone());
-            gents::sign_agent_request_create(&self.user, &mut create)
+            gents_session::request::admission::sign_agent_request_create(&self.user, &mut create)
                 .await
                 .unwrap();
-            gents::request::lifecycle::submit_client_request(&self.client, &create)
+            gents_session::request::lifecycle::submit_client_request(&self.client, &create)
                 .await
                 .unwrap();
             let row = wait_row_as(
@@ -400,7 +402,7 @@ impl EndpointEdits {
     }
 
     async fn publish(&self, command: &SessionInputEdit) -> anyhow::Result<String> {
-        gents::request::lifecycle::publish_edit_command(&self.client, command).await
+        gents_session::request::lifecycle::publish_edit_command(&self.client, command).await
     }
 
     async fn command_rows(&self, command_id: &str) -> Vec<serde_json::Value> {
@@ -443,7 +445,7 @@ impl EndpointEdits {
     }
 
     async fn pending(&self, session_id: &str) -> Vec<String> {
-        gents::request::lifecycle::pending_user_queue(
+        gents_session::request::lifecycle::pending_user_queue(
             &self.client,
             self.node_did(),
             session_id,
@@ -826,7 +828,7 @@ async fn identical_edit_republished_after_receipt_is_refused() {
 
 #[tokio::test]
 async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempotent() {
-    use gents::NodeIdentity as _;
+    use gents_store::identity::NodeIdentity as _;
     let mut db = support::test_db("input-edit-reopen").await;
     let did = db.node_identity.did().to_owned();
     // The enrolled User created this Agent and edits its own queued input.
@@ -842,9 +844,9 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
             let agent_did = agent.did();
             Box::pin(async move {
                 Ok::<_, anyhow::Error>(
-                    gents::documents::read_desired_state_record_in_txn(
+                    gents_documents::read_desired_state_record_in_txn(
                         txn,
-                        gents::Collection::Agent,
+                        gents_store::collection::Collection::Agent,
                         did,
                         agent_did,
                     )
@@ -880,15 +882,15 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
         background_completion_wake_version: None,
     });
     original.session_doc_id = Some(
-        gents::request::lifecycle::reserve_goal_session(&client, &original)
+        gents_session::request::lifecycle::reserve_goal_session(&client, &original)
             .await
             .unwrap(),
     );
     original.agent_doc_id = Some(agent_doc);
-    gents::sign_agent_request_create(&user, &mut original)
+    gents_session::request::admission::sign_agent_request_create(&user, &mut original)
         .await
         .unwrap();
-    gents::request::lifecycle::submit_client_request(&client, &original)
+    gents_session::request::lifecycle::submit_client_request(&client, &original)
         .await
         .unwrap();
     let created = client
@@ -940,7 +942,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
         signature: vec![],
     };
     command.signature = user.sign(&command.signing_payload()).await.unwrap();
-    gents::request::lifecycle::publish_edit_command(&client, &command)
+    gents_session::request::lifecycle::publish_edit_command(&client, &command)
         .await
         .unwrap();
     db.simulate_process_crash().await.unwrap();
@@ -1024,7 +1026,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
             .await
             .3;
     stale.signature = user.sign(&stale.signing_payload()).await.unwrap();
-    gents::request::lifecycle::publish_edit_command(&client, &stale)
+    gents_session::request::lifecycle::publish_edit_command(&client, &stale)
         .await
         .unwrap();
     let cancel = CancellationToken::new();

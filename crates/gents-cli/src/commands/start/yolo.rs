@@ -2,14 +2,14 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, ensure, Context, Result};
-use gents::store::config_client::GraphqlEndpoint;
-use gents::store::graphql::escape_graphql_string;
 use gents_protocol::node_readiness::{
     AgentReadinessEntry, AgentReadinessState, NodeReadinessSnapshot,
 };
 use gents_protocol::operations::agent::{AgentCreateInput, AgentCreateOperation};
 use gents_protocol::operations::StringUpdate;
 use gents_protocol::row::{decode_node_readiness_snapshot, NodeReadinessRow};
+use gents_store::config_client::GraphqlEndpoint;
+use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;
 
 use crate::config_writes::ConfigAccess;
@@ -135,7 +135,7 @@ async fn grant_self_configuration(
     yolo: &str,
     source: &str,
 ) -> Result<()> {
-    gents::tools::builtin::self_config::grant_own_self_configuration(access, node_did, yolo, source)
+    gents_tools::builtin::self_config::grant_own_self_configuration(access, node_did, yolo, source)
         .await
         .with_context(|| format!("granting the yolo agent {yolo} its own self-configuration"))
 }
@@ -150,11 +150,11 @@ async fn ensure_root_reader(
     yolo: &str,
     source: &str,
 ) -> Result<()> {
-    use gents::tools::surface::ToolRootReader;
-    match gents::tools::surface::agent_tool_root_reader(access, node_did, yolo).await? {
+    use gents_tools::surface::ToolRootReader;
+    match gents_tools::surface::agent_tool_root_reader(access, node_did, yolo).await? {
         ToolRootReader::NotNeeded => Ok(()),
         ToolRootReader::Published(root) => {
-            gents::tools::surface::grant_workspace_root_reader(access, &root, yolo)
+            gents_tools::surface::grant_workspace_root_reader(access, &root, yolo)
                 .await
                 .with_context(|| format!("granting the yolo agent {yolo} reader on {root}"))
         }

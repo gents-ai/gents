@@ -25,9 +25,9 @@ use crate::optimization::proposer::Proposer;
 use crate::optimization::target::JobTarget;
 use crate::runner::freeze::tests::Launching;
 use crate::runner::{Capture, RunOptions, ScriptedExecutor, TrialExecutor};
-use gents::documents::EvalSplit;
-use gents::store::config_client::ConfigAccess;
-use gents::Collection;
+use gents_documents::EvalSplit;
+use gents_store::collection::Collection;
+use gents_store::config_client::ConfigAccess;
 
 pub(crate) struct Harness {
     launching: Launching,
@@ -104,7 +104,7 @@ impl Harness {
         config.agents.push(serde_json::from_value(agent).unwrap());
         let agent_bindings =
             std::collections::BTreeMap::from([("monitor".into(), binding.clone())]);
-        let bound = gents::pack::BoundPackConfig {
+        let bound = gents_pack::pack::BoundPackConfig {
             installation_doc_id: None,
             config,
             agent_bindings: agent_bindings.clone(),
@@ -115,15 +115,15 @@ impl Harness {
             .bind_inference(&authored.manifest, &inference_bindings)
             .unwrap();
         let mut identity =
-            gents::pack::PackIdentity::new(&authored.manifest, authored.digest, Vec::new());
+            gents_pack::pack::PackIdentity::new(&authored.manifest, authored.digest, Vec::new());
         identity.agent_bindings = agent_bindings;
-        gents::pack::install_pack_documents(
+        gents_pack::pack::install_pack_documents(
             &owner_access,
             launching.owner(),
             &identity,
             &config,
-            gents::pack::DriftPolicy::Overwrite,
-            &gents::inference::resolved::ProviderProfilePolicy,
+            gents_pack::pack::DriftPolicy::Overwrite,
+            &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await
         .unwrap();
@@ -184,7 +184,7 @@ impl Harness {
     pub(crate) async fn grant_node_permissions(
         &self,
         actor: &str,
-        permissions: &[gents::store::config_client::NodePermission],
+        permissions: &[gents_store::config_client::NodePermission],
     ) -> anyhow::Result<()> {
         self.launching
             .grant_node_permissions(actor, permissions)
@@ -262,7 +262,7 @@ async fn fixture_installs_bound_pack_documents_with_authored_origin() {
             tags.iter().any(|tag| tag
                 == &format!(
                     "gents:pack:{}/monitor_fixture",
-                    gents::documents::pack_spec::DEFAULT_NAMESPACE
+                    gents_documents::pack_spec::DEFAULT_NAMESPACE
                 )),
             "{collection} lost its pack origin"
         );

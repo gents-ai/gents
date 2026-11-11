@@ -1,9 +1,9 @@
-use gents::store::config_client::GraphqlEndpoint;
+use gents_store::config_client::GraphqlEndpoint;
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
-use gents::{store::graphql::escape_graphql_string, ConfigAccess};
 use gents_protocol::row::AgentRequestRow;
+use gents_store::{config_client::ConfigAccess, graphql::escape_graphql_string};
 use serde_json::Value;
 
 use crate::cli::args::RequestShowArgs;
@@ -92,12 +92,16 @@ async fn load_request_show_snapshot(
 
     let request_terminal = canonical_request.is_terminal();
     let request_node_did = canonical_request.node_did.unwrap_or_default();
-    let blocked = gents::goal::blocked_turn::blocked_turn(&access, &request_node_did, request_id)
-        .await
-        .unwrap_or_else(|error| {
-            tracing::warn!(request_id, error = %format!("{error:#}"), "blocked turn unreadable");
-            None
-        });
+    let blocked = gents_automation::goal::blocked_turn::blocked_turn(
+        &access,
+        &request_node_did,
+        request_id,
+    )
+    .await
+    .unwrap_or_else(|error| {
+        tracing::warn!(request_id, error = %format!("{error:#}"), "blocked turn unreadable");
+        None
+    });
     let liveness = crate::commands::status::load_liveness_value(graphql, &request_node_did).await;
     let active_tool_calls = active_tool_call_keys(&liveness);
     let native_executors_available = liveness

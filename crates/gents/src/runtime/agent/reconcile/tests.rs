@@ -7,21 +7,21 @@ use std::time::Duration;
 use tokio::sync::{mpsc, watch, Mutex, Notify, Semaphore};
 
 use super::*;
-use crate::ensure_runtime_schemas;
-use crate::inference::admission::BackendAdmissionConfig;
-use crate::inference::backends::provider::BackendProviderKind;
-use crate::inference::resolved::{MaxTurnsProvenance, ResolvedAgent, DEFAULT_MAX_TURNS};
 use crate::runtime::agent::PendingAgent;
 use crate::runtime::status::RuntimeStatusHandle;
-use crate::store::graphql::escape_graphql_string;
-use crate::store::identity::{KeyIdentity, NodeIdentity as _, RuntimeNode};
-use crate::tools::surface::{AgentToolSurfaceConfig, ToolCeiling, ToolSurface};
+use gents_inference::admission::BackendAdmissionConfig;
+use gents_inference::backends::provider::BackendProviderKind;
+use gents_inference::resolved::{MaxTurnsProvenance, ResolvedAgent, DEFAULT_MAX_TURNS};
 use gents_lean_vocab::lean_runtime_reconcile_case;
 use gents_protocol::row::AgentRequest;
+use gents_store::graphql::escape_graphql_string;
+use gents_store::identity::{KeyIdentity, NodeIdentity as _, RuntimeNode};
+use gents_store::schema::ensure_runtime_schemas;
+use gents_tools::surface::{AgentToolSurfaceConfig, ToolCeiling, ToolSurface};
 
 async fn test_node() -> Arc<defra_node::Node> {
     Arc::new(
-        crate::store::test_support::node_builder()
+        gents_store::test_support::node_builder()
             .build()
             .await
             .unwrap(),
@@ -34,7 +34,7 @@ fn test_identity(name: &str) -> KeyIdentity {
 }
 
 fn stub_runtime_node() -> Arc<RuntimeNode> {
-    let identity: Arc<dyn crate::store::identity::NodeIdentity> = Arc::new(
+    let identity: Arc<dyn gents_store::identity::NodeIdentity> = Arc::new(
         KeyIdentity::load_or_create(
             std::env::temp_dir().join(format!("stub-runtime-node-{}.key", uuid::Uuid::new_v4())),
             None,
@@ -81,14 +81,14 @@ fn runtime_status_handle(node: &Arc<defra_node::Node>, node_did: &str) -> Runtim
 /// Revisions of one Agent share its provisioned binding and root identity, so they
 /// resolve to the same agent DID. Each fresh provisioning is a different Agent.
 struct AgentLineage {
-    root: Arc<dyn crate::store::identity::NodeIdentity>,
+    root: Arc<dyn gents_store::identity::NodeIdentity>,
     binding: gents_protocol::agent_identity::AgentIdentityBinding,
 }
 
 impl AgentLineage {
     fn provision(name: &str) -> Self {
-        let root: Arc<dyn crate::store::identity::NodeIdentity> = Arc::new(test_identity(name));
-        let binding = crate::store::identity::provision_agent_identity(root.as_ref()).unwrap();
+        let root: Arc<dyn gents_store::identity::NodeIdentity> = Arc::new(test_identity(name));
+        let binding = gents_store::identity::provision_agent_identity(root.as_ref()).unwrap();
         Self { root, binding }
     }
 
@@ -121,7 +121,7 @@ async fn snapshot_for_agents_with_node(
                 node,
                 node.node_identity_did()
                     .expect("fixture node has an identity"),
-                &crate::tools::plugin_host::NoPluginHost,
+                &gents_tools::plugin_host::NoPluginHost,
             )
             .await
             .unwrap();
@@ -150,7 +150,7 @@ async fn snapshot_for_agents_with_admission(
                 node,
                 node.node_identity_did()
                     .expect("fixture node has an identity"),
-                &crate::tools::plugin_host::NoPluginHost,
+                &gents_tools::plugin_host::NoPluginHost,
             )
             .await
             .unwrap();
@@ -176,7 +176,7 @@ fn backend_admission_config(
         max_concurrent,
         max_queue_depth,
         enabled: true,
-        probe_status: crate::inference::backends::registry::HEALTHY_PROBE_STATUS.to_string(),
+        probe_status: gents_inference::backends::registry::HEALTHY_PROBE_STATUS.to_string(),
         measured_unhealthy: false,
         config_fingerprint: format!("{backend_id}:{max_concurrent}:{max_queue_depth}"),
     }
@@ -258,8 +258,8 @@ async fn max_turns_provenance_only_edit_changes_snapshot_and_slot_fingerprints()
     assert_eq!(unset.max_turns, explicit.max_turns);
 
     assert_ne!(
-        crate::inference::connection_fingerprint::agent_slot_fingerprint(&unset),
-        crate::inference::connection_fingerprint::agent_slot_fingerprint(&explicit),
+        gents_inference::connection_fingerprint::agent_slot_fingerprint(&unset),
+        gents_inference::connection_fingerprint::agent_slot_fingerprint(&explicit),
         "slot selection must rebuild when only max_turns provenance changed"
     );
 
@@ -315,7 +315,7 @@ async fn pairing_desired_read_failure_applies_no_operations() {
 }
 
 async fn read_failure_is_noop_self_loop(node: Arc<defra_node::Node>) -> bool {
-    use crate::runtime::agent::p2p_reconcile::{
+    use gents_p2p::p2p_reconcile::{
         reconcile_peer_tick, EmbeddedRemoteP2pAdmin, LoadedPairingApplied, PairingDesired,
         PairingStateStore,
     };
@@ -419,7 +419,7 @@ async fn slot_panic_restarts_agent() {
                 &node,
                 node.node_identity_did()
                     .expect("fixture node has an identity"),
-                &crate::tools::plugin_host::NoPluginHost,
+                &gents_tools::plugin_host::NoPluginHost,
             )
             .await
             .unwrap(),
@@ -509,7 +509,7 @@ async fn dropping_agent_slot_aborts_a_held_executor() {
                 &node,
                 node.node_identity_did()
                     .expect("fixture node has an identity"),
-                &crate::tools::plugin_host::NoPluginHost,
+                &gents_tools::plugin_host::NoPluginHost,
             )
             .await
             .unwrap(),
@@ -749,7 +749,7 @@ async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::inference::admission::AdmissionRegistry::new(node.clone()),
+        gents_inference::admission::AdmissionRegistry::new(node.clone()),
         crate::runtime::agent::retry::RetryPolicy {
             max_retries: 3,
             base_delay_ms: 5,
@@ -811,11 +811,13 @@ async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
 /// fixture Agent gets the same node grants the admission fixtures give a managed Agent.
 async fn grant_fixture_agent_call_access(
     node: &Arc<defra_node::Node>,
-    signer: &crate::store::identity::ManagedAgentSigner,
+    signer: &gents_store::identity::ManagedAgentSigner,
 ) {
-    use crate::store::config_client::NodePermission;
-    let admin =
-        crate::ConfigAccess::local_as(node.clone(), identity::Did::new(signer.node_did()).unwrap());
+    use gents_store::config_client::NodePermission;
+    let admin = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(signer.node_did()).unwrap(),
+    );
     let actor = identity::Did::new(signer.did()).unwrap();
     for permission in [
         NodePermission::CollectionGet,
@@ -836,13 +838,16 @@ async fn grant_fixture_agent_call_access(
 /// session through the Agent's own signed access, as the Agent's requests are published.
 async fn seed_fixture_agent_session(
     node: &Arc<defra_node::Node>,
-    signer: &crate::store::identity::ManagedAgentSigner,
+    signer: &gents_store::identity::ManagedAgentSigner,
     session_id: &str,
 ) {
     let actor = identity::Did::new(signer.did()).unwrap();
-    let access =
-        crate::ConfigAccess::local_with_agent_signer(node.clone(), actor.clone(), signer.clone())
-            .unwrap();
+    let access = gents_store::config_client::ConfigAccess::local_with_agent_signer(
+        node.clone(),
+        actor.clone(),
+        signer.clone(),
+    )
+    .unwrap();
     let node_did = signer.node_did().to_string();
     let agent_did = signer.did().to_string();
     let session_id = session_id.to_string();
@@ -853,9 +858,9 @@ async fn seed_fixture_agent_session(
             let agent_did = &agent_did;
             let session_id = &session_id;
             Box::pin(async move {
-                let (agent_doc, _) = crate::documents::read_desired_state_record_in_txn(
+                let (agent_doc, _) = gents_documents::read_desired_state_record_in_txn(
                     txn,
-                    crate::Collection::Agent,
+                    gents_store::collection::Collection::Agent,
                     node_did,
                     agent_did,
                 )
@@ -869,8 +874,8 @@ async fn seed_fixture_agent_session(
                             "created_at": "2026-04-15T00:00:00Z"}}),
                     )
                     .await?;
-                let session_doc = crate::store::graphql::created_doc_id(&response, "AgentSession")?;
-                crate::session::stage_session_relationships_in_txn(
+                let session_doc = gents_store::graphql::created_doc_id(&response, "AgentSession")?;
+                gents_session::session::stage_session_relationships_in_txn(
                     txn,
                     &session_doc,
                     &agent_doc,
@@ -901,19 +906,19 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
     grant_fixture_agent_call_access(&node, &signer).await;
     seed_fixture_agent_session(&node, &signer, "session-test").await;
     agent_config.backend_id = Some("backend-general".to_string());
-    agent_config.backend_auth = crate::documents::BackendAuth::ApiKey {
+    agent_config.backend_auth = gents_documents::BackendAuth::ApiKey {
         key: "fixture-old-key".into(),
     };
     let mut rotated = agent_config.clone();
-    rotated.backend_auth = crate::documents::BackendAuth::ApiKey {
+    rotated.backend_auth = gents_documents::BackendAuth::ApiKey {
         key: "fixture-new-key".into(),
     };
     assert_eq!(format!("{agent_config:?}"), format!("{rotated:?}"));
     assert!(!format!("{rotated:?}").contains("fixture-new-key"));
     let new_connection =
-        crate::inference::connection_fingerprint::agent_connection_fingerprint(&rotated);
+        gents_inference::connection_fingerprint::agent_connection_fingerprint(&rotated);
     assert_ne!(
-        crate::inference::connection_fingerprint::agent_connection_fingerprint(&agent_config),
+        gents_inference::connection_fingerprint::agent_connection_fingerprint(&agent_config),
         new_connection
     );
     let admission = |connection: String| {
@@ -926,7 +931,7 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
         &agent_did,
         vec![Arc::new(agent_config.clone())],
         admission(
-            crate::inference::connection_fingerprint::agent_connection_fingerprint(&agent_config),
+            gents_inference::connection_fingerprint::agent_connection_fingerprint(&agent_config),
         ),
     )
     .await
@@ -950,7 +955,7 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
         let built_tx = built_tx.clone();
         async move {
             let key = match &agent_config.backend_auth {
-                crate::documents::BackendAuth::ApiKey { key } => key.clone(),
+                gents_documents::BackendAuth::ApiKey { key } => key.clone(),
                 _ => String::new(),
             };
             let _ = built_tx.send((generation, key));
@@ -970,7 +975,7 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
         }
     };
 
-    let registry = crate::inference::admission::AdmissionRegistry::new(node.clone());
+    let registry = gents_inference::admission::AdmissionRegistry::new(node.clone());
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
@@ -1027,7 +1032,7 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
             "req-rotated-slot",
             "backend-general",
             &agent_config,
-            crate::inference::admission::CallKind::Inference,
+            gents_inference::admission::CallKind::Inference,
             &new_connection,
             Some(signer),
         )
@@ -1045,7 +1050,7 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
 
 #[tokio::test]
 async fn backend_change_restages_the_slot_and_drains_the_call_in_flight() {
-    use crate::documents::BackendAuth;
+    use gents_documents::BackendAuth;
 
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -1122,7 +1127,7 @@ async fn backend_change_restages_the_slot_and_drains_the_call_in_flight() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::inference::admission::AdmissionRegistry::new(node.clone()),
+        gents_inference::admission::AdmissionRegistry::new(node.clone()),
         crate::runtime::agent::retry::RetryPolicy {
             max_retries: 3,
             base_delay_ms: 5,
@@ -1205,7 +1210,7 @@ struct RuntimeStatusRow {
 }
 
 async fn fetch_runtime_status(node: &Arc<defra_node::Node>, node_did: &str) -> RuntimeStatusRow {
-    let access = crate::store::config_client::ConfigAccess::local_as(
+    let access = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
         identity::Did::new(node_did).unwrap(),
     );
@@ -1256,7 +1261,7 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
         .node_identity_did()
         .expect("fixture node has an identity");
     // The NodeRuntime status row publishes under a visible, registered Node parent.
-    crate::test_support::documents::ensure_test_node(&node, node_did).await;
+    gents_documents::test_support::ensure_test_node(&node, node_did).await;
     let runtime_status = runtime_status_handle(&node, node_did);
 
     let starts = Arc::new(StdMutex::new(RapidHashMap::<String, usize>::new()));
@@ -1307,7 +1312,7 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::inference::admission::AdmissionRegistry::new(node.clone()),
+        gents_inference::admission::AdmissionRegistry::new(node.clone()),
         crate::runtime::agent::retry::RetryPolicy {
             max_retries: 3,
             base_delay_ms: 5,
@@ -1409,7 +1414,7 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
         .node_identity_did()
         .expect("fixture node has an identity");
     // The NodeRuntime status row publishes under a visible, registered Node parent.
-    crate::test_support::documents::ensure_test_node(&node, node_did).await;
+    gents_documents::test_support::ensure_test_node(&node, node_did).await;
     let runtime_status = runtime_status_handle(&node, node_did);
 
     let lineage = AgentLineage::provision("general");
@@ -1468,7 +1473,7 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::inference::admission::AdmissionRegistry::new(node.clone()),
+        gents_inference::admission::AdmissionRegistry::new(node.clone()),
         crate::runtime::agent::retry::RetryPolicy {
             max_retries: 3,
             base_delay_ms: 5,
@@ -1672,7 +1677,7 @@ async fn registration_failure_rolls_back_standing_before_any_staged_slot_spawns(
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::inference::admission::AdmissionRegistry::new(node),
+        gents_inference::admission::AdmissionRegistry::new(node),
         crate::runtime::agent::retry::RetryPolicy {
             max_retries: 1,
             base_delay_ms: 1,
@@ -1766,7 +1771,7 @@ async fn retired_slot_drain_failure_reaches_supervisor_shutdown() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::inference::admission::AdmissionRegistry::new(node.clone()),
+        gents_inference::admission::AdmissionRegistry::new(node.clone()),
         crate::runtime::agent::retry::RetryPolicy {
             max_retries: 1,
             base_delay_ms: 1,
@@ -1884,7 +1889,7 @@ async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::inference::admission::AdmissionRegistry::new(node),
+        gents_inference::admission::AdmissionRegistry::new(node),
         crate::runtime::agent::retry::RetryPolicy {
             max_retries: 1,
             base_delay_ms: 1,
@@ -2037,7 +2042,7 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::inference::admission::AdmissionRegistry::new(node),
+        gents_inference::admission::AdmissionRegistry::new(node),
         crate::runtime::agent::retry::RetryPolicy {
             max_retries: 1,
             base_delay_ms: 1,
@@ -2117,13 +2122,13 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
     });
 
     let binding =
-        crate::store::identity::provision_agent_identity(runtime_node.identity.as_ref()).unwrap();
+        gents_store::identity::provision_agent_identity(runtime_node.identity.as_ref()).unwrap();
     let agent_identity =
-        crate::store::identity::resolve_agent_identity(runtime_node.identity.as_ref(), &binding)
+        gents_store::identity::resolve_agent_identity(runtime_node.identity.as_ref(), &binding)
             .unwrap();
     let agent_did = binding.agent_did.clone();
     let initial_agent = Arc::new(ResolvedAgent {
-        configuration: crate::inference::resolved::ResolvedConfiguration::Static,
+        configuration: gents_inference::resolved::ResolvedConfiguration::Static,
         profile_id: None,
         skills: Vec::new(),
         oauth_pool: Vec::new(),
@@ -2132,37 +2137,36 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         agent_identity,
         backend_id: Some("backend-general".to_string()),
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
-        openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
+        openai_wire_api: gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
         backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
         claude_platform: None,
-        backend_auth: crate::documents::BackendAuth::Unauthenticated,
+        backend_auth: gents_documents::BackendAuth::Unauthenticated,
         model_name: "default".to_string(),
         service_tier: None,
         resolved_reasoning_efforts: None,
-        context_window: crate::inference::resolved::DEFAULT_CONTEXT_WINDOW,
-        max_output_tokens: crate::inference::resolved::DEFAULT_MAX_OUTPUT_TOKENS,
-        max_turns: crate::inference::resolved::DEFAULT_MAX_TURNS,
-        max_turns_provenance: crate::inference::resolved::MaxTurnsProvenance::Default,
+        context_window: gents_inference::resolved::DEFAULT_CONTEXT_WINDOW,
+        max_output_tokens: gents_inference::resolved::DEFAULT_MAX_OUTPUT_TOKENS,
+        max_turns: gents_inference::resolved::DEFAULT_MAX_TURNS,
+        max_turns_provenance: gents_inference::resolved::MaxTurnsProvenance::Default,
         system_prompt: "initial".to_string(),
         tools: AgentToolSurfaceConfig::meta_only(),
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
-        stream_batch_ms: crate::inference::resolved::DEFAULT_STREAM_BATCH_MS,
+        stream_batch_ms: gents_inference::resolved::DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(
-            crate::documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+            gents_documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         ),
         deadline_duration: Duration::from_secs(
-            crate::documents::inference_defaults::DEFAULT_DEADLINE_DURATION_SECS,
+            gents_documents::inference_defaults::DEFAULT_DEADLINE_DURATION_SECS,
         ),
         provider_idle_timeout: Duration::from_secs(
-            crate::inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
+            gents_inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
         ),
-        completion_retry:
-            crate::runtime::agent::completion_retry::CompletionRetryProfileFields::default(),
-        sampling: crate::inference::resolved::SamplingConfig::default(),
+        completion_retry: gents_loop::completion_retry::CompletionRetryProfileFields::default(),
+        sampling: gents_inference::resolved::SamplingConfig::default(),
     });
-    let updated_tools: crate::documents::Tools = serde_json::from_value(serde_json::json!({
+    let updated_tools: gents_documents::Tools = serde_json::from_value(serde_json::json!({
         "tools_id": "general-tools",
         "node_did": runtime_node.node_did,
         "host": {"files": {"mode": "ReadOnly"}},
@@ -2218,7 +2222,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::inference::admission::AdmissionRegistry::new(node.clone()),
+        gents_inference::admission::AdmissionRegistry::new(node.clone()),
         crate::runtime::agent::retry::RetryPolicy {
             max_retries: 3,
             base_delay_ms: 5,
@@ -2333,7 +2337,7 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::inference::admission::AdmissionRegistry::new(node.clone()),
+        gents_inference::admission::AdmissionRegistry::new(node.clone()),
         crate::runtime::agent::retry::RetryPolicy {
             max_retries: 1,
             base_delay_ms: 1,
@@ -2393,7 +2397,7 @@ async fn plugin_resolution_surfaces(
 ) -> (Arc<ResolvedAgent>, Arc<ToolSurface>, Arc<ToolSurface>) {
     let mut agent_config = PendingAgent::new("general")
         .build_with_identity_for_test(test_identity("plugin-resolution-fingerprint"));
-    let tools: crate::documents::Tools = serde_json::from_value(serde_json::json!({
+    let tools: gents_documents::Tools = serde_json::from_value(serde_json::json!({
         "tools_id": format!("{}:tools", agent_config.agent_did),
         "node_did": agent_config.node_did(),
         "integrations": {"plugins": [{"plugin": "fixture/list_files"}]},
@@ -2409,29 +2413,30 @@ async fn plugin_resolution_surfaces(
     let agent_config = Arc::new(agent_config);
 
     let absent_home = tempfile::tempdir().unwrap();
-    let absent_plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
-        absent_home.path().to_path_buf(),
-    )));
+    let absent_plugins = Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(
+        Some(absent_home.path().to_path_buf()),
+    ));
     let installed_home = tempfile::tempdir().unwrap();
-    let record: crate::plugin::store::InstalledPlugin = serde_json::from_value(serde_json::json!({
-        "namespace": "fixture",
-        "name": "list_files",
-        "version": "0.1.0",
-        "digest": format!("sha256:{}", "a".repeat(64)),
-        "language": "rust",
-        "declaration": {
+    let record: gents_pack::plugin::store::InstalledPlugin =
+        serde_json::from_value(serde_json::json!({
+            "namespace": "fixture",
             "name": "list_files",
-            "description": "lists files",
-            "artifact": "plugins/list_files.afb",
+            "version": "0.1.0",
+            "digest": format!("sha256:{}", "a".repeat(64)),
             "language": "rust",
-            "input_schema": {"type": "object"}
-        }
-    }))
-    .unwrap();
-    crate::plugin::store::write_record(installed_home.path(), &record).unwrap();
-    let installed_plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
-        installed_home.path().to_path_buf(),
-    )));
+            "declaration": {
+                "name": "list_files",
+                "description": "lists files",
+                "artifact": "plugins/list_files.afb",
+                "language": "rust",
+                "input_schema": {"type": "object"}
+            }
+        }))
+        .unwrap();
+    gents_pack::plugin::store::write_record(installed_home.path(), &record).unwrap();
+    let installed_plugins = Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(
+        Some(installed_home.path().to_path_buf()),
+    ));
 
     let absent = Arc::new(
         agent_config
@@ -2457,7 +2462,7 @@ async fn plugin_resolution_surfaces(
             .await
             .unwrap(),
     );
-    let plugin_ref = crate::documents::PluginToolRef {
+    let plugin_ref = gents_documents::PluginToolRef {
         tool_calls: false,
         plugin: "fixture/list_files".to_string(),
         digest: None,
@@ -2533,8 +2538,9 @@ async fn a_changed_plugin_resolution_changes_the_fingerprint_and_recreates_the_s
         .expect("installed record");
     reinstalled.declaration.description = "lists files, reworded".to_owned();
     let home = tempfile::tempdir().unwrap();
-    crate::plugin::store::write_record(home.path(), &reinstalled).unwrap();
-    let plugins = crate::plugin::executor::PluginExecutor::new(Some(home.path().to_path_buf()));
+    gents_pack::plugin::store::write_record(home.path(), &reinstalled).unwrap();
+    let plugins =
+        gents_toolcalls::plugin::executor::PluginExecutor::new(Some(home.path().to_path_buf()));
     let reinstalled_surface = Arc::new(
         agent_config
             .tools

@@ -1,12 +1,14 @@
 use std::time::{Duration, Instant};
 
 use gents::defra_node::Node as EmbeddedNode;
-use gents::runtime::agent::p2p_reconcile::{
+use gents::{DocumentRuntimeOptions, Gents};
+use gents_p2p::p2p_reconcile::{
     EmbeddedRemoteP2pAdmin, GraphqlEnrollmentStore, PairingFilters, RemoteP2pAdmin,
     RemoteP2pAdminError,
 };
-use gents::store::graphql::escape_graphql_string;
-use gents::{DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
+use gents_store::graphql::escape_graphql_string;
+use gents_store::identity::NodeIdentity;
+use gents_tools::surface::ToolCeiling;
 use serde_json::Value;
 
 use crate::support::enrollment::{authorize_enrollment_peer, wait_for_peer_identity};
@@ -90,7 +92,7 @@ async fn fetch_pairing_applied(node: &EmbeddedNode, peer_id: &str) -> Option<Vec
 
 async fn fetch_subscribed_collection_names(node: &EmbeddedNode) -> Vec<String> {
     // Subscription listing is authorized for the node's own identity only.
-    let Some(p2p) = gents::store::identity::node_p2p(node) else {
+    let Some(p2p) = gents_store::identity::node_p2p(node) else {
         return Vec::new();
     };
     p2p.get_collections()
@@ -618,9 +620,9 @@ async fn empty_app_collection_row_does_not_stall_control_pairing() {
 
 async fn install_shared_fixture(
     db: &crate::support::TestDb,
-    archive: &gents::pack::archive::PackArchive,
+    archive: &gents_pack::pack::archive::PackArchive,
 ) {
-    use gents::pack::{
+    use gents_pack::pack::{
         install_prepared_document_pack, load_pack_config, prepare_document_pack_install,
         DriftPolicy, InstalledVia, PackInferenceBindings, PackInstallOptions,
     };
@@ -662,11 +664,11 @@ async fn install_shared_fixture(
         false,
         InstalledVia::Operator,
         DriftPolicy::Refuse,
-        &gents::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
-    let packs = gents::pack::installed_packs(None, Some((&access, &owner)))
+    let packs = gents_pack::pack::installed_packs(None, Some((&access, &owner)))
         .await
         .unwrap();
     let pack = packs
@@ -679,15 +681,12 @@ async fn install_shared_fixture(
 
 /// The household owner's signed GraphQL principal, which writes and reads its
 /// own pack documents.
-async fn household_access(db: &crate::support::TestDb) -> gents::ConfigAccess {
+async fn household_access(db: &crate::support::TestDb) -> gents_store::config_client::ConfigAccess {
     let user = crate::support::load_managed_fixture_user(db).await;
-    gents::ConfigAccess::Graphql(
-        gents::store::config_client::GraphqlEndpoint::as_principal(
-            db.client_endpoint(),
-            user.did(),
-        )
-        .with_client_signing_capability(user.client_signing_capability().unwrap())
-        .unwrap(),
+    gents_store::config_client::ConfigAccess::Graphql(
+        gents_store::config_client::GraphqlEndpoint::as_principal(db.client_endpoint(), user.did())
+            .with_client_signing_capability(user.client_signing_capability().unwrap())
+            .unwrap(),
     )
 }
 
@@ -721,8 +720,8 @@ async fn document_pack_collections_stay_local_under_explicit_pairing() {
     std::env::set_var("GENTS_PAIRING_SWEEP_MS", "1000");
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/packs/shared_fixture");
-    let (bytes, _) = gents::pack::archive::pack_dir(&path).unwrap();
-    let archive = gents::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
+    let (bytes, _) = gents_pack::pack::archive::pack_dir(&path).unwrap();
+    let archive = gents_pack::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
     let a = test_p2p_db("shared-fixture-a").await;
     let b = test_p2p_db("shared-fixture-b").await;
     install_shared_fixture(&a, &archive).await;

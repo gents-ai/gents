@@ -25,7 +25,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
-use gents::store::config_client::ConfigAccess;
+use gents_store::config_client::ConfigAccess;
 use p2p::iroh::{IrohDiscoveryConfig, IrohRelayModeConfig};
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
@@ -77,7 +77,7 @@ pub struct ClientCoreOptions {
     pub rate_limit_rate: f64,
     pub max_pending_dags: usize,
     pub install_replicators_on_bootstrap: bool,
-    pub store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice,
+    pub store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice,
     pub store_key_provider: Option<Arc<dyn ClientStoreKeyProvider>>,
     /// Headless observation must not open platform credential dialogs. Explicit
     /// user commands retain their existing operator authority requirements.
@@ -94,17 +94,17 @@ pub trait ClientStoreKeyProvider: std::fmt::Debug + Send + Sync {
     /// Retained stores and pending upgrades always use `load`.
     async fn create(
         &self,
-        record: &gents::store::local::store_key::StoreEncryption,
+        record: &gents_store::local::store_key::StoreEncryption,
         key_file: &std::path::Path,
         data_path: &std::path::Path,
-    ) -> Result<gents::store::local::store_key::StoreKey>;
+    ) -> Result<gents_store::local::store_key::StoreKey>;
 
     async fn load(
         &self,
-        record: &gents::store::local::store_key::StoreEncryption,
+        record: &gents_store::local::store_key::StoreEncryption,
         key_file: &std::path::Path,
         data_path: &std::path::Path,
-    ) -> Result<gents::store::local::store_key::StoreKey>;
+    ) -> Result<gents_store::local::store_key::StoreKey>;
 }
 
 impl Default for ClientCoreOptions {
@@ -122,7 +122,7 @@ impl Default for ClientCoreOptions {
             rate_limit_rate: DESKTOP_P2P_RATE_LIMIT_RATE,
             max_pending_dags: p2p::sync::DEFAULT_MAX_PENDING_DAGS,
             install_replicators_on_bootstrap: true,
-            store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::default(),
+            store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::default(),
             store_key_provider: None,
             operator_identity_interaction: Default::default(),
         }
@@ -135,7 +135,7 @@ impl ClientCoreOptions {
             bind_addr: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
             relay_mode: IrohRelayModeConfig::Disabled,
             discovery: IrohDiscoveryConfig::Disabled,
-            store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::File,
+            store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
             ..Self::default()
         }
     }
@@ -613,7 +613,7 @@ impl ClientCore {
         let scoped = self.selected_node_did();
         let captured = self.store.capture_read();
         let records = self.sync_state.records();
-        let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+        let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
             self.node_identity.private_key_bytes(),
         )?;
         let (snapshot, refused) = match scoped.as_deref() {
@@ -671,7 +671,7 @@ impl ClientCore {
         }
         let captured = self.store.capture_read();
         let records = self.sync_state.records();
-        let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+        let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
             self.node_identity.private_key_bytes(),
         )?;
         let snapshot = match load_node_scoped_snapshot_with_peer_records(
@@ -708,7 +708,7 @@ impl ClientCore {
     /// The observer owns runtime connection state: a refusal clears the
     /// node's rows and asks it to confirm with its own authenticated read.
     fn observe_refresh_failure(&self, node_did: &str, error: &anyhow::Error) {
-        if gents::store::config_client::TransactionFailure::permission_denied(error) {
+        if gents_store::config_client::TransactionFailure::permission_denied(error) {
             self.store.clear_node_after_refused_read(node_did);
         } else {
             self.store.request_resync(Some(node_did));

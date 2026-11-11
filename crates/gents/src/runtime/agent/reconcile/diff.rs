@@ -1,4 +1,6 @@
-use crate::triggers::runtime_snapshot::{ActiveRuntimeSnapshot, ResolvedRuntimeSnapshot};
+use gents_automation::triggers::runtime_snapshot::{
+    ActiveRuntimeSnapshot, ResolvedRuntimeSnapshot,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct SnapshotDiffCounts {

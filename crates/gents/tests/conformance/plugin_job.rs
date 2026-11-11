@@ -11,26 +11,6 @@
 //! type. Lean models only the presence or count of a rider, so a protocol field
 //! the model does not carry (a prompt, a title, a write's body) is left empty.
 //! Composed wire traces carry the actual resolution table and raw ceilings.
-use gents::pack::home_install::{
-    installer_provenance, record_after_install_via, recorded_provenance, InstalledVia,
-};
-use gents::pack::job_admission::job_block_admissible;
-use gents::pack::PackKind;
-use gents::plugin::data::StampContext;
-use gents::plugin::job_calls;
-use gents::session::tool_call_state::ToolCallState;
-use gents::tools::background::job::admit::{
-    self, HostFacts, RootCall, StepCall, StepChild, StepContext, StepRow,
-};
-use gents::tools::background::job::control::{self, KillAction, KillCause, KillObservation};
-use gents::tools::background::job::dispatch::{
-    host_pin, split_address, unique_handle, Delivery, ToolCallView,
-};
-use gents::tools::background::job::driver;
-use gents::tools::background::job::origin::call_origin;
-use gents::tools::background::status::ProcessControlScope;
-use gents::tools::call::lifecycle::ToolRowKind;
-use gents::tools::surface::EndpointScope;
 use gents_lean_vocab::{
     lean_plugin_job_admission_cases, lean_plugin_job_adoption_cases,
     lean_plugin_job_authority_cases, lean_plugin_job_control_cases, lean_plugin_job_key_cases,
@@ -42,6 +22,11 @@ use gents_lean_vocab::{
     LeanPluginJobResume, LeanPluginJobRootCall, LeanPluginJobRow, LeanPluginJobScope,
     LeanPluginJobTarget, LeanPluginJobToolCall, LeanPluginJobWireCase, LeanPluginJobWireKind,
 };
+use gents_pack::pack::home_install::{
+    installer_provenance, record_after_install_via, recorded_provenance, InstalledVia,
+};
+use gents_pack::pack::job_admission::job_block_admissible;
+use gents_pack::pack::PackKind;
 use gents_protocol::job::keys::{
     decode_job_retry_key, job_message_key, job_session_id, job_spawn_key,
 };
@@ -56,6 +41,21 @@ use gents_protocol::job::{
 };
 use gents_protocol::job_settings::{policy_valid, wire_targets_from};
 use gents_protocol::tool_call::AwaitMode;
+use gents_session::session::tool_call_state::ToolCallState;
+use gents_toolcalls::background::job::admit::{
+    self, HostFacts, RootCall, StepCall, StepChild, StepContext, StepRow,
+};
+use gents_toolcalls::background::job::control::{self, KillAction, KillCause, KillObservation};
+use gents_toolcalls::background::job::dispatch::{
+    host_pin, split_address, unique_handle, Delivery, ToolCallView,
+};
+use gents_toolcalls::background::job::driver;
+use gents_toolcalls::background::job::origin::call_origin;
+use gents_toolcalls::background::status::ProcessControlScope;
+use gents_toolcalls::call::lifecycle::ToolRowKind;
+use gents_toolcalls::plugin::data::StampContext;
+use gents_toolcalls::plugin::job_calls;
+use gents_tools::surface::EndpointScope;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -496,7 +496,7 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
             .collect();
         expected_kills.sort_unstable();
         let settled =
-            match gents::tools::background::job::admit::admit_step(&context, &job, &output) {
+            match gents_toolcalls::background::job::admit::admit_step(&context, &job, &output) {
                 Ok(admitted) => {
                     assert!(expected.admitted, "{}: admitted a refused step", case.name);
                     assert!(!expected.dynamic_code_disabled, "{}", case.name);
@@ -523,7 +523,7 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
                         "{}: refusal code",
                         case.name
                     );
-                    use gents::tools::background::job::admit::PolicyDenialDetail;
+                    use gents_toolcalls::background::job::admit::PolicyDenialDetail;
                     match case.name.as_str() {
                         "dynamic_check_spawn_refused" => assert_eq!(
                             refusal.detail,
@@ -540,12 +540,12 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
                         _ => {}
                     }
                     assert_eq!(
-                        refusal.refusal
-                            == gents::tools::background::job::admit::Refusal::DynamicCodeDisabled,
-                        expected.dynamic_code_disabled,
-                        "{}: dynamic-source refusal detail",
-                        case.name
-                    );
+                    refusal.refusal
+                        == gents_toolcalls::background::job::admit::Refusal::DynamicCodeDisabled,
+                    expected.dynamic_code_disabled,
+                    "{}: dynamic-source refusal detail",
+                    case.name
+                );
                     assert!(expected.job.is_none(), "{}", case.name);
                     assert_eq!(
                         refusal.closed_row().state,
@@ -565,11 +565,11 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
                 "before_kill" | "after_kill" => &settled,
                 other => panic!("unknown interruption {other}"),
             };
-            let facts = gents::tools::background::job::recovery::facts_from_durable_read(
+            let facts = gents_toolcalls::background::job::recovery::facts_from_durable_read(
                 durable,
                 durable.state == JobState::Running,
                 durable.pin.as_ref().expect("wire trace has a durable pin"),
-                gents::tools::background::job::recovery::DurableRead {
+                gents_toolcalls::background::job::recovery::DurableRead {
                     session_stopped: trace.read.session_stopped,
                     now_millis: trace.read.now_millis,
                     available: if trace.read.available {
@@ -633,7 +633,7 @@ fn generated_plugin_job_adoption_cases_drive_adopt() {
                 expected,
             } => {
                 let call = tool_call(call);
-                match gents::tools::background::job::dispatch::adopt(
+                match gents_toolcalls::background::job::dispatch::adopt(
                     &context(ctx, job, out),
                     &call,
                     &row(job),
@@ -1176,14 +1176,17 @@ fn generated_plugin_job_authority_cases_drive_origin_and_provenance() {
                 *kinds.entry("published_read").or_default() += 1;
                 let home = tempfile::tempdir().expect("plugin home");
                 let _stage = publication_in_progress.then(|| {
-                    gents::plugin::store::try_lock_store(home.path()).expect("stage lock")
+                    gents_pack::plugin::store::try_lock_store(home.path()).expect("stage lock")
                 });
-                let result =
-                    gents::plugin::store::read_published_record(home.path(), "fixture", "absent");
+                let result = gents_pack::plugin::store::read_published_record(
+                    home.path(),
+                    "fixture",
+                    "absent",
+                );
                 assert_eq!(
                     matches!(
                         result,
-                        Err(gents::plugin::store::PublishedPluginReadError::Busy)
+                        Err(gents_pack::plugin::store::PublishedPluginReadError::Busy)
                     ),
                     expected.deferred,
                     "{name}: defer staged read"

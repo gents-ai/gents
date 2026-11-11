@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use gents::store::config_client::{ConfigAccess, GraphqlEndpoint, TransactionFailure};
+use gents_store::config_client::{ConfigAccess, GraphqlEndpoint, TransactionFailure};
 use tokio::sync::mpsc;
 use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::Instant;
@@ -12,7 +12,7 @@ use tokio::time::Instant;
 use super::{ObservedStore, ObserverMetrics, RuntimeConnectionEvent};
 use crate::client::query::OBSERVED_COLLECTIONS;
 use crate::client::{PeerRecord, SnapshotReadError};
-use gents::store::config_client::SubscriptionEnd;
+use gents_store::config_client::SubscriptionEnd;
 
 /// One event of a source task (`RuntimeConnectionObservation.armedEvent` or
 /// `streamEndEvent`).
@@ -257,7 +257,7 @@ impl Sources {
     pub(super) fn reconcile(
         &mut self,
         peers: &[PeerRecord],
-        capability: &gents::store::config_client::ClientSigningCapability,
+        capability: &gents_store::config_client::ClientSigningCapability,
         notices: &mpsc::UnboundedSender<Notice>,
         store: &Arc<ObservedStore>,
         metrics: &Arc<ObserverMetrics>,

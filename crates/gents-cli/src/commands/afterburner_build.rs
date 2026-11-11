@@ -25,11 +25,11 @@ fn validate_source_language(owner: &str, declared: &str) -> Result<SourceLang> {
     })?;
     let normalized = declared.trim().to_ascii_lowercase();
     anyhow::ensure!(
-        gents::pack::SUPPORTED_PLUGIN_LANGUAGES.contains(&normalized.as_str()),
+        gents_pack::pack::SUPPORTED_PLUGIN_LANGUAGES.contains(&normalized.as_str()),
         "{owner} declares language {declared:?}; Afterburner can compile it, but gents config pack plugin \
          run cannot run it under its declared bounds yet, so it is refused rather than built \
          unusable; supported languages: {}",
-        gents::pack::SUPPORTED_PLUGIN_LANGUAGES.join(", ")
+        gents_pack::pack::SUPPORTED_PLUGIN_LANGUAGES.join(", ")
     );
     Ok(lang)
 }
@@ -235,7 +235,7 @@ mod tests {
                 .is_file());
             assert_eq!(std::env::var_os("CARGO_TARGET_DIR"), inherited_target);
 
-            let plugin: gents::pack::PackPlugin = serde_json::from_value(serde_json::json!({
+            let plugin: gents_pack::pack::PackPlugin = serde_json::from_value(serde_json::json!({
                 "name": "sample",
                 "description": "a test plugin",
                 "artifact": "plugins/rust.afb",
@@ -243,14 +243,14 @@ mod tests {
                 "input_schema": {"type": "object"},
             }))
             .unwrap();
-            let result = gents::plugin::PluginRunner::compile(&bytes, &plugin)
+            let result = gents_pack::plugin::PluginRunner::compile(&bytes, &plugin)
                 .unwrap()
                 .call(
                     &serde_json::json!({}),
-                    &gents::plugin::PluginBudget::default(),
+                    &gents_pack::plugin::PluginBudget::default(),
                 )
                 .unwrap();
-            assert_eq!(result.verdict, gents::plugin::PluginVerdict::Success);
+            assert_eq!(result.verdict, gents_pack::plugin::PluginVerdict::Success);
             assert_eq!(result.output, serde_json::json!({}));
             return;
         }
@@ -340,10 +340,10 @@ mod tests {
             &root,
             language,
             entry,
-            gents::pack::authoring::scaffold::echo_source(entry).as_bytes(),
+            gents_pack::pack::authoring::scaffold::echo_source(entry).as_bytes(),
         );
         let bytes = assert_compiles_to_wasm32_wasip1(&root, language);
-        let plugin: gents::pack::PackPlugin = serde_json::from_value(serde_json::json!({
+        let plugin: gents_pack::pack::PackPlugin = serde_json::from_value(serde_json::json!({
             "name": "sample",
             "description": "a test plugin",
             "artifact": format!("plugins/{language}.afb"),
@@ -352,13 +352,13 @@ mod tests {
         }))
         .unwrap();
         let input = serde_json::json!({"hello": "world"});
-        let result = gents::plugin::PluginRunner::compile(&bytes, &plugin)
+        let result = gents_pack::plugin::PluginRunner::compile(&bytes, &plugin)
             .unwrap()
-            .call(&input, &gents::plugin::PluginBudget::default())
+            .call(&input, &gents_pack::plugin::PluginBudget::default())
             .unwrap();
         assert_eq!(
             (result.verdict, result.output),
-            (gents::plugin::PluginVerdict::Success, input),
+            (gents_pack::plugin::PluginVerdict::Success, input),
             "{language}: {}",
             result.diagnostics
         );
@@ -384,7 +384,7 @@ mod tests {
         };
         use sha2::{Digest, Sha256};
         let script = r#"module.exports = (i) => i.pin ? {effects:{}} : {effects:{spawn:[{slot:"a",attempt:0,target:"wf-read-only",prompt:"p",title:"a"}]}};"#;
-        let run = gents::tools::background::job::promote::DynamicRun {
+        let run = gents_toolcalls::background::job::promote::DynamicRun {
             view: JobView {
                 address: "session-1:call_1".into(),
                 row_doc_id: "row-1".into(),
@@ -434,7 +434,7 @@ mod tests {
         // The step-0 fixture runs the script under wasmtime, which blocks.
         let generated = dir.clone();
         tokio::task::spawn_blocking(move || {
-            gents::tools::background::job::promote::generate_pack(&generated, "rome", &run)
+            gents_toolcalls::background::job::promote::generate_pack(&generated, "rome", &run)
         })
         .await
         .unwrap()
@@ -447,7 +447,7 @@ mod tests {
                 panic!("building the promotion pack must succeed: {error:#}")
             });
         }
-        let cases = gents::plugin::authoring_test::run_plugin_cases(&dir)
+        let cases = gents_toolcalls::plugin::authoring_test::run_plugin_cases(&dir)
             .await
             .unwrap();
         assert_eq!(cases.len(), 1);
@@ -457,7 +457,7 @@ mod tests {
             "{:?}",
             cases[0].failures
         );
-        let checked = gents::pack::authoring::check_dir(&dir).await;
+        let checked = gents_pack::pack::authoring::check_dir(&dir).await;
         assert_eq!(checked.problems, Vec::<String>::new());
     }
 
@@ -467,14 +467,14 @@ mod tests {
     async fn js_workflow_scaffold_builds_and_passes_its_fixture() {
         let dir = tempfile::tempdir().unwrap();
         let pack = dir.path().join("demo_flow");
-        let input = gents::pack::authoring::scaffold::ScaffoldInput {
+        let input = gents_pack::pack::authoring::scaffold::ScaffoldInput {
             namespace: "acme".into(),
-            template: Some(gents::pack::authoring::template::Template::Workflow),
+            template: Some(gents_pack::pack::authoring::template::Template::Workflow),
             kind: None,
             language: Some("js".into()),
             ux: false,
         };
-        gents::pack::authoring::scaffold::scaffold(&pack, "demo_flow", &input).unwrap();
+        gents_pack::pack::authoring::scaffold::scaffold(&pack, "demo_flow", &input).unwrap();
         {
             let _guard = compile_lock()
                 .lock()
@@ -482,7 +482,7 @@ mod tests {
             crate::commands::pack::build::build_pack(&pack, None)
                 .unwrap_or_else(|error| panic!("building the js workflow must succeed: {error:#}"));
         }
-        let cases = gents::plugin::authoring_test::run_plugin_cases(&pack)
+        let cases = gents_toolcalls::plugin::authoring_test::run_plugin_cases(&pack)
             .await
             .unwrap();
         assert_eq!(cases.len(), 1);
@@ -553,7 +553,7 @@ mod tests {
             "python compiles to a self-contained pyodide bundle, not a WASI command"
         );
 
-        let plugin = gents::pack::PackPlugin {
+        let plugin = gents_pack::pack::PackPlugin {
             name: "py_plugin".to_owned(),
             description: "a python plugin".to_owned(),
             artifact: "plugins/py_plugin.afb".to_owned(),
@@ -568,7 +568,7 @@ mod tests {
             service: None,
             ..Default::default()
         };
-        gents::plugin::PluginRunner::compile(&bytes, &plugin).unwrap_or_else(|error| {
+        gents_pack::plugin::PluginRunner::compile(&bytes, &plugin).unwrap_or_else(|error| {
             panic!("a compiled python bundle runs under every bound a call applies: {error:#}")
         });
     }

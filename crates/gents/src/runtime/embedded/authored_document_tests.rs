@@ -1,5 +1,5 @@
-use crate::store::config_client::authored_document::*;
-use crate::NodeIdentity;
+use gents_store::config_client::authored_document::*;
+use gents_store::identity::NodeIdentity;
 use serde_json::json;
 
 #[tokio::test]
@@ -13,8 +13,8 @@ async fn authored_application_document_is_signed_by_the_held_user() -> anyhow::R
         db.node.clone(),
         identity::Did::new(db.node_identity.did()).unwrap(),
     );
-    let plan = crate::store::config_client::preview_schema_install(&admin, SDL).await?;
-    crate::store::config_client::apply_schema_install(&admin, SDL, &plan.artifact_digest).await?;
+    let plan = gents_store::config_client::preview_schema_install(&admin, SDL).await?;
+    gents_store::config_client::apply_schema_install(&admin, SDL, &plan.artifact_digest).await?;
     let doc = create_authored_document(
         &access,
         "AuthoredDocumentFixture",
@@ -23,7 +23,7 @@ async fn authored_application_document_is_signed_by_the_held_user() -> anyhow::R
         SDL,
     )
     .await?;
-    let escaped = crate::store::graphql::escape_graphql_string(&doc);
+    let escaped = gents_store::graphql::escape_graphql_string(&doc);
     let response = access.execute(&format!(
         r#"{{ _commits(docID: "{escaped}", filter: {{fieldName: {{_eq: "_C"}}}}, order: {{height: ASC}}, limit: 1) {{cid}} }}"#,
     )).await?;

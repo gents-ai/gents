@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::inference::resolved::ResolvedAgent;
-use crate::store::identity::RuntimeNode;
+use gents_inference::resolved::ResolvedAgent;
+use gents_store::identity::RuntimeNode;
 
 #[derive(Debug)]
 pub struct AgentBuildError {

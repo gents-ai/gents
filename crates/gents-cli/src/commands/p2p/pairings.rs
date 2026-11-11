@@ -95,7 +95,7 @@ pub(super) async fn pairing_reader_targets(args: P2pAccessArgs) -> Result<()> {
 }
 
 pub(super) async fn pairing_reader(args: P2pPairingsReaderArgs, grant: bool) -> Result<()> {
-    use gents::store::config_client::{PairingObservation, PairingReadReason};
+    use gents_store::config_client::{PairingObservation, PairingReadReason};
 
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let observation = match args.observation {
@@ -200,7 +200,7 @@ fn parse_pairing_rows(rows: Vec<Value>, now: DateTime<Utc>) -> Vec<PeerPairingDe
             let transport_peer_ids = replicator_addresses
                 .iter()
                 .filter_map(|address| {
-                    gents::runtime::agent::p2p_reconcile::TransportEndpoint::parse(address.clone())
+                    gents_p2p::p2p_reconcile::TransportEndpoint::parse(address.clone())
                         .ok()
                         .map(|endpoint| endpoint.peer_id().to_string())
                 })
@@ -393,7 +393,7 @@ fn peer_id_from_address_like_peer(value: &str) -> Option<String> {
 }
 
 fn is_push_template(template: Option<&str>) -> bool {
-    use gents::runtime::agent::p2p_reconcile::{resolve_template, Delivery};
+    use gents_p2p::p2p_reconcile::{resolve_template, Delivery};
     template
         .and_then(resolve_template)
         .map(|t| t.delivery == Delivery::Push)
@@ -552,7 +552,7 @@ mod tests {
             transport_peer_ids: addresses
                 .iter()
                 .filter_map(|address| {
-                    gents::runtime::agent::p2p_reconcile::TransportEndpoint::parse(*address)
+                    gents_p2p::p2p_reconcile::TransportEndpoint::parse(*address)
                         .ok()
                         .map(|endpoint| endpoint.peer_id().to_string())
                 })
@@ -578,8 +578,8 @@ mod tests {
     fn push_template_health_keys_off_replicating_not_subscribed_collections() {
         let desired = vec![desired_row(
             "peer-a",
-            gents::runtime::agent::p2p_reconcile::templates::MACHINE_TEMPLATE,
-            &[gents::runtime::agent::p2p_reconcile::templates::NODE_DIRECTORY_COLLECTION],
+            gents_p2p::p2p_reconcile::templates::MACHINE_TEMPLATE,
+            &[gents_p2p::p2p_reconcile::templates::NODE_DIRECTORY_COLLECTION],
             &["/ip4/1/tcp/4001"],
         )];
         let applied = vec![applied("peer-a", &[], &["/ip4/1/tcp/4001"])];
@@ -600,8 +600,8 @@ mod tests {
     fn push_template_without_applied_replicator_is_unhealthy() {
         let desired = vec![desired_row(
             "peer-a",
-            gents::runtime::agent::p2p_reconcile::templates::MACHINE_TEMPLATE,
-            &[gents::runtime::agent::p2p_reconcile::templates::NODE_DIRECTORY_COLLECTION],
+            gents_p2p::p2p_reconcile::templates::MACHINE_TEMPLATE,
+            &[gents_p2p::p2p_reconcile::templates::NODE_DIRECTORY_COLLECTION],
             &["/ip4/1/tcp/4001"],
         )];
         let applied = vec![applied("peer-a", &[], &[])];

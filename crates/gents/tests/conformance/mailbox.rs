@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use gents::defra_node::Node as EmbeddedNode;
-use gents::documents::mailbox_write_decl::{MailboxAction, MailboxKind};
-use gents::session::mailbox::{
+use gents_documents::mailbox_write_decl::{MailboxAction, MailboxKind};
+use gents_session::session::mailbox::{
     dismiss_mailbox_item_on, stamp_create_with_access, FileMailboxItemArgs, MailboxSourceKind,
     MailboxStampContext, MailboxStatus, MAILBOX_CLOSE_COLLECTIONS,
 };
@@ -61,35 +61,47 @@ async fn rust_mailbox_dismiss_owner_drives_only_lean_legal_transitions() {
 
     let directory = tempfile::tempdir().unwrap();
     let identity =
-        gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
-    let requester =
-        gents::KeyIdentity::load_or_create(directory.path().join("requester.key"), None).unwrap();
-    let other =
-        gents::KeyIdentity::load_or_create(directory.path().join("other.key"), None).unwrap();
-    let agent_binding = gents::store::identity::provision_agent_identity(&identity).unwrap();
-    let agent = gents::store::identity::resolve_agent_identity(&identity, &agent_binding).unwrap();
+        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("node.key"), None)
+            .unwrap();
+    let requester = gents_store::identity::KeyIdentity::load_or_create(
+        directory.path().join("requester.key"),
+        None,
+    )
+    .unwrap();
+    let other = gents_store::identity::KeyIdentity::load_or_create(
+        directory.path().join("other.key"),
+        None,
+    )
+    .unwrap();
+    let agent_binding = gents_store::identity::provision_agent_identity(&identity).unwrap();
+    let agent = gents_store::identity::resolve_agent_identity(&identity, &agent_binding).unwrap();
     let node = Arc::new(
         EmbeddedNode::builder()
             .enable_signing()
-            .with_node_identity_did(gents::NodeIdentity::did(&identity))
+            .with_node_identity_did(gents_store::identity::NodeIdentity::did(&identity))
             .with_node_acp_enabled()
             .build()
             .await
             .expect("embedded node"),
     );
-    gents::ensure_runtime_schemas(&node)
+    gents_store::schema::ensure_runtime_schemas(&node)
         .await
         .expect("runtime schemas");
 
-    let admin = gents::ConfigAccess::local_as(
+    let admin = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
-        gents::NodeIdentity::did(&identity).parse().unwrap(),
+        gents_store::identity::NodeIdentity::did(&identity)
+            .parse()
+            .unwrap(),
     );
-    for actor in [agent.did(), gents::NodeIdentity::did(&other)] {
+    for actor in [
+        agent.did(),
+        gents_store::identity::NodeIdentity::did(&other),
+    ] {
         for permission in [
-            gents::store::config_client::NodePermission::DocumentRead,
-            gents::store::config_client::NodePermission::DocumentUpdate,
-            gents::store::config_client::NodePermission::DacRelationAdd,
+            gents_store::config_client::NodePermission::DocumentRead,
+            gents_store::config_client::NodePermission::DocumentUpdate,
+            gents_store::config_client::NodePermission::DacRelationAdd,
         ] {
             admin
                 .grant_node_permission(&actor.parse().unwrap(), permission)
@@ -97,22 +109,24 @@ async fn rust_mailbox_dismiss_owner_drives_only_lean_legal_transitions() {
                 .unwrap();
         }
     }
-    let creator = gents::ConfigAccess::local_managed_agent(
+    let creator = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         agent.did().parse().unwrap(),
         agent.as_ref(),
     )
     .unwrap();
-    let outsider = gents::ConfigAccess::local_as(
+    let outsider = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
-        gents::NodeIdentity::did(&other).parse().unwrap(),
+        gents_store::identity::NodeIdentity::did(&other)
+            .parse()
+            .unwrap(),
     );
     let item = stamp_create_with_access(
         &node,
         &creator,
         &MailboxStampContext {
-            requester_did: gents::NodeIdentity::did(&requester).to_string(),
-            node_did: gents::NodeIdentity::did(&identity).to_string(),
+            requester_did: gents_store::identity::NodeIdentity::did(&requester).to_string(),
+            node_did: gents_store::identity::NodeIdentity::did(&identity).to_string(),
             agent_did: agent.did().to_string(),
             session_id: Some("session-1".to_string()),
         },

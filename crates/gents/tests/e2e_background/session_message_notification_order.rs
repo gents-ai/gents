@@ -1,9 +1,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::documents::{AgentTools, Tools};
-use gents::store::graphql::escape_graphql_string;
-use gents::{DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
+use gents::{DocumentRuntimeOptions, Gents};
+use gents_documents::{AgentTools, Tools};
+use gents_store::graphql::escape_graphql_string;
+use gents_store::identity::NodeIdentity;
+use gents_tools::surface::ToolCeiling;
 use serde_json::json;
 
 use crate::support::accepted_turn::{
@@ -75,7 +77,7 @@ async fn configure_session_chain(db: &TestDb) -> (ManagedAgentFixture, String) {
             ..Default::default()
         },
         vec![(
-            gents::Collection::AgentTarget,
+            gents_store::collection::Collection::AgentTarget,
             serde_json::to_value(agent_target(&node_did, CHILD_TARGET, &node_did, &child_did))
                 .expect("serialize the child target"),
         )],

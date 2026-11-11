@@ -1,12 +1,13 @@
 use anyhow::Result;
 
 use super::super::terminal::{finalize_request_failure, terminalize_request};
-use super::{
-    request_failure_reason, AgentDaemon, AgentRequest, DefraStreamWriter, ProviderModel,
-    RequestLifecycle,
+use super::{request_failure_reason, AgentDaemon, AgentRequest};
+use gents_inference::llm::rig_compat::ProviderModel;
+use gents_observe::observe::runtime_trace::{
+    record_current_failure_class, record_current_request_outcome,
 };
-use crate::observe::runtime_trace::{record_current_failure_class, record_current_request_outcome};
-use crate::request::lifecycle::RequestTerminalOutcome;
+use gents_session::request::lifecycle::RequestTerminalOutcome;
+use gents_session::{request::lifecycle::RequestLifecycle, request::streaming::DefraStreamWriter};
 
 impl<M> AgentDaemon<M>
 where
@@ -33,7 +34,7 @@ where
             tracing::warn!(request_id = %request.request_id, %error, "stopping workspace completion after execution ownership loss");
             return Ok(());
         }
-        if let Err(error) = crate::workspace::seal_on_writer_success(
+        if let Err(error) = gents_session::workspace::seal_on_writer_success(
             &self.node,
             self.agent_config.agent_identity.as_ref(),
             request,
@@ -44,7 +45,7 @@ where
             record_current_failure_class(&error);
             tracing::error!(
                 request_id = %request.request_id,
-                error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
+                error = %gents_protocol::failure_text::BoundedErrorChain(error.as_ref()),
                 "failed to repair workspace seal after writer success"
             );
             finalize_request_failure(
@@ -66,7 +67,7 @@ where
         {
             record_current_request_outcome("terminalization_failed");
             record_current_failure_class(&error);
-            tracing::error!(request_id = %request.request_id, error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
+            tracing::error!(request_id = %request.request_id, error = %gents_protocol::failure_text::BoundedErrorChain(error.as_ref()),
                 "failed to atomically terminalize completed request and response");
         }
         Ok(())

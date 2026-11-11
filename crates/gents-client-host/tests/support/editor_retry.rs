@@ -1,7 +1,7 @@
 use super::{fake_llm, Attachment, ChatAction};
 use anyhow::{ensure, Context, Result};
-use gents::ConfigAccess;
 use gents_protocol::{request_lifecycle::RequestLifecycleState, row::AgentRequestRow};
+use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -71,7 +71,7 @@ pub async fn verify(
         .find(|row| row.lifecycle_state == Some(RequestLifecycleState::Completed))
         .context("completed retry successor")?;
     for row in &before {
-        gents::verify_request_receipt_signature(row)?;
+        gents_store::identity::request_receipt::verify_request_receipt_signature(row)?;
         ensure!(
             row.admission_signer_did.as_deref() == Some(author)
                 && row.requester_did.as_deref() == Some(author),
@@ -199,8 +199,8 @@ async fn requests(
 ) -> Result<Vec<AgentRequestRow>> {
     let result = access.execute(&format!(
         r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, purpose: {{_eq: "normal"}}}}) {{ {} }} }}"#,
-        gents::store::graphql::escape_graphql_string(node),
-        gents::store::graphql::escape_graphql_string(session),
+        gents_store::graphql::escape_graphql_string(node),
+        gents_store::graphql::escape_graphql_string(session),
         gents::SIGNED_REQUEST_FIELDS,
     )).await?;
     Ok(serde_json::from_value(

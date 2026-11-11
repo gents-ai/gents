@@ -1,0 +1,529 @@
+use anyhow::{anyhow, Result};
+use defra_node::Node as EmbeddedNode;
+use serde::{Deserialize, Serialize};
+
+use gents_store::graphql::escape_graphql_string;
+
+pub const TRIGGER_CURSOR_BATCH_SIZE: usize = 64;
+
+#[derive(Debug, Default, Clone)]
+pub struct TriggerRuntimeUpdate {
+    pub(crate) next_run_at: Option<String>,
+    pub(crate) last_attempt_at: Option<String>,
+    pub(crate) last_fired_source_doc_id: Option<String>,
+    pub(crate) last_status: Option<String>,
+    pub(crate) last_error: Option<String>,
+    pub(crate) fire_count_delta: Option<i64>,
+}
+
+fn trigger_runtime_input(
+    updates: &TriggerRuntimeUpdate,
+) -> gents_protocol::document_query::Input<gents_protocol::document_query::fields::trigger::Doc> {
+    use gents_protocol::document_query::{fields::trigger as fields, Input};
+    let mut input = Input::new();
+    if let Some(value) = &updates.next_run_at {
+        input = input.set(fields::NEXT_RUN_AT, value);
+    }
+    if let Some(value) = &updates.last_attempt_at {
+        input = input.set(fields::LAST_ATTEMPT_AT, value);
+    }
+    if let Some(value) = &updates.last_fired_source_doc_id {
+        input = input.set(fields::LAST_FIRED_SOURCE_DOC_ID, value);
+    }
+    if let Some(value) = &updates.last_status {
+        input = input.set(fields::LAST_STATUS, value);
+    }
+    if let Some(value) = &updates.last_error {
+        input = input.set(fields::LAST_ERROR, value);
+    } else if updates.last_status.is_some() {
+        input = input.set_null(fields::LAST_ERROR);
+    }
+    input
+}
+
+/// Disables a Trigger whose fire budget is spent and records why. Document
+/// ACP gives the admitting Agent no write on the Trigger, so the stop is
+/// written here, by the owner of the Trigger's runtime fields.
+pub async fn stop_trigger_for_budget(
+    node: &std::sync::Arc<EmbeddedNode>,
+    node_did: &str,
+    trigger_id: &str,
+    reason: &str,
+) -> Result<()> {
+    use gents_protocol::document_query::{fields::trigger as fields, Filter, Input, Update};
+    let rendered = Update::matching(
+        Filter::eq(fields::NODE_DID, node_did).and(Filter::eq(fields::TRIGGER_ID, trigger_id)),
+        Input::new()
+            .set(fields::ENABLED, false)
+            .set(fields::LAST_STATUS, super::BUDGET_EXHAUSTED_STATUS)
+            .set(fields::LAST_ERROR, reason),
+    )
+    .render();
+    gents_store::config_client::ConfigAccess::write_local_rendered(
+        node,
+        "document.stop_trigger_for_budget",
+        &rendered,
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn load_trigger_next_run_at_batch(
+    node: &EmbeddedNode,
+    scopes: &[(String, String)],
+) -> Vec<Result<Option<String>>> {
+    let mut results = std::iter::repeat_with(|| None)
+        .take(scopes.len())
+        .collect::<Vec<Option<Result<Option<String>>>>>();
+
+    for (chunk_index, chunk) in scopes.chunks(TRIGGER_CURSOR_BATCH_SIZE).enumerate() {
+        let chunk_start = chunk_index * TRIGGER_CURSOR_BATCH_SIZE;
+        let mut selections = Vec::new();
+        let mut aliases = Vec::new();
+        for (index, (node_did, trigger_id)) in chunk.iter().enumerate() {
+            let result_index = chunk_start + index;
+            if node_did.is_empty() {
+                results[result_index] = Some(Err(anyhow!("trigger observation owner is required")));
+                continue;
+            }
+            let alias = format!("trigger_{index}");
+            selections.push(format!(
+                r#"{alias}: Trigger(filter: {{ node_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}, limit: 2) {{ next_run_at }}"#,
+                escape_graphql_string(node_did),
+                escape_graphql_string(trigger_id),
+            ));
+            aliases.push((result_index, alias));
+        }
+        if selections.is_empty() {
+            continue;
+        }
+        let query = format!("{{ {} }}", selections.join("\n"));
+        #[cfg(test)]
+        record_trigger_cursor_batch_query();
+        let response = match gents_store::graphql::graphql_response_with_transaction_retry(
+            node,
+            &query,
+            "query Trigger cursor batch",
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                for (result_index, _) in aliases {
+                    results[result_index] =
+                        Some(Err(anyhow!("query Trigger cursor failed: {error:#}")));
+                }
+                continue;
+            }
+        };
+        let known_aliases = aliases
+            .iter()
+            .map(|(_, alias)| alias.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let global_errors = response
+            .errors
+            .iter()
+            .filter(|error| {
+                error
+                    .path
+                    .as_ref()
+                    .and_then(|path| path.first())
+                    .is_none_or(|alias| !known_aliases.contains(alias.as_str()))
+            })
+            .map(|error| error.message.as_str())
+            .collect::<Vec<_>>();
+
+        for (result_index, alias) in aliases {
+            let alias_errors = response
+                .errors
+                .iter()
+                .filter(|error| {
+                    error
+                        .path
+                        .as_ref()
+                        .and_then(|path| path.first())
+                        .is_some_and(|path_alias| path_alias == &alias)
+                })
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>();
+            if !alias_errors.is_empty() || !global_errors.is_empty() {
+                let messages = alias_errors
+                    .into_iter()
+                    .chain(global_errors.iter().copied())
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                results[result_index] = Some(Err(anyhow!(
+                    "query Trigger cursor for {alias} failed: {messages}"
+                )));
+                continue;
+            }
+
+            let rows = response
+                .data
+                .as_ref()
+                .and_then(|data| data.get(alias.as_str()))
+                .and_then(serde_json::Value::as_array);
+            if let Some(rows) = rows {
+                if rows.len() > 1 {
+                    results[result_index] =
+                        Some(Err(anyhow!("ambiguous scoped trigger observation")));
+                    continue;
+                }
+            }
+            results[result_index] = Some(Ok(rows
+                .and_then(|rows| rows.first())
+                .and_then(|row| row.get("next_run_at"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)));
+        }
+    }
+
+    results
+        .into_iter()
+        .map(|result| result.unwrap_or_else(|| Err(anyhow!("trigger cursor result was omitted"))))
+        .collect()
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    static TRIGGER_CURSOR_BATCH_QUERIES: std::sync::Arc<std::sync::atomic::AtomicUsize>;
+}
+
+#[cfg(test)]
+fn record_trigger_cursor_batch_query() {
+    let _ = TRIGGER_CURSOR_BATCH_QUERIES
+        .try_with(|queries| queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+}
+
+#[cfg(test)]
+pub async fn count_trigger_cursor_batch_queries<F>(future: F) -> (F::Output, usize)
+where
+    F: std::future::Future,
+{
+    let queries = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let output = TRIGGER_CURSOR_BATCH_QUERIES
+        .scope(queries.clone(), future)
+        .await;
+    (output, queries.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+pub async fn update_trigger_runtime_fields(
+    node: &std::sync::Arc<EmbeddedNode>,
+    node_did: &str,
+    trigger_id: &str,
+    updates: TriggerRuntimeUpdate,
+) -> Result<()> {
+    use gents_protocol::document_query::{
+        fields::trigger as fields, Filter, Query, Selection, Update,
+    };
+    anyhow::ensure!(
+        !node_did.is_empty(),
+        "trigger observation owner is required"
+    );
+    if updates.next_run_at.is_none()
+        && updates.last_attempt_at.is_none()
+        && updates.last_fired_source_doc_id.is_none()
+        && updates.last_status.is_none()
+        && updates.last_error.is_none()
+        && updates.fire_count_delta.is_none()
+    {
+        return Ok(());
+    }
+
+    // Build the input with only the requested fields so apply-owned
+    // fields are never overwritten.
+    let Some(fire_count_delta) = updates.fire_count_delta else {
+        let rendered = Update::matching(
+            Filter::eq(fields::NODE_DID, node_did).and(Filter::eq(fields::TRIGGER_ID, trigger_id)),
+            trigger_runtime_input(&updates),
+        )
+        .render();
+        gents_store::config_client::ConfigAccess::write_local_rendered(
+            node,
+            "document.update_trigger_runtime",
+            &rendered,
+        )
+        .await?;
+        return Ok(());
+    };
+
+    // Read and write in one transaction. Conflict retries rerun this whole
+    // read-modify-write against a fresh snapshot, so concurrent committed
+    // deltas cannot overwrite one another.
+    let input = trigger_runtime_input(&updates);
+    gents_store::config_client::ConfigAccess::transact_local_write(
+        node,
+        None,
+        "document.update_trigger_runtime",
+        |txn| {
+            let input = input.clone();
+            Box::pin(async move {
+                let query = Query::select(Selection::new().field(fields::FIRE_COUNT))
+                    .filter(
+                        Filter::eq(fields::NODE_DID, node_did)
+                            .and(Filter::eq(fields::TRIGGER_ID, trigger_id)),
+                    )
+                    .limit(2)
+                    .render();
+                let response = txn.run(&query).await?;
+                let rows = response
+                    .get("data")
+                    .and_then(|data| data.get("Trigger"))
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                anyhow::ensure!(rows.len() <= 1, "ambiguous scoped trigger observation");
+                let Some(row) = rows.first() else {
+                    tracing::info!(
+                        trigger_id,
+                        "Trigger doc missing during runtime update; skipping"
+                    );
+                    return Ok(());
+                };
+                let current_fire_count = row
+                    .get("fire_count")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or(0);
+                let input = input.set(
+                    fields::FIRE_COUNT,
+                    current_fire_count.saturating_add(fire_count_delta),
+                );
+                let mutation = Update::matching(
+                    Filter::eq(fields::NODE_DID, node_did)
+                        .and(Filter::eq(fields::TRIGGER_ID, trigger_id)),
+                    input,
+                )
+                .render();
+                txn.run(&mutation).await?;
+                Ok(())
+            })
+        },
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// Reusable event-source configuration; the existing event engine owns group
+/// state independently per typed trigger/callback consumer.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct EventSource {
+    pub node_did: String,
+    pub event_source_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub display_name: Option<String>,
+    pub source_collection: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Absent/null means created, never all events.
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub event_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub filter: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub correlation_field: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub group: Option<EventGroup>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub workspace_authority: Option<gents_loop::tool_policy::WorkspaceAuthority>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub updated_at: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
+    #[schemars(transform = crate::accepts_null)]
+    pub tags: Vec<String>,
+}
+
+/// Completion conditions for documents sharing an event correlation.
+/// Existing group deduplication, bounds, and durable ownership remain
+/// authoritative.
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct EventGroup {
+    /// Fixed count or count supplied by each source document, never both.
+    /// Absence retains existing timeout-driven grouping, subject to validation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub expected_count: Option<EventGroupCount>,
+    /// Time to wait for the group, not the task execution deadline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub timeout_secs: Option<i64>,
+    /// Minimum group size accepted on timeout; unset uses the existing default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub min_count: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(untagged)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub enum EventGroupCount {
+    Fixed(i64),
+    SourceField { source_field: String },
+}
+
+impl EventSource {
+    pub(crate) fn group_projection(&self) -> (Option<usize>, Option<String>, Option<u64>, usize) {
+        let Some(group) = self.group.as_ref() else {
+            return (None, None, None, 1);
+        };
+        let expected_count = match group.expected_count {
+            Some(EventGroupCount::Fixed(count)) => usize::try_from(count).ok(),
+            Some(EventGroupCount::SourceField { .. }) => None,
+            None => None,
+        };
+        let expected_count_field = match &group.expected_count {
+            Some(EventGroupCount::Fixed(_)) => None,
+            Some(EventGroupCount::SourceField { source_field }) => Some(source_field.clone()),
+            None => None,
+        };
+        let group_timeout_secs = group
+            .timeout_secs
+            .and_then(|value| u64::try_from(value).ok())
+            .filter(|value| *value > 0);
+        let group_min_count = group
+            .min_count
+            .and_then(|value| usize::try_from(value).ok())
+            .unwrap_or(1);
+        (
+            expected_count,
+            expected_count_field,
+            group_timeout_secs,
+            group_min_count,
+        )
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        gents_store::graphql::validate_collection_identifier(&self.source_collection)?;
+        anyhow::ensure!(
+            self.event_kind.as_deref().unwrap_or("created") == "created",
+            "event source supports only the created event kind"
+        );
+        if let Some(filter) = self
+            .filter
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            gents_store::graphql::validate_graphql_filter_fragment(filter)?;
+        }
+        if let Some(field) = self
+            .correlation_field
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            gents_store::graphql::validate_graphql_name(field)?;
+        }
+        self.validate_group()
+    }
+
+    pub fn validate_group(&self) -> anyhow::Result<()> {
+        use super::automation::MAX_EVENT_TRIGGER_GROUP_DOCS;
+        let correlation_field = self
+            .correlation_field
+            .as_deref()
+            .filter(|field| !field.trim().is_empty());
+        let Some(group) = self.group.as_ref() else {
+            return Ok(());
+        };
+
+        if correlation_field.is_none() {
+            anyhow::bail!("per_group source requires correlation_field");
+        }
+
+        let expected_count = match &group.expected_count {
+            Some(crate::EventGroupCount::Fixed(count)) => {
+                let count = usize::try_from(*count)
+                    .map_err(|_| anyhow::anyhow!("expected_count must be a positive count"))?;
+                if !(1..=MAX_EVENT_TRIGGER_GROUP_DOCS).contains(&count) {
+                    anyhow::bail!(
+                        "expected_count {count} exceeds the group bound \
+                     {MAX_EVENT_TRIGGER_GROUP_DOCS}"
+                    );
+                }
+                Some(count)
+            }
+            Some(crate::EventGroupCount::SourceField { source_field }) => {
+                if gents_store::graphql::validate_graphql_name(source_field).is_err() {
+                    anyhow::bail!("count field is not a GraphQL name");
+                }
+                None
+            }
+            None => None,
+        };
+        let expected_count_field = match &group.expected_count {
+            Some(crate::EventGroupCount::SourceField { source_field }) => {
+                Some(source_field.clone())
+            }
+            _ => None,
+        };
+
+        let group_timeout_secs = group
+            .timeout_secs
+            .map(|value| {
+                anyhow::ensure!(value > 0, "group timeout_secs must be positive");
+                u64::try_from(value)
+                    .map_err(|_| anyhow::anyhow!("group timeout_secs exceeds the supported range"))
+            })
+            .transpose()?;
+        let group_min_count = group
+            .min_count
+            .map(|value| {
+                anyhow::ensure!(value > 0, "group min_count must be positive");
+                usize::try_from(value)
+                    .map_err(|_| anyhow::anyhow!("group min_count exceeds the supported range"))
+            })
+            .transpose()?;
+        if let Some(min_count) = group_min_count {
+            if min_count == 0 || min_count > MAX_EVENT_TRIGGER_GROUP_DOCS {
+                anyhow::bail!(
+                    "min_count {min_count} must be within 1..={MAX_EVENT_TRIGGER_GROUP_DOCS}"
+                );
+            }
+            if group_timeout_secs.is_none() {
+                anyhow::bail!("min_count requires a positive group timeout_secs");
+            }
+        }
+        if let (Some(expected), Some(min_count)) = (expected_count, group_min_count) {
+            if min_count > expected {
+                anyhow::bail!("min_count {min_count} exceeds expected_count {expected}");
+            }
+        }
+        match (expected_count, expected_count_field.as_ref()) {
+            (Some(_), None) | (None, Some(_)) => {}
+            (None, None) => {
+                if group_timeout_secs.is_none() {
+                    anyhow::bail!(
+                        "per_group without a fixed or source-field count requires \
+                     a positive timeout_secs"
+                    );
+                }
+            }
+            (Some(_), Some(_)) => {
+                anyhow::bail!("expected_count cannot combine a fixed count and a source field");
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn outcome_source_allowed(source_collection: &str, emit_outcome: bool) -> bool {
+    source_collection != "FireOutcome" || !emit_outcome
+}

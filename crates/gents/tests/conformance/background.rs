@@ -1,7 +1,7 @@
 use super::*;
-use gents::tools::call::lifecycle::ToolRowKind;
 use gents_lean_vocab::LeanRestartRowKind;
 use gents_protocol::tool_call::AwaitMode;
+use gents_toolcalls::call::lifecycle::ToolRowKind;
 
 pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
     let cases = lean_r6_backgrounding_cases();
@@ -156,8 +156,10 @@ pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
     assert_eq!(redrive.post_retry_count, Some(2));
     assert_eq!(redrive.retry_delay_seconds, Some(10));
     assert_eq!(
-        gents::request::lifecycle::background_wake_retry_delay(redrive.retry_count.unwrap() as i64)
-            .num_seconds(),
+        gents_session::request::lifecycle::background_wake_retry_delay(
+            redrive.retry_count.unwrap() as i64
+        )
+        .num_seconds(),
         redrive.retry_delay_seconds.unwrap() as i64
     );
     assert_eq!(redrive.is_latest, Some(true));

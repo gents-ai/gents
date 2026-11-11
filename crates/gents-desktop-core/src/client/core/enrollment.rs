@@ -4,27 +4,27 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use defra_p2p_adapter::{P2PError, P2POperations as P2POps};
-use gents::runtime::agent::p2p_reconcile::enrollment::{
+use gents_p2p::p2p_reconcile::enrollment::{
     active_request_visible, pending_request_satisfied, EnrollmentRequestAuthority,
 };
-use gents::runtime::agent::p2p_reconcile::enrollment_candidate::{
+use gents_p2p::p2p_reconcile::enrollment_candidate::{
     confirm_network_admin_pin, local_enrollment_ticket, push_enrollment_request,
     sign_enrollment_request_with_name, verify_enrollment_offer, write_enrollment_request,
 };
-use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
-use gents::NodeIdentity;
 use gents_protocol::enrollment::{
     decode_offer, enrollment_schema_fingerprint, EnrollmentDecisionKind, EnrollmentRequestRecord,
 };
 use gents_protocol::network_token::EndpointRecord;
+use gents_store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
+use gents_store::identity::NodeIdentity;
 use serde_json::Value;
 use tokio::time::timeout;
 
 use super::{ClientCore, P2P_OPERATION_TIMEOUT};
-use gents::runtime::agent::p2p_reconcile::enrollment_projection::{
+use gents_p2p::p2p_reconcile::enrollment_projection::{
     assemble_durable_enrollment_documents, listing_assembly_requests, listing_revision_rows,
 };
-use gents::runtime::agent::p2p_reconcile::enrollment_rows::{
+use gents_p2p::p2p_reconcile::enrollment_rows::{
     to_pure_decision, EnrollmentDecisionRow, EnrollmentPinRow, EnrollmentRequestRow,
     STATUS_ENROLLMENT_QUERY,
 };
@@ -186,7 +186,7 @@ impl ClientCore {
             "desktop enrollment requires its configured local identity"
         );
         let response: defra_node::QueryResponse = serde_json::from_value(
-            gents::store::config_client::ConfigAccess::local_as(
+            gents_store::config_client::ConfigAccess::local_as(
                 self.node.clone(),
                 identity::Did::new(self.node_identity.did())?,
             )

@@ -39,7 +39,7 @@ pub(crate) struct CloudLoginOutcome {
     pub(crate) doc_id: String,
     pub(crate) email: String,
     pub(crate) workspace_id: String,
-    pub(crate) credential: gents::inference::auth::credential::OAuthCredential,
+    pub(crate) credential: gents_inference::auth::credential::OAuthCredential,
 }
 
 pub(crate) async fn cloud_login(args: CloudLoginArgs) -> Result<()> {
@@ -88,7 +88,7 @@ pub(crate) async fn run_cloud_login(
 
     let credential = credential_from_session(node_did, provider, &session, Utc::now());
     let doc_id =
-        gents::inference::auth::credential::upsert_oauth_credential_on(access, &credential).await?;
+        gents_inference::auth::credential::upsert_oauth_credential_on(access, &credential).await?;
 
     Ok(CloudLoginOutcome {
         doc_id,
@@ -259,10 +259,10 @@ fn credential_from_session(
     provider: &str,
     session: &SignedIn,
     now: DateTime<Utc>,
-) -> gents::inference::auth::credential::OAuthCredential {
-    gents::inference::auth::credential::OAuthCredential {
+) -> gents_inference::auth::credential::OAuthCredential {
+    gents_inference::auth::credential::OAuthCredential {
         doc_id: None,
-        credential_id: gents::inference::auth::credential::oauth_credential_id(node_did, provider),
+        credential_id: gents_inference::auth::credential::oauth_credential_id(node_did, provider),
         node_did: node_did.to_string(),
         provider: provider.to_string(),
         access_token: session.token.clone(),
@@ -333,9 +333,9 @@ fn cloud_provider(provider: &str) -> Result<&str> {
     }
     if matches!(
         provider,
-        gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER
-            | gents::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER
-            | gents::inference::clients::xai_grok::XAI_OAUTH_PROVIDER
+        gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER
+            | gents_inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER
+            | gents_inference::clients::xai_grok::XAI_OAUTH_PROVIDER
     ) {
         anyhow::bail!(
             "--provider {provider} is an OAuth credential gents refreshes; cloud login stores a workspace token under gents-cloud"
@@ -811,7 +811,7 @@ mod tests {
                 }]
             }
         });
-        let loaded = gents::inference::auth::credential::oauth_credentials_from_response(&response)
+        let loaded = gents_inference::auth::credential::oauth_credentials_from_response(&response)
             .into_iter()
             .collect::<Result<Vec<_>, _>>()
             .expect("cloud credential decodes");

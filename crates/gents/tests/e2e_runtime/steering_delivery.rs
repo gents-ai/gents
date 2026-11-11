@@ -1,20 +1,21 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::inference::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
-use gents::request::lifecycle::{
-    pending_steer_edit, pending_user_queue, submit_pending_user_edit, submit_pending_user_steer,
-    PendingMessageEdit, PendingQueueEdit,
-};
-use gents::store::config_client::ConfigAccess;
-use gents::store::graphql::escape_graphql_string;
-use gents::{Gents, NodeIdentity};
+use gents::Gents;
+use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
 use gents_protocol::request_input::{
     QueueDelivery, QueuePolicy, QueuePosition, QueueSource, RequestQueue,
 };
+use gents_session::request::lifecycle::{
+    pending_steer_edit, pending_user_queue, submit_pending_user_edit, submit_pending_user_steer,
+    PendingMessageEdit, PendingQueueEdit,
+};
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
+use gents_store::identity::NodeIdentity;
 use tokio::sync::Notify;
 
 use crate::queue_management::{enqueue_owned, insert_signed_as, row_as};
@@ -136,7 +137,7 @@ async fn steering_case(hold_tool: bool, promote: bool) {
     access
         .transact_write("test.steering.title", |txn| {
             Box::pin(async move {
-                gents::session::apply_title_in_txn(
+                gents_session::session::apply_title_in_txn(
                     txn,
                     did,
                     Some(user_did),
@@ -158,7 +159,7 @@ async fn steering_case(hold_tool: bool, promote: bool) {
         .backend_admission(db.home.backend_admission())
         .identity(identity)
         .default_agent_did(agent_did)
-        .tool_ceiling(gents::ToolCeiling::meta_only())
+        .tool_ceiling(gents_tools::surface::ToolCeiling::meta_only())
         .agent(agent_did)
         .identity_binding(fixture.binding.clone())
         .backend_id(BACKEND)
@@ -408,7 +409,7 @@ async fn signed_request_cannot_forge_another_requests_queue_slot() {
         .access
         .transact_write("test.forged_slot.title", |txn| {
             Box::pin(async move {
-                gents::session::apply_title_in_txn(
+                gents_session::session::apply_title_in_txn(
                     txn,
                     did,
                     Some(user_did),
@@ -545,7 +546,7 @@ async fn caller_message(
     create.caused_by_parent_tool_call_doc_id = Some(tool_call_doc.into());
     create.input.queue = queue;
     create.session_doc_id = Some(
-        gents::request::lifecycle::reserve_goal_session(&caller.agent_access, &create)
+        gents_session::request::lifecycle::reserve_goal_session(&caller.agent_access, &create)
             .await
             .expect("reserve the caller's target session"),
     );
@@ -557,9 +558,9 @@ async fn caller_message(
                 let node_did = &node_did;
                 Box::pin(async move {
                     Ok::<_, anyhow::Error>(
-                        gents::documents::read_desired_state_record_in_txn(
+                        gents_documents::read_desired_state_record_in_txn(
                             txn,
-                            gents::Collection::Agent,
+                            gents_store::collection::Collection::Agent,
                             node_did,
                             target_agent_did,
                         )
@@ -572,10 +573,13 @@ async fn caller_message(
             .await
             .expect("read the target Agent as the caller"),
     );
-    gents::sign_agent_request_create(caller.agent().as_ref(), &mut create)
-        .await
-        .expect("sign the caller's session message");
-    gents::request::lifecycle::submit_client_request(&caller.agent_access, &create)
+    gents_session::request::admission::sign_agent_request_create(
+        caller.agent().as_ref(),
+        &mut create,
+    )
+    .await
+    .expect("sign the caller's session message");
+    gents_session::request::lifecycle::submit_client_request(&caller.agent_access, &create)
         .await
         .expect("submit the caller's session message");
     let response = caller
@@ -621,7 +625,7 @@ fn held_runtime(
             release: release.clone(),
         })
         .done()
-        .tool_ceiling(gents::ToolCeiling::meta_only())
+        .tool_ceiling(gents_tools::surface::ToolCeiling::meta_only())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -699,7 +703,7 @@ async fn signed_agent_steer_passes_a_queued_turn_after_a_held_tool() {
             let node_did = worker.node_did();
             let caller_did = caller_did.as_str();
             Box::pin(async move {
-                gents::session::apply_title_in_txn(
+                gents_session::session::apply_title_in_txn(
                     txn,
                     node_did,
                     Some(caller_did),

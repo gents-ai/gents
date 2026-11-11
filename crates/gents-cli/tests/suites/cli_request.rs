@@ -1091,17 +1091,17 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
 /// at create, then the receipt the node signs for the created document.
 async fn create_started_session(
     graphql: &str,
-    node: &gents::KeyIdentity,
+    node: &gents_store::identity::KeyIdentity,
     session: gents_protocol::session::AgentSession,
     source: gents_protocol::session::SessionReference,
     parent_doc_id: &str,
     opening_doc_id: &str,
     tool_call_doc_id: &str,
 ) -> Result<()> {
-    use gents::NodeIdentity as _;
     use gents_protocol::session::{
         SessionCreationCause, SessionCreationReceipt, SessionCreationStarter, SessionProvenance,
     };
+    use gents_store::identity::NodeIdentity as _;
 
     let mut provenance = SessionProvenance {
         parent_request_doc_id: Some(parent_doc_id.to_owned()),

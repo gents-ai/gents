@@ -1,0 +1,224 @@
+use super::*;
+use crate::config_client::GraphqlEndpoint;
+use crate::identity::{KeyIdentity, NodeIdentity};
+use serde_json::json;
+use std::sync::Arc;
+
+#[tokio::test]
+async fn fragmented_subscription_preserves_utf8_and_completion() {
+    let wire = "event: next\r\ndata: {\"data\":{\"Parcel\":[{\"value\":\"café\"}]}}\r\n\r\nevent: complete\ndata: {}\n\n";
+    let chunks = wire
+        .as_bytes()
+        .chunks(3)
+        .map(|chunk| Ok::<_, reqwest::Error>(chunk.to_vec()))
+        .collect::<Vec<_>>();
+    let mut subscription = GraphqlSubscription {
+        events: Some(Box::pin(futures::stream::iter(chunks).eventsource())),
+        renew_at: None,
+        ended: None,
+    };
+    assert_eq!(
+        subscription.recv().await.unwrap(),
+        Some(json!({"data":{"Parcel":[{"value":"café"}]}}))
+    );
+    assert_eq!(subscription.recv().await.unwrap(), None);
+    assert_eq!(subscription.recv().await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn subscription_returns_explicit_denial_without_retrying_or_falling_back() {
+    let wire = b"event: next\ndata: {\"errors\":[{\"message\":\"opaque\",\"extensions\":{\"code\":\"PERMISSION_DENIED\"}}]}\n\n";
+    let chunks = vec![Ok::<_, reqwest::Error>(wire.to_vec())];
+    let mut subscription = GraphqlSubscription {
+        events: Some(Box::pin(futures::stream::iter(chunks).eventsource())),
+        renew_at: None,
+        ended: None,
+    };
+    let error = subscription.recv().await.unwrap_err();
+    assert!(error.is_permission_denied());
+    assert!(!super::super::retry::is_retryable_ambiguous_write(&error));
+    assert!(subscription.recv().await.unwrap().is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn subscription_closes_for_reauthentication_without_waiting_for_data() {
+    let mut subscription = GraphqlSubscription {
+        events: Some(Box::pin(futures::stream::pending())),
+        renew_at: Some(Instant::now() + Duration::from_secs(1)),
+        ended: None,
+    };
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert_eq!(subscription.recv().await.unwrap(), None);
+    assert!(subscription.events.is_none());
+    assert_eq!(subscription.end(), Some(SubscriptionEnd::RenewalDue));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_taken_renewal_keeps_delivering_past_its_deadline() {
+    let wire = b"event: next\ndata: {\"data\":{\"Parcel\":[]}}\n\n";
+    let events = futures::stream::pending::<std::result::Result<Vec<u8>, reqwest::Error>>();
+    let late = futures::stream::once(async {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        Ok::<_, reqwest::Error>(wire.to_vec())
+    });
+    let mut subscription = GraphqlSubscription {
+        events: Some(Box::pin(late.chain(events).eventsource())),
+        renew_at: Some(Instant::now() + Duration::from_secs(1)),
+        ended: None,
+    };
+    assert_eq!(
+        subscription.take_renewal(),
+        Some(SUBSCRIPTION_RENEWAL_PERIOD)
+    );
+    assert_eq!(
+        SUBSCRIPTION_RENEWAL_PERIOD * 2,
+        crate::identity::DEFRADB_BEARER_LIFETIME
+    );
+    assert_eq!(subscription.take_renewal(), None);
+    assert_eq!(
+        subscription.recv().await.unwrap(),
+        Some(json!({"data":{"Parcel":[]}}))
+    );
+    assert_eq!(subscription.end(), None);
+}
+
+#[tokio::test]
+async fn runtime_completion_is_not_a_planned_renewal() {
+    let wire = b"event: complete\ndata: {}\n\n";
+    let mut subscription = GraphqlSubscription {
+        events: Some(Box::pin(
+            futures::stream::iter(vec![Ok::<_, reqwest::Error>(wire.to_vec())]).eventsource(),
+        )),
+        renew_at: Some(Instant::now() + Duration::from_secs(3600)),
+        ended: None,
+    };
+    assert_eq!(subscription.recv().await.unwrap(), None);
+    assert_eq!(subscription.end(), Some(SubscriptionEnd::Completed));
+}
+
+/// `recv` rejects every envelope that carries GraphQL errors, so a caller
+/// never sees one as data.
+#[tokio::test]
+async fn subscription_never_yields_an_errors_envelope() {
+    for errors in [
+        r#"[{"message":"opaque"}]"#,
+        r#"{"message":"not a list"}"#,
+        r#""text""#,
+    ] {
+        let wire = format!("event: next\ndata: {{\"data\":null,\"errors\":{errors}}}\n\n");
+        let mut subscription = GraphqlSubscription {
+            events: Some(Box::pin(
+                futures::stream::iter(vec![Ok::<_, reqwest::Error>(wire.into_bytes())])
+                    .eventsource(),
+            )),
+            renew_at: None,
+            ended: None,
+        };
+        let error = subscription.recv().await.unwrap_err();
+        assert!(!error.is_permission_denied(), "{error}");
+        assert_eq!(subscription.end(), None);
+    }
+}
+
+#[tokio::test]
+async fn native_subscription_uses_caller_and_observes_nonbranchable_deletion() {
+    let directory = tempfile::tempdir().unwrap();
+    let owner_path = directory.path().join("owner.key");
+    let reader_path = directory.path().join("reader.key");
+    let (owner, reader) = tokio::task::spawn_blocking(move || {
+        (
+            KeyIdentity::load_or_create(owner_path, None).unwrap(),
+            KeyIdentity::load_or_create(reader_path, None).unwrap(),
+        )
+    })
+    .await
+    .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+    let node = Arc::new(
+        defra_node::Node::builder()
+            .with_node_identity_did(owner.did())
+            .with_http(defra_node::HttpConfig::with_listener(listener.into_std().unwrap()).unwrap())
+            .build()
+            .await
+            .unwrap(),
+    );
+    let policy = node
+        .add_dac_policy_as(
+            &defra_core::RequestContext::default().with_identity(Some(owner.did().to_owned())),
+            "name: Subscription identity\nresources:\n  - name: parcels\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n",
+        )
+        .await
+        .unwrap();
+    let access = ConfigAccess::local_as(node.clone(), owner.did().parse().unwrap());
+    access
+        .add_collection(&format!(
+        "type SubscriptionParcel @policy(id: \"{}\", resource: \"parcels\") {{ value: String }}",
+        crate::graphql::escape_graphql_string(&policy),
+    ))
+        .await
+        .unwrap();
+    let created = access.write("test.subscription.seed", "mutation { create_SubscriptionParcel(input: [{value:\"visible\"}, {value:\"private\"}]) { _docID } }").await.unwrap();
+    let rows = crate::graphql::mutation_documents(&created, "create_SubscriptionParcel")
+        .unwrap()
+        .expect("created parcels");
+    assert_eq!(rows.len(), 2);
+    let visible = rows[0]["_docID"].as_str().unwrap();
+    let private = rows[1]["_docID"].as_str().unwrap();
+    node.add_dac_actor_relationship(
+        owner.did(),
+        "SubscriptionParcel",
+        visible,
+        "reader",
+        reader.did(),
+    )
+    .await
+    .unwrap();
+    let reader_access = ConfigAccess::Graphql(
+        GraphqlEndpoint::as_principal(endpoint, reader.did())
+            .with_client_signing_capability(reader.client_signing_capability().unwrap())
+            .unwrap(),
+    );
+    let mut subscription = reader_access
+        .subscribe(
+            "subscription { SubscriptionParcel(showDeleted: true) { _docID _deleted value } }",
+        )
+        .await
+        .unwrap();
+    for (doc, value) in [(private, "private-update"), (visible, "visible-update")] {
+        access.write("test.subscription.update", &format!(
+            "mutation {{ update_SubscriptionParcel(docID: \"{}\", input: {{value:\"{}\"}}) {{ _docID }} }}",
+            crate::graphql::escape_graphql_string(doc),
+            crate::graphql::escape_graphql_string(value),
+        )).await.unwrap();
+    }
+    let event = tokio::time::timeout(Duration::from_secs(10), subscription.recv())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(event["data"]["SubscriptionParcel"][0]["_docID"], visible);
+    assert_eq!(
+        event["data"]["SubscriptionParcel"][0]["value"],
+        "visible-update"
+    );
+    access
+        .write(
+            "test.subscription.delete",
+            &format!(
+                "mutation {{ delete_SubscriptionParcel(docID: \"{}\") {{ _docID }} }}",
+                crate::graphql::escape_graphql_string(visible),
+            ),
+        )
+        .await
+        .unwrap();
+    let deleted = tokio::time::timeout(Duration::from_secs(10), subscription.recv())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(deleted["data"]["SubscriptionParcel"][0]["_docID"], visible);
+    assert_eq!(deleted["data"]["SubscriptionParcel"][0]["_deleted"], true);
+    drop(subscription);
+    node.shutdown().await.expect("node shutdown");
+}

@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
-use gents::default_inference_profile_id_for_agent;
+use gents_documents::default_inference_profile_id_for_agent;
 use serde_json::Value;
 
 use super::graphql::escape_graphql_string;

@@ -4,8 +4,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use clap::CommandFactory as _;
-use gents::store::config_client::GraphqlEndpoint;
-use gents::store::local::storage_backend::{IncompatibleStore, IncompatibleStoreKind};
+use gents_store::config_client::GraphqlEndpoint;
+use gents_store::local::storage_backend::{IncompatibleStore, IncompatibleStoreKind};
 use tokio::runtime::Handle;
 
 use crate::cli::args::{ShellArgs, StoreKeyCustodyArg};
@@ -111,7 +111,7 @@ async fn chosen_agent(
 /// `gents config client set` once chose between the built-in shell and Codex in this file.
 /// Codex is gone, so a file left behind is named and otherwise ignored.
 fn report_ignored_client_setting(home: &Path) {
-    let path = home.join(gents::store::local::home::CLIENT_CONFIG_FILE_NAME);
+    let path = home.join(gents_store::local::home::CLIENT_CONFIG_FILE_NAME);
     if path.exists() {
         eprintln!("{}", ignored_client_setting_notice(&path));
     }
@@ -146,10 +146,10 @@ fn shell_cannot_continue_with_a_prompt() -> &'static str {
 }
 
 async fn session_agent(graphql: &GraphqlEndpoint, node_did: &str, session: &str) -> Result<String> {
-    let owner = gents::ConfigAccess::Graphql(graphql.clone())
+    let owner = gents_store::config_client::ConfigAccess::Graphql(graphql.clone())
         .transact_readonly("cli.start.session_agent", |txn| {
             Box::pin(async move {
-                gents::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
                     txn, node_did, session,
                 )
                 .await
@@ -240,7 +240,7 @@ fn store_refusal(home: &Path, exit: &ServiceExit) -> Option<IncompatibleStore> {
     let kind = exit.refused_store()?;
     let data_path = match kind {
         IncompatibleStoreKind::InsecureKey => home.join("keys"),
-        _ => gents::store::local::home::default_data_dir(home),
+        _ => gents_store::local::home::default_data_dir(home),
     };
     Some(IncompatibleStore { kind, data_path })
 }
@@ -400,11 +400,11 @@ mod tests {
         assert_eq!(older.kind, IncompatibleStoreKind::UnknownLineage);
         assert_eq!(
             older.data_path,
-            gents::store::local::home::default_data_dir(home)
+            gents_store::local::home::default_data_dir(home)
         );
         let error = anyhow::Error::new(older.clone());
         assert_eq!(
-            gents::store::local::storage_backend::incompatible_store(error.as_ref(), Path::new("")),
+            gents_store::local::storage_backend::incompatible_store(error.as_ref(), Path::new("")),
             Some(older)
         );
 

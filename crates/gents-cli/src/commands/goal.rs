@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
-use gents::goal::{set_goal_from_access, GoalDocument};
-use gents::store::config_client::ConfigAccess;
-use gents::store::graphql::escape_graphql_string;
+use gents_automation::goal::{set_goal_from_access, GoalDocument};
 use gents_protocol::goal::GOAL_FIELDS;
 use gents_protocol::goal_status::GoalStatus;
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
 
 use crate::cli::args::{
     GoalCommand, GoalResumeArgs, GoalResumeOnArgs, GoalScopeArgs, GoalSetArgs, GoalShowArgs,
@@ -39,14 +39,16 @@ async fn goal_show_value(
     let goal = load_goal(access, node_did, session_id)
         .await?
         .with_context(|| format!("no durable goal for session {session_id}"))?;
-    let mut value = serde_json::to_value(gents::goal::snapshot(&goal, now))?;
+    let mut value = serde_json::to_value(gents_automation::goal::snapshot(&goal, now))?;
     value["auto_resume_at_reset"] = goal.auto_resume_at_reset.unwrap_or(false).into();
-    let blocked = gents::goal::blocked_turn::blocked_goal_turn(access, node_did, session_id)
-        .await
-        .unwrap_or_else(|error| {
-            tracing::warn!(session_id, error = %format!("{error:#}"), "blocked turn unreadable");
-            None
-        });
+    let blocked = gents_automation::goal::blocked_turn::blocked_goal_turn(
+        access, node_did, session_id,
+    )
+    .await
+    .unwrap_or_else(|error| {
+        tracing::warn!(session_id, error = %format!("{error:#}"), "blocked turn unreadable");
+        None
+    });
     value["blocked"] = serde_json::to_value(blocked)?;
     Ok(value)
 }
@@ -79,7 +81,7 @@ async fn goal_set_value(
         args.auto_resume,
     )
     .await?;
-    Ok(serde_json::to_value(gents::goal::snapshot(
+    Ok(serde_json::to_value(gents_automation::goal::snapshot(
         &goal,
         Utc::now(),
     ))?)
@@ -92,8 +94,8 @@ async fn goal_resume(args: GoalResumeArgs) -> Result<()> {
     let actor = access
         .actor_did()
         .context("Goal resume requires an authenticated client identity")?;
-    let identity = gents::store::identity::RegisteredIdentity::from_registered_did(actor, None)?;
-    let receipt = gents::goal::resume_goal_request(
+    let identity = gents_store::identity::RegisteredIdentity::from_registered_did(actor, None)?;
+    let receipt = gents_automation::goal::resume_goal_request(
         &access,
         &identity,
         &node_did,
@@ -111,7 +113,7 @@ async fn goal_resume_on(args: GoalResumeOnArgs) -> Result<()> {
     let actor = access
         .actor_did()
         .context("Goal resume requires an authenticated client identity")?;
-    let identity = gents::store::identity::RegisteredIdentity::from_registered_did(actor, None)?;
+    let identity = gents_store::identity::RegisteredIdentity::from_registered_did(actor, None)?;
     let backend_id = crate::commands::config::profile::backend_for_account(
         &access,
         &node_did,
@@ -120,7 +122,7 @@ async fn goal_resume_on(args: GoalResumeOnArgs) -> Result<()> {
     )
     .await?;
     let (home, graphql) = (args.scope.home.as_deref(), args.scope.graphql.as_deref());
-    let receipt = gents::goal::resume_goal_on_account(
+    let receipt = gents_automation::goal::resume_goal_on_account(
         &access,
         &identity,
         &node_did,
@@ -141,10 +143,13 @@ async fn goal_clear(args: GoalShowArgs) -> Result<()> {
     let goal = load_goal(&access, &node_did, &args.scope.session)
         .await?
         .with_context(|| format!("no durable goal for session {}", args.scope.session))?;
-    let deleted =
-        gents::goal::delete_goals_for_session_from_access(&access, &node_did, &args.scope.session)
-            .await?
-            > 0;
+    let deleted = gents_automation::goal::delete_goals_for_session_from_access(
+        &access,
+        &node_did,
+        &args.scope.session,
+    )
+    .await?
+        > 0;
     print_json(&serde_json::json!({
         "goal_id": goal.goal_id,
         "session_id": goal.session_id,
@@ -154,7 +159,7 @@ async fn goal_clear(args: GoalShowArgs) -> Result<()> {
 
 async fn access_and_did(
     scope: &GoalScopeArgs,
-) -> Result<(gents::store::config_client::ConfigAccess, String)> {
+) -> Result<(gents_store::config_client::ConfigAccess, String)> {
     let node_did = resolve_node_did(scope.home.as_deref(), scope.node_did.as_deref())
         .context("resolving goal owner node_did")?;
     let (access, _) = resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref())

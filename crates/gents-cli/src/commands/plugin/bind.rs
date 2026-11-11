@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use gents::plugin::install::set_model_binding;
-use gents::plugin::model_binding::{AccessModels, ModelBinding, ModelResolver};
+use gents_pack::plugin::install::set_model_binding;
+use gents_pack::plugin::model_binding::{AccessModels, ModelBinding, ModelResolver};
 use serde_json::json;
 
 use super::store;

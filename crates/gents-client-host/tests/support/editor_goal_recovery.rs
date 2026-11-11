@@ -1,7 +1,7 @@
 use super::{fake_llm, ChatAction};
 use anyhow::{ensure, Context, Result};
-use gents::ConfigAccess;
 use gents_protocol::{request_lifecycle::RequestLifecycleState, row::AgentRequestRow};
+use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 use std::path::Path;
 use std::sync::{
@@ -75,8 +75,8 @@ pub async fn wait_for_source_blocked(
     node: &str,
     session: &str,
 ) -> Result<Value> {
-    let node = gents::store::graphql::escape_graphql_string(node);
-    let session = gents::store::graphql::escape_graphql_string(session);
+    let node = gents_store::graphql::escape_graphql_string(node);
+    let session = gents_store::graphql::escape_graphql_string(session);
     let query = format!(
         r#"{{
             Goal(filter: {{node_did: {{_eq: "{node}"}}, session_id: {{_eq: "{session}"}}}}) {{ {} }}
@@ -152,11 +152,11 @@ pub async fn verify(
 ) -> Result<Value> {
     let query = format!(
         r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, purpose: {{_eq: "normal"}}}}) {{ {} }} Goal(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}) {{ {} }} }}"#,
-        gents::store::graphql::escape_graphql_string(node),
-        gents::store::graphql::escape_graphql_string(session),
+        gents_store::graphql::escape_graphql_string(node),
+        gents_store::graphql::escape_graphql_string(session),
         gents::SIGNED_REQUEST_FIELDS,
-        gents::store::graphql::escape_graphql_string(node),
-        gents::store::graphql::escape_graphql_string(session),
+        gents_store::graphql::escape_graphql_string(node),
+        gents_store::graphql::escape_graphql_string(session),
         gents_protocol::goal::GOAL_FIELDS,
     );
     let value = tokio::time::timeout(Duration::from_secs(30), async {
@@ -231,7 +231,7 @@ pub async fn verify(
     let mut failed = 0;
     let mut wrapups = 0;
     for row in &rows {
-        gents::verify_request_receipt_signature(row)?;
+        gents_store::identity::request_receipt::verify_request_receipt_signature(row)?;
         ensure!(
             row.requester_did.as_deref() == Some(author),
             "goal recovery changed its requester"

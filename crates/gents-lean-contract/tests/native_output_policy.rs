@@ -4,7 +4,7 @@
     reason = "This target exercises lease admission and renewal from the shared execution-policy owner."
 )]
 mod execution_policy;
-#[path = "../../gents/src/request/lifecycle/terminal_binding.rs"]
+#[path = "../../gents-session/src/request/lifecycle/terminal_binding.rs"]
 mod terminal_binding;
 
 #[test]

@@ -1,6 +1,6 @@
 use super::*;
-use gents::store::config_client::ConfigAccess;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_store::config_client::ConfigAccess;
 
 #[tokio::test]
 async fn live_read_observes_exact_request_lifecycle_and_every_crdt_record_without_history() {

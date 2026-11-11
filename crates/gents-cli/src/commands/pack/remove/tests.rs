@@ -2,11 +2,11 @@ use super::*;
 use crate::cli::{PackDriftArgs, PackInstallArgs, ScopeArgs};
 use crate::commands::pack::test_support::{assets_pack_dir, fixture_dir};
 use crate::output_format::OutputFormat;
-use gents::pack::HomePackInstall;
+use gents_pack::pack::HomePackInstall;
 use serde_json::json;
 
-async fn selected_agent(access: &gents::ConfigAccess, owner: &str) -> String {
-    let value = access.execute(&format!("{{ Node(filter: {{ node_did: {{ _eq: \"{}\" }} }}, limit: 1) {{ default_agent_did }} }}", gents::store::graphql::escape_graphql_string(owner))).await.unwrap();
+async fn selected_agent(access: &gents_store::config_client::ConfigAccess, owner: &str) -> String {
+    let value = access.execute(&format!("{{ Node(filter: {{ node_did: {{ _eq: \"{}\" }} }}, limit: 1) {{ default_agent_did }} }}", gents_store::graphql::escape_graphql_string(owner))).await.unwrap();
     value["data"]["Node"][0]["default_agent_did"]
         .as_str()
         .expect("initialized default agent")
@@ -38,7 +38,7 @@ async fn install(home: &Path, package: String) -> anyhow::Result<Value> {
         explicit: true,
     }))
     .await
-    .map_err(gents::pack::PackChangeError::into_anyhow)
+    .map_err(gents_pack::pack::PackChangeError::into_anyhow)
 }
 
 async fn remove_pkg(home: &Path, package: &str) -> anyhow::Result<Value> {
@@ -48,7 +48,7 @@ async fn remove_pkg(home: &Path, package: &str) -> anyhow::Result<Value> {
         drift: PackDriftArgs::default(),
     }))
     .await
-    .map_err(gents::pack::PackChangeError::into_anyhow)
+    .map_err(gents_pack::pack::PackChangeError::into_anyhow)
 }
 
 fn assets_fixture_spec() -> String {
@@ -58,7 +58,7 @@ fn assets_fixture_spec() -> String {
 #[tokio::test]
 async fn unconfigured_home_does_not_prove_a_plugin_is_unreferenced() {
     let home = tempfile::tempdir().unwrap();
-    let guard = gents::plugin::store::try_lock_store(home.path()).unwrap();
+    let guard = gents_pack::plugin::store::try_lock_store(home.path()).unwrap();
     super::ensure_home_plugins_unreferenced(home.path(), &BTreeSet::new(), &guard)
         .await
         .unwrap();
@@ -70,8 +70,8 @@ async fn unconfigured_home_does_not_prove_a_plugin_is_unreferenced() {
     .await
     .unwrap_err();
     assert!(matches!(
-        error.downcast_ref::<gents::pack::PackRemovalError>(),
-        Some(gents::pack::PackRemovalError::NodeUnobserved)
+        error.downcast_ref::<gents_pack::pack::PackRemovalError>(),
+        Some(gents_pack::pack::PackRemovalError::NodeUnobserved)
     ));
 }
 
@@ -111,7 +111,7 @@ async fn an_assets_pack_from_a_directory_releases_its_archive() {
     let home = tempfile::tempdir().unwrap();
     let installed = install(home.path(), assets_fixture_spec()).await.unwrap();
     let digest = installed["digest"].as_str().unwrap().to_owned();
-    let store = gents::pack::store::PackStore::new(home.path());
+    let store = gents_pack::pack::store::PackStore::new(home.path());
     assert!(store.contains(&digest).unwrap());
 
     remove_pkg(home.path(), "fixture/assets_fixture")
@@ -153,7 +153,7 @@ async fn a_busy_cache_lock_fails_removal_loudly() {
     let installed = install(home.path(), assets_fixture_spec()).await.unwrap();
     let assets = Path::new(installed["installed_assets"].as_str().unwrap());
     let parent = assets.parent().unwrap();
-    let lock = gents::pack::materialize::lock_exclusive(parent).unwrap();
+    let lock = gents_pack::pack::materialize::lock_exclusive(parent).unwrap();
 
     let error = remove_pkg(home.path(), "fixture/assets_fixture")
         .await
@@ -182,8 +182,8 @@ async fn same_name_assets_have_independent_removal_locks() {
             installed["installed_assets"].as_str().unwrap(),
         ));
     }
-    let _lease = gents::store::local::file_lock::FileLock::shared(
-        gents::pack::materialize::cache_lock(roots[1].parent().unwrap()).unwrap(),
+    let _lease = gents_store::local::file_lock::FileLock::shared(
+        gents_pack::pack::materialize::cache_lock(roots[1].parent().unwrap()).unwrap(),
     )
     .unwrap();
 
@@ -192,9 +192,11 @@ async fn same_name_assets_have_independent_removal_locks() {
     assert!(roots[1].exists());
     let error = remove_pkg(home.path(), "zeta/tools").await.unwrap_err();
     assert!(format!("{error:#}").contains("pack cache is in use"));
-    assert!(gents::pack::read_home_install(home.path(), "zeta/tools")
-        .unwrap()
-        .is_some());
+    assert!(
+        gents_pack::pack::read_home_install(home.path(), "zeta/tools")
+            .unwrap()
+            .is_some()
+    );
 }
 
 async fn install_unscoped_assets(home: &Path, package: String) -> HomePackInstall {
@@ -204,12 +206,12 @@ async fn install_unscoped_assets(home: &Path, package: String) -> HomePackInstal
     let (_, name) = super::super::split_namespace(&record.coordinate);
     record.assets = format!(
         "packs/{name}/{}",
-        gents::pack::archive::digest_hex(&record.digest).unwrap()
+        gents_pack::pack::archive::digest_hex(&record.digest).unwrap()
     );
     let recorded_root = home.join(&record.assets);
     super::super::test_support::copy_tree(root, &recorded_root).unwrap();
     std::fs::remove_dir_all(root).unwrap();
-    gents::pack::write_home_install(home, &record).unwrap();
+    gents_pack::pack::write_home_install(home, &record).unwrap();
     record
 }
 
@@ -218,8 +220,8 @@ async fn recorded_unscoped_assets_use_their_original_lock_and_retention_rules() 
     let home = tempfile::tempdir().unwrap();
     let record = install_unscoped_assets(home.path(), assets_fixture_spec()).await;
     let root = home.path().join(&record.assets);
-    let _lease = gents::store::local::file_lock::FileLock::shared(
-        gents::pack::materialize::cache_lock(root.parent().unwrap()).unwrap(),
+    let _lease = gents_store::local::file_lock::FileLock::shared(
+        gents_pack::pack::materialize::cache_lock(root.parent().unwrap()).unwrap(),
     )
     .unwrap();
     let error = remove_pkg(home.path(), &record.coordinate)
@@ -258,21 +260,21 @@ async fn removing_a_materialized_pack_preserves_a_digest_named_namespace() {
         .find_map(|version| {
             let dir = assets_pack_dir("fixture", "materialized", &format!("1.0.{version}"));
             let pack = super::super::test_support::local_pack_source(dir.path(), home.path());
-            let namespace = gents::pack::archive::digest_hex(pack.digest()).unwrap();
-            gents::documents::pack_spec::is_valid_pack_name(namespace).then_some(dir)
+            let namespace = gents_pack::pack::archive::digest_hex(pack.digest()).unwrap();
+            gents_documents::pack_spec::is_valid_pack_name(namespace).then_some(dir)
         })
         .expect("a pack digest beginning with a letter");
     let record =
         install_unscoped_assets(home.path(), dir.path().to_str().unwrap().to_owned()).await;
-    let namespace = gents::pack::archive::digest_hex(&record.digest).unwrap();
+    let namespace = gents_pack::pack::archive::digest_hex(&record.digest).unwrap();
     let other = assets_pack_dir(namespace, "tools", "1.0.0");
     let installed = install(home.path(), other.path().to_str().unwrap().to_owned())
         .await
         .unwrap();
     let root = Path::new(installed["installed_assets"].as_str().unwrap());
     std::fs::create_dir(root.join("runs")).unwrap();
-    let _lease = gents::store::local::file_lock::FileLock::shared(
-        gents::pack::materialize::cache_lock(root.parent().unwrap()).unwrap(),
+    let _lease = gents_store::local::file_lock::FileLock::shared(
+        gents_pack::pack::materialize::cache_lock(root.parent().unwrap()).unwrap(),
     )
     .unwrap();
 
@@ -280,7 +282,7 @@ async fn removing_a_materialized_pack_preserves_a_digest_named_namespace() {
     assert!(root.join("runs").is_dir());
     assert!(root.join("manifest.json").is_file());
     assert!(
-        gents::pack::read_home_install(home.path(), &format!("{namespace}/tools"))
+        gents_pack::pack::read_home_install(home.path(), &format!("{namespace}/tools"))
             .unwrap()
             .is_some()
     );
@@ -302,7 +304,7 @@ async fn releasing_an_unpacked_pack_preserves_recorded_runs_on_every_release() {
         "holds run history"
     );
     assert_eq!(removed["removed"]["archives"], json!([record.digest]));
-    let store = gents::pack::store::PackStore::new(home.path());
+    let store = gents_pack::pack::store::PackStore::new(home.path());
     assert!(!store.contains(&record.digest).unwrap());
     assert!(store.lookup("fixture", "unpacked", None).unwrap().is_none());
     assert!(!store.release(&record.digest).unwrap());
@@ -319,13 +321,13 @@ async fn unscoped_receipts_cannot_release_another_namespace_or_modified_assets()
     let record = install_unscoped_assets(home.path(), assets_fixture_spec()).await;
     let mut forged = record.clone();
     forged.coordinate = "other/assets_fixture".to_owned();
-    gents::pack::write_home_install(home.path(), &forged).unwrap();
+    gents_pack::pack::write_home_install(home.path(), &forged).unwrap();
     let error = remove_pkg(home.path(), &forged.coordinate)
         .await
         .unwrap_err();
     assert!(format!("{error:#}").contains("digest belongs to a different pack"));
     assert!(
-        gents::pack::read_home_install(home.path(), &forged.coordinate)
+        gents_pack::pack::read_home_install(home.path(), &forged.coordinate)
             .unwrap()
             .is_some()
     );
@@ -343,7 +345,7 @@ async fn unscoped_receipts_cannot_release_another_namespace_or_modified_assets()
 async fn forged_asset_paths_do_not_release_files_or_install_receipts() {
     let home = tempfile::tempdir().unwrap();
     install(home.path(), assets_fixture_spec()).await.unwrap();
-    let record = gents::pack::read_home_install(home.path(), "fixture/assets_fixture")
+    let record = gents_pack::pack::read_home_install(home.path(), "fixture/assets_fixture")
         .unwrap()
         .unwrap();
     for assets in [
@@ -357,14 +359,14 @@ async fn forged_asset_paths_do_not_release_files_or_install_receipts() {
     ] {
         let mut forged = record.clone();
         forged.assets = assets;
-        gents::pack::write_home_install(home.path(), &forged).unwrap();
+        gents_pack::pack::write_home_install(home.path(), &forged).unwrap();
         let error = remove_pkg(home.path(), &record.coordinate)
             .await
             .unwrap_err();
         assert!(format!("{error:#}").contains("recorded asset path"));
         assert!(home.path().join(&record.assets).exists());
         assert!(
-            gents::pack::read_home_install(home.path(), &record.coordinate)
+            gents_pack::pack::read_home_install(home.path(), &record.coordinate)
                 .unwrap()
                 .is_some()
         );
@@ -433,21 +435,21 @@ async fn a_plugins_pack_keeps_records_and_bytes_on_a_home_with_no_node() {
     install(home.path(), zeta.path().to_str().unwrap().to_owned())
         .await
         .unwrap();
-    assert!(gents::plugin::store::read_bytes(home.path(), &digest_hex).is_ok());
+    assert!(gents_pack::plugin::store::read_bytes(home.path(), &digest_hex).is_ok());
 
     for coordinate in ["acme/tools", "zeta/tools"] {
         let error = remove_pkg(home.path(), coordinate).await.unwrap_err();
         assert!(matches!(
-            error.downcast_ref::<gents::pack::PackRemovalError>(),
-            Some(gents::pack::PackRemovalError::NodeUnobserved)
+            error.downcast_ref::<gents_pack::pack::PackRemovalError>(),
+            Some(gents_pack::pack::PackRemovalError::NodeUnobserved)
         ));
-        assert!(gents::pack::read_home_install(home.path(), coordinate)
+        assert!(gents_pack::pack::read_home_install(home.path(), coordinate)
             .unwrap()
             .is_some());
     }
-    assert!(gents::plugin::store::read_bytes(home.path(), &digest_hex).is_ok());
-    assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_ok());
-    assert!(gents::plugin::store::read_record(home.path(), "zeta", "shared").is_ok());
+    assert!(gents_pack::plugin::store::read_bytes(home.path(), &digest_hex).is_ok());
+    assert!(gents_pack::plugin::store::read_record(home.path(), "acme", "shared").is_ok());
+    assert!(gents_pack::plugin::store::read_record(home.path(), "zeta", "shared").is_ok());
 }
 
 fn documents_pack_dir() -> tempfile::TempDir {
@@ -527,10 +529,10 @@ async fn documents_pack_with_a_home_record_is_removed_from_the_node_and_forgotte
     install(home.path(), pack.path().to_str().unwrap().to_owned())
         .await
         .unwrap();
-    let record = gents::pack::read_home_install(home.path(), "gents/demo_pack")
+    let record = gents_pack::pack::read_home_install(home.path(), "gents/demo_pack")
         .unwrap()
         .expect("a documents install records itself in the home");
-    assert_eq!(record.kind, gents::pack::PackKind::Documents);
+    assert_eq!(record.kind, gents_pack::pack::PackKind::Documents);
     assert_eq!(demo_tools_rows(home.path()).await, 1);
 
     remove_pkg(home.path(), "gents/demo_pack").await.unwrap();
@@ -541,7 +543,7 @@ async fn documents_pack_with_a_home_record_is_removed_from_the_node_and_forgotte
         "the pack's documents leave the node"
     );
     assert!(
-        gents::pack::read_home_install(home.path(), "gents/demo_pack")
+        gents_pack::pack::read_home_install(home.path(), "gents/demo_pack")
             .unwrap()
             .is_none()
     );
@@ -551,10 +553,10 @@ async fn documents_pack_with_a_home_record_is_removed_from_the_node_and_forgotte
 async fn assets_pack_still_takes_the_early_path() {
     let home = tempfile::tempdir().unwrap();
     install(home.path(), assets_fixture_spec()).await.unwrap();
-    let record = gents::pack::read_home_install(home.path(), "fixture/assets_fixture")
+    let record = gents_pack::pack::read_home_install(home.path(), "fixture/assets_fixture")
         .unwrap()
         .unwrap();
-    assert_eq!(record.kind, gents::pack::PackKind::Assets);
+    assert_eq!(record.kind, gents_pack::pack::PackKind::Assets);
 
     remove_pkg(home.path(), "fixture/assets_fixture")
         .await
@@ -562,7 +564,7 @@ async fn assets_pack_still_takes_the_early_path() {
 
     assert!(!home.path().join("data").exists(), "no node was opened");
     assert!(
-        gents::pack::read_home_install(home.path(), "fixture/assets_fixture")
+        gents_pack::pack::read_home_install(home.path(), "fixture/assets_fixture")
             .unwrap()
             .is_none()
     );
@@ -638,8 +640,8 @@ async fn referenced_plugin_removal_refuses_before_changing_pack_or_store_records
             .unwrap_err();
             assert!(format!("{error:#}").contains("acme/shared"));
         }
-        let before = gents::pack::read_home_install(home.path(), "acme/tools").unwrap();
-        let plugin = gents::plugin::store::read_record(home.path(), "acme", "shared").unwrap();
+        let before = gents_pack::pack::read_home_install(home.path(), "acme/tools").unwrap();
+        let plugin = gents_pack::plugin::store::read_record(home.path(), "acme", "shared").unwrap();
         let error = remove_pkg(home.path(), "acme/tools").await.unwrap_err();
         let error = format!("{error:#}");
         assert!(
@@ -647,11 +649,11 @@ async fn referenced_plugin_removal_refuses_before_changing_pack_or_store_records
             "{error}"
         );
         assert_eq!(
-            gents::pack::read_home_install(home.path(), "acme/tools").unwrap(),
+            gents_pack::pack::read_home_install(home.path(), "acme/tools").unwrap(),
             before
         );
         assert_eq!(
-            gents::plugin::store::read_record(home.path(), "acme", "shared").unwrap(),
+            gents_pack::plugin::store::read_record(home.path(), "acme", "shared").unwrap(),
             plugin
         );
         let (access, owner) = super::super::resolve_scope_owner(&scope(home.path()))
@@ -670,7 +672,7 @@ async fn referenced_plugin_removal_refuses_before_changing_pack_or_store_records
         drop(access);
         // Once nothing selects the plugin, the removal retires it.
         remove_pkg(home.path(), "acme/tools").await.unwrap();
-        assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_err());
+        assert!(gents_pack::plugin::store::read_record(home.path(), "acme", "shared").is_err());
     }
 }
 
@@ -695,7 +697,7 @@ async fn wiring_holds_store_lock_through_pin_commit() {
     let (access, owner) = super::super::resolve_scope_owner(&scope(home.path()))
         .await
         .unwrap();
-    let expected_digest = gents::plugin::store::read_record(home.path(), "acme", "shared")
+    let expected_digest = gents_pack::plugin::store::read_record(home.path(), "acme", "shared")
         .unwrap()
         .digest;
     let pause = std::sync::Arc::new(super::super::wire::WireTestPause {
@@ -722,27 +724,27 @@ async fn wiring_holds_store_lock_through_pin_commit() {
         }
     });
     pause.reached.notified().await;
-    let (archive_bytes, _) = gents::pack::archive::pack_dir(replacement.path()).unwrap();
-    let archive = gents::pack::archive::PackArchive::from_bytes(&archive_bytes).unwrap();
+    let (archive_bytes, _) = gents_pack::pack::archive::pack_dir(replacement.path()).unwrap();
+    let archive = gents_pack::pack::archive::PackArchive::from_bytes(&archive_bytes).unwrap();
     let notify_access = access.clone();
     let notify_owner = owner.clone();
     let notify_home = home.path().to_owned();
-    let result = gents::pack::plugin_lifecycle::install(
+    let result = gents_pack::pack::plugin_lifecycle::install(
         home.path(),
         &archive,
         false,
         Some(&owner),
         &std::collections::BTreeMap::new(),
-        gents::pack::InstalledVia::Operator,
-        gents::pack::PackSource::Local { file_name: None },
+        gents_pack::pack::InstalledVia::Operator,
+        gents_pack::pack::PackSource::Local { file_name: None },
         move |identity, _| async move {
-            gents::pack::record_plugin_store_change(
+            gents_pack::pack::record_plugin_store_change(
                 &notify_access,
                 &notify_owner,
                 &notify_home,
                 &identity.coordinate,
                 Some(&identity),
-                &gents::inference::resolved::ProviderProfilePolicy,
+                &gents_inference::resolved::ProviderProfilePolicy,
             )
             .await
         },
@@ -775,7 +777,7 @@ async fn wiring_holds_store_lock_through_pin_commit() {
             let owner = &owner;
             let agent = &agent;
             Box::pin(async move {
-                gents::documents::load_agent_context_and_tools_in_txn(txn, owner, agent).await
+                gents_documents::load_agent_context_and_tools_in_txn(txn, owner, agent).await
             })
         })
         .await
@@ -878,7 +880,7 @@ async fn remote_wire_refuses_new_pin_before_http_access_but_allows_preview_and_r
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let home = tempfile::tempdir().unwrap();
-    let access = gents::store::config_client::ConfigAccess::graphql(format!(
+    let access = gents_store::config_client::ConfigAccess::graphql(format!(
         "http://{address}/api/v0/graphql"
     ));
     let cases: Value =
@@ -958,7 +960,7 @@ async fn wire_refuses_even_the_initialized_homes_served_endpoint() {
         },
     )
     .unwrap();
-    let access = gents::store::config_client::ConfigAccess::graphql(url);
+    let access = gents_store::config_client::ConfigAccess::graphql(url);
     let request = super::super::wire::WireRequest {
         plugin: "acme/missing".into(),
         agent: "engineer".into(),
@@ -1033,7 +1035,7 @@ async fn removal_holds_plugin_lock_after_reference_check_until_deletion() {
     pause.release.notify_one();
     remover.await.unwrap().unwrap();
     *super::REMOVAL_TEST_PAUSE.lock().unwrap() = None;
-    assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_err());
+    assert!(gents_pack::plugin::store::read_record(home.path(), "acme", "shared").is_err());
 }
 
 #[tokio::test]
@@ -1044,9 +1046,9 @@ async fn delegated_home_removal_uses_the_existing_store_guard() {
     install(home.path(), pack.path().to_str().unwrap().to_owned())
         .await
         .unwrap();
-    let guard = gents::plugin::store::try_lock_store(home.path()).unwrap();
+    let guard = gents_pack::plugin::store::try_lock_store(home.path()).unwrap();
     super::remove_home_install_with_guard(home.path(), "acme/tools", guard)
         .await
         .unwrap();
-    assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_err());
+    assert!(gents_pack::plugin::store::read_record(home.path(), "acme", "shared").is_err());
 }

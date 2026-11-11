@@ -3,15 +3,15 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use gents::documents::Tools;
-use gents::pack::authoring::check_dir;
-use gents::plugin::authoring_test::run_plugin_cases;
-use gents::store::config_client::ConfigAccess;
-use gents::tools::background::job::promote::{
+use gents_documents::Tools;
+use gents_pack::pack::authoring::check_dir;
+use gents_store::config_client::ConfigAccess;
+use gents_toolcalls::background::job::promote::{
     generate_pack, load_dynamic_run, validate_name, write_promotion, PromoteRefusal,
     PromotionRecord,
 };
-use gents::tools::background::job::view::JobKey;
+use gents_toolcalls::background::job::view::JobKey;
+use gents_toolcalls::plugin::authoring_test::run_plugin_cases;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -98,7 +98,7 @@ pub fn refusal_code(error: &PromotionError) -> Option<&'static str> {
 
 /// The run's handle as the tool name, when it is a pack name.
 pub fn default_name(handle: &str) -> Option<String> {
-    gents::documents::pack_spec::is_valid_pack_name(handle).then(|| handle.to_owned())
+    gents_documents::pack_spec::is_valid_pack_name(handle).then(|| handle.to_owned())
 }
 
 /// Refuses an agent with no Tools document: wiring into it would fail after
@@ -141,8 +141,9 @@ fn reserve_promoted_dir(home: &Path, name: &str) -> Result<PathBuf> {
 
 fn javy_version() -> Result<String, JavyMissing> {
     let javy = std::env::var("JAVY").unwrap_or_else(|_| "javy".into());
-    match gents::exec::native_spawn::output_std(std::process::Command::new(&javy).arg("--version"))
-    {
+    match gents_session::exec::native_spawn::output_std(
+        std::process::Command::new(&javy).arg("--version"),
+    ) {
         Ok(output) if output.status.success() => {
             Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
         }
@@ -188,7 +189,7 @@ pub async fn promote(
             .transact_readonly("job.promote.agent_tools", move |txn| {
                 let (owner, agent_did) = (owner.clone(), agent_did.clone());
                 Box::pin(async move {
-                    gents::documents::load_agent_tools_in_txn(txn, &owner, &agent_did).await
+                    gents_documents::load_agent_tools_in_txn(txn, &owner, &agent_did).await
                 })
             })
             .await
@@ -261,7 +262,7 @@ pub async fn promote(
             crate::commands::pack::resolve_pack_source(&install.package, None, home).await?;
         crate::commands::pack::install_documents_pack(access, actor, &source, &install, true)
             .await
-            .map_err(gents::pack::PackChangeError::into_anyhow)
+            .map_err(gents_pack::pack::PackChangeError::into_anyhow)
     }
     .await
     .context("promote install failed")?;
@@ -317,9 +318,9 @@ pub async fn promote(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::store::config_client::GraphqlEndpoint;
-    use gents::tools::background::job::promote::gate;
     use gents_protocol::job::{JobOrigin, JobPinSummary, JobScope, JobState, JobView};
+    use gents_store::config_client::GraphqlEndpoint;
+    use gents_toolcalls::background::job::promote::gate;
 
     fn view(state: JobState, origin: JobOrigin) -> JobView {
         JobView {

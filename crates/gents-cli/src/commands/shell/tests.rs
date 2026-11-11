@@ -6,10 +6,8 @@ use axum::extract::State;
 use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
-use gents::pack::PackChangeError;
-use gents::plugin::authority::GrantError;
-use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
-use gents::store::graphql::escape_graphql_string;
+use gents_pack::pack::PackChangeError;
+use gents_pack::plugin::authority::GrantError;
 use gents_protocol::output::MessageRole;
 use gents_protocol::row::AgentRequestRow;
 use gents_shell::app::{App, ChatLine};
@@ -20,6 +18,8 @@ use gents_shell::source::{
     FormError, FormRef, FormValues, Input, Intent, Job, JobEnd, MenuAct, MenuRow, PackAct, Prompt,
     PromptKind, Session, Skill, Update,
 };
+use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
+use gents_store::graphql::escape_graphql_string;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use serde_json::{json, Value};
@@ -74,11 +74,14 @@ fn blank() -> ChatLine {
 }
 
 /// The User every test shell signs as; its key lives as long as the process.
-fn test_user() -> &'static gents::KeyIdentity {
-    static USER: std::sync::LazyLock<(tempfile::TempDir, gents::KeyIdentity)> =
+fn test_user() -> &'static gents_store::identity::KeyIdentity {
+    static USER: std::sync::LazyLock<(tempfile::TempDir, gents_store::identity::KeyIdentity)> =
         std::sync::LazyLock::new(|| {
             let keys = tempfile::tempdir().unwrap();
-            let user = gents::KeyIdentity::load_or_create(keys.path().join("user.key"), None);
+            let user = gents_store::identity::KeyIdentity::load_or_create(
+                keys.path().join("user.key"),
+                None,
+            );
             (keys, user.unwrap())
         });
     &USER.1
@@ -92,7 +95,7 @@ fn user_endpoint(graphql: &str) -> GraphqlEndpoint {
 /// The test User's access for writing fixtures: the same signer, without the signed-create
 /// rule that refuses an ordinary mutation.
 fn seeding_access(graphql: &str) -> ConfigAccess {
-    use gents::NodeIdentity as _;
+    use gents_store::identity::NodeIdentity as _;
     let user = test_user();
     let endpoint = GraphqlEndpoint::as_principal(graphql, user.did());
     let capability = user.client_signing_capability().unwrap();
@@ -193,14 +196,16 @@ impl ChatNode {
 
     /// The `agents` of the config, of which `ready` are ready.
     async fn with_agents(agents: &[&str], ready: &[&str]) -> ChatNode {
-        use gents::documents::apply_desired_state_plan;
-        use gents::documents::DesiredStateApplyPlan;
+        use gents_documents::apply_desired_state_plan;
+        use gents_documents::DesiredStateApplyPlan;
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let graphql = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
         let http = gents::defra_node::HttpConfig::with_listener(listener).unwrap();
         let builder = crate::shared::test_support::fixture_node_builder();
         let node = Arc::new(builder.with_http(http).build().await.unwrap());
-        gents::ensure_runtime_schemas(&node).await.unwrap();
+        gents_store::schema::ensure_runtime_schemas(&node)
+            .await
+            .unwrap();
         let config = serde_json::from_value(chat_config(agents)).unwrap();
         let plan = DesiredStateApplyPlan::from_pack_config(&config).unwrap();
         let user = ConfigAccess::Graphql(user_endpoint(&graphql));
@@ -210,7 +215,7 @@ impl ChatNode {
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
@@ -494,11 +499,11 @@ impl ChatNode {
     /// `agent`'s session `child`, started by `request` of its parent as `agent_new` starts one:
     /// its opening request names the parent's, and its receipt is the runtime's.
     pub(super) async fn child(&self, request: &AgentRequestRow, child: &str, agent: &str) {
-        use gents::NodeIdentity as _;
         use gents_protocol::session::{
             SessionCreationCause, SessionCreationReceipt, SessionCreationStarter,
             SessionProvenance, SessionReference,
         };
+        use gents_store::identity::NodeIdentity as _;
         let parent = request.doc_id.clone().unwrap();
         // `agent_new` records the call that started it beside the request.
         let caused = format!(
@@ -2068,8 +2073,14 @@ async fn a_refused_goal_shows_the_owners_reason() {
     );
     let create = prepared.await.unwrap().create;
     let access = work.access();
-    let owner =
-        gents::goal::submit_goal_backed_request(&access, OWNER, "s1", "ship more", None, &create);
+    let owner = gents_automation::goal::submit_goal_backed_request(
+        &access,
+        OWNER,
+        "s1",
+        "ship more",
+        None,
+        &create,
+    );
     let owner = owner.await.unwrap_err();
     assert_eq!(*message, format!("Couldn’t set the goal: {owner:#}"));
     on.node.shutdown().await.expect("node shutdown");
@@ -2206,8 +2217,8 @@ pub(super) fn home_serving(
     let path = home.path().to_string_lossy().into_owned();
     let node_did = match key {
         Some(key) => {
-            let identity = gents::store::identity::KeyIdentity::load_or_create(key, None).unwrap();
-            let did = gents::store::identity::NodeIdentity::did(&identity).to_string();
+            let identity = gents_store::identity::KeyIdentity::load_or_create(key, None).unwrap();
+            let did = gents_store::identity::NodeIdentity::did(&identity).to_string();
             crate::home_state::write_init_config(
                 home.path(),
                 &crate::shared::StoredInitConfig {
@@ -3148,7 +3159,7 @@ async fn a_subagent_waiting_on_a_question_says_so_in_its_parents_row() {
 
 #[tokio::test]
 async fn dismissing_sends_the_mailbox_dismiss_and_shows_the_rest() {
-    use gents::documents::mailbox_write_decl::{MailboxAction, MailboxKind};
+    use gents_documents::mailbox_write_decl::{MailboxAction, MailboxKind};
     let (node, work, _home) = served_settings().await;
     let gate = filed(
         &node,
@@ -3187,7 +3198,8 @@ async fn dismissing_sends_the_mailbox_dismiss_and_shows_the_rest() {
 
     let read = shell.until(is_prompts).await;
     assert_eq!(read, [prompts("s1", vec![asking])], "no notice: {read:?}");
-    let stored = gents::session::mailbox::load_mailbox_item_with_access(&access, &gate).await;
+    let stored =
+        gents_session::session::mailbox::load_mailbox_item_with_access(&access, &gate).await;
     assert_eq!(stored.unwrap().unwrap().status, "dismissed");
     node.shutdown().await.expect("node shutdown");
 }
@@ -3234,7 +3246,7 @@ async fn a_reply_to_a_closed_item_is_a_notice_in_the_owners_words() {
 /// shows like any other request.
 #[tokio::test]
 async fn a_reply_is_a_request_caused_by_its_item() {
-    use gents::documents::mailbox_write_decl::{MailboxAction, MailboxKind};
+    use gents_documents::mailbox_write_decl::{MailboxAction, MailboxKind};
     let (node, work, _home) = served_settings().await;
     let ask = MailboxAction::StartRequest;
     let question = filed(&node, &work, "i1 title", MailboxKind::Ask, ask).await;
@@ -3395,10 +3407,12 @@ async fn filed(
     node: &Arc<defra_node::Node>,
     work: &Work,
     title: &str,
-    kind: gents::documents::mailbox_write_decl::MailboxKind,
-    action: gents::documents::mailbox_write_decl::MailboxAction,
+    kind: gents_documents::mailbox_write_decl::MailboxKind,
+    action: gents_documents::mailbox_write_decl::MailboxAction,
 ) -> String {
-    use gents::session::mailbox::{FileMailboxItemArgs, MailboxSourceKind, MailboxStampContext};
+    use gents_session::session::mailbox::{
+        FileMailboxItemArgs, MailboxSourceKind, MailboxStampContext,
+    };
     let context = MailboxStampContext {
         requester_did: work.access().actor_did().unwrap(),
         node_did: OWNER.to_string(),
@@ -3422,19 +3436,24 @@ async fn filed(
     };
     let root = crate::caused_sessions::fixtures::fixture_signer();
     let binding = crate::shared::test_support::fixture_agent_named("engineer");
-    let agent = gents::store::identity::resolve_agent_identity(&root, &binding).unwrap();
+    let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
     let actor = ::identity::Did::new(agent.did()).unwrap();
-    let access = gents::ConfigAccess::local_managed_agent(node.clone(), actor, agent.as_ref());
+    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
+        node.clone(),
+        actor,
+        agent.as_ref(),
+    );
     let access = access.unwrap();
     // The runtime projects an Agent's baseline from its live document; no runtime runs here.
     let runtime = ::identity::Did::new(OWNER).unwrap();
-    let runtime = gents::ConfigAccess::local_as(node.clone(), runtime);
-    let baseline = gents::store::identity::GrantSet::AgentBaseline;
+    let runtime = gents_store::config_client::ConfigAccess::local_as(node.clone(), runtime);
+    let baseline = gents_store::identity::GrantSet::AgentBaseline;
     let agent_did = ::identity::Did::new(agent.did()).unwrap();
     baseline.grant(&runtime, &agent_did).await.unwrap();
-    let close = gents::session::mailbox::MAILBOX_CLOSE_COLLECTIONS;
-    let item =
-        gents::session::mailbox::stamp_create_with_access(node, &access, &context, args, close);
+    let close = gents_session::session::mailbox::MAILBOX_CLOSE_COLLECTIONS;
+    let item = gents_session::session::mailbox::stamp_create_with_access(
+        node, &access, &context, args, close,
+    );
     item.await.unwrap().doc_id
 }
 
@@ -3454,7 +3473,7 @@ async fn shell_on_served(node: &Arc<defra_node::Node>, work: Work) -> Shell {
 
 #[tokio::test]
 async fn an_act_notices_and_rereads_its_menu() {
-    use gents::documents::mailbox_write_decl::{MailboxAction, MailboxKind};
+    use gents_documents::mailbox_write_decl::{MailboxAction, MailboxKind};
     let (node, work, _home) = served_settings().await;
     let item = filed(
         &node,
@@ -3477,7 +3496,8 @@ async fn an_act_notices_and_rereads_its_menu() {
         shell.until(is_menu).await,
         [Update::Notice("dismissed".to_string()), reread]
     );
-    let stored = gents::session::mailbox::load_mailbox_item_with_access(&access, &item).await;
+    let stored =
+        gents_session::session::mailbox::load_mailbox_item_with_access(&access, &item).await;
     assert_eq!(stored.unwrap().unwrap().status, "dismissed");
     node.shutdown().await.expect("node shutdown");
 }
@@ -3846,8 +3866,10 @@ async fn a_duplicate_is_a_new_document_off() {
 async fn a_trigger_reads_its_own_nodes_schedule() {
     let (node, work, _home) = served_settings().await;
     let keys = tempfile::tempdir().unwrap();
-    let other = gents::KeyIdentity::load_or_create(keys.path().join("other.key"), None).unwrap();
-    let other = gents::NodeIdentity::did(&other).to_string();
+    let other =
+        gents_store::identity::KeyIdentity::load_or_create(keys.path().join("other.key"), None)
+            .unwrap();
+    let other = gents_store::identity::NodeIdentity::did(&other).to_string();
     let theirs = json!({
         "node": { "node_did": other },
         "schedules": [{
@@ -3856,7 +3878,7 @@ async fn a_trigger_reads_its_own_nodes_schedule() {
             "cadence": { "kind": "interval", "interval_secs": 60 },
         }],
     });
-    let plan = gents::documents::DesiredStateApplyPlan::from_pack_config(
+    let plan = gents_documents::DesiredStateApplyPlan::from_pack_config(
         &serde_json::from_value(theirs).unwrap(),
     )
     .unwrap();
@@ -3864,10 +3886,10 @@ async fn a_trigger_reads_its_own_nodes_schedule() {
         .transact_write("test.other_node", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                gents::documents::apply_desired_state_plan(
+                gents_documents::apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
@@ -3984,7 +4006,7 @@ async fn owner_rules_come_back_in_the_status() {
         over.contains("min_count 3 exceeds expected_count 2"),
         "{over}"
     );
-    let owner = gents::documents::schedule_cron::validate_cron_schedule("every day", "UTC", None);
+    let owner = gents_documents::schedule_cron::validate_cron_schedule("every day", "UTC", None);
     let owner = format!("{:#}", owner.unwrap_err());
     let Err(FormError {
         field: None,
@@ -4180,7 +4202,7 @@ async fn a_schedule_runs_now_through_its_trigger() {
     let request = text.strip_prefix("Schedule started · ").expect(&text);
     let query = format!(
         r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ caused_by_trigger_kind retry_key }} }}"#,
-        gents::store::graphql::escape_graphql_string(request)
+        gents_store::graphql::escape_graphql_string(request)
     );
     let written = access.execute(&query).await.unwrap();
     let fired = &written["data"]["AgentRequest"][0];
@@ -4237,7 +4259,7 @@ async fn a_new_trigger_on_a_preset_writes_schedule_task_and_trigger() {
         ["name", "kind", "event", "collection", "event_kind"]
     );
     let zone = iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_string());
-    let owner = gents::documents::schedule_cron::validate_cron_schedule("every day", &zone, None);
+    let owner = gents_documents::schedule_cron::validate_cron_schedule("every day", &zone, None);
     let owner = format!("{:#}", owner.unwrap_err());
     let Err(FormError {
         field: None,
@@ -4525,8 +4547,8 @@ async fn changing_the_default_agent_enables_it() {
 
 #[tokio::test]
 async fn folder_rows_toggle_and_remove() {
-    use gents::pack::BindAccess;
-    use gents::plugin::allowed;
+    use gents_pack::pack::BindAccess;
+    use gents_pack::plugin::allowed;
     let (home, folders) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let [notes, repos] = ["notes", "repos"].map(|name| {
         let folder = folders.path().join(name);
@@ -4622,8 +4644,8 @@ async fn folder_rows_toggle_and_remove() {
 
 #[tokio::test]
 async fn adding_a_folder_writes_the_homes_file() {
-    use gents::pack::BindAccess;
-    use gents::plugin::allowed;
+    use gents_pack::pack::BindAccess;
+    use gents_pack::plugin::allowed;
     let (home, folder) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let access = offline(home.path()).access();
     let add = FormRef::AddFolder;
@@ -4688,7 +4710,7 @@ fn profile_of(
     display_name: Option<&str>,
     id: &str,
     model: &str,
-) -> gents::documents::InferenceProfile {
+) -> gents_documents::InferenceProfile {
     let mut profile = json!({
         "node_did": OWNER, "profile_id": id, "backend_id": "backend", "model_name": model,
     });
@@ -5165,7 +5187,7 @@ fn a_replaced_install_can_still_ask_for_authority() {
 
 #[test]
 fn an_install_that_cannot_pick_a_model_asks_which_and_keeps_the_rest() {
-    use gents::pack::SlotBindingError;
+    use gents_pack::pack::SlotBindingError;
     use EditedChoice::Keep;
     let profile = |id: &str, name: &str, model: &str| {
         let profile = json!({

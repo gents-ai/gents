@@ -1,14 +1,14 @@
 use rapidhash::RapidHashSet;
 
 use anyhow::{Context, Result};
-use gents::session::load_latest_request_in_txn;
-use gents::session::origin::{
-    lineage, load_session, starting_request, SessionLink, REQUEST_FIELDS,
-};
-use gents::store::config_client::ConfigAccess;
-use gents::store::graphql::escape_graphql_string;
 use gents_protocol::row::AgentRequestRow;
 pub(crate) use gents_protocol::session::SessionScope;
+use gents_session::session::load_latest_request_in_txn;
+use gents_session::session::origin::{
+    lineage, load_session, starting_request, SessionLink, REQUEST_FIELDS,
+};
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;
 
 #[derive(Clone, Debug)]
@@ -164,22 +164,22 @@ fn row_scope(row: &AgentRequestRow) -> Result<SessionScope> {
 pub(crate) mod fixtures {
     use std::collections::BTreeMap;
 
-    use gents::store::graphql::escape_graphql_string;
     use gents_protocol::request_admission::RequestPurpose;
+    use gents_store::graphql::escape_graphql_string;
     use serde_json::Value;
 
     /// The DID of [`fixture_signer`]; sessions it starts carry receipts it signed.
     pub(crate) const FIXTURE_DID: &str = "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z";
 
     /// A fixed test key, so fixture rows can name its DID as a constant.
-    pub(crate) fn fixture_signer() -> gents::KeyIdentity {
-        use gents::NodeIdentity as _;
+    pub(crate) fn fixture_signer() -> gents_store::identity::KeyIdentity {
+        use gents_store::identity::NodeIdentity as _;
         use std::io::Write as _;
         // A named temporary file is created private to its owner, as a key must be.
         let mut key = tempfile::NamedTempFile::new().unwrap();
         key.write_all(&crypto::ed25519_key_from_seed(&[7; 32]).unwrap())
             .unwrap();
-        let signer = gents::KeyIdentity::load_existing(key.path(), None).unwrap();
+        let signer = gents_store::identity::KeyIdentity::load_existing(key.path(), None).unwrap();
         assert_eq!(signer.did(), FIXTURE_DID);
         signer
     }
@@ -194,10 +194,10 @@ pub(crate) mod fixtures {
         parent: &str,
         opening: &str,
     ) -> String {
-        use gents::NodeIdentity as _;
         use gents_protocol::session::{
             SessionCreationCause, SessionCreationReceipt, SessionCreationStarter, SessionProvenance,
         };
+        use gents_store::identity::NodeIdentity as _;
         assert_eq!(
             session.node_did, FIXTURE_DID,
             "the fixture key signs receipts"
@@ -279,7 +279,7 @@ pub(crate) mod fixtures {
     async fn run(node: &gents::defra_node::Node, mutation: String, collection: &str) -> String {
         let response = node.execute(&mutation).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
-        gents::store::graphql::single_mutation_document(&response, &format!("create_{collection}"))
+        gents_store::graphql::single_mutation_document(&response, &format!("create_{collection}"))
             .unwrap()
             .and_then(|document| document["_docID"].as_str().map(str::to_owned))
             .expect("created doc id")
@@ -505,7 +505,7 @@ mod tests {
                     .await
                     .unwrap(),
             );
-            gents::store::schema::ensure_runtime_schemas(node.as_ref())
+            gents_store::schema::ensure_runtime_schemas(node.as_ref())
                 .await
                 .unwrap();
             let ids = fixtures::seed_lineage_case(&node, case, did).await;

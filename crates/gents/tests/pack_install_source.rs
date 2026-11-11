@@ -2,13 +2,13 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use gents::pack::{
+use gents_pack::pack::{
     archive::{pack_dir, PackArchive},
     install_prepared_document_graph, installed_catalog, load_pack_config,
     prepare_document_pack_install, DriftPolicy, InstalledVia, PackInstallOptions, PackSource,
 };
-use gents::store::config_client::ConfigAccess;
-use gents::{KeyIdentity, NodeIdentity};
+use gents_store::config_client::ConfigAccess;
+use gents_store::identity::{KeyIdentity, NodeIdentity};
 use serde_json::json;
 
 #[test]
@@ -47,14 +47,16 @@ async fn document_install_records_portable_source_and_history() {
             .await
             .unwrap(),
     );
-    gents::ensure_runtime_schemas(&node).await.unwrap();
+    gents_store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     let access = ConfigAccess::local_as(node.clone(), owner.parse().unwrap());
     access
         .write(
             "test.pack_source.node",
             &format!(
                 "mutation {{ create_Node(input: {{node_did: \"{}\", enabled: true}}) {{_docID}} }}",
-                gents::store::graphql::escape_graphql_string(&owner),
+                gents_store::graphql::escape_graphql_string(&owner),
             ),
         )
         .await
@@ -99,7 +101,7 @@ async fn document_install_records_portable_source_and_history() {
             None,
             false,
             true,
-            &gents::inference::resolved::ProviderProfilePolicy,
+            &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await
         .unwrap();
@@ -124,20 +126,20 @@ async fn asset_install_keeps_portable_source_across_reinstall() {
     let home = tempfile::tempdir().unwrap();
     let local = PackSource::local(Path::new("/private/folder/assets.pack"));
     for source in [local.clone(), PackSource::Store] {
-        gents::pack::plugin_lifecycle::install(
+        gents_pack::pack::plugin_lifecycle::install(
             home.path(),
             &archive,
             false,
             None,
             &BTreeMap::new(),
-            gents::pack::InstalledVia::Operator,
+            gents_pack::pack::InstalledVia::Operator,
             source,
             |_, _| async { Ok(()) },
         )
         .await
         .unwrap();
     }
-    let record = gents::pack::read_home_install(home.path(), "fixture/assets_fixture")
+    let record = gents_pack::pack::read_home_install(home.path(), "fixture/assets_fixture")
         .unwrap()
         .unwrap();
     assert_eq!(record.source, Some(PackSource::Store));

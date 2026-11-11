@@ -79,7 +79,7 @@ pub(super) fn validate_tool_root(path: &Path) -> Result<PathBuf, BridgeError> {
         ));
     }
     let user_home = dirs::home_dir().and_then(|home| std::fs::canonicalize(home).ok());
-    gents::tools::surface::refuse_too_broad_root(&canonical, user_home.as_deref())
+    gents_tools::surface::refuse_too_broad_root(&canonical, user_home.as_deref())
         .map_err(|error| BridgeError::new(BridgeErrorCode::InvalidArgument, error.to_string()))?;
     std::fs::read_dir(&canonical).map_err(|error| {
         BridgeError::new(

@@ -120,7 +120,7 @@ fn runtime_key_unlock_preserves_existing_keys_and_refuses_a_missing_key() {
     let config_bytes = std::fs::read(&config_path).unwrap();
     let config: serde_json::Value = serde_json::from_slice(&config_bytes).unwrap();
     let identity_path = std::path::Path::new(config["key_path"].as_str().unwrap());
-    let encryption_path = gents::store::local::store_key::home_key_file(&home);
+    let encryption_path = gents_store::local::store_key::home_key_file(&home);
     let identity = std::fs::read(identity_path).unwrap();
     let encryption = std::fs::read(&encryption_path).unwrap();
     let unlock = || {
@@ -144,7 +144,7 @@ fn runtime_key_unlock_preserves_existing_keys_and_refuses_a_missing_key() {
 
     // Identity-only init bootstraps the owner into a fresh protected store; refusing the
     // missing key must leave that store byte-for-byte as init wrote it.
-    let data = gents::store::local::home::default_data_dir(&home);
+    let data = gents_store::local::home::default_data_dir(&home);
     assert!(data.join("MANIFEST").exists());
     let store = store_files(&data);
     std::fs::remove_file(&encryption_path).unwrap();

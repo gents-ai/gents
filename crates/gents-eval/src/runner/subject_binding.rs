@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use gents::pack::AGENT_SLOT_REFERENCE_PREFIX;
+use gents_pack::pack::AGENT_SLOT_REFERENCE_PREFIX;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubjectAgent {

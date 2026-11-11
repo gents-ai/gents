@@ -5,10 +5,10 @@ use axum::{
     Json,
 };
 use defra_http::ExtractIdentity;
-use gents::store::config_client::ConfigAccess;
 use gents_desktop_core::inference::{
     load_inference_setup_state, InferenceSettingsResponse, INFERENCE_SETTINGS_CONTRACT_VERSION,
 };
+use gents_store::config_client::ConfigAccess;
 
 use super::router::RuntimeHttpState;
 

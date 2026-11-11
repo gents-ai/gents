@@ -50,7 +50,7 @@ async fn run_refuses_without_a_proposer_and_an_unknown_proposer_is_a_usage_error
 
 #[test]
 fn a_slot_with_several_behaviors_needs_the_behavior_named() {
-    let slot = gents::pack::PackInferenceSlot {
+    let slot = gents_pack::pack::PackInferenceSlot {
         name: "proposer".to_owned(),
         description: String::new(),
         agents: vec!["terse".to_owned(), "verbose".to_owned()],
@@ -70,7 +70,7 @@ fn a_slot_with_several_behaviors_needs_the_behavior_named() {
         unknown.to_string().contains("no inference-slot agent"),
         "{unknown}"
     );
-    let one = gents::pack::PackInferenceSlot {
+    let one = gents_pack::pack::PackInferenceSlot {
         agents: vec!["terse".to_owned()],
         optional: false,
         ..slot

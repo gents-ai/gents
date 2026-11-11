@@ -146,7 +146,7 @@ async fn reset(
         ),
     }
     let _home_lock = if plan.runtime.is_some() {
-        Some(gents::store::local::home::lock_home_store(&home)?)
+        Some(gents_store::local::home::lock_home_store(&home)?)
     } else {
         None
     };
@@ -211,7 +211,7 @@ fn notify(message: &str) {
     tracing::info!(message, "desktop reset finished");
     #[cfg(target_os = "macos")]
     {
-        let _ = gents::exec::native_spawn::status_std(
+        let _ = gents_session::exec::native_spawn::status_std(
             std::process::Command::new("/usr/bin/osascript")
                 .args([
                     "-e",
@@ -310,7 +310,7 @@ fn run_browser_helper(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(stderr.try_clone()?);
-    let mut child = gents::exec::native_spawn::spawn_std(&mut command).context("starting Gents to clear browser data; install the matching Gents desktop app before resetting")?;
+    let mut child = gents_session::exec::native_spawn::spawn_std(&mut command).context("starting Gents to clear browser data; install the matching Gents desktop app before resetting")?;
     let status = match child.wait_timeout(timeout) {
         Ok(Some(status)) => status,
         result => {

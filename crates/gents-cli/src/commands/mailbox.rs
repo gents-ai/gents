@@ -1,13 +1,13 @@
 use anyhow::{bail, ensure, Context, Result};
-use gents::documents::mailbox_write_decl::{MailboxAction, MailboxKind};
-use gents::session::mailbox::{MailboxItem, MailboxStatus, MAILBOX_FIELDS};
-use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
-use gents::store::graphql::escape_graphql_string;
+use gents_documents::mailbox_write_decl::{MailboxAction, MailboxKind};
 use gents_protocol::mailbox_question::{
     question_requires_reply_receipt, question_source_hash, MailboxQuestion, MailboxQuestionAnswer,
     MailboxQuestionReply,
 };
 use gents_protocol::request_input::RequestInput;
+use gents_session::session::mailbox::{MailboxItem, MailboxStatus, MAILBOX_FIELDS};
+use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
+use gents_store::graphql::escape_graphql_string;
 
 use crate::cli::args::{MailboxCommand, MailboxItemArgs, MailboxListArgs, MailboxReplyArgs};
 use crate::cli::output_format::OutputFormat;
@@ -83,7 +83,8 @@ async fn dismiss(args: MailboxItemArgs) -> Result<()> {
         .ensure_supported("automation mailbox dismiss", &[OutputFormat::Json])?;
     let (access, _) =
         resolve_config_access(args.access.home.as_deref(), args.access.graphql.as_deref()).await?;
-    let item = gents::session::mailbox::dismiss_mailbox_item_on(&access, &args.doc_id).await?;
+    let item =
+        gents_session::session::mailbox::dismiss_mailbox_item_on(&access, &args.doc_id).await?;
     print_json(&serde_json::to_value(item)?)
 }
 

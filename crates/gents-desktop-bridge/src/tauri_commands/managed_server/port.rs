@@ -3,9 +3,9 @@ use super::preference::read_initialized_did;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 use crate::types::{ManagedServerState, ManagedServerStatus};
-use gents::store::config_client::ClientSigningCapability;
 use gents_desktop_core::local_runtime::HostedRuntimeStatusError;
 use gents_protocol::serve_lifecycle::ObservedServeLifecycle;
+use gents_store::config_client::ClientSigningCapability;
 use std::path::Path;
 use std::time::Duration;
 
@@ -36,7 +36,7 @@ pub(super) async fn user_status_signer(
     state: &DesktopAppState,
     node_home: &Path,
 ) -> Option<ClientSigningCapability> {
-    use gents::store::identity::NodeIdentity as _;
+    use gents_store::identity::NodeIdentity as _;
     let paths = &state.policy.desktop_paths;
     let core = crate::state::current_core(state);
     let peers = match &core {

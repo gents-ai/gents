@@ -1,4 +1,4 @@
-use gents::goal::{
+use gents_automation::goal::{
     decide_goal_continuation, decide_model_goal_create, gate_goal_continuation,
     goal_continuation_materialization_step, goal_creation_fingerprint, goal_submission_step,
     next_goal_infrastructure_retries, observe_goal_agent_readiness, GoalAction,
@@ -257,13 +257,13 @@ fn generated_task_goal_cases_fence_declaration_and_identity() {
     for case in cases {
         let declaration_valid = match case.goal_token_budget {
             Some(budget) => i64::try_from(budget).is_ok_and(|budget| {
-                gents::documents::task_goal_declaration::validate_task_goal_declaration(
+                gents_documents::task_goal_declaration::validate_task_goal_declaration(
                     case.goal_objective.as_deref(),
                     Some(budget),
                 )
                 .is_ok()
             }),
-            None => gents::documents::task_goal_declaration::validate_task_goal_declaration(
+            None => gents_documents::task_goal_declaration::validate_task_goal_declaration(
                 case.goal_objective.as_deref(),
                 None,
             )
@@ -276,8 +276,11 @@ fn generated_task_goal_cases_fence_declaration_and_identity() {
         );
 
         if declaration_valid && case.goal_objective.is_some() {
-            let identity =
-                gents::goal::task_goal_fire_identity(&case.node_did, &case.task_id, &case.fire_key);
+            let identity = gents_automation::goal::task_goal_fire_identity(
+                &case.node_did,
+                &case.task_id,
+                &case.fire_key,
+            );
             assert_eq!(
                 case.expected_session_id.as_deref(),
                 Some(identity.session_id.as_str()),
@@ -305,50 +308,54 @@ fn generated_task_goal_recovery_cases_fence_request_witness() {
     let cases = lean_task_goal_recovery_cases();
     assert_eq!(cases.len(), 10, "the Task goal recovery matrix drifted");
     for case in cases {
-        let identity =
-            gents::goal::task_goal_fire_identity(&case.node_did, &case.task_id, &case.fire_key);
-        let expected = gents::goal::TaskGoalRequestBinding {
+        let identity = gents_automation::goal::task_goal_fire_identity(
+            &case.node_did,
+            &case.task_id,
+            &case.fire_key,
+        );
+        let expected = gents_automation::goal::TaskGoalRequestBinding {
             node_did: case.node_did.clone(),
             agent_did: case.agent_did.clone(),
             session_id: identity.session_id,
             request_id: identity.request_id,
             retry_key: identity.retry_key,
         };
-        let observed = case
-            .request_present
-            .then(|| gents::goal::TaskGoalRequestBinding {
-                node_did: case
-                    .observed_node_did
-                    .clone()
-                    .expect("present request must emit node_did"),
-                agent_did: case
-                    .observed_agent_did
-                    .clone()
-                    .expect("present request must emit agent_did"),
-                session_id: case
-                    .observed_session_id
-                    .clone()
-                    .expect("present request must emit session_id"),
-                request_id: case
-                    .observed_request_id
-                    .clone()
-                    .expect("present request must emit request_id"),
-                retry_key: case
-                    .observed_retry_key
-                    .clone()
-                    .expect("present request must emit retry_key"),
-            });
+        let observed =
+            case.request_present
+                .then(|| gents_automation::goal::TaskGoalRequestBinding {
+                    node_did: case
+                        .observed_node_did
+                        .clone()
+                        .expect("present request must emit node_did"),
+                    agent_did: case
+                        .observed_agent_did
+                        .clone()
+                        .expect("present request must emit agent_did"),
+                    session_id: case
+                        .observed_session_id
+                        .clone()
+                        .expect("present request must emit session_id"),
+                    request_id: case
+                        .observed_request_id
+                        .clone()
+                        .expect("present request must emit request_id"),
+                    retry_key: case
+                        .observed_retry_key
+                        .clone()
+                        .expect("present request must emit retry_key"),
+                });
         assert_eq!(
             observed.as_ref() == Some(&expected),
             case.request_binding_matches,
             "Lean case {} binding classification",
             case.name
         );
-        let actual = gents::goal::decide_task_goal_fire_recovery(&expected, observed.as_ref());
+        let actual =
+            gents_automation::goal::decide_task_goal_fire_recovery(&expected, observed.as_ref());
         let disposition = match actual.disposition {
-            gents::goal::TaskGoalFireRecoveryDisposition::Absent => "absent",
-            gents::goal::TaskGoalFireRecoveryDisposition::Recovered => "recovered",
-            gents::goal::TaskGoalFireRecoveryDisposition::Conflict => "conflict",
+            gents_automation::goal::TaskGoalFireRecoveryDisposition::Absent => "absent",
+            gents_automation::goal::TaskGoalFireRecoveryDisposition::Recovered => "recovered",
+            gents_automation::goal::TaskGoalFireRecoveryDisposition::Conflict => "conflict",
         };
         assert_eq!(
             disposition, case.expected_disposition,

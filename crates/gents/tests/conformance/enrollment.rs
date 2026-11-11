@@ -1,4 +1,4 @@
-use gents::runtime::agent::p2p_reconcile::enrollment::{
+use gents_p2p::p2p_reconcile::enrollment::{
     canonical_enrollment_digest, canonical_enrollment_payload, frame_enrollment_field,
     AuthorizationRevision, AuthorizationRevisionKind, DurableEnrollmentDocuments, EnrollmentAction,
     EnrollmentDecision, EnrollmentDecisionKind, EnrollmentOffer, EnrollmentRequest,
@@ -55,11 +55,15 @@ fn generated_agent_request_admission_cases_match_shared_projector() {
             native_create_authorized: case.native_create_authorized,
             hop_within_bound: case.hop_within_bound,
         };
-        let actual = gents::final_claim_admission_disposition(true, observation)
-            == AgentRequestAdmissionDisposition::Admit;
+        let actual =
+            gents_session::request::admission::final_claim_admission_disposition(true, observation)
+                == AgentRequestAdmissionDisposition::Admit;
         assert_eq!(actual, case.expected_admitted, "{}", case.name);
         let actual_disposition =
-            gents::final_claim_admission_disposition(case.observation_available, observation);
+            gents_session::request::admission::final_claim_admission_disposition(
+                case.observation_available,
+                observation,
+            );
         assert_eq!(
             actual_disposition.as_str(),
             case.expected_disposition,
@@ -192,7 +196,7 @@ fn generated_causal_hop_cases_match_native_materializer() {
     assert!(!contract.interrupt_cases.is_empty());
     for case in &contract.interrupt_cases {
         assert_eq!(
-            gents::session::message::agent_interrupt_allowed(
+            gents_session::session::message::agent_interrupt_allowed(
                 &case.caller_session,
                 &case.target_session,
                 case.target_origin_cause.as_deref(),

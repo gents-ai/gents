@@ -1,6 +1,6 @@
 use crate::types::*;
 use futures::TryFutureExt;
-use gents::pack::PackChangeError;
+use gents_pack::pack::PackChangeError;
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::Value;
 use tauri::State;
@@ -41,7 +41,7 @@ where
     F: FnOnce() -> Fut + Send + 'static,
     Fut: std::future::Future<Output = anyhow::Result<Value>>,
 {
-    gents::store::local::storage_backend::drive_unsendable(runtime, operation)
+    gents_store::local::storage_backend::drive_unsendable(runtime, operation)
         .await
         .map_err(|error| BridgeError::untyped(format!("the pack operation stopped: {error}")))?
         .map_err(failed)
@@ -60,7 +60,7 @@ pub async fn desktop_pack_installed(
         let home = home(&state)?;
         if let Some(core) = current_core(&state) {
             let node_did = packs::ux_installing_node(&home).map_err(failed)?;
-            let access = gents::ConfigAccess::Graphql(
+            let access = gents_store::config_client::ConfigAccess::Graphql(
                 core.local_home_operator_endpoint(&node_did, &home)
                     .map_err(|error| failed(error.into()))?,
             );

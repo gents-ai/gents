@@ -258,7 +258,7 @@ async fn household_policy_actions_drive_native_acp() -> anyhow::Result<()> {
             assert!(gents_protocol::schemas::is_local_only_collection(
                 collection
             ));
-            for template in gents::runtime::agent::p2p_reconcile::templates::builtin_templates() {
+            for template in gents_p2p::p2p_reconcile::templates::builtin_templates() {
                 assert!(
                     !template.collections.contains(&collection.as_str()),
                     "{} must not replicate {collection}",
@@ -399,14 +399,14 @@ async fn household_policy_actions_drive_native_acp() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn modeled_configuration_grants_use_authenticated_native_relations() -> anyhow::Result<()> {
-    use gents::documents::apply_desired_state_plan;
-    use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-    use gents::store::config_client::NodePermission;
-    use gents::store::graphql::{created_doc_id, escape_graphql_string};
-    use gents::NodeIdentity;
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     use gents_lean_vocab::{
         lean_identity_household_cases, LeanIdentityAction, LeanIdentitySubject,
     };
+    use gents_store::config_client::NodePermission;
+    use gents_store::graphql::{created_doc_id, escape_graphql_string};
+    use gents_store::identity::NodeIdentity;
 
     let case = lean_identity_household_cases()
         .iter()
@@ -454,27 +454,26 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
     let node = db.node.clone();
     let node_did = db.node_identity.did();
     let user_access = fixture.access.clone();
-    let agent_access = gents::ConfigAccess::local_managed_agent(
+    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         Did::new(fixture.agent.did())?,
         fixture.agent.as_ref(),
     )?;
-    let sibling_binding = gents::store::identity::provision_agent_identity_authorized(
+    let sibling_binding = gents_store::identity::provision_agent_identity_authorized(
         &node,
         db.node_identity.as_ref(),
         &Did::new(fixture.user.did())?,
     )
     .await?;
-    let sibling_signer = gents::store::identity::resolve_agent_identity(
-        db.node_identity.as_ref(),
-        &sibling_binding,
-    )?;
-    let sibling_access = gents::ConfigAccess::local_managed_agent(
+    let sibling_signer =
+        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &sibling_binding)?;
+    let sibling_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         Did::new(sibling_signer.did())?,
         sibling_signer.as_ref(),
     )?;
-    let runtime_access = gents::ConfigAccess::local_as(node.clone(), Did::new(node_did)?);
+    let runtime_access =
+        gents_store::config_client::ConfigAccess::local_as(node.clone(), Did::new(node_did)?);
     for actual in [
         fixture.user.did(),
         fixture.agent.did(),
@@ -506,7 +505,7 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
         };
         Ok(Did::new(actual)?)
     };
-    let access_for = |modeled: &str| -> anyhow::Result<gents::ConfigAccess> {
+    let access_for = |modeled: &str| -> anyhow::Result<gents_store::config_client::ConfigAccess> {
         if modeled == owner {
             Ok(user_access.clone())
         } else if modeled == agent {
@@ -526,7 +525,7 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
     let selected =
         serde_json::json!({"node_did":node_did,"tools_id":"selected", "display_name":"initial"});
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: gents::Collection::Tools,
+        collection: gents_store::collection::Collection::Tools,
         add: selected.clone(),
         update: selected,
     }])?;
@@ -537,7 +536,7 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
@@ -562,9 +561,9 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
         .transact_readonly("test.configuration.node", |txn| {
             Box::pin(async move {
                 Ok::<_, anyhow::Error>(
-                    gents::documents::read_desired_state_record_in_txn(
+                    gents_documents::read_desired_state_record_in_txn(
                         txn,
-                        gents::Collection::Node,
+                        gents_store::collection::Collection::Node,
                         node_did,
                         node_did,
                     )
@@ -639,7 +638,7 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
                     let document =
                         serde_json::json!({"node_did":node_did,"tools_id":id,"display_name":value});
                     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                        collection: gents::Collection::Tools,
+                        collection: gents_store::collection::Collection::Tools,
                         add: document.clone(),
                         update: document,
                     }])?;
@@ -650,7 +649,7 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
                                 apply_desired_state_plan(
                                     txn,
                                     plan,
-                                    &gents::inference::resolved::ProviderProfilePolicy,
+                                    &gents_inference::resolved::ProviderProfilePolicy,
                                 )
                                 .await
                             })
@@ -689,7 +688,7 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
         let commit = observation["commit"].as_bool().unwrap();
         let document = serde_json::json!({"node_did":node_did,"tools_id":"atomic"});
         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-            collection: gents::Collection::Tools,
+            collection: gents_store::collection::Collection::Tools,
             add: document.clone(),
             update: document,
         }])?;
@@ -701,12 +700,12 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
                     apply_desired_state_plan(
                         txn,
                         plan,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await?;
-                    let (doc, _) = gents::documents::read_desired_state_record_in_txn(
+                    let (doc, _) = gents_documents::read_desired_state_record_in_txn(
                         txn,
-                        gents::Collection::Tools,
+                        gents_store::collection::Collection::Tools,
                         node_did,
                         "atomic",
                     )
@@ -747,11 +746,11 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
 #[tokio::test]
 async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyhow::Result<()> {
     use anyhow::Context;
-    use gents::store::config_client::AgentSelfConfigPermission;
-    use gents::NodeIdentity;
     use gents_lean_vocab::{
         lean_identity_household_cases, LeanIdentityAction, LeanIdentitySubject,
     };
+    use gents_store::config_client::AgentSelfConfigPermission;
+    use gents_store::identity::NodeIdentity;
 
     let case = lean_identity_household_cases()
         .first()
@@ -789,34 +788,34 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
     let user_access = fixture.access.clone();
     let agent = &fixture.binding;
     let agent_signer = fixture.agent.clone();
-    let sibling = gents::store::identity::provision_agent_identity_authorized(
+    let sibling = gents_store::identity::provision_agent_identity_authorized(
         &node,
         runtime.as_ref(),
         &Did::new(user.did())?,
     )
     .await?;
-    let sibling_signer =
-        gents::store::identity::resolve_agent_identity(runtime.as_ref(), &sibling)?;
-    let node_admin = gents::ConfigAccess::local_as(node.clone(), Did::new(runtime.did())?);
+    let sibling_signer = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &sibling)?;
+    let node_admin =
+        gents_store::config_client::ConfigAccess::local_as(node.clone(), Did::new(runtime.did())?);
     for actor in [user.did(), agent_signer.did(), sibling_signer.did()] {
         for permission in [
-            gents::store::config_client::NodePermission::DocumentRead,
-            gents::store::config_client::NodePermission::DocumentUpdate,
-            gents::store::config_client::NodePermission::CollectionGet,
-            gents::store::config_client::NodePermission::DacRelationAdd,
-            gents::store::config_client::NodePermission::DacRelationDelete,
+            gents_store::config_client::NodePermission::DocumentRead,
+            gents_store::config_client::NodePermission::DocumentUpdate,
+            gents_store::config_client::NodePermission::CollectionGet,
+            gents_store::config_client::NodePermission::DacRelationAdd,
+            gents_store::config_client::NodePermission::DacRelationDelete,
         ] {
             node_admin
                 .grant_node_permission(&Did::new(actor)?, permission)
                 .await?;
         }
     }
-    let agent_access = gents::ConfigAccess::local_managed_agent(
+    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         Did::new(agent_signer.did())?,
         agent_signer.as_ref(),
     )?;
-    let sibling_access = gents::ConfigAccess::local_managed_agent(
+    let sibling_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         Did::new(sibling_signer.did())?,
         sibling_signer.as_ref(),
@@ -825,9 +824,9 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
         .transact_readonly("test.self_config.agent", |txn| {
             let runtime = &runtime;
             Box::pin(async move {
-                gents::documents::read_desired_state_record_in_txn(
+                gents_documents::read_desired_state_record_in_txn(
                     txn,
-                    gents::Collection::Agent,
+                    gents_store::collection::Collection::Agent,
                     runtime.did(),
                     &agent.agent_did,
                 )
@@ -836,7 +835,7 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
             })
         })
         .await?;
-    let access_for = |did: &str| -> anyhow::Result<gents::ConfigAccess> {
+    let access_for = |did: &str| -> anyhow::Result<gents_store::config_client::ConfigAccess> {
         if did == user.did() {
             Ok(user_access.clone())
         } else if did == agent_signer.did() {
@@ -884,16 +883,16 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
             .await
         {
             Ok(()) => "applied",
-            Err(gents::store::config_client::AgentSelfConfigPermissionError::AgentUnavailable) => {
+            Err(gents_store::config_client::AgentSelfConfigPermissionError::AgentUnavailable) => {
                 "unavailable"
             }
-            Err(gents::store::config_client::AgentSelfConfigPermissionError::Access(
-                gents::store::config_client::ConfigClientError::DocumentRelationshipStatus {
+            Err(gents_store::config_client::AgentSelfConfigPermissionError::Access(
+                gents_store::config_client::ConfigClientError::DocumentRelationshipStatus {
                     status,
                     ..
                 },
             )) if status.is_client_error() => "denied",
-            Err(gents::store::config_client::AgentSelfConfigPermissionError::Access(error))
+            Err(gents_store::config_client::AgentSelfConfigPermissionError::Access(error))
                 if error.is_permission_denied() =>
             {
                 "denied"
@@ -958,9 +957,9 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
                 let response = if actor(modeled)?.as_str() == user.did() {
                     let mut updated = agent_value.clone();
                     updated["description"] = serde_json::json!("configured");
-                    let plan = gents::documents::DesiredStateApplyPlan::new(vec![
-                        gents::documents::DesiredStateApplyDocument {
-                            collection: gents::Collection::Agent,
+                    let plan = gents_documents::DesiredStateApplyPlan::new(vec![
+                        gents_documents::DesiredStateApplyDocument {
+                            collection: gents_store::collection::Collection::Agent,
                             add: agent_value.clone(),
                             update: updated,
                         },
@@ -969,10 +968,10 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
                         .transact_write("test.self_config.update", |txn| {
                             let plan = &plan;
                             Box::pin(async move {
-                                gents::documents::apply_desired_state_plan(
+                                gents_documents::apply_desired_state_plan(
                                     txn,
                                     plan,
-                                    &gents::inference::resolved::ProviderProfilePolicy,
+                                    &gents_inference::resolved::ProviderProfilePolicy,
                                 )
                                 .await
                             })

@@ -5,8 +5,8 @@ pub(super) async fn seed_agent_session(
     fixture: &support::ManagedAgentFixture,
     session_id: &str,
     created_at: &str,
-) -> (gents::ConfigAccess, String, String) {
-    let access = gents::ConfigAccess::local_managed_agent(
+) -> (gents_store::config_client::ConfigAccess, String, String) {
+    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
         db.node.clone(),
         fixture.agent.did().parse().unwrap(),
         fixture.agent.as_ref(),
@@ -17,9 +17,9 @@ pub(super) async fn seed_agent_session(
         .transact_readonly("test.session_control.agent", |txn| {
             Box::pin(async move {
                 Ok::<_, anyhow::Error>(
-                    gents::documents::read_desired_state_record_in_txn(
+                    gents_documents::read_desired_state_record_in_txn(
                         txn,
-                        gents::Collection::Agent,
+                        gents_store::collection::Collection::Agent,
                         db.node_identity.did(),
                         fixture.agent.did(),
                     )
@@ -42,7 +42,7 @@ pub(super) async fn seed_agent_session(
                 "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) {_docID} }",
                 &serde_json::json!({"input":input}),
             ).await?;
-            let session_doc = gents::store::graphql::created_doc_id(&response,"AgentSession")?;
+            let session_doc = gents_store::graphql::created_doc_id(&response,"AgentSession")?;
             txn.add_resource_relationship("AgentSession", &session_doc, "parent", "agents", agent_doc).await?;
             txn.add_actor_relationship("AgentSession", &session_doc, "working_agent", &fixture.agent.did().parse()?).await?;
             Ok::<_,anyhow::Error>(session_doc)
@@ -58,7 +58,7 @@ pub(super) async fn seed_agent_session(
 pub(super) async fn seed_agent_request(
     db: &support::TestDb,
     fixture: &support::ManagedAgentFixture,
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     agent_doc: &str,
     session_doc: &str,
     session_id: &str,
@@ -82,9 +82,12 @@ pub(super) async fn seed_agent_request(
     );
     create.agent_doc_id = Some(agent_doc.to_owned());
     create.session_doc_id = Some(session_doc.to_owned());
-    gents::sign_agent_request_create(fixture.agent.as_ref(), &mut create)
-        .await
-        .unwrap();
+    gents_session::request::admission::sign_agent_request_create(
+        fixture.agent.as_ref(),
+        &mut create,
+    )
+    .await
+    .unwrap();
     access
         .transact_write("test.session_control.request", |txn| {
             let create = &create;
@@ -92,7 +95,7 @@ pub(super) async fn seed_agent_request(
                 let response = txn
                     .execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
                     .await?;
-                let doc = gents::store::graphql::created_doc_id(&response, "AgentRequest")?;
+                let doc = gents_store::graphql::created_doc_id(&response, "AgentRequest")?;
                 txn.add_resource_relationship("AgentRequest", &doc, "parent", "agents", agent_doc)
                     .await?;
                 txn.add_resource_relationship(
@@ -118,15 +121,15 @@ pub(super) async fn seed_agent_request(
 }
 
 async fn load_goal(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     session_id: &str,
-) -> gents::goal::GoalDocument {
+) -> gents_automation::goal::GoalDocument {
     access
         .transact_readonly("test.session_control.goal", |txn| {
             Box::pin(async move {
                 Ok::<_, anyhow::Error>(
-                    gents::goal::load_canonical_goal_in_txn(txn, node_did, session_id)
+                    gents_automation::goal::load_canonical_goal_in_txn(txn, node_did, session_id)
                         .await?
                         .expect("goal"),
                 )
@@ -157,7 +160,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
     assert_eq!(interrupt_case["initial_pending_count"], 0);
     let (access, agent_doc, _) =
         seed_agent_session(&db, &fixture, &interrupted_session, "2026-10-20T10:00:00Z").await;
-    gents::goal::set_goal_from_access(
+    gents_automation::goal::set_goal_from_access(
         &access,
         node_did,
         &interrupted_session,
@@ -169,7 +172,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
     .await
     .unwrap();
     assert_eq!(
-        gents::session::message::interrupt_session_with_access(
+        gents_session::session::message::interrupt_session_with_access(
             &db.node,
             &access,
             &gents_protocol::session::SessionScope {
@@ -219,7 +222,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
         pending_ids.push(pending_id);
         pending_docs.push(pending_doc);
     }
-    gents::goal::set_goal_from_access(
+    gents_automation::goal::set_goal_from_access(
         &access,
         node_did,
         &stopped_session,
@@ -230,7 +233,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
     )
     .await
     .unwrap();
-    let receipt = gents::session::stop_session_with_access(
+    let receipt = gents_automation::session_control::stop_session_with_access(
         &db.node,
         &access,
         node_did,
@@ -279,7 +282,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
             .is_empty(),
         stop_case["pending_empty"].as_bool().unwrap()
     );
-    gents::goal::set_goal_from_access(
+    gents_automation::goal::set_goal_from_access(
         &access,
         node_did,
         &stopped_session,
@@ -291,21 +294,21 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
     .await
     .unwrap();
     let job_home = tempfile::tempdir().unwrap();
-    let job_driver = gents::tools::background::job::driver::JobDriver::new(
-        gents::tools::background::job::driver::JobRuntime::new(
+    let job_driver = gents_toolcalls::background::job::driver::JobDriver::new(
+        gents_toolcalls::background::job::driver::JobRuntime::new(
             db.node.clone(),
-            std::sync::Arc::new(gents::plugin::executor::PluginExecutor::new(None)),
+            std::sync::Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(None)),
             job_home.path().to_path_buf(),
             None,
         ),
     );
-    gents::session::resume_session_with_access(
+    gents_automation::session_control::resume_session_with_access(
         &db.node,
         &access,
         node_did,
         &stopped_session,
         Some(fixture.agent.did()),
-        gents::tools::call::hook::BackgroundExecutionRegistry::default(),
+        gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
         job_driver,
     )
     .await
@@ -352,7 +355,7 @@ async fn generated_resume_after_settlement_stages_the_paused_goal_continuation()
         "mutation {{ update_AgentRequest(docID: \"{}\", input: {{lifecycle_state: \"processing\"}}) {{_docID}} }}",
         escape_graphql_string(&predecessor_doc),
     )).await.unwrap();
-    gents::goal::set_goal_from_access(
+    gents_automation::goal::set_goal_from_access(
         &access,
         node_did,
         &session_id,
@@ -363,7 +366,7 @@ async fn generated_resume_after_settlement_stages_the_paused_goal_continuation()
     )
     .await
     .unwrap();
-    let receipt = gents::session::stop_session_with_access(
+    let receipt = gents_automation::session_control::stop_session_with_access(
         &db.node,
         &access,
         node_did,
@@ -378,22 +381,22 @@ async fn generated_resume_after_settlement_stages_the_paused_goal_continuation()
     );
 
     let job_home = tempfile::tempdir().unwrap();
-    let job_driver = gents::tools::background::job::driver::JobDriver::new(
-        gents::tools::background::job::driver::JobRuntime::new(
+    let job_driver = gents_toolcalls::background::job::driver::JobDriver::new(
+        gents_toolcalls::background::job::driver::JobRuntime::new(
             db.node.clone(),
-            std::sync::Arc::new(gents::plugin::executor::PluginExecutor::new(None)),
+            std::sync::Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(None)),
             job_home.path().to_path_buf(),
             None,
         ),
     );
     let resume = || {
-        gents::session::resume_session_with_access(
+        gents_automation::session_control::resume_session_with_access(
             &db.node,
             &access,
             node_did,
             &session_id,
             Some(fixture.agent.did()),
-            gents::tools::call::hook::BackgroundExecutionRegistry::default(),
+            gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
             job_driver.clone(),
         )
     };

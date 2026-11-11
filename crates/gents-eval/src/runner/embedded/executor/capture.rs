@@ -12,8 +12,8 @@ use crate::runner::executor::{Capture, CaptureResult, FileRef};
 #[cfg(test)]
 use gents::defra_node::Node as EmbeddedNode;
 #[cfg(test)]
-use gents::store::graphql::graphql_with_transaction_retry;
-use gents::store::graphql::{
+use gents_store::graphql::graphql_with_transaction_retry;
+use gents_store::graphql::{
     escape_graphql_string, validate_collection_identifier, validate_graphql_name,
 };
 
@@ -35,13 +35,13 @@ pub(super) async fn run_captures(
 ) -> BTreeMap<String, CaptureResult> {
     let access = match bindings.evaluator_did {
         Some(did) => match ::identity::Did::new(did) {
-            Ok(actor) => gents::ConfigAccess::local_as(node.clone(), actor),
+            Ok(actor) => gents_store::config_client::ConfigAccess::local_as(node.clone(), actor),
             Err(error) => {
                 tracing::warn!(%error, "eval capture evaluator identity is invalid");
                 return BTreeMap::new();
             }
         },
-        None => gents::ConfigAccess::local(node.clone()),
+        None => gents_store::config_client::ConfigAccess::local(node.clone()),
     };
     run_captures_with_access(
         &access, trial_did, session_id, workspace, captures, bindings,
@@ -50,7 +50,7 @@ pub(super) async fn run_captures(
 }
 
 pub(super) async fn run_captures_with_access(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     trial_did: &str,
     session_id: &str,
     workspace: &Path,
@@ -280,7 +280,7 @@ pub(super) async fn capture_documents(
 }
 
 pub(in crate::runner::embedded) async fn capture_documents_with_access(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     collection: &str,
     filter: &Value,
     fields: &[String],
@@ -300,15 +300,17 @@ pub(in crate::runner::embedded) async fn capture_documents_with_access(
 }
 
 async fn capture_inference_backends(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     filter: &Value,
     fields: &[String],
     trial_did: &str,
 ) -> Result<Vec<Value>> {
-    let (allowed, _) =
-        gents::documents::config_projection(gents::Collection::InferenceBackend, None)?;
+    let (allowed, _) = gents_documents::config_projection(
+        gents_store::collection::Collection::InferenceBackend,
+        None,
+    )?;
     let mut filter_fields = Vec::new();
-    gents::tools::builtin::defra_query::collect_filter_field_keys(filter, &mut filter_fields);
+    gents_tools::builtin::defra_query::collect_filter_field_keys(filter, &mut filter_fields);
     for field in fields.iter().chain(filter_fields.iter()) {
         anyhow::ensure!(
             field == "_docID" || allowed.contains(&field.as_str()),
@@ -356,7 +358,7 @@ async fn capture_inference_backends(
                 let mut by_doc = BTreeMap::new();
                 for node in nodes {
                     for backend in
-                        gents::documents::list_inference_backends_in_txn(txn, &node).await?
+                        gents_documents::list_inference_backends_in_txn(txn, &node).await?
                     {
                         let doc = backend
                             .physical_doc_id
@@ -410,15 +412,15 @@ pub(in crate::runner::embedded) fn documents_capture_query(
     validate_filter_names(filter)?;
     for field in fields {
         anyhow::ensure!(
-            !gents::tools::builtin::defra_query::is_restricted_field(collection, field),
+            !gents_tools::builtin::defra_query::is_restricted_field(collection, field),
             "field {field:?} on {collection:?} is restricted and cannot be captured"
         );
     }
     let mut filter_fields = Vec::new();
-    gents::tools::builtin::defra_query::collect_filter_field_keys(filter, &mut filter_fields);
+    gents_tools::builtin::defra_query::collect_filter_field_keys(filter, &mut filter_fields);
     for field in &filter_fields {
         anyhow::ensure!(
-            !gents::tools::builtin::defra_query::is_restricted_field(collection, field),
+            !gents_tools::builtin::defra_query::is_restricted_field(collection, field),
             "field {field:?} on {collection:?} is restricted and cannot be used in a capture filter"
         );
     }

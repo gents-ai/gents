@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::outcome::{classify, EvidenceClass, OutcomeKind, ProviderReason};
-use crate::documents::{EvalSplit, EvalTier};
-use crate::store::config_client::ConfigAccess;
-use crate::store::graphql::escape_graphql_string;
+use gents_documents::{EvalSplit, EvalTier};
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
 
 pub const DENOMINATOR_POLICY_V1: &str = "exclude_not_evidence_v1";
 
@@ -235,7 +235,7 @@ async fn create(
                     .execute_client_signed_create(mutation, variables, schema)
                     .await?;
                 let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&response, name)?;
-                crate::documents::publish_node_child_in_txn(txn, name, &doc_id, owner).await?;
+                gents_documents::publish_node_child_in_txn(txn, name, &doc_id, owner).await?;
                 Ok::<(), anyhow::Error>(())
             })
         })

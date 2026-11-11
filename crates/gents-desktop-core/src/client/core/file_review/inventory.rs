@@ -1,11 +1,13 @@
 use anyhow::{ensure, Context, Result};
-use gents::store::config_client::ConfigAccess;
-use gents::tools::call::lifecycle::{load_tool_file_change_observation, ToolFileChangeRead};
 use gents_protocol::file_changes::{ToolFileChanges, FILE_CHANGES_VERSION};
 use gents_protocol::file_inventory::{
     FileChangeMetadata, FileInventoryEntry, FileInventoryImage, FileInventoryImageReference,
     FileInventoryObservation, FileInventoryReadAction, FileInventorySnapshotView,
 };
+use gents_session::tool_call::query::result::{
+    load_tool_file_change_observation, ToolFileChangeRead,
+};
+use gents_store::config_client::ConfigAccess;
 
 use super::ClientCore;
 

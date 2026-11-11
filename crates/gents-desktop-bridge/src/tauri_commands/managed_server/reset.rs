@@ -109,7 +109,7 @@ async fn client_binding(state: &DesktopAppState) -> ClientBinding {
     let reviewed_path = Path::new(&reviewed.node_home);
     let reviewed_home = read_home_identity(reviewed_path).await;
     let Ok(reviewed_init_present) =
-        present(&gents::store::local::home::init_config_path(reviewed_path))
+        present(&gents_store::local::home::init_config_path(reviewed_path))
     else {
         return ClientBinding::Unbound;
     };
@@ -320,7 +320,7 @@ pub(super) fn launch_reset_helper_with_timeout(
 
 async fn ensure_home_not_served(
     home: &Path,
-    user: Option<&gents::store::config_client::ClientSigningCapability>,
+    user: Option<&gents_store::config_client::ClientSigningCapability>,
 ) -> Result<(), BridgeError> {
     let config = gents_server::server_host::ServerConfig::standard(home.to_path_buf());
     let managed_address = std::net::SocketAddr::new(config.http_addr, config.http_port);

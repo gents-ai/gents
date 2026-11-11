@@ -242,7 +242,7 @@ pub(crate) async fn run(
     deps: &Deps<'_>,
     out: &mut dyn Write,
 ) -> Result<()> {
-    let gents::ConfigAccess::Graphql(graphql) = &ctx.access else {
+    let gents_store::config_client::ConfigAccess::Graphql(graphql) = &ctx.access else {
         anyhow::bail!(
             "start `gents runtime server` for this home and retry: the author runs on a served home"
         );
@@ -367,39 +367,39 @@ pub(crate) async fn run(
 }
 
 pub(crate) async fn install_pack_slot(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     owner: &str,
     pack: &PackSource,
     slot: &str,
     profile: &str,
-) -> Result<gents::pack::InstallReport> {
+) -> Result<gents_pack::pack::InstallReport> {
     let manifest = pack.manifest();
     let requested = std::collections::BTreeMap::from([(slot.to_owned(), profile.to_owned())]);
     anyhow::ensure!(manifest.metadata.dependencies.is_empty(),
         "eval author pack dependencies must be installed through `gents config pack install` on the runtime host");
-    let prepared = gents::pack::prepare_document_pack_archive(
+    let prepared = gents_pack::pack::prepare_document_pack_archive(
         access,
         owner,
         pack.archive(),
         &requested,
         &[],
-        gents::pack::InstalledVia::Operator,
+        gents_pack::pack::InstalledVia::Operator,
         None,
         &|_| None,
         &Default::default(),
     )
     .await
-    .map_err(gents::pack::PackChangeError::into_anyhow)?;
-    gents::pack::install_prepared_document_graph(
+    .map_err(gents_pack::pack::PackChangeError::into_anyhow)?;
+    gents_pack::pack::install_prepared_document_graph(
         access,
         owner,
         pack.archive(),
         &prepared,
-        gents::pack::DriftPolicy::Overwrite,
+        gents_pack::pack::DriftPolicy::Overwrite,
         None,
         false,
         true,
-        &gents::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .map(|(report, _)| report)
@@ -409,10 +409,10 @@ pub(crate) async fn install_pack_slot(
 pub(crate) fn pack_config(
     pack: &PackSource,
     owner: &str,
-) -> Result<gents::pack::AuthoredPackConfig> {
-    gents::pack::load_pack_authoring_config(
+) -> Result<gents_pack::pack::AuthoredPackConfig> {
+    gents_pack::pack::load_pack_authoring_config(
         pack.manifest(),
-        &gents::pack::PackInstallOptions {
+        &gents_pack::pack::PackInstallOptions {
             node_did: owner.to_owned(),
         },
         &|path| pack.asset(path).map(Vec::from),
@@ -498,7 +498,7 @@ mod tests {
         assert_eq!(outcome.rounds, 1);
         let definition = outcome.assembled.unwrap().definition;
         assert!(definition.cases.iter().all(|case| {
-            matches!(&case.stages[0].capture[0], gents::documents::EvalCapture::Documents {
+            matches!(&case.stages[0].capture[0], gents_documents::EvalCapture::Documents {
                 collection, fields, ..
             } if collection == "AgentRequest" && fields.iter().any(|field| field == "request_id"))
         }));
@@ -552,14 +552,14 @@ mod tests {
         let fixture = crate::commands::eval::testing::Fixture::new().await;
         let access = &fixture.ctx.access;
         let owner = fixture.ctx.owner.as_str();
-        let read = |ids: [(gents::Collection, String); 3]| async move {
+        let read = |ids: [(gents_store::collection::Collection, String); 3]| async move {
             let mut documents = Vec::new();
             for (collection, id) in ids {
                 let id = id.as_str();
                 let found = access
                     .transact_write("cli.eval.init.test_read_author", |txn| {
                         Box::pin(async move {
-                            gents::documents::read_desired_state_record_in_txn(
+                            gents_documents::read_desired_state_record_in_txn(
                                 txn, collection, owner, id,
                             )
                             .await
@@ -584,16 +584,27 @@ mod tests {
         let first_counts = install_pack_slot(access, owner, &author, &slot, "local")
             .await
             .unwrap();
-        assert_eq!(first_counts.applied.get(gents::Collection::Agent), 1);
+        assert_eq!(
+            first_counts
+                .applied
+                .get(gents_store::collection::Collection::Agent),
+            1
+        );
         let installed_agent = first_counts.agents["fixture-author"].clone();
         let installed = || {
             read([
-                (gents::Collection::Agent, installed_agent.clone()),
                 (
-                    gents::Collection::AgentContext,
+                    gents_store::collection::Collection::Agent,
+                    installed_agent.clone(),
+                ),
+                (
+                    gents_store::collection::Collection::AgentContext,
                     "fixture-author-context".to_owned(),
                 ),
-                (gents::Collection::Tools, "fixture-author-tools".to_owned()),
+                (
+                    gents_store::collection::Collection::Tools,
+                    "fixture-author-tools".to_owned(),
+                ),
             ])
         };
 
@@ -658,17 +669,17 @@ mod tests {
             .expect("a runtime state written by `gents runtime server`");
         crate::load_client_identity().await.unwrap();
         let graphql = crate::home_graphql_endpoint(&home_dir, state.graphql.clone()).unwrap();
-        let access = gents::ConfigAccess::Graphql(graphql.clone());
+        let access = gents_store::config_client::ConfigAccess::Graphql(graphql.clone());
         let owner = state.node_did.clone();
 
         let subject_dir = PathBuf::from(SMOKE_SUBJECT);
         let dossier = dossier::render(&subject_dir, Some(SMOKE_BEHAVIOR)).unwrap();
         let registry = CheckRegistry::builtin();
-        let selected = access.execute(&format!("{{ Node(filter: {{ node_did: {{ _eq: \"{}\" }} }}, limit: 1) {{ default_agent_did }} }}", gents::store::graphql::escape_graphql_string(&owner))).await.unwrap();
+        let selected = access.execute(&format!("{{ Node(filter: {{ node_did: {{ _eq: \"{}\" }} }}, limit: 1) {{ default_agent_did }} }}", gents_store::graphql::escape_graphql_string(&owner))).await.unwrap();
         let agent_did = selected["data"]["Node"][0]["default_agent_did"]
             .as_str()
             .expect("served default agent");
-        let selected = access.execute(&format!("{{ Agent(filter: {{ agent_did: {{ _eq: \"{}\" }} }}, limit: 1) {{ inference_profile_id }} }}", gents::store::graphql::escape_graphql_string(agent_did))).await.unwrap();
+        let selected = access.execute(&format!("{{ Agent(filter: {{ agent_did: {{ _eq: \"{}\" }} }}, limit: 1) {{ inference_profile_id }} }}", gents_store::graphql::escape_graphql_string(agent_did))).await.unwrap();
         let profile = selected["data"]["Agent"][0]["inference_profile_id"]
             .as_str()
             .expect("served agent profile")

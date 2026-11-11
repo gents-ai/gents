@@ -1,0 +1,65 @@
+[package]
+name = "gents-pack"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Packs and the plugin runner for Gents"
+
+[features]
+default = ["defra-node/http", "defra-node/p2p", "defra-node/wasmtime-runtime"]
+typescript = ["dep:ts-rs", "gents-loop/typescript", "gents-protocol/typescript", "gents-store/typescript", "gents-documents/typescript"]
+live-e2e = ["gents-store/live-e2e", "gents-documents/live-e2e"]
+test-home-guard = ["gents-store/test-home-guard", "gents-documents/test-home-guard"]
+test-fixtures = ["test-home-guard", "axum/ws", "gents-store/test-fixtures", "gents-documents/test-fixtures"]
+
+[dependencies]
+gents-store.workspace = true
+gents-documents.workspace = true
+acp.workspace = true
+schema.workspace = true
+rapidhash = { workspace = true }
+ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat", "no-serde-warnings"] }
+anyhow.workspace = true
+axum = "0.8"
+base64.workspace = true
+chrono.workspace = true
+defra-core.workspace = true
+gents-loop = { workspace = true, features = ["native"] }
+gents-protocol.workspace = true
+defra-node.workspace = true
+dirs.workspace = true
+futures = "0.3"
+identity.workspace = true
+libc = "0.2"
+query.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+same-file = "1.0.6"
+regex = "1"
+schemars = "1"
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
+tempfile = "3"
+memmap2 = "0.9"
+tar = "0.4"
+flate2 = "1"
+semver = "1"
+afterburner-afb = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1" }
+afterburner-core = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1" }
+afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "f6d6d3faa0be201603cc8c6a8b1a2bc9f756caa1", default-features = false, features = [
+    "afb-run",
+] }
+nuclei = { version = "0.5.6", default-features = false }
+wasmtime = { version = "49", default-features = false, features = ["runtime"] }
+
+[dev-dependencies]
+gents-store = { workspace = true, features = ["test-fixtures"] }
+gents-documents = { workspace = true, features = ["test-fixtures"] }
+axum = { version = "0.8", features = ["ws"] }
+gents-lean-contract.workspace = true
+gents-lean-vocab.workspace = true
+wat = "1.254"

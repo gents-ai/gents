@@ -61,7 +61,7 @@ fn created_id(response: &QueryResponse) -> Result<Option<String>> {
         return Ok(None);
     }
     let row =
-        gents::store::graphql::single_mutation_document(response, "create_AgentOutputSegment")?
+        gents_store::graphql::single_mutation_document(response, "create_AgentOutputSegment")?
             .context("successful create omitted its row")?;
     Ok(Some(
         row.get("_docID")
@@ -95,14 +95,17 @@ async fn rows(node: &EmbeddedNode) -> Result<Vec<(String, OutputSegment)>> {
 async fn canonical_segment_genesis_is_immutable_under_concurrent_and_repeated_create() -> Result<()>
 {
     let directory = tempfile::tempdir()?;
-    let identity = gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None)?;
+    let identity = gents_store::identity::KeyIdentity::load_or_create(
+        directory.path().join("node.key"),
+        None,
+    )?;
     let node = Arc::new(
         EmbeddedNode::builder()
-            .with_node_identity_did(gents::NodeIdentity::did(&identity))
+            .with_node_identity_did(gents_store::identity::NodeIdentity::did(&identity))
             .build()
             .await?,
     );
-    gents::store::schema::ensure_runtime_schemas(&node).await?;
+    gents_store::schema::ensure_runtime_schemas(&node).await?;
     let original = segment("original");
 
     let (first, second) = tokio::join!(create(&node, &original), create(&node, &original));

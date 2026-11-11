@@ -1,20 +1,22 @@
 use super::*;
 use crate::snapshot::tests::push_canonical_text_message;
-use gents::store::config_client::ConfigAccess;
 use gents_desktop_core::client::{ClientStoreRows, TranscriptWindow};
 use gents_protocol::output::rows::{
     output_segment_create_variables, transcript_message_create_variables,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
 use gents_protocol::output::{MessageBlock, MessageRole};
+use gents_store::config_client::ConfigAccess;
 
 #[tokio::test]
 async fn persisted_background_inputs_keep_origin_across_transcript_windows() {
-    use gents::NodeIdentity as _;
+    use gents_store::identity::NodeIdentity as _;
     let home = tempfile::tempdir().unwrap();
-    let identity = gents::KeyIdentity::load_or_create(home.path().join("node.key"), None).unwrap();
+    let identity =
+        gents_store::identity::KeyIdentity::load_or_create(home.path().join("node.key"), None)
+            .unwrap();
     let amy = identity.did().to_owned();
-    let binding = gents::store::identity::provision_agent_identity(&identity).unwrap();
+    let binding = gents_store::identity::provision_agent_identity(&identity).unwrap();
     let agent = binding.agent_did.clone();
     let node = std::sync::Arc::new(
         gents::defra_node::Node::builder()
@@ -23,7 +25,9 @@ async fn persisted_background_inputs_keep_origin_across_transcript_windows() {
             .await
             .unwrap(),
     );
-    gents::ensure_runtime_schemas(&node).await.unwrap();
+    gents_store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     let access = ConfigAccess::local(node.clone());
     for mutation in [
         format!(
@@ -52,7 +56,7 @@ async fn persisted_background_inputs_keep_origin_across_transcript_windows() {
         let response = ConfigAccess::write_local(&node, "test.background_origin", &query)
             .await
             .unwrap();
-        requests.push(gents::store::graphql::created_doc_id(&response, "AgentRequest").unwrap());
+        requests.push(gents_store::graphql::created_doc_id(&response, "AgentRequest").unwrap());
     }
     let wake = gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
     let success = "<tool-completion tool_call_id=\"spawned:one\" status=\"completed\"><result>done</result></tool-completion>";
@@ -104,7 +108,7 @@ async fn persisted_background_inputs_keep_origin_across_transcript_windows() {
                         &output_segment_create_variables(&segment)?,
                     )
                     .await?;
-                let close = gents::store::graphql::created_doc_id(&response, "AgentOutputSegment")?;
+                let close = gents_store::graphql::created_doc_id(&response, "AgentOutputSegment")?;
                 if let MessageBlock::Text { text } = &mut header.blocks[0] {
                     text.output.close_doc_id = close;
                 }

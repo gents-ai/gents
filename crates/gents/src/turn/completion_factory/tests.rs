@@ -2,12 +2,12 @@ use super::*;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::inference::resolved::SamplingConfig;
-use crate::request::aggregate_token_limit::parse_aggregate_token_limit;
-use crate::runtime::agent::completion_retry::CompletionRetryProfileFields;
-use crate::store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
-use crate::tools::surface::AgentToolSurfaceConfig;
+use gents_inference::resolved::SamplingConfig;
+use gents_loop::completion_retry::CompletionRetryProfileFields;
 use gents_protocol::row::AgentRequest;
+use gents_session::request::aggregate_token_limit::parse_aggregate_token_limit;
+use gents_store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
+use gents_tools::surface::AgentToolSurfaceConfig;
 
 fn request() -> AgentRequest {
     AgentRequest {
@@ -50,7 +50,7 @@ fn claude_profile_effort_reaches_messages_without_sampling() {
     assert_eq!(
         reasoning_profile_params(
             BackendProviderKind::ClaudeCliSubscription,
-            crate::OpenAiWireApi::ChatCompletions,
+            gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
             Some(ReasoningEffort::High),
         ),
         Some(serde_json::json!({"output_config": {"effort": "high"}}))
@@ -61,19 +61,19 @@ fn claude_profile_effort_reaches_messages_without_sampling() {
 fn absent_profile_effort_does_not_inject_reasoning() {
     assert!(reasoning_profile_params(
         BackendProviderKind::OpenAiCompatible,
-        crate::OpenAiWireApi::ChatCompletions,
+        gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
         None,
     )
     .is_none());
     assert!(reasoning_profile_params(
         BackendProviderKind::OpenAiCompatible,
-        crate::OpenAiWireApi::Responses,
+        gents_loop::openai_wire::OpenAiWireApi::Responses,
         None,
     )
     .is_none());
     assert!(reasoning_profile_params(
         BackendProviderKind::OpenRouter,
-        crate::OpenAiWireApi::ChatCompletions,
+        gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
         None,
     )
     .is_none());
@@ -84,7 +84,7 @@ fn absent_profile_effort_keeps_the_codex_medium_default() {
     assert_eq!(
         reasoning_profile_params(
             BackendProviderKind::ChatGptCodex,
-            crate::OpenAiWireApi::Responses,
+            gents_loop::openai_wire::OpenAiWireApi::Responses,
             None,
         ),
         Some(serde_json::json!({ "reasoning": { "effort": "medium" } })),
@@ -92,7 +92,7 @@ fn absent_profile_effort_keeps_the_codex_medium_default() {
     assert_eq!(
         reasoning_profile_params(
             BackendProviderKind::ChatGptCodex,
-            crate::OpenAiWireApi::Responses,
+            gents_loop::openai_wire::OpenAiWireApi::Responses,
             Some(ReasoningEffort::High),
         ),
         Some(serde_json::json!({ "reasoning": { "effort": "high" } })),
@@ -119,7 +119,7 @@ fn generic_responses_request_does_not_force_reasoning() {
         tool_choice: None,
         additional_params: reasoning_profile_params(
             BackendProviderKind::OpenAiCompatible,
-            crate::OpenAiWireApi::Responses,
+            gents_loop::openai_wire::OpenAiWireApi::Responses,
             None,
         ),
         output_schema: None,
@@ -141,20 +141,20 @@ fn generic_responses_request_does_not_force_reasoning() {
 fn responses_and_openrouter_use_profile_reasoning_effort() {
     let codex = reasoning_profile_params(
         BackendProviderKind::ChatGptCodex,
-        crate::OpenAiWireApi::Responses,
-        Some(crate::documents::inference_defaults::ReasoningEffort::Ultra),
+        gents_loop::openai_wire::OpenAiWireApi::Responses,
+        Some(gents_documents::inference_defaults::ReasoningEffort::Ultra),
     )
     .expect("profile reasoning effort must be present");
     let responses = reasoning_profile_params(
         BackendProviderKind::OpenAiCompatible,
-        crate::OpenAiWireApi::Responses,
-        Some(crate::documents::inference_defaults::ReasoningEffort::XHigh),
+        gents_loop::openai_wire::OpenAiWireApi::Responses,
+        Some(gents_documents::inference_defaults::ReasoningEffort::XHigh),
     )
     .expect("profile reasoning effort must be present");
     let openrouter = reasoning_profile_params(
         BackendProviderKind::OpenRouter,
-        crate::OpenAiWireApi::ChatCompletions,
-        Some(crate::documents::inference_defaults::ReasoningEffort::Medium),
+        gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
+        Some(gents_documents::inference_defaults::ReasoningEffort::Medium),
     )
     .expect("profile reasoning effort must be present");
 
@@ -168,8 +168,8 @@ fn responses_and_openrouter_use_profile_reasoning_effort() {
 fn profile_none_disables_local_thinking() {
     let value = reasoning_profile_params(
         BackendProviderKind::OpenAiCompatible,
-        crate::OpenAiWireApi::ChatCompletions,
-        Some(crate::documents::inference_defaults::ReasoningEffort::None),
+        gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
+        Some(gents_documents::inference_defaults::ReasoningEffort::None),
     )
     .expect("explicit none must be present");
 
@@ -188,13 +188,13 @@ fn profile_reasoning_serializes_top_level_into_openai_body() {
         merge_optional_params(
             reasoning_profile_params(
                 BackendProviderKind::OpenAiCompatible,
-                crate::OpenAiWireApi::ChatCompletions,
-                Some(crate::documents::inference_defaults::ReasoningEffort::Max),
+                gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
+                Some(gents_documents::inference_defaults::ReasoningEffort::Max),
             ),
             provider_additional_params(
                 BackendProviderKind::OpenAiCompatible,
-                crate::OpenAiWireApi::ChatCompletions,
-                crate::inference::backends::setup::OPENAI_ENDPOINT,
+                gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
+                gents_inference::backends::setup::OPENAI_ENDPOINT,
             ),
         ),
         SamplingConfig::default().additional_params(),
@@ -235,8 +235,8 @@ fn profile_reasoning_serializes_top_level_into_openai_body() {
 fn openrouter_additional_params_require_parameters() {
     let value = provider_additional_params(
         BackendProviderKind::OpenRouter,
-        crate::OpenAiWireApi::Responses,
-        crate::inference::backends::setup::OPENAI_ENDPOINT,
+        gents_loop::openai_wire::OpenAiWireApi::Responses,
+        gents_inference::backends::setup::OPENAI_ENDPOINT,
     )
     .expect("OpenRouter should contribute additional params");
 
@@ -306,7 +306,7 @@ fn generated_responses_storage_cases_drive_loop_config() {
 
 #[test]
 fn generated_responses_effort_cases_drive_loop_config() {
-    use crate::documents::inference_defaults::ReasoningEffort;
+    use gents_documents::inference_defaults::ReasoningEffort;
     use gents_lean_vocab::lean_prompt_assembly_responses_effort_cases;
 
     let parse = |value: &String| ReasoningEffort::parse(value).expect("Lean effort");
@@ -316,7 +316,7 @@ fn generated_responses_effort_cases_drive_loop_config() {
     for case in cases {
         let mut agent = agent_with_retry(Default::default());
         agent.backend_provider_kind = BackendProviderKind::OpenAiCompatible;
-        agent.openai_wire_api = crate::OpenAiWireApi::Responses;
+        agent.openai_wire_api = gents_loop::openai_wire::OpenAiWireApi::Responses;
         agent.backend_endpoint = case.endpoint.clone();
         agent.sampling.reasoning_effort = case.requested.as_ref().map(parse);
         agent.resolved_reasoning_efforts = case
@@ -368,8 +368,8 @@ fn sampling_additional_params_merge_with_provider_params() {
     let value = merge_optional_params(
         provider_additional_params(
             BackendProviderKind::OpenRouter,
-            crate::OpenAiWireApi::Responses,
-            crate::inference::backends::setup::OPENAI_ENDPOINT,
+            gents_loop::openai_wire::OpenAiWireApi::Responses,
+            gents_inference::backends::setup::OPENAI_ENDPOINT,
         ),
         sampling.additional_params(),
     )
@@ -403,7 +403,7 @@ fn openai_cache_scope_falls_back_to_request_id() {
 fn codex_cache_key_stays_with_session_across_requests() {
     let mut agent = agent_with_retry(Default::default());
     agent.backend_provider_kind = BackendProviderKind::ChatGptCodex;
-    agent.openai_wire_api = crate::OpenAiWireApi::Responses;
+    agent.openai_wire_api = gents_loop::openai_wire::OpenAiWireApi::Responses;
     let mut request = request();
     let first = request_additional_params(&agent, &request).unwrap();
     let config = loop_config_for_request(&agent, "system".into(), &request, None, 0, 0).unwrap();
@@ -483,31 +483,31 @@ fn profile_seed_rejects_provider_paths_without_seed_support() {
     sampling
         .validate_for_provider(
             BackendProviderKind::OpenAiCompatible,
-            crate::OpenAiWireApi::ChatCompletions,
+            gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
         )
         .unwrap();
     sampling
         .validate_for_provider(
             BackendProviderKind::OpenRouter,
-            crate::OpenAiWireApi::ChatCompletions,
+            gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
         )
         .unwrap();
     assert!(sampling
         .validate_for_provider(
             BackendProviderKind::ChatGptCodex,
-            crate::OpenAiWireApi::Responses,
+            gents_loop::openai_wire::OpenAiWireApi::Responses,
         )
         .is_err());
     assert!(sampling
         .validate_for_provider(
             BackendProviderKind::XaiGrokOAuth,
-            crate::OpenAiWireApi::ChatCompletions,
+            gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
         )
         .is_err());
     assert!(sampling
         .validate_for_provider(
             BackendProviderKind::ClaudeCliSubscription,
-            crate::OpenAiWireApi::ChatCompletions,
+            gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
         )
         .is_err());
 }
@@ -520,7 +520,7 @@ fn agent_with_retry(completion_retry: CompletionRetryProfileFields) -> ResolvedA
         )
         .unwrap(),
     );
-    let binding = crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+    let binding = gents_store::identity::provision_agent_identity(identity.as_ref()).unwrap();
     agent_with_binding(identity, &binding, completion_retry)
 }
 
@@ -538,41 +538,41 @@ fn agent_with_binding(
     });
 
     let agent_identity =
-        crate::store::identity::resolve_agent_identity(node.identity.as_ref(), binding).unwrap();
+        gents_store::identity::resolve_agent_identity(node.identity.as_ref(), binding).unwrap();
     let agent_did = binding.agent_did.clone();
     ResolvedAgent {
-        configuration: crate::inference::resolved::ResolvedConfiguration::Static,
+        configuration: gents_inference::resolved::ResolvedConfiguration::Static,
         profile_id: None,
         agent_did,
         agent_identity,
         node,
         backend_id: Some("backend-general".to_string()),
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
-        openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
+        openai_wire_api: gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
         backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
         claude_platform: None,
-        backend_auth: crate::documents::BackendAuth::Unauthenticated,
-        model_name: crate::inference::resolved::DEFAULT_MODEL_NAME.to_string(),
+        backend_auth: gents_documents::BackendAuth::Unauthenticated,
+        model_name: gents_inference::resolved::DEFAULT_MODEL_NAME.to_string(),
         service_tier: None,
         resolved_reasoning_efforts: None,
-        context_window: crate::inference::resolved::DEFAULT_CONTEXT_WINDOW,
-        max_output_tokens: crate::inference::resolved::DEFAULT_MAX_OUTPUT_TOKENS,
-        max_turns: crate::inference::resolved::DEFAULT_MAX_TURNS,
-        max_turns_provenance: crate::inference::resolved::MaxTurnsProvenance::Default,
+        context_window: gents_inference::resolved::DEFAULT_CONTEXT_WINDOW,
+        max_output_tokens: gents_inference::resolved::DEFAULT_MAX_OUTPUT_TOKENS,
+        max_turns: gents_inference::resolved::DEFAULT_MAX_TURNS,
+        max_turns_provenance: gents_inference::resolved::MaxTurnsProvenance::Default,
         system_prompt: "system".to_string(),
         tools: AgentToolSurfaceConfig::meta_only(),
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
-        stream_batch_ms: crate::inference::resolved::DEFAULT_STREAM_BATCH_MS,
+        stream_batch_ms: gents_inference::resolved::DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(
-            crate::documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+            gents_documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         ),
         deadline_duration: Duration::from_secs(
-            crate::documents::inference_defaults::DEFAULT_DEADLINE_DURATION_SECS,
+            gents_documents::inference_defaults::DEFAULT_DEADLINE_DURATION_SECS,
         ),
         provider_idle_timeout: Duration::from_secs(
-            crate::inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
+            gents_inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
         ),
         completion_retry,
         sampling: SamplingConfig::default(),
@@ -584,7 +584,7 @@ fn agent_with_binding(
 #[test]
 fn claude_advertised_efforts_override_spoofed_additional_params() {
     let spoofed = Some(serde_json::json!({
-        (crate::inference::clients::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM): ["high"]
+        (gents_inference::clients::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM): ["high"]
     }));
     let unknown = super::authoritative_reasoning_capabilities(
         spoofed.clone(),
@@ -592,9 +592,10 @@ fn claude_advertised_efforts_override_spoofed_additional_params() {
         None,
     )
     .unwrap();
-    assert!(unknown
-        [crate::inference::clients::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM]
-        .is_null());
+    assert!(
+        unknown[gents_inference::clients::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM]
+            .is_null()
+    );
 
     let advertised = super::authoritative_reasoning_capabilities(
         spoofed,
@@ -603,7 +604,7 @@ fn claude_advertised_efforts_override_spoofed_additional_params() {
     )
     .unwrap();
     assert_eq!(
-        advertised[crate::inference::clients::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM],
+        advertised[gents_inference::clients::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM],
         serde_json::json!(["low", "xhigh"])
     );
 }
@@ -656,7 +657,7 @@ fn prior_usage_decode_fails_closed_on_malformed_payload() {
     ])))
     .unwrap();
     assert_eq!(
-        crate::provider_usage::sum_charged_from_persisted_parts(
+        gents_loop::provider_usage::sum_charged_from_persisted_parts(
             rows.into_iter()
                 .map(|row| (row.prompt_tokens, row.completion_tokens))
         )
@@ -675,7 +676,7 @@ fn prior_usage_decode_rejects_partial_or_negative_components() {
     ] {
         let rows = super::prior_usage_rows_from_response(Some(&payload)).unwrap();
         assert!(
-            crate::provider_usage::sum_charged_from_persisted_parts(
+            gents_loop::provider_usage::sum_charged_from_persisted_parts(
                 rows.into_iter()
                     .map(|row| (row.prompt_tokens, row.completion_tokens))
             )
@@ -702,35 +703,36 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
             &binding,
             CompletionRetryProfileFields::default(),
         );
-        let access = crate::store::config_client::ConfigAccess::local_managed_agent(
+        let access = gents_store::config_client::ConfigAccess::local_managed_agent(
             node.clone(),
             identity::Did::new(&agent.agent_did).unwrap(),
             agent.agent_identity.as_ref(),
         )
         .unwrap();
-        let create = crate::request::lifecycle::build_signed_client_request(
+        let create = gents_session::request::lifecycle::build_signed_client_request(
             &owner,
-            crate::request::lifecycle::RequestSpec::new(
+            gents_session::request::lifecycle::RequestSpec::new(
                 gents_protocol::request_admission::RequestPurpose::Normal,
-                crate::request::lifecycle::RequestIdentity {
+                gents_session::request::lifecycle::RequestIdentity {
                     request_id: "req-budget".into(),
                     node_did: agent.node_did().into(),
                     requester_did: Some(user.did().into()),
                     agent_did: agent.agent_did.clone(),
                     session_id: "session-budget".into(),
                     content: "Resume the request".into(),
-                    execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                    execution_origin:
+                        gents_session::request::lifecycle::ExecutionOrigin::Interactive,
                     created_at: chrono::Utc::now()
                         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                 },
                 gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
             ),
-            crate::request::lifecycle::RequestSigner::Identity(&user),
+            gents_session::request::lifecycle::RequestSigner::Identity(&user),
         )
         .await
         .unwrap();
         let session_doc_id = create.session_doc_id.clone().unwrap();
-        crate::request::lifecycle::submit_client_request(&owner, &create)
+        gents_session::request::lifecycle::submit_client_request(&owner, &create)
             .await
             .unwrap();
         let response = access
@@ -744,8 +746,8 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
             serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
         let parent = row.try_into().unwrap();
         let (_authority_owner, authority) =
-            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
-        let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+            gents_p2p::p2p_reconcile::enrollment_authority_channel();
+        let verifier = gents_session::request::admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             db.node_identity.clone(),
             authority,
@@ -754,13 +756,14 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
             .verify_fresh_for_claim(&parent, &agent.agent_did)
             .await
             .unwrap();
-        let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
-            node.clone(),
-            parent,
-            120,
-            crate::request::lifecycle::ExecutionOrigin::Interactive,
-            agent.backend_id.clone().unwrap(),
-        );
+        let mut lifecycle =
+            gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
+                node.clone(),
+                parent,
+                120,
+                gents_session::request::lifecycle::ExecutionOrigin::Interactive,
+                agent.backend_id.clone().unwrap(),
+            );
         lifecycle
             .bind_managed_agent(agent.agent_identity.as_ref())
             .unwrap();
@@ -768,7 +771,7 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
         lifecycle.set_configured_max_total_tokens(case.pinned_limit.filter(|limit| *limit != 0));
         assert_eq!(
             lifecycle.claim_with_identity().await.unwrap(),
-            crate::request::lifecycle::ClaimOutcome::Claimed
+            gents_session::request::lifecycle::ClaimOutcome::Claimed
         );
         let mut request = lifecycle.request().clone();
         if case.pinned_limit == Some(0) {
@@ -833,7 +836,7 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
                     Box::pin(async move {
                         let response = txn.execute(seed).await?;
                         let doc_id =
-                            crate::store::graphql::created_doc_id(&response, "InferenceCall")?;
+                            gents_store::graphql::created_doc_id(&response, "InferenceCall")?;
                         txn.add_resource_relationship(
                             "InferenceCall",
                             &doc_id,
@@ -914,10 +917,10 @@ fn unpinned_sampling_knobs_emit_no_provider_params() {
 
 #[tokio::test]
 async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
-    use crate::inference::rendered_request::scope::{
+    use gents_inference::rendered_request::scope::{
         claim_pending, scope_request, test_scope, CaptureClaim, CaptureScopeKind,
     };
-    use crate::inference::rendered_request::{
+    use gents_inference::rendered_request::{
         AssemblyBuildPath, AssemblyTrace, RenderedRequestCaptureSink, RenderedRequestContext,
     };
 
@@ -993,11 +996,11 @@ fn generated_service_tier_cases_drive_loop_config() {
     assert!(!cases.is_empty());
     for case in cases {
         let family = BackendProviderKind::parse_optional(Some(&case.family)).expect("Lean family");
-        let tier: Option<crate::inference::resolved::ServiceTier> =
+        let tier: Option<gents_inference::resolved::ServiceTier> =
             serde_json::from_value(serde_json::to_value(&case.requested).unwrap())
                 .expect("Lean tier");
         assert_eq!(
-            crate::inference::resolved::validate_service_tier(family, tier).is_ok(),
+            gents_inference::resolved::validate_service_tier(family, tier).is_ok(),
             case.allowed,
             "{case:?}"
         );
@@ -1005,11 +1008,11 @@ fn generated_service_tier_cases_drive_loop_config() {
             continue;
         }
         for wire in [
-            crate::OpenAiWireApi::Responses,
-            crate::OpenAiWireApi::ChatCompletions,
+            gents_loop::openai_wire::OpenAiWireApi::Responses,
+            gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
         ] {
             if family == BackendProviderKind::ChatGptCodex
-                && wire != crate::OpenAiWireApi::Responses
+                && wire != gents_loop::openai_wire::OpenAiWireApi::Responses
             {
                 continue;
             }
@@ -1239,20 +1242,20 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
         &binding,
         CompletionRetryProfileFields::default(),
     );
-    let access = crate::store::config_client::ConfigAccess::local_managed_agent(
+    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         identity::Did::new(&agent.agent_did).unwrap(),
         agent.agent_identity.as_ref(),
     )
     .unwrap();
-    let other_binding = crate::store::identity::provision_agent_identity_authorized(
+    let other_binding = gents_store::identity::provision_agent_identity_authorized(
         &node,
         db.node_identity.as_ref(),
         &identity::Did::new(user.did()).unwrap(),
     )
     .await
     .unwrap();
-    crate::test_support::inference::install_test_agent_binding_with_access(
+    gents_inference::test_support::install_test_agent_binding_with_access(
         db.node_identity.did(),
         "Other calibration agent",
         &other_binding,
@@ -1260,9 +1263,9 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
     )
     .await;
     let other =
-        crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &other_binding)
+        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &other_binding)
             .unwrap();
-    let other_access = crate::store::config_client::ConfigAccess::local_managed_agent(
+    let other_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         identity::Did::new(other.did()).unwrap(),
         other.as_ref(),
@@ -1272,24 +1275,25 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
     let session = "session-calibration";
     let mut sessions = Vec::new();
     for session_id in [session, "other-session"] {
-        let create = crate::request::lifecycle::build_signed_client_request(
+        let create = gents_session::request::lifecycle::build_signed_client_request(
             &owner,
-            crate::request::lifecycle::RequestSpec::new(
+            gents_session::request::lifecycle::RequestSpec::new(
                 gents_protocol::request_admission::RequestPurpose::Normal,
-                crate::request::lifecycle::RequestIdentity {
+                gents_session::request::lifecycle::RequestIdentity {
                     request_id: format!("seed-{session_id}"),
                     node_did: did.clone(),
                     requester_did: Some(user.did().into()),
                     agent_did: agent.agent_did.clone(),
                     session_id: session_id.into(),
                     content: "calibration".into(),
-                    execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                    execution_origin:
+                        gents_session::request::lifecycle::ExecutionOrigin::Interactive,
                     created_at: chrono::Utc::now()
                         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                 },
                 gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
             ),
-            crate::request::lifecycle::RequestSigner::Identity(&user),
+            gents_session::request::lifecycle::RequestSigner::Identity(&user),
         )
         .await
         .unwrap();
@@ -1398,7 +1402,7 @@ async fn session_calibration_seeds_from_durable_inference_calls() {
                 let seed = &seed;
                 Box::pin(async move {
                     let response = txn.execute(seed).await?;
-                    let doc_id = crate::store::graphql::created_doc_id(&response, "InferenceCall")?;
+                    let doc_id = gents_store::graphql::created_doc_id(&response, "InferenceCall")?;
                     txn.add_resource_relationship(
                         "InferenceCall",
                         &doc_id,
@@ -1451,7 +1455,7 @@ fn claude_subscription_requests_carry_the_session_key_and_hops_reach_the_policy(
     let config = loop_config_for_request(&agent, "system".into(), &request(), None, 0, 3).unwrap();
     let params = config.additional_params.unwrap();
     assert_eq!(
-        params[crate::inference::clients::claude_messages::SESSION_KEY_PARAM],
+        params[gents_inference::clients::claude_messages::SESSION_KEY_PARAM],
         "session-456"
     );
     assert_eq!(config.retry_policy.account_hops, 3);

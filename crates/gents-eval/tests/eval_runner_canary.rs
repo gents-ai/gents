@@ -3,17 +3,18 @@ use gents::support;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use gents::documents::apply_desired_state_plan;
-use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::documents::{EvalSplit, InferenceBackend, InferenceProfile};
 use gents::eval::{load_trials, load_verdicts, Anchor, OutcomeKind, ProviderReason, TrialRecord};
-use gents::{Collection, ConfigAccess, DocumentRuntimeOptions};
+use gents::DocumentRuntimeOptions;
+use gents_documents::apply_desired_state_plan;
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents_documents::{EvalSplit, InferenceBackend, InferenceProfile};
 use gents_eval::checks::CheckRegistry;
 use gents_eval::runner::embedded::{EmbeddedExecutor, EmbeddedHome};
 use gents_eval::runner::{
     freeze_refused, run, Capture, CaptureResult, CellRequest, CellSource, RunOptions, RunRequest,
     TrialExecutor, TrialLocator,
 };
+use gents_store::{collection::Collection, config_client::ConfigAccess};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -304,7 +305,7 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
             .join(locator(trial(&trials, "seeded")).home_hint.unwrap())
             .join("home");
         let home = EmbeddedHome::open_retained(&retained).await.unwrap();
-        let state = gents::store::graphql::graphql_with_transaction_retry(
+        let state = gents_store::graphql::graphql_with_transaction_retry(
             &home.node,
             "{ Trigger { trigger_id last_status last_error } AgentRequest { request_id lifecycle_state failure_reason session_id requester_did } AgentSession { session_id node_did requester_did agent_did } }",
             "failed routing canary",
@@ -761,7 +762,7 @@ async fn live_smoke_one_trial_on_a_real_provider_reports_whether_seed_was_honour
 }
 struct Canary {
     _home: EmbeddedHome,
-    evaluator: Arc<gents::KeyIdentity>,
+    evaluator: Arc<gents_store::identity::KeyIdentity>,
     access: ConfigAccess,
     dirs: TempDir,
     owner: String,
@@ -805,7 +806,7 @@ impl Canary {
                     apply_desired_state_plan(
                         txn,
                         plan,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await
                     .map(|_| ())
@@ -816,7 +817,7 @@ impl Canary {
     }
 }
 async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
-    use gents::NodeIdentity;
+    use gents_store::identity::NodeIdentity;
 
     support::init_test_tracing();
     let mut home = EmbeddedHome::create_temp("eval-canary").await.unwrap();
@@ -824,7 +825,7 @@ async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
     let evaluator_path = dirs.path().join("evaluator.key");
     let evaluator = Arc::new(
         tokio::task::spawn_blocking(move || {
-            gents::store::identity::KeyIdentity::load_or_create(evaluator_path, None)
+            gents_store::identity::KeyIdentity::load_or_create(evaluator_path, None)
         })
         .await
         .unwrap()
@@ -837,7 +838,7 @@ async fn canary_request(endpoint: &str, run_id: &str) -> (Canary, RunRequest) {
         ConfigAccess::local_as(home.node.clone(), ::identity::Did::new(home.did()).unwrap());
     let evaluator_actor = ::identity::Did::new(&evaluator_did).unwrap();
     // The evaluator is an enrolled User of the controller home.
-    gents::store::identity::GrantSet::OperatorUser
+    gents_store::identity::GrantSet::OperatorUser
         .grant(&admin, &evaluator_actor)
         .await
         .unwrap();

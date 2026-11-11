@@ -62,10 +62,10 @@ pub async fn request_output(
 }
 
 fn request_output_state(
-    output: Option<gents::session::CanonicalRequestOutput>,
+    output: Option<gents_session::session::CanonicalRequestOutput>,
 ) -> crate::types::RequestOutputStateView {
     use crate::types::RequestOutputStateView as View;
-    use gents::session::CanonicalRequestOutput as Output;
+    use gents_session::session::CanonicalRequestOutput as Output;
     match output {
         Some(Output::TerminalMessage { presentation, .. }) => View::TerminalMessage { content: presentation.body_markdown },
         Some(Output::TerminalNoMessage) => View::TerminalNoMessage,
@@ -214,7 +214,7 @@ pub async fn fork_session_before_message(
 #[cfg(test)]
 mod edit_fork_tests {
     use super::*;
-    use gents::store::config_client::ConfigAccess;
+    use gents_store::config_client::ConfigAccess;
 
     #[test]
     fn fork_wire_requires_the_retained_client_and_destination() {
@@ -321,17 +321,19 @@ pub async fn edit_pending_queue(
         .edit_pending_queue(
             &request.node_did,
             &request.session_id,
-            gents::request::lifecycle::PendingQueueEdit {
+            gents_session::request::lifecycle::PendingQueueEdit {
                 expected_request_doc_ids: request.expected_request_doc_ids,
                 selected_request_doc_ids: request.selected_request_doc_ids,
                 messages: request
                     .messages
                     .into_iter()
-                    .map(|message| gents::request::lifecycle::PendingMessageEdit {
-                        authored_input: message.authored_input,
-                        request_doc_id: message.request_doc_id,
-                        content: message.content,
-                    })
+                    .map(
+                        |message| gents_session::request::lifecycle::PendingMessageEdit {
+                            authored_input: message.authored_input,
+                            request_doc_id: message.request_doc_id,
+                            content: message.content,
+                        },
+                    )
                     .collect(),
             },
         )
@@ -368,7 +370,7 @@ mod tests {
     #[test]
     fn terminal_diagnostic_history_cannot_keep_voice_waiting_for_a_complete_answer() {
         let state = request_output_state(Some(
-            gents::session::CanonicalRequestOutput::RetainedPartial(Vec::new()),
+            gents_session::session::CanonicalRequestOutput::RetainedPartial(Vec::new()),
         ));
         assert!(matches!(
             state,

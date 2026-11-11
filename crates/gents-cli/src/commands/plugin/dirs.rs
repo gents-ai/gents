@@ -1,5 +1,5 @@
 use anyhow::Result;
-use gents::plugin::allowed;
+use gents_pack::plugin::allowed;
 use serde_json::json;
 
 use crate::cli::args::PluginDirsCommand;

@@ -1,8 +1,10 @@
 use std::time::Duration;
 
 use chrono::{Duration as ChronoDuration, Utc};
-use gents::store::graphql::escape_graphql_string;
-use gents::{ConfigAccess, DocumentRuntimeOptions, Gents, ToolCeiling};
+use gents::{DocumentRuntimeOptions, Gents};
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
+use gents_tools::surface::ToolCeiling;
 
 use crate::support::fixtures::bind_managed_agent_backend;
 use crate::support::mock_endpoint::MockModelEndpoint;
@@ -15,9 +17,9 @@ const UNUSED_BACKEND_ENDPOINT: &str = "http://127.0.0.1:9/v1";
 
 async fn apply_documents(
     access: &ConfigAccess,
-    documents: Vec<(gents::Collection, serde_json::Value)>,
+    documents: Vec<(gents_store::collection::Collection, serde_json::Value)>,
 ) {
-    use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     let plan = DesiredStateApplyPlan::new(
         documents
             .into_iter()
@@ -33,10 +35,10 @@ async fn apply_documents(
         .transact_write("test.automation_configuration", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                gents::documents::apply_desired_state_plan(
+                gents_documents::apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
@@ -52,7 +54,7 @@ async fn create_task(
     agent_did: &str,
     prompt_template: &str,
 ) {
-    apply_documents(access, vec![(gents::Collection::Task, serde_json::json!({"node_did":owner,"task_id":task_id,"display_name":task_id,"agent_did":agent_did,"prompt_template":prompt_template}))]).await;
+    apply_documents(access, vec![(gents_store::collection::Collection::Task, serde_json::json!({"node_did":owner,"task_id":task_id,"display_name":task_id,"agent_did":agent_did,"prompt_template":prompt_template}))]).await;
 }
 
 fn schedule_trigger(
@@ -76,11 +78,11 @@ async fn create_schedule(access: &ConfigAccess, owner: &str, schedule_id: &str, 
         access,
         vec![
             (
-                gents::Collection::Schedule,
+                gents_store::collection::Collection::Schedule,
                 serde_json::json!({"node_did":owner,"schedule_id":schedule_id,"cadence":{"kind":"interval","interval_secs":60}}),
             ),
             (
-                gents::Collection::Trigger,
+                gents_store::collection::Collection::Trigger,
                 schedule_trigger(owner, schedule_id, task_id, true),
             ),
         ],
@@ -99,7 +101,7 @@ async fn set_schedule_trigger_enabled(
     apply_documents(
         access,
         vec![(
-            gents::Collection::Trigger,
+            gents_store::collection::Collection::Trigger,
             schedule_trigger(owner, trigger_id, task_id, enabled),
         )],
     )
@@ -156,8 +158,8 @@ async fn create_event_trigger(
     event_kind: &str,
 ) {
     apply_documents(access, vec![
-        (gents::Collection::EventSource, serde_json::json!({"node_did":owner,"event_source_id":trigger_id,"source_collection":source_collection,"event_kind":event_kind})),
-        (gents::Collection::Trigger, serde_json::json!({"node_did":owner,"trigger_id":trigger_id,"task_id":task_id,"source":{"kind":"event","event_source_id":trigger_id},"concurrency":"serial"})),
+        (gents_store::collection::Collection::EventSource, serde_json::json!({"node_did":owner,"event_source_id":trigger_id,"source_collection":source_collection,"event_kind":event_kind})),
+        (gents_store::collection::Collection::Trigger, serde_json::json!({"node_did":owner,"trigger_id":trigger_id,"task_id":task_id,"source":{"kind":"event","event_source_id":trigger_id},"concurrency":"serial"})),
     ]).await;
 }
 

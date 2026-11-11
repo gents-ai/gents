@@ -1,11 +1,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::triggers::snapshot_observer::RuntimeSnapshotObserver;
-use gents::{
-    ConfigAccess, DocumentRuntimeOptions, Gents, ProcessLifecycleObserver, ProcessLifecycleState,
-    ToolCeiling,
-};
+use gents::{DocumentRuntimeOptions, Gents, ProcessLifecycleObserver, ProcessLifecycleState};
+use gents_automation::triggers::snapshot_observer::RuntimeSnapshotObserver;
+use gents_store::config_client::ConfigAccess;
+use gents_tools::surface::ToolCeiling;
 use tokio::sync::watch;
 
 use crate::support::fixtures::bind_managed_agent_backend;
@@ -180,11 +179,11 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
             let node_did = &node_did;
             let agent_did = &default_agent_did;
             Box::pin(async move {
-                use gents::documents::{
+                use gents_documents::{
                     read_desired_state_record_in_txn as read, DesiredStateApplyDocument,
                     DesiredStateApplyPlan,
                 };
-                use gents::Collection;
+                use gents_store::collection::Collection;
                 let (_, mut behavior) = read(txn, Collection::Agent, node_did, agent_did)
                     .await?
                     .expect("behavior");
@@ -213,10 +212,10 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
                     })
                     .collect(),
                 )?;
-                gents::documents::apply_desired_state_plan(
+                gents_documents::apply_desired_state_plan(
                     txn,
                     &plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })

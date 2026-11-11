@@ -3,8 +3,9 @@
 
 use std::time::Duration;
 
-use gents::{DocumentRuntimeOptions, Gents, ToolCeiling};
+use gents::{DocumentRuntimeOptions, Gents};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_tools::surface::ToolCeiling;
 
 use crate::support::builder_runtime::{builder_actors, submit_request};
 use crate::support::interrupt::{
@@ -17,9 +18,13 @@ const MODEL: &str = "disabled-sibling-model";
 const BACKEND: &str = "disabled-sibling-backend";
 const MARKER: &str = "disabled-sibling-marker";
 
-async fn disable_agent(access: &gents::ConfigAccess, node_did: &str, agent_did: &str) {
-    use gents::documents::apply_desired_state_plan;
-    use gents::documents::{
+async fn disable_agent(
+    access: &gents_store::config_client::ConfigAccess,
+    node_did: &str,
+    agent_did: &str,
+) {
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     access
@@ -27,7 +32,7 @@ async fn disable_agent(access: &gents::ConfigAccess, node_did: &str, agent_did: 
             Box::pin(async move {
                 let (_, mut agent) = read_desired_state_record_in_txn(
                     txn,
-                    gents::Collection::Agent,
+                    gents_store::collection::Collection::Agent,
                     node_did,
                     agent_did,
                 )
@@ -35,14 +40,14 @@ async fn disable_agent(access: &gents::ConfigAccess, node_did: &str, agent_did: 
                 .expect("sibling Agent");
                 agent["enabled"] = false.into();
                 let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                    collection: gents::Collection::Agent,
+                    collection: gents_store::collection::Collection::Agent,
                     add: agent.clone(),
                     update: agent,
                 }])?;
                 apply_desired_state_plan(
                     txn,
                     &plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
                 .map(|_| ())

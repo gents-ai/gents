@@ -3,7 +3,7 @@ mod build;
 mod dirs;
 mod install;
 mod run;
-pub(crate) use gents::plugin::store;
+pub(crate) use gents_pack::plugin::store;
 pub use run::{call_installed, call_installed_for_operator};
 
 use anyhow::{Context, Result};
@@ -58,11 +58,11 @@ fn plugin_pack(
     dir: &std::path::Path,
     afb: &afterburner_cloud::Afb,
     bytes: &[u8],
-) -> Result<(Vec<u8>, gents::pack::archive::PackHeader)> {
+) -> Result<(Vec<u8>, gents_pack::pack::archive::PackHeader)> {
     let package = &afb.manifest.package;
     anyhow::ensure!(
-        gents::documents::pack_spec::is_valid_pack_name(&package.name)
-            && gents::documents::pack_spec::is_valid_pack_name(&package.namespace),
+        gents_documents::pack_spec::is_valid_pack_name(&package.name)
+            && gents_documents::pack_spec::is_valid_pack_name(&package.namespace),
         "{}/{} cannot be a pack: pack names are snake_case; rename the plugin",
         package.namespace,
         package.name
@@ -95,7 +95,7 @@ fn plugin_pack(
         dir.join("manifest.json"),
         serde_json::to_vec_pretty(&manifest).context("encoding the plugin pack manifest")?,
     )?;
-    gents::pack::archive::pack_dir(dir)
+    gents_pack::pack::archive::pack_dir(dir)
 }
 
 fn list(args: PluginListArgs) -> Result<()> {
@@ -115,11 +115,11 @@ async fn remove(args: PluginRemoveArgs) -> Result<()> {
         .ok()
         .and_then(|record| record.owner_pack_coordinate);
     if let Some(coordinate) = owner {
-        if let Some(record) = gents::pack::read_home_install(&home, &coordinate)? {
+        if let Some(record) = gents_pack::pack::read_home_install(&home, &coordinate)? {
             anyhow::ensure!(
                 matches!(
                     record.kind,
-                    gents::pack::PackKind::Assets | gents::pack::PackKind::Plugins
+                    gents_pack::pack::PackKind::Assets | gents_pack::pack::PackKind::Plugins
                 ) && record.plugins.iter().all(|plugin| plugin.name == name),
                 "{namespace}/{name} is installed by pack {coordinate} with other contents; remove it with gents config pack remove {coordinate}"
             );
@@ -154,9 +154,9 @@ async fn remove(args: PluginRemoveArgs) -> Result<()> {
 
 pub(crate) fn declaration_from_artifact(
     afb: &afterburner_cloud::Afb,
-) -> Result<gents::pack::PackPlugin> {
+) -> Result<gents_pack::pack::PackPlugin> {
     let package = &afb.manifest.package;
-    Ok(gents::pack::PackPlugin {
+    Ok(gents_pack::pack::PackPlugin {
         name: package.name.clone(),
         description: package
             .description

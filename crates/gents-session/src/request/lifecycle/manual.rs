@@ -1,0 +1,383 @@
+use anyhow::{anyhow, Result};
+use defra_node::Node as EmbeddedNode;
+use serde_json::Value;
+
+use crate::request::lifecycle::{
+    write_pending_agent_request_with_lineage_workspace_and_conversation_title, ExecutionOrigin,
+    TriggerLineage,
+};
+use gents_documents::template::{render_manual_template, task_node_ctx, TemplateScope};
+
+pub async fn write_manual_agent_request(
+    node: &std::sync::Arc<EmbeddedNode>,
+    actor: ::identity::Did,
+    identity: &dyn gents_store::identity::NodeIdentity,
+    target: ManualRequestTarget<'_>,
+    prompt_template: &str,
+    args: Value,
+) -> Result<String> {
+    write_manual_agent_request_with_conversation_title(
+        node,
+        actor,
+        identity,
+        target,
+        prompt_template,
+        args,
+        None,
+    )
+    .await
+}
+
+pub struct ManualRequestTarget<'a> {
+    pub node_did: &'a str,
+    pub agent_did: &'a str,
+    pub task_id: &'a str,
+}
+
+pub async fn write_manual_agent_request_with_conversation_title(
+    node: &std::sync::Arc<EmbeddedNode>,
+    actor: ::identity::Did,
+    identity: &dyn gents_store::identity::NodeIdentity,
+    target: ManualRequestTarget<'_>,
+    prompt_template: &str,
+    args: Value,
+    conversation_title: Option<&str>,
+) -> Result<String> {
+    let ManualRequestTarget {
+        node_did,
+        agent_did,
+        task_id,
+    } = target;
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let (node_scope, ctx_scope) = task_node_ctx(node_did, agent_did, &now);
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let scope = TemplateScope {
+        session: Some(serde_json::json!({"session_id": session_id})),
+        request: Some(serde_json::json!({"request_id": request_id})),
+        event: serde_json::json!({
+            "fired_at": now,
+            "trigger_id": serde_json::Value::Null,
+            "trigger_kind": "manual",
+        }),
+        doc: None,
+        args: Some(args),
+        group: None,
+        node: node_scope,
+        ctx: ctx_scope,
+    };
+    let content = render_manual_template(task_id, prompt_template, &scope)?;
+
+    let enqueued = write_pending_agent_request_with_lineage_workspace_and_conversation_title(
+        node,
+        actor,
+        node_did,
+        agent_did,
+        &content,
+        ExecutionOrigin::Interactive,
+        TriggerLineage {
+            trigger_id: None,
+            trigger_kind: Some("manual".to_string()),
+            source_doc_id: None,
+            correlation: None,
+            trigger_context: None,
+        },
+        conversation_title,
+        None,
+        Some(&request_id),
+        None,
+        None,
+        Some(&session_id),
+        identity,
+    )
+    .await
+    .map_err(|e| anyhow!("create manual AgentRequest for task {task_id}: {e}"))?;
+
+    tracing::info!(
+        task_id = %task_id,
+        request_id = %enqueued.request_id,
+        session_id = %enqueued.session_id,
+        doc_id = %enqueued.doc_id,
+        "manual task run enqueued as AgentRequest"
+    );
+    Ok(enqueued.doc_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use defra_node::Node as EmbeddedNode;
+    use serde_json::Value;
+
+    use super::{
+        write_manual_agent_request, write_manual_agent_request_with_conversation_title,
+        ManualRequestTarget,
+    };
+    use gents_store::identity::{KeyIdentity, NodeIdentity};
+    use gents_store::schema::ensure_runtime_schemas;
+
+    async fn test_node() -> (Arc<EmbeddedNode>, String, Arc<dyn NodeIdentity>) {
+        let temp = tempfile::tempdir().unwrap();
+        let identity = KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap();
+        let did = identity.did().to_string();
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(identity.did())
+                .build()
+                .await
+                .unwrap(),
+        );
+        ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let admin = gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            ::identity::Did::new(identity.did()).unwrap(),
+        );
+        gents_documents::test_support::bootstrap_signed_test_node(&admin, &did).await;
+        let binding = gents_store::identity::provision_agent_identity(&identity).unwrap();
+        gents_inference::test_support::install_test_agent_binding(
+            &node,
+            &did,
+            "manual fixture",
+            &binding,
+        )
+        .await;
+        let agent = gents_store::identity::resolve_agent_identity(&identity, &binding).unwrap();
+        (node, did, agent)
+    }
+
+    /// Reads through the agent's own signed access: ACP filters unsigned node reads.
+    async fn agent_query(node: &Arc<EmbeddedNode>, agent: &dyn NodeIdentity, query: &str) -> Value {
+        gents_store::config_client::ConfigAccess::local_managed_agent(
+            node.clone(),
+            agent.did().parse().unwrap(),
+            agent,
+        )
+        .unwrap()
+        .execute(query)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn writes_manual_request_with_rendered_template_and_manual_lineage() {
+        let (node, node_did, agent) = test_node().await;
+        let actor = ::identity::Did::new(agent.did()).unwrap();
+
+        let doc_id = write_manual_agent_request(
+            &node,
+            actor,
+            agent.as_ref(),
+            ManualRequestTarget {
+                node_did: &node_did,
+                agent_did: agent.did(),
+                task_id: "task-1",
+            },
+            "hello {{ args.name }}",
+            serde_json::json!({"name": "Amy"}),
+        )
+        .await
+        .unwrap();
+        assert!(!doc_id.is_empty());
+
+        let query = format!(
+            r#"{{
+                AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}) {{
+                    _docID
+                    content
+                    caused_by_trigger_kind
+                    caused_by_trigger_id
+                    execution_origin
+                    lifecycle_state
+                    input
+                }}
+            }}"#
+        );
+        let response = agent_query(&node, agent.as_ref(), &query).await;
+        let rows = response["data"]["AgentRequest"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(rows.len(), 1, "expected exactly one row, got {rows:?}");
+        let row = &rows[0];
+
+        assert_eq!(row["content"].as_str(), Some("hello Amy"));
+        assert_eq!(row["caused_by_trigger_kind"].as_str(), Some("manual"));
+        assert!(
+            row["caused_by_trigger_id"].is_null(),
+            "caused_by_trigger_id should be null for manual runs, got {:?}",
+            row["caused_by_trigger_id"]
+        );
+        assert_eq!(row["execution_origin"].as_str(), Some("interactive"));
+        assert_eq!(row["lifecycle_state"].as_str(), Some("pending"));
+        assert!(row["input"].is_null());
+    }
+
+    #[tokio::test]
+    async fn manual_task_template_gets_node_and_ctx_scope() {
+        let (node, node_did, agent) = test_node().await;
+        let actor = ::identity::Did::new(agent.did()).unwrap();
+        let doc_id = write_manual_agent_request(
+            &node,
+            actor,
+            agent.as_ref(),
+            ManualRequestTarget {
+                node_did: &node_did,
+                agent_did: agent.did(),
+                task_id: "task-1",
+            },
+            "tick {{ ctx.now }} on {{ node.node_did }} / {{ node.agent_did }}",
+            serde_json::json!({}),
+        )
+        .await
+        .unwrap();
+
+        let query = format!(
+            r#"{{
+                AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
+                    content
+                }}
+            }}"#
+        );
+        let response = agent_query(&node, agent.as_ref(), &query).await;
+        let content = response["data"]["AgentRequest"][0]["content"]
+            .as_str()
+            .expect("request content");
+
+        assert!(content.starts_with("tick "));
+        assert!(content.contains(&node_did), "content={content:?}");
+        assert!(
+            content.ends_with(&format!(" / {}", agent.did())),
+            "content={content:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn writes_manual_request_with_slash_selected_skill_input() {
+        let (node, node_did, agent) = test_node().await;
+        let actor = ::identity::Did::new(agent.did()).unwrap();
+
+        let doc_id = write_manual_agent_request(
+            &node,
+            actor,
+            agent.as_ref(),
+            ManualRequestTarget {
+                node_did: &node_did,
+                agent_did: agent.did(),
+                task_id: "task-1",
+            },
+            "/vuln-scan\nReview /work",
+            serde_json::json!({}),
+        )
+        .await
+        .unwrap();
+
+        let query = format!(
+            r#"{{
+                AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
+                    content
+                    input
+                }}
+            }}"#
+        );
+        let response = agent_query(&node, agent.as_ref(), &query).await;
+        let row = response["data"]["AgentRequest"]
+            .as_array()
+            .and_then(|rows| rows.first())
+            .expect("expected request row");
+
+        assert_eq!(row["content"].as_str(), Some("Review /work"));
+        assert_eq!(row["input"]["selected_skill_ids"][0], "vuln-scan");
+    }
+
+    #[tokio::test]
+    async fn writes_manual_request_with_deferred_conversation_title() {
+        let (node, node_did, agent) = test_node().await;
+        let actor = ::identity::Did::new(agent.did()).unwrap();
+
+        let doc_id = write_manual_agent_request_with_conversation_title(
+            &node,
+            actor,
+            agent.as_ref(),
+            ManualRequestTarget {
+                node_did: &node_did,
+                agent_did: agent.did(),
+                task_id: "task-1",
+            },
+            "hello {{ args.name }}",
+            serde_json::json!({"name": "Amy"}),
+            Some("mini-host-health-20260430t180405z"),
+        )
+        .await
+        .unwrap();
+
+        let query = format!(
+            r#"{{
+                AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
+                    session_id
+                    input
+                }}
+            }}"#
+        );
+        let response = agent_query(&node, agent.as_ref(), &query).await;
+        let request = response["data"]["AgentRequest"]
+            .as_array()
+            .and_then(|rows| rows.first())
+            .expect("request row");
+        let session_id = request
+            .get("session_id")
+            .and_then(Value::as_str)
+            .expect("request should have session_id");
+        let input = request
+            .get("input")
+            .expect("request should carry canonical input");
+        assert_eq!(
+            input.pointer("/initial_title/text").and_then(Value::as_str),
+            Some("mini-host-health-20260430t180405z")
+        );
+
+        let session_query = format!(
+            r#"{{
+                AgentSession(
+                    filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                    limit: 1
+                ) {{
+                    title
+                }}
+            }}"#
+        );
+        let session_response = agent_query(&node, agent.as_ref(), &session_query).await;
+        let sessions = session_response["data"]["AgentSession"]
+            .as_array()
+            .expect("session rows");
+        assert!(
+            sessions.is_empty(),
+            "enqueue persists only AgentRequest; the runtime materializes AgentSession"
+        );
+    }
+
+    #[tokio::test]
+    async fn surfaces_template_render_errors() {
+        let (node, node_did, agent) = test_node().await;
+        let actor = ::identity::Did::new(agent.did()).unwrap();
+        let err = write_manual_agent_request(
+            &node,
+            actor,
+            agent.as_ref(),
+            ManualRequestTarget {
+                node_did: &node_did,
+                agent_did: agent.did(),
+                task_id: "task-err",
+            },
+            "hello {{ args.missing }}",
+            serde_json::json!({}),
+        )
+        .await
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("render manual template for task task-err"),
+            "expected render error context, got: {msg}"
+        );
+    }
+}

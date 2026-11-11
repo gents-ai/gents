@@ -39,8 +39,8 @@ async fn set_backend_capacity(
     backend_id: &str,
     max_concurrent: usize,
 ) {
-    use gents::documents::apply_desired_state_plan;
-    use gents::documents::{
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     let owner = db.node_identity.did();
@@ -51,7 +51,7 @@ async fn set_backend_capacity(
             Box::pin(async move {
                 let (_, mut backend) = read_desired_state_record_in_txn(
                     txn,
-                    gents::Collection::InferenceBackend,
+                    gents_store::collection::Collection::InferenceBackend,
                     owner,
                     backend_id,
                 )
@@ -59,14 +59,14 @@ async fn set_backend_capacity(
                 .expect("bound fixture backend");
                 backend["max_concurrent"] = max_concurrent.into();
                 let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                    collection: gents::Collection::InferenceBackend,
+                    collection: gents_store::collection::Collection::InferenceBackend,
                     add: backend.clone(),
                     update: backend,
                 }])?;
                 apply_desired_state_plan(
                     txn,
                     &plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
                 .map(|_| ())
@@ -229,7 +229,7 @@ pub async fn seed_session_message(
                     .execute_with_variables(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION, &variables)
                     .await?;
                 let close_doc_id =
-                    gents::store::graphql::created_doc_id(&created, "AgentOutputSegment")?;
+                    gents_store::graphql::created_doc_id(&created, "AgentOutputSegment")?;
                 txn.add_resource_relationship(
                     "AgentOutputSegment",
                     &close_doc_id,
@@ -247,7 +247,7 @@ pub async fn seed_session_message(
                 .await?;
                 let message = TranscriptMessage {
                     native_request_id: None,
-                    message_key: gents::session::sequence_message_key(
+                    message_key: gents_session::session::sequence_message_key(
                         node_did,
                         session_id,
                         Some(agent_did),
@@ -285,7 +285,7 @@ pub async fn seed_session_message(
                     .execute_with_variables(CREATE_AGENT_MESSAGE_MUTATION, &variables)
                     .await?;
                 let message_doc_id =
-                    gents::store::graphql::created_doc_id(&created, "AgentMessage")?;
+                    gents_store::graphql::created_doc_id(&created, "AgentMessage")?;
                 txn.add_resource_relationship(
                     "AgentMessage",
                     &message_doc_id,

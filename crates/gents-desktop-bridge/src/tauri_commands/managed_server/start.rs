@@ -55,7 +55,7 @@ where
         stored.as_ref(),
     )?;
     refuse_renaming_home(&node_home, node_name).await?;
-    gents::store::local::home::ensure_home_identity_can_serve(&node_home).map_err(|error| {
+    gents_store::local::home::ensure_home_identity_can_serve(&node_home).map_err(|error| {
         BridgeError::untyped(gents_protocol::error_chain::ErrorChain(&error).to_string())
     })?;
 

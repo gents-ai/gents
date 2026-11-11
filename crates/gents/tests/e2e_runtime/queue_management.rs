@@ -1,13 +1,13 @@
-use gents::request::lifecycle::{
-    pending_steer_edit, pending_user_queue, submit_pending_user_edit, submit_pending_user_steer,
-    PendingMessageEdit, PendingQueueEdit,
-};
 use gents::runtime::agent::session_commands::run_session_command_reconciler;
-use gents::store::graphql::escape_graphql_string;
-use gents::NodeIdentity;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 use gents_protocol::request_input::QueueDelivery;
 use gents_protocol::session_input_edit::SessionInputEditReceipt;
+use gents_session::request::lifecycle::{
+    pending_steer_edit, pending_user_queue, submit_pending_user_edit, submit_pending_user_steer,
+    PendingMessageEdit, PendingQueueEdit,
+};
+use gents_store::graphql::escape_graphql_string;
+use gents_store::identity::NodeIdentity;
 
 use crate::support::{self, test_db, TestDb};
 
@@ -16,7 +16,7 @@ pub(super) async fn insert_signed_as(
     mut request: AgentRequestCreate,
 ) -> String {
     request.session_doc_id = Some(
-        gents::request::lifecycle::reserve_goal_session(&fixture.access, &request)
+        gents_session::request::lifecycle::reserve_goal_session(&fixture.access, &request)
             .await
             .unwrap(),
     );
@@ -26,9 +26,9 @@ pub(super) async fn insert_signed_as(
             .transact_readonly("test.queue.selected_agent", |txn| {
                 Box::pin(async {
                     Ok::<_, anyhow::Error>(
-                        gents::documents::read_desired_state_record_in_txn(
+                        gents_documents::read_desired_state_record_in_txn(
                             txn,
-                            gents::Collection::Agent,
+                            gents_store::collection::Collection::Agent,
                             &request.node_did,
                             &request.agent_did,
                         )
@@ -41,10 +41,10 @@ pub(super) async fn insert_signed_as(
             .await
             .unwrap(),
     );
-    gents::sign_agent_request_create(&fixture.user, &mut request)
+    gents_session::request::admission::sign_agent_request_create(&fixture.user, &mut request)
         .await
         .unwrap();
-    gents::request::lifecycle::submit_client_request(&fixture.access, &request)
+    gents_session::request::lifecycle::submit_client_request(&fixture.access, &request)
         .await
         .unwrap();
     let response = fixture.access.execute(&format!(
@@ -156,8 +156,8 @@ pub(super) async fn row_as(fixture: &support::ManagedAgentFixture, doc: &str) ->
 }
 
 async fn install_review_skill(db: &TestDb, fixture: &support::ManagedAgentFixture) {
-    use gents::documents::apply_desired_state_plan;
-    use gents::documents::{
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     let owner = db.node_identity.did();
@@ -165,23 +165,23 @@ async fn install_review_skill(db: &TestDb, fixture: &support::ManagedAgentFixtur
     fixture.access.transact_write("test.queue_review_skill", |txn| {
         Box::pin(async move {
             let (_, mut agent) = read_desired_state_record_in_txn(
-                txn, gents::Collection::Agent, owner, selected,
+                txn, gents_store::collection::Collection::Agent, owner, selected,
             ).await?.expect("selected Agent");
             agent["context_id"] = "test-context".into();
             let documents = [
-                (gents::Collection::Skill, serde_json::json!({
+                (gents_store::collection::Collection::Skill, serde_json::json!({
                     "node_did": owner, "skill_id": "review", "name": "review",
                     "description": "test", "instructions": "review", "enabled": true,
                 })),
-                (gents::Collection::AgentContext, serde_json::json!({
+                (gents_store::collection::Collection::AgentContext, serde_json::json!({
                     "node_did": owner, "context_id": "test-context", "skill_ids": ["review"],
                 })),
-                (gents::Collection::Agent, agent),
+                (gents_store::collection::Collection::Agent, agent),
             ];
             let plan = DesiredStateApplyPlan::new(documents.into_iter().map(|(collection, value)| {
                 DesiredStateApplyDocument { collection, add: value.clone(), update: value }
             }).collect())?;
-            apply_desired_state_plan(txn, &plan, &gents::inference::resolved::ProviderProfilePolicy).await
+            apply_desired_state_plan(txn, &plan, &gents_inference::resolved::ProviderProfilePolicy).await
         })
     }).await.expect("install User-authored review skill");
 }
@@ -626,7 +626,7 @@ async fn signed_pending_replacement_authenticates_delivery_and_each_position_fie
         serde_json::from_value(response["data"]["AgentRequest"].clone()).unwrap();
     assert_eq!(rows.len(), 1);
     let signed = &rows[0];
-    gents::verify_request_receipt_signature(signed)
+    gents_store::identity::request_receipt::verify_request_receipt_signature(signed)
         .expect("the actual replacement signed by the user must authenticate");
     let queue = signed.input.as_ref().unwrap().queue.as_ref().unwrap();
     assert_eq!(queue.delivery, QueueDelivery::Steer);
@@ -672,11 +672,13 @@ async fn signed_pending_replacement_authenticates_delivery_and_each_position_fie
         ("slot_request_doc_id", changed_slot),
         ("replaces_request_doc_id", changed_predecessor),
     ] {
-        let error = gents::verify_request_receipt_signature(&tampered).expect_err(field);
+        let error =
+            gents_store::identity::request_receipt::verify_request_receipt_signature(&tampered)
+                .expect_err(field);
         let chain = gents_protocol::error_chain::ErrorChain(&error).to_string();
         assert!(chain.contains("signature"), "{field}: {chain}");
     }
-    gents::verify_request_receipt_signature(signed)
+    gents_store::identity::request_receipt::verify_request_receipt_signature(signed)
         .expect("tampering clones must not change the persisted signed replacement");
 }
 

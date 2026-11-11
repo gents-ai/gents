@@ -12,8 +12,8 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::runtime::agent::ProcessLifecycleState;
-use crate::store::graphql::escape_graphql_string;
-use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
+use gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
+use gents_store::graphql::escape_graphql_string;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AgentAdmissionObservation {
@@ -830,7 +830,7 @@ async fn persist_candidate(
 }
 
 fn is_fatal_node_readiness_write(error: &anyhow::Error) -> bool {
-    if crate::store::graphql::is_storage_full(error.as_ref()) {
+    if gents_store::graphql::is_storage_full(error.as_ref()) {
         return true;
     }
     #[cfg(test)]
@@ -859,7 +859,7 @@ pub(crate) async fn upsert_node_readiness(
         "readiness publisher DID does not match the configured node identity"
     );
     let actor = identity::Did::new(node_did)?;
-    let access = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor.clone());
+    let access = gents_store::config_client::ConfigAccess::local_as(node.clone(), actor.clone());
     let snapshot_json = serde_json::to_string(snapshot)?;
     let escaped_did = escape_graphql_string(node_did);
     let escaped_snapshot = escape_graphql_string(&snapshot_json);
@@ -950,7 +950,7 @@ pub(crate) async fn upsert_node_readiness(
         );
     }
     if let Err(error) =
-        crate::store::config_client::recover_deferred_node_operations(node, node_did).await
+        gents_store::config_client::recover_deferred_node_operations(node, node_did).await
     {
         tracing::warn!(node_did, error = %error, "deferred node operation relationship recovery failed");
     }

@@ -10,7 +10,7 @@ use gents::defra_node::Node as EmbeddedNode;
 pub async fn wait_for_listen_addr(node: &EmbeddedNode) -> String {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let addrs = gents::store::identity::node_p2p(node)
+        let addrs = gents_store::identity::node_p2p(node)
             .expect("p2p should be enabled")
             .listen_addresses()
             .await
@@ -31,7 +31,7 @@ pub async fn wait_for_listen_addr(node: &EmbeddedNode) -> String {
 pub async fn wait_for_connected_peer(node: &EmbeddedNode) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let peers = gents::store::identity::node_p2p(node)
+        let peers = gents_store::identity::node_p2p(node)
             .expect("p2p should be enabled")
             .connected_peers()
             .await

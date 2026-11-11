@@ -6,7 +6,7 @@ use crate::{
     TrialCompletion, TrialIdentity, TrialRecord, TrialUsage, VerdictRecord, DENOMINATOR_POLICY_V1,
     TAXONOMY_VERSION,
 };
-use gents::documents::{EvalDefinition, EvalSplit, EvalTier};
+use gents_documents::{EvalDefinition, EvalSplit, EvalTier};
 
 pub(crate) const RUN: &str = "run";
 

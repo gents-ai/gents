@@ -21,7 +21,7 @@ use crate::optimization::proposer::ScriptedProposer;
 use crate::report::load_run_rows;
 use crate::runner::ScriptedExecutor;
 use crate::{load_run, load_verdicts};
-use gents::documents::EvalSplit;
+use gents_documents::EvalSplit;
 
 #[tokio::test]
 async fn a_candidate_that_wins_every_case_is_accepted_and_reaches_ready_to_promote() {

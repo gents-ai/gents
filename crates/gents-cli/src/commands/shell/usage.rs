@@ -1,10 +1,10 @@
 //! The desktop's Usage limits (`ProviderUsage.tsx:329-423`), as the `/usage` menu.
 
 use chrono::{DateTime, Utc};
-use gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
-use gents::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
-use gents::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
-use gents::inference::usage_observation::{AccountUsageRead, UsageRead, UsageTrigger, WindowView};
+use gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
+use gents_inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
+use gents_inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
+use gents_inference::usage_observation::{AccountUsageRead, UsageRead, UsageTrigger, WindowView};
 use gents_shell::sample::Tone;
 use gents_shell::source::{MenuAct, MenuRow};
 

@@ -1,10 +1,8 @@
 use anyhow::{Context, Result};
-use gents::runtime::agent::p2p_reconcile::templates::{
+use gents_p2p::p2p_reconcile::templates::{
     combine_filters, equality_filter, to_replication_filters, PairingFilters,
 };
-use gents::runtime::agent::p2p_reconcile::{
-    expand_p2p_collection_profile_ids, P2pCollectionProfile,
-};
+use gents_p2p::p2p_reconcile::{expand_p2p_collection_profile_ids, P2pCollectionProfile};
 use serde_json::{json, Value};
 
 use crate::cli::args::{

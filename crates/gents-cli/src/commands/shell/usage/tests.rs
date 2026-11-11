@@ -1,6 +1,6 @@
 use chrono::{Duration, TimeZone};
-use gents::inference::usage_observation::account_usage::UsageSource;
-use gents::inference::usage_observation::{UsageView, WindowView};
+use gents_inference::usage_observation::account_usage::UsageSource;
+use gents_inference::usage_observation::{UsageView, WindowView};
 use gents_shell::sample::Tone::{Accent, Label, Plain, Warn};
 
 use super::*;

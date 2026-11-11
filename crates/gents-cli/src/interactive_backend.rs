@@ -2,7 +2,7 @@ use std::io::{IsTerminal, Write as _};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use gents::inference::backends::setup::{
+use gents_inference::backends::setup::{
     inference_setup_catalog, InferenceAuthMethod, InferenceAuthOption, InferenceProviderId,
 };
 use serde_json::Value;
@@ -330,7 +330,7 @@ async fn read_hidden_line() -> Result<String> {
 fn set_terminal_echo(on: bool) -> bool {
     let mut command = std::process::Command::new("stty");
     command.arg(if on { "echo" } else { "-echo" });
-    gents::exec::native_spawn::status_std(&mut command)
+    gents_session::exec::native_spawn::status_std(&mut command)
         .map(|status| status.success())
         .unwrap_or(false)
 }
@@ -355,8 +355,8 @@ async fn read_line() -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use gents::inference::backends::setup::connection_spec;
-    use gents::OpenAiWireApi;
+    use gents_inference::backends::setup::connection_spec;
+    use gents_loop::openai_wire::OpenAiWireApi;
 
     use super::*;
     use crate::{resolve_backend_config_with_preset, BackendResolutionMode};

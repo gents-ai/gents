@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;
-use gents::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
-use gents::store::graphql::escape_graphql_string;
 use gents_protocol::goal_control::SessionGoalControlReceipt;
+use gents_store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
+use gents_store::graphql::escape_graphql_string;
 use std::sync::Arc;
 
 use super::super::goal_delivery::{self, Decision, Intent, Record, Reference};

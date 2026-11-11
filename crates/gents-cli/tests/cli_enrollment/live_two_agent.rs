@@ -1,6 +1,6 @@
 use super::*;
-use gents::store::config_client::ConfigAccess;
 use gents_protocol::agent_identity::AgentIdentityBinding;
+use gents_store::config_client::ConfigAccess;
 use std::sync::Arc;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -205,7 +205,7 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
     let runtime_identity = identity_from_init(&init)?;
     let data = runtime_home.join("data");
     let node = Arc::new(
-        gents::store::local::store_key::open_home_store_key(&runtime_home, &data)
+        gents_store::local::store_key::open_home_store_key(&runtime_home, &data)
             .await?
             .encrypt(
                 gents::defra_node::Node::builder()
@@ -252,7 +252,7 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
             })
         })
         .await?;
-    let commits = gents::store::graphql::composite_commits(
+    let commits = gents_store::graphql::composite_commits(
         &node,
         &agent_doc,
         "test.live_agent_creation_signature",
@@ -319,8 +319,7 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
     let actors = bindings
         .iter()
         .map(|binding| {
-            let signer =
-                gents::store::identity::resolve_agent_identity(&runtime_identity, binding)?;
+            let signer = gents_store::identity::resolve_agent_identity(&runtime_identity, binding)?;
             Ok(ConfigAccess::local_managed_agent(
                 node.clone(),
                 binding.agent_did.parse()?,
@@ -349,7 +348,7 @@ async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() ->
             node.nac_manager()
                 .check_permission(
                     &binding.agent_did.parse()?,
-                    gents::store::config_client::NodePermission::DocumentUpdate
+                    gents_store::config_client::NodePermission::DocumentUpdate
                 )
                 .await?,
             "Agent needs node-level update before the document ACP check"

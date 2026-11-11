@@ -20,7 +20,7 @@ pub(crate) struct ClaudeLoginOptions {
 }
 
 pub(crate) struct ClaudeLoginOutcome {
-    pub(crate) sign_in: gents::inference::auth::credential::SignIn,
+    pub(crate) sign_in: gents_inference::auth::credential::SignIn,
 }
 
 pub(crate) async fn claude_login(args: ClaudeLoginArgs) -> Result<()> {
@@ -57,7 +57,7 @@ pub(crate) async fn run_claude_login<O>(
 where
     O: FnOnce(&str),
 {
-    let provider = gents::inference::auth::claude::normalize_provider(&opts.provider);
+    let provider = gents_inference::auth::claude::normalize_provider(&opts.provider);
     let mut login_options = LoginOptions {
         open_browser: opts.open_browser,
         ..LoginOptions::default()
@@ -109,7 +109,7 @@ where
         .await?
     };
 
-    let login_tokens = gents::inference::auth::claude::ClaudeLoginTokens {
+    let login_tokens = gents_inference::auth::claude::ClaudeLoginTokens {
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
         expires_in: tokens.expires_in,
@@ -118,18 +118,15 @@ where
         organization_uuid: tokens.organization_uuid,
         account_uuid: tokens.account_uuid,
     };
-    let credential = gents::inference::auth::claude::credential_from_login_tokens(
+    let credential = gents_inference::auth::claude::credential_from_login_tokens(
         node_did,
         &provider,
         &login_tokens,
         chrono::Utc::now(),
     );
-    let sign_in = gents::inference::auth::credential::store_sign_in(
-        access,
-        credential,
-        opts.label.as_deref(),
-    )
-    .await?;
+    let sign_in =
+        gents_inference::auth::credential::store_sign_in(access, credential, opts.label.as_deref())
+            .await?;
     Ok(ClaudeLoginOutcome { sign_in })
 }
 
@@ -138,7 +135,7 @@ pub(crate) fn claude_login_result_json(outcome: &ClaudeLoginOutcome) -> Value {
     json!({
         "login": "completed",
         "doc_id": outcome.sign_in.doc_id,
-        "label": gents::inference::auth::credential::effective_account_label(credential),
+        "label": gents_inference::auth::credential::effective_account_label(credential),
         "result": outcome.sign_in.result,
         "profiles": outcome.sign_in.profiles,
         "credential_id": credential.credential_id,
@@ -158,10 +155,10 @@ mod tests {
 
     #[test]
     fn result_json_redacts_tokens() {
-        let credential = gents::inference::auth::claude::credential_from_login_tokens(
+        let credential = gents_inference::auth::claude::credential_from_login_tokens(
             "did:key:z6MkTest",
             "claude-subscription",
-            &gents::inference::auth::claude::ClaudeLoginTokens {
+            &gents_inference::auth::claude::ClaudeLoginTokens {
                 access_token: "access-SECRET".into(),
                 refresh_token: "refresh-SECRET".into(),
                 expires_in: Some(60),
@@ -173,10 +170,10 @@ mod tests {
             chrono::Utc::now(),
         );
         let json = claude_login_result_json(&ClaudeLoginOutcome {
-            sign_in: gents::inference::auth::credential::SignIn {
+            sign_in: gents_inference::auth::credential::SignIn {
                 doc_id: "bae-1".into(),
                 credential,
-                result: gents::inference::auth::credential::SignInResult::Added,
+                result: gents_inference::auth::credential::SignInResult::Added,
                 identity_matched: false,
                 profiles: vec!["default-profile".into()],
             },
@@ -193,7 +190,7 @@ mod tests {
     fn browser_free_login() -> (ConfigAccess, ClaudeLoginOptions) {
         let access = ConfigAccess::graphql("http://127.0.0.1:9/api/v0/graphql");
         let opts = ClaudeLoginOptions {
-            provider: gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER.into(),
+            provider: gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER.into(),
             label: None,
             manual: false,
             open_browser: false,

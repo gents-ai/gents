@@ -3,12 +3,12 @@ use super::super::router::configuration_admission::{
     DeferredRequests,
 };
 use super::support::request;
-use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-use crate::inference::resolved::visibility::ConfigurationVisibilityError;
-use crate::inference::resolved::{ResolvedConfiguration, SelectedConfiguration};
 use crate::runtime::agent::{resolve_document_runtime_snapshot, DocumentResolveContext};
-use crate::store::identity::NodeIdentity;
-use crate::Collection;
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents_inference::resolved::visibility::ConfigurationVisibilityError;
+use gents_inference::resolved::{ResolvedConfiguration, SelectedConfiguration};
+use gents_store::collection::Collection;
+use gents_store::identity::NodeIdentity;
 use serde_json::json;
 
 #[test]
@@ -55,14 +55,14 @@ async fn client_rebinding_defers_the_superseded_generation_and_scopes_the_new_se
     let runtime = db.node_identity.clone();
     let owner = runtime.did().to_owned();
     let user_did = identity::Did::new(user.did()).unwrap();
-    let sibling = crate::store::identity::provision_agent_identity_authorized(
+    let sibling = gents_store::identity::provision_agent_identity_authorized(
         &node,
         runtime.as_ref(),
         &user_did,
     )
     .await
     .unwrap();
-    crate::test_support::inference::install_test_agent_binding_with_access(
+    gents_inference::test_support::install_test_agent_binding_with_access(
         &owner,
         "Sibling fixture agent",
         &sibling,
@@ -71,7 +71,7 @@ async fn client_rebinding_defers_the_superseded_generation_and_scopes_the_new_se
     .await;
     let context = DocumentResolveContext::for_tests(
         runtime.clone(),
-        crate::tools::surface::ToolCeiling::readonly(),
+        gents_tools::surface::ToolCeiling::readonly(),
         Default::default(),
     );
     let first = resolve_document_runtime_snapshot(&node, &context)
@@ -85,7 +85,7 @@ async fn client_rebinding_defers_the_superseded_generation_and_scopes_the_new_se
         ConfigurationAdmission::Claim
     );
 
-    let mut agent = crate::test_support::documents::test_agent_documents(
+    let mut agent = gents_documents::test_support::test_agent_documents(
         &owner,
         "Default fixture agent",
         &binding,
@@ -120,17 +120,17 @@ async fn client_rebinding_defers_the_superseded_generation_and_scopes_the_new_se
         .transact_write("test.client_rebinding", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::documents::apply_desired_state_plan(
+                gents_documents::apply_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
         })
         .await
         .unwrap();
-    crate::inference::backends::registry::set_backend_probe_status_as(
+    gents_inference::backends::registry::set_backend_probe_status_as(
         &access,
         &owner,
         "editor-setup",
@@ -174,7 +174,7 @@ async fn client_rebinding_defers_the_superseded_generation_and_scopes_the_new_se
         "an agent that did not select the configuration must not read it: {sibling_read:?}"
     );
     let outsider = tokio::task::spawn_blocking(|| {
-        crate::store::test_support::test_identity("configuration-admission-outsider")
+        gents_store::test_support::test_identity("configuration-admission-outsider")
     })
     .await
     .unwrap();

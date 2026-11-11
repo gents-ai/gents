@@ -4,8 +4,8 @@ use super::{reject, StructuralRejection};
 use crate::optimization::subject::{task_seed_routes, MaterializedPack};
 use crate::optimization::target::TargetField;
 use crate::runner::embedded::executor::install::bind_fixture_owner;
-use gents::documents::template::{render_template, task_node_ctx, TemplateScope};
-use gents::documents::{EvalCase, EvalDefinition, EventSource};
+use gents_documents::template::{render_template, task_node_ctx, TemplateScope};
+use gents_documents::{EvalCase, EvalDefinition, EventSource};
 
 pub(crate) fn seed_gate(
     baseline: &MaterializedPack,
@@ -55,7 +55,7 @@ fn failed_seeds(
                         "state_doc_id": identity,
                         "correlation_value": correlation,
                         "count": docs.len(),
-                        "complete": gents::triggers::expected_group_count(
+                        "complete": gents_automation::triggers::expected_group_count(
                             group.expected_count.as_ref(), &docs
                         ).ok().flatten() == Some(docs.len()),
                         "docs": docs,
@@ -131,16 +131,19 @@ fn group_documents(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::documents::TriggerSource;
+    use gents_documents::TriggerSource;
 
     #[test]
     fn exact_seed_rendering_matches_lean() {
         for row in &gents_lean_vocab::lean_optimization_cases().seed_rendering {
             let dir = tempfile::tempdir().unwrap();
             crate::optimization::subject::tests::write_task_fixture_pack(dir.path(), false);
-            use gents::NodeIdentity;
-            let runtime =
-                gents::KeyIdentity::load_or_create(dir.path().join("runtime.key"), None).unwrap();
+            use gents_store::identity::NodeIdentity;
+            let runtime = gents_store::identity::KeyIdentity::load_or_create(
+                dir.path().join("runtime.key"),
+                None,
+            )
+            .unwrap();
             let fixture = crate::optimization::subject::materialize_pack(
                 dir.path(),
                 runtime.did(),

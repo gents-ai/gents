@@ -2,8 +2,6 @@ use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use gents::store::config_client::{ConfigAccess, TransactionFailure};
-use gents::tools::background::job::view::{load_job_view, JobKey};
 use gents_desktop_core::client::{
     CanonicalTranscriptDependencies, ClientCore, ClientStore, SessionTranscriptQueryPage,
 };
@@ -13,6 +11,8 @@ use gents_protocol::output::rows::TranscriptMessageRow;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::{AgentRequestRow, AgentToolCallRow};
 use gents_protocol::transcript::present_message;
+use gents_store::config_client::{ConfigAccess, TransactionFailure};
+use gents_toolcalls::background::job::view::{load_job_view, JobKey};
 
 use super::super::cause_derivation::{derive_tool_call_cause, RequestEvidence, ToolCallEvidence};
 use super::super::types::{
@@ -49,8 +49,8 @@ pub(super) fn question_reply_view(
         });
     let source = gents_protocol::question_reply_source::question_reply_source(
         matches!(
-            gents::request::lifecycle::request_origin(request),
-            gents::request::lifecycle::RequestOrigin::Person
+            gents_session::request::lifecycle::request_origin(request),
+            gents_session::request::lifecycle::RequestOrigin::Person
         ),
         request.caused_by_source_doc_id.as_deref(),
         evidence.map(|reply| reply.source_doc_id.as_str()),
@@ -114,61 +114,68 @@ pub(super) fn message_is_runtime_control(
         .and_then(|request| request.input.as_ref())
         .cloned()
         .unwrap_or_default();
-    gents::request::lifecycle::is_runtime_control_message(&request_input, &message.message_key)
+    gents_session::request::lifecycle::is_runtime_control_message(
+        &request_input,
+        &message.message_key,
+    )
 }
 
 pub(super) fn request_origin_view(
     store: &ClientStore,
     request: &AgentRequestRow,
 ) -> Option<RequestOriginView> {
-    use gents::request::lifecycle::RequestOrigin;
-    Some(match gents::request::lifecycle::request_origin(request) {
-        RequestOrigin::Person => return None,
-        RequestOrigin::SessionMessage {
-            parent_request_doc_id,
-        } => {
-            let parent = parent_request_doc_id.and_then(|doc_id| {
-                store
-                    .requests
-                    .iter()
-                    .find(|row| row.doc_id.as_deref() == Some(doc_id))
-            });
-            RequestOriginView::SessionMessage {
-                display_body: parent
-                    .and_then(|parent| {
-                        gents::request::lifecycle::session_message_display_body(request, parent)
-                    })
-                    .map(str::to_owned),
-                sender_node_did: parent
-                    .and_then(|row| normalize_optional(row.node_did.as_deref()))
-                    .or_else(|| normalize_optional(request.requester_did.as_deref())),
-                sender_session_id: parent
-                    .and_then(|row| normalize_optional(row.session_id.as_deref())),
-                sender_request_id: parent
-                    .map(|row| row.request_id.clone())
-                    .or_else(|| normalize_optional(request.caused_by_parent_request_id.as_deref())),
+    use gents_session::request::lifecycle::RequestOrigin;
+    Some(
+        match gents_session::request::lifecycle::request_origin(request) {
+            RequestOrigin::Person => return None,
+            RequestOrigin::SessionMessage {
+                parent_request_doc_id,
+            } => {
+                let parent = parent_request_doc_id.and_then(|doc_id| {
+                    store
+                        .requests
+                        .iter()
+                        .find(|row| row.doc_id.as_deref() == Some(doc_id))
+                });
+                RequestOriginView::SessionMessage {
+                    display_body: parent
+                        .and_then(|parent| {
+                            gents_session::request::lifecycle::session_message_display_body(
+                                request, parent,
+                            )
+                        })
+                        .map(str::to_owned),
+                    sender_node_did: parent
+                        .and_then(|row| normalize_optional(row.node_did.as_deref()))
+                        .or_else(|| normalize_optional(request.requester_did.as_deref())),
+                    sender_session_id: parent
+                        .and_then(|row| normalize_optional(row.session_id.as_deref())),
+                    sender_request_id: parent.map(|row| row.request_id.clone()).or_else(|| {
+                        normalize_optional(request.caused_by_parent_request_id.as_deref())
+                    }),
+                }
             }
-        }
-        RequestOrigin::Trigger {
-            trigger_id,
-            trigger_kind,
-        } => RequestOriginView::Trigger {
-            trigger_id: trigger_id.to_owned(),
-            trigger_kind: trigger_kind.map(str::to_owned),
+            RequestOrigin::Trigger {
+                trigger_id,
+                trigger_kind,
+            } => RequestOriginView::Trigger {
+                trigger_id: trigger_id.to_owned(),
+                trigger_kind: trigger_kind.map(str::to_owned),
+            },
+            RequestOrigin::GoalContinuation {
+                goal_id,
+                sequence,
+                wrapup,
+            } => RequestOriginView::GoalContinuation {
+                goal_id: goal_id.map(str::to_owned),
+                sequence,
+                wrapup,
+            },
+            RequestOrigin::BackgroundCompletion => RequestOriginView::BackgroundCompletion {
+                notification: false,
+            },
         },
-        RequestOrigin::GoalContinuation {
-            goal_id,
-            sequence,
-            wrapup,
-        } => RequestOriginView::GoalContinuation {
-            goal_id: goal_id.map(str::to_owned),
-            sequence,
-            wrapup,
-        },
-        RequestOrigin::BackgroundCompletion => RequestOriginView::BackgroundCompletion {
-            notification: false,
-        },
-    })
+    )
 }
 
 pub(super) fn message_origin(
@@ -197,7 +204,7 @@ pub(super) fn request_is_background_completion(request: &AgentRequestRow) -> boo
     request
         .input
         .as_ref()
-        .is_some_and(gents::request::lifecycle::is_background_completion_request)
+        .is_some_and(gents_session::request::lifecycle::is_background_completion_request)
 }
 
 pub(super) fn authored_prompt_message_key(request_doc_id: &str) -> String {

@@ -1,26 +1,26 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::inference::llm::message::{
+use gents_inference::llm::message::{
     AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResultContent,
     UserContent,
 };
-use crate::inference::llm::HookAction;
-use crate::store::identity::NodeIdentity;
+use gents_inference::llm::HookAction;
 use gents_loop::provider_input::ProviderInputProfile;
+use gents_store::identity::NodeIdentity;
 
 use super::*;
-use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
-use crate::request::streaming::DefraStreamWriter;
-use crate::store::test_support::first_content;
-use crate::tools::call::hook::FailurePolicy;
+use gents_session::request::lifecycle::{ClaimOutcome, RequestLifecycle};
+use gents_session::request::streaming::DefraStreamWriter;
+use gents_store::test_support::first_content;
+use gents_toolcalls::call::hook::FailurePolicy;
 
 #[path = "stream_cadence_tests.rs"]
 mod cadence;
 
 #[test]
 fn claude_signed_final_seals_preview_without_duplicating_bytes() {
-    use crate::inference::llm::message::ReasoningContent;
+    use gents_inference::llm::message::ReasoningContent;
 
     let mut accumulator = AssistantTurnAccumulator::default();
     accumulator.push_reasoning_delta(None, "考");
@@ -96,7 +96,7 @@ fn claude_signed_final_seals_preview_without_duplicating_bytes() {
 
 #[test]
 fn generated_reasoning_delta_cases_coalesce_native_parts() {
-    use crate::inference::llm::message::ReasoningContent;
+    use gents_inference::llm::message::ReasoningContent;
     use gents_lean_vocab::{lean_reasoning_delta_cases, LeanReasoningDeltaPart as Part};
 
     for case in lean_reasoning_delta_cases() {
@@ -281,14 +281,14 @@ async fn pre_stream_failures_do_not_fabricate_provider_attempt_closures() {
         (
             0,
             true,
-            crate::error::InferenceError::RateLimited {
+            gents_loop::error::InferenceError::RateLimited {
                 retry_after: Some(Duration::from_secs(1)),
             },
         ),
         (
             1,
             false,
-            crate::error::InferenceError::ModelUnreachable {
+            gents_loop::error::InferenceError::ModelUnreachable {
                 endpoint: "http://provider.invalid".into(),
             },
         ),
@@ -309,7 +309,7 @@ async fn pre_stream_failures_do_not_fabricate_provider_attempt_closures() {
     }
     drop(processor);
 
-    let request_doc_id = crate::store::graphql::escape_graphql_string(&doc_id);
+    let request_doc_id = gents_store::graphql::escape_graphql_string(&doc_id);
     let response = exec(&access, &format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ _docID }} }}"#
         ))
@@ -415,10 +415,10 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
     }
 
     assert!(processor.has_observable_activity());
-    use crate::inference::rendered_request::scope::{
+    use gents_inference::rendered_request::scope::{
         arm, claim_pending, current_audit_sender, scope_request, RequestCaptureScope,
     };
-    use crate::inference::rendered_request::{
+    use gents_inference::rendered_request::{
         AssemblyBuildPath, AssemblyTrace, RenderedRequestCaptureSink, RenderedRequestContext,
     };
     let capture_sink: RenderedRequestCaptureSink = Arc::new(|_| Box::pin(async { Ok(()) }));
@@ -438,7 +438,7 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
     ));
     scope_request(scope, async {
         let label = arm(
-            crate::inference::rendered_request::CaptureScopeKind::Inference,
+            gents_inference::rendered_request::CaptureScopeKind::Inference,
             0,
             0,
             AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new()),
@@ -465,7 +465,7 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
     })
     .await;
 
-    let history = crate::session::load_history_with_access(
+    let history = gents_session::session::load_history_with_access(
         &access,
         &session_id,
         &runtime_did,
@@ -488,7 +488,7 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
     else {
         panic!("retained ordinary text must be selectable terminal output")
     };
-    let (header, native) = crate::session::load_canonical_message(
+    let (header, native) = gents_session::session::load_canonical_message(
         &access,
         &message_doc_id,
         &runtime_did,
@@ -517,7 +517,7 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
     use gents_protocol::output::{OutputOutcome, PayloadRef, SourceClose};
     let result = exec(&access, &format!(
         r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#,
-        crate::store::graphql::escape_graphql_string(&response_doc_id)
+        gents_store::graphql::escape_graphql_string(&response_doc_id)
     )).await;
     assert!(!result.has_errors(), "{:?}", result.errors);
     let records = result.data.as_ref().unwrap()["AgentOutputSegment"]
@@ -583,10 +583,10 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
 /// Agent-owned rows go through `access`, never the node identity.
 struct SignedRun {
     db: crate::support::TestDb,
-    user: crate::KeyIdentity,
+    user: gents_store::identity::KeyIdentity,
     node: Arc<defra_node::Node>,
     runtime_did: String,
-    access: crate::ConfigAccess,
+    access: gents_store::config_client::ConfigAccess,
     hook: DefraSessionHook,
     lifecycle: RequestLifecycle,
     writer: DefraStreamWriter,
@@ -602,9 +602,9 @@ async fn signed_run(name: &str, batch_interval: Duration) -> SignedRun {
     let (db, user, owner, binding) = crate::test_support::root::signed_test_node(name).await;
     let node = db.node.clone();
     let runtime_did = db.node_identity.did().to_owned();
-    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
-        .unwrap();
-    let access = crate::ConfigAccess::local_managed_agent(
+    let agent =
+        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
+    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         agent.did().parse().unwrap(),
         agent.as_ref(),
@@ -625,7 +625,7 @@ async fn signed_run(name: &str, batch_interval: Duration) -> SignedRun {
         AgentRequestAdmissionRecord::client(user.did()),
     );
     let mut lifecycle =
-        crate::tools::call::lifecycle::admission_fixture::pending_client_fixture_request(
+        gents_toolcalls::call::lifecycle::admission_fixture::pending_client_fixture_request(
             &node,
             &owner,
             db.node_identity.clone(),
@@ -694,7 +694,7 @@ impl ReadResponse {
     }
 }
 
-async fn exec(access: &crate::ConfigAccess, query: &str) -> ReadResponse {
+async fn exec(access: &gents_store::config_client::ConfigAccess, query: &str) -> ReadResponse {
     let response = access.execute(query).await.expect("agent-scoped read");
     ReadResponse {
         data: response.get("data").cloned(),
@@ -706,11 +706,11 @@ async fn exec(access: &crate::ConfigAccess, query: &str) -> ReadResponse {
     }
 }
 
-async fn count_segments(access: &crate::ConfigAccess, doc: &str) -> usize {
+async fn count_segments(access: &gents_store::config_client::ConfigAccess, doc: &str) -> usize {
     let response = access
         .execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-            crate::store::graphql::escape_graphql_string(doc)
+            gents_store::graphql::escape_graphql_string(doc)
         ))
         .await
         .unwrap();
@@ -728,17 +728,17 @@ struct PersistedMessageShape {
 }
 
 async fn load_message_shapes_in_scope(
-    access: &crate::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     session_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
 ) -> Vec<PersistedMessageShape> {
-    let scope_node_did = crate::store::graphql::escape_graphql_string(node_did);
+    let scope_node_did = gents_store::graphql::escape_graphql_string(node_did);
     let scope_requester = requester_did.map_or_else(
         || "null".to_owned(),
-        |did| format!("\"{}\"", crate::store::graphql::escape_graphql_string(did)),
+        |did| format!("\"{}\"", gents_store::graphql::escape_graphql_string(did)),
     );
-    let session_id = crate::store::graphql::escape_graphql_string(session_id);
+    let session_id = gents_store::graphql::escape_graphql_string(session_id);
     let query = format!(
         r#"{{
             AgentMessage(
@@ -754,7 +754,7 @@ async fn load_message_shapes_in_scope(
     for row in rows {
         let doc_id = row["_docID"].as_str().expect("physical message identity");
         let (header, message) =
-            crate::session::load_canonical_message(access, doc_id, node_did, requester_did)
+            gents_session::session::load_canonical_message(access, doc_id, node_did, requester_did)
                 .await
                 .expect("exact canonical message reconstructs");
         shapes.push(PersistedMessageShape {
@@ -770,7 +770,7 @@ async fn load_message_shapes_in_scope(
     shapes
 }
 
-fn text_item(text: &str) -> Result<LoopStreamItem, crate::error::LoopStreamError> {
+fn text_item(text: &str) -> Result<LoopStreamItem, gents_loop::error::LoopStreamError> {
     Ok(LoopStreamItem::Text(text.to_string()))
 }
 
@@ -778,7 +778,7 @@ fn tool_call_item(
     name: &str,
     args_json: &str,
     internal_id: &str,
-) -> Result<LoopStreamItem, crate::error::LoopStreamError> {
+) -> Result<LoopStreamItem, gents_loop::error::LoopStreamError> {
     tool_call_item_with_ids(name, args_json, internal_id, internal_id, None)
 }
 
@@ -788,7 +788,7 @@ fn tool_call_item_with_ids(
     tool_id: &str,
     internal_id: &str,
     call_id: Option<&str>,
-) -> Result<LoopStreamItem, crate::error::LoopStreamError> {
+) -> Result<LoopStreamItem, gents_loop::error::LoopStreamError> {
     Ok(LoopStreamItem::ToolCall {
         tool_call: ToolCall {
             raw_arguments: None,
@@ -809,7 +809,7 @@ fn tool_result_item(
     tool_id: &str,
     result_json: &str,
     internal_id: &str,
-) -> Result<LoopStreamItem, crate::error::LoopStreamError> {
+) -> Result<LoopStreamItem, gents_loop::error::LoopStreamError> {
     tool_result_item_with_call_id(tool_id, None, result_json, internal_id)
 }
 
@@ -818,9 +818,9 @@ fn tool_result_item_with_call_id(
     call_id: Option<&str>,
     result_json: &str,
     internal_id: &str,
-) -> Result<LoopStreamItem, crate::error::LoopStreamError> {
+) -> Result<LoopStreamItem, gents_loop::error::LoopStreamError> {
     Ok(LoopStreamItem::ToolResult {
-        tool_result: crate::inference::llm::message::ToolResult {
+        tool_result: gents_inference::llm::message::ToolResult {
             id: tool_id.to_string(),
             call_id: call_id.map(ToOwned::to_owned),
             content: vec![ToolResultContent::text(result_json)],
@@ -829,7 +829,7 @@ fn tool_result_item_with_call_id(
     })
 }
 
-fn final_item(response_text: &str) -> Result<LoopStreamItem, crate::error::LoopStreamError> {
+fn final_item(response_text: &str) -> Result<LoopStreamItem, gents_loop::error::LoopStreamError> {
     Ok(LoopStreamItem::Final {
         text: response_text.to_string(),
     })
@@ -838,7 +838,7 @@ fn final_item(response_text: &str) -> Result<LoopStreamItem, crate::error::LoopS
 fn turn_retracted_item(
     turn: usize,
     attempt: u32,
-) -> Result<LoopStreamItem, crate::error::LoopStreamError> {
+) -> Result<LoopStreamItem, gents_loop::error::LoopStreamError> {
     Ok(LoopStreamItem::TurnRetracted {
         turn,
         attempt,
@@ -924,7 +924,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         )
         .await;
     assert!(
-        matches!(action, crate::inference::llm::ToolCallHookAction::Continue),
+        matches!(action, gents_inference::llm::ToolCallHookAction::Continue),
         "tool call persistence failed: {action:?}"
     );
     assert!(matches!(
@@ -949,7 +949,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         .await
         .unwrap();
 
-    let history = crate::session::load_history_with_access(
+    let history = gents_session::session::load_history_with_access(
         &access,
         &session_id,
         &runtime_did,
@@ -983,7 +983,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         &access,
         &format!(
             r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-            crate::store::graphql::escape_graphql_string(model_result_id),
+            gents_store::graphql::escape_graphql_string(model_result_id),
         ),
     )
     .await;
@@ -996,7 +996,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         .and_then(|row| row.get("_docID"))
         .and_then(serde_json::Value::as_str)
         .expect("physical tool call identity");
-    let native = crate::session::load_tool_call_result(
+    let native = gents_session::session::load_tool_call_result(
         &access,
         tool_doc_id,
         &runtime_did,
@@ -1006,7 +1006,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
     .await
     .unwrap();
     assert_eq!(
-        crate::tools::call::lifecycle::query::render_tool_result(&native).unwrap(),
+        gents_session::tool_call::query::result::render_tool_result(&native).unwrap(),
         tool_result
     );
 }
@@ -1084,7 +1084,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
             r#"{"path":"/work/entry.c"}"#,
         )
         .await,
-        crate::inference::llm::ToolCallHookAction::Continue
+        gents_inference::llm::ToolCallHookAction::Continue
     ));
 
     let queue = gents_protocol::request_input::RequestQueue {
@@ -1115,10 +1115,13 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
     wake.input.queue = Some(queue.clone());
     wake.caused_by_parent_request_id = Some(request_id.clone());
     wake.caused_by_parent_request_doc_id = Some(notification_request.doc_id.clone());
-    crate::sign_agent_request_create(db.node_identity.as_ref(), &mut wake)
-        .await
-        .unwrap();
-    crate::store::config_client::ConfigAccess::local(node.clone())
+    gents_session::request::admission::sign_agent_request_create(
+        db.node_identity.as_ref(),
+        &mut wake,
+    )
+    .await
+    .unwrap();
+    gents_store::config_client::ConfigAccess::local(node.clone())
         .write(
             "test.stream_processor.pending_wake",
             &wake.graphql_mutation().unwrap(),
@@ -1126,7 +1129,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         .await
         .unwrap();
     // The parent Agent's own managed access supplies the signer the atomic write requires.
-    crate::request::lifecycle::queue::persist_background_completion_with_message_waking_with_access(
+    gents_session::request::lifecycle::queue::persist_background_completion_with_message_waking_with_access(
         &access,
         &node,
         &notification_request,
@@ -1162,7 +1165,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         .await
         .unwrap();
 
-    let history = crate::session::load_history_with_access(
+    let history = gents_session::session::load_history_with_access(
         &access,
         &session_id,
         &runtime_did,
@@ -1288,7 +1291,7 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
         assert!(matches!(
             hook.on_tool_call("read_file", Some(call_id.clone()), &internal_id, &args,)
                 .await,
-            crate::inference::llm::ToolCallHookAction::Continue
+            gents_inference::llm::ToolCallHookAction::Continue
         ));
         assert!(matches!(
             hook.on_tool_result(
@@ -1317,7 +1320,7 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
             .unwrap();
     }
 
-    let history = crate::session::load_history_with_access(
+    let history = gents_session::session::load_history_with_access(
         &access,
         &session_id,
         &runtime_did,
@@ -1399,7 +1402,7 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
         .on_tool_call("discover_tools", None, "call-1", args)
         .await;
     assert!(
-        matches!(action, crate::inference::llm::ToolCallHookAction::Continue),
+        matches!(action, gents_inference::llm::ToolCallHookAction::Continue),
         "{action:?}"
     );
     assert!(matches!(
@@ -1451,7 +1454,7 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
 
     processor.process_item(final_item("done")).await.unwrap();
 
-    let history = crate::session::load_history_with_access(
+    let history = gents_session::session::load_history_with_access(
         &access,
         &session_id,
         &runtime_did,
@@ -1563,7 +1566,7 @@ async fn turn_retraction_retains_old_bytes_but_publishes_only_the_retry() {
         .unwrap();
     assert_eq!(processor.streamed_text, "Hello world");
 
-    let history = crate::session::load_history_with_access(
+    let history = gents_session::session::load_history_with_access(
         &access,
         &session_id,
         &runtime_did,
@@ -1599,7 +1602,7 @@ async fn turn_retraction_retains_old_bytes_but_publishes_only_the_retry() {
     use gents_protocol::output::{OutputSource, SourceClose};
     let result = exec(&access, &format!(
         r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#,
-        crate::store::graphql::escape_graphql_string(&response_doc_id)
+        gents_store::graphql::escape_graphql_string(&response_doc_id)
     )).await;
     assert!(!result.has_errors(), "{:?}", result.errors);
     let records = result.data.as_ref().unwrap()["AgentOutputSegment"]
@@ -1679,16 +1682,16 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
         }))
         .await
         .unwrap();
-    let corrupt_call: Result<LoopStreamItem, crate::error::LoopStreamError> =
+    let corrupt_call: Result<LoopStreamItem, gents_loop::error::LoopStreamError> =
         Ok(LoopStreamItem::ToolCall {
-            tool_call: crate::inference::llm::rig_compat::from_rig_tool_call(
+            tool_call: gents_inference::llm::rig_compat::from_rig_tool_call(
                 &rig::completion::message::ToolCall {
                     id: "result-1".to_string(),
                     call_id: Some("call-1".to_string()),
                     function: rig::completion::message::ToolFunction {
                         name: "describe_tool".to_string(),
                         arguments: serde_json::Value::String(
-                            crate::store::test_support::CORRUPT_TOOL_ARGS_589.to_string(),
+                            gents_store::test_support::CORRUPT_TOOL_ARGS_589.to_string(),
                         ),
                     },
                     signature: None,
@@ -1714,17 +1717,17 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
             "describe_tool",
             Some("call-1".to_string()),
             "internal-1",
-            crate::store::test_support::CORRUPT_TOOL_ARGS_589,
+            gents_store::test_support::CORRUPT_TOOL_ARGS_589,
         )
         .await,
-        crate::inference::llm::ToolCallHookAction::Continue
+        gents_inference::llm::ToolCallHookAction::Continue
     ));
     assert!(matches!(
         hook.on_tool_result(
             "describe_tool",
             Some("call-1".to_string()),
             "internal-1",
-            crate::store::test_support::CORRUPT_TOOL_ARGS_589,
+            gents_store::test_support::CORRUPT_TOOL_ARGS_589,
             &gents_loop::tool_call_lifecycle::ToolOutcome::Completed(
                 "described:list_hosts".to_string()
             ),
@@ -1743,7 +1746,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
         .await
         .unwrap();
 
-    let history = crate::session::load_history_with_access(
+    let history = gents_session::session::load_history_with_access(
         &access,
         &session_id,
         &runtime_did,
@@ -1775,8 +1778,8 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
 
 #[test]
 fn coalesced_reasoning_fragments_encode_as_one_native_stream() {
-    use crate::inference::llm::message::ReasoningContent;
-    use crate::request::streaming::native_encoding::encode_native_message;
+    use gents_inference::llm::message::ReasoningContent;
+    use gents_session::request::streaming::native_encoding::encode_native_message;
 
     let mut accumulator = AssistantTurnAccumulator::default();
     for _ in 0..128 {

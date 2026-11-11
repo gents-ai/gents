@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use crate::store::identity::grant_sets::tests::*;
-use crate::store::identity::grant_sets::*;
-use crate::store::identity::NodeIdentity;
+use gents_store::identity::grant_sets::tests::*;
+use gents_store::identity::grant_sets::*;
+use gents_store::identity::NodeIdentity;
 
 pub(crate) async fn agent_step(
     access: &ConfigAccess,
@@ -10,12 +10,12 @@ pub(crate) async fn agent_step(
     binding: &gents_protocol::agent_identity::AgentIdentityBinding,
     action: &str,
 ) -> anyhow::Result<()> {
-    use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     if action == "delete" {
         let response = access
             .execute(&format!(
                 r#"{{ Agent(filter: {{ agent_did: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-                crate::store::graphql::escape_graphql_string(&binding.agent_did)
+                gents_store::graphql::escape_graphql_string(&binding.agent_did)
             ))
             .await?;
         let doc = response["data"]["Agent"][0]["_docID"]
@@ -31,13 +31,13 @@ pub(crate) async fn agent_step(
         return Ok(());
     }
     let documents =
-        crate::test_support::documents::test_agent_documents(node_did, "Baseline agent", binding)
+        gents_documents::test_support::test_agent_documents(node_did, "Baseline agent", binding)
             .into_iter()
             .filter(|(collection, _)| {
-                action == "publish" || *collection == crate::Collection::Agent
+                action == "publish" || *collection == gents_store::collection::Collection::Agent
             })
             .map(|(collection, mut value)| {
-                if collection == crate::Collection::Agent {
+                if collection == gents_store::collection::Collection::Agent {
                     value["enabled"] = serde_json::json!(action != "disable");
                 }
                 DesiredStateApplyDocument {
@@ -52,10 +52,10 @@ pub(crate) async fn agent_step(
         .transact_write("test.grant_sets.agent", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::documents::apply_desired_state_plan(
+                gents_documents::apply_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
@@ -77,7 +77,7 @@ async fn agent_baseline_projection_follows_modeled_lifecycle() {
             ConfigAccess::local_as(db.node.clone(), identity::Did::new(runtime.did()).unwrap());
         let actor_name = format!("{}-actor", case.name);
         let actor = tokio::task::spawn_blocking(move || {
-            crate::store::test_support::test_identity(&actor_name)
+            gents_store::test_support::test_identity(&actor_name)
         })
         .await
         .unwrap();
@@ -96,7 +96,7 @@ async fn agent_baseline_projection_follows_modeled_lifecycle() {
             .unwrap();
         drop(owner);
         let actor_access = db.client_access(&actor);
-        let binding = crate::store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
+        let binding = gents_store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
         let agent = identity::Did::new(&binding.agent_did).unwrap();
         for step in &case.steps {
             let result = agent_step(&actor_access, &runtime_did, &binding, &step.action).await;

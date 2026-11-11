@@ -2,36 +2,36 @@ use rapidhash::{HashSetExt, RapidHashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::inference::llm::tool::ToolDyn;
 use anyhow::{anyhow, Context, Result};
 use defra_node::Node as EmbeddedNode;
+use gents_loop::tool::ToolDyn;
 
 pub(crate) type AgentFactory =
     Box<dyn FnOnce(Arc<RuntimeNode>) -> std::result::Result<ResolvedAgent, AgentBuildError> + Send>;
 
 use super::{assemble_node_and_agents, runtime, AgentBuildError, Gents, ProcessLifecycleObserver};
-use crate::documents::inference_defaults::{
+use crate::runtime::agent::retry::RetryPolicy;
+use gents_documents::inference_defaults::{
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
-use crate::documents::{BashMode, FileToolMode};
-use crate::inference::admission::BackendAdmissionConfig;
+use gents_documents::{BashMode, FileToolMode};
+use gents_inference::admission::BackendAdmissionConfig;
 #[cfg(test)]
-use crate::inference::backends::provider::BackendProviderKind;
-use crate::inference::backends::registry::backend_fields;
-use crate::inference::backends::registry::lookup_backend;
-use crate::inference::compaction::CompactionStrategy;
-use crate::inference::resolved::{
+use gents_inference::backends::provider::BackendProviderKind;
+use gents_inference::backends::registry::backend_fields;
+use gents_inference::backends::registry::lookup_backend;
+use gents_inference::compaction::CompactionStrategy;
+use gents_inference::resolved::{
     ResolvedAgent, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
     DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS, DEFAULT_MODEL_NAME,
     DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS,
 };
-use crate::runtime::agent::completion_retry::CompletionRetryProfileFields;
-use crate::runtime::agent::retry::RetryPolicy;
-use crate::store::identity::{NodeIdentity, RuntimeNode};
-use crate::tools::call::hook::{BackgroundExecutionRegistry, FailurePolicy};
-use crate::tools::mcp::health::HealthCheckerOptions;
-use crate::tools::mcp::pool::McpPool;
-use crate::tools::surface::{
+use gents_loop::completion_retry::CompletionRetryProfileFields;
+use gents_store::identity::{NodeIdentity, RuntimeNode};
+use gents_toolcalls::call::hook::{BackgroundExecutionRegistry, FailurePolicy};
+use gents_tools::mcp::health::HealthCheckerOptions;
+use gents_tools::mcp::pool::McpPool;
+use gents_tools::surface::{
     AgentToolSurfaceConfig, CustomToolFactory, ResolvedToolSelection, ToolCeiling,
 };
 
@@ -40,7 +40,7 @@ const TEST_DEFAULT_BACKEND_ENDPOINT: &str = "http://localhost:8000/v1";
 
 #[derive(Default)]
 pub struct GentsBuilder {
-    backend_admission: Option<crate::store::local::backend_protection::BackendAdmission>,
+    backend_admission: Option<gents_store::local::backend_protection::BackendAdmission>,
     node: Option<Arc<EmbeddedNode>>,
     identity: Option<Arc<dyn NodeIdentity>>,
     default_agent_did: Option<String>,
@@ -53,9 +53,9 @@ pub struct GentsBuilder {
     health_checker_options: HealthCheckerOptions,
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
     rendered_request_capture_factory:
-        Option<crate::inference::rendered_request::RenderedRequestCaptureFactory>,
+        Option<gents_inference::rendered_request::RenderedRequestCaptureFactory>,
     agents: Vec<PendingAgent>,
-    backend_health: crate::inference::backends::health::BackendHealthMap,
+    backend_health: gents_inference::backends::health::BackendHealthMap,
     plugin_home: Option<std::path::PathBuf>,
 }
 
@@ -71,7 +71,7 @@ impl GentsBuilder {
 
     pub fn backend_admission(
         mut self,
-        admission: crate::store::local::backend_protection::BackendAdmission,
+        admission: gents_store::local::backend_protection::BackendAdmission,
     ) -> Self {
         self.backend_admission = Some(admission);
         self
@@ -85,7 +85,7 @@ impl GentsBuilder {
     #[cfg(test)]
     pub(crate) fn backend_health(
         mut self,
-        backend_health: crate::inference::backends::health::BackendHealthMap,
+        backend_health: gents_inference::backends::health::BackendHealthMap,
     ) -> Self {
         self.backend_health = backend_health;
         self
@@ -188,7 +188,7 @@ impl GentsBuilder {
         let mut pending_agents = self.agents;
         for agent in &mut pending_agents {
             if agent.identity_binding.is_none() {
-                agent.identity_binding = Some(crate::store::identity::provision_agent_identity(
+                agent.identity_binding = Some(gents_store::identity::provision_agent_identity(
                     identity.as_ref(),
                 )?);
             }
@@ -282,7 +282,7 @@ impl GentsBuilder {
             inference_observations: Default::default(),
             health_checker_options: self.health_checker_options,
             backend_prober_options:
-                crate::inference::backends::health::BackendProberOptions::default(),
+                gents_inference::backends::health::BackendProberOptions::default(),
             backend_health: self.backend_health,
             process_state_observer: self.process_state_observer,
             runtime_snapshot_observer: None,
@@ -295,8 +295,8 @@ impl GentsBuilder {
             operator_tool_root: self.tool_ceiling.root().map(std::path::PathBuf::from),
             plugins: Arc::new(crate::runtime::agent::plugin_executor(
                 self.plugin_home,
-                crate::plugin::model_binding::AccessModels(
-                    crate::store::config_client::ConfigAccess::local(plugin_node),
+                gents_pack::plugin::model_binding::AccessModels(
+                    gents_store::config_client::ConfigAccess::local(plugin_node),
                 ),
             )),
         })
@@ -535,7 +535,7 @@ pub(crate) struct PendingAgent {
     provider_idle_timeout: Duration,
     deadline_duration: Duration,
     sampling: SamplingConfig,
-    skills: Vec<crate::documents::skills::Skill>,
+    skills: Vec<gents_documents::skills::Skill>,
 }
 
 impl PendingAgent {
@@ -570,7 +570,7 @@ impl PendingAgent {
         node: &Arc<EmbeddedNode>,
         node_did: &str,
         tool_ceiling: &ToolCeiling,
-        backend_health: &crate::inference::backends::health::BackendHealthMap,
+        backend_health: &gents_inference::backends::health::BackendHealthMap,
     ) -> Result<AgentFactory> {
         let backend_id = self
             .backend_id
@@ -586,7 +586,7 @@ impl PendingAgent {
                     backend_id
                 )
             })?;
-        let observation = crate::inference::backends::registry::lookup_backend_observation(
+        let observation = gents_inference::backends::registry::lookup_backend_observation(
             node,
             node_did,
             &backend_id,
@@ -628,7 +628,7 @@ impl PendingAgent {
     fn build_with_resolved_backend(
         self,
         principal: Arc<RuntimeNode>,
-        backend_fields: crate::inference::backends::registry::BackendFields,
+        backend_fields: gents_inference::backends::registry::BackendFields,
         tool_ceiling: &ToolCeiling,
     ) -> Result<ResolvedAgent> {
         let agent_name = self.name.clone();
@@ -637,7 +637,7 @@ impl PendingAgent {
             backend_fields.openai_wire_api,
         )?;
 
-        let compaction = crate::documents::CompactionConfig {
+        let compaction = gents_documents::CompactionConfig {
             compaction_id: self.name.clone(),
             node_did: principal.node_did.clone(),
             display_name: None,
@@ -656,9 +656,9 @@ impl PendingAgent {
             .as_ref()
             .ok_or_else(|| anyhow!("agent {agent_name:?} identity was not provisioned"))?;
         let agent_identity =
-            crate::store::identity::resolve_agent_identity(principal.identity.as_ref(), binding)?;
+            gents_store::identity::resolve_agent_identity(principal.identity.as_ref(), binding)?;
         Ok(ResolvedAgent {
-            configuration: crate::inference::resolved::ResolvedConfiguration::Static,
+            configuration: gents_inference::resolved::ResolvedConfiguration::Static,
             profile_id: None,
             agent_did: binding.agent_did.clone(),
             agent_identity,
@@ -676,9 +676,9 @@ impl PendingAgent {
             max_output_tokens: self.max_output_tokens,
             max_turns: self.max_turns,
             max_turns_provenance: if self.max_turns_explicit {
-                crate::inference::resolved::MaxTurnsProvenance::BuilderOverride
+                gents_inference::resolved::MaxTurnsProvenance::BuilderOverride
             } else {
-                crate::inference::resolved::MaxTurnsProvenance::Default
+                gents_inference::resolved::MaxTurnsProvenance::Default
             },
             system_prompt: self.system_prompt,
             tools: AgentToolSurfaceConfig::from_selection(
@@ -726,7 +726,7 @@ impl PendingAgent {
         let backend_id = self.backend_id.clone();
         let backend_endpoint = self.backend_endpoint.clone();
         let binding = self.identity_binding.get_or_insert_with(|| {
-            crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap()
+            gents_store::identity::provision_agent_identity(identity.as_ref()).unwrap()
         });
         let agent_did = binding.agent_did.clone();
         let principal = Arc::new(RuntimeNode {
@@ -738,15 +738,15 @@ impl PendingAgent {
         });
         self.build_with_resolved_backend(
             principal,
-            crate::inference::backends::registry::BackendFields {
+            gents_inference::backends::registry::BackendFields {
                 backend_id,
                 backend_provider_kind: BackendProviderKind::OpenAiCompatible,
-                openai_wire_api: crate::OpenAiWireApi::effective_for_provider(
+                openai_wire_api: gents_loop::openai_wire::OpenAiWireApi::effective_for_provider(
                     BackendProviderKind::OpenAiCompatible,
                     None,
                 ),
                 backend_endpoint,
-                backend_auth: crate::documents::BackendAuth::Unauthenticated,
+                backend_auth: gents_documents::BackendAuth::Unauthenticated,
                 claude_platform: None,
             },
             &ToolCeiling::meta_only(),
@@ -758,8 +758,8 @@ impl PendingAgent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::inference::resolved::{MaxTurnsProvenance, DEFAULT_MAX_TURNS};
-    use crate::store::identity::KeyIdentity;
+    use gents_inference::resolved::{MaxTurnsProvenance, DEFAULT_MAX_TURNS};
+    use gents_store::identity::KeyIdentity;
 
     fn test_identity(name: &str) -> KeyIdentity {
         let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));

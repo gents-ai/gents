@@ -5,15 +5,15 @@ use anyhow::Result;
 use defra_node::Node as EmbeddedNode;
 use tokio_util::sync::CancellationToken;
 
-use crate::store::agent_identity_watch::AgentIdentityWatch;
+use gents_store::agent_identity_watch::AgentIdentityWatch;
 
 const AGENT_REQUEST_COLLECTION: &str = "AgentRequest";
 
 pub(crate) async fn run_background_completion_observer(
     node: Arc<EmbeddedNode>,
     local_did: String,
-    background_executions: crate::tools::call::hook::BackgroundExecutionRegistry,
-    job_driver: Arc<crate::tools::background::job::driver::JobDriver>,
+    background_executions: gents_toolcalls::call::hook::BackgroundExecutionRegistry,
+    job_driver: Arc<gents_toolcalls::background::job::driver::JobDriver>,
     agents: Box<dyn AgentIdentityWatch>,
     cancel: CancellationToken,
 ) -> Result<()> {
@@ -31,8 +31,8 @@ pub(crate) async fn run_background_completion_observer(
 struct BackgroundCompletionObserver {
     node: Arc<EmbeddedNode>,
     local_did: String,
-    background_executions: crate::tools::call::hook::BackgroundExecutionRegistry,
-    job_driver: Arc<crate::tools::background::job::driver::JobDriver>,
+    background_executions: gents_toolcalls::call::hook::BackgroundExecutionRegistry,
+    job_driver: Arc<gents_toolcalls::background::job::driver::JobDriver>,
     agents: Box<dyn AgentIdentityWatch>,
     cancel: CancellationToken,
     subscription: events::DocumentChangeSubscription,
@@ -43,12 +43,12 @@ impl BackgroundCompletionObserver {
     fn new(
         node: Arc<EmbeddedNode>,
         local_did: String,
-        background_executions: crate::tools::call::hook::BackgroundExecutionRegistry,
-        job_driver: Arc<crate::tools::background::job::driver::JobDriver>,
+        background_executions: gents_toolcalls::call::hook::BackgroundExecutionRegistry,
+        job_driver: Arc<gents_toolcalls::background::job::driver::JobDriver>,
         agents: Box<dyn AgentIdentityWatch>,
         cancel: CancellationToken,
     ) -> Result<Self> {
-        let subscription = crate::store::subscription_source::subscribe_collections(
+        let subscription = gents_store::subscription_source::subscribe_collections(
             &node,
             [AGENT_REQUEST_COLLECTION],
         )?;
@@ -100,7 +100,7 @@ impl BackgroundCompletionObserver {
             for change in batch.changes {
                 for (actor, access) in self.selected_agents() {
                     if let Err(error) =
-                        crate::tools::background::completion::settle_rows_after_request_update(
+                        gents_toolcalls::background::completion::settle_rows_after_request_update(
                             &self.node,
                             &access,
                             &self.local_did,
@@ -111,7 +111,7 @@ impl BackgroundCompletionObserver {
                         tracing::warn!(request_doc_id = %change.doc_id, agent_did = %actor, %error, "session-message settlement failed; the periodic scan retries");
                     }
                     if let Err(error) =
-                        crate::session::recover_agent_session_relationships_with_access(
+                        gents_session::session::recover_agent_session_relationships_with_access(
                             &access,
                             &self.local_did,
                             &actor,
@@ -121,7 +121,7 @@ impl BackgroundCompletionObserver {
                         tracing::warn!(agent_did = %actor, %error, "session relationship recovery failed; will retry");
                     }
                     if let Err(error) =
-                        crate::tools::background::job::recovery::wake_jobs_after_request_update(
+                        gents_toolcalls::background::job::recovery::wake_jobs_after_request_update(
                             &access,
                             &self.job_driver,
                             &change.doc_id,
@@ -142,7 +142,7 @@ impl BackgroundCompletionObserver {
 
     async fn run_reconcilers(&mut self) -> Result<()> {
         let identities = self.agents.watcher_identities()?;
-        match crate::session::mailbox::sweep_open_mailbox_items(
+        match gents_session::session::mailbox::sweep_open_mailbox_items(
             &self.node,
             &self.local_did,
             &identities,
@@ -169,7 +169,7 @@ impl BackgroundCompletionObserver {
             }
         }
         for run in
-            crate::tools::call::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
+            gents_toolcalls::call::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
                 &self.node,
                 &self.local_did,
                 &identities,
@@ -187,17 +187,18 @@ impl BackgroundCompletionObserver {
             }
         }
         for (actor, access) in self.selected_agents() {
-            if let Err(error) = crate::session::recover_agent_session_relationships_with_access(
-                &access,
-                &self.local_did,
-                &actor,
-            )
-            .await
+            if let Err(error) =
+                gents_session::session::recover_agent_session_relationships_with_access(
+                    &access,
+                    &self.local_did,
+                    &actor,
+                )
+                .await
             {
                 tracing::warn!(agent_did = %actor, %error, "session relationship recovery failed; will retry");
             }
             if let Err(error) =
-                crate::store::config_client::session_children::recover_agent_session_child_relationships_with_access(
+                gents_store::config_client::session_children::recover_agent_session_child_relationships_with_access(
                     &access,
                     &self.local_did,
                     &actor,
@@ -206,7 +207,7 @@ impl BackgroundCompletionObserver {
             {
                 tracing::warn!(agent_did = %actor, %error, "session child relationship recovery failed; will retry");
             }
-            match crate::tools::background::job::recovery::redrive_running_jobs(
+            match gents_toolcalls::background::job::recovery::redrive_running_jobs(
                 &self.job_driver,
                 &actor,
             )
@@ -222,7 +223,7 @@ impl BackgroundCompletionObserver {
             }
         }
         let wake_redrive =
-            crate::RequestLifecycle::redrive_failed_background_wakeups_with_identities(
+            gents_session::request::lifecycle::RequestLifecycle::redrive_failed_background_wakeups_with_identities(
                 &self.node,
                 &self.local_did,
                 &identities,
@@ -243,7 +244,7 @@ impl BackgroundCompletionObserver {
         Ok(())
     }
 
-    fn selected_agents(&self) -> Vec<(identity::Did, crate::ConfigAccess)> {
+    fn selected_agents(&self) -> Vec<(identity::Did, gents_store::config_client::ConfigAccess)> {
         let identities = match self.agents.watcher_identities() {
             Ok(identities) => identities,
             Err(error) => {
@@ -258,7 +259,7 @@ impl BackgroundCompletionObserver {
                 return None;
             }
             let result = identity::Did::new(did).map_err(anyhow::Error::from).and_then(|actor| {
-                let access = crate::ConfigAccess::local_managed_agent(self.node.clone(), actor.clone(), identity.as_ref())?;
+                let access = gents_store::config_client::ConfigAccess::local_managed_agent(self.node.clone(), actor.clone(), identity.as_ref())?;
                 Ok((actor, access))
             });
             match result {

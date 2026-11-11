@@ -1,12 +1,11 @@
 use anyhow::{anyhow, bail, Context, Result};
 use defra_node::Node as EmbeddedNode;
-use gents::documents::{
+use gents_documents::{
     Agent, AgentContext, AgentTargetDocument, CompactionConfig, DatastoreToolSurfaceDocument,
     EventSource, InferenceBackend, InferenceBackendObservation, InferenceExecution,
     InferenceProfile, InferenceSampling, Node, Schedule, ScheduleObservation, SkillDocument, Task,
     ToolServiceRegistry, Tools, Trigger, TriggerObservation,
 };
-use gents::store::config_client::TransactionFailure;
 use gents_protocol::client_protocol::SessionRowObservation;
 use gents_protocol::graphql::escape_graphql_string;
 use gents_protocol::output::reconstruction::DependencyDenial;
@@ -23,6 +22,7 @@ use gents_protocol::schemas::{
     SCHEDULE_NAME, SKILL_NAME, TASK_NAME, TOOLS_NAME, TOOL_SERVICE_REGISTRY_NAME, TRIGGER_NAME,
 };
 use gents_protocol::session::AgentSession;
+use gents_store::config_client::TransactionFailure;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
@@ -160,7 +160,7 @@ pub enum SelectedSessionRead {
 }
 
 pub async fn load_chat_patch(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     session_id: &str,
     request_id: Option<&str>,
@@ -269,7 +269,7 @@ async fn load_chat_patch_with<'a>(
 }
 
 pub(crate) async fn load_request_documents_on(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     doc_ids: &[String],
 ) -> Result<Vec<AgentRequestRow>> {
     let (rows, expected) = session_transcript::read_request_documents(
@@ -593,14 +593,14 @@ pub(super) async fn execute_local_graphql_query(
     operation: &str,
 ) -> Result<Value> {
     let response =
-        gents::store::graphql::graphql_with_transaction_retry(node, query, operation).await?;
+        gents_store::graphql::graphql_with_transaction_retry(node, query, operation).await?;
     response
         .data
         .with_context(|| format!("{operation} returned no data"))
 }
 
 pub(super) async fn execute_access_graphql_query(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     query: &str,
     operation: &str,
 ) -> Result<Value> {

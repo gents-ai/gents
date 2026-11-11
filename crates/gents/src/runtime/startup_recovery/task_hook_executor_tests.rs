@@ -1,14 +1,14 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::documents::TaskHookPhase;
-use crate::tools::call::task_hooks::{
-    effective_timeout_secs, run_task_hooks, HookAttempt, HookPrimaryError, ManagedTaskHookExec,
-    TaskAgentResult, TaskHookCancellation, TaskHookExec, TaskHookOutcome,
-};
+use gents_documents::TaskHookPhase;
 use gents_lean_vocab::{
     lean_task_hook_run_cases, LeanCommandResult, LeanHookAttempt, LeanHookInvocation,
     LeanTaskHookRunCase, LeanTaskOutcome, LeanTaskPrimaryError,
+};
+use gents_toolcalls::call::task_hooks::{
+    effective_timeout_secs, run_task_hooks, HookAttempt, HookPrimaryError, ManagedTaskHookExec,
+    TaskAgentResult, TaskHookCancellation, TaskHookExec, TaskHookOutcome,
 };
 
 fn outcome(generated: &LeanTaskOutcome) -> TaskHookOutcome {
@@ -103,7 +103,7 @@ fn assert_attempts(case: &str, phase: &str, actual: &[HookAttempt], expected: &[
             .iter()
             .map(|attempt| (
                 attempt.hook_id.as_str(),
-                crate::tools::call::task_hooks::test_support::native_command_result(
+                gents_toolcalls::call::task_hooks::test_support::native_command_result(
                     &attempt.result
                 )
             ))
@@ -122,20 +122,20 @@ fn assert_attempts(case: &str, phase: &str, actual: &[HookAttempt], expected: &[
 
 struct RevokingExec<'a> {
     managed: ManagedTaskHookExec,
-    access: crate::ConfigAccess,
+    access: gents_store::config_client::ConfigAccess,
     request_doc_id: &'a str,
     revoked: &'a [String],
 }
 
 #[async_trait::async_trait]
 impl TaskHookExec for RevokingExec<'_> {
-    async fn attempt(&self, hook: &crate::documents::TaskHook) -> HookAttempt {
+    async fn attempt(&self, hook: &gents_documents::TaskHook) -> HookAttempt {
         if self.revoked.contains(&hook.hook_id) {
             let response = self.access.write(
                 "test.task_hook_launch_revocation",
                 &format!(
                     r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_generation: "revoked-generation" }}) {{ _docID }} }}"#,
-                    crate::store::graphql::escape_graphql_string(self.request_doc_id),
+                    gents_store::graphql::escape_graphql_string(self.request_doc_id),
                 ),
             ).await.unwrap();
             assert_eq!(
@@ -163,7 +163,7 @@ async fn generated_task_hook_run_cases_drive_real_host_commands() {
         let mut unlaunchable = case.refused_before_launch.clone();
         for generated in &case.hooks {
             let mut configured =
-                crate::tools::call::task_hooks::test_support::native_task_hook(generated);
+                gents_toolcalls::call::task_hooks::test_support::native_task_hook(generated);
             assert_eq!(
                 effective_timeout_secs(&configured),
                 generated.effective_timeout_secs,
@@ -200,7 +200,7 @@ async fn generated_task_hook_run_cases_drive_real_host_commands() {
                 .with_execution_lease(
                     fixture.node.clone(),
                     lifecycle.request().doc_id.clone(),
-                    crate::request::lifecycle::RequestExecutionLease::new(
+                    gents_session::request::lifecycle::RequestExecutionLease::new(
                         lifecycle.execution_generation().unwrap().to_owned(),
                         lifecycle.actor_did().unwrap(),
                     ),

@@ -5,10 +5,10 @@ use anyhow::{bail, Context, Result};
 use defra_node::Node as EmbeddedNode;
 use serde::Deserialize;
 
-use crate::documents::OutputObligationDecision;
-use crate::store::graphql::canonical_positive_count;
+use gents_documents::OutputObligationDecision;
+use gents_store::graphql::canonical_positive_count;
 #[cfg(test)]
-use crate::store::graphql::escape_graphql_string;
+use gents_store::graphql::escape_graphql_string;
 
 use gents_loop::output_obligation::OutputObligationCheck;
 pub(crate) use gents_loop::output_obligation::UnmetOutputObligation;
@@ -16,11 +16,11 @@ pub(crate) use gents_loop::output_obligation::UnmetOutputObligation;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ActiveOutputObligation {
     pub(crate) tool_name: String,
-    pub(crate) contract: crate::documents::WriteToolOutputObligation,
+    pub(crate) contract: gents_documents::WriteToolOutputObligation,
 }
 
 fn active_for_request(
-    configured: &[(String, crate::documents::WriteToolOutputObligation)],
+    configured: &[(String, gents_documents::WriteToolOutputObligation)],
     has_automated_trigger_lineage: bool,
 ) -> Vec<ActiveOutputObligation> {
     configured
@@ -35,7 +35,7 @@ fn active_for_request(
 
 #[derive(Clone)]
 pub(crate) struct OutputObligationGate {
-    access: crate::ConfigAccess,
+    access: gents_store::config_client::ConfigAccess,
     request_doc_ids: Vec<String>,
     obligations: Vec<ActiveOutputObligation>,
 }
@@ -65,7 +65,7 @@ impl OutputObligationGate {
         obligations: Vec<ActiveOutputObligation>,
     ) -> Self {
         Self {
-            access: crate::ConfigAccess::local_as(node, actor),
+            access: gents_store::config_client::ConfigAccess::local_as(node, actor),
             request_doc_ids: vec![request_doc_id.into()],
             obligations,
         }
@@ -74,12 +74,15 @@ impl OutputObligationGate {
     pub(crate) async fn for_request(
         node: Arc<EmbeddedNode>,
         request: &gents_protocol::row::AgentRequest,
-        configured: &[(String, crate::documents::WriteToolOutputObligation)],
+        configured: &[(String, gents_documents::WriteToolOutputObligation)],
     ) -> Result<Option<Self>> {
         if configured.is_empty() {
             return Ok(None);
         }
-        let access = crate::ConfigAccess::local_as(node, identity::Did::new(&request.agent_did)?);
+        let access = gents_store::config_client::ConfigAccess::local_as(
+            node,
+            identity::Did::new(&request.agent_did)?,
+        );
         let mut request_doc_ids = vec![request.doc_id.clone()];
         let mut triggered = request.has_automated_trigger_lineage();
         if request.caused_by_trigger_kind.as_deref()
@@ -102,7 +105,7 @@ impl OutputObligationGate {
                     .cloned()
                     .context("output obligation ancestry query omitted requests")?,
             )?;
-            let members = crate::goal::authenticated_goal_request_members(
+            let members = gents_automation::goal::authenticated_goal_request_members(
                 &request.node_did,
                 &request.session_id,
                 &request.doc_id,
@@ -171,12 +174,13 @@ impl OutputObligationGate {
                 "completed output write lacks exact request membership"
             );
             if !requests.contains_key(&row.request_doc_id) {
-                let request = crate::request::binding::load_agent_request_by_doc_id_with_access(
-                    &self.access,
-                    &row.request_doc_id,
-                )
-                .await?
-                .context("completed output write references a missing request")?;
+                let request =
+                    gents_session::request::binding::load_agent_request_by_doc_id_with_access(
+                        &self.access,
+                        &row.request_doc_id,
+                    )
+                    .await?
+                    .context("completed output write references a missing request")?;
                 requests.insert(row.request_doc_id.clone(), request);
             }
             let request = &requests[&row.request_doc_id];
@@ -202,7 +206,7 @@ impl OutputObligationGate {
                 .collect::<std::collections::BTreeSet<_>>()
                 .into_iter()
                 .collect::<Vec<_>>();
-            let calls = crate::observe::run_timeline_fetch::load_accepted_tool_calls(
+            let calls = gents_observe::observe::run_timeline_fetch::load_accepted_tool_calls(
                 &self.access,
                 &node_did,
                 &session_id,
@@ -323,13 +327,13 @@ fn expected_write_count(
         })?;
         let count = canonical_positive_count(
             value,
-            crate::documents::automation::MAX_EVENT_TRIGGER_GROUP_DOCS,
+            gents_documents::automation::MAX_EVENT_TRIGGER_GROUP_DOCS,
         )
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "completed `{}` write expected_count_field `{field}` must be a canonical positive integer <= {}",
                 obligation.tool_name,
-                crate::documents::automation::MAX_EVENT_TRIGGER_GROUP_DOCS,
+                gents_documents::automation::MAX_EVENT_TRIGGER_GROUP_DOCS,
             )
         })?;
         if expected.is_some_and(|prior| prior != count) {

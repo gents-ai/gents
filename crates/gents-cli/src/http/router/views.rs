@@ -187,7 +187,7 @@ pub(super) async fn fleet_slots_handler(
     crate::http::private_reader::private(fleet_slots_response(&reader).await)
 }
 
-async fn fleet_slots_response(reader: &gents::store::config_client::GraphqlEndpoint) -> Response {
+async fn fleet_slots_response(reader: &gents_store::config_client::GraphqlEndpoint) -> Response {
     match load_fleet_slot_snapshot(reader).await {
         Ok(snapshot) => (StatusCode::OK, axum::Json(snapshot)).into_response(),
         Err(error) => (

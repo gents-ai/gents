@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use gents::pack::{InstalledPackPlugin, PackChangeError, PackKind, RemoveReport};
-use gents::store::config_client::ConfigAccess;
+use gents_pack::pack::{InstalledPackPlugin, PackChangeError, PackKind, RemoveReport};
+use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 
 use crate::cli::PackRemoveArgs;
@@ -17,7 +17,7 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<(), PackChangeError> 
     // through `remove_pack` below and the record is forgotten after.
     let mut documents_record = false;
     if args.scope.graphql.is_none() {
-        if let Some(record) = gents::pack::read_home_install(&home, &coordinate)? {
+        if let Some(record) = gents_pack::pack::read_home_install(&home, &coordinate)? {
             if matches!(record.kind, PackKind::Assets | PackKind::Plugins) {
                 if args.scope.node_did.is_some() {
                     return Err(anyhow::anyhow!(
@@ -32,7 +32,7 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<(), PackChangeError> 
             }
             documents_record = true;
         }
-        if !gents::store::local::home::init_config_path(&home).is_file() {
+        if !gents_store::local::home::init_config_path(&home).is_file() {
             return Err(
                 anyhow::anyhow!("{coordinate} is not installed in {}", home.display()).into(),
             );
@@ -41,17 +41,17 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<(), PackChangeError> 
 
     let (access, owner) = super::resolve_scope_owner(&args.scope).await?;
     let result = async {
-        let report = gents::pack::remove_pack(
+        let report = gents_pack::pack::remove_pack(
             &access,
             &owner,
             &coordinate,
             args.drift.policy(),
-            &gents::inference::resolved::ProviderProfilePolicy,
+            &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await?;
         if documents_record {
             // Before the archive scan below, which counts every file record.
-            gents::pack::forget_home_install(&home, &coordinate)?;
+            gents_pack::pack::forget_home_install(&home, &coordinate)?;
         }
 
         let mut plugin_digests = BTreeSet::new();
@@ -147,14 +147,14 @@ fn release_plugin_records(
     candidates: &mut BTreeSet<String>,
 ) -> Result<Vec<InstalledPackPlugin>> {
     candidates.extend(plugins.iter().map(|plugin| plugin.digest.clone()));
-    gents::pack::plugin_lifecycle::release_plugin_records(home, coordinate, plugins)
+    gents_pack::pack::plugin_lifecycle::release_plugin_records(home, coordinate, plugins)
 }
 
 fn plugin_release_result(home: &Path, candidates: &BTreeSet<String>) -> Result<Vec<String>> {
     if candidates.is_empty() {
         return Ok(Vec::new());
     }
-    gents::plugin::store::release_unreferenced_bytes(home, candidates)
+    gents_pack::plugin::store::release_unreferenced_bytes(home, candidates)
 }
 
 async fn release_archives(
@@ -165,8 +165,8 @@ async fn release_archives(
     if digests.is_empty() {
         return Ok(Vec::new());
     }
-    let referenced = gents::pack::referenced_pack_digests(home, node).await?;
-    let store = gents::pack::store::PackStore::new(home);
+    let referenced = gents_pack::pack::referenced_pack_digests(home, node).await?;
+    let store = gents_pack::pack::store::PackStore::new(home);
     let mut released = Vec::new();
     for digest in digests {
         if referenced.contains(digest) {
@@ -197,13 +197,13 @@ pub(super) static REMOVAL_TEST_PAUSE: std::sync::Mutex<Option<std::sync::Arc<Rem
 pub(crate) async fn ensure_home_plugins_unreferenced(
     home: &Path,
     plugins: &BTreeSet<String>,
-    guard: &gents::plugin::store::StoreGuard,
+    guard: &gents_pack::plugin::store::StoreGuard,
 ) -> Result<()> {
     if plugins.is_empty() {
         return Ok(());
     }
-    if !gents::store::local::home::init_config_path(home).is_file() {
-        return Err(gents::pack::PackRemovalError::NodeUnobserved.into());
+    if !gents_store::local::home::init_config_path(home).is_file() {
+        return Err(gents_pack::pack::PackRemovalError::NodeUnobserved.into());
     }
     #[cfg(test)]
     {
@@ -219,7 +219,7 @@ pub(crate) async fn ensure_home_plugins_unreferenced(
         }
     }
     let (access, owner) = super::resolve_home_owner_under_plugin_store(home, guard).await?;
-    let result = gents::pack::ensure_plugins_unreferenced(&access, &owner, plugins).await;
+    let result = gents_pack::pack::ensure_plugins_unreferenced(&access, &owner, plugins).await;
     if let Some(node) = access.local_node() {
         if let Err(error) = node.shutdown().await {
             tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
@@ -232,7 +232,7 @@ pub(crate) async fn ensure_home_plugins_unreferenced(
 pub(crate) async fn remove_home_install(home: &Path, coordinate: &str) -> Result<Value> {
     let lock_home = home.to_owned();
     let guard =
-        tokio::task::spawn_blocking(move || gents::plugin::store::try_lock_store(&lock_home))
+        tokio::task::spawn_blocking(move || gents_pack::plugin::store::try_lock_store(&lock_home))
             .await??;
     remove_home_install_with_guard(home, coordinate, guard).await
 }
@@ -240,10 +240,10 @@ pub(crate) async fn remove_home_install(home: &Path, coordinate: &str) -> Result
 pub(crate) async fn remove_home_install_with_guard(
     home: &Path,
     coordinate: &str,
-    guard: gents::plugin::store::StoreGuard,
+    guard: gents_pack::plugin::store::StoreGuard,
 ) -> Result<Value> {
     guard.for_home(home)?;
-    let record = gents::pack::read_home_install(home, coordinate)?
+    let record = gents_pack::pack::read_home_install(home, coordinate)?
         .with_context(|| format!("{coordinate} is not installed"))?;
     let (namespace, _) = super::split_namespace(coordinate);
     let plugins = record
@@ -255,7 +255,7 @@ pub(crate) async fn remove_home_install_with_guard(
     let checked_record = record;
     let mut retained = Vec::new();
     let mut assets_removed = Vec::new();
-    let removal = gents::pack::plugin_lifecycle::remove_local_locked(
+    let removal = gents_pack::pack::plugin_lifecycle::remove_local_locked(
         &guard,
         home,
         coordinate,

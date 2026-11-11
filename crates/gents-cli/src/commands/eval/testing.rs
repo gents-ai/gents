@@ -2,16 +2,16 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::Parser;
-use gents::documents::apply_desired_state_plan;
-use gents::documents::EvalSplit;
-use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::runtime::embedded::EmbeddedHome;
-use gents::{Collection, ConfigAccess, NodeIdentity};
+use gents_documents::apply_desired_state_plan;
+use gents_documents::EvalSplit;
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents_eval::checks::CheckRegistry;
 use gents_eval::runner::{
     run, CellRequest, CellSource, RunOptions, RunOutcome, RunRequest, ScriptKey, ScriptedExecutor,
     TrialEvidence, TrialExecutor,
 };
+use gents_store::{collection::Collection, config_client::ConfigAccess, identity::NodeIdentity};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -51,7 +51,11 @@ impl Fixture {
         let owner = home.did().to_string();
         let dirs = tempfile::tempdir().unwrap();
         let evaluator = std::sync::Arc::new(
-            gents::KeyIdentity::load_or_create(dirs.path().join("evaluator.key"), None).unwrap(),
+            gents_store::identity::KeyIdentity::load_or_create(
+                dirs.path().join("evaluator.key"),
+                None,
+            )
+            .unwrap(),
         );
         let client_signing = evaluator.client_signing_capability().unwrap();
         home.set_evaluator(evaluator.clone(), client_signing.clone());
@@ -59,7 +63,7 @@ impl Fixture {
             home.node.clone(),
             ::identity::Did::new(owner.clone()).unwrap(),
         );
-        gents::store::identity::GrantSet::OperatorUser
+        gents_store::identity::GrantSet::OperatorUser
             .grant(&admin, &::identity::Did::new(evaluator.did()).unwrap())
             .await
             .unwrap();
@@ -75,7 +79,7 @@ impl Fixture {
             client_signing,
         };
         let binding =
-            gents::store::identity::provision_agent_identity(home.identity.as_ref()).unwrap();
+            gents_store::identity::provision_agent_identity(home.identity.as_ref()).unwrap();
         let mut initial = vec![(Collection::Node, json!({"node_did": &owner}))];
         let (client_documents, owner_documents): (Vec<_>, Vec<_>) =
             documents(&owner).into_iter().partition(|(collection, _)| {
@@ -341,31 +345,32 @@ async fn install_baseline(
     pack: &Path,
     binding: &gents_protocol::agent_identity::AgentIdentityBinding,
 ) {
-    let manifest: gents::pack::PackManifest =
+    let manifest: gents_pack::pack::PackManifest =
         serde_json::from_slice(&std::fs::read(pack.join("manifest.json")).unwrap()).unwrap();
-    let files: std::collections::BTreeMap<String, Vec<u8>> = gents::pack::declared_paths(&manifest)
-        .into_iter()
-        .map(|path| {
-            let bytes = std::fs::read(pack.join(&path)).unwrap();
-            (path, bytes)
-        })
-        .collect();
+    let files: std::collections::BTreeMap<String, Vec<u8>> =
+        gents_pack::pack::declared_paths(&manifest)
+            .into_iter()
+            .map(|path| {
+                let bytes = std::fs::read(pack.join(&path)).unwrap();
+                (path, bytes)
+            })
+            .collect();
     let read = |path: &str| {
         files
             .get(path)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("pack has no asset {path:?}"))
     };
-    let digest = gents::pack::digest_declared_assets(&manifest, |path| {
+    let digest = gents_pack::pack::digest_declared_assets(&manifest, |path| {
         files
             .get(path)
             .map(Vec::as_slice)
             .ok_or_else(|| anyhow::anyhow!("pack has no asset {path:?}"))
     })
     .unwrap();
-    let authored = gents::pack::load_pack_authoring_config(
+    let authored = gents_pack::pack::load_pack_authoring_config(
         &manifest,
-        &gents::pack::PackInstallOptions {
+        &gents_pack::pack::PackInstallOptions {
             node_did: owner.to_owned(),
         },
         &read,
@@ -381,7 +386,7 @@ async fn install_baseline(
     fields.insert("node_did".into(), json!(owner));
     config.agents.push(serde_json::from_value(agent).unwrap());
     let agent_bindings = std::collections::BTreeMap::from([("monitor".into(), binding.clone())]);
-    let config = gents::pack::BoundPackConfig {
+    let config = gents_pack::pack::BoundPackConfig {
         installation_doc_id: None,
         config,
         agent_bindings: agent_bindings.clone(),
@@ -391,15 +396,15 @@ async fn install_baseline(
         &std::collections::BTreeMap::from([("primary".into(), "local".into())]),
     )
     .unwrap();
-    let mut identity = gents::pack::PackIdentity::new(&manifest, digest, Vec::new());
+    let mut identity = gents_pack::pack::PackIdentity::new(&manifest, digest, Vec::new());
     identity.agent_bindings = agent_bindings;
-    gents::pack::install_pack_documents(
+    gents_pack::pack::install_pack_documents(
         owner_access,
         owner,
         &identity,
         &config,
-        gents::pack::DriftPolicy::Overwrite,
-        &gents::inference::resolved::ProviderProfilePolicy,
+        gents_pack::pack::DriftPolicy::Overwrite,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -409,7 +414,7 @@ async fn set_default_agent(access: &ConfigAccess, owner: &str, agent_did: &str) 
     access
         .transact_write("cli.eval.test_default_agent", |txn| {
             Box::pin(async move {
-                let (_, mut node) = gents::documents::read_desired_state_record_in_txn(
+                let (_, mut node) = gents_documents::read_desired_state_record_in_txn(
                     txn,
                     Collection::Node,
                     owner,
@@ -426,7 +431,7 @@ async fn set_default_agent(access: &ConfigAccess, owner: &str, agent_did: &str) 
                 apply_desired_state_plan(
                     txn,
                     &plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
                 .map(|_| ())
@@ -455,7 +460,7 @@ async fn install(access: &ConfigAccess, documents: Vec<(Collection, Value)>) {
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
                 .map(|_| ())

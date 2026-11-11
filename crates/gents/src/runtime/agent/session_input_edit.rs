@@ -9,11 +9,11 @@ use gents_protocol::session_input_edit::{
 
 #[cfg(test)]
 use super::session_commands::run_session_command_reconciler_with_agents;
-use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
-#[cfg(test)]
-use crate::store::graphql::escape_graphql_string;
-use crate::store::identity::NodeIdentity;
 use gents_protocol::session_command_row::{CommandRow, FIELDS};
+use gents_store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
+#[cfg(test)]
+use gents_store::graphql::escape_graphql_string;
+use gents_store::identity::NodeIdentity;
 
 pub(super) async fn verified_receipt(
     identity: &dyn NodeIdentity,
@@ -92,14 +92,13 @@ async fn authority_rejection(
             ));
         }
     }
-    crate::store::graphql::fence_arrivals(txn, "AgentSession").await?;
-    let Some(session) =
-        crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
-            txn,
-            &command.node_did,
-            &command.session_id,
-        )
-        .await?
+    gents_store::graphql::fence_arrivals(txn, "AgentSession").await?;
+    let Some(session) = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
+        txn,
+        &command.node_did,
+        &command.session_id,
+    )
+    .await?
     else {
         // Processing is reached only once the command's physical session was
         // observed as this Agent's, so an unresolved logical ID is a binding
@@ -108,9 +107,9 @@ async fn authority_rejection(
             "edit physical targets do not match the canonical session".into(),
         ));
     };
-    let Some((agent_doc, _)) = crate::documents::read_desired_state_record_in_txn(
+    let Some((agent_doc, _)) = gents_documents::read_desired_state_record_in_txn(
         txn,
-        crate::Collection::Agent,
+        gents_store::collection::Collection::Agent,
         &command.node_did,
         &command.agent_did,
     )
@@ -255,21 +254,23 @@ async fn verified_graphs(
         .iter()
         .zip(&command.replacement_evidence)
     {
-        let input = match crate::store::config_client::client_request_input(create) {
+        let input = match gents_store::config_client::client_request_input(create) {
             Ok(input) => input,
             Err(_) => return Ok(Err("invalid replacement input".into())),
         };
-        let graph =
-            match crate::store::config_client::verify_request_evidence(input, evidence.clone())
-                .await
-            {
-                Ok(graph) => graph,
-                Err(
-                    crate::store::config_client::ConfigClientError::ClientAgentGraph(_)
-                    | crate::store::config_client::ConfigClientError::Json(_),
-                ) => return Ok(Err("invalid replacement evidence".into())),
-                Err(error) => return Err(error.into()),
-            };
+        let graph = match gents_store::config_client::verify_request_evidence(
+            input,
+            evidence.clone(),
+        )
+        .await
+        {
+            Ok(graph) => graph,
+            Err(
+                gents_store::config_client::ConfigClientError::ClientAgentGraph(_)
+                | gents_store::config_client::ConfigClientError::Json(_),
+            ) => return Ok(Err("invalid replacement evidence".into())),
+            Err(error) => return Err(error.into()),
+        };
         if graph.signer_did() != command.requester_did {
             return Ok(Err("replacement signer differs from edit author".into()));
         }
@@ -311,7 +312,7 @@ async fn replacements_were_applied(
             None => {
                 row["lifecycle_state"] == "interrupted"
                     && row["failure_reason"].as_str()
-                        == Some(crate::request::lifecycle::REMOVED_REASON)
+                        == Some(gents_session::request::lifecycle::REMOVED_REASON)
             }
         };
         if !applied {
@@ -383,7 +384,7 @@ pub(crate) async fn process_command(
             if row.node_did != identity.did() {
                 return Ok(None);
             }
-            let working_agent = match crate::store::config_client::agent_session::load_agent_session_owner_in_txn(txn, &row.node_did, &row.session_id).await? {
+            let working_agent = match gents_store::config_client::agent_session::load_agent_session_owner_in_txn(txn, &row.node_did, &row.session_id).await? {
                 Some(session) => session.session.agent_did,
                 None => match physical_session_agent(txn, row).await? {
                     Some(agent) => agent,
@@ -396,7 +397,7 @@ pub(crate) async fn process_command(
                 && row.requester_did == command.requester_did && row.requester_peer_id == command.requester_peer_id
                 && row.session_id == command.session_id, "edit immutable scope disagrees with signed intent");
             if verified_receipt(identity.as_ref(), &command, row.receipt_json.as_deref()).await?.is_some() { return Ok(None); }
-            crate::store::graphql::fence_arrivals(txn, "AgentSessionInputEdit").await?;
+            gents_store::graphql::fence_arrivals(txn, "AgentSessionInputEdit").await?;
             let rendered = Query::select(Selection::doc_id().field(edit_fields::COMMAND_ID))
                 .filter(Filter::eq(edit_fields::NODE_DID, &row.node_did))
                 .filter(Filter::eq(edit_fields::REQUESTER_DID, &row.requester_did))
@@ -426,17 +427,17 @@ pub(crate) async fn process_command(
             } else {
                 let graphs = graphs.as_ref().and_then(|result| result.as_ref().ok()).context("verified graphs unavailable")?;
                 let expected: Vec<String> = graphs.iter().map(|graph| graph.doc_id().to_owned()).collect();
-                match crate::request::lifecycle::queue::persisted_replacements_in_txn(txn, &command.node_did, &command.replacements, Some(&expected)).await? {
-                    crate::request::lifecycle::queue::PersistedReplacements::Exact(ids) => {
+                match gents_session::request::lifecycle::queue::persisted_replacements_in_txn(txn, &command.node_did, &command.replacements, Some(&expected)).await? {
+                    gents_session::request::lifecycle::queue::PersistedReplacements::Exact(ids) => {
                         if replacements_were_applied(txn, &command, &ids).await? {
                             (SessionInputEditOutcome::Applied, String::new(), ids)
                         } else {
                             (SessionInputEditOutcome::Rejected, "replacement state conflicts with edit".into(), Vec::new())
                         }
                     }
-                    crate::request::lifecycle::queue::PersistedReplacements::Conflicting =>
+                    gents_session::request::lifecycle::queue::PersistedReplacements::Conflicting =>
                         (SessionInputEditOutcome::Rejected, "replacement identity conflicts with edit".into(), Vec::new()),
-                    crate::request::lifecycle::queue::PersistedReplacements::None => {
+                    gents_session::request::lifecycle::queue::PersistedReplacements::None => {
                         if command.replacements.is_empty()
                             && replacements_were_applied(txn, &command, &[]).await? {
                             // A terminal removal does not name the command that caused it.
@@ -451,13 +452,13 @@ pub(crate) async fn process_command(
                         match rejection {
                             Some(reason) => (SessionInputEditOutcome::Rejected, reason, Vec::new()),
                             None => {
-                                let session = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(txn, &command.node_did, &command.session_id).await?.context("validated session disappeared")?;
+                                let session = gents_store::config_client::agent_session::load_agent_session_owner_in_txn(txn, &command.node_did, &command.session_id).await?.context("validated session disappeared")?;
                                 let requester = session.session.requester_did.context("validated session lacks requester provenance")?;
-                                match crate::request::lifecycle::queue::validate_pending_user_edit_in_txn(txn, &command.node_did, &command.session_id,
+                                match gents_session::request::lifecycle::queue::validate_pending_user_edit_in_txn(txn, &command.node_did, &command.session_id,
                                     &requester, &command.requester_did, &command.edit, &command.replacements).await? {
                                     Err(reason) => (SessionInputEditOutcome::Rejected, reason, Vec::new()),
                                     Ok(validated) => (SessionInputEditOutcome::Applied, String::new(),
-                                        crate::request::lifecycle::queue::apply_pending_user_edit_in_txn(txn, validated, graphs).await?.request_doc_ids),
+                                        gents_session::request::lifecycle::queue::apply_pending_user_edit_in_txn(txn, validated, graphs).await?.request_doc_ids),
                                 }
                             }
                         }
@@ -485,14 +486,14 @@ async fn test_signed_replacement_fields(
         .transact_readonly("test.edit.targets", |txn| {
             Box::pin(async move {
                 let session =
-                    crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                    gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
                         txn, node_did, session_id,
                     )
                     .await?
                     .context("test session missing")?;
-                let (agent, _) = crate::documents::read_desired_state_record_in_txn(
+                let (agent, _) = gents_documents::read_desired_state_record_in_txn(
                     txn,
-                    crate::Collection::Agent,
+                    gents_store::collection::Collection::Agent,
                     node_did,
                     &session.session.agent_did,
                 )
@@ -506,9 +507,9 @@ async fn test_signed_replacement_fields(
     let mut evidence = Vec::new();
     for create in replacements {
         evidence.push(
-            crate::store::config_client::prepare_request_evidence(
+            gents_store::config_client::prepare_request_evidence(
                 signer,
-                crate::store::config_client::client_request_input(create).unwrap(),
+                gents_store::config_client::client_request_input(create).unwrap(),
             )
             .await
             .unwrap(),

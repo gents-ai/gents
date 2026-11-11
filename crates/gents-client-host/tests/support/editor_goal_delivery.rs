@@ -1,7 +1,9 @@
 use super::{fake_llm, support::Attachment, ChatAction};
 use anyhow::{ensure, Context, Result};
-use gents::{store::graphql::escape_graphql_string, ConfigAccess, NodeIdentity};
 use gents_protocol::{goal_control::SessionGoalControl, row::AgentRequestRow};
+use gents_store::{
+    config_client::ConfigAccess, graphql::escape_graphql_string, identity::NodeIdentity,
+};
 use serde_json::{json, Value};
 use std::{
     path::Path,
@@ -252,7 +254,7 @@ pub async fn verify(
             == 1
     );
     for request in &requests {
-        gents::verify_request_receipt_signature(request)?;
+        gents_store::identity::request_receipt::verify_request_receipt_signature(request)?;
         ensure!(request.requester_did.as_deref() == Some(author));
         ensure!(
             request.lifecycle_state

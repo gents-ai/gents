@@ -231,7 +231,7 @@ mod tests {
     use crate::runner::ScriptedExecutor;
     use crate::OutcomeKind;
     use gents::defra_node::Node as EmbeddedNode;
-    use gents::store::config_client::ConfigAccess;
+    use gents_store::config_client::ConfigAccess;
     use std::sync::Arc;
 
     #[test]

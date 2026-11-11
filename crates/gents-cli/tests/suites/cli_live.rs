@@ -1474,7 +1474,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         "harness: the held request must complete"
     );
 
-    let access = gents::store::config_client::ConfigAccess::Graphql(
+    let access = gents_store::config_client::ConfigAccess::Graphql(
         crate::support::graphql::served_endpoint(&graphql),
     );
     let captures = captures_for(&active_request_id).await?;
@@ -1488,13 +1488,13 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
             capture["request_doc_id"], active_doc_id,
             "steering must not start a second physical request"
         );
-        let body = gents::inference::rendered_request::decode_capture_json(
+        let body = gents_inference::rendered_request::decode_capture_json(
             &access,
             capture["capture_version"]
                 .as_u64()
                 .context("capture_version")? as u32,
             capture["request_json"].as_str().context("request_json")?,
-            gents::inference::rendered_request::CapturePayloadKind::RequestBody,
+            gents_inference::rendered_request::CapturePayloadKind::RequestBody,
         )
         .await?
         .to_string();
@@ -1536,7 +1536,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         assert_eq!(row["lifecycle_state"], "superseded", "{row}");
         assert_eq!(
             row["failure_reason"],
-            gents::request::lifecycle::FOLDED_REASON,
+            gents_session::request::lifecycle::FOLDED_REASON,
             "{row}"
         );
         assert_eq!(

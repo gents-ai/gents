@@ -1,11 +1,11 @@
 use crate::cli::{AgentTargetEntryArgs, ToolsSetArgs};
 use anyhow::{Context, Result};
-use gents::documents::apply_desired_state_plan;
-use gents::documents::{
+use gents_documents::apply_desired_state_plan;
+use gents_documents::{
     read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents::documents::{AgentTargetDocument, Tools};
-use gents::Collection;
+use gents_documents::{AgentTargetDocument, Tools};
+use gents_store::collection::Collection;
 use serde_json::json;
 
 pub(super) fn agent_target_entry_command(args: AgentTargetEntryArgs) -> Result<()> {
@@ -49,7 +49,7 @@ pub(super) async fn tools_set(args: ToolsSetArgs) -> Result<()> {
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await?;
                 let (doc_id, _) =

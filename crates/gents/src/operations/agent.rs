@@ -1,10 +1,10 @@
 use gents_protocol::agent_identity::AgentIdentityBinding;
 use gents_protocol::operations::agent::{AgentCreateInput, AgentOperationError};
 
-use crate::store::config_client::ConfigAccess;
-use crate::tools::surface::SelfConfigProcessCeiling;
+use gents_store::config_client::ConfigAccess;
+use gents_tools::surface::SelfConfigProcessCeiling;
 
-pub type AgentReceipt = gents_protocol::operations::agent::AgentReceipt<crate::documents::Agent>;
+pub type AgentReceipt = gents_protocol::operations::agent::AgentReceipt<gents_documents::Agent>;
 
 /// Creates or clones an Agent with its Context and Tools in one transaction,
 /// written as whoever `access` signs for. `identity_binding` comes from the
@@ -18,12 +18,6 @@ pub async fn create(
     input: &AgentCreateInput,
     ceiling: &SelfConfigProcessCeiling,
 ) -> Result<AgentReceipt, AgentOperationError> {
-    crate::tools::builtin::self_config::create_agent(
-        access,
-        owner,
-        identity_binding,
-        input,
-        ceiling,
-    )
-    .await
+    gents_tools::builtin::self_config::create_agent(access, owner, identity_binding, input, ceiling)
+        .await
 }

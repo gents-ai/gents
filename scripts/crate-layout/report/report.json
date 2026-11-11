@@ -1,0 +1,2220 @@
+{
+ "constructs_not_rewritten": [
+  {
+   "construct": "include_str! with a computed path",
+   "file": "crates/gents/src/file_contents/tests.rs",
+   "line": 188
+  },
+  {
+   "construct": "include_str! with a computed path",
+   "file": "crates/gents/src/runtime/agent/loop_stream/tests/tool_execution.rs",
+   "line": 781
+  },
+  {
+   "construct": "CARGO_MANIFEST_DIR in a file that changed crate",
+   "file": "crates/gents-pack/src/pack/store.rs",
+   "line": 727
+  },
+  {
+   "construct": "CARGO_MANIFEST_DIR in a file that changed crate",
+   "file": "crates/gents-pack/src/test_support.rs",
+   "line": 6
+  },
+  {
+   "construct": "CARGO_MANIFEST_DIR in a file that changed crate",
+   "file": "crates/gents-session/src/exec/native_spawn.rs",
+   "line": 152
+  },
+  {
+   "construct": "CARGO_MANIFEST_DIR in a file that changed crate",
+   "file": "crates/gents-session/src/file_contents/tests.rs",
+   "line": 189
+  },
+  {
+   "construct": "CARGO_MANIFEST_DIR in a file that changed crate",
+   "file": "crates/gents-automation/src/goal/history/native_projection_tests.rs",
+   "line": 11
+  },
+  {
+   "construct": "CARGO_MANIFEST_DIR in a file that changed crate",
+   "file": "crates/gents-observe/src/observe/adapter_projection/tests.rs",
+   "line": 222
+  },
+  {
+   "construct": "CARGO_MANIFEST_DIR in a file that changed crate",
+   "file": "crates/gents-pack/src/pack/archive/tests.rs",
+   "line": 15
+  },
+  {
+   "construct": "CARGO_MANIFEST_DIR in a file that changed crate",
+   "file": "crates/gents-pack/src/pack/loader/tests.rs",
+   "line": 116
+  },
+  {
+   "construct": "CARGO_MANIFEST_DIR in a file that changed crate",
+   "file": "crates/gents-pack/src/plugin/ux/tests.rs",
+   "line": 286
+  },
+  {
+   "construct": "CARGO_MANIFEST_DIR in a file that changed crate",
+   "file": "crates/gents-tools/src/native/tests.rs",
+   "line": 391
+  },
+  {
+   "construct": "CARGO_MANIFEST_DIR in a file that changed crate",
+   "file": "crates/gents-tools/src/native/tests.rs",
+   "line": 2823
+  },
+  {
+   "construct": "CARGO_MANIFEST_DIR in a file that changed crate",
+   "file": "crates/gents-store/src/local/home/tests.rs",
+   "line": 374
+  },
+  {
+   "construct": "CARGO_MANIFEST_DIR in a file that changed crate",
+   "file": "crates/gents-tools/src/native/lsp/admit.rs",
+   "line": 61
+  },
+  {
+   "construct": "CARGO_MANIFEST_DIR in a file that changed crate",
+   "file": "crates/gents-tools/src/native/lsp/tests.rs",
+   "line": 2142
+  },
+  {
+   "construct": "CARGO_MANIFEST_DIR in a file that changed crate",
+   "file": "crates/gents-tools/src/native/lsp/tests.rs",
+   "line": 2161
+  },
+  {
+   "construct": "CARGO_MANIFEST_DIR in a file that changed crate",
+   "file": "crates/gents-tools/src/native/lsp/tests.rs",
+   "line": 2244
+  },
+  {
+   "construct": "CARGO_MANIFEST_DIR in a file that changed crate",
+   "file": "crates/gents-tools/src/builtin/self_config/configuration_discovery/tests.rs",
+   "line": 429
+  },
+  {
+   "construct": "CARGO_MANIFEST_DIR in a file that changed crate",
+   "file": "crates/gents-tools/src/builtin/self_config/tests/live_documents.rs",
+   "line": 334
+  }
+ ],
+ "counts": {
+  "consumer_files_touched": 669,
+  "files_rewritten": 1992,
+  "tree_files": 1353,
+  "upward_refs": 883,
+  "widenings": 1041
+ },
+ "deleted_shims": [
+  "crates/gents/src/error.rs",
+  "crates/gents/src/inference/llm/responses_normalize.rs",
+  "crates/gents/src/inference/llm/tool.rs",
+  "crates/gents/src/openai_wire.rs",
+  "crates/gents/src/provider_usage.rs",
+  "crates/gents/src/runtime/agent/completion_retry.rs",
+  "crates/gents/src/tools/background/job/keys.rs",
+  "crates/gents/src/truncation.rs"
+ ],
+ "dependencies_between_new_crates": {
+  "gents": [
+   "gents-protocol",
+   "gents-store",
+   "gents-documents",
+   "gents-inference",
+   "gents-p2p",
+   "gents-pack",
+   "gents-session",
+   "gents-tools",
+   "gents-toolcalls",
+   "gents-automation",
+   "gents-observe"
+  ],
+  "gents-automation": [
+   "gents-store",
+   "gents-documents",
+   "gents-inference",
+   "gents-p2p",
+   "gents-pack",
+   "gents-session",
+   "gents-tools",
+   "gents-toolcalls"
+  ],
+  "gents-cli": [
+   "gents-protocol",
+   "gents-store",
+   "gents-documents",
+   "gents-inference",
+   "gents-p2p",
+   "gents-pack",
+   "gents-session",
+   "gents-tools",
+   "gents-toolcalls",
+   "gents-automation",
+   "gents-observe",
+   "gents"
+  ],
+  "gents-client-host": [
+   "gents-store",
+   "gents-documents",
+   "gents-inference",
+   "gents-pack",
+   "gents-session",
+   "gents-tools",
+   "gents-automation",
+   "gents-observe",
+   "gents"
+  ],
+  "gents-desktop": [
+   "gents-session"
+  ],
+  "gents-desktop-bridge": [
+   "gents-store",
+   "gents-documents",
+   "gents-inference",
+   "gents-pack",
+   "gents-session",
+   "gents-tools",
+   "gents-toolcalls",
+   "gents-automation",
+   "gents"
+  ],
+  "gents-desktop-core": [
+   "gents-store",
+   "gents-documents",
+   "gents-inference",
+   "gents-p2p",
+   "gents-session",
+   "gents-tools",
+   "gents-toolcalls",
+   "gents-automation",
+   "gents-observe",
+   "gents"
+  ],
+  "gents-desktop-tauri": [
+   "gents-store",
+   "gents-documents",
+   "gents-inference",
+   "gents-p2p",
+   "gents-pack",
+   "gents-session",
+   "gents-tools",
+   "gents-observe",
+   "gents"
+  ],
+  "gents-documents": [
+   "gents-store"
+  ],
+  "gents-eval": [
+   "gents-store",
+   "gents-documents",
+   "gents-inference",
+   "gents-pack",
+   "gents-session",
+   "gents-tools",
+   "gents-toolcalls",
+   "gents-automation",
+   "gents-observe",
+   "gents"
+  ],
+  "gents-inference": [
+   "gents-protocol",
+   "gents-store",
+   "gents-documents"
+  ],
+  "gents-observe": [
+   "gents-store",
+   "gents-documents",
+   "gents-inference",
+   "gents-p2p",
+   "gents-session",
+   "gents-toolcalls",
+   "gents-automation"
+  ],
+  "gents-p2p": [
+   "gents-store",
+   "gents-documents"
+  ],
+  "gents-pack": [
+   "gents-store",
+   "gents-documents"
+  ],
+  "gents-session": [
+   "gents-store",
+   "gents-documents",
+   "gents-inference",
+   "gents-p2p"
+  ],
+  "gents-toolcalls": [
+   "gents-store",
+   "gents-documents",
+   "gents-inference",
+   "gents-p2p",
+   "gents-pack",
+   "gents-session",
+   "gents-tools"
+  ],
+  "gents-tools": [
+   "gents-store",
+   "gents-documents",
+   "gents-inference",
+   "gents-p2p",
+   "gents-pack",
+   "gents-session"
+  ]
+ },
+ "files_not_reachable_from_lib_rs": [
+  "crates/gents/src/tools/mcp/registry/tests.rs",
+  "crates/gents/src/runtime/agent/retry/tests.rs",
+  "crates/gents/src/pack/authoring/templates/workflow/lib.rs",
+  "crates/gents/src/pack/authoring/templates/workflow/main.rs",
+  "crates/gents/src/pack/authoring/templates/workflow/wire.rs",
+  "crates/gents/src/inference/clients/claude_messages/fixtures.rs",
+  "crates/gents/src/documents/schedule_cadence_tests.rs",
+  "crates/gents/src/documents/event_group_validation_tests.rs",
+  "crates/gents/src/documents/task_validation/tests.rs",
+  "crates/gents/src/documents/projection_acp/tests.rs"
+ ],
+ "outstanding_splits": [
+  {
+   "assigned_whole_to": "gents",
+   "parts": [
+    {
+     "crate": "gents",
+     "items": "mod eval, runtime, turn, operations, claude_request_context, lean_vocab_test declarations; provider_budget (turn::provider_input::budget); __test_internals (AgentBuildError); CAPTURED_EVENT_TARGETS and enable_scoped_event_capture (names runtime::status, store write_telemetry and session REFUSAL_PROJECTION_EVENT_TARGET, so it can only live at the root); first_content, CORRUPT_TOOL_ARGS_589; also the #[path] include of lean_vocab_test/canonical_execution/native_adapter.rs (3,573 lines, uses request::lifecycle, streaming, tools::call and runtime::agent)"
+    },
+    {
+     "crate": "gents-store",
+     "items": "test_support: runtime_handle, node_builder, held_runtime_identity, EnvVarGuard, delete_configuration_document, mod acp_policies and read_observation; `support` path include of tests/support/mod.rs (TestDb)"
+    },
+    {
+     "crate": "gents-documents",
+     "items": "test_support: bootstrap_signed_test_node, ensure_test_node, set_test_default_agent_as, set_test_node_field_as, test_agent_documents, signed_test_node_without_agent(_from_db); apply_desired_state_plan users"
+    },
+    {
+     "crate": "gents-inference",
+     "items": "test_support: install_test_agent_binding_with_access, install_test_agent(_binding), signed_test_node(_from_db), ensure_test_default_agent (they call inference::backends::registry::set_backend_probe_status_as), capture_scripted_provider_request (inference::rendered_request::transport)"
+    },
+    {
+     "crate": "gents-pack",
+     "items": "test_support: fixture_pack_copy, home_with_fixture_pack, home_with_pack_dir (use plugin::tests::build_plugin_afb, pack::archive, plugin::executor)"
+    },
+    {
+     "crate": "gents-session",
+     "items": "test_support: publish_provider_message, admitted_client_lifecycle (request::admission verifier plus p2p enrollment_authority_channel), create_agent_owned_session"
+    },
+    {
+     "crate": "gents-tools",
+     "items": "test_support::tool_policy (tools::surface::ToolCeiling::policy)"
+    },
+    {
+     "crate": "gents-automation",
+     "items": "test_support re-exports of crate_owners (checkpoint_prefix, PreparedFire, update_trigger_runtime_fields and others)"
+    }
+   ],
+   "path": "crates/gents/src/lib.rs"
+  },
+  {
+   "assigned_whole_to": "gents-pack",
+   "parts": [
+    {
+     "crate": "gents-pack",
+     "items": "PluginRunner, PluginBudget, PluginVerdict, narrow_manifold, attempts_allowed, retry_backoff; mod allowed, authority, bound, executor, host_imports, http_calls, install, rounds, script_engine, store, ux, wasi_runtime, tests (lines 1-630 and the matching mod lines)"
+    },
+    {
+     "crate": "gents-toolcalls",
+     "items": "mod application_write, data, job_calls, model_calls, service, tool, tool_calls declarations (host-callback half, plan step 10)"
+    },
+    {
+     "crate": "gents-tools",
+     "items": "mod approval (plan step 13 files plugin::approval::workspace in tools; step 10 says host half; they disagree)"
+    }
+   ],
+   "path": "crates/gents/src/plugin.rs"
+  },
+  {
+   "assigned_whole_to": "gents-toolcalls",
+   "parts": [
+    {
+     "crate": "gents-documents or lower",
+     "items": "DEFAULT_WAIT_PROCESS_TIMEOUT_SECS, MAX_WAIT_PROCESS_TIMEOUT_SECS (documents/tools.rs:736,737,843,844; tools/surface/timeouts.rs:4)"
+    },
+    {
+     "crate": "gents-tools or lower",
+     "items": "r4c_args::{ListBackgroundToolsArgs, ReadToolOutputArgs}, BackgroundToolArgs, WaitToolArgs, CancelToolArgs (tools/native/session_message.rs:9)"
+    },
+    {
+     "crate": "gents-session",
+     "items": "canonical_tool_output_from_rows, observe_canonical_tool_output_with_access, CanonicalToolOutputObservation (status.rs:370-470; query/result.rs)"
+    },
+    {
+     "crate": "gents-toolcalls",
+     "items": "the rest"
+    }
+   ],
+   "path": "crates/gents/src/tools/background/status.rs",
+   "source": "recon conflict 7"
+  }
+ ],
+ "references_not_resolved": [],
+ "removed_root_reexports": [
+  {
+   "line": 38,
+   "name": "final_claim_admission_disposition",
+   "now": "gents_session::request::admission::final_claim_admission_disposition",
+   "was": "request::admission::final_claim_admission_disposition"
+  },
+  {
+   "line": 39,
+   "name": "sign_agent_request_create",
+   "now": "gents_session::request::admission::sign_agent_request_create",
+   "was": "request::admission::sign_agent_request_create"
+  },
+  {
+   "line": 39,
+   "name": "sign_agent_request_create_as_registered_target",
+   "now": "gents_session::request::admission::sign_agent_request_create_as_registered_target",
+   "was": "request::admission::sign_agent_request_create_as_registered_target"
+  },
+  {
+   "line": 52,
+   "name": "EventTriggerFireMode",
+   "now": "gents_documents::automation::EventTriggerFireMode",
+   "was": "documents::automation::EventTriggerFireMode"
+  },
+  {
+   "line": 52,
+   "name": "ResolvedEventTrigger",
+   "now": "gents_documents::automation::ResolvedEventTrigger",
+   "was": "documents::automation::ResolvedEventTrigger"
+  },
+  {
+   "line": 52,
+   "name": "ResolvedSchedule",
+   "now": "gents_documents::automation::ResolvedSchedule",
+   "was": "documents::automation::ResolvedSchedule"
+  },
+  {
+   "line": 52,
+   "name": "ResolvedTask",
+   "now": "gents_documents::automation::ResolvedTask",
+   "was": "documents::automation::ResolvedTask"
+  },
+  {
+   "line": 52,
+   "name": "MAX_EVENT_TRIGGER_GROUP_DOCS",
+   "now": "gents_documents::automation::MAX_EVENT_TRIGGER_GROUP_DOCS",
+   "was": "documents::automation::MAX_EVENT_TRIGGER_GROUP_DOCS"
+  },
+  {
+   "line": 56,
+   "name": "reject_secret_bearing_callback_fields",
+   "now": "gents_documents::callback_secret_fields::reject_secret_bearing_callback_fields",
+   "was": "documents::callback_secret_fields::reject_secret_bearing_callback_fields"
+  },
+  {
+   "line": 57,
+   "name": "ReasoningEffort",
+   "now": "gents_documents::inference_defaults::ReasoningEffort",
+   "was": "documents::inference_defaults::ReasoningEffort"
+  },
+  {
+   "line": 57,
+   "name": "DEFAULT_DEADLINE_DURATION_SECS",
+   "now": "gents_documents::inference_defaults::DEFAULT_DEADLINE_DURATION_SECS",
+   "was": "documents::inference_defaults::DEFAULT_DEADLINE_DURATION_SECS"
+  },
+  {
+   "line": 57,
+   "name": "DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS",
+   "now": "gents_documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS",
+   "was": "documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS"
+  },
+  {
+   "line": 60,
+   "name": "TriggerKind",
+   "now": "gents_documents::task_delivery::TriggerKind",
+   "was": "documents::task_delivery::TriggerKind"
+  },
+  {
+   "line": 61,
+   "name": "check_template_vocabulary",
+   "now": "gents_documents::template::check_template_vocabulary",
+   "was": "documents::template::check_template_vocabulary"
+  },
+  {
+   "line": 61,
+   "name": "parse_template_for_validation",
+   "now": "gents_documents::template::parse_template_for_validation",
+   "was": "documents::template::parse_template_for_validation"
+  },
+  {
+   "line": 61,
+   "name": "render_manual_template",
+   "now": "gents_documents::template::render_manual_template",
+   "was": "documents::template::render_manual_template"
+  },
+  {
+   "line": 61,
+   "name": "render_template",
+   "now": "gents_documents::template::render_template",
+   "was": "documents::template::render_template"
+  },
+  {
+   "line": 61,
+   "name": "TemplateError",
+   "now": "gents_documents::template::TemplateError",
+   "was": "documents::template::TemplateError"
+  },
+  {
+   "line": 61,
+   "name": "TemplateScope",
+   "now": "gents_documents::template::TemplateScope",
+   "was": "documents::template::TemplateScope"
+  },
+  {
+   "line": 61,
+   "name": "VariableRef",
+   "now": "gents_documents::template::VariableRef",
+   "was": "documents::template::VariableRef"
+  },
+  {
+   "line": 65,
+   "name": "default_inference_profile_id_for_agent",
+   "now": "gents_documents::default_inference_profile_id_for_agent",
+   "was": "documents::default_inference_profile_id_for_agent"
+  },
+  {
+   "line": 65,
+   "name": "default_inference_profile_id_for_node",
+   "now": "gents_documents::default_inference_profile_id_for_node",
+   "was": "documents::default_inference_profile_id_for_node"
+  },
+  {
+   "line": 65,
+   "name": "deserialize_dual_shape",
+   "now": "gents_documents::deserialize_dual_shape",
+   "was": "documents::deserialize_dual_shape"
+  },
+  {
+   "line": 65,
+   "name": "ensure_node",
+   "now": "gents_documents::ensure_node",
+   "was": "documents::ensure_node"
+  },
+  {
+   "line": 65,
+   "name": "is_reserved_builtin_tool_name",
+   "now": "gents_documents::is_reserved_builtin_tool_name",
+   "was": "documents::is_reserved_builtin_tool_name"
+  },
+  {
+   "line": 65,
+   "name": "list_agents",
+   "now": "gents_documents::list_agents",
+   "was": "documents::list_agents"
+  },
+  {
+   "line": 65,
+   "name": "list_datastore_tool_surfaces",
+   "now": "gents_documents::list_datastore_tool_surfaces",
+   "was": "documents::list_datastore_tool_surfaces"
+  },
+  {
+   "line": 65,
+   "name": "list_inference_profile_records",
+   "now": "gents_documents::list_inference_profile_records",
+   "was": "documents::list_inference_profile_records"
+  },
+  {
+   "line": 65,
+   "name": "load_agent",
+   "now": "gents_documents::load_agent",
+   "was": "documents::load_agent"
+  },
+  {
+   "line": 65,
+   "name": "load_inference_profile",
+   "now": "gents_documents::load_inference_profile",
+   "was": "documents::load_inference_profile"
+  },
+  {
+   "line": 65,
+   "name": "load_node",
+   "now": "gents_documents::load_node",
+   "was": "documents::load_node"
+  },
+  {
+   "line": 65,
+   "name": "merge_datastore_tool_surfaces",
+   "now": "gents_documents::merge_datastore_tool_surfaces",
+   "was": "documents::merge_datastore_tool_surfaces"
+  },
+  {
+   "line": 65,
+   "name": "AgentDocument",
+   "now": "gents_documents::Agent",
+   "was": "documents::Agent"
+  },
+  {
+   "line": 65,
+   "name": "AgentTargetDocument",
+   "now": "gents_documents::AgentTargetDocument",
+   "was": "documents::AgentTargetDocument"
+  },
+  {
+   "line": 65,
+   "name": "ConfigReferences",
+   "now": "gents_documents::ConfigReferences",
+   "was": "documents::ConfigReferences"
+  },
+  {
+   "line": 65,
+   "name": "DatastoreToolSurfaceDocument",
+   "now": "gents_documents::DatastoreToolSurfaceDocument",
+   "was": "documents::DatastoreToolSurfaceDocument"
+  },
+  {
+   "line": 65,
+   "name": "InferenceProfile",
+   "now": "gents_documents::InferenceProfile",
+   "was": "documents::InferenceProfile"
+  },
+  {
+   "line": 65,
+   "name": "MergedSurfaceTools",
+   "now": "gents_documents::MergedSurfaceTools",
+   "was": "documents::MergedSurfaceTools"
+  },
+  {
+   "line": 65,
+   "name": "QueryToolDecl",
+   "now": "gents_documents::QueryToolDecl",
+   "was": "documents::QueryToolDecl"
+  },
+  {
+   "line": 65,
+   "name": "SurfaceToolDecl",
+   "now": "gents_documents::SurfaceToolDecl",
+   "was": "documents::SurfaceToolDecl"
+  },
+  {
+   "line": 65,
+   "name": "Tools",
+   "now": "gents_documents::Tools",
+   "was": "documents::Tools"
+  },
+  {
+   "line": 65,
+   "name": "WriteToolDecl",
+   "now": "gents_documents::WriteToolDecl",
+   "was": "documents::WriteToolDecl"
+  },
+  {
+   "line": 65,
+   "name": "WriteToolField",
+   "now": "gents_documents::WriteToolField",
+   "was": "documents::WriteToolField"
+  },
+  {
+   "line": 65,
+   "name": "WriteToolFieldFill",
+   "now": "gents_documents::WriteToolFieldFill",
+   "was": "documents::WriteToolFieldFill"
+  },
+  {
+   "line": 65,
+   "name": "WriteToolOutputObligation",
+   "now": "gents_documents::WriteToolOutputObligation",
+   "was": "documents::WriteToolOutputObligation"
+  },
+  {
+   "line": 65,
+   "name": "WriteToolOutputObligationScope",
+   "now": "gents_documents::WriteToolOutputObligationScope",
+   "was": "documents::WriteToolOutputObligationScope"
+  },
+  {
+   "line": 74,
+   "name": "BashMode",
+   "now": "gents_documents::BashMode",
+   "was": "documents::BashMode"
+  },
+  {
+   "line": 74,
+   "name": "FileToolMode",
+   "now": "gents_documents::FileToolMode",
+   "was": "documents::FileToolMode"
+  },
+  {
+   "line": 75,
+   "name": "ConcurrencyMode",
+   "now": "gents_documents::ConcurrencyMode",
+   "was": "documents::ConcurrencyMode"
+  },
+  {
+   "line": 75,
+   "name": "ScheduleCadence",
+   "now": "gents_documents::ScheduleCadence",
+   "was": "documents::ScheduleCadence"
+  },
+  {
+   "line": 76,
+   "name": "active_native_executors",
+   "now": "gents_session::exec::status::active_native_executors",
+   "was": "exec::status::active_native_executors"
+  },
+  {
+   "line": 76,
+   "name": "NativeExecutorStatus",
+   "now": "gents_session::exec::status::NativeExecutorStatus",
+   "was": "exec::status::NativeExecutorStatus"
+  },
+  {
+   "line": 83,
+   "name": "call_state_holds_backend_slot",
+   "now": "gents_inference::admission::call_state_holds_backend_slot",
+   "was": "inference::admission::call_state_holds_backend_slot"
+  },
+  {
+   "line": 84,
+   "name": "BackendAdmissionConfig",
+   "now": "gents_inference::admission::BackendAdmissionConfig",
+   "was": "inference::admission::BackendAdmissionConfig"
+  },
+  {
+   "line": 85,
+   "name": "document_configured_from_fields",
+   "now": "gents_inference::admission::document_configured_from_fields",
+   "was": "inference::admission::document_configured_from_fields"
+  },
+  {
+   "line": 85,
+   "name": "InferenceCall",
+   "now": "gents_inference::admission::InferenceCall",
+   "was": "inference::admission::InferenceCall"
+  },
+  {
+   "line": 85,
+   "name": "InferenceCallRecoveryReport",
+   "now": "gents_inference::admission::InferenceCallRecoveryReport",
+   "was": "inference::admission::InferenceCallRecoveryReport"
+  },
+  {
+   "line": 88,
+   "name": "probe_backends_cycle",
+   "now": "gents_inference::backends::health::probe_backends_cycle",
+   "was": "inference::backends::health::probe_backends_cycle"
+  },
+  {
+   "line": 88,
+   "name": "run_backend_probe_cycle",
+   "now": "gents_inference::backends::health::run_backend_probe_cycle",
+   "was": "inference::backends::health::run_backend_probe_cycle"
+  },
+  {
+   "line": 88,
+   "name": "spawn_backend_prober",
+   "now": "gents_inference::backends::health::spawn_backend_prober",
+   "was": "inference::backends::health::spawn_backend_prober"
+  },
+  {
+   "line": 88,
+   "name": "BackendHealthMap",
+   "now": "gents_inference::backends::health::BackendHealthMap",
+   "was": "inference::backends::health::BackendHealthMap"
+  },
+  {
+   "line": 88,
+   "name": "BackendHealthSnapshot",
+   "now": "gents_inference::backends::health::BackendHealthSnapshot",
+   "was": "inference::backends::health::BackendHealthSnapshot"
+  },
+  {
+   "line": 88,
+   "name": "BackendHealthState",
+   "now": "gents_inference::backends::health::BackendHealthState",
+   "was": "inference::backends::health::BackendHealthState"
+  },
+  {
+   "line": 88,
+   "name": "BackendProberOptions",
+   "now": "gents_inference::backends::health::BackendProberOptions",
+   "was": "inference::backends::health::BackendProberOptions"
+  },
+  {
+   "line": 88,
+   "name": "ProbeCycleOutcome",
+   "now": "gents_inference::backends::health::ProbeCycleOutcome",
+   "was": "inference::backends::health::ProbeCycleOutcome"
+  },
+  {
+   "line": 92,
+   "name": "discover_backend_models",
+   "now": "gents_inference::backends::provider::discover_models",
+   "was": "inference::backends::provider::discover_models"
+  },
+  {
+   "line": 92,
+   "name": "BackendProviderKind",
+   "now": "gents_inference::backends::provider::BackendProviderKind",
+   "was": "inference::backends::provider::BackendProviderKind"
+  },
+  {
+   "line": 95,
+   "name": "record_discovered_catalog_on",
+   "now": "gents_inference::backends::registry::record_discovered_catalog_on",
+   "was": "inference::backends::registry::record_discovered_catalog_on"
+  },
+  {
+   "line": 95,
+   "name": "record_model_catalog_in_txn",
+   "now": "gents_inference::backends::registry::record_model_catalog_in_txn",
+   "was": "inference::backends::registry::record_model_catalog_in_txn"
+  },
+  {
+   "line": 95,
+   "name": "InferenceBackend",
+   "now": "gents_documents::InferenceBackend",
+   "was": "inference::backends::registry::InferenceBackend"
+  },
+  {
+   "line": 95,
+   "name": "HEALTHY_PROBE_STATUS",
+   "now": "gents_inference::backends::registry::HEALTHY_PROBE_STATUS",
+   "was": "inference::backends::registry::HEALTHY_PROBE_STATUS"
+  },
+  {
+   "line": 99,
+   "name": "CompactionStrategy",
+   "now": "gents_inference::compaction::CompactionStrategy",
+   "was": "inference::compaction::CompactionStrategy"
+  },
+  {
+   "line": 100,
+   "name": "ResolvedAgent",
+   "now": "gents_inference::resolved::ResolvedAgent",
+   "was": "inference::resolved::ResolvedAgent"
+  },
+  {
+   "line": 100,
+   "name": "SamplingConfig",
+   "now": "gents_inference::resolved::SamplingConfig",
+   "was": "inference::resolved::SamplingConfig"
+  },
+  {
+   "line": 100,
+   "name": "DEFAULT_COMPACTION_THRESHOLD",
+   "now": "gents_inference::resolved::DEFAULT_COMPACTION_THRESHOLD",
+   "was": "inference::resolved::DEFAULT_COMPACTION_THRESHOLD"
+  },
+  {
+   "line": 100,
+   "name": "DEFAULT_CONTEXT_WINDOW",
+   "now": "gents_inference::resolved::DEFAULT_CONTEXT_WINDOW",
+   "was": "inference::resolved::DEFAULT_CONTEXT_WINDOW"
+  },
+  {
+   "line": 100,
+   "name": "DEFAULT_MAX_OUTPUT_TOKENS",
+   "now": "gents_inference::resolved::DEFAULT_MAX_OUTPUT_TOKENS",
+   "was": "inference::resolved::DEFAULT_MAX_OUTPUT_TOKENS"
+  },
+  {
+   "line": 100,
+   "name": "DEFAULT_MAX_TURNS",
+   "now": "gents_inference::resolved::DEFAULT_MAX_TURNS",
+   "was": "inference::resolved::DEFAULT_MAX_TURNS"
+  },
+  {
+   "line": 100,
+   "name": "DEFAULT_MODEL_NAME",
+   "now": "gents_inference::resolved::DEFAULT_MODEL_NAME",
+   "was": "inference::resolved::DEFAULT_MODEL_NAME"
+  },
+  {
+   "line": 100,
+   "name": "DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS",
+   "now": "gents_inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS",
+   "was": "inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS"
+  },
+  {
+   "line": 100,
+   "name": "DEFAULT_STREAM_BATCH_MS",
+   "now": "gents_inference::resolved::DEFAULT_STREAM_BATCH_MS",
+   "was": "inference::resolved::DEFAULT_STREAM_BATCH_MS"
+  },
+  {
+   "line": 105,
+   "name": "adapter_projection_eval_jsonl_record_schema",
+   "now": "gents_observe::observe::adapter_projection::adapter_projection_eval_jsonl_record_schema",
+   "was": "observe::adapter_projection::adapter_projection_eval_jsonl_record_schema"
+  },
+  {
+   "line": 105,
+   "name": "adapter_projection_eval_jsonl_records",
+   "now": "gents_observe::observe::adapter_projection::adapter_projection_eval_jsonl_records",
+   "was": "observe::adapter_projection::adapter_projection_eval_jsonl_records"
+  },
+  {
+   "line": 105,
+   "name": "adapter_projection_json_schema",
+   "now": "gents_observe::observe::adapter_projection::adapter_projection_json_schema",
+   "was": "observe::adapter_projection::adapter_projection_json_schema"
+  },
+  {
+   "line": 105,
+   "name": "adapter_projection_jsonl_record_schema",
+   "now": "gents_observe::observe::adapter_projection::adapter_projection_jsonl_record_schema",
+   "was": "observe::adapter_projection::adapter_projection_jsonl_record_schema"
+  },
+  {
+   "line": 105,
+   "name": "adapter_projection_jsonl_records",
+   "now": "gents_observe::observe::adapter_projection::adapter_projection_jsonl_records",
+   "was": "observe::adapter_projection::adapter_projection_jsonl_records"
+  },
+  {
+   "line": 105,
+   "name": "adapter_projection_native_json",
+   "now": "gents_observe::observe::adapter_projection::adapter_projection_native_json",
+   "was": "observe::adapter_projection::adapter_projection_native_json"
+  },
+  {
+   "line": 105,
+   "name": "adapter_projection_native_json_schema",
+   "now": "gents_observe::observe::adapter_projection::adapter_projection_native_json_schema",
+   "was": "observe::adapter_projection::adapter_projection_native_json_schema"
+  },
+  {
+   "line": 105,
+   "name": "build_adapter_projection",
+   "now": "gents_observe::observe::adapter_projection::build_adapter_projection",
+   "was": "observe::adapter_projection::build_adapter_projection"
+  },
+  {
+   "line": 105,
+   "name": "validate_adapter_projection_contract",
+   "now": "gents_observe::observe::adapter_projection::validate_adapter_projection_contract",
+   "was": "observe::adapter_projection::validate_adapter_projection_contract"
+  },
+  {
+   "line": 105,
+   "name": "AdapterProjection",
+   "now": "gents_observe::observe::adapter_projection::AdapterProjection",
+   "was": "observe::adapter_projection::AdapterProjection"
+  },
+  {
+   "line": 105,
+   "name": "AdapterProjectionContractError",
+   "now": "gents_observe::observe::adapter_projection::AdapterProjectionContractError",
+   "was": "observe::adapter_projection::AdapterProjectionContractError"
+  },
+  {
+   "line": 105,
+   "name": "AdapterProjectionEnvelope",
+   "now": "gents_observe::observe::adapter_projection::AdapterProjectionEnvelope",
+   "was": "observe::adapter_projection::AdapterProjectionEnvelope"
+  },
+  {
+   "line": 105,
+   "name": "AdapterProjectionEvalJsonlRecord",
+   "now": "gents_observe::observe::adapter_projection::AdapterProjectionEvalJsonlRecord",
+   "was": "observe::adapter_projection::AdapterProjectionEvalJsonlRecord"
+  },
+  {
+   "line": 105,
+   "name": "AdapterProjectionJsonlRecord",
+   "now": "gents_observe::observe::adapter_projection::AdapterProjectionJsonlRecord",
+   "was": "observe::adapter_projection::AdapterProjectionJsonlRecord"
+  },
+  {
+   "line": 105,
+   "name": "AtifAgent",
+   "now": "gents_observe::observe::adapter_projection::AtifAgent",
+   "was": "observe::adapter_projection::AtifAgent"
+  },
+  {
+   "line": 105,
+   "name": "AtifFinalMetrics",
+   "now": "gents_observe::observe::adapter_projection::AtifFinalMetrics",
+   "was": "observe::adapter_projection::AtifFinalMetrics"
+  },
+  {
+   "line": 105,
+   "name": "AtifObservation",
+   "now": "gents_observe::observe::adapter_projection::AtifObservation",
+   "was": "observe::adapter_projection::AtifObservation"
+  },
+  {
+   "line": 105,
+   "name": "AtifObservationResult",
+   "now": "gents_observe::observe::adapter_projection::AtifObservationResult",
+   "was": "observe::adapter_projection::AtifObservationResult"
+  },
+  {
+   "line": 105,
+   "name": "AtifStep",
+   "now": "gents_observe::observe::adapter_projection::AtifStep",
+   "was": "observe::adapter_projection::AtifStep"
+  },
+  {
+   "line": 105,
+   "name": "AtifStepSource",
+   "now": "gents_observe::observe::adapter_projection::AtifStepSource",
+   "was": "observe::adapter_projection::AtifStepSource"
+  },
+  {
+   "line": 105,
+   "name": "AtifToolCall",
+   "now": "gents_observe::observe::adapter_projection::AtifToolCall",
+   "was": "observe::adapter_projection::AtifToolCall"
+  },
+  {
+   "line": 105,
+   "name": "AtifTrajectory",
+   "now": "gents_observe::observe::adapter_projection::AtifTrajectory",
+   "was": "observe::adapter_projection::AtifTrajectory"
+  },
+  {
+   "line": 105,
+   "name": "ProjectionContext",
+   "now": "gents_observe::observe::adapter_projection::ProjectionContext",
+   "was": "observe::adapter_projection::ProjectionContext"
+  },
+  {
+   "line": 105,
+   "name": "ProjectionRedactionMode",
+   "now": "gents_observe::observe::adapter_projection::ProjectionRedactionMode",
+   "was": "observe::adapter_projection::ProjectionRedactionMode"
+  },
+  {
+   "line": 105,
+   "name": "ATIF_SCHEMA_VERSION",
+   "now": "gents_observe::observe::adapter_projection::ATIF_SCHEMA_VERSION",
+   "was": "observe::adapter_projection::ATIF_SCHEMA_VERSION"
+  },
+  {
+   "line": 115,
+   "name": "import_external_adapter_capture_to_derived_view",
+   "now": "gents_observe::observe::external_adapter_capture::import_external_adapter_capture_to_derived_view",
+   "was": "observe::external_adapter_capture::import_external_adapter_capture_to_derived_view"
+  },
+  {
+   "line": 115,
+   "name": "ExternalAdapterCapture",
+   "now": "gents_observe::observe::external_adapter_capture::ExternalAdapterCapture",
+   "was": "observe::external_adapter_capture::ExternalAdapterCapture"
+  },
+  {
+   "line": 115,
+   "name": "ExternalAdapterImport",
+   "now": "gents_observe::observe::external_adapter_capture::ExternalAdapterImport",
+   "was": "observe::external_adapter_capture::ExternalAdapterImport"
+  },
+  {
+   "line": 115,
+   "name": "ExternalAdapterMapping",
+   "now": "gents_observe::observe::external_adapter_capture::ExternalAdapterMapping",
+   "was": "observe::external_adapter_capture::ExternalAdapterMapping"
+  },
+  {
+   "line": 115,
+   "name": "ExternalAdapterSource",
+   "now": "gents_observe::observe::external_adapter_capture::ExternalAdapterSource",
+   "was": "observe::external_adapter_capture::ExternalAdapterSource"
+  },
+  {
+   "line": 119,
+   "name": "build_run_timeline",
+   "now": "gents_observe::observe::run_timeline::build_run_timeline",
+   "was": "observe::run_timeline::build_run_timeline"
+  },
+  {
+   "line": 119,
+   "name": "RetrySummary",
+   "now": "gents_observe::observe::run_timeline::RetrySummary",
+   "was": "observe::run_timeline::RetrySummary"
+  },
+  {
+   "line": 119,
+   "name": "RunTimeline",
+   "now": "gents_observe::observe::run_timeline::RunTimeline",
+   "was": "observe::run_timeline::RunTimeline"
+  },
+  {
+   "line": 119,
+   "name": "RunTimelineEvent",
+   "now": "gents_observe::observe::run_timeline::RunTimelineEvent",
+   "was": "observe::run_timeline::RunTimelineEvent"
+  },
+  {
+   "line": 119,
+   "name": "RunTimelineRows",
+   "now": "gents_observe::observe::run_timeline::RunTimelineRows",
+   "was": "observe::run_timeline::RunTimelineRows"
+  },
+  {
+   "line": 119,
+   "name": "TimelineGoalParentState",
+   "now": "gents_observe::observe::run_timeline::TimelineGoalParentState",
+   "was": "observe::run_timeline::TimelineGoalParentState"
+  },
+  {
+   "line": 119,
+   "name": "TimelineGoalState",
+   "now": "gents_observe::observe::run_timeline::TimelineGoalState",
+   "was": "observe::run_timeline::TimelineGoalState"
+  },
+  {
+   "line": 119,
+   "name": "TimelineGoalTransitionEvent",
+   "now": "gents_observe::observe::run_timeline::TimelineGoalTransitionEvent",
+   "was": "observe::run_timeline::TimelineGoalTransitionEvent"
+  },
+  {
+   "line": 119,
+   "name": "TimelineGoalVersionRow",
+   "now": "gents_observe::observe::run_timeline::TimelineGoalVersionRow",
+   "was": "observe::run_timeline::TimelineGoalVersionRow"
+  },
+  {
+   "line": 119,
+   "name": "TimelineInferenceCallRow",
+   "now": "gents_observe::observe::run_timeline::TimelineInferenceCallRow",
+   "was": "observe::run_timeline::TimelineInferenceCallRow"
+  },
+  {
+   "line": 119,
+   "name": "TimelineMessageRow",
+   "now": "gents_observe::observe::run_timeline::TimelineMessageRow",
+   "was": "observe::run_timeline::TimelineMessageRow"
+  },
+  {
+   "line": 119,
+   "name": "TimelineRequestRow",
+   "now": "gents_observe::observe::run_timeline::TimelineRequestRow",
+   "was": "observe::run_timeline::TimelineRequestRow"
+  },
+  {
+   "line": 119,
+   "name": "TimelineSessionRow",
+   "now": "gents_observe::observe::run_timeline::TimelineSessionRow",
+   "was": "observe::run_timeline::TimelineSessionRow"
+  },
+  {
+   "line": 119,
+   "name": "TimelineToolCallRow",
+   "now": "gents_observe::observe::run_timeline::TimelineToolCallRow",
+   "was": "observe::run_timeline::TimelineToolCallRow"
+  },
+  {
+   "line": 126,
+   "name": "fetch_interrupt_requested_at",
+   "now": "gents_session::request::interrupt::fetch_interrupt_requested_at",
+   "was": "request::interrupt::fetch_interrupt_requested_at"
+  },
+  {
+   "line": 126,
+   "name": "fetch_interrupt_requested_at_by_doc_id",
+   "now": "gents_session::request::interrupt::fetch_interrupt_requested_at_by_doc_id",
+   "was": "request::interrupt::fetch_interrupt_requested_at_by_doc_id"
+  },
+  {
+   "line": 126,
+   "name": "interrupt_request",
+   "now": "gents_session::request::interrupt::interrupt_request",
+   "was": "request::interrupt::interrupt_request"
+  },
+  {
+   "line": 126,
+   "name": "interrupt_request_by_doc_id",
+   "now": "gents_session::request::interrupt::interrupt_request_by_doc_id",
+   "was": "request::interrupt::interrupt_request_by_doc_id"
+  },
+  {
+   "line": 130,
+   "name": "background_wake_next_retry_at",
+   "now": "gents_session::request::lifecycle::background_wake_next_retry_at",
+   "was": "request::lifecycle::background_wake_next_retry_at"
+  },
+  {
+   "line": 130,
+   "name": "background_wake_retry_delay",
+   "now": "gents_session::request::lifecycle::background_wake_retry_delay",
+   "was": "request::lifecycle::background_wake_retry_delay"
+  },
+  {
+   "line": 130,
+   "name": "build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title",
+   "now": "gents_session::request::lifecycle::build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title",
+   "was": "request::lifecycle::build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title"
+  },
+  {
+   "line": 130,
+   "name": "build_signed_request",
+   "now": "gents_session::request::lifecycle::build_signed_request",
+   "was": "request::lifecycle::build_signed_request"
+  },
+  {
+   "line": 130,
+   "name": "enqueue_local_steering_request",
+   "now": "gents_session::request::lifecycle::enqueue_local_steering_request",
+   "was": "request::lifecycle::enqueue_local_steering_request"
+  },
+  {
+   "line": 130,
+   "name": "task_session_title",
+   "now": "gents_session::request::lifecycle::task_session_title",
+   "was": "request::lifecycle::task_session_title"
+  },
+  {
+   "line": 130,
+   "name": "write_manual_agent_request",
+   "now": "gents_session::request::lifecycle::write_manual_agent_request",
+   "was": "request::lifecycle::write_manual_agent_request"
+  },
+  {
+   "line": 130,
+   "name": "write_manual_agent_request_with_conversation_title",
+   "now": "gents_session::request::lifecycle::write_manual_agent_request_with_conversation_title",
+   "was": "request::lifecycle::write_manual_agent_request_with_conversation_title"
+  },
+  {
+   "line": 130,
+   "name": "BackgroundWakeRedriveReport",
+   "now": "gents_session::request::lifecycle::BackgroundWakeRedriveReport",
+   "was": "request::lifecycle::BackgroundWakeRedriveReport"
+  },
+  {
+   "line": 130,
+   "name": "ParentLink",
+   "now": "gents_session::request::lifecycle::ParentLink",
+   "was": "request::lifecycle::ParentLink"
+  },
+  {
+   "line": 130,
+   "name": "RecoveryReport",
+   "now": "gents_session::request::lifecycle::RecoveryReport",
+   "was": "request::lifecycle::RecoveryReport"
+  },
+  {
+   "line": 130,
+   "name": "RequestIdentity",
+   "now": "gents_session::request::lifecycle::RequestIdentity",
+   "was": "request::lifecycle::RequestIdentity"
+  },
+  {
+   "line": 130,
+   "name": "RequestLifecycle",
+   "now": "gents_session::request::lifecycle::RequestLifecycle",
+   "was": "request::lifecycle::RequestLifecycle"
+  },
+  {
+   "line": 130,
+   "name": "RequestSigner",
+   "now": "gents_session::request::lifecycle::RequestSigner",
+   "was": "request::lifecycle::RequestSigner"
+  },
+  {
+   "line": 130,
+   "name": "RequestSpec",
+   "now": "gents_session::request::lifecycle::RequestSpec",
+   "was": "request::lifecycle::RequestSpec"
+  },
+  {
+   "line": 130,
+   "name": "RetryLink",
+   "now": "gents_session::request::lifecycle::RetryLink",
+   "was": "request::lifecycle::RetryLink"
+  },
+  {
+   "line": 130,
+   "name": "TerminalRepairReport",
+   "now": "gents_session::request::lifecycle::TerminalRepairReport",
+   "was": "request::lifecycle::TerminalRepairReport"
+  },
+  {
+   "line": 138,
+   "name": "DefraStreamWriter",
+   "now": "gents_session::request::streaming::DefraStreamWriter",
+   "was": "request::streaming::DefraStreamWriter"
+  },
+  {
+   "line": 138,
+   "name": "StreamWriter",
+   "now": "gents_session::request::streaming::StreamWriter",
+   "was": "request::streaming::StreamWriter"
+  },
+  {
+   "line": 138,
+   "name": "MAX_LIVE_REASONING_BYTES",
+   "now": "gents_session::request::streaming::MAX_LIVE_REASONING_BYTES",
+   "was": "request::streaming::MAX_LIVE_REASONING_BYTES"
+  },
+  {
+   "line": 139,
+   "name": "DefraWatcher",
+   "now": "gents_session::request::watcher::DefraWatcher",
+   "was": "request::watcher::DefraWatcher"
+  },
+  {
+   "line": 139,
+   "name": "Watcher",
+   "now": "gents_session::request::watcher::Watcher",
+   "was": "request::watcher::Watcher"
+  },
+  {
+   "line": 147,
+   "name": "JsonP2pSyncStatusAdapter",
+   "now": "gents_p2p::p2p::observability::JsonP2pSyncStatusAdapter",
+   "was": "runtime::p2p::observability::JsonP2pSyncStatusAdapter"
+  },
+  {
+   "line": 147,
+   "name": "P2pInboundClassSnapshot",
+   "now": "gents_p2p::p2p::observability::P2pInboundClassSnapshot",
+   "was": "runtime::p2p::observability::P2pInboundClassSnapshot"
+  },
+  {
+   "line": 147,
+   "name": "P2pPeerBacklogSnapshot",
+   "now": "gents_p2p::p2p::observability::P2pPeerBacklogSnapshot",
+   "was": "runtime::p2p::observability::P2pPeerBacklogSnapshot"
+  },
+  {
+   "line": 147,
+   "name": "P2pPeerFetchSnapshot",
+   "now": "gents_p2p::p2p::observability::P2pPeerFetchSnapshot",
+   "was": "runtime::p2p::observability::P2pPeerFetchSnapshot"
+  },
+  {
+   "line": 147,
+   "name": "P2pPeerSummarySnapshot",
+   "now": "gents_p2p::p2p::observability::P2pPeerSummarySnapshot",
+   "was": "runtime::p2p::observability::P2pPeerSummarySnapshot"
+  },
+  {
+   "line": 147,
+   "name": "P2pPendingPeerOccupancySnapshot",
+   "now": "gents_p2p::p2p::observability::P2pPendingPeerOccupancySnapshot",
+   "was": "runtime::p2p::observability::P2pPendingPeerOccupancySnapshot"
+  },
+  {
+   "line": 147,
+   "name": "P2pPushBacklogSnapshot",
+   "now": "gents_p2p::p2p::observability::P2pPushBacklogSnapshot",
+   "was": "runtime::p2p::observability::P2pPushBacklogSnapshot"
+  },
+  {
+   "line": 147,
+   "name": "P2pPushRetryMarkerSnapshot",
+   "now": "gents_p2p::p2p::observability::P2pPushRetryMarkerSnapshot",
+   "was": "runtime::p2p::observability::P2pPushRetryMarkerSnapshot"
+  },
+  {
+   "line": 147,
+   "name": "P2pRequestDispatchSnapshot",
+   "now": "gents_p2p::p2p::observability::P2pRequestDispatchSnapshot",
+   "was": "runtime::p2p::observability::P2pRequestDispatchSnapshot"
+  },
+  {
+   "line": 147,
+   "name": "P2pSyncStatusAdapter",
+   "now": "gents_p2p::p2p::observability::P2pSyncStatusAdapter",
+   "was": "runtime::p2p::observability::P2pSyncStatusAdapter"
+  },
+  {
+   "line": 147,
+   "name": "P2pSyncStatusSnapshot",
+   "now": "gents_p2p::p2p::observability::P2pSyncStatusSnapshot",
+   "was": "runtime::p2p::observability::P2pSyncStatusSnapshot"
+  },
+  {
+   "line": 153,
+   "name": "load_history",
+   "now": "gents_session::session::load_history",
+   "was": "session::load_history"
+  },
+  {
+   "line": 154,
+   "name": "ForkError",
+   "now": "gents_session::session::ForkError",
+   "was": "session::ForkError"
+  },
+  {
+   "line": 154,
+   "name": "ForkOutcome",
+   "now": "gents_session::session::ForkOutcome",
+   "was": "session::ForkOutcome"
+  },
+  {
+   "line": 154,
+   "name": "ForkParams",
+   "now": "gents_session::session::ForkParams",
+   "was": "session::ForkParams"
+  },
+  {
+   "line": 155,
+   "name": "Collection",
+   "now": "gents_store::collection::Collection",
+   "was": "store::collection::Collection"
+  },
+  {
+   "line": 155,
+   "name": "DESIRED_STATE_APPLY_ORDER",
+   "now": "gents_store::collection::DESIRED_STATE_APPLY_ORDER",
+   "was": "store::collection::DESIRED_STATE_APPLY_ORDER"
+  },
+  {
+   "line": 156,
+   "name": "ConfigAccess",
+   "now": "gents_store::config_client::ConfigAccess",
+   "was": "store::config_client::ConfigAccess"
+  },
+  {
+   "line": 157,
+   "name": "verify_request_receipt_signature",
+   "now": "gents_store::identity::request_receipt::verify_request_receipt_signature",
+   "was": "store::identity::request_receipt::verify_request_receipt_signature"
+  },
+  {
+   "line": 158,
+   "name": "load_macos_keychain_identity",
+   "now": "gents_store::identity::load_macos_keychain_identity",
+   "was": "store::identity::load_macos_keychain_identity"
+  },
+  {
+   "line": 158,
+   "name": "load_macos_secure_enclave_identity",
+   "now": "gents_store::identity::load_macos_secure_enclave_identity",
+   "was": "store::identity::load_macos_secure_enclave_identity"
+  },
+  {
+   "line": 158,
+   "name": "load_or_create_macos_keychain_identity",
+   "now": "gents_store::identity::load_or_create_macos_keychain_identity",
+   "was": "store::identity::load_or_create_macos_keychain_identity"
+  },
+  {
+   "line": 158,
+   "name": "load_or_create_macos_secure_enclave_identity",
+   "now": "gents_store::identity::load_or_create_macos_secure_enclave_identity",
+   "was": "store::identity::load_or_create_macos_secure_enclave_identity"
+  },
+  {
+   "line": 158,
+   "name": "KeyIdentity",
+   "now": "gents_store::identity::KeyIdentity",
+   "was": "store::identity::KeyIdentity"
+  },
+  {
+   "line": 158,
+   "name": "NodeIdentity",
+   "now": "gents_store::identity::NodeIdentity",
+   "was": "store::identity::NodeIdentity"
+  },
+  {
+   "line": 158,
+   "name": "RegisteredIdentity",
+   "now": "gents_store::identity::RegisteredIdentity",
+   "was": "store::identity::RegisteredIdentity"
+  },
+  {
+   "line": 158,
+   "name": "RuntimeNode",
+   "now": "gents_store::identity::RuntimeNode",
+   "was": "store::identity::RuntimeNode"
+  },
+  {
+   "line": 158,
+   "name": "ServiceAccount",
+   "now": "gents_store::identity::ServiceAccount",
+   "was": "store::identity::ServiceAccount"
+  },
+  {
+   "line": 163,
+   "name": "ensure_runtime_schemas",
+   "now": "gents_store::schema::ensure_runtime_schemas",
+   "was": "store::schema::ensure_runtime_schemas"
+  },
+  {
+   "line": 163,
+   "name": "AGENT_MESSAGE_SCHEMA",
+   "now": "gents_store::schema::AGENT_MESSAGE_SCHEMA",
+   "was": "store::schema::AGENT_MESSAGE_SCHEMA"
+  },
+  {
+   "line": 163,
+   "name": "AGENT_OUTPUT_SEGMENT_SCHEMA",
+   "now": "gents_store::schema::AGENT_OUTPUT_SEGMENT_SCHEMA",
+   "was": "store::schema::AGENT_OUTPUT_SEGMENT_SCHEMA"
+  },
+  {
+   "line": 163,
+   "name": "AGENT_REQUEST_SCHEMA",
+   "now": "gents_store::schema::AGENT_REQUEST_SCHEMA",
+   "was": "store::schema::AGENT_REQUEST_SCHEMA"
+  },
+  {
+   "line": 163,
+   "name": "AGENT_SCHEMA",
+   "now": "gents_store::schema::AGENT_SCHEMA",
+   "was": "store::schema::AGENT_SCHEMA"
+  },
+  {
+   "line": 163,
+   "name": "AGENT_SESSION_SCHEMA",
+   "now": "gents_store::schema::AGENT_SESSION_SCHEMA",
+   "was": "store::schema::AGENT_SESSION_SCHEMA"
+  },
+  {
+   "line": 163,
+   "name": "AGENT_TOOL_CALL_SCHEMA",
+   "now": "gents_store::schema::AGENT_TOOL_CALL_SCHEMA",
+   "was": "store::schema::AGENT_TOOL_CALL_SCHEMA"
+  },
+  {
+   "line": 163,
+   "name": "COMPACTION_ENTRY_SCHEMA",
+   "now": "gents_store::schema::COMPACTION_ENTRY_SCHEMA",
+   "was": "store::schema::COMPACTION_ENTRY_SCHEMA"
+  },
+  {
+   "line": 163,
+   "name": "GOAL_SCHEMA",
+   "now": "gents_store::schema::GOAL_SCHEMA",
+   "was": "store::schema::GOAL_SCHEMA"
+  },
+  {
+   "line": 163,
+   "name": "INFERENCE_BACKEND_SCHEMA",
+   "now": "gents_store::schema::INFERENCE_BACKEND_SCHEMA",
+   "was": "store::schema::INFERENCE_BACKEND_SCHEMA"
+  },
+  {
+   "line": 163,
+   "name": "INFERENCE_CALL_SCHEMA",
+   "now": "gents_store::schema::INFERENCE_CALL_SCHEMA",
+   "was": "store::schema::INFERENCE_CALL_SCHEMA"
+  },
+  {
+   "line": 163,
+   "name": "INFERENCE_PROFILE_SCHEMA",
+   "now": "gents_store::schema::INFERENCE_PROFILE_SCHEMA",
+   "was": "store::schema::INFERENCE_PROFILE_SCHEMA"
+  },
+  {
+   "line": 163,
+   "name": "MAILBOX_ITEM_SCHEMA",
+   "now": "gents_store::schema::MAILBOX_ITEM_SCHEMA",
+   "was": "store::schema::MAILBOX_ITEM_SCHEMA"
+  },
+  {
+   "line": 163,
+   "name": "NODE_RUNTIME_SCHEMA",
+   "now": "gents_store::schema::NODE_RUNTIME_SCHEMA",
+   "was": "store::schema::NODE_RUNTIME_SCHEMA"
+  },
+  {
+   "line": 163,
+   "name": "NODE_SCHEMA",
+   "now": "gents_store::schema::NODE_SCHEMA",
+   "was": "store::schema::NODE_SCHEMA"
+  },
+  {
+   "line": 163,
+   "name": "OAUTH_CREDENTIAL_SCHEMA",
+   "now": "gents_store::schema::OAUTH_CREDENTIAL_SCHEMA",
+   "was": "store::schema::OAUTH_CREDENTIAL_SCHEMA"
+  },
+  {
+   "line": 163,
+   "name": "SCHEDULE_SCHEMA",
+   "now": "gents_store::schema::SCHEDULE_SCHEMA",
+   "was": "store::schema::SCHEDULE_SCHEMA"
+  },
+  {
+   "line": 163,
+   "name": "TASK_SCHEMA",
+   "now": "gents_store::schema::TASK_SCHEMA",
+   "was": "store::schema::TASK_SCHEMA"
+  },
+  {
+   "line": 163,
+   "name": "TOOLS_SCHEMA",
+   "now": "gents_store::schema::TOOLS_SCHEMA",
+   "was": "store::schema::TOOLS_SCHEMA"
+  },
+  {
+   "line": 163,
+   "name": "TOOL_SERVICE_HEALTH_STATE_SCHEMA",
+   "now": "gents_store::schema::TOOL_SERVICE_HEALTH_STATE_SCHEMA",
+   "was": "store::schema::TOOL_SERVICE_HEALTH_STATE_SCHEMA"
+  },
+  {
+   "line": 163,
+   "name": "TOOL_SERVICE_REGISTRY_SCHEMA",
+   "now": "gents_store::schema::TOOL_SERVICE_REGISTRY_SCHEMA",
+   "was": "store::schema::TOOL_SERVICE_REGISTRY_SCHEMA"
+  },
+  {
+   "line": 171,
+   "name": "load_background_completion_diagnostics_for_session",
+   "now": "gents_toolcalls::background::diagnostics::load_background_completion_diagnostics_for_session",
+   "was": "tools::background::diagnostics::load_background_completion_diagnostics_for_session"
+  },
+  {
+   "line": 172,
+   "name": "load_background_completion_diagnostics",
+   "now": "gents_toolcalls::background::diagnostics::load_background_completion_diagnostics",
+   "was": "tools::background::diagnostics::load_background_completion_diagnostics"
+  },
+  {
+   "line": 172,
+   "name": "BackgroundCompletionDiagnostics",
+   "now": "gents_toolcalls::background::diagnostics::BackgroundCompletionDiagnostics",
+   "was": "tools::background::diagnostics::BackgroundCompletionDiagnostics"
+  },
+  {
+   "line": 172,
+   "name": "BackgroundCompletionEpochDiagnostic",
+   "now": "gents_toolcalls::background::diagnostics::BackgroundCompletionEpochDiagnostic",
+   "was": "tools::background::diagnostics::BackgroundCompletionEpochDiagnostic"
+  },
+  {
+   "line": 176,
+   "name": "OutputEvidence",
+   "now": "gents_toolcalls::background::status::status_projection::OutputEvidence",
+   "was": "tools::background::status::status_projection::OutputEvidence"
+  },
+  {
+   "line": 177,
+   "name": "cancel_background_tool_call",
+   "now": "gents_toolcalls::call::control::cancel_background_tool_call",
+   "was": "tools::call::control::cancel_background_tool_call"
+  },
+  {
+   "line": 177,
+   "name": "CancelBackgroundToolCallOutcome",
+   "now": "gents_toolcalls::call::control::CancelBackgroundToolCallOutcome",
+   "was": "tools::call::control::CancelBackgroundToolCallOutcome"
+  },
+  {
+   "line": 178,
+   "name": "BackgroundExecutionRegistry",
+   "now": "gents_toolcalls::call::hook::BackgroundExecutionRegistry",
+   "was": "tools::call::hook::BackgroundExecutionRegistry"
+  },
+  {
+   "line": 178,
+   "name": "BackgroundToolRegistry",
+   "now": "gents_toolcalls::call::hook::BackgroundToolRegistry",
+   "was": "tools::call::hook::BackgroundToolRegistry"
+  },
+  {
+   "line": 178,
+   "name": "DefraSessionHook",
+   "now": "gents_toolcalls::call::hook::DefraSessionHook",
+   "was": "tools::call::hook::DefraSessionHook"
+  },
+  {
+   "line": 178,
+   "name": "FailurePolicy",
+   "now": "gents_toolcalls::call::hook::FailurePolicy",
+   "was": "tools::call::hook::FailurePolicy"
+  },
+  {
+   "line": 178,
+   "name": "HookStats",
+   "now": "gents_toolcalls::call::hook::HookStats",
+   "was": "tools::call::hook::HookStats"
+  },
+  {
+   "line": 181,
+   "name": "periodic_recovery_sweep_metadata",
+   "now": "gents_toolcalls::call::periodic_recovery::periodic_recovery_sweep_metadata",
+   "was": "tools::call::periodic_recovery::periodic_recovery_sweep_metadata"
+  },
+  {
+   "line": 181,
+   "name": "run_periodic_recovery_sweeps_with_identities",
+   "now": "gents_toolcalls::call::periodic_recovery::run_periodic_recovery_sweeps_with_identities",
+   "was": "tools::call::periodic_recovery::run_periodic_recovery_sweeps_with_identities"
+  },
+  {
+   "line": 181,
+   "name": "PeriodicRecoverySweepMetadata",
+   "now": "gents_toolcalls::call::periodic_recovery::PeriodicRecoverySweepMetadata",
+   "was": "tools::call::periodic_recovery::PeriodicRecoverySweepMetadata"
+  },
+  {
+   "line": 181,
+   "name": "PeriodicRecoverySweepOutcome",
+   "now": "gents_toolcalls::call::periodic_recovery::PeriodicRecoverySweepOutcome",
+   "was": "tools::call::periodic_recovery::PeriodicRecoverySweepOutcome"
+  },
+  {
+   "line": 181,
+   "name": "PeriodicRecoverySweepRun",
+   "now": "gents_toolcalls::call::periodic_recovery::PeriodicRecoverySweepRun",
+   "was": "tools::call::periodic_recovery::PeriodicRecoverySweepRun"
+  },
+  {
+   "line": 185,
+   "name": "run_health_check_cycle",
+   "now": "gents_tools::mcp::health::run_health_check_cycle",
+   "was": "tools::mcp::health::run_health_check_cycle"
+  },
+  {
+   "line": 185,
+   "name": "run_health_check_cycle_for_actor",
+   "now": "gents_tools::mcp::health::run_health_check_cycle_for_actor",
+   "was": "tools::mcp::health::run_health_check_cycle_for_actor"
+  },
+  {
+   "line": 185,
+   "name": "spawn_health_checker",
+   "now": "gents_tools::mcp::health::spawn_health_checker",
+   "was": "tools::mcp::health::spawn_health_checker"
+  },
+  {
+   "line": 185,
+   "name": "HealthCheckerOptions",
+   "now": "gents_tools::mcp::health::HealthCheckerOptions",
+   "was": "tools::mcp::health::HealthCheckerOptions"
+  },
+  {
+   "line": 185,
+   "name": "HealthPersistenceContext",
+   "now": "gents_tools::mcp::health::HealthPersistenceContext",
+   "was": "tools::mcp::health::HealthPersistenceContext"
+  },
+  {
+   "line": 185,
+   "name": "HealthStatus",
+   "now": "gents_tools::mcp::health::HealthStatus",
+   "was": "tools::mcp::health::HealthStatus"
+  },
+  {
+   "line": 185,
+   "name": "MCPServiceHealthSnapshot",
+   "now": "gents_tools::mcp::health::MCPServiceHealthSnapshot",
+   "was": "tools::mcp::health::MCPServiceHealthSnapshot"
+  },
+  {
+   "line": 185,
+   "name": "McpHealthCheckService",
+   "now": "gents_tools::mcp::health::McpHealthCheckService",
+   "was": "tools::mcp::health::McpHealthCheckService"
+  },
+  {
+   "line": 185,
+   "name": "ServiceHealth",
+   "now": "gents_tools::mcp::health::ServiceHealth",
+   "was": "tools::mcp::health::ServiceHealth"
+  },
+  {
+   "line": 185,
+   "name": "ServiceHealthMap",
+   "now": "gents_tools::mcp::health::ServiceHealthMap",
+   "was": "tools::mcp::health::ServiceHealthMap"
+  },
+  {
+   "line": 190,
+   "name": "build_meta_tools",
+   "now": "gents_tools::mcp::meta::build_meta_tools",
+   "was": "tools::mcp::meta::build_meta_tools"
+  },
+  {
+   "line": 191,
+   "name": "McpPool",
+   "now": "gents_tools::mcp::pool::McpPool",
+   "was": "tools::mcp::pool::McpPool"
+  },
+  {
+   "line": 192,
+   "name": "build_native_tools",
+   "now": "gents_tools::native::build_native_tools",
+   "was": "tools::native::build_native_tools"
+  },
+  {
+   "line": 192,
+   "name": "enable_self_runner",
+   "now": "gents_tools::native::enable_self_runner",
+   "was": "tools::native::enable_self_runner"
+  },
+  {
+   "line": 192,
+   "name": "run_plugin_build",
+   "now": "gents_tools::native::run_plugin_build",
+   "was": "tools::native::run_plugin_build"
+  },
+  {
+   "line": 192,
+   "name": "CliToolConfig",
+   "now": "gents_tools::native::CliToolConfig",
+   "was": "tools::native::CliToolConfig"
+  },
+  {
+   "line": 192,
+   "name": "CommandExecutionMode",
+   "now": "gents_tools::native::CommandExecutionMode",
+   "was": "tools::native::CommandExecutionMode"
+  },
+  {
+   "line": 192,
+   "name": "CommandExecutionPolicy",
+   "now": "gents_tools::native::CommandExecutionPolicy",
+   "was": "tools::native::CommandExecutionPolicy"
+  },
+  {
+   "line": 192,
+   "name": "CommandNetworkMode",
+   "now": "gents_tools::native::CommandNetworkMode",
+   "was": "tools::native::CommandNetworkMode"
+  },
+  {
+   "line": 192,
+   "name": "FileToolLimits",
+   "now": "gents_tools::native::FileToolLimits",
+   "was": "tools::native::FileToolLimits"
+  },
+  {
+   "line": 192,
+   "name": "NativeTool",
+   "now": "gents_tools::native::NativeTool",
+   "was": "tools::native::NativeTool"
+  },
+  {
+   "line": 192,
+   "name": "PluginBuildOutcome",
+   "now": "gents_tools::native::PluginBuildOutcome",
+   "was": "tools::native::PluginBuildOutcome"
+  },
+  {
+   "line": 192,
+   "name": "ToolSet",
+   "now": "gents_tools::native::ToolSet",
+   "was": "tools::native::ToolSet"
+  },
+  {
+   "line": 192,
+   "name": "ToolSetBuilder",
+   "now": "gents_tools::native::ToolSetBuilder",
+   "was": "tools::native::ToolSetBuilder"
+  },
+  {
+   "line": 192,
+   "name": "PLUGIN_BUILD_COMMAND",
+   "now": "gents_tools::native::PLUGIN_BUILD_COMMAND",
+   "was": "tools::native::PLUGIN_BUILD_COMMAND"
+  },
+  {
+   "line": 197,
+   "name": "cli_tool",
+   "now": "gents_tools::surface::cli_tool",
+   "was": "tools::surface::cli_tool"
+  },
+  {
+   "line": 197,
+   "name": "AgentToolSurfaceConfig",
+   "now": "gents_tools::surface::AgentToolSurfaceConfig",
+   "was": "tools::surface::AgentToolSurfaceConfig"
+  },
+  {
+   "line": 197,
+   "name": "CustomToolFactory",
+   "now": "gents_tools::surface::CustomToolFactory",
+   "was": "tools::surface::CustomToolFactory"
+  },
+  {
+   "line": 197,
+   "name": "ResolvedToolSelection",
+   "now": "gents_tools::surface::ResolvedToolSelection",
+   "was": "tools::surface::ResolvedToolSelection"
+  },
+  {
+   "line": 197,
+   "name": "ToolCeiling",
+   "now": "gents_tools::surface::ToolCeiling",
+   "was": "tools::surface::ToolCeiling"
+  },
+  {
+   "line": 197,
+   "name": "ToolPolicyVersion",
+   "now": "gents_tools::surface::ToolPolicyVersion",
+   "was": "tools::surface::ToolPolicyVersion"
+  },
+  {
+   "line": 197,
+   "name": "ToolRuntimeContext",
+   "now": "gents_tools::surface::ToolRuntimeContext",
+   "was": "tools::surface::ToolRuntimeContext"
+  },
+  {
+   "line": 197,
+   "name": "ToolSurface",
+   "now": "gents_tools::surface::ToolSurface",
+   "was": "tools::surface::ToolSurface"
+  },
+  {
+   "line": 197,
+   "name": "TOOL_POLICY_V1",
+   "now": "gents_tools::surface::TOOL_POLICY_V1",
+   "was": "tools::surface::TOOL_POLICY_V1"
+  },
+  {
+   "line": 201,
+   "name": "EventSource",
+   "now": "gents_automation::triggers::engine::event_source::EventSource",
+   "was": "triggers::engine::event_source::EventSource"
+  },
+  {
+   "line": 202,
+   "name": "GoalSource",
+   "now": "gents_automation::triggers::engine::goal_source::GoalSource",
+   "was": "triggers::engine::goal_source::GoalSource"
+  },
+  {
+   "line": 203,
+   "name": "run_trigger_engine",
+   "now": "gents_automation::triggers::engine::run_trigger_engine",
+   "was": "triggers::engine::run_trigger_engine"
+  },
+  {
+   "line": 203,
+   "name": "FireIntent",
+   "now": "gents_automation::triggers::engine::FireIntent",
+   "was": "triggers::engine::FireIntent"
+  },
+  {
+   "line": 203,
+   "name": "FireResult",
+   "now": "gents_automation::triggers::engine::FireResult",
+   "was": "triggers::engine::FireResult"
+  },
+  {
+   "line": 203,
+   "name": "TriggerSource",
+   "now": "gents_automation::triggers::engine::TriggerSource",
+   "was": "triggers::engine::TriggerSource"
+  },
+  {
+   "line": 204,
+   "name": "ActiveRuntimeSnapshot",
+   "now": "gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot",
+   "was": "triggers::runtime_snapshot::ActiveRuntimeSnapshot"
+  },
+  {
+   "line": 204,
+   "name": "DispatcherMap",
+   "now": "gents_automation::triggers::runtime_snapshot::DispatcherMap",
+   "was": "triggers::runtime_snapshot::DispatcherMap"
+  },
+  {
+   "line": 251,
+   "name": "activate_workspace_bound_request_with_identity",
+   "now": "gents_session::request::lifecycle::materialize::activate_workspace_bound_request_with_identity",
+   "was": "crate::request::lifecycle::materialize::activate_workspace_bound_request_with_identity"
+  },
+  {
+   "line": 252,
+   "name": "reconcile_coalesced_pending_request",
+   "now": "gents_session::request::lifecycle::queue::reconcile_coalesced_pending_request",
+   "was": "crate::request::lifecycle::queue::reconcile_coalesced_pending_request"
+  },
+  {
+   "line": 252,
+   "name": "reconcile_coalesced_pending_request_for_with_access",
+   "now": "gents_session::request::lifecycle::queue::reconcile_coalesced_pending_request_for_with_access",
+   "was": "crate::request::lifecycle::queue::reconcile_coalesced_pending_request_for_with_access"
+  },
+  {
+   "line": 252,
+   "name": "QueueSource",
+   "now": "gents_session::request::lifecycle::queue::QueueSource",
+   "was": "crate::request::lifecycle::queue::QueueSource"
+  },
+  {
+   "line": 257,
+   "name": "supersede_trigger_requests_in_txn",
+   "now": "gents_automation::triggers::engine::durable::supersede_trigger_requests_in_txn",
+   "was": "crate::triggers::engine::durable::supersede_trigger_requests_in_txn"
+  }
+ ],
+ "skipped_manifest_entries": [],
+ "string_literals_naming_moved_modules": [
+  {
+   "file": "crates/gents-session/src/log_rate.rs",
+   "line": 8,
+   "now": "gents_session::log_rate",
+   "string": "gents::observe::log_rate"
+  },
+  {
+   "file": "crates/gents-tools/src/builtin/defra_query/native_filter.rs",
+   "line": 215,
+   "now": "gents_tools::builtin::defra_query",
+   "string": "gents::tools::builtin::defra_query"
+  },
+  {
+   "file": "crates/gents-p2p/src/p2p_reconcile/engine/desired.rs",
+   "line": 31,
+   "now": "gents_p2p::p2p_reconcile::engine",
+   "string": "gents::runtime::agent::p2p_reconcile::engine"
+  },
+  {
+   "file": "crates/gents-p2p/src/p2p_reconcile/engine/reconcile.rs",
+   "line": 70,
+   "now": "gents_p2p::p2p_reconcile::engine",
+   "string": "gents::runtime::agent::p2p_reconcile::engine"
+  },
+  {
+   "file": "crates/gents-p2p/src/p2p_reconcile/engine/reconcile.rs",
+   "line": 126,
+   "now": "gents_p2p::p2p_reconcile::engine",
+   "string": "gents::runtime::agent::p2p_reconcile::engine"
+  },
+  {
+   "file": "crates/gents-p2p/src/p2p_reconcile/engine/reconcile.rs",
+   "line": 159,
+   "now": "gents_p2p::p2p_reconcile::engine",
+   "string": "gents::runtime::agent::p2p_reconcile::engine"
+  },
+  {
+   "file": "crates/gents-p2p/src/p2p_reconcile/engine/reconcile.rs",
+   "line": 333,
+   "now": "gents_p2p::p2p_reconcile::engine",
+   "string": "gents::runtime::agent::p2p_reconcile::engine"
+  },
+  {
+   "file": "crates/gents-p2p/src/p2p_reconcile/engine/reconcile.rs",
+   "line": 364,
+   "now": "gents_p2p::p2p_reconcile::engine",
+   "string": "gents::runtime::agent::p2p_reconcile::engine"
+  },
+  {
+   "file": "crates/gents-p2p/src/p2p_reconcile/engine/remote_topology.rs",
+   "line": 86,
+   "now": "gents_p2p::p2p_reconcile::engine",
+   "string": "gents::runtime::agent::p2p_reconcile::engine"
+  },
+  {
+   "file": "crates/gents-p2p/src/p2p_reconcile/engine/remote_topology.rs",
+   "line": 145,
+   "now": "gents_p2p::p2p_reconcile::engine",
+   "string": "gents::runtime::agent::p2p_reconcile::engine"
+  },
+  {
+   "file": "crates/gents-p2p/src/p2p_reconcile/engine/remote_topology.rs",
+   "line": 208,
+   "now": "gents_p2p::p2p_reconcile::engine",
+   "string": "gents::runtime::agent::p2p_reconcile::engine"
+  },
+  {
+   "file": "crates/gents-p2p/src/p2p_reconcile/engine/rows.rs",
+   "line": 74,
+   "now": "gents_p2p::p2p_reconcile::engine",
+   "string": "gents::runtime::agent::p2p_reconcile::engine"
+  },
+  {
+   "file": "crates/gents-p2p/src/p2p_reconcile/engine/store.rs",
+   "line": 168,
+   "now": "gents_p2p::p2p_reconcile::engine",
+   "string": "gents::runtime::agent::p2p_reconcile::engine"
+  },
+  {
+   "file": "crates/gents-p2p/src/p2p_reconcile/engine/sweep.rs",
+   "line": 29,
+   "now": "gents_p2p::p2p_reconcile::engine",
+   "string": "gents::runtime::agent::p2p_reconcile::engine"
+  },
+  {
+   "file": "crates/gents-p2p/src/p2p_reconcile/engine/sweep.rs",
+   "line": 91,
+   "now": "gents_p2p::p2p_reconcile::engine",
+   "string": "gents::runtime::agent::p2p_reconcile::engine"
+  },
+  {
+   "file": "crates/gents-p2p/src/p2p_reconcile/engine/sweep.rs",
+   "line": 120,
+   "now": "gents_p2p::p2p_reconcile::engine",
+   "string": "gents::runtime::agent::p2p_reconcile::engine"
+  },
+  {
+   "file": "crates/gents-p2p/src/p2p_reconcile/engine/sweep.rs",
+   "line": 125,
+   "now": "gents_p2p::p2p_reconcile::engine",
+   "string": "gents::runtime::agent::p2p_reconcile::engine"
+  },
+  {
+   "file": "crates/gents-p2p/src/p2p_reconcile/engine/sweep.rs",
+   "line": 183,
+   "now": "gents_p2p::p2p_reconcile::engine",
+   "string": "gents::runtime::agent::p2p_reconcile::engine"
+  },
+  {
+   "file": "crates/gents-p2p/src/p2p_reconcile/engine/sweep.rs",
+   "line": 255,
+   "now": "gents_p2p::p2p_reconcile::engine",
+   "string": "gents::runtime::agent::p2p_reconcile::engine"
+  },
+  {
+   "file": "crates/gents-p2p/src/p2p_reconcile/engine/sweep.rs",
+   "line": 262,
+   "now": "gents_p2p::p2p_reconcile::engine",
+   "string": "gents::runtime::agent::p2p_reconcile::engine"
+  },
+  {
+   "file": "crates/gents-p2p/src/p2p_reconcile/engine/sweep.rs",
+   "line": 272,
+   "now": "gents_p2p::p2p_reconcile::engine",
+   "string": "gents::runtime::agent::p2p_reconcile::engine"
+  },
+  {
+   "file": "crates/gents-p2p/src/p2p_reconcile/engine/sweep.rs",
+   "line": 278,
+   "now": "gents_p2p::p2p_reconcile::engine",
+   "string": "gents::runtime::agent::p2p_reconcile::engine"
+  },
+  {
+   "file": "crates/gents-p2p/src/p2p_reconcile/engine/sweep.rs",
+   "line": 288,
+   "now": "gents_p2p::p2p_reconcile::engine",
+   "string": "gents::runtime::agent::p2p_reconcile::engine"
+  },
+  {
+   "file": "crates/gents-tools/src/builtin/self_config/command/observe.rs",
+   "line": 34,
+   "now": "gents_tools::builtin::self_config",
+   "string": "gents::tools::builtin::self_config"
+  },
+  {
+   "file": "crates/gents-tools/src/builtin/self_config/command/observe.rs",
+   "line": 77,
+   "now": "gents_tools::builtin::self_config",
+   "string": "gents::tools::builtin::self_config"
+  },
+  {
+   "file": "crates/gents-tools/src/builtin/self_config/command/policy.rs",
+   "line": 534,
+   "now": "gents_tools::builtin::self_config::policy",
+   "string": "gents::tools::builtin::self_config::policy"
+  },
+  {
+   "file": "crates/gents-cli/src/lib.rs",
+   "line": 82,
+   "now": "gents_inference::clients",
+   "string": "gents::inference::clients"
+  },
+  {
+   "file": "crates/gents-cli/src/lib.rs",
+   "line": 83,
+   "now": "gents_toolcalls::call",
+   "string": "gents::tools::call"
+  },
+  {
+   "file": "crates/gents-cli/src/lib.rs",
+   "line": 84,
+   "now": "gents_session::session",
+   "string": "gents::session"
+  },
+  {
+   "file": "crates/gents-cli/src/lib.rs",
+   "line": 85,
+   "now": "gents_session::request",
+   "string": "gents::request"
+  },
+  {
+   "file": "crates/gents-cli/src/lib.rs",
+   "line": 86,
+   "now": "gents_automation::triggers",
+   "string": "gents::triggers"
+  },
+  {
+   "file": "crates/gents/tests/misc/legacy_authority_absence.rs",
+   "line": 207,
+   "now": "gents_session::request::lifecycle::build_signed_client_request",
+   "string": "gents::request::lifecycle::build_signed_client_request"
+  },
+  {
+   "file": "crates/gents/tests/misc/legacy_authority_absence.rs",
+   "line": 217,
+   "now": "gents_session::request::lifecycle::build_signed_client_request",
+   "string": "gents::request::lifecycle::build_signed_client_request"
+  }
+ ],
+ "synthesized_modules": {
+  "gents_automation": [
+   "pub mod goal;",
+   "pub mod triggers;",
+   "#[cfg(any(test, feature = \"test-fixtures\"))]\npub mod test_support;",
+   "pub mod session_control;"
+  ],
+  "gents_observe": [
+   "pub mod file_inventory;",
+   "pub mod observe;"
+  ],
+  "gents_p2p": [
+   "pub mod p2p;",
+   "pub mod directory_projection;",
+   "pub mod p2p_reconcile;"
+  ],
+  "gents_pack": [
+   "pub mod pack;",
+   "pub mod plugin;",
+   "#[cfg(any(test, feature = \"test-fixtures\"))]\npub mod test_support;"
+  ],
+  "gents_pack::plugin::tests": [
+   "#[cfg(test)]\n#[cfg(target_os = \"macos\")]\nmod trap_handler;",
+   "#[cfg(test)]\npub mod call_bound;"
+  ],
+  "gents_session": [
+   "pub mod request;",
+   "pub mod exec;",
+   "pub mod file_contents;",
+   "pub mod session;",
+   "pub mod workspace;",
+   "pub mod log_rate;",
+   "#[cfg(any(test, feature = \"test-fixtures\"))]\npub mod test_support;",
+   "pub mod tool_call;"
+  ],
+  "gents_session::tool_call": [
+   "pub mod query;"
+  ],
+  "gents_session::tool_call::query": [
+   "pub mod result;"
+  ],
+  "gents_toolcalls": [
+   "pub mod plugin;",
+   "#[cfg(any(test, feature = \"test-fixtures\"))]\npub mod test_support;",
+   "pub mod background;",
+   "pub mod call;"
+  ],
+  "gents_toolcalls::plugin": [
+   "pub mod application_write;",
+   "pub mod authoring_test;",
+   "pub mod data;",
+   "pub mod executor;",
+   "pub(crate) mod host_calls;",
+   "pub mod job_calls;",
+   "pub mod model_calls;",
+   "mod rounds;",
+   "mod service;",
+   "pub mod tool;",
+   "pub mod tool_calls;",
+   "#[cfg(test)]\npub mod tests;"
+  ],
+  "gents_tools::plugin": [
+   "pub mod approval;"
+  ]
+ },
+ "unassigned_top_level_modules": [],
+ "visibility_feedback_applied": 33,
+ "visibility_feedback_not_located": [],
+ "warnings": [
+  "gents-protocol gains dependencies for sunk files: regex"
+ ]
+}

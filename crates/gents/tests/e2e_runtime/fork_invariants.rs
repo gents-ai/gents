@@ -1,10 +1,10 @@
-use gents::session::{fork_on, ForkError, ForkOutcome, ForkParams};
-use gents::store::graphql::escape_graphql_string;
-use gents::NodeIdentity;
 use gents_protocol::output::rows::{
     decode_transcript_message_row, TranscriptMessageRow, AGENT_MESSAGE_FIELDS,
 };
 use gents_protocol::output::*;
+use gents_session::session::{fork_on, ForkError, ForkOutcome, ForkParams};
+use gents_store::graphql::escape_graphql_string;
+use gents_store::identity::NodeIdentity;
 
 use crate::support::agent_requests::{canonical_now, RequestActors, RequestSeed};
 use crate::support::agent_transcript::{self, Imported, Source};
@@ -54,7 +54,7 @@ impl Fixture {
     fn params<'a>(&'a self, source: &'a str, requester: &'a str, turn: u32) -> ForkParams<'a> {
         ForkParams {
             source_session_id: source,
-            boundary: gents::session::ForkBoundary::UserTurn(turn),
+            boundary: gents_session::session::ForkBoundary::UserTurn(turn),
             caller_node_did: self.node_did(),
             caller_requester_did: Some(requester),
             target_agent_did: None,
@@ -91,7 +91,7 @@ impl Fixture {
     }
 
     async fn body(&self, header: &str, requester: &str) -> String {
-        let (_, native) = gents::session::load_canonical_message(
+        let (_, native) = gents_session::session::load_canonical_message(
             &self.actors.agent_access,
             header,
             self.node_did(),
@@ -184,7 +184,7 @@ async fn fork_via_http_uses_same_header_contract() {
     let parent = f.source("parent-http").await;
     let source = f.import(&parent, 1, MessageRole::User, "u", true).await;
     let agent = f.actors.agent();
-    let endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(
+    let endpoint = gents_store::config_client::GraphqlEndpoint::as_principal(
         f.db.client_endpoint(),
         agent.did(),
     )
@@ -192,7 +192,7 @@ async fn fork_via_http_uses_same_header_contract() {
     .unwrap()
     .with_client_signed_agent_creates();
     let outcome = fork_on(
-        &gents::store::config_client::ConfigAccess::Graphql(endpoint),
+        &gents_store::config_client::ConfigAccess::Graphql(endpoint),
         f.own("parent-http", 1),
     )
     .await

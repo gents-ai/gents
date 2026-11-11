@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 
 /// The shell's own client-local choices.
 fn keys_path(home: &Path) -> std::path::PathBuf {
-    home.join(gents::store::local::home::SHELL_CONFIG_FILE_NAME)
+    home.join(gents_store::local::home::SHELL_CONFIG_FILE_NAME)
 }
 
 /// The saved key set, or Regular when the file is missing, unreadable or invalid.

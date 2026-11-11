@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
-use gents::store::graphql::{escape_graphql_string, graphql_string_list_literal};
+use gents_store::graphql::{escape_graphql_string, graphql_string_list_literal};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 

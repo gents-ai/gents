@@ -1,0 +1,282 @@
+use super::*;
+
+const ARGS: &str = r#"{"file_path":"/tmp/transcript-contract.txt"}"#;
+
+async fn fixture(name: &str) -> (Arc<defra_node::Node>, DefraSessionHook, String, String) {
+    let node = Arc::new(
+        gents_store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
+    gents_store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
+    let hook = signed_hook(&node, FailurePolicy::default()).await;
+    let session = hook.session_id().await.unwrap();
+    let request = format!("native-transcript-{name}");
+    bind_interruptible_request(
+        &hook,
+        &request,
+        &session,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
+    (node, hook, session, request)
+}
+
+fn tool_turn(ids: &[String]) -> Message {
+    Message::Assistant {
+        request_id: None,
+        id: None,
+        content: ids
+            .iter()
+            .map(|id| {
+                AssistantContent::ToolCall(ToolCall {
+                    raw_arguments: None,
+                    id: id.clone(),
+                    call_id: Some(id.clone()),
+                    function: ToolFunction {
+                        name: "read".into(),
+                        arguments: serde_json::from_str(ARGS).unwrap(),
+                    },
+                    signature: None,
+                    additional_params: None,
+                })
+            })
+            .collect(),
+    }
+}
+
+async fn accept_turn(
+    hook: &DefraSessionHook,
+    call_ids: &[usize],
+    logical_result_ids: &[usize],
+) -> (u32, Vec<String>) {
+    let provider_source = if logical_result_ids.is_empty() {
+        call_ids
+    } else {
+        assert_eq!(call_ids.len(), logical_result_ids.len());
+        logical_result_ids
+    };
+    let provider_ids = provider_source
+        .iter()
+        .map(|id| format!("result-{id}"))
+        .collect::<Vec<_>>();
+    let internal_ids = call_ids
+        .iter()
+        .map(|id| format!("internal-{id}"))
+        .collect::<Vec<_>>();
+    let calls = internal_ids
+        .iter()
+        .zip(&provider_ids)
+        .map(|(internal, provider)| (internal.as_str(), Some(provider.as_str())))
+        .collect::<Vec<_>>();
+    let sequence = publish_and_adopt_tool_turns(hook, &calls, tool_turn(&provider_ids)).await;
+    (sequence, provider_ids)
+}
+
+async fn dispatch(hook: &DefraSessionHook, call_id: usize, provider_id: &str) {
+    let internal = format!("internal-{call_id}");
+    assert!(matches!(
+        hook.on_tool_call("read", Some(provider_id.into()), &internal, ARGS)
+            .await,
+        ToolCallHookAction::Continue
+    ));
+}
+
+async fn complete(hook: &DefraSessionHook, call_id: usize, provider_id: &str, payload: &str) {
+    let internal = format!("internal-{call_id}");
+    assert!(matches!(
+        hook.on_tool_result(
+            "read",
+            Some(provider_id.into()),
+            &internal,
+            ARGS,
+            &gents_loop::tool_call_lifecycle::ToolOutcome::Completed(payload.into())
+        )
+        .await,
+        HookAction::Continue
+    ));
+}
+
+async fn history(hook: &DefraSessionHook, session: &str) -> Vec<Message> {
+    hook_history(hook, session).await.unwrap()
+}
+
+fn results(messages: &[Message]) -> Vec<&str> {
+    messages
+        .iter()
+        .filter_map(|message| match message {
+            Message::User { content } => content.iter().find_map(|item| match item {
+                UserContent::ToolResult(result) => Some(result.id.as_str()),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+async fn completed(name: &str) -> (Arc<defra_node::Node>, DefraSessionHook, String) {
+    let case = gents_lean_vocab::lean_transcript_case(name);
+    let (node, hook, session, request) = fixture(name).await;
+    publish_claimed_authored_input(
+        &hook,
+        &request,
+        None,
+        user_text_message("run transcript conformance tool"),
+    )
+    .await;
+    let (sequence, ids) = accept_turn(
+        &hook,
+        &case.action_call_ids,
+        &case.action_logical_result_ids,
+    )
+    .await;
+    assert_eq!(sequence as usize, case.assistant_sequence);
+    assert_eq!(ids.len(), 1, "completed action exports one provider result");
+    assert_eq!(case.action_payload_hashes.len(), 1);
+    dispatch(&hook, case.action_call_ids[0], &ids[0]).await;
+    complete(
+        &hook,
+        case.action_call_ids[0],
+        &ids[0],
+        &format!("payload-{}", case.action_payload_hashes[0]),
+    )
+    .await;
+    (node, hook, session)
+}
+
+#[tokio::test]
+async fn generated_transcript_cases_drive_reachable_native_canonical_owners() {
+    let ordering = gents_lean_vocab::lean_transcript_case("ordering_user_assistant_tool_result");
+    let (node, hook, session) = completed(&ordering.name).await;
+    let rows = history(&hook, &session).await;
+    assert_eq!(rows.len(), ordering.post_message_count);
+    assert!(matches!(
+        rows.as_slice(),
+        [
+            Message::User { .. },
+            Message::Assistant { .. },
+            Message::User { .. }
+        ]
+    ));
+    let ordering_id = format!("result-{}", ordering.logical_result_id);
+    assert_eq!(results(&rows), vec![ordering_id.as_str()]);
+    let ordering_call = fetch_tool_call_row(&hook, &session, &ordering_id).await;
+    assert_eq!(
+        ordering_call["message_sequence"]
+            .as_u64()
+            .map(|value| value as usize),
+        Some(ordering.assistant_sequence)
+    );
+    assert_eq!(ordering_call["lifecycle_state"].as_str(), Some("completed"));
+    assert_eq!(
+        ordering_call["result"].as_str(),
+        Some(format!("payload-{}", ordering.payload_hash).as_str())
+    );
+    assert_eq!(
+        gents_session::session::max_sequence_as(
+            &node,
+            &session,
+            &hook.node_did,
+            hook.active_requester_did().await.as_deref(),
+            hook.actor.clone(),
+        )
+        .await
+        .unwrap() as usize,
+        ordering.result_sequence
+    );
+    assert_eq!(
+        hook.cancel_in_flight_tool_calls().await.unwrap(),
+        ordering.post_in_flight_count
+    );
+
+    let dedupe = gents_lean_vocab::lean_transcript_case("dedupe_duplicate_reuses_sequence");
+    assert_eq!(dedupe.action, "observe_duplicate_tool_result");
+    assert!(dedupe.expected_duplicate_reused_sequence);
+
+    let distinct =
+        gents_lean_vocab::lean_transcript_case("distinct_result_ids_append_distinct_rows");
+    assert_eq!(distinct.action, "append_distinct_tool_result");
+    assert!(!distinct.expected_pair_closed);
+    let parallel = gents_lean_vocab::lean_transcript_case("parallel_results_share_assistant_turn");
+    assert_eq!(
+        parallel.action,
+        "publish_once_dispatch_in_order_then_complete_each_parallel_result"
+    );
+    let (_node, hook, session, request) = fixture(&parallel.name).await;
+    publish_claimed_authored_input(
+        &hook,
+        &request,
+        None,
+        user_text_message("run parallel tools"),
+    )
+    .await;
+    let (sequence, ids) = accept_turn(
+        &hook,
+        &parallel.action_call_ids,
+        &parallel.action_logical_result_ids,
+    )
+    .await;
+    assert_eq!(sequence as usize, parallel.assistant_sequence);
+    assert_eq!(parallel.action_payload_hashes.len(), ids.len());
+    for ((call_id, id), payload_hash) in parallel
+        .action_call_ids
+        .iter()
+        .copied()
+        .zip(&ids)
+        .zip(parallel.action_payload_hashes.iter().copied())
+    {
+        dispatch(&hook, call_id, id).await;
+        complete(&hook, call_id, id, &format!("payload-{payload_hash}")).await;
+    }
+    let rows = history(&hook, &session).await;
+    assert_eq!(rows.len(), parallel.post_message_count);
+    assert_eq!(
+        results(&rows),
+        ids.iter().map(String::as_str).collect::<Vec<_>>()
+    );
+    for (id, payload_hash) in ids.iter().zip(&parallel.action_payload_hashes) {
+        let row = fetch_tool_call_row(&hook, &session, id).await;
+        assert_eq!(
+            row["message_sequence"].as_u64().map(|value| value as usize),
+            Some(parallel.assistant_sequence)
+        );
+        assert_eq!(row["lifecycle_state"].as_str(), Some("completed"));
+        assert_eq!(
+            row["result"].as_str(),
+            Some(format!("payload-{payload_hash}").as_str())
+        );
+    }
+
+    let pair = gents_lean_vocab::lean_transcript_case("completed_tool_pair_closed");
+    let (_node, hook, session) = completed(&pair.name).await;
+    let id = format!("result-{}", pair.logical_result_id);
+    assert_eq!(
+        fetch_tool_call_row(&hook, &session, &id).await["lifecycle_state"].as_str(),
+        Some("completed")
+    );
+    assert_eq!(results(&history(&hook, &session).await), vec![id.as_str()]);
+    assert_eq!(
+        hook.cancel_in_flight_tool_calls().await.unwrap(),
+        pair.post_in_flight_count
+    );
+
+    let abandon = gents_lean_vocab::lean_transcript_case("drop_abandon_not_strong_drain");
+    let (_node, hook, session, _) = fixture(&abandon.name).await;
+    let (_, ids) = accept_turn(
+        &hook,
+        &abandon.action_call_ids,
+        &abandon.action_logical_result_ids,
+    )
+    .await;
+    assert_eq!(ids.len(), 1);
+    dispatch(&hook, abandon.action_call_ids[0], &ids[0]).await;
+    let reader = hook.actor_access().unwrap();
+    drop(hook);
+    assert_eq!(
+        fetch_tool_call_row_as(&reader, &session, &ids[0]).await["lifecycle_state"].as_str(),
+        Some("running")
+    );
+}

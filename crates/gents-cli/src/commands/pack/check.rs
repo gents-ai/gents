@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use gents::pack::archive::{pack_dir, PackArchive};
-use gents::NodeIdentity;
+use gents_pack::pack::archive::{pack_dir, PackArchive};
+use gents_store::identity::NodeIdentity;
 use serde::Serialize;
 use serde_json::json;
 
@@ -42,7 +42,7 @@ pub(crate) async fn check(args: PackCheckArgs) -> Result<()> {
 }
 
 pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
-    let shared = gents::pack::authoring::check_dir(dir).await;
+    let shared = gents_pack::pack::authoring::check_dir(dir).await;
     let mut report = CheckReport {
         dir: shared.dir,
         pack: shared.pack,
@@ -68,10 +68,11 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
             return report;
         }
     };
-    if manifest.metadata.kind == gents::pack::PackKind::Documents {
+    if manifest.metadata.kind == gents_pack::pack::PackKind::Documents {
         match load_config(&archive) {
             Ok(config) => {
-                report.warnings = gents::pack::authoring::self_write_warnings(&config.documents);
+                report.warnings =
+                    gents_pack::pack::authoring::self_write_warnings(&config.documents);
                 if let Err(error) =
                     check_filters(dir, &config.documents, &mut report.problems).await
                 {
@@ -89,17 +90,17 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
     report
 }
 
-fn read_manifest(dir: &Path) -> Result<gents::pack::PackManifest> {
-    gents::pack::authoring::read_manifest(dir)
+fn read_manifest(dir: &Path) -> Result<gents_pack::pack::PackManifest> {
+    gents_pack::pack::authoring::read_manifest(dir)
 }
 
-fn load_config(archive: &PackArchive) -> Result<gents::pack::AuthoredPackConfig> {
-    gents::pack::authoring::load_config(archive)
+fn load_config(archive: &PackArchive) -> Result<gents_pack::pack::AuthoredPackConfig> {
+    gents_pack::pack::authoring::load_config(archive)
 }
 
 async fn check_filters(
     dir: &Path,
-    config: &gents::documents::PackConfig,
+    config: &gents_documents::PackConfig,
     problems: &mut Vec<String>,
 ) -> Result<()> {
     if config
@@ -110,15 +111,18 @@ async fn check_filters(
         return Ok(());
     }
     let directory = tempfile::tempdir()?;
-    let identity = gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None)?;
+    let identity = gents_store::identity::KeyIdentity::load_or_create(
+        directory.path().join("node.key"),
+        None,
+    )?;
     let node = std::sync::Arc::new(
         gents::defra_node::Node::builder()
             .with_node_identity_did(identity.did())
             .build()
             .await?,
     );
-    gents::ensure_runtime_schemas(node.as_ref()).await?;
-    let access = gents::store::config_client::ConfigAccess::local(node.clone());
+    gents_store::schema::ensure_runtime_schemas(node.as_ref()).await?;
+    let access = gents_store::config_client::ConfigAccess::local(node.clone());
     crate::commands::schema::apply_pack_schemas_if_present(&access, dir).await?;
     for source in &config.event_sources {
         let Some(filter) = source.filter.as_deref() else {

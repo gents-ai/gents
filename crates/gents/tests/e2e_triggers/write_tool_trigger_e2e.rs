@@ -1,11 +1,13 @@
 use std::time::Duration;
 
-use gents::documents::{WriteToolDecl, WriteToolField};
-use gents::inference::llm::tool::Tool;
-use gents::store::graphql::escape_graphql_string;
-use gents::tools::builtin::defra_write::BoundedWriteTool;
-use gents::{Collection, ConfigAccess, DocumentRuntimeOptions, Gents, ToolCeiling};
+use gents::{DocumentRuntimeOptions, Gents};
+use gents_documents::{WriteToolDecl, WriteToolField};
+use gents_loop::tool::Tool;
 use gents_protocol::row::AgentRequestRow;
+use gents_store::graphql::escape_graphql_string;
+use gents_store::{collection::Collection, config_client::ConfigAccess};
+use gents_tools::builtin::defra_write::BoundedWriteTool;
+use gents_tools::surface::ToolCeiling;
 use serde_json::{json, Value};
 
 use crate::support::fixtures::bind_managed_agent_backend;
@@ -31,10 +33,10 @@ const ACTION_REQUEST_SDL: &str = r#"
 "#;
 
 async fn register_action_request_schema(access: &ConfigAccess) {
-    let plan = gents::store::config_client::preview_schema_install(access, ACTION_REQUEST_SDL)
+    let plan = gents_store::config_client::preview_schema_install(access, ACTION_REQUEST_SDL)
         .await
         .expect("preview ActionRequest schema");
-    gents::store::config_client::apply_schema_install(
+    gents_store::config_client::apply_schema_install(
         access,
         ACTION_REQUEST_SDL,
         &plan.artifact_digest,
@@ -44,7 +46,7 @@ async fn register_action_request_schema(access: &ConfigAccess) {
 }
 
 async fn apply_documents(access: &ConfigAccess, documents: Vec<(Collection, serde_json::Value)>) {
-    use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     let plan = DesiredStateApplyPlan::new(
         documents
             .into_iter()
@@ -60,10 +62,10 @@ async fn apply_documents(access: &ConfigAccess, documents: Vec<(Collection, serd
         .transact_write("test.automation_configuration", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                gents::documents::apply_desired_state_plan(
+                gents_documents::apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
@@ -382,11 +384,11 @@ async fn multi_field_template_renders_all_referenced_doc_fields() {
     let (handle, shutdown_tx) =
         boot_agent_with_action_trigger(&db, &fixture, "b6-multifield", task_id, trigger_id).await;
 
-    gents::store::config_client::create_authored_document(
+    gents_store::config_client::create_authored_document(
         &fixture.access,
         "ActionRequest",
         &json!({"drift_sig": DRIFT_SIG, "summary": SUMMARY, "target_paths": TARGET_PATHS, "status": "open"}),
-        gents::store::config_client::DocumentSchemaSource::UserAuthored,
+        gents_store::config_client::DocumentSchemaSource::UserAuthored,
         ACTION_REQUEST_SDL,
     ).await.expect("create User-signed ActionRequest");
 
@@ -411,7 +413,7 @@ async fn declared_write_tool_call_fires_event_trigger() {
         boot_agent_with_action_trigger(&db, &fixture, "b6-tooldriven", task_id, trigger_id).await;
 
     let tool = BoundedWriteTool::new(
-        gents::ConfigAccess::local_managed_agent(
+        gents_store::config_client::ConfigAccess::local_managed_agent(
             db.node.clone(),
             ::identity::Did::new(fixture.agent.did()).unwrap(),
             fixture.agent.as_ref(),

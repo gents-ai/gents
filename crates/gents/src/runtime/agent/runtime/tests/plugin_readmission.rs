@@ -26,12 +26,12 @@ async fn wait_for_agent_state(
     }
 }
 
-fn install_fixture_plugin(plugin_home: &std::path::Path) -> crate::pack::PackIdentity {
+fn install_fixture_plugin(plugin_home: &std::path::Path) -> gents_pack::pack::PackIdentity {
     let (_pack_guard, pack_root) =
-        crate::test_support::pack::fixture_pack_copy("bind_plugin_fixture", &serde_json::json!({}));
-    let (pack_bytes, _) = crate::pack::archive::pack_dir(&pack_root).unwrap();
-    let archive = crate::pack::archive::PackArchive::from_bytes(&pack_bytes).unwrap();
-    let installed = crate::plugin::install::install_pack_plugins(
+        gents_pack::test_support::fixture_pack_copy("bind_plugin_fixture", &serde_json::json!({}));
+    let (pack_bytes, _) = gents_pack::pack::archive::pack_dir(&pack_root).unwrap();
+    let archive = gents_pack::pack::archive::PackArchive::from_bytes(&pack_bytes).unwrap();
+    let installed = gents_pack::plugin::install::install_pack_plugins(
         plugin_home,
         archive.manifest(),
         archive.digest(),
@@ -39,12 +39,12 @@ fn install_fixture_plugin(plugin_home: &std::path::Path) -> crate::pack::PackIde
         false,
     )
     .unwrap();
-    crate::pack::PackIdentity::new(
+    gents_pack::pack::PackIdentity::new(
         archive.manifest(),
         archive.digest(),
         installed
             .iter()
-            .map(|plugin| crate::pack::InstalledPackPlugin {
+            .map(|plugin| gents_pack::pack::InstalledPackPlugin {
                 name: plugin.name.clone(),
                 digest: plugin.digest.clone(),
             })
@@ -94,10 +94,10 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
         "integrations": {"plugins": [{"plugin": "fixture/list_files"}]},
     }))
     .unwrap();
-    crate::documents::write_tools_document(
+    gents_documents::write_tools_document(
         &fixture.user_access,
         &tools,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -116,7 +116,7 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
     );
 
     let pack = install_fixture_plugin(plugin_home.path());
-    crate::pack::record_plugin_store_change_as_with_node_binding(
+    gents_pack::pack::record_plugin_store_change_as_with_node_binding(
         &fixture.agent_access,
         &node_did,
         fixture
@@ -129,7 +129,7 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
         &pack.coordinate,
         Some(&pack),
         Some(&fixture.node_binding),
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -147,8 +147,8 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
         "the Tools write and the install each applied a generation: {readmitted:?}"
     );
 
-    crate::plugin::store::remove_record(plugin_home.path(), "fixture", "list_files").unwrap();
-    crate::pack::record_plugin_store_change_as_with_node_binding(
+    gents_pack::plugin::store::remove_record(plugin_home.path(), "fixture", "list_files").unwrap();
+    gents_pack::pack::record_plugin_store_change_as_with_node_binding(
         &fixture.agent_access,
         &node_did,
         fixture
@@ -161,7 +161,7 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
         &pack.coordinate,
         None,
         Some(&fixture.node_binding),
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -177,7 +177,7 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
     assert!(removed.active_generation > readmitted.active_generation);
 
     let pack = install_fixture_plugin(plugin_home.path());
-    crate::pack::record_plugin_store_change_as_with_node_binding(
+    gents_pack::pack::record_plugin_store_change_as_with_node_binding(
         &fixture.agent_access,
         &node_did,
         fixture
@@ -190,7 +190,7 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
         &pack.coordinate,
         Some(&pack),
         Some(&fixture.node_binding),
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();

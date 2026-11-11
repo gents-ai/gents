@@ -1,16 +1,18 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::inference::resolved::{MaxTurnsProvenance, ResolvedAgent, DEFAULT_MAX_TURNS};
-use gents::request::lifecycle::{
+use gents::{DocumentRuntimeOptions, Gents};
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents_inference::resolved::{MaxTurnsProvenance, ResolvedAgent, DEFAULT_MAX_TURNS};
+use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+use gents_session::request::lifecycle::{
     build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
     RequestSigner, RequestSpec,
 };
-use gents::store::config_client::{ConfigAccess, NodePermission};
-use gents::store::graphql::escape_graphql_string;
-use gents::{Collection, DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
-use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+use gents_store::config_client::{ConfigAccess, NodePermission};
+use gents_store::graphql::escape_graphql_string;
+use gents_store::{collection::Collection, identity::NodeIdentity};
+use gents_tools::surface::ToolCeiling;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -59,7 +61,7 @@ async fn configure_session_chain(
     let node_did = db.node_identity.did();
     let access = db.client_access(owner);
     let admin = ConfigAccess::local_as(db.node.clone(), node_did.parse().unwrap());
-    gents::store::identity::GrantSet::OperatorUser
+    gents_store::identity::GrantSet::OperatorUser
         .grant(&admin, &owner.did().parse().unwrap())
         .await
         .expect("grant user operator access");
@@ -74,10 +76,10 @@ async fn configure_session_chain(
         .transact_write("test.session_limit.node", |txn| {
             let node_plan = &node_plan;
             Box::pin(async move {
-                gents::documents::apply_desired_state_plan(
+                gents_documents::apply_desired_state_plan(
                     txn,
                     node_plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
@@ -86,14 +88,14 @@ async fn configure_session_chain(
         .expect("create user-owned node");
 
     let user_did = owner.did().parse().unwrap();
-    let parent = gents::store::identity::provision_agent_identity_authorized(
+    let parent = gents_store::identity::provision_agent_identity_authorized(
         &db.node,
         db.node_identity.as_ref(),
         &user_did,
     )
     .await
     .expect("provision parent agent");
-    let child = gents::store::identity::provision_agent_identity_authorized(
+    let child = gents_store::identity::provision_agent_identity_authorized(
         &db.node,
         db.node_identity.as_ref(),
         &user_did,
@@ -166,17 +168,17 @@ async fn configure_session_chain(
         .transact_write("test.session_limit.configuration", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                gents::documents::apply_desired_state_plan(
+                gents_documents::apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
         })
         .await
         .expect("create user-owned agent configuration");
-    gents::inference::backends::registry::set_backend_probe_status_as(
+    gents_inference::backends::registry::set_backend_probe_status_as(
         &admin, node_did, BACKEND_ID, "healthy",
     )
     .await
@@ -197,10 +199,10 @@ async fn withdraw_child_target(db: &TestDb, owner: &dyn NodeIdentity) {
         .transact_write("test.session_limit.withdraw_target", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                gents::documents::apply_desired_state_plan(
+                gents_documents::apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })

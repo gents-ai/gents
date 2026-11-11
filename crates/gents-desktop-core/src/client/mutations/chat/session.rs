@@ -1,6 +1,6 @@
 use crate::client::store::ClientStore;
 use anyhow::Result;
-use gents::store::config_client::ConfigAccess;
+use gents_store::config_client::ConfigAccess;
 
 use super::super::graphql::normalize_required;
 
@@ -26,5 +26,6 @@ pub async fn rename_session(
         })
         .ok_or_else(|| anyhow::anyhow!("session {} not found", session_id))?;
 
-    gents::session::rename_session_on(access, node_did, requester_did, session_id, title).await
+    gents_session::session::rename_session_on(access, node_did, requester_did, session_id, title)
+        .await
 }

@@ -103,7 +103,7 @@ async fn generated_authored_input_is_durable_before_provider_stream_entry() {
         Arc::new(Vec::new()),
         owned_config(0),
     );
-    let scoped_doc_id = crate::store::graphql::escape_graphql_string(&doc_id);
+    let scoped_doc_id = gents_store::graphql::escape_graphql_string(&doc_id);
     let query = format!(
         r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{scoped_doc_id}" }} }}) {{ _docID message_key }} }}"#
     );
@@ -161,7 +161,7 @@ async fn generated_authored_input_is_durable_before_provider_stream_entry() {
                     case.name
                 );
                 let header_id = header["_docID"].as_str().unwrap();
-                let (_, native) = crate::session::load_canonical_message(
+                let (_, native) = gents_session::session::load_canonical_message(
                     &reader,
                     header_id,
                     &node_did,
@@ -196,11 +196,11 @@ async fn loop_entry_sanitizes_a_recovered_checkpoint_as_one_projection() {
         request_id: None,
         id: None,
         content: vec![AssistantContent::ToolCall(
-            crate::inference::llm::message::ToolCall {
+            gents_inference::llm::message::ToolCall {
                 raw_arguments: None,
                 id: "restored-call".to_string(),
                 call_id: Some("restored-call".to_string()),
-                function: crate::inference::llm::message::ToolFunction {
+                function: gents_inference::llm::message::ToolFunction {
                     name: "read".to_string(),
                     arguments: serde_json::json!({}),
                 },
@@ -211,7 +211,7 @@ async fn loop_entry_sanitizes_a_recovered_checkpoint_as_one_projection() {
     };
     let result = Message::User {
         content: vec![UserContent::ToolResult(
-            crate::inference::llm::message::ToolResult {
+            gents_inference::llm::message::ToolResult {
                 id: "restored-call".to_string(),
                 call_id: Some("restored-call".to_string()),
                 content: vec![ToolResultContent::text("restored result")],
@@ -221,7 +221,7 @@ async fn loop_entry_sanitizes_a_recovered_checkpoint_as_one_projection() {
 
     let collected = collect_scripted_stream(run_loop_stream(
         model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(result),
         (vec![call])
             .into_iter()
@@ -353,22 +353,22 @@ async fn every_request_in_a_tool_loop_satisfies_provider_invariants() {
 
 #[tokio::test]
 async fn dirty_caller_history_is_sanitized_at_loop_entry() {
-    let unpaired_call = crate::inference::llm::message::ToolCall {
+    let unpaired_call = gents_inference::llm::message::ToolCall {
         raw_arguments: None,
         id: "call-unpaired".to_string(),
         call_id: Some("call-unpaired".to_string()),
-        function: crate::inference::llm::message::ToolFunction {
+        function: gents_inference::llm::message::ToolFunction {
             name: "echo".to_string(),
             arguments: serde_json::json!({}),
         },
         signature: None,
         additional_params: None,
     };
-    let paired_call = crate::inference::llm::message::ToolCall {
+    let paired_call = gents_inference::llm::message::ToolCall {
         raw_arguments: None,
         id: "call-paired".to_string(),
         call_id: Some("call-paired".to_string()),
-        function: crate::inference::llm::message::ToolFunction {
+        function: gents_inference::llm::message::ToolFunction {
             name: "echo".to_string(),
             arguments: serde_json::json!({}),
         },
@@ -379,7 +379,7 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
         Message::User {
             content: vec![UserContent::tool_result(
                 "call-gone".to_string(),
-                vec![crate::inference::llm::message::ToolResultContent::text(
+                vec![gents_inference::llm::message::ToolResultContent::text(
                     "orphaned",
                 )],
             )],
@@ -390,7 +390,7 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
             content: vec![
                 AssistantContent::ToolCall(paired_call),
                 AssistantContent::ToolCall(unpaired_call),
-                AssistantContent::Text(crate::inference::llm::message::Text {
+                AssistantContent::Text(gents_inference::llm::message::Text {
                     text: "stale ordering".to_string(),
                 }),
             ],
@@ -398,7 +398,7 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
         Message::User {
             content: vec![UserContent::tool_result(
                 "call-paired".to_string(),
-                vec![crate::inference::llm::message::ToolResultContent::text(
+                vec![gents_inference::llm::message::ToolResultContent::text(
                     "ok",
                 )],
             )],
@@ -525,7 +525,7 @@ fn is_request_context_message_only_matches_context_user_text() {
 
 #[tokio::test]
 async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
-    use crate::inference::llm::tool::{Tool, ToolDefinition};
+    use gents_loop::tool::{Tool, ToolDefinition};
 
     struct DescribeTool;
     #[derive(Debug, thiserror::Error)]
@@ -554,7 +554,7 @@ async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
 
     let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
 
-    let poison = serde_json::Value::String(crate::store::test_support::CORRUPT_TOOL_ARGS_589.to_string());
+    let poison = serde_json::Value::String(gents_store::test_support::CORRUPT_TOOL_ARGS_589.to_string());
     let model = ScriptedModel::new_turns(vec![
         vec![
             RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
@@ -603,7 +603,7 @@ async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
 
 #[tokio::test]
 async fn nonobject_tool_args_never_reach_durable_history_or_provider() {
-    use crate::inference::llm::tool::{Tool, ToolDefinition};
+    use gents_loop::tool::{Tool, ToolDefinition};
 
     struct StrictTool;
     #[derive(Debug, thiserror::Error)]
@@ -714,11 +714,11 @@ fn assert_all_history_tool_args_object_shaped(history: &[Message]) {
 async fn repair_sanitizes_poisoned_tool_args_in_loaded_history() {
     let poison = format!("bad{}value", '\u{0007}');
 
-    let poisoned_call = crate::inference::llm::message::ToolCall {
+    let poisoned_call = gents_inference::llm::message::ToolCall {
         raw_arguments: None,
         id: "call-historic".to_string(),
         call_id: Some("call-historic".to_string()),
-        function: crate::inference::llm::message::ToolFunction {
+        function: gents_inference::llm::message::ToolFunction {
             name: "echo".to_string(),
             arguments: serde_json::json!({ "note": poison }),
         },
@@ -755,7 +755,7 @@ async fn repair_sanitizes_poisoned_tool_args_in_loaded_history() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("hi")),
         (history)
             .into_iter()
@@ -932,11 +932,11 @@ fn repaired_arguments(arguments: serde_json::Value) -> serde_json::Value {
             request_id: None,
             id: None,
             content: vec![AssistantContent::ToolCall(
-                crate::inference::llm::message::ToolCall {
+                gents_inference::llm::message::ToolCall {
                     raw_arguments: None,
                     id: "call-1".to_string(),
                     call_id: Some("call-1".to_string()),
-                    function: crate::inference::llm::message::ToolFunction {
+                    function: gents_inference::llm::message::ToolFunction {
                         name: "echo".to_string(),
                         arguments,
                     },
@@ -947,11 +947,11 @@ fn repaired_arguments(arguments: serde_json::Value) -> serde_json::Value {
         },
         Message::User {
             content: vec![UserContent::ToolResult(
-                crate::inference::llm::message::ToolResult {
+                gents_inference::llm::message::ToolResult {
                     id: "call-1".to_string(),
                     call_id: Some("call-1".to_string()),
                     content: vec![ToolResultContent::Text(
-                        crate::inference::llm::message::Text {
+                        gents_inference::llm::message::Text {
                             text: "call-1-result".to_string(),
                         },
                     )],
@@ -985,11 +985,11 @@ fn repair_preserves_a_tool_pair_split_across_history_and_prompt() {
         request_id: None,
         id: None,
         content: vec![AssistantContent::ToolCall(
-            crate::inference::llm::message::ToolCall {
+            gents_inference::llm::message::ToolCall {
                 raw_arguments: None,
                 id: "call-1".to_string(),
                 call_id: Some("call-1".to_string()),
-                function: crate::inference::llm::message::ToolFunction {
+                function: gents_inference::llm::message::ToolFunction {
                     name: "echo".to_string(),
                     arguments: serde_json::json!({ "text": "bad\nvalue" }),
                 },
@@ -1000,11 +1000,11 @@ fn repair_preserves_a_tool_pair_split_across_history_and_prompt() {
     }];
     let new_messages = vec![Message::User {
         content: vec![UserContent::ToolResult(
-            crate::inference::llm::message::ToolResult {
+            gents_inference::llm::message::ToolResult {
                 id: "call-1".to_string(),
                 call_id: Some("call-1".to_string()),
                 content: vec![ToolResultContent::Text(
-                    crate::inference::llm::message::Text {
+                    gents_inference::llm::message::Text {
                         text: "done".to_string(),
                     },
                 )],
@@ -1042,7 +1042,7 @@ fn repair_preserves_a_tool_pair_split_across_history_and_prompt() {
         .map(|row| row.message.clone())
         .collect::<Vec<_>>();
     assert_eq!(
-        crate::inference::compaction::sanitize_history_for_provider(
+        gents_inference::compaction::sanitize_history_for_provider(
             crate::turn::provider_input::ProviderInputProfile::OpenAiChatCompletions,
             joined.clone(),
         ),
@@ -1103,7 +1103,7 @@ fn generated_authored_key(
         Key::Context => "context".to_owned(),
         Key::Prompt => "prompt".to_owned(),
         Key::Folded { request_id } => {
-            crate::request::lifecycle::queue::folded_input_key(&docs[request_id])
+            gents_session::request::lifecycle::queue::folded_input_key(&docs[request_id])
         }
     }
 }
@@ -1137,7 +1137,7 @@ async fn drive_generated_turn_input(
         .folded
         .iter()
         .map(|folded| crate::runtime::agent::loop_stream::FoldedPrompt {
-            key: crate::request::lifecycle::queue::folded_input_key(&docs[&folded.request_id]),
+            key: gents_session::request::lifecycle::queue::folded_input_key(&docs[&folded.request_id]),
             message: Message::user(folded.content.clone()),
         })
         .collect();
@@ -1163,7 +1163,7 @@ async fn drive_generated_turn_input(
             Box::pin(async move {
                 let observed = agent_response(&reader, &format!(
                         r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{}" }}, role: {{ _eq: "user" }} }}) {{ _docID }} }}"#,
-                        crate::store::graphql::escape_graphql_string(&request_doc_id)
+                        gents_store::graphql::escape_graphql_string(&request_doc_id)
                     )).await;
                 *published_before_reduction.lock().unwrap() = observed.data.unwrap()
                     ["AgentMessage"]
@@ -1242,7 +1242,7 @@ async fn drive_generated_turn_input(
         );
     }
 
-    let scoped_doc_id = crate::store::graphql::escape_graphql_string(&head.doc_id);
+    let scoped_doc_id = gents_store::graphql::escape_graphql_string(&head.doc_id);
     let observed = agent_response(&lifecycle.access().unwrap(), &format!(
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{scoped_doc_id}" }}, role: {{ _eq: "user" }} }}, order: {{ sequence: ASC }}) {{ _docID message_key }} }}"#
         )).await;
@@ -1265,7 +1265,7 @@ async fn drive_generated_turn_input(
             "{}",
             case.name
         );
-        let (_, native) = crate::session::load_canonical_message(
+        let (_, native) = gents_session::session::load_canonical_message(
                     &lifecycle.access().unwrap(),
             header["_docID"].as_str().unwrap(),
             &head.node_did,
@@ -1285,7 +1285,7 @@ async fn drive_generated_turn_input(
             &lifecycle.access().unwrap(),
             &format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state superseded_by_request_doc_id }} }}"#,
-                crate::store::graphql::escape_graphql_string(doc)
+                gents_store::graphql::escape_graphql_string(doc)
             ),
         )
         .await;
@@ -1299,7 +1299,7 @@ async fn drive_generated_turn_input(
         );
     }
 
-    let history = crate::session::load_sequenced_history_for_request(
+    let history = gents_session::session::load_sequenced_history_for_request(
         &node,
         lifecycle.request(),
         None,
@@ -1312,7 +1312,7 @@ async fn drive_generated_turn_input(
     assert!(history
         .iter()
         .all(|row| !matches!(&row.message, Message::User { .. })));
-    let resumed_history = crate::session::load_sequenced_history_for_request(
+    let resumed_history = gents_session::session::load_sequenced_history_for_request(
         &node,
         lifecycle.request(),
         None,

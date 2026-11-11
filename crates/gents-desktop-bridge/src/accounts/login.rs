@@ -5,8 +5,8 @@ use std::sync::{
 };
 use std::time::Duration;
 
-use gents::inference::auth::credential::{OAuthCredential, SignIn};
-use gents::inference::backends::setup::InferenceAuthMethod;
+use gents_inference::auth::credential::{OAuthCredential, SignIn};
+use gents_inference::backends::setup::InferenceAuthMethod;
 use tokio_util::sync::CancellationToken;
 
 use super::{
@@ -18,13 +18,13 @@ use crate::error::{BridgeError, BridgeErrorCode};
 pub(crate) fn provider(method: InferenceAuthMethod) -> Result<&'static str, BridgeError> {
     match method {
         InferenceAuthMethod::ChatGptOauth => {
-            Ok(gents::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER)
+            Ok(gents_inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER)
         }
         InferenceAuthMethod::ClaudeOauth => {
-            Ok(gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER)
+            Ok(gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER)
         }
         InferenceAuthMethod::GrokOauth => {
-            Ok(gents::inference::clients::xai_grok::XAI_OAUTH_PROVIDER)
+            Ok(gents_inference::clients::xai_grok::XAI_OAUTH_PROVIDER)
         }
         _ => Err(BridgeError::new(
             BridgeErrorCode::InvalidArgument,
@@ -88,7 +88,7 @@ pub(crate) async fn sign_in<A, O>(
     on_url: O,
 ) -> Result<SignIn, BridgeError>
 where
-    A: Fn() -> anyhow::Result<gents::ConfigAccess>,
+    A: Fn() -> anyhow::Result<gents_store::config_client::ConfigAccess>,
     O: AsyncFnOnce(&str) -> Result<(), BridgeError>,
 {
     provider(method)?;
@@ -148,7 +148,7 @@ where
                 product,
             )
             .await?;
-            let tokens = gents::inference::auth::claude::ClaudeLoginTokens {
+            let tokens = gents_inference::auth::claude::ClaudeLoginTokens {
                 access_token: tokens.access_token,
                 refresh_token: tokens.refresh_token,
                 expires_in: tokens.expires_in,
@@ -176,7 +176,7 @@ where
                 .timeout(Duration::from_secs(30))
                 .build()
                 .map_err(|_| BridgeError::untyped("Could not prepare the sign-in connection."))?;
-            let login = gents::inference::auth::xai_login::run_device_code_login_with_url_callback(
+            let login = gents_inference::auth::xai_login::run_device_code_login_with_url_callback(
                 &http,
                 Some(stop.clone()),
                 async move |url| {
@@ -234,7 +234,7 @@ mod tests {
             || panic!("cancelled sign-in must not read configuration"),
             "did:test:node",
             InferenceAuthMethod::GrokOauth,
-            gents::inference::clients::xai_grok::XAI_OAUTH_PROVIDER,
+            gents_inference::clients::xai_grok::XAI_OAUTH_PROVIDER,
             None,
             &cancel,
             async |_| panic!("cancelled sign-in must not open a browser"),

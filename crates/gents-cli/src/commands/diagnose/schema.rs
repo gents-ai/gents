@@ -34,7 +34,7 @@ pub(super) async fn load_runtime_row(
     access: &ConfigAccess,
     node_did: &str,
 ) -> Result<Option<Value>> {
-    use gents::store::graphql::escape_graphql_string;
+    use gents_store::graphql::escape_graphql_string;
     let query = format!(
         r#"{{
             NodeRuntime(

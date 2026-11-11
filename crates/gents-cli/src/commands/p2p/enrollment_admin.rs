@@ -14,7 +14,7 @@ use crate::{
 
 pub(crate) fn resolve_home_identity(
     home: Option<&std::path::Path>,
-) -> Result<std::sync::Arc<dyn gents::NodeIdentity>> {
+) -> Result<std::sync::Arc<dyn gents_store::identity::NodeIdentity>> {
     let home_dir = resolve_home_dir(home);
     let config = read_init_config(&home_dir)?.with_context(|| {
         format!(
@@ -199,11 +199,11 @@ pub(super) async fn grant_pending_client(args: P2pEnrollmentGrantArgs) -> Result
 /// `expected` binds managed pairing to the target runtime and held desktop User.
 pub(crate) async fn grant_verified_client(
     home: &std::path::Path,
-    endpoint: gents::store::config_client::GraphqlEndpoint,
+    endpoint: gents_store::config_client::GraphqlEndpoint,
     request_id: &str,
     expected: Option<(&str, &str)>,
 ) -> Result<Option<serde_json::Value>> {
-    use gents::store::config_client::ConfigAccess;
+    use gents_store::config_client::ConfigAccess;
     let request_id = request_id.trim();
     anyhow::ensure!(!request_id.is_empty(), "request_id must not be empty");
     let runtime = resolve_home_identity(Some(home))?;
@@ -280,7 +280,7 @@ pub(crate) async fn grant_verified_client(
     let owner = ConfigAccess::Graphql(endpoint.clone());
     let query = format!(
         "{{ Node(filter: {{ node_did: {{ _eq: \"{}\" }} }}) {{ _docID }} }}",
-        gents::store::graphql::escape_graphql_string(runtime.did())
+        gents_store::graphql::escape_graphql_string(runtime.did())
     );
     let response = owner
         .execute(&query)
@@ -297,10 +297,10 @@ pub(crate) async fn grant_verified_client(
         .as_str()
         .context("Node has no document ID")?;
     let runtime_access = ConfigAccess::Graphql(
-        gents::store::config_client::GraphqlEndpoint::as_principal(endpoint.url(), runtime.did())
+        gents_store::config_client::GraphqlEndpoint::as_principal(endpoint.url(), runtime.did())
             .with_client_signing_capability(runtime.client_signing_capability()?)?,
     );
-    let outcome = gents::store::identity::grant_enrollment_authority(
+    let outcome = gents_store::identity::grant_enrollment_authority(
         &owner,
         &runtime_access,
         doc_id,

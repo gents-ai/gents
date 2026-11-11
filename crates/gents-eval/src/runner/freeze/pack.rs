@@ -7,15 +7,15 @@ use super::documents::inference_binding;
 use super::{refused, CellRequest, CellSource, FrozenCell, RunRequest};
 use crate::runner::executor::Isolation;
 use crate::{CellSpec, SubjectRef};
-use gents::documents::PackConfig;
-use gents::pack::{declared_paths, digest_declared_assets, PackInstallOptions, PackManifest};
-use gents::store::config_client::ConfigAccess;
-use gents::BashMode;
+use gents_documents::BashMode;
+use gents_documents::PackConfig;
+use gents_pack::pack::{declared_paths, digest_declared_assets, PackInstallOptions, PackManifest};
+use gents_store::config_client::ConfigAccess;
 
 pub(crate) struct LoadedPack {
     pub(crate) digest: String,
     pub(crate) config: PackConfig,
-    pub(crate) authored: gents::pack::AuthoredPackConfig,
+    pub(crate) authored: gents_pack::pack::AuthoredPackConfig,
     pub(crate) manifest: PackManifest,
     pub(crate) files: BTreeMap<String, Vec<u8>>,
 }
@@ -37,7 +37,7 @@ pub(crate) fn load_pack(source: &CellSource, owner: &str) -> Result<LoadedPack> 
             .with_context(|| format!("pack has no asset {path:?}"))
     };
     let digest = digest_declared_assets(&manifest, |path| asset(path).map(Vec::as_slice))?;
-    let config = gents::pack::load_pack_authoring_config(
+    let config = gents_pack::pack::load_pack_authoring_config(
         &manifest,
         &options,
         &|path| asset(path).cloned(),

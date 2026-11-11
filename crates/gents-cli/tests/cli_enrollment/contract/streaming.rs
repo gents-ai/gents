@@ -159,9 +159,11 @@ async fn canonical_live_content(
         return Ok(None);
     };
     let app = core.node_identity();
-    let access = gents::ConfigAccess::Graphql(
-        gents::store::config_client::GraphqlEndpoint::as_principal(graphql, app.did())
-            .with_client_signing_capability(gents::NodeIdentity::client_signing_capability(app)?)?,
+    let access = gents_store::config_client::ConfigAccess::Graphql(
+        gents_store::config_client::GraphqlEndpoint::as_principal(graphql, app.did())
+            .with_client_signing_capability(
+                gents_store::identity::NodeIdentity::client_signing_capability(app)?,
+            )?,
     );
     let canonical = gents_desktop_core::client::load_session_context_store_on(
         &access,

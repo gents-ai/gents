@@ -1,7 +1,7 @@
-use gents::tools::native::{
+use gents_documents::FileToolMode;
+use gents_tools::native::{
     lsp_action_authorized, lsp_advertised, lsp_apply_authorized, LspAction, LspMutationSource,
 };
-use gents::FileToolMode;
 
 use gents_lean_vocab::lean_lsp_action_cases;
 

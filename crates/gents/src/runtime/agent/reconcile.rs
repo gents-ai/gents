@@ -6,16 +6,16 @@ use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::{JoinError, JoinSet};
 use tracing::Instrument;
 
-use crate::inference::admission::AdmissionRegistry;
-use crate::inference::resolved::ResolvedAgent;
 use crate::runtime::agent::retry::RetryPolicy;
 use crate::runtime::agent::worker_capacity::WorkerCapacity;
 use crate::runtime::status::RuntimeStatusHandle;
-use crate::tools::surface::ToolSurface;
-use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
-use crate::triggers::runtime_snapshot::ResolvedRuntimeSnapshot;
+use gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
+use gents_automation::triggers::runtime_snapshot::ResolvedRuntimeSnapshot;
+use gents_inference::admission::AdmissionRegistry;
+use gents_inference::resolved::ResolvedAgent;
 use gents_protocol::node_readiness::ReconcilePhase;
 use gents_protocol::row::AgentRequest;
+use gents_tools::surface::ToolSurface;
 
 mod diff;
 mod slot;

@@ -117,7 +117,7 @@ async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
     drop(core);
 
     assert_eq!(
-        gents::store::local::home::lock_store(&home, &data).is_err(),
+        gents_store::local::home::lock_store(&home, &data).is_err(),
         claim_held_for("caller_cancelled"),
         "the claim observation after shutdown waiter cancellation"
     );
@@ -130,7 +130,7 @@ async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
     .await
     .expect("native shutdown returns before the claim is released");
     assert_eq!(
-        gents::store::local::home::lock_store(&home, &data).is_err(),
+        gents_store::local::home::lock_store(&home, &data).is_err(),
         claim_held_for("native_returned"),
         "the claim observation after native shutdown return"
     );
@@ -141,7 +141,7 @@ async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
     let reacquired = tokio::task::spawn_blocking(move || {
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         loop {
-            match gents::store::local::home::lock_store(&retry_home, &retry_data) {
+            match gents_store::local::home::lock_store(&retry_home, &retry_data) {
                 Ok(lock) => return lock,
                 Err(_) if std::time::Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(10));
@@ -157,7 +157,7 @@ async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
     .expect("store lock probe panicked");
     drop(reacquired);
     assert_eq!(
-        gents::store::local::home::lock_store(&home, &data).is_err(),
+        gents_store::local::home::lock_store(&home, &data).is_err(),
         claim_held_for("access_released"),
         "the claim observation after access release"
     );
@@ -606,8 +606,8 @@ async fn saved_peer_cleanup_removes_replicator_before_idempotent_disconnect() {
     assert!(calls[0].starts_with(&format!("remove-replicator:{}:", record.addr)));
     assert!(calls[1].starts_with(&format!("remove-replicator:{}:", record.addr)));
     assert_eq!(calls[2], format!("disconnect:{}", record.addr));
-    for collection in gents::runtime::agent::p2p_reconcile::client_route_collections(
-        gents::runtime::agent::p2p_reconcile::PairingDirection::ClientToRuntime,
+    for collection in gents_p2p::p2p_reconcile::client_route_collections(
+        gents_p2p::p2p_reconcile::PairingDirection::ClientToRuntime,
     ) {
         assert!(calls[0].contains(collection));
     }
@@ -651,7 +651,7 @@ async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offlin
         .peers
         .iter()
         .any(|status| status.peer_id == record.peer_id));
-    let route = gents::runtime::agent::p2p_reconcile::ClientRouteIdentity::new(
+    let route = gents_p2p::p2p_reconcile::ClientRouteIdentity::new(
         record.peer_id.clone(),
         "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
         "did:key:desktop-requester",
@@ -662,7 +662,7 @@ async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offlin
     let manual_write = lifecycle
         .upsert_desired(
             &route,
-            gents::runtime::agent::p2p_reconcile::PairingDirection::RuntimeToClient,
+            gents_p2p::p2p_reconcile::PairingDirection::RuntimeToClient,
         )
         .await;
     assert!(manual_write
@@ -697,7 +697,7 @@ async fn remove_peer_hides_deployment_and_persists_cleanup_tombstone_when_offlin
         .iter()
         .any(|status| status.peer_id == record.peer_id));
     let peer_id = gents_protocol::graphql::escape_graphql_string(
-        &route.desired_id(gents::runtime::agent::p2p_reconcile::PairingDirection::RuntimeToClient),
+        &route.desired_id(gents_p2p::p2p_reconcile::PairingDirection::RuntimeToClient),
     );
     let response = core
         .node()
@@ -1120,11 +1120,11 @@ async fn the_client_store_is_encrypted_with_its_recorded_key() {
     let core = Arc::new(core);
     core.shutdown().await.expect("shutdown");
     drop(core);
-    let record: gents::store::local::store_key::StoreEncryption =
+    let record: gents_store::local::store_key::StoreEncryption =
         serde_json::from_slice(&std::fs::read(paths.store_encryption_path()).unwrap()).unwrap();
     assert_eq!(
         record.custody,
-        gents::store::local::store_key::StoreKeyCustody::File
+        gents_store::local::store_key::StoreKeyCustody::File
     );
     assert!(paths.store_key_path().is_file());
 
@@ -1147,12 +1147,12 @@ async fn the_client_store_is_encrypted_with_its_recorded_key() {
         Err(error) => error,
     };
     assert_eq!(
-        gents::store::local::storage_backend::incompatible_store(
+        gents_store::local::storage_backend::incompatible_store(
             error.as_ref(),
             paths.node_data_dir()
         )
         .map(|store| store.kind),
-        Some(gents::store::local::storage_backend::IncompatibleStoreKind::MissingStoreKey)
+        Some(gents_store::local::storage_backend::IncompatibleStoreKind::MissingStoreKey)
     );
     assert!(
         !paths.store_key_path().exists(),
@@ -1227,7 +1227,7 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
             let response = access
                 .execute(&format!(
                     "{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{ request_id requester_did admission_kind admission_signer_did }} }}",
-                    gents::store::graphql::escape_graphql_string(&request_id),
+                    gents_store::graphql::escape_graphql_string(&request_id),
                 ))
                 .await?;
             anyhow::Ok(
@@ -1362,14 +1362,14 @@ async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Re
     let owner = runtime.node_did().to_owned();
     let agent = runtime.provision_agent().await;
     let user = runtime.user_access();
-    gents::documents::write_inference_backend_document(
+    gents_documents::write_inference_backend_document(
         &user,
         &serde_json::from_value(serde_json::json!({
             "node_did": owner, "backend_id": "backend", "name": "Backend",
             "provider_kind": "OpenAiCompatible", "endpoint": "http://localhost:8000/v1",
             "auth": {"kind": "unauthenticated"}
         }))?,
-        &gents::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await?;
     crate::client::mutations::upsert_inference_profile_on(
@@ -1408,7 +1408,7 @@ async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Re
                                 &serde_json::json!({"input": input}),
                             )
                             .await?;
-                        let doc = gents::store::graphql::created_doc_id(&response, "AgentRequest")?;
+                        let doc = gents_store::graphql::created_doc_id(&response, "AgentRequest")?;
                         txn.add_resource_relationship("AgentRequest", &doc, "parent", "agents", agent_doc)
                             .await?;
                         txn.add_resource_relationship("AgentRequest", &doc, "session", "sessions", session_doc)
@@ -1429,7 +1429,7 @@ async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Re
             "test.terminal_page.session",
             &format!(
                 "mutation {{ update_AgentSession(docID: \"{}\", input: {{observation: {observation}}}) {{_docID}} }}",
-                gents::store::graphql::escape_graphql_string(&session_doc)
+                gents_store::graphql::escape_graphql_string(&session_doc)
             ),
         )
         .await?;
@@ -1534,7 +1534,7 @@ async fn direct_refresh_distinguishes_published_from_superseded_reads() -> anyho
 
 #[tokio::test]
 async fn inference_activity_selects_authenticated_transport_by_peer_authority() {
-    use gents::store::identity::NodeIdentity as _;
+    use gents_store::identity::NodeIdentity as _;
     use identity::Identity as _;
     use wiremock::{
         matchers::{method, path},
@@ -1564,12 +1564,12 @@ async fn inference_activity_selects_authenticated_transport_by_peer_authority() 
         std::fs::create_dir_all(&home).unwrap();
         let key_path = home.join("node.key");
         let did = if authenticated {
-            gents::store::identity::KeyIdentity::load_or_create(&key_path, None)
+            gents_store::identity::KeyIdentity::load_or_create(&key_path, None)
                 .unwrap()
                 .did()
                 .to_owned()
         } else {
-            gents::store::identity::load_or_create_file_identity(&key_path)
+            gents_store::identity::load_or_create_file_identity(&key_path)
                 .unwrap()
                 .did()
                 .unwrap()
@@ -1593,7 +1593,7 @@ async fn inference_activity_selects_authenticated_transport_by_peer_authority() 
         core.sync_state.upsert_for_test(record).await.unwrap();
         let operator = core.operator_observation_endpoint(&did).await.unwrap();
         assert!(!operator.is_anonymous(), "{case}");
-        let key = gents::inference::inference_observation::InferenceKey {
+        let key = gents_inference::inference_observation::InferenceKey {
             node: did.clone(),
             session: case.into(),
             request: "request".into(),

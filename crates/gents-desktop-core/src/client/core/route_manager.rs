@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
-use gents::runtime::agent::p2p_reconcile::{
+use gents_p2p::p2p_reconcile::{
     client_route_id, desired_route_is_applied, reconcile_peer_tick,
     teardown_owned_replicators_at_endpoint, ClientRouteIdentity, EmbeddedRemoteP2pAdmin,
     EnrollmentEndpointEntry, GraphqlPairingStateStore, PairingDesired, PairingDirection,
@@ -66,7 +66,7 @@ impl ClientRouteManager {
             pairing_ready,
             last_run_elapsed,
             force,
-            gents::runtime::agent::p2p_reconcile::intervals::sweep_interval(),
+            gents_p2p::p2p_reconcile::intervals::sweep_interval(),
         )
     }
 
@@ -181,9 +181,7 @@ impl ClientRouteManager {
         if is_enrollment_peer(saved) {
             return saved.clone();
         }
-        let current = match gents::runtime::agent::p2p_reconcile::TransportEndpoint::parse(
-            saved.addr.clone(),
-        ) {
+        let current = match gents_p2p::p2p_reconcile::TransportEndpoint::parse(saved.addr.clone()) {
             Ok(current) => current,
             Err(error) => {
                 tracing::warn!(
@@ -478,10 +476,10 @@ impl ClientRouteManager {
         direction: PairingDirection,
         record: &PeerRecord,
     ) -> Result<()> {
-        use gents::runtime::agent::p2p_reconcile::enrollment_member_authority::{
+        use gents_p2p::p2p_reconcile::enrollment_member_authority::{
             load_status_enrollment_approvals_in_txn, EnrollmentAuthorityOutcome,
         };
-        use gents::runtime::agent::p2p_reconcile::materialize_enrollment_desired_in_txn;
+        use gents_p2p::p2p_reconcile::materialize_enrollment_desired_in_txn;
 
         anyhow::ensure!(
             record.is_enrollment(),
@@ -491,7 +489,7 @@ impl ClientRouteManager {
             self.node.node_identity_did() == Some(self.actor.did()),
             "desktop enrollment requires its configured local identity"
         );
-        gents::store::config_client::ConfigAccess::transact_local_write(
+        gents_store::config_client::ConfigAccess::transact_local_write(
             &self.node,
             Some(identity::Did::new(self.actor.did())?),
             "desktop.pairing_desired.upsert",
@@ -557,7 +555,7 @@ impl ClientRouteManager {
         &self,
         record: &PeerRecord,
         graphql: &str,
-    ) -> gents::runtime::agent::p2p_reconcile::RemoteP2pAdminResult<HttpRemoteP2pAdmin> {
+    ) -> gents_p2p::p2p_reconcile::RemoteP2pAdminResult<HttpRemoteP2pAdmin> {
         let admin = HttpRemoteP2pAdmin::new_with_actor(graphql, Arc::clone(&self.actor))?;
         let endpoint = match self
             .identity_interaction
@@ -567,24 +565,17 @@ impl ClientRouteManager {
             Some(endpoint) => endpoint,
             None => {
                 let capability =
-                    gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+                    gents_store::config_client::ClientSigningCapability::from_ed25519_key(
                         self.actor.private_key_bytes(),
                     )
                     .map_err(|error| {
-                        gents::runtime::agent::p2p_reconcile::RemoteP2pAdminError::LocalError(
-                            error.to_string(),
-                        )
+                        gents_p2p::p2p_reconcile::RemoteP2pAdminError::LocalError(error.to_string())
                     })?;
-                gents::store::config_client::GraphqlEndpoint::as_principal(
-                    graphql,
-                    self.actor.did(),
-                )
-                .with_client_signing_capability(capability)
-                .map_err(|error| {
-                    gents::runtime::agent::p2p_reconcile::RemoteP2pAdminError::LocalError(
-                        error.to_string(),
-                    )
-                })?
+                gents_store::config_client::GraphqlEndpoint::as_principal(graphql, self.actor.did())
+                    .with_client_signing_capability(capability)
+                    .map_err(|error| {
+                        gents_p2p::p2p_reconcile::RemoteP2pAdminError::LocalError(error.to_string())
+                    })?
             }
         };
         Ok(admin.with_node_identity(endpoint))
@@ -638,7 +629,7 @@ impl ClientRouteManager {
                     applied: delete_PeerPairingApplied(filter: {{ peer_id: {{ _in: [{ids}] }}, node_did: {{_eq: "{local}"}} }}) {{ _docID }}
                 }}"#
         );
-        let access = gents::store::config_client::ConfigAccess::local_as(
+        let access = gents_store::config_client::ConfigAccess::local_as(
             self.node.clone(),
             identity::Did::new(self.actor.did())?,
         );
@@ -824,12 +815,10 @@ pub(super) async fn cleanup_saved_peer_p2p(
     let mut replicator_errors = Vec::new();
     if let Err(error) = p2p_remove_replicator(
         p2p,
-        gents::runtime::agent::p2p_reconcile::client_route_collections(
-            PairingDirection::ClientToRuntime,
-        )
-        .iter()
-        .map(|collection| (*collection).to_string())
-        .collect(),
+        gents_p2p::p2p_reconcile::client_route_collections(PairingDirection::ClientToRuntime)
+            .iter()
+            .map(|collection| (*collection).to_string())
+            .collect(),
         &record.addr,
     )
     .await
@@ -899,8 +888,8 @@ pub(super) async fn cleanup_saved_peer_p2p(
 
 fn same_transport_peer(left: &PeerRecord, right: &PeerRecord) -> bool {
     match (
-        gents::runtime::agent::p2p_reconcile::TransportEndpoint::parse(left.addr.clone()),
-        gents::runtime::agent::p2p_reconcile::TransportEndpoint::parse(right.addr.clone()),
+        gents_p2p::p2p_reconcile::TransportEndpoint::parse(left.addr.clone()),
+        gents_p2p::p2p_reconcile::TransportEndpoint::parse(right.addr.clone()),
     ) {
         (Ok(left), Ok(right)) => left.peer_id() == right.peer_id(),
         _ => left.addr == right.addr,
@@ -953,15 +942,14 @@ pub(super) fn is_enrollment_peer(record: &PeerRecord) -> bool {
 }
 
 fn replacement_endpoint(
-    current: &gents::runtime::agent::p2p_reconcile::TransportEndpoint,
+    current: &gents_p2p::p2p_reconcile::TransportEndpoint,
     addresses: impl IntoIterator<Item = String>,
 ) -> Option<String> {
     let authoritative = addresses
         .into_iter()
         .filter_map(|address| {
             let endpoint =
-                gents::runtime::agent::p2p_reconcile::TransportEndpoint::parse(address.clone())
-                    .ok()?;
+                gents_p2p::p2p_reconcile::TransportEndpoint::parse(address.clone()).ok()?;
             (endpoint.peer_id() == current.peer_id()).then_some((address, endpoint))
         })
         .max_by_key(|(address, endpoint)| {
@@ -987,7 +975,7 @@ fn route_status(
         .and_then(|desired| desired.replicator_addresses.iter().next())
         .cloned();
     let transport_peer_id = address.as_ref().and_then(|address| {
-        gents::runtime::agent::p2p_reconcile::TransportEndpoint::parse(address.clone())
+        gents_p2p::p2p_reconcile::TransportEndpoint::parse(address.clone())
             .ok()
             .map(|endpoint| endpoint.peer_id().to_string())
     });

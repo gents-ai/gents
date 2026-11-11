@@ -1,12 +1,12 @@
-use gents::store::config_client::GraphqlEndpoint;
+use gents_store::config_client::GraphqlEndpoint;
 use std::hash::{Hash, Hasher};
 use std::io::{self, IsTerminal, Write};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::store::graphql::escape_graphql_string;
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
+use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;
 
 use crate::{
@@ -156,7 +156,8 @@ fn dim(text: &str, colors: bool) -> String {
 }
 
 fn folded_input_completed(state: RequestLifecycleState, reason: &str) -> bool {
-    state == RequestLifecycleState::Superseded && reason == gents::request::lifecycle::FOLDED_REASON
+    state == RequestLifecycleState::Superseded
+        && reason == gents_session::request::lifecycle::FOLDED_REASON
 }
 
 pub(crate) async fn stream_turn_progress(
@@ -206,11 +207,11 @@ pub(crate) async fn stream_turn_progress(
 
         let folded = request
             .as_ref()
-            .is_some_and(|row| gents::request::lifecycle::folded_into(row).is_some());
+            .is_some_and(|row| gents_session::request::lifecycle::folded_into(row).is_some());
         if folded
             || request
                 .as_ref()
-                .is_some_and(|row| gents::request::lifecycle::replaced_by(row).is_some())
+                .is_some_and(|row| gents_session::request::lifecycle::replaced_by(row).is_some())
         {
             let envelope = crate::request_helpers::wait_for_terminal_response_with_progress(
                 graphql,
@@ -343,7 +344,7 @@ pub(crate) async fn stream_turn_progress(
                 .take()
                 .context("terminal chat request output observation is missing")?;
             match output {
-                gents::session::CanonicalRequestOutput::Loading => {
+                gents_session::session::CanonicalRequestOutput::Loading => {
                     if last_progress_at.elapsed() >= idle_timeout {
                         anyhow::bail!(
                             "timed out waiting for materialized AgentMessage {} after {}s of inactivity\n{}",
@@ -355,32 +356,32 @@ pub(crate) async fn stream_turn_progress(
                     tokio::time::sleep(Duration::from_secs(poll_secs)).await;
                     continue;
                 }
-                gents::session::CanonicalRequestOutput::Denied => {
+                gents_session::session::CanonicalRequestOutput::Denied => {
                     anyhow::bail!(
                         "canonical terminal output for request {} is denied",
                         submitted.request_id
                     )
                 }
-                gents::session::CanonicalRequestOutput::Conflicted => anyhow::bail!(
+                gents_session::session::CanonicalRequestOutput::Conflicted => anyhow::bail!(
                     "canonical terminal output for request {} is conflicted",
                     submitted.request_id
                 ),
-                gents::session::CanonicalRequestOutput::Invalid => {
+                gents_session::session::CanonicalRequestOutput::Invalid => {
                     anyhow::bail!(
                         "canonical terminal output for request {} is invalid",
                         submitted.request_id
                     )
                 }
-                gents::session::CanonicalRequestOutput::Retracted => anyhow::bail!(
+                gents_session::session::CanonicalRequestOutput::Retracted => anyhow::bail!(
                     "canonical terminal output for request {} is retracted",
                     submitted.request_id
                 ),
-                gents::session::CanonicalRequestOutput::RetainedPartial(_) => anyhow::bail!(
+                gents_session::session::CanonicalRequestOutput::RetainedPartial(_) => anyhow::bail!(
                     "canonical terminal output for request {} resolved only to retained partial diagnostics",
                     submitted.request_id
                 ),
-                gents::session::CanonicalRequestOutput::TerminalNoMessage
-                | gents::session::CanonicalRequestOutput::TerminalMessage { .. } => {
+                gents_session::session::CanonicalRequestOutput::TerminalNoMessage
+                | gents_session::session::CanonicalRequestOutput::TerminalMessage { .. } => {
                     let envelope = request_output_envelope(request, output)?;
                     let presentation = match &envelope.output {
                         crate::CliOutputObservation::TerminalMessage { presentation, .. } => {
@@ -419,10 +420,10 @@ pub(crate) async fn stream_turn_progress(
 
                     return Ok(envelope);
                 }
-                gents::session::CanonicalRequestOutput::Absent
-                | gents::session::CanonicalRequestOutput::Live(_)
-                | gents::session::CanonicalRequestOutput::Settling(_)
-                | gents::session::CanonicalRequestOutput::Published { .. } => {
+                gents_session::session::CanonicalRequestOutput::Absent
+                | gents_session::session::CanonicalRequestOutput::Live(_)
+                | gents_session::session::CanonicalRequestOutput::Settling(_)
+                | gents_session::session::CanonicalRequestOutput::Published { .. } => {
                     if last_progress_at.elapsed() >= idle_timeout {
                         anyhow::bail!(
                             "timed out waiting for terminal canonical selection for request {} after {}s of inactivity\n{}",
@@ -492,12 +493,12 @@ fn render_tool_start_line(tool: &ToolCallProgress, verbose: bool, colors: bool) 
 }
 
 fn chat_output_progress(
-    output: &gents::session::CanonicalRequestOutput,
+    output: &gents_session::session::CanonicalRequestOutput,
 ) -> Option<ChatOutputProgress> {
     let (kind, presentation) = match output {
-        gents::session::CanonicalRequestOutput::Live(value) => ("live", value),
-        gents::session::CanonicalRequestOutput::Settling(value) => ("settling", value),
-        gents::session::CanonicalRequestOutput::Published { presentation, .. } => {
+        gents_session::session::CanonicalRequestOutput::Live(value) => ("live", value),
+        gents_session::session::CanonicalRequestOutput::Settling(value) => ("settling", value),
+        gents_session::session::CanonicalRequestOutput::Published { presentation, .. } => {
             ("published", presentation)
         }
         _ => return None,
@@ -511,7 +512,7 @@ fn chat_output_progress(
 
 fn chat_progress_marker(
     request_row: Option<&AgentRequestRow>,
-    output: Option<&gents::session::CanonicalRequestOutput>,
+    output: Option<&gents_session::session::CanonicalRequestOutput>,
     tool_rows: &[Value],
 ) -> ChatProgressMarker {
     ChatProgressMarker {
@@ -538,7 +539,7 @@ fn chat_tool_progress_marker(row: &Value) -> ChatToolProgressMarker {
 
 fn should_print_thinking(
     lifecycle_state: Option<RequestLifecycleState>,
-    output: &gents::session::CanonicalRequestOutput,
+    output: &gents_session::session::CanonicalRequestOutput,
 ) -> bool {
     let (body, reasoning) = match chat_output_progress(output) {
         Some(progress) => (progress.body_markdown, progress.reasoning_markdown),
@@ -798,8 +799,8 @@ fn text_fingerprint(value: &str) -> (usize, u64) {
 
 fn account_problem_lines(
     failure_reason: &str,
-    accounts: &[(String, gents::inference::auth::credential::ServingAccount)],
-    all: &[gents::inference::auth::credential::AccountSummary],
+    accounts: &[(String, gents_inference::auth::credential::ServingAccount)],
+    all: &[gents_inference::auth::credential::AccountSummary],
 ) -> Vec<String> {
     if !gents_protocol::node_readiness::is_behavior_unavailable_rejection(failure_reason.trim()) {
         return Vec::new();
@@ -807,7 +808,7 @@ fn account_problem_lines(
     accounts
         .iter()
         .filter(|(_, account)| {
-            account.state != gents::inference::auth::credential::AccountState::Enabled
+            account.state != gents_inference::auth::credential::AccountState::Enabled
         })
         .filter_map(|(profile, account)| {
             let provider = account.provider?;
@@ -816,7 +817,7 @@ fn account_problem_lines(
                  set-account {profile} <account> ({})",
                 account.label,
                 account.state.as_str(),
-                gents::inference::auth::credential::enabled_accounts_note(provider, all),
+                gents_inference::auth::credential::enabled_accounts_note(provider, all),
             ))
         })
         .collect()
@@ -835,11 +836,11 @@ async fn account_problems(
         return Vec::new();
     };
     let read = async {
-        let access = gents::store::config_client::ConfigAccess::Graphql(graphql.clone());
+        let access = gents_store::config_client::ConfigAccess::Graphql(graphql.clone());
         let did = submitted.node_did.as_str();
         anyhow::Ok((
-            gents::inference::auth::credential::agent_accounts(&access, did, agent_did).await?,
-            gents::inference::auth::credential::list_accounts(&access, did).await?,
+            gents_inference::auth::credential::agent_accounts(&access, did, agent_did).await?,
+            gents_inference::auth::credential::list_accounts(&access, did).await?,
         ))
     };
     match read.await {
@@ -890,12 +891,13 @@ mod tests {
 
     #[test]
     fn thinking_indicator_follows_active_lifecycle_and_projected_reasoning() {
-        let reasoning_only =
-            gents::session::CanonicalRequestOutput::Live(gents::session::CanonicalPresentation {
+        let reasoning_only = gents_session::session::CanonicalRequestOutput::Live(
+            gents_session::session::CanonicalPresentation {
                 body_markdown: String::new(),
                 reasoning_markdown: Some("pondering the request".to_string()),
                 selected_source: None,
-            });
+            },
+        );
         assert!(should_print_thinking(
             Some(RequestLifecycleState::Processing),
             &reasoning_only
@@ -906,30 +908,32 @@ mod tests {
             &reasoning_only
         ));
 
-        let with_content =
-            gents::session::CanonicalRequestOutput::Live(gents::session::CanonicalPresentation {
+        let with_content = gents_session::session::CanonicalRequestOutput::Live(
+            gents_session::session::CanonicalPresentation {
                 body_markdown: "answer body".to_string(),
                 reasoning_markdown: Some("pondering the request".to_string()),
                 selected_source: None,
-            });
+            },
+        );
         assert!(!should_print_thinking(
             Some(RequestLifecycleState::Processing),
             &with_content
         ));
 
-        let no_reasoning =
-            gents::session::CanonicalRequestOutput::Live(gents::session::CanonicalPresentation {
+        let no_reasoning = gents_session::session::CanonicalRequestOutput::Live(
+            gents_session::session::CanonicalPresentation {
                 body_markdown: String::new(),
                 reasoning_markdown: None,
                 selected_source: None,
-            });
+            },
+        );
         assert!(!should_print_thinking(
             Some(RequestLifecycleState::Processing),
             &no_reasoning
         ));
         assert!(!should_print_thinking(
             Some(RequestLifecycleState::Processing),
-            &gents::session::CanonicalRequestOutput::Loading
+            &gents_session::session::CanonicalRequestOutput::Loading
         ));
         assert!(!should_print_thinking(None, &reasoning_only));
     }
@@ -938,14 +942,12 @@ mod tests {
     fn progress_marker_ignores_retained_partial_diagnostics() {
         let absent = chat_progress_marker(
             None,
-            Some(&gents::session::CanonicalRequestOutput::Absent),
+            Some(&gents_session::session::CanonicalRequestOutput::Absent),
             &[],
         );
         let retained = chat_progress_marker(
             None,
-            Some(&gents::session::CanonicalRequestOutput::RetainedPartial(
-                Vec::new(),
-            )),
+            Some(&gents_session::session::CanonicalRequestOutput::RetainedPartial(Vec::new())),
             &[],
         );
 
@@ -1138,7 +1140,7 @@ mod tests {
 
     mod account_problem {
         use super::*;
-        use gents::inference::auth::credential::{AccountState, AccountSummary, ServingAccount};
+        use gents_inference::auth::credential::{AccountState, AccountSummary, ServingAccount};
         use gents_protocol::row::AgentReadinessUnavailableReason as Reason;
 
         const CLAUDE: &str = "claude-subscription";
@@ -1252,7 +1254,7 @@ mod folded_input_tests {
 
     #[test]
     fn only_owned_fold_supersession_is_an_informational_completion() {
-        let reason = gents::request::lifecycle::FOLDED_REASON;
+        let reason = gents_session::request::lifecycle::FOLDED_REASON;
         assert!(folded_input_completed(
             RequestLifecycleState::Superseded,
             reason

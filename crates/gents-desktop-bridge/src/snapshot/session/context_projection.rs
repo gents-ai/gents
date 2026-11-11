@@ -16,10 +16,10 @@ where
 
 fn configured_context_window(
     store: &gents_desktop_core::client::ClientStore,
-    profile: Option<&gents::documents::InferenceProfile>,
+    profile: Option<&gents_documents::InferenceProfile>,
 ) -> Result<usize, String> {
     let Some(profile) = profile else {
-        return Ok(gents::inference::resolved::DEFAULT_CONTEXT_WINDOW);
+        return Ok(gents_inference::resolved::DEFAULT_CONTEXT_WINDOW);
     };
     let Some(backend) = store
         .inference_backends
@@ -29,7 +29,7 @@ fn configured_context_window(
         return Ok(profile
             .context_window
             .and_then(|value| usize::try_from(value).ok())
-            .unwrap_or(gents::inference::resolved::DEFAULT_CONTEXT_WINDOW));
+            .unwrap_or(gents_inference::resolved::DEFAULT_CONTEXT_WINDOW));
     };
     let observation = store
         .backend_observations
@@ -46,9 +46,9 @@ fn configured_context_window(
         })
         .map(|(_, observation)| observation);
     let advertised_model =
-        gents::inference::resolved::advertised_model_for_profile(backend, profile, observation)
+        gents_inference::resolved::advertised_model_for_profile(backend, profile, observation)
             .map_err(|error| error.to_string())?;
-    gents::inference::resolved::ResolvedInference {
+    gents_inference::resolved::ResolvedInference {
         backend: backend.clone(),
         profile: profile.clone(),
         sampling: None,
@@ -93,7 +93,7 @@ pub(super) fn build_session_context_view(
         .map(|backend| {
             gents::ProviderInputProfile::resolve(
                 backend.provider_kind,
-                gents::openai_wire::OpenAiWireApi::effective_for_provider(
+                gents_loop::openai_wire::OpenAiWireApi::effective_for_provider(
                     backend.provider_kind,
                     backend.openai_wire_api,
                 ),
@@ -119,17 +119,17 @@ pub(super) fn build_session_context_view(
         match configured_context_window(store, inference_profile) {
             Ok(window) => (window, None),
             Err(error) => (
-                gents::inference::resolved::DEFAULT_CONTEXT_WINDOW,
+                gents_inference::resolved::DEFAULT_CONTEXT_WINDOW,
                 Some(error),
             ),
         };
     let compaction_threshold = compaction
         .and_then(|compaction| compaction.threshold)
-        .unwrap_or(gents::inference::resolved::DEFAULT_COMPACTION_THRESHOLD);
+        .unwrap_or(gents_inference::resolved::DEFAULT_COMPACTION_THRESHOLD);
     let compaction_strategy = compaction
         .map(|compaction| compaction.strategy.as_str().to_string())
         .unwrap_or_else(|| {
-            gents::inference::compaction::CompactionStrategy::default()
+            gents_inference::compaction::CompactionStrategy::default()
                 .as_str()
                 .to_string()
         });
@@ -190,11 +190,11 @@ pub(super) fn build_session_context_view(
     let display_profile =
         selected_provider_profile.unwrap_or(gents::ProviderInputProfile::OpenAiChatCompletions);
     let (active_provider_messages, _) =
-        gents::inference::compaction::provider_view(display_profile, provider_input);
+        gents_inference::compaction::provider_view(display_profile, provider_input);
     let summaries = compaction_rows
         .iter()
         .filter_map(|row| row.summary.clone())
-        .map(gents::inference::compaction::bounded_summary)
+        .map(gents_inference::compaction::bounded_summary)
         .collect::<Vec<_>>();
     let displayed_provider_messages = gents::turn::prompt::compaction_summary_message(&summaries)
         .into_iter()

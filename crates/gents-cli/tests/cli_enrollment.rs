@@ -40,7 +40,7 @@ fn enrollment_e2e_lock() -> &'static Mutex<()> {
 }
 
 async fn grant_configured_workspace_root_readers(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     graphql: &str,
     init: &Value,
     owner_home: &std::path::Path,
@@ -50,7 +50,7 @@ async fn grant_configured_workspace_root_readers(
     let authored_root = init["tool_root"]
         .as_str()
         .context("init has no configured host root")?;
-    let root = gents::workspace::root_resolution::resolve_configured_tool_root(
+    let root = gents_session::workspace::root_resolution::resolve_configured_tool_root(
         std::path::Path::new(authored_root),
     )?;
     let root = root.to_str().context("configured host root is not UTF-8")?;
@@ -61,11 +61,11 @@ async fn grant_configured_workspace_root_readers(
         bootstrap_user.did() != node_did,
         "workspace root creator must be a distinct User"
     );
-    let owner_access = gents::ConfigAccess::Graphql(
-        gents::store::config_client::GraphqlEndpoint::as_principal(graphql, bootstrap_user.did())
-            .with_client_signing_capability(gents::NodeIdentity::client_signing_capability(
-            &bootstrap_user,
-        )?)?,
+    let owner_access = gents_store::config_client::ConfigAccess::Graphql(
+        gents_store::config_client::GraphqlEndpoint::as_principal(graphql, bootstrap_user.did())
+            .with_client_signing_capability(
+                gents_store::identity::NodeIdentity::client_signing_capability(&bootstrap_user)?,
+            )?,
     );
     let query = format!(
         "{{ WorkspaceRoot(filter: {{node_did: {{_eq: \"{}\"}}, root_path: {{_eq: \"{}\"}}}}) {{_docID node_did root_path enabled}} }}",
@@ -107,7 +107,7 @@ async fn grant_configured_workspace_root_readers(
     );
     let runtime = identity_from_init(init)?;
     for binding in bindings {
-        gents::tools::surface::grant_workspace_root_reader(access, root, &binding.agent_did)
+        gents_tools::surface::grant_workspace_root_reader(access, root, &binding.agent_did)
             .await
             .with_context(|| {
                 format!(
@@ -115,9 +115,9 @@ async fn grant_configured_workspace_root_readers(
                     binding.agent_did
                 )
             })?;
-        let agent = gents::store::identity::resolve_agent_identity(&runtime, binding)?;
-        let reader = gents::ConfigAccess::Graphql(
-            gents::store::config_client::GraphqlEndpoint::as_principal(graphql, &binding.agent_did)
+        let agent = gents_store::identity::resolve_agent_identity(&runtime, binding)?;
+        let reader = gents_store::config_client::ConfigAccess::Graphql(
+            gents_store::config_client::GraphqlEndpoint::as_principal(graphql, &binding.agent_did)
                 .with_client_signing_capability(agent.client_signing_capability()?)?,
         );
         let visible = reader.execute(&query).await.with_context(|| {
@@ -268,10 +268,10 @@ async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node(
             };
             assert_eq!(request.owner_node_did, node_did);
             assert_eq!(request.candidate_did, client_did);
-            let owner_endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(
+            let owner_endpoint = gents_store::config_client::GraphqlEndpoint::as_principal(
                 &graphql, bootstrap_user.did(),
-            ).with_client_signing_capability(gents::NodeIdentity::client_signing_capability(&bootstrap_user)?)?;
-            let owner_access = gents::ConfigAccess::Graphql(owner_endpoint);
+            ).with_client_signing_capability(gents_store::identity::NodeIdentity::client_signing_capability(&bootstrap_user)?)?;
+            let owner_access = gents_store::config_client::ConfigAccess::Graphql(owner_endpoint);
             let nodes = owner_access.execute(&format!(
                 r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
                 escape_graphql_string(&node_did),
@@ -541,7 +541,7 @@ async fn wait_for_runtime_agent_request(
                         content
                     }}
                 }}"#,
-                gents::session::public_request_filter(&format!(
+                gents_session::session::public_request_filter(&format!(
                     r#"node_did: {{ _eq: "{}" }}, content: {{ _eq: "{}" }}"#,
                     escape_graphql_string(node_did),
                     escape_graphql_string(content),
@@ -600,12 +600,14 @@ async fn wait_for_complete_agent_response(
     session: &str,
     timeout: Duration,
 ) -> Result<RuntimeTerminalReply> {
-    let access = gents::ConfigAccess::Graphql(crate::support::graphql::served_endpoint(graphql));
+    let access = gents_store::config_client::ConfigAccess::Graphql(
+        crate::support::graphql::served_endpoint(graphql),
+    );
     wait_for_complete_agent_response_with_access(&access, request_id, session, timeout).await
 }
 
 async fn wait_for_complete_agent_response_with_access(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     request_id: &str,
     session: &str,
     timeout: Duration,
@@ -657,9 +659,10 @@ async fn wait_for_complete_agent_response_with_access(
                 );
             }
             if request.is_terminal() {
-                let output = gents::session::observe_request_output(access, &request).await?;
+                let output =
+                    gents_session::session::observe_request_output(access, &request).await?;
                 let visible = match &output {
-                    gents::session::CanonicalRequestOutput::TerminalMessage {
+                    gents_session::session::CanonicalRequestOutput::TerminalMessage {
                         header,
                         presentation,
                         ..
@@ -671,13 +674,13 @@ async fn wait_for_complete_agent_response_with_access(
                         );
                         Some(presentation.body_markdown.clone())
                     }
-                    gents::session::CanonicalRequestOutput::TerminalNoMessage => bail!(
+                    gents_session::session::CanonicalRequestOutput::TerminalNoMessage => bail!(
                         "live inference completed without a canonical terminal message for {request_id}: {output:?}"
                     ),
-                    gents::session::CanonicalRequestOutput::Denied
-                    | gents::session::CanonicalRequestOutput::Invalid
-                    | gents::session::CanonicalRequestOutput::Conflicted
-                    | gents::session::CanonicalRequestOutput::Retracted => bail!(
+                    gents_session::session::CanonicalRequestOutput::Denied
+                    | gents_session::session::CanonicalRequestOutput::Invalid
+                    | gents_session::session::CanonicalRequestOutput::Conflicted
+                    | gents_session::session::CanonicalRequestOutput::Retracted => bail!(
                         "canonical terminal output is not presentable for {request_id}: {output:?}"
                     ),
                     _ => None,

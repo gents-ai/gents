@@ -2,18 +2,22 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use gents::documents::apply_desired_state_plan;
-use gents::documents::mailbox_write_decl::canonical_mailbox_write_decl;
-use gents::documents::{
+use gents_documents::apply_desired_state_plan;
+use gents_documents::mailbox_write_decl::canonical_mailbox_write_decl;
+use gents_documents::DatastoreToolSurfaceDocument;
+use gents_documents::{
     grant_selected_self_configuration, read_desired_state_record_in_txn, DesiredStateApplyDocument,
     DesiredStateApplyPlan,
 };
-use gents::documents::{DatastoreTools, SurfaceToolDecl, Tools};
-use gents::request::lifecycle::{reserve_goal_session, submit_client_request};
-use gents::store::config_client::GraphqlEndpoint;
-use gents::{Collection, ConfigAccess, DatastoreToolSurfaceDocument, KeyIdentity, NodeIdentity};
+use gents_documents::{DatastoreTools, SurfaceToolDecl, Tools};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+};
+use gents_session::request::lifecycle::{reserve_goal_session, submit_client_request};
+use gents_store::config_client::GraphqlEndpoint;
+use gents_store::{
+    collection::Collection, config_client::ConfigAccess, identity::KeyIdentity,
+    identity::NodeIdentity,
 };
 
 use super::accepted_turn::PreparedAcceptedTurn;
@@ -34,11 +38,12 @@ impl SignedMailboxTurn {
     pub async fn submit(&self, mut request: AgentRequestCreate) -> anyhow::Result<String> {
         request.session_doc_id = Some(self.session_doc.clone());
         request.agent_doc_id = Some(self.agent_doc.clone());
-        gents::sign_agent_request_create(&self.user, &mut request).await?;
+        gents_session::request::admission::sign_agent_request_create(&self.user, &mut request)
+            .await?;
         submit_client_request(&self.client, &request).await?;
         let query = format!(
             r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
-            gents::store::graphql::escape_graphql_string(&request.request_id)
+            gents_store::graphql::escape_graphql_string(&request.request_id)
         );
         let response = self.client.execute(&query).await?;
         let rows = response["data"]["AgentRequest"]
@@ -88,7 +93,7 @@ pub async fn prepare_signed_mailbox_turn(
     let admin = ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse()?);
     // The client key is an enrolled User; its Agent creation projects only
     // what that enrollment grants.
-    gents::store::identity::GrantSet::OperatorUser
+    gents_store::identity::GrantSet::OperatorUser
         .grant(&admin, &user.did().parse()?)
         .await?;
     let client = ConfigAccess::Graphql(
@@ -111,20 +116,19 @@ pub async fn prepare_signed_mailbox_turn(
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
         })
         .await?;
-    let binding = gents::store::identity::provision_agent_identity_authorized(
+    let binding = gents_store::identity::provision_agent_identity_authorized(
         &db.node,
         db.node_identity.as_ref(),
         &user.did().parse()?,
     )
     .await?;
-    let agent =
-        gents::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)?;
+    let agent = gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)?;
     let agent_access =
         ConfigAccess::local_managed_agent(db.node.clone(), agent.did().parse()?, agent.as_ref())?;
     let context_id = format!("{}:context", agent.did());
@@ -152,15 +156,15 @@ pub async fn prepare_signed_mailbox_turn(
             datastore_tool_surface_ids: Some(vec![surface_id.clone()]),
             ..Default::default()
         }),
-        agents: Some(gents::documents::AgentTools {
+        agents: Some(gents_documents::AgentTools {
             target_ids: Vec::new(),
             enabled: Some(true),
         }),
-        built_ins: Some(gents::documents::BuiltInTools {
+        built_ins: Some(gents_documents::BuiltInTools {
             enable_session_history_tool: Some(true),
             ..Default::default()
         }),
-        self_config: Some(gents::tools::builtin::self_config::engineer_self_config()),
+        self_config: Some(gents_tools::builtin::self_config::engineer_self_config()),
         ..Default::default()
     };
     let surface = DatastoreToolSurfaceDocument {
@@ -239,7 +243,7 @@ pub async fn prepare_signed_mailbox_turn(
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await?;
                 grant_selected_self_configuration(txn, node_did, agent.did()).await?;
@@ -266,7 +270,7 @@ pub async fn prepare_signed_mailbox_turn(
             })
         })
         .await?;
-    gents::inference::backends::registry::set_backend_probe_status_as(
+    gents_inference::backends::registry::set_backend_probe_status_as(
         &client, &node_did, backend_id, "healthy",
     )
     .await?;
@@ -306,7 +310,7 @@ pub async fn request_state_on(
 ) -> anyhow::Result<Option<String>> {
     let query = format!(
         r#"{{AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}, limit: 2) {{lifecycle_state}}}}"#,
-        gents::store::graphql::escape_graphql_string(request_id)
+        gents_store::graphql::escape_graphql_string(request_id)
     );
     let response = access.execute(&query).await?;
     let rows = response["data"]["AgentRequest"]

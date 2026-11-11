@@ -8,7 +8,7 @@ pub(super) fn generated_mcp_health_cases_pin_threshold_projection_shape() {
     );
 
     assert_eq!(
-        gents::HealthCheckerOptions::default().failure_threshold_k,
+        gents_tools::mcp::health::HealthCheckerOptions::default().failure_threshold_k,
         3,
         "health checker default threshold drifted; update the required K coverage below"
     );

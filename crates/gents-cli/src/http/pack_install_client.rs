@@ -1,6 +1,6 @@
 use anyhow::{bail, ensure, Context, Result};
 use futures_util::{SinkExt, StreamExt};
-use gents::store::config_client::{
+use gents_store::config_client::{
     prepare_pack_evidence_from_history, prepare_pack_relationship, prepare_pack_schema_approval,
     ClientSigningCapability, GraphqlEndpoint, PackApprovalError, PackApprovalScope, PackMutation,
     PackRelationship, PackReplayTransport,
@@ -19,7 +19,7 @@ use tokio_tungstenite::{
 enum ServerMessage {
     Ready {
         scope: PackApprovalScope,
-        preparation: gents::pack::HostedPackPreparation,
+        preparation: gents_pack::pack::HostedPackPreparation,
     },
     ReadResult {
         id: u64,
@@ -56,7 +56,7 @@ pub(crate) struct PackInstallSession {
     socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
     actor: ClientSigningCapability,
     scope: PackApprovalScope,
-    preparation: gents::pack::HostedPackPreparation,
+    preparation: gents_pack::pack::HostedPackPreparation,
     pending: Option<ServerMessage>,
     next_id: u64,
 }
@@ -127,7 +127,7 @@ impl PackInstallSession {
         })
     }
 
-    pub(crate) fn preparation(&self) -> &gents::pack::HostedPackPreparation {
+    pub(crate) fn preparation(&self) -> &gents_pack::pack::HostedPackPreparation {
         &self.preparation
     }
 
@@ -236,7 +236,7 @@ impl PackInstallSession {
             }
             _ => bail!("runtime pack timestamp differs from the client installation plan"),
         };
-        let value = gents::store::config_client::mint_recreate_identity_timestamp();
+        let value = gents_store::config_client::mint_recreate_identity_timestamp();
         send(
             &mut self.socket,
             json!({"type": "timestamp_value", "id": id, "value": value}),
@@ -436,10 +436,10 @@ pub(crate) async fn install_remote(
         .collect::<Vec<_>>();
     let mut session = PackInstallSession::start(endpoint, request, owner, &digests).await?;
     let preparation = session.preparation().clone();
-    let access = gents::store::config_client::ConfigAccess::Graphql(endpoint.clone());
+    let access = gents_store::config_client::ConfigAccess::Graphql(endpoint.clone());
     let requested = crate::commands::pack::parse_inference_slot_bindings(&args.inference_slots)?;
     let overrides = crate::commands::pack::parse_dependency_variables(&args.dependency_variables)?;
-    let mut prepared = gents::pack::prepare_hosted_document_pack_archive(
+    let mut prepared = gents_pack::pack::prepare_hosted_document_pack_archive(
         &access,
         owner,
         pack.archive(),
@@ -458,7 +458,7 @@ pub(crate) async fn install_remote(
     let graph_archive = pack.shared_archive();
     let graph_prepared = prepared.clone();
     let graph = tokio::task::spawn_blocking(move || {
-        gents::pack::hosted_document_graph(&graph_archive, &graph_prepared, explicit)
+        gents_pack::pack::hosted_document_graph(&graph_archive, &graph_prepared, explicit)
     })
     .await
     .context("reconstructing the reviewed pack graph")??;
@@ -469,7 +469,7 @@ pub(crate) async fn install_remote(
     )
     .await?;
     let replay = std::sync::Arc::new(PackReplaySession::new(session));
-    let access = gents::store::config_client::ConfigAccess::Graphql(
+    let access = gents_store::config_client::ConfigAccess::Graphql(
         endpoint.clone().with_pack_replay(replay.clone())?,
     );
     let policy = args.drift.policy();
@@ -477,12 +477,12 @@ pub(crate) async fn install_remote(
         .transact_write("pack.hosted_document_graph.replay", |txn| {
             let graph = &graph;
             Box::pin(async move {
-                gents::pack::apply_hosted_document_graph(
+                gents_pack::pack::apply_hosted_document_graph(
                     txn,
                     owner,
                     graph,
                     policy,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await?;
                 Ok::<_, anyhow::Error>(())
@@ -495,7 +495,7 @@ pub(crate) async fn install_remote(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::store::identity::KeyIdentity;
+    use gents_store::identity::KeyIdentity;
     use tokio::net::TcpListener;
     use tokio_tungstenite::accept_async;
 

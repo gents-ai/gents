@@ -11,17 +11,17 @@ async fn temp_home() -> EmbeddedHome {
     let home = EmbeddedHome::create_temp("input-edit-recovery")
         .await
         .unwrap();
-    let binding = crate::store::identity::provision_agent_identity(home.identity.as_ref()).unwrap();
+    let binding = gents_store::identity::provision_agent_identity(home.identity.as_ref()).unwrap();
     let access = client_access(&home, home.identity.as_ref());
-    crate::test_support::documents::bootstrap_signed_test_node(&access, home.did()).await;
-    crate::test_support::inference::install_test_agent_binding_with_access(
+    gents_documents::test_support::bootstrap_signed_test_node(&access, home.did()).await;
+    gents_inference::test_support::install_test_agent_binding_with_access(
         home.did(),
         "General",
         &binding,
         &access,
     )
     .await;
-    crate::test_support::documents::set_test_default_agent_as(
+    gents_documents::test_support::set_test_default_agent_as(
         &access,
         home.did(),
         &binding.agent_did,
@@ -32,33 +32,35 @@ async fn temp_home() -> EmbeddedHome {
 
 async fn agent_for(home: &EmbeddedHome) -> Arc<dyn NodeIdentity> {
     let binding =
-        crate::test_support::inference::ensure_test_default_agent(&home.node, home.identity.did())
+        gents_inference::test_support::ensure_test_default_agent(&home.node, home.identity.did())
             .await;
-    crate::store::identity::resolve_agent_identity(home.identity.as_ref(), &binding).unwrap()
+    gents_store::identity::resolve_agent_identity(home.identity.as_ref(), &binding).unwrap()
 }
 
 async fn active_agents(
     home: &EmbeddedHome,
-) -> tokio::sync::watch::Receiver<Arc<crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot>> {
+) -> tokio::sync::watch::Receiver<
+    Arc<gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot>,
+> {
     let agent_identity = agent_for(home).await;
-    let node = Arc::new(crate::store::identity::RuntimeNode {
+    let node = Arc::new(gents_store::identity::RuntimeNode {
         node_did: home.identity.did().into(),
         identity: home.identity.clone(),
         default_agent_did: agent_identity.did().into(),
         display_name: None,
         enabled: true,
     });
-    let agent = Arc::new(crate::inference::resolved::ResolvedAgent {
-        configuration: crate::inference::resolved::ResolvedConfiguration::Static,
+    let agent = Arc::new(gents_inference::resolved::ResolvedAgent {
+        configuration: gents_inference::resolved::ResolvedConfiguration::Static,
         agent_did: agent_identity.did().into(),
         node: node.clone(),
         agent_identity,
         backend_id: None,
         backend_provider_kind:
-            crate::inference::backends::provider::BackendProviderKind::OpenAiCompatible,
-        openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
+            gents_inference::backends::provider::BackendProviderKind::OpenAiCompatible,
+        openai_wire_api: gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
         backend_endpoint: String::new(),
-        backend_auth: crate::documents::BackendAuth::Unauthenticated,
+        backend_auth: gents_documents::BackendAuth::Unauthenticated,
         claude_platform: None,
         model_name: String::new(),
         profile_id: None,
@@ -67,9 +69,9 @@ async fn active_agents(
         context_window: 8192,
         max_output_tokens: 1024,
         max_turns: 2,
-        max_turns_provenance: crate::inference::resolved::MaxTurnsProvenance::Default,
+        max_turns_provenance: gents_inference::resolved::MaxTurnsProvenance::Default,
         system_prompt: String::new(),
-        tools: crate::tools::surface::AgentToolSurfaceConfig::meta_only(),
+        tools: gents_tools::surface::AgentToolSurfaceConfig::meta_only(),
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
@@ -77,28 +79,28 @@ async fn active_agents(
         stream_liveness_timeout: std::time::Duration::from_secs(5),
         provider_idle_timeout: std::time::Duration::from_secs(5),
         deadline_duration: std::time::Duration::from_secs(30),
-        completion_retry:
-            crate::runtime::agent::completion_retry::CompletionRetryProfileFields::default(),
-        sampling: crate::inference::resolved::SamplingConfig::default(),
+        completion_retry: gents_loop::completion_retry::CompletionRetryProfileFields::default(),
+        sampling: gents_inference::resolved::SamplingConfig::default(),
         skills: Vec::new(),
         oauth_pool: Vec::new(),
     });
-    let snapshot = crate::triggers::runtime_snapshot::ResolvedRuntimeSnapshot::from_parts(
-        agent.agent_did.clone(),
-        vec![agent],
-        Default::default(),
-        Default::default(),
-    )
-    .with_node(node)
-    .with_local_did(home.identity.did().into())
-    .activate(1, Default::default());
+    let snapshot =
+        gents_automation::triggers::runtime_snapshot::ResolvedRuntimeSnapshot::from_parts(
+            agent.agent_did.clone(),
+            vec![agent],
+            Default::default(),
+            Default::default(),
+        )
+        .with_node(node)
+        .with_local_did(home.identity.did().into())
+        .activate(1, Default::default());
     let (_sender, receiver) = tokio::sync::watch::channel(Arc::new(snapshot));
     receiver
 }
 
 fn client_access(home: &EmbeddedHome, signer: &dyn NodeIdentity) -> ConfigAccess {
     ConfigAccess::Graphql(
-        crate::store::config_client::GraphqlEndpoint::as_principal(
+        gents_store::config_client::GraphqlEndpoint::as_principal(
             home.graphql_endpoint().unwrap(),
             signer.did(),
         )
@@ -110,7 +112,7 @@ fn client_access(home: &EmbeddedHome, signer: &dyn NodeIdentity) -> ConfigAccess
 
 async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionInputEdit {
     let did = home.identity.did();
-    let binding = crate::test_support::inference::ensure_test_default_agent(&home.node, did).await;
+    let binding = gents_inference::test_support::ensure_test_default_agent(&home.node, did).await;
     let access = client_access(home, home.identity.as_ref());
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
@@ -135,7 +137,7 @@ async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionI
         background_completion_wake_version: None,
     });
     create.session_doc_id = Some(
-        crate::request::lifecycle::reserve_goal_session(&access, &create)
+        gents_session::request::lifecycle::reserve_goal_session(&access, &create)
             .await
             .unwrap(),
     );
@@ -143,9 +145,9 @@ async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionI
         .transact_readonly("test.edit.agent", |txn| {
             let agent_did = &binding.agent_did;
             Box::pin(async move {
-                let (doc, _) = crate::documents::read_desired_state_record_in_txn(
+                let (doc, _) = gents_documents::read_desired_state_record_in_txn(
                     txn,
-                    crate::Collection::Agent,
+                    gents_store::collection::Collection::Agent,
                     did,
                     agent_did,
                 )
@@ -157,10 +159,13 @@ async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionI
         .await
         .unwrap();
     create.agent_doc_id = Some(agent_doc);
-    crate::sign_agent_request_create(home.identity.as_ref(), &mut create)
-        .await
-        .unwrap();
-    crate::request::lifecycle::submit_client_request(&access, &create)
+    gents_session::request::admission::sign_agent_request_create(
+        home.identity.as_ref(),
+        &mut create,
+    )
+    .await
+    .unwrap();
+    gents_session::request::lifecycle::submit_client_request(&access, &create)
         .await
         .unwrap();
     let response = access
@@ -185,7 +190,7 @@ async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionI
             content: "corrected content".into(),
         }],
     };
-    let replacements = crate::request::lifecycle::queue::prepare_pending_user_edit(
+    let replacements = gents_session::request::lifecycle::queue::prepare_pending_user_edit(
         &access,
         home.identity.as_ref(),
         AgentRequestAdmissionRecord::client(did),
@@ -246,7 +251,7 @@ async fn submit(
                 "mutation($input: AgentSessionInputEditMutationInputArg!) { create_AgentSessionInputEdit(input: $input) { _docID } }",
                 &serde_json::json!({"input":input}), gents_protocol::schemas::AGENT_SESSION_INPUT_EDIT,
             ).await?;
-            let doc = crate::store::graphql::created_doc_id(&response, "AgentSessionInputEdit")?;
+            let doc = gents_store::graphql::created_doc_id(&response, "AgentSessionInputEdit")?;
             txn.add_resource_relationship("AgentSessionInputEdit", &doc, "parent", "sessions", &command.session_doc_id).await?;
             txn.add_actor_relationship("AgentSessionInputEdit", &doc, "working_agent", &::identity::Did::new(&command.agent_did)?).await?;
             Ok::<_, anyhow::Error>(doc)
@@ -372,7 +377,7 @@ async fn duplicate_command_id_after_apply_preserves_receipt_and_effects() {
     twin.signature = home.identity.sign(&twin.signing_payload()).await.unwrap();
     let access = client_access(&home, home.identity.as_ref());
     assert!(
-        crate::request::lifecycle::queue::publish_edit_command(&access, &twin)
+        gents_session::request::lifecycle::queue::publish_edit_command(&access, &twin)
             .await
             .is_err()
     );

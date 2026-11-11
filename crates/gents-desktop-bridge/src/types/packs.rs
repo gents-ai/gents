@@ -158,7 +158,7 @@ pub struct PackInstallView {
 #[derive(Debug, Serialize, Deserialize, TS)]
 pub struct PackInferenceNeedsView {
     pub slots: Vec<PackInferenceSlotNeedView>,
-    pub profiles: Vec<gents::pack::PackInferenceProfileOption>,
+    pub profiles: Vec<gents_pack::pack::PackInferenceProfileOption>,
     /// The required slots the install would refuse as unbound.
     pub unbound: Vec<String>,
 }
@@ -301,7 +301,7 @@ pub struct PackAccountIdentityView {
 #[derive(Debug, Serialize, Deserialize, TS)]
 pub struct PackPluginSlotsView {
     pub plugins: Vec<PackPluginSlotView>,
-    pub profiles: Vec<gents::pack::PackInferenceProfileOption>,
+    pub profiles: Vec<gents_pack::pack::PackInferenceProfileOption>,
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]
@@ -314,7 +314,7 @@ pub struct PackPluginSlotView {
 #[derive(Debug, Serialize, Deserialize, TS)]
 pub struct PackPluginBindingView {
     pub plugin: String,
-    pub bound: Option<gents::plugin::model_binding::ModelBinding>,
+    pub bound: Option<gents_pack::plugin::model_binding::ModelBinding>,
 }
 
 /// The JSON `gents automation job promote` reports for a promoted dynamic run.

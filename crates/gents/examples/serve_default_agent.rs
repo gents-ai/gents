@@ -4,10 +4,9 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use gents::defra_node::{HttpConfig, Node as EmbeddedNode};
-use gents::{
-    ensure_runtime_schemas, DocumentRuntimeOptions, Gents, KeyIdentity, McpPool, NodeIdentity,
-    ToolCeiling,
-};
+use gents::{DocumentRuntimeOptions, Gents};
+use gents_store::{identity::KeyIdentity, identity::NodeIdentity, schema::ensure_runtime_schemas};
+use gents_tools::{mcp::pool::McpPool, surface::ToolCeiling};
 use tokio::sync::watch;
 
 fn env_or(name: &str, default: &str) -> String {
@@ -39,7 +38,7 @@ async fn main() -> Result<()> {
     let node = Arc::new(
         EmbeddedNode::builder()
             .data_path(&data_dir)
-            .with_regolith_options(gents::store::local::storage_backend::regolith_options())
+            .with_regolith_options(gents_store::local::storage_backend::regolith_options())
             .with_http(HttpConfig::with_addr(http_addr))
             .with_node_identity_did(identity.did())
             .build()

@@ -1,12 +1,12 @@
-use gents::plugin::application_write::Observation as WriteFacts;
-use gents::plugin::data::{
-    self as plugin_data, InsertOutcome, Invocation, OnConflict, Stamp, WriteRefusal,
-};
 use gents_lean_vocab::{
     lean_goal_capability_resolution_cases, lean_plugin_calls_route_cases, lean_plugin_data_cases,
     lean_plugin_host_import_cases, lean_plugin_scratch_cases, lean_tool_policy_cases,
     LeanPluginDataInsertOutcome, LeanPluginDataInvocation, LeanPluginDataOnConflict,
     LeanPluginDataOperation, LeanPluginDataRefusal, LeanPluginDataStamp, LeanPluginDataWriteFacts,
+};
+use gents_toolcalls::plugin::application_write::Observation as WriteFacts;
+use gents_toolcalls::plugin::data::{
+    self as plugin_data, InsertOutcome, Invocation, OnConflict, Stamp, WriteRefusal,
 };
 use std::collections::BTreeSet;
 
@@ -34,7 +34,7 @@ pub(super) fn generated_goal_capability_resolution_matches_rust_decoder() {
     let cases = lean_goal_capability_resolution_cases();
     assert_eq!(cases.len(), 4, "goal capability resolution matrix drifted");
     for case in cases {
-        let (goal_tools, goal_creation) = gents::tools::surface::resolve_goal_capabilities(
+        let (goal_tools, goal_creation) = gents_tools::surface::resolve_goal_capabilities(
             case.explicit_goal_tools,
             case.explicit_goal_create,
         );
@@ -207,7 +207,7 @@ fn generated_plugin_job_resource_cases_drive_scratch() {
     for (index, row) in scratch.iter().enumerate() {
         let allowed = row.cwd_allowed;
         assert_eq!(
-            gents::tools::background::job::effects::admit_scratch(
+            gents_toolcalls::background::job::effects::admit_scratch(
                 &row.cwd,
                 &|_path: &str| allowed,
                 &row.tool_call_id,
@@ -239,7 +239,7 @@ fn generated_plugin_calls_route_cases_drive_supported() {
         };
         let job_tools: BTreeSet<String> =
             row.job_bound.then(|| name.to_owned()).into_iter().collect();
-        let supported = gents::plugin::tool_calls::supported(name, &job_tools);
+        let supported = gents_toolcalls::plugin::tool_calls::supported(name, &job_tools);
         if row.selected && row.admitted {
             assert_eq!(supported, row.expected, "route {index}");
         } else {
@@ -256,7 +256,7 @@ fn generated_plugin_calls_route_cases_drive_supported() {
 /// and `no_script` for one without; an undeclared plugin has none.
 #[test]
 fn generated_plugin_host_import_cases_drive_the_grant() {
-    use gents::pack::{HostImport, PackPlugin};
+    use gents_pack::pack::{HostImport, PackPlugin};
     let cases = lean_plugin_host_import_cases();
     assert_eq!(cases.len(), 4, "Lean host-import rows drifted");
     for (index, row) in cases.iter().enumerate() {
@@ -285,7 +285,7 @@ fn generated_plugin_host_import_cases_drive_the_grant() {
             serde_json::json!({})
         };
         let answer = linked.then(|| {
-            if gents::plugin::host_imports::script_of(&arguments).is_some() {
+            if gents_pack::plugin::host_imports::script_of(&arguments).is_some() {
                 "result"
             } else {
                 "no_script"

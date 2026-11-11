@@ -2,14 +2,15 @@ use crate::cli::*;
 use crate::shared::ResolvedBackendConfig;
 use crate::{resolve_node_did, BackendResolutionMode};
 use anyhow::{Context, Result};
-use gents::documents::apply_desired_state_plan;
-use gents::documents::{
+use gents_documents::apply_desired_state_plan;
+use gents_documents::{
     read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents::documents::{BackendAuth, InferenceBackend};
-use gents::inference::backends::rotation::{set_backend_rotation, BackendRotation};
-use gents::store::config_client::ConfigAccess;
-use gents::{discover_backend_models, Collection};
+use gents_documents::{BackendAuth, InferenceBackend};
+use gents_inference::backends::provider::discover_models as discover_backend_models;
+use gents_inference::backends::rotation::{set_backend_rotation, BackendRotation};
+use gents_store::collection::Collection;
+use gents_store::config_client::ConfigAccess;
 use serde_json::json;
 
 fn backend_plan(contents: &[u8]) -> Result<(InferenceBackend, DesiredStateApplyPlan)> {
@@ -39,7 +40,7 @@ pub(super) async fn backend_set(args: BackendSetArgs) -> Result<()> {
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await?;
                 Ok::<_, anyhow::Error>(
@@ -109,7 +110,7 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
                 let actor = access
                     .actor_did()
                     .context("runtime discovery requires an authenticated actor")?;
-                gents::inference::backends::registry::discover_backend_for_actor(
+                gents_inference::backends::registry::discover_backend_for_actor(
                     node,
                     &identity::Did::new(&actor)?,
                     &backend.node_did,
@@ -184,7 +185,12 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
     let catalog_written = if let Some(backend) = stored.as_ref() {
         let (access, _) =
             crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-        gents::record_discovered_catalog_on(&access, backend, discovered_models.clone()).await?;
+        gents_inference::backends::registry::record_discovered_catalog_on(
+            &access,
+            backend,
+            discovered_models.clone(),
+        )
+        .await?;
         true
     } else {
         false
@@ -272,16 +278,16 @@ async fn resolve_backend_discovery_target(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::inference::auth::credential::{set_account_enabled, store_sign_in};
+    use gents_inference::auth::credential::{set_account_enabled, store_sign_in};
 
     const DID: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
     const CLAUDE: &str = "claude-subscription";
 
-    fn claude_sign_in(who: &str) -> gents::inference::auth::credential::OAuthCredential {
-        gents::inference::auth::claude::credential_from_login_tokens(
+    fn claude_sign_in(who: &str) -> gents_inference::auth::credential::OAuthCredential {
+        gents_inference::auth::claude::credential_from_login_tokens(
             DID,
             CLAUDE,
-            &gents::inference::auth::claude::ClaudeLoginTokens {
+            &gents_inference::auth::claude::ClaudeLoginTokens {
                 access_token: "access-SECRET".into(),
                 refresh_token: format!("refresh-SECRET-{who}"),
                 expires_in: Some(3600),
@@ -301,7 +307,9 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        gents::ensure_runtime_schemas(&node).await.unwrap();
+        gents_store::schema::ensure_runtime_schemas(&node)
+            .await
+            .unwrap();
         crate::shared::test_support::publish_test_node(&node).await;
         let access = ConfigAccess::local_as(
             node,
@@ -332,10 +340,10 @@ mod tests {
                 "provider_kind": kind, "endpoint": endpoint, "auth": auth,
             }))
             .unwrap();
-            gents::documents::write_inference_backend_document(
+            gents_documents::write_inference_backend_document(
                 &access,
                 &backend,
-                &gents::inference::resolved::ProviderProfilePolicy,
+                &gents_inference::resolved::ProviderProfilePolicy,
             )
             .await
             .unwrap();
@@ -347,7 +355,7 @@ mod tests {
         access
             .transact_readonly("test.backend.pool.read", |txn| {
                 Box::pin(async move {
-                    gents::documents::load_inference_backend_in_txn(txn, DID, backend_id)
+                    gents_documents::load_inference_backend_in_txn(txn, DID, backend_id)
                         .await?
                         .context("backend missing")
                 })
@@ -404,10 +412,10 @@ mod tests {
             "auth": {"kind": "node_oauth", "account_ref": "pinned"},
         }))
         .unwrap();
-        gents::documents::write_inference_backend_document(
+        gents_documents::write_inference_backend_document(
             &access,
             &pinned,
-            &gents::inference::resolved::ProviderProfilePolicy,
+            &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await
         .unwrap();

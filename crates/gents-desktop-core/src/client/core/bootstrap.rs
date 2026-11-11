@@ -69,20 +69,19 @@ impl ClientCore {
             }
         };
         paths.ensure_root_dirs().await?;
-        gents::store::local::storage_backend::reject_legacy_store(paths.node_data_dir())?;
-        let store_lock =
-            gents::store::local::home::lock_store(paths.root(), paths.node_data_dir())?;
+        gents_store::local::storage_backend::reject_legacy_store(paths.node_data_dir())?;
+        let store_lock = gents_store::local::home::lock_store(paths.root(), paths.node_data_dir())?;
         let store_key = open_or_create_client_store_key(&paths, &options, &mut checkpoint).await?;
         options.store_key_provider = None;
 
         let node_identity = PrincipalIdentity::load_or_create(&paths).await?;
         checkpoint("paths_and_identity");
-        let projection = gents::store::local::document_projector(
+        let projection = gents_store::local::document_projector(
             Arc::new(node_identity.clone()),
-            std::sync::Arc::new(gents::tools::surface::ToolCeiling::meta_only()),
+            std::sync::Arc::new(gents_tools::surface::ToolCeiling::meta_only()),
         )?;
         let mut node_builder =
-            gents::store::local::store_key::persistent_builder(paths.node_data_dir(), &store_key)?
+            gents_store::local::store_key::persistent_builder(paths.node_data_dir(), &store_key)?
                 .with_p2p(desktop_p2p_config(&paths, &options))
                 .with_signing_key(defra_node::SigningKey::Ed25519(
                     node_identity.private_key_bytes().to_vec(),
@@ -102,7 +101,7 @@ impl ClientCore {
             let _ = node.shutdown().await;
             anyhow::bail!("embedded client signer does not match its held peer identity");
         }
-        let store_access = match gents::store::config_client::ConfigAccess::claimed_local(
+        let store_access = match gents_store::config_client::ConfigAccess::claimed_local(
             node.clone(),
             store_lock,
         ) {
@@ -118,10 +117,10 @@ impl ClientCore {
         checkpoint("embedded_node");
 
         let result: Result<Self> = async {
-            gents::store::schema::migration::ensure_all_runtime_migrations(node.clone())
+            gents_store::schema::migration::ensure_all_runtime_migrations(node.clone())
                 .await
                 .map_err(|error| {
-                    gents::store::local::storage_backend::classify_store_error(
+                    gents_store::local::storage_backend::classify_store_error(
                         error,
                         paths.node_data_dir(),
                     )
@@ -138,7 +137,7 @@ impl ClientCore {
             sync_state.clear_ephemeral_pairing_readiness().await?;
             let records = sync_state.records();
             checkpoint("peer_directory");
-            gents::store::local::store_key::upgrade::finish(paths.node_data_dir())?;
+            gents_store::local::store_key::upgrade::finish(paths.node_data_dir())?;
             subscribe_all_collections(node.as_ref()).await?;
             checkpoint("collection_subscriptions");
 
@@ -148,7 +147,7 @@ impl ClientCore {
             let (store, _store_updates) = ObservedStore::new(initial_snapshot);
             checkpoint("initial_snapshot");
 
-            let p2p = gents::store::identity::node_p2p(&node)
+            let p2p = gents_store::identity::node_p2p(&node)
                 .context("desktop node started without identity-bound P2P support")?;
             let local_peer_id = p2p_local_peer_id(&p2p)
                 .await
@@ -189,7 +188,7 @@ impl ClientCore {
             let observer = spawn_observer(
                 Arc::clone(&store),
                 sync_state.clone(),
-                gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+                gents_store::config_client::ClientSigningCapability::from_ed25519_key(
                     node_identity.private_key_bytes(),
                 )?,
             );
@@ -498,8 +497,8 @@ async fn open_or_create_client_store_key(
     paths: &DesktopPaths,
     options: &ClientCoreOptions,
     progress: &mut (dyn FnMut(&'static str) + Send),
-) -> Result<gents::store::local::store_key::StoreKey> {
-    use gents::store::local::store_key::{upgrade, StoreEncryption};
+) -> Result<gents_store::local::store_key::StoreKey> {
+    use gents_store::local::store_key::{upgrade, StoreEncryption};
     let choice = options.store_key_custody;
     let record_path = paths.store_encryption_path();
     let record = match std::fs::read(record_path) {
@@ -571,10 +570,10 @@ async fn open_or_create_client_store_key(
 
 async fn client_store_key(
     options: &ClientCoreOptions,
-    record: &gents::store::local::store_key::StoreEncryption,
+    record: &gents_store::local::store_key::StoreEncryption,
     key_file: &std::path::Path,
     data_path: &std::path::Path,
-) -> Result<gents::store::local::store_key::StoreKey> {
+) -> Result<gents_store::local::store_key::StoreKey> {
     if let Some(provider) = &options.store_key_provider {
         provider.load(record, key_file, data_path).await
     } else {
@@ -584,7 +583,7 @@ async fn client_store_key(
 
 fn write_client_store_record(
     paths: &DesktopPaths,
-    record: &gents::store::local::store_key::StoreEncryption,
+    record: &gents_store::local::store_key::StoreEncryption,
 ) -> Result<()> {
     let record_path = paths.store_encryption_path();
     let staged = tempfile::NamedTempFile::new_in(paths.root())
@@ -613,20 +612,20 @@ mod tests {
     impl super::super::ClientStoreKeyProvider for RecordingKeyProvider {
         async fn create(
             &self,
-            record: &gents::store::local::store_key::StoreEncryption,
+            record: &gents_store::local::store_key::StoreEncryption,
             key_file: &std::path::Path,
             data_path: &std::path::Path,
-        ) -> Result<gents::store::local::store_key::StoreKey> {
+        ) -> Result<gents_store::local::store_key::StoreKey> {
             self.created
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(record.initialize(key_file, data_path)?)
         }
         async fn load(
             &self,
-            record: &gents::store::local::store_key::StoreEncryption,
+            record: &gents_store::local::store_key::StoreEncryption,
             key_file: &std::path::Path,
             data_path: &std::path::Path,
-        ) -> Result<gents::store::local::store_key::StoreKey> {
+        ) -> Result<gents_store::local::store_key::StoreKey> {
             self.loaded
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(record.initialize(key_file, data_path)?)
@@ -639,7 +638,7 @@ mod tests {
         let paths = DesktopPaths::from_root(temp.path().join("client"));
         paths.ensure_root_dirs().await.unwrap();
         let _lock =
-            gents::store::local::home::lock_store(paths.root(), paths.node_data_dir()).unwrap();
+            gents_store::local::home::lock_store(paths.root(), paths.node_data_dir()).unwrap();
         let provider = Arc::new(RecordingKeyProvider::default());
         let options = ClientCoreOptions {
             store_key_provider: Some(provider.clone()),
@@ -671,8 +670,8 @@ mod tests {
     /// identities from the current schema.
     #[tokio::test]
     async fn desktop_client_and_node_stores_advertise_the_same_canonical_schema() {
-        use gents::runtime::agent::p2p_reconcile::templates::read_client_replicated_schema;
-        use gents::store::schema::migration::canonical_versions;
+        use gents_p2p::p2p_reconcile::templates::read_client_replicated_schema;
+        use gents_store::schema::migration::canonical_versions;
 
         let client_home = tempfile::tempdir().unwrap();
         let core = Arc::new(
@@ -702,7 +701,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        gents::store::schema::ensure_runtime_schemas(&runtime)
+        gents_store::schema::ensure_runtime_schemas(&runtime)
             .await
             .unwrap();
         let node = read_client_replicated_schema(Arc::clone(&runtime))
@@ -717,7 +716,7 @@ mod tests {
         // `Node` no longer replicates runtime→client; P2P carries only discovery.
         assert_eq!(
             client.keys().map(String::as_str).collect::<Vec<_>>(),
-            gents::runtime::agent::p2p_reconcile::CLIENT_COLLECTIONS,
+            gents_p2p::p2p_reconcile::CLIENT_COLLECTIONS,
             "the client route carries only discovery"
         );
         for name in [
@@ -735,8 +734,8 @@ mod tests {
 
     #[tokio::test]
     async fn plaintext_client_upgrade_preserves_identity_history_and_subscription_metadata() {
-        use gents::store::config_client::ConfigAccess;
-        use gents::store::graphql::escape_graphql_string;
+        use gents_store::config_client::ConfigAccess;
+        use gents_store::graphql::escape_graphql_string;
 
         let temp = tempfile::tempdir().unwrap();
         let paths = DesktopPaths::from_root(temp.path().join("client"));
@@ -832,7 +831,7 @@ mod tests {
             "InferenceBackend".to_string(),
             "OAuthCredential".to_string(),
         ];
-        let p2p = gents::store::identity::node_p2p(&plain).expect("plain node P2P");
+        let p2p = gents_store::identity::node_p2p(&plain).expect("plain node P2P");
         p2p.add_collections(sensitive.to_vec()).await.unwrap();
         let old_subscriptions = p2p.get_collections().await.unwrap();
         assert!(sensitive
@@ -870,7 +869,7 @@ mod tests {
                 access.execute(&history_query).await.unwrap(),
                 expected_history
             );
-            let subscriptions = gents::store::identity::node_p2p(&core.node_arc())
+            let subscriptions = gents_store::identity::node_p2p(&core.node_arc())
                 .expect("client P2P")
                 .get_collections()
                 .await
@@ -940,7 +939,7 @@ mod tests {
             Err(error) => error,
         };
         assert!(
-            gents::store::local::home::store_lock_held(error.as_ref()).is_some(),
+            gents_store::local::home::store_lock_held(error.as_ref()).is_some(),
             "{error:#}"
         );
         assert_eq!(std::fs::read(paths.store_key_path()).unwrap(), key);

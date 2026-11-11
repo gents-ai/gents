@@ -108,7 +108,7 @@ async fn generated_schema_argument_repair_cases_drive_owned_loop() {
             .iter()
             .find(|row| row["tool_call_id"] == format!("repair-{index}"))
             .unwrap();
-        let arguments = crate::tools::call::lifecycle::load_tool_call_arguments(
+        let arguments = gents_session::tool_call::query::result::load_tool_call_arguments(
             &access,
             row["_docID"].as_str().unwrap(),
             &lifecycle.request().node_did,
@@ -130,7 +130,7 @@ async fn generated_schema_argument_repair_cases_drive_owned_loop() {
         .unwrap()
         .chat_history
         .iter()
-        .map(crate::inference::llm::rig_compat::from_rig_message)
+        .map(gents_inference::llm::rig_compat::from_rig_message)
         .filter_map(|message| match message {
             Message::Assistant { content, .. } => Some(content),
             _ => None,
@@ -155,15 +155,15 @@ async fn generated_schema_argument_repair_cases_drive_owned_loop() {
 #[tokio::test]
 async fn config_container_repairs_preserve_native_validation_and_the_invalid_budget() {
     let identity_dir = tempfile::tempdir().unwrap();
-    let identity: Arc<dyn crate::NodeIdentity> = Arc::new(
-        crate::KeyIdentity::load_or_create(identity_dir.path().join("config-repair.key"), None)
+    let identity: Arc<dyn gents_store::identity::NodeIdentity> = Arc::new(
+        gents_store::identity::KeyIdentity::load_or_create(identity_dir.path().join("config-repair.key"), None)
             .unwrap(),
     );
     let owner = identity.did().to_owned();
     let (node, hook, writer, mut lifecycle) = owned_test_hook_with_identity(identity.clone()).await;
-    let binding = crate::test_support::inference::install_test_agent(&node, &owner, "general").await;
+    let binding = gents_inference::test_support::install_test_agent(&node, &owner, "general").await;
     let agent_did = binding.agent_did.clone();
-    let grants = crate::tools::surface::SelfConfigToolConfig {
+    let grants = gents_tools::surface::SelfConfigToolConfig {
         enabled: true,
         agent_did: agent_did.clone(),
         categories: ["profile".to_string()].into_iter().collect(),
@@ -171,12 +171,12 @@ async fn config_container_repairs_preserve_native_validation_and_the_invalid_bud
         no_lockout: false,
         ..Default::default()
     };
-    let tools = crate::tools::builtin::self_config::build_self_config_tools(std::sync::Arc::default(),
+    let tools = gents_tools::builtin::self_config::build_self_config_tools(std::sync::Arc::default(),
         node.clone(),
         owner,
         Some(identity),
         &grants,
-        Arc::new(crate::plugin::executor::PluginExecutor::default()),
+        Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::default()),
     );
     let mut calls = (0..10)
         .map(|index| {

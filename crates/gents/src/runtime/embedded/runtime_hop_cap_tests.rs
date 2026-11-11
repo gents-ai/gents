@@ -1,11 +1,11 @@
 use anyhow::Context as _;
 
-use crate::documents::apply_desired_state_plan;
-use crate::documents::{
+use gents_documents::apply_desired_state_plan;
+use gents_documents::{
     read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use crate::store::config_client::{ConfigAccess, NodePermission};
-use crate::store::identity::NodeIdentity;
+use gents_store::config_client::{ConfigAccess, NodePermission};
+use gents_store::identity::NodeIdentity;
 
 async fn set_node_hop_cap(owner: &ConfigAccess, node_did: &str, cap: u32) -> anyhow::Result<()> {
     owner
@@ -13,7 +13,7 @@ async fn set_node_hop_cap(owner: &ConfigAccess, node_did: &str, cap: u32) -> any
             Box::pin(async move {
                 let (_, mut node) = read_desired_state_record_in_txn(
                     txn,
-                    crate::Collection::Node,
+                    gents_store::collection::Collection::Node,
                     node_did,
                     node_did,
                 )
@@ -21,14 +21,14 @@ async fn set_node_hop_cap(owner: &ConfigAccess, node_did: &str, cap: u32) -> any
                 .context("owned Node is unavailable")?;
                 node["max_request_hop"] = serde_json::json!(cap);
                 let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                    collection: crate::Collection::Node,
+                    collection: gents_store::collection::Collection::Node,
                     add: node.clone(),
                     update: node,
                 }])?;
                 apply_desired_state_plan(
                     txn,
                     &plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
@@ -43,7 +43,7 @@ async fn agent_transaction_reads_hidden_node_cap_as_runtime_and_fails_closed() -
     let (db, user, user_access, binding) =
         crate::test_support::root::signed_test_node("runtime-hop-cap").await;
     let runtime = db.node_identity.as_ref();
-    let signer = crate::store::identity::resolve_agent_identity(runtime, &binding)?;
+    let signer = gents_store::identity::resolve_agent_identity(runtime, &binding)?;
     let agent = ConfigAccess::local_managed_agent(
         db.node.clone(),
         identity::Did::new(&binding.agent_did)?,

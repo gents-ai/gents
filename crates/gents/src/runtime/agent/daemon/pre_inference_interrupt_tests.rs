@@ -90,7 +90,7 @@ struct PreInferenceBlockingTool {
     entered: Arc<tokio::sync::Notify>,
 }
 
-impl crate::inference::llm::tool::ToolDyn for PreInferenceBlockingTool {
+impl gents_loop::tool::ToolDyn for PreInferenceBlockingTool {
     fn name(&self) -> String {
         "pre_inference_block".into()
     }
@@ -98,7 +98,7 @@ impl crate::inference::llm::tool::ToolDyn for PreInferenceBlockingTool {
     fn definition<'a>(
         &'a self,
         _: String,
-    ) -> crate::inference::llm::tool::BoxFuture<'a, crate::inference::llm::tool::ToolDefinition>
+    ) -> gents_loop::tool::BoxFuture<'a, gents_loop::tool::ToolDefinition>
     {
         Box::pin(async move {
             self.entered.notify_one();
@@ -109,9 +109,9 @@ impl crate::inference::llm::tool::ToolDyn for PreInferenceBlockingTool {
     fn call<'a>(
         &'a self,
         _: String,
-    ) -> crate::inference::llm::tool::BoxFuture<
+    ) -> gents_loop::tool::BoxFuture<
         'a,
-        Result<String, crate::inference::llm::tool::ToolError>,
+        Result<String, gents_loop::tool::ToolError>,
     > {
         Box::pin(async { unreachable!("the pre-inference window never dispatches a tool") })
     }
@@ -157,12 +157,12 @@ fn pre_inference_agent(agent_config: Arc<ResolvedAgent>) -> Arc<ResolvedAgent> {
 }
 
 async fn request_terminal_row(
-    access: &crate::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     request_doc_id: &str,
 ) -> anyhow::Result<serde_json::Value> {
     use anyhow::Context;
 
-    let doc_id = crate::store::graphql::escape_graphql_string(request_doc_id);
+    let doc_id = gents_store::graphql::escape_graphql_string(request_doc_id);
     let response = held_daemon_query(
         access,
         &format!(
@@ -208,7 +208,7 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
         loop_tools: Arc::new(vec![Box::new(PreInferenceBlockingTool {
             entered: entered.clone(),
         })
-            as Box<dyn crate::inference::llm::tool::ToolDyn>]),
+            as Box<dyn gents_loop::tool::ToolDyn>]),
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: None,
@@ -220,10 +220,10 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
             node_did.clone(),
         ),
         slot_generation: 1,
-        request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
+        request_admission: gents_session::request::admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
-            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+            gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
         ),
     })
     .unwrap();
@@ -255,7 +255,7 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
             .unwrap();
         assert_eq!(row["lifecycle_state"], "processing");
 
-        crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+        gents_session::request::interrupt::interrupt_request_by_doc_id_with_access(
             &agent_access,
             &request_doc_id,
             &node_did,
@@ -275,7 +275,7 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
         settled_in < Duration::from_secs(10),
         "owner terminalization took {settled_in:?}, which no longer excludes the \
          recovery path waiting out the {}s default execution lease",
-        crate::documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+        gents_documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
     );
 
     let row = request_terminal_row(&agent_access, &request_doc_id)
@@ -322,7 +322,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         provider_family: None,
         model: Arc::new(ProviderCallCountingModel(provider_calls.clone())),
         preamble: prompt.preamble().to_owned(),
-        loop_tools: Arc::new(Vec::<Box<dyn crate::inference::llm::tool::ToolDyn>>::new()),
+        loop_tools: Arc::new(Vec::<Box<dyn gents_loop::tool::ToolDyn>>::new()),
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: None,
@@ -334,10 +334,10 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
             node_did.clone(),
         ),
         slot_generation: 1,
-        request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
+        request_admission: gents_session::request::admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
-            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+            gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
         ),
     })
     .unwrap();
@@ -352,16 +352,16 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
     let request_doc_id = request.doc_id.clone();
     let requester_did = request.requester_did.clone();
 
-    let stream_writer = crate::request::streaming::DefraStreamWriter::new(
+    let stream_writer = gents_session::request::streaming::DefraStreamWriter::new(
         node.clone(),
         agent_config.node_did(),
         Duration::from_millis(agent_config.stream_batch_ms),
     );
-    let origin = crate::request::lifecycle::ExecutionOrigin::from_persisted(
+    let origin = gents_session::request::lifecycle::ExecutionOrigin::from_persisted(
         request.execution_origin.as_deref(),
     )
     .expect("a created request carries a canonical execution origin");
-    let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
+    let mut lifecycle = gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
         node.clone(),
         request.clone(),
         agent_config.deadline_duration.as_secs(),
@@ -373,10 +373,10 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         .unwrap();
     lifecycle.set_execution_lease_duration(agent_config.stream_liveness_timeout);
     lifecycle.set_configured_max_total_tokens(agent_config.max_total_tokens);
-    let (_, client_claim) = crate::request::admission::AgentRequestAdmissionVerifier::new(
+    let (_, client_claim) = gents_session::request::admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
         agent_config.node_identity().clone(),
-        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+        gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
     )
     .verify_fresh_for_claim_with_identity(&request, agent_config.agent_identity.as_ref())
     .await
@@ -387,7 +387,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
             .claim_with_identity()
             .await
             .expect("claim the fresh request"),
-        crate::request::lifecycle::ClaimOutcome::Claimed,
+        gents_session::request::lifecycle::ClaimOutcome::Claimed,
         "this runtime must win the claim to own the pre-execution window"
     );
     let claimed = request_terminal_row(&agent_access, &request_doc_id)
@@ -399,10 +399,10 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
     );
 
     let (interrupt_tx, mut interrupt_rx) =
-        tokio::sync::watch::channel::<Option<crate::request::interrupt::InterruptIntent>>(None);
+        tokio::sync::watch::channel::<Option<gents_session::request::interrupt::InterruptIntent>>(None);
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let _observer = tokio_util::task::AbortOnDropHandle::new(
-        crate::request::interrupt::spawn_request_interrupt_observer(
+        gents_session::request::interrupt::spawn_request_interrupt_observer(
             node.clone(),
             agent_access.clone(),
             request_doc_id.clone(),
@@ -410,7 +410,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
             shutdown_rx.clone(),
         ),
     );
-    crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+    gents_session::request::interrupt::interrupt_request_by_doc_id_with_access(
         &agent_access,
         &request_doc_id,
         &node_did,
@@ -448,7 +448,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         .await;
     assert_eq!(
         outcome.observation(),
-        crate::tools::call::task_hooks::TaskAgentResult::Cancelled
+        gents_toolcalls::call::task_hooks::TaskAgentResult::Cancelled
     );
     let crate::runtime::agent::daemon::owned_work::OwnedWorkOutcome::Interrupted(
         crate::runtime::agent::daemon::RequestInterruptionSource::Claimed,
@@ -519,7 +519,7 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
         provider_family: None,
         model: Arc::new(ProviderCallCountingModel(provider_calls.clone())),
         preamble: prompt.preamble().to_owned(),
-        loop_tools: Arc::new(Vec::<Box<dyn crate::inference::llm::tool::ToolDyn>>::new()),
+        loop_tools: Arc::new(Vec::<Box<dyn gents_loop::tool::ToolDyn>>::new()),
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: None,
@@ -531,10 +531,10 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
             node_did.clone(),
         ),
         slot_generation: 1,
-        request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
+        request_admission: gents_session::request::admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
-            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+            gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
         ),
     })
     .unwrap();
@@ -552,7 +552,7 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
     let reached = Arc::new(tokio::sync::Notify::new());
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let capture = InterruptionCapture::default();
-    let process = crate::store::config_client::ConfigApplyTxn::with_read_pause(
+    let process = gents_store::config_client::ConfigApplyTxn::with_read_pause(
         "reduction_index: ASC",
         reached.clone(),
         daemon.process_request(request, shutdown_rx),
@@ -570,7 +570,7 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
             .unwrap();
         assert_eq!(row["lifecycle_state"], "processing");
 
-        crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+        gents_session::request::interrupt::interrupt_request_by_doc_id_with_access(
             &agent_access,
             &request_doc_id,
             &node_did,
@@ -605,7 +605,7 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn interrupt_while_hashing_a_sealed_workspace_kills_git_and_keeps_its_index() {
-    use crate::exec::ownership::{ProcessIdentity, ProcessObservation};
+    use gents_session::exec::ownership::{ProcessIdentity, ProcessObservation};
 
     fn git(dir: &std::path::Path, args: &[&str]) {
         let status = std::process::Command::new("git")
@@ -651,12 +651,12 @@ async fn interrupt_while_hashing_a_sealed_workspace_kills_git_and_keeps_its_inde
     let index_before = std::fs::read(dir.join(".git/index")).unwrap();
 
     let (interrupt_tx, mut interrupt_rx) =
-        tokio::sync::watch::channel::<Option<crate::request::interrupt::InterruptIntent>>(None);
+        tokio::sync::watch::channel::<Option<gents_session::request::interrupt::InterruptIntent>>(None);
     let dest = dir.to_path_buf();
     let hashing = tokio::spawn(async move {
         super::super::request::prepare_unless_interrupted(
             &mut interrupt_rx,
-            crate::workspace::adapter::working_tree_hash(&dest),
+            gents_session::workspace::adapter::working_tree_hash(&dest),
         )
         .await
         .map(|hashed| hashed.map_err(|error| format!("{error:#}")))
@@ -678,7 +678,7 @@ async fn interrupt_while_hashing_a_sealed_workspace_kills_git_and_keeps_its_inde
 
     let filter = ProcessIdentity::of_live(filter_pid).expect("the parked clean filter is running");
     interrupt_tx
-        .send(Some(crate::request::interrupt::InterruptIntent {
+        .send(Some(gents_session::request::interrupt::InterruptIntent {
             at: chrono::Utc::now(),
         }))
         .unwrap();

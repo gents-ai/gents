@@ -1,6 +1,5 @@
 use super::super::session_commands::{unanswered_commands, CommandKind, Sweep};
 use super::*;
-use crate::store::identity::KeyIdentity;
 use gents_lean_vocab::{
     LeanQueueManagementState, LeanSessionInputEditAuthority, LeanSessionInputEditCommand,
     LeanSessionInputEditStep, LeanSessionInputEditor, QueueImage,
@@ -12,6 +11,7 @@ use gents_protocol::request_input::{
     QueueDelivery, QueuePolicy, QueueSource, RequestInput, RequestQueue,
 };
 use gents_protocol::session_input_edit::{PendingMessageEdit, PendingQueueEdit};
+use gents_store::identity::KeyIdentity;
 use rapidhash::{HashMapExt, RapidHashMap};
 
 const SESSION: &str = "edit-session";
@@ -31,7 +31,7 @@ impl Fixture {
         let dir = tempfile::tempdir().unwrap();
         let identity: Arc<dyn NodeIdentity> =
             Arc::new(KeyIdentity::load_or_create(dir.path().join("node.key"), None).unwrap());
-        let key = crate::store::identity::load_file_identity(&dir.path().join("node.key"))
+        let key = gents_store::identity::load_file_identity(&dir.path().join("node.key"))
             .unwrap()
             .private_key_bytes();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -49,16 +49,18 @@ impl Fixture {
                 .await
                 .unwrap(),
         );
-        crate::ensure_runtime_schemas(&node).await.unwrap();
-        let binding = crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+        gents_store::schema::ensure_runtime_schemas(&node)
+            .await
+            .unwrap();
+        let binding = gents_store::identity::provision_agent_identity(identity.as_ref()).unwrap();
         let access = ConfigAccess::Graphql(
-            crate::store::config_client::GraphqlEndpoint::as_principal(&endpoint, identity.did())
+            gents_store::config_client::GraphqlEndpoint::as_principal(&endpoint, identity.did())
                 .with_client_signing_capability(identity.client_signing_capability().unwrap())
                 .unwrap()
                 .with_client_signed_agent_creates(),
         );
-        crate::test_support::documents::bootstrap_signed_test_node(&access, identity.did()).await;
-        crate::test_support::inference::install_test_agent_binding_with_access(
+        gents_documents::test_support::bootstrap_signed_test_node(&access, identity.did()).await;
+        gents_inference::test_support::install_test_agent_binding_with_access(
             identity.did(),
             "General",
             &binding,
@@ -67,7 +69,7 @@ impl Fixture {
         .await;
         // Production projects the AgentBaseline from each live Agent document;
         // this fixture has no projection pass, so the node admin grants it.
-        crate::store::identity::GrantSet::AgentBaseline
+        gents_store::identity::GrantSet::AgentBaseline
             .grant(
                 &ConfigAccess::local_as(
                     node.clone(),
@@ -78,14 +80,14 @@ impl Fixture {
             .await
             .unwrap();
         let agent_identity =
-            crate::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
+            gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
         let agent_doc = access
             .transact_readonly("test.edit.agent", |txn| {
                 Box::pin(async {
                     Ok::<_, anyhow::Error>(
-                        crate::documents::read_desired_state_record_in_txn(
+                        gents_documents::read_desired_state_record_in_txn(
                             txn,
-                            crate::Collection::Agent,
+                            gents_store::collection::Collection::Agent,
                             identity.did(),
                             &binding.agent_did,
                         )
@@ -103,7 +105,7 @@ impl Fixture {
                 "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
                 &serde_json::json!({"input": {"session_id":SESSION,"node_did":identity.did(),"requester_did":identity.did(),"agent_did":binding.agent_did,"relationships_pending":false,"created_at":"2026-10-10T00:00:00Z"}}),
                 gents_protocol::schemas::AGENT_SESSION).await?;
-            let doc = crate::store::graphql::created_doc_id(&response, "AgentSession")?;
+            let doc = gents_store::graphql::created_doc_id(&response, "AgentSession")?;
             txn.add_resource_relationship("AgentSession", &doc, "parent", "agents", &agent_doc).await?;
             txn.add_actor_relationship("AgentSession", &doc, "working_agent", &agent).await?;
             Ok::<_, anyhow::Error>(())
@@ -121,7 +123,7 @@ impl Fixture {
 
     fn client_access(&self) -> ConfigAccess {
         ConfigAccess::Graphql(
-            crate::store::config_client::GraphqlEndpoint::as_principal(
+            gents_store::config_client::GraphqlEndpoint::as_principal(
                 &self.endpoint,
                 self.identity.did(),
             )
@@ -167,16 +169,17 @@ impl Fixture {
         let (session, agent) = access
             .transact_readonly("test.edit.targets", |txn| {
                 Box::pin(async move {
-                    let session = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                    let session =
+                        gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
+                            txn,
+                            self.identity.did(),
+                            SESSION,
+                        )
+                        .await?
+                        .context("session missing")?;
+                    let (agent, _) = gents_documents::read_desired_state_record_in_txn(
                         txn,
-                        self.identity.did(),
-                        SESSION,
-                    )
-                    .await?
-                    .context("session missing")?;
-                    let (agent, _) = crate::documents::read_desired_state_record_in_txn(
-                        txn,
-                        crate::Collection::Agent,
+                        gents_store::collection::Collection::Agent,
                         self.identity.did(),
                         &self.agent_did,
                     )
@@ -189,16 +192,19 @@ impl Fixture {
             .unwrap();
         create.session_doc_id = Some(session.clone());
         create.agent_doc_id = Some(agent.clone());
-        crate::sign_agent_request_create(self.identity.as_ref(), &mut create)
-            .await
-            .unwrap();
+        gents_session::request::admission::sign_agent_request_create(
+            self.identity.as_ref(),
+            &mut create,
+        )
+        .await
+        .unwrap();
         access
             .transact_write("test.edit.request", |txn| {
                 let create = &create;
                 let session = &session;
                 let agent = &agent;
                 Box::pin(async move {
-                    crate::request::lifecycle::stage_client_request_in_txn(
+                    gents_session::request::lifecycle::stage_client_request_in_txn(
                         txn, create, session, agent,
                     )
                     .await
@@ -218,7 +224,7 @@ impl Fixture {
                 content: "corrected content".into(),
             }],
         };
-        let replacements = crate::request::lifecycle::queue::prepare_pending_user_edit(
+        let replacements = gents_session::request::lifecycle::queue::prepare_pending_user_edit(
             &self.client_access(),
             self.identity.as_ref(),
             AgentRequestAdmissionRecord::client(self.identity.did()),
@@ -275,7 +281,7 @@ impl Fixture {
                     "mutation($input: AgentSessionInputEditMutationInputArg!) { create_AgentSessionInputEdit(input: $input) { _docID } }",
                     &serde_json::json!({"input":input}), gents_protocol::schemas::AGENT_SESSION_INPUT_EDIT,
                 ).await?;
-                let doc = crate::store::graphql::created_doc_id(&response, "AgentSessionInputEdit")?;
+                let doc = gents_store::graphql::created_doc_id(&response, "AgentSessionInputEdit")?;
                 txn.add_resource_relationship("AgentSessionInputEdit", &doc, "parent", "sessions", &command.session_doc_id).await?;
                 txn.add_actor_relationship("AgentSessionInputEdit", &doc, "working_agent", &::identity::Did::new(&command.agent_did)?).await?;
                 Ok::<_, anyhow::Error>(doc)
@@ -312,7 +318,7 @@ struct ModeledQueue {
     request_ids: RapidHashMap<u64, String>,
     doc_ids: RapidHashMap<u64, String>,
     commands: RapidHashMap<(u64, u64), (String, SessionInputEdit)>,
-    active: Option<crate::request::lifecycle::RequestLifecycle>,
+    active: Option<gents_session::request::lifecycle::RequestLifecycle>,
     anchor: DateTime<Utc>,
     nows: Vec<u64>,
 }
@@ -377,16 +383,15 @@ impl ModeledQueue {
             queue.doc_ids.insert(entry.request_id, doc);
         }
         if let Some(active) = state.active {
-            let request = crate::request::binding::load_agent_request_by_doc_id(
+            let request = gents_session::request::binding::load_agent_request_by_doc_id(
                 &queue.fixture.node,
                 &queue.doc_ids[&active],
             )
             .await
             .unwrap()
             .unwrap();
-            let (_owner, authority) =
-                crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
-            let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+            let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
+            let verifier = gents_session::request::admission::AgentRequestAdmissionVerifier::new(
                 queue.fixture.node.clone(),
                 queue.fixture.identity.clone(),
                 authority,
@@ -397,11 +402,11 @@ impl ModeledQueue {
                 .unwrap();
             assert!(admission.is_some());
             let mut lifecycle =
-                crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
+                gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
                     queue.fixture.node.clone(),
                     request,
                     600,
-                    crate::request::lifecycle::ExecutionOrigin::Interactive,
+                    gents_session::request::lifecycle::ExecutionOrigin::Interactive,
                     String::new(),
                 );
             lifecycle
@@ -417,7 +422,7 @@ impl ModeledQueue {
             );
             assert_eq!(
                 lifecycle.claim_with_identity().await.unwrap(),
-                crate::request::lifecycle::ClaimOutcome::Claimed
+                gents_session::request::lifecycle::ClaimOutcome::Claimed
             );
             queue.active = Some(lifecycle);
         }
@@ -431,7 +436,7 @@ impl ModeledQueue {
     }
 
     async fn image(&self) -> QueueImage {
-        crate::request::lifecycle::test_support::native_queue_image(
+        gents_session::request::lifecycle::test_support::native_queue_image(
             &self.fixture.node,
             self.fixture.identity.did(),
             SESSION,
@@ -489,7 +494,7 @@ impl ModeledQueue {
             .unwrap();
             &foreign
         };
-        let pending = crate::request::lifecycle::pending_user_queue(
+        let pending = gents_session::request::lifecycle::pending_user_queue(
             &ConfigAccess::local_as(
                 self.fixture.node.clone(),
                 ::identity::Did::new(self.fixture.identity.did().to_owned()).unwrap(),
@@ -524,7 +529,7 @@ impl ModeledQueue {
                 .collect(),
             selected_request_doc_ids: selected,
         };
-        let mut replacements = crate::request::lifecycle::queue::prepare_pending_user_edit(
+        let mut replacements = gents_session::request::lifecycle::queue::prepare_pending_user_edit(
             &ConfigAccess::local_as(
                 self.fixture.node.clone(),
                 ::identity::Did::new(self.fixture.identity.did().to_owned()).unwrap(),
@@ -541,7 +546,7 @@ impl ModeledQueue {
         if requester.did() != self.fixture.identity.did() {
             for create in &mut replacements {
                 create.admission = AgentRequestAdmissionRecord::client(requester.did());
-                crate::sign_agent_request_create(requester, create)
+                gents_session::request::admission::sign_agent_request_create(requester, create)
                     .await
                     .unwrap();
             }
@@ -667,7 +672,7 @@ async fn unanswered_sweep_discovers_malformed_command_for_transactional_validati
                 &serde_json::json!({"input": {"command_id":"malformed", "requester_did":identity.did(), "node_did":identity.did(), "session_id":SESSION, "intent_json":"not-json"}}),
                 gents_protocol::schemas::AGENT_SESSION_INPUT_EDIT,
             ).await?;
-            let doc = crate::store::graphql::created_doc_id(&response, "AgentSessionInputEdit")?;
+            let doc = gents_store::graphql::created_doc_id(&response, "AgentSessionInputEdit")?;
             txn.add_resource_relationship("AgentSessionInputEdit", &doc, "parent", "sessions", session).await?;
             txn.add_actor_relationship("AgentSessionInputEdit", &doc, "working_agent", &::identity::Did::new(agent_did)?).await?;
             Ok::<_, anyhow::Error>(doc)
@@ -838,14 +843,17 @@ async fn valid_author_signature_cannot_install_replacement_with_wrong_admission_
     let fixture = Fixture::new().await;
     let mut command = fixture.command().await;
     command.replacements[0].admission = AgentRequestAdmissionRecord::peer(fixture.identity.did());
-    crate::sign_agent_request_create(fixture.identity.as_ref(), &mut command.replacements[0])
-        .await
-        .unwrap();
+    gents_session::request::admission::sign_agent_request_create(
+        fixture.identity.as_ref(),
+        &mut command.replacements[0],
+    )
+    .await
+    .unwrap();
     // The re-signed replacement carries its own valid graph evidence, so the
     // rejection comes from the admission branch rather than stale evidence.
-    command.replacement_evidence = vec![crate::store::config_client::prepare_request_evidence(
+    command.replacement_evidence = vec![gents_store::config_client::prepare_request_evidence(
         fixture.identity.as_ref(),
-        crate::store::config_client::client_request_input(&command.replacements[0]).unwrap(),
+        gents_store::config_client::client_request_input(&command.replacements[0]).unwrap(),
     )
     .await
     .unwrap()];

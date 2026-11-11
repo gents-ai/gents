@@ -1,9 +1,9 @@
 use anyhow::Result;
-use gents::documents::apply_desired_state_plan;
-use gents::documents::{
+use gents_documents::apply_desired_state_plan;
+use gents_documents::{
     read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents::Collection;
+use gents_store::collection::Collection;
 use serde_json::Value;
 
 use crate::config_bundle::select_apply_collection_docs;
@@ -91,12 +91,9 @@ async fn apply_selected_plan(
         }
     }
     // Enumeration order is deterministic; it does not establish reference safety.
-    let applied = apply_desired_state_plan(
-        txn,
-        plan,
-        &gents::inference::resolved::ProviderProfilePolicy,
-    )
-    .await?;
+    let applied =
+        apply_desired_state_plan(txn, plan, &gents_inference::resolved::ProviderProfilePolicy)
+            .await?;
     for collection in Collection::ALL {
         counts.add(collection, applied.get(collection));
     }

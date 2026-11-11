@@ -3,10 +3,10 @@
 mod support;
 
 use anyhow::{ensure, Context, Result};
-use gents::documents::apply_desired_state_plan;
-use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::store::graphql::escape_graphql_string;
-use gents::{Collection, ConfigAccess, NodeIdentity};
+use gents_documents::apply_desired_state_plan;
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents_store::graphql::escape_graphql_string;
+use gents_store::{collection::Collection, config_client::ConfigAccess, identity::NodeIdentity};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -111,8 +111,8 @@ type DeliveryWork {
 /// Installs one application collection as the household-owner User, the
 /// actor whose key signs the qualification's source documents.
 async fn install_schema(access: &ConfigAccess, sdl: &str) -> Result<()> {
-    let plan = gents::store::config_client::preview_schema_install(access, sdl).await?;
-    gents::store::config_client::apply_schema_install(access, sdl, &plan.artifact_digest).await?;
+    let plan = gents_store::config_client::preview_schema_install(access, sdl).await?;
+    gents_store::config_client::apply_schema_install(access, sdl, &plan.artifact_digest).await?;
     Ok(())
 }
 
@@ -123,11 +123,11 @@ async fn create_source(
     sdl: &str,
     fields: Value,
 ) -> Result<String> {
-    Ok(gents::store::config_client::create_authored_document(
+    Ok(gents_store::config_client::create_authored_document(
         access,
         collection,
         &fields,
-        gents::store::config_client::DocumentSchemaSource::UserAuthored,
+        gents_store::config_client::DocumentSchemaSource::UserAuthored,
         sdl,
     )
     .await?)
@@ -158,7 +158,7 @@ async fn apply(
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
                 .map(|_| ())
@@ -215,21 +215,21 @@ async fn bind_agents(access: &ConfigAccess, owner: &str, agents: &DeliveryAgents
     ];
     access
         .transact_write("test.delivery_live.bind_agents", |txn| {
-            use gents::documents::read_desired_state_record_in_txn as read;
+            use gents_documents::read_desired_state_record_in_txn as read;
             let profiles = &profiles;
             let lead = &agents.lead;
             Box::pin(async move {
                 let (_, node) = read(txn, Collection::Node, owner, owner)
                     .await?
                     .context("the fixture User's Node is missing")?;
-                let mut node: gents::documents::Node = serde_json::from_value(node)?;
+                let mut node: gents_documents::Node = serde_json::from_value(node)?;
                 node.default_agent_did = Some(lead.clone());
                 let mut documents = vec![(Collection::Node, serde_json::to_value(node)?)];
                 for (agent_did, profile_id) in profiles {
                     let (_, agent) = read(txn, Collection::Agent, owner, agent_did)
                         .await?
                         .with_context(|| format!("provisioned Agent {agent_did} is missing"))?;
-                    let mut agent: gents::documents::Agent = serde_json::from_value(agent)?;
+                    let mut agent: gents_documents::Agent = serde_json::from_value(agent)?;
                     agent.inference_profile_id = profile_id.clone();
                     documents.push((Collection::Agent, serde_json::to_value(agent)?));
                 }
@@ -246,7 +246,7 @@ async fn bind_agents(access: &ConfigAccess, owner: &str, agents: &DeliveryAgents
                 apply_desired_state_plan(
                     txn,
                     &plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
                 .map(|_| ())
@@ -349,7 +349,7 @@ async fn configure(
         support::fixtures::configure_agent_tools(
             db, &owner, agent_did,
             Some("Follow the requested exact one-line response. This is a delivery qualification; never call tools.".into()),
-            gents::documents::Tools {
+            gents_documents::Tools {
                 tools_id: format!("{agent_did}:tools"), node_did: owner.clone(), ..Default::default()
             }, Vec::new(),
         ).await;

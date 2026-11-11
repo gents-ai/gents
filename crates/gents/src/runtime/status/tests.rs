@@ -7,12 +7,12 @@ use tokio::sync::mpsc;
 use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 
 use super::*;
-use crate::ensure_runtime_schemas;
 use gents_lean_vocab::{
     assert_lean_contract_vocabulary_matches, assert_lean_transition_is_legal,
     assert_state_machine_contract_is_complete, lean_process_transition_cases,
     lean_runtime_reconcile_case, LeanContractVocabulary, LeanLifecycleTransitionCase,
 };
+use gents_store::schema::ensure_runtime_schemas;
 
 #[derive(Debug, Deserialize)]
 struct NodeRuntimeRow {
@@ -32,14 +32,14 @@ struct NodeReadinessRow {
 
 async fn test_node() -> Arc<defra_node::Node> {
     let node = Arc::new(
-        crate::store::test_support::node_builder()
+        gents_store::test_support::node_builder()
             .build()
             .await
             .unwrap(),
     );
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let did = node.node_identity_did().unwrap();
-    let access = crate::store::config_client::ConfigAccess::local_as(
+    let access = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
         identity::Did::new(did).unwrap(),
     );
@@ -59,9 +59,9 @@ async fn test_node() -> Arc<defra_node::Node> {
 #[tokio::test]
 async fn runtime_status_publication_preserves_native_ownership_and_revocation() -> anyhow::Result<()>
 {
-    use crate::store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
-    use crate::NodeIdentity;
     use gents_lean_vocab::{lean_identity_household_cases, LeanIdentityAction};
+    use gents_store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
+    use gents_store::identity::NodeIdentity;
 
     let model = lean_identity_household_cases()
         .iter()
@@ -76,11 +76,14 @@ async fn runtime_status_publication_preserves_native_ownership_and_revocation() 
         })
         .collect();
     let dir = tempfile::tempdir()?;
-    let user = crate::KeyIdentity::load_or_create(dir.path().join("user"), None)?;
-    let runtime = crate::KeyIdentity::load_or_create(dir.path().join("runtime"), None)?;
-    let agent = crate::KeyIdentity::load_or_create(dir.path().join("agent"), None)?;
-    let sibling = crate::KeyIdentity::load_or_create(dir.path().join("sibling"), None)?;
-    let outsider = crate::KeyIdentity::load_or_create(dir.path().join("outsider"), None)?;
+    let user = gents_store::identity::KeyIdentity::load_or_create(dir.path().join("user"), None)?;
+    let runtime =
+        gents_store::identity::KeyIdentity::load_or_create(dir.path().join("runtime"), None)?;
+    let agent = gents_store::identity::KeyIdentity::load_or_create(dir.path().join("agent"), None)?;
+    let sibling =
+        gents_store::identity::KeyIdentity::load_or_create(dir.path().join("sibling"), None)?;
+    let outsider =
+        gents_store::identity::KeyIdentity::load_or_create(dir.path().join("outsider"), None)?;
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let address = listener.local_addr()?;
     let node = Arc::new(
@@ -102,7 +105,7 @@ async fn runtime_status_publication_preserves_native_ownership_and_revocation() 
     node.add_collection(gents_protocol::schemas::NODE).await?;
     node.add_collection(gents_protocol::schemas::NODE_RUNTIME)
         .await?;
-    let access = |actor: &crate::KeyIdentity| -> anyhow::Result<ConfigAccess> {
+    let access = |actor: &gents_store::identity::KeyIdentity| -> anyhow::Result<ConfigAccess> {
         Ok(ConfigAccess::Graphql(
             GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), actor.did())
                 .with_client_signing_capability(actor.client_signing_capability()?)?,
@@ -276,11 +279,11 @@ fn status_test_request(request_id: &str) -> gents_protocol::row::AgentRequest {
     }
 }
 
-fn unavailable_general() -> RapidHashMap<String, crate::triggers::runtime_snapshot::UnavailableAgent>
-{
+fn unavailable_general(
+) -> RapidHashMap<String, gents_automation::triggers::runtime_snapshot::UnavailableAgent> {
     RapidHashMap::from_iter([(
         "general".to_string(),
-        crate::triggers::runtime_snapshot::UnavailableAgent::new(
+        gents_automation::triggers::runtime_snapshot::UnavailableAgent::new(
             AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
             "test runtime is not configured",
         ),
@@ -302,7 +305,7 @@ async fn fetch_runtime_row(node: &Arc<defra_node::Node>, node_did: &str) -> Node
         }}"#
     );
     let actor = identity::Did::new(node.node_identity_did().unwrap()).unwrap();
-    let response = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor)
+    let response = gents_store::config_client::ConfigAccess::local_as(node.clone(), actor)
         .execute(&query)
         .await
         .unwrap();
@@ -322,7 +325,7 @@ async fn fetch_node_readiness_row(
 ) -> NodeReadinessRow {
     let escaped_node_did = escape_graphql_string(node_did);
     let actor = identity::Did::new(node.node_identity_did().unwrap()).unwrap();
-    let response = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor)
+    let response = gents_store::config_client::ConfigAccess::local_as(node.clone(), actor)
         .execute(&format!(
             r#"{{
                 NodeReadiness(

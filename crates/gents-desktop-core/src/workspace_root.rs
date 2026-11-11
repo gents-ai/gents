@@ -7,10 +7,10 @@
 //! this returns: `gents serve` refuses a configured root that is not published.
 
 use anyhow::{Context, Result};
-use gents::documents::write_tools_document;
-use gents::documents::{load_agent_context_and_tools_in_txn, Tools};
-use gents::store::config_client::ConfigAccess;
-use gents::store::graphql::escape_graphql_string;
+use gents_documents::write_tools_document;
+use gents_documents::{load_agent_context_and_tools_in_txn, Tools};
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -32,7 +32,7 @@ pub async fn select_agent_workspace_root(
     root_path: &str,
 ) -> Result<AgentWorkspaceRoot> {
     ensure_absolute(root_path)?;
-    let workspace_root_doc_id = gents::tools::surface::set_workspace_root_with_readers(
+    let workspace_root_doc_id = gents_tools::surface::set_workspace_root_with_readers(
         access,
         node_did,
         root_path,
@@ -47,7 +47,7 @@ pub async fn select_agent_workspace_root(
         write_tools_document(
             access,
             &tools,
-            &gents::inference::resolved::ProviderProfilePolicy,
+            &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await?;
     }
@@ -118,7 +118,7 @@ pub(crate) fn retarget_host_root(tools: &mut Tools, root_path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::store::config_client::GraphqlEndpoint;
+    use gents_store::config_client::GraphqlEndpoint;
     use serde_json::json;
 
     fn tools(host: serde_json::Value) -> Tools {

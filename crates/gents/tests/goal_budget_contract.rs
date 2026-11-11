@@ -22,10 +22,10 @@
 //! These tests use only public API and static schema text: no database, no
 //! network, no provider.
 
-use gents::documents::task_goal_declaration::validate_task_goal_declaration;
-use gents::documents::{InferenceExecution, Task};
-use gents::goal::GoalDocument;
-use gents::{GOAL_SCHEMA, TASK_SCHEMA};
+use gents_automation::goal::GoalDocument;
+use gents_documents::task_goal_declaration::validate_task_goal_declaration;
+use gents_documents::{InferenceExecution, Task};
+use gents_store::schema::{GOAL_SCHEMA, TASK_SCHEMA};
 
 const UNCAPPED_GOAL_JSON: &str = r#"{
     "_docID": "bafyrei_contract_goal_uncapped",

@@ -21,7 +21,7 @@ async fn pending_edit_request_patch_reads_only_selected_and_replacement_document
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
-    let access = gents::ConfigAccess::local(node.clone());
+    let access = gents_store::config_client::ConfigAccess::local(node.clone());
     let response = access
         .write(
             "test.pending_edit_request_patch",
@@ -355,7 +355,7 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
-    let access = gents::ConfigAccess::local(node.clone());
+    let access = gents_store::config_client::ConfigAccess::local(node.clone());
 
     let mutation = r#"mutation {
         selected_session: create_AgentSession(input: {
@@ -636,7 +636,7 @@ fn direct_session_read_matches_the_lean_model() {
 async fn absent_session_is_empty_even_when_a_request_is_visible() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
-    let access = gents::ConfigAccess::local(node.clone());
+    let access = gents_store::config_client::ConfigAccess::local(node.clone());
     let response = node
         .execute(
             r#"mutation { create_AgentRequest(input: {
@@ -666,7 +666,7 @@ async fn load_chat_patch_uses_the_canonical_nullable_session_requester() {
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
-    let access = gents::ConfigAccess::local(node.clone());
+    let access = gents_store::config_client::ConfigAccess::local(node.clone());
     let response = node
         .execute(
             r#"mutation {
@@ -722,7 +722,7 @@ async fn title_request_patch_preserves_existence_without_public_projection() {
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
-    let access = gents::ConfigAccess::local(node.clone());
+    let access = gents_store::config_client::ConfigAccess::local(node.clone());
     access
         .write(
             "test.title_request_patch",
@@ -832,16 +832,16 @@ async fn catalog_freshness_reaches_snapshot_operator_and_document_patch_readers(
         "auth":{"kind":"unauthenticated"}
     }))?;
     let access = runtime.user_access();
-    gents::documents::write_inference_backend_document(
+    gents_documents::write_inference_backend_document(
         &access,
         &backend,
-        &gents::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await?;
     // Catalog discovery is the runtime's own observation.
     let observer = runtime.runtime_access();
     for observed_at in ["2026-10-28T01:00:00Z", "2026-10-28T02:00:00Z"] {
-        let catalog: gents::documents::BackendModelCatalog =
+        let catalog: gents_documents::BackendModelCatalog =
             serde_json::from_value(serde_json::json!({
                 "node_did":null, "observed_at":observed_at,
                 "models":[{"model_name":"retained-model"}]
@@ -851,7 +851,7 @@ async fn catalog_freshness_reaches_snapshot_operator_and_document_patch_readers(
                 let backend = &backend;
                 let catalog = catalog.clone();
                 Box::pin(async move {
-                    gents::inference::backends::registry::record_model_catalog_in_txn(
+                    gents_inference::backends::registry::record_model_catalog_in_txn(
                         txn, backend, catalog,
                     )
                     .await

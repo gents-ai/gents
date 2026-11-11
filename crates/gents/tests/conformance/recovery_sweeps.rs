@@ -1,10 +1,10 @@
 use super::*;
-use gents::tools::background::job::admit::{is_stalled, Refusal};
-use gents::tools::background::job::recovery::{
-    step_invocation_allowed, tick_action, RecoveryFacts, TickAction,
-};
 use gents_lean_vocab::{lean_plugin_job_recovery_cases, LeanPluginJobRecoveryRow};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_toolcalls::background::job::admit::{is_stalled, Refusal};
+use gents_toolcalls::background::job::recovery::{
+    step_invocation_allowed, tick_action, RecoveryFacts, TickAction,
+};
 use std::collections::BTreeMap;
 use support::agent_requests::{RequestActors, RequestSeed};
 
@@ -149,7 +149,7 @@ async fn generated_plugin_job_recovery_cases_drive_redrive_owner() {
         if case.row.session_stopped {
             assert_eq!(
                 action,
-                TickAction::Kill(gents::tools::background::job::control::KillCause::Stop),
+                TickAction::Kill(gents_toolcalls::background::job::control::KillCause::Stop),
                 "{name}"
             );
         }
@@ -216,7 +216,7 @@ fn assert_periodic_recovery_registry_matches_lean(
     }
 
     let mut rust_periodic_by_id = BTreeMap::new();
-    for metadata in gents::periodic_recovery_sweep_metadata() {
+    for metadata in gents_toolcalls::call::periodic_recovery::periodic_recovery_sweep_metadata() {
         assert!(
             !metadata.sweep_ids.is_empty(),
             "periodic recovery registry entry {} must name at least one Lean sweep id",
@@ -247,7 +247,7 @@ fn assert_periodic_recovery_registry_matches_lean(
 }
 
 fn rust_periodic_recovery_sweep_ids() -> BTreeSet<&'static str> {
-    gents::periodic_recovery_sweep_metadata()
+    gents_toolcalls::call::periodic_recovery::periodic_recovery_sweep_metadata()
         .iter()
         .flat_map(|metadata| metadata.sweep_ids.iter().copied())
         .collect()
@@ -381,9 +381,9 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
                 .calls_recovered,
             0
         );
-        let registry = gents::BackgroundExecutionRegistry::default();
+        let registry = gents_toolcalls::call::hook::BackgroundExecutionRegistry::default();
         let live =
-            gents::tools::call::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
+            gents_toolcalls::call::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
                 &db.node,
                 db.node_identity.did(),
                 std::slice::from_ref(&agent),
@@ -416,7 +416,7 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
             )
             .await;
         let repaired =
-            gents::tools::call::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
+            gents_toolcalls::call::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
                 &db.node,
                 db.node_identity.did(),
                 std::slice::from_ref(&agent),
@@ -440,9 +440,11 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
             call.call_state, terminal_call_state,
             "periodic registry must recover the inference row after its parent"
         );
-        assert!(!gents::call_state_holds_backend_slot(&call.call_state));
+        assert!(!gents_inference::admission::call_state_holds_backend_slot(
+            &call.call_state
+        ));
         let second =
-            gents::tools::call::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
+            gents_toolcalls::call::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
                 &db.node,
                 db.node_identity.did(),
                 std::slice::from_ref(&agent),
@@ -759,7 +761,7 @@ async fn own_child_fixture(
     );
     assert_eq!(owner.claim().await.unwrap(), ClaimOutcome::Claimed);
     if processing {
-        let writer = gents::DefraStreamWriter::new_managed(
+        let writer = gents_session::request::streaming::DefraStreamWriter::new_managed(
             actors.node.clone(),
             actors.agent().as_ref(),
             std::time::Duration::ZERO,

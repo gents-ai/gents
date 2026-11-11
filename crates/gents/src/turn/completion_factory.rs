@@ -1,23 +1,23 @@
-use crate::inference::llm::ToolChoice;
 use chrono::{DateTime, Utc};
 use defra_node::Node as EmbeddedNode;
+use gents_inference::llm::ToolChoice;
 use serde::Deserialize;
 
-use crate::documents::inference_defaults::ReasoningEffort;
-use crate::inference::admission::{AdmissionRegistry, AdmittedCompletionModel};
-use crate::inference::backends::provider::BackendProviderKind;
-use crate::inference::backends::registry::backend_fields;
-use crate::inference::connection_fingerprint::agent_connection_fingerprint;
-use crate::inference::rendered_request::CaptureScopeKind;
-use crate::inference::resolved::ResolvedAgent;
-use crate::openai_wire::OpenAiWireApi;
-use crate::provider_usage;
-use crate::request::aggregate_token_limit::parse_aggregate_token_limit;
-use crate::request::lifecycle::ExecutionOrigin;
-use crate::runtime::agent::completion_retry::CompletionRetryPolicy;
 use crate::runtime::agent::loop_stream::{AggregateTokenBudget, LoopConfig};
-use crate::store::graphql::escape_graphql_string;
+use gents_documents::inference_defaults::ReasoningEffort;
+use gents_inference::admission::{AdmissionRegistry, AdmittedCompletionModel};
+use gents_inference::backends::provider::BackendProviderKind;
+use gents_inference::backends::registry::backend_fields;
+use gents_inference::connection_fingerprint::agent_connection_fingerprint;
+use gents_inference::rendered_request::CaptureScopeKind;
+use gents_inference::resolved::ResolvedAgent;
+use gents_loop::completion_retry::CompletionRetryPolicy;
+use gents_loop::openai_wire::OpenAiWireApi;
+use gents_loop::provider_usage;
 use gents_protocol::row::AgentRequest;
+use gents_session::request::aggregate_token_limit::parse_aggregate_token_limit;
+use gents_session::request::lifecycle::ExecutionOrigin;
+use gents_store::graphql::escape_graphql_string;
 
 pub(crate) fn effective_max_tokens(
     max_output_tokens: usize,
@@ -32,9 +32,9 @@ pub(crate) fn build_admitted_model<C>(
     agent_config: &ResolvedAgent,
 ) -> AdmittedCompletionModel<C::CompletionModel>
 where
-    C: crate::inference::llm::rig_compat::ProviderClient,
+    C: gents_inference::llm::rig_compat::ProviderClient,
 {
-    crate::inference::llm::rig_compat::admitted_model(
+    gents_inference::llm::rig_compat::admitted_model(
         client,
         admission,
         agent_connection_fingerprint(agent_config),
@@ -43,7 +43,7 @@ where
         agent_config.openai_wire_api == OpenAiWireApi::ChatCompletions
             && (agent_config.backend_provider_kind == BackendProviderKind::XaiGrokOAuth
                 || (agent_config.backend_provider_kind == BackendProviderKind::OpenAiCompatible
-                    && crate::inference::backends::setup::is_xai_api_endpoint(
+                    && gents_inference::backends::setup::is_xai_api_endpoint(
                         &agent_config.backend_endpoint,
                     ))),
         agent_config.agent_identity.managed_agent_signer(),
@@ -84,7 +84,7 @@ pub(crate) fn loop_config(
                     reasoning_profile_params(
                         agent_config.backend_provider_kind,
                         agent_config.openai_wire_api,
-                        crate::inference::backends::setup::sent_reasoning_effort(
+                        gents_inference::backends::setup::sent_reasoning_effort(
                             agent_config.backend_provider_kind,
                             agent_config.openai_wire_api,
                             &agent_config.backend_endpoint,
@@ -103,7 +103,8 @@ pub(crate) fn loop_config(
                     agent_config
                         .service_tier
                         .filter(|_| {
-                            agent_config.openai_wire_api == crate::OpenAiWireApi::ChatCompletions
+                            agent_config.openai_wire_api
+                                == gents_loop::openai_wire::OpenAiWireApi::ChatCompletions
                         })
                         .map(|tier| serde_json::json!({"service_tier":tier.wire_value()})),
                 ),
@@ -117,7 +118,7 @@ pub(crate) fn loop_config(
             &agent_config.configuration,
         ),
         on_rendered_request: Some(
-            crate::inference::rendered_request::scope::ambient_arming_sink(capture_scope),
+            gents_inference::rendered_request::scope::ambient_arming_sink(capture_scope),
         ),
         turn_compactor: None,
         active_reduction_keys: Vec::new(),
@@ -146,7 +147,7 @@ fn authoritative_reasoning_capabilities(
         return params;
     }
     let mut params = params.unwrap_or_else(|| serde_json::json!({}));
-    params[crate::inference::clients::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM] =
+    params[gents_inference::clients::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM] =
         advertised.map_or(serde_json::Value::Null, |values| {
             serde_json::Value::Array(
                 values
@@ -195,7 +196,7 @@ pub(crate) fn loop_config_for_request(
 /// rehydrated from its signed physical scope and authenticated auxiliary
 /// children so crash redrive cannot mint another allowance.
 pub(crate) async fn aggregate_token_budget_for_request(
-    access: &crate::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     request: &AgentRequest,
 ) -> anyhow::Result<Option<AggregateTokenBudget>> {
     use gents_protocol::request_admission::RequestPurpose;
@@ -209,7 +210,7 @@ pub(crate) async fn aggregate_token_budget_for_request(
     };
     let used = match request.purpose {
         RequestPurpose::Normal => {
-            crate::tools::native::load_parent_inclusive_budget_usage(access, request).await?
+            gents_tools::native::load_parent_inclusive_budget_usage(access, request).await?
         }
         RequestPurpose::TitleAudit => load_prior_charged_tokens(access, &request.doc_id).await?,
         RequestPurpose::AccessReview => unreachable!("review cannot mint a ledger"),
@@ -234,7 +235,7 @@ struct PriorUsageRow {
 }
 
 async fn load_prior_charged_tokens(
-    access: &crate::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     request_doc_id: &str,
 ) -> anyhow::Result<u64> {
     anyhow::ensure!(
@@ -298,7 +299,7 @@ const CALIBRATION_CALL_SCAN: usize =
 /// Calibration only raises estimates, so an unreadable history keeps the
 /// prior rather than failing the request.
 pub(crate) async fn context_calibration_for_session(
-    access: &crate::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     agent_config: &ResolvedAgent,
     node_did: &str,
     session_id: &str,
@@ -348,7 +349,7 @@ pub(crate) async fn context_calibration_for_session(
 /// another agent's calls describe another preamble and tool set, so they
 /// neither observe nor anchor this one.
 async fn load_session_calibration_rows(
-    access: &crate::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     agent_did: &str,
     session_id: &str,
@@ -586,13 +587,13 @@ pub(crate) fn params_disable_reasoning(params: Option<&serde_json::Value>) -> bo
 /// replayable without server state (`PromptAssembly.ResponsesStorage.storage`).
 fn provider_additional_params(
     kind: BackendProviderKind,
-    wire: crate::OpenAiWireApi,
+    wire: gents_loop::openai_wire::OpenAiWireApi,
     endpoint: &str,
 ) -> Option<serde_json::Value> {
     match kind {
         BackendProviderKind::OpenAiCompatible
-            if wire == crate::OpenAiWireApi::Responses
-                && crate::inference::backends::setup::is_xai_api_endpoint(endpoint) =>
+            if wire == gents_loop::openai_wire::OpenAiWireApi::Responses
+                && gents_inference::backends::setup::is_xai_api_endpoint(endpoint) =>
         {
             Some(serde_json::json!({
                 "store": false,
@@ -631,7 +632,7 @@ fn request_additional_params(
         BackendProviderKind::ClaudeCliSubscription => {
             let session = normalize_cache_scope(request.session_id.as_str())?;
             Some(
-                serde_json::json!({ crate::inference::clients::claude_messages::SESSION_KEY_PARAM: session }),
+                serde_json::json!({ gents_inference::clients::claude_messages::SESSION_KEY_PARAM: session }),
             )
         }
         BackendProviderKind::OpenRouter
@@ -663,14 +664,14 @@ mod tests;
 
 /// The enclosing request later supplies deadline and ledger.
 pub(crate) async fn build_compaction_engine(
-    cache: std::sync::Arc<crate::inference::usage_observation::UsageCache>,
+    cache: std::sync::Arc<gents_inference::usage_observation::UsageCache>,
     node: std::sync::Arc<EmbeddedNode>,
     agent_config: &ResolvedAgent,
     admission: AdmissionRegistry,
     build_timeout: std::time::Duration,
 ) -> anyhow::Result<
     Option<(
-        std::sync::Arc<dyn crate::inference::compaction::ReductionEngine>,
+        std::sync::Arc<dyn gents_inference::compaction::ReductionEngine>,
         String,
     )>,
 > {
@@ -678,7 +679,7 @@ pub(crate) async fn build_compaction_engine(
         anyhow::ensure!(
             matches!(
                 agent_config.compaction_strategy().reduction_mode(),
-                crate::inference::compaction::ReductionMode::StripOnly
+                gents_inference::compaction::ReductionMode::StripOnly
             ) || agent_config
                 .compaction
                 .as_ref()
@@ -690,7 +691,7 @@ pub(crate) async fn build_compaction_engine(
     };
     if matches!(
         agent_config.compaction_strategy().reduction_mode(),
-        crate::inference::compaction::ReductionMode::StripOnly
+        gents_inference::compaction::ReductionMode::StripOnly
     ) {
         return Ok(None);
     }
@@ -723,13 +724,13 @@ pub(crate) async fn build_compaction_engine(
     let api_key = if summary.backend_auth.uses_node_oauth()
         || matches!(
             &summary.backend_auth,
-            crate::documents::BackendAuth::Credential { .. }
+            gents_documents::BackendAuth::Credential { .. }
         ) {
         "no-key".to_owned()
     } else {
         summary.completion_client_api_key()?
     };
-    let client = crate::inference::llm::backend_client::build_backend_client(
+    let client = gents_inference::llm::backend_client::build_backend_client(
         cache,
         node,
         &summary,
@@ -746,16 +747,16 @@ pub(crate) async fn build_compaction_engine(
         ));
     let config = loop_config(&summary, String::new(), 0, CaptureScopeKind::Compaction);
     let backend_id = inference.backend.backend_id.clone();
-    let engine = crate::inference::llm::backend_client::with_backend_client!(client, |client| {
+    let engine = gents_inference::llm::backend_client::with_backend_client!(client, |client| {
         let model = std::sync::Arc::new(build_admitted_model(client, admission, &summary));
-        crate::inference::compaction::backend_scoped_reduction_engine(
+        gents_inference::compaction::backend_scoped_reduction_engine(
             std::sync::Arc::new(
-                crate::inference::compaction::ProviderReductionEngine::new(model, config)
+                gents_inference::compaction::ProviderReductionEngine::new(model, config)
                     .with_source_input_counter(source_counter)
                     .with_summary_output_limit(inference.max_output_tokens()?),
             ),
             backend_id,
-        ) as std::sync::Arc<dyn crate::inference::compaction::ReductionEngine>
+        ) as std::sync::Arc<dyn gents_inference::compaction::ReductionEngine>
     });
     Ok(Some((engine, provider_family)))
 }

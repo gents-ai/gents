@@ -2,15 +2,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::documents::{AgentContext, InferenceProfile};
-use gents::request::interrupt::interrupt_request_by_doc_id_with_access;
-use gents::session::load_canonical_message;
-use gents::store::config_client::ConfigAccess;
-use gents::store::graphql::escape_graphql_string;
-use gents::{
-    default_inference_profile_id_for_agent, Collection, DocumentRuntimeOptions, Gents,
-    ReasoningEffort, ToolCeiling,
+use gents::{DocumentRuntimeOptions, Gents};
+use gents_documents::{
+    default_inference_profile_id_for_agent, inference_defaults::ReasoningEffort,
 };
+use gents_documents::{AgentContext, InferenceProfile};
 use gents_protocol::message::{AssistantContent, Message, Text};
 use gents_protocol::output::live::{
     project_live, LiveObservation, LiveTarget, LiveView, OwnerLiveness,
@@ -26,6 +22,12 @@ use gents_protocol::output::{
 use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
+use gents_session::request::interrupt::interrupt_request_by_doc_id_with_access;
+use gents_session::session::load_canonical_message;
+use gents_store::collection::Collection;
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
+use gents_tools::surface::ToolCeiling;
 use serde_json::Value;
 
 use crate::support::agent_requests::RequestActors;
@@ -476,8 +478,8 @@ async fn boot_interrupt_agent(
 /// The node's client key gives the bound Agent a high-effort live sampling
 /// profile and a streaming system prompt.
 async fn configure_live_interrupt(actors: &RequestActors, target: &InferenceTarget) {
-    use gents::documents::apply_desired_state_plan;
-    use gents::documents::{
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{
         read_desired_state_record_in_txn as read, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     let node_did = actors.node_did();
@@ -515,7 +517,7 @@ async fn configure_live_interrupt(actors: &RequestActors, target: &InferenceTarg
                 let (_, agent) = read(txn, Collection::Agent, node_did, agent_did)
                     .await?
                     .ok_or_else(|| anyhow::anyhow!("the live Agent is missing"))?;
-                let mut agent: gents::documents::Agent = serde_json::from_value(agent)?;
+                let mut agent: gents_documents::Agent = serde_json::from_value(agent)?;
                 agent.context_id = Some(LIVE_CONTEXT_ID.to_string());
                 let plan = DesiredStateApplyPlan::new(
                     [
@@ -538,7 +540,7 @@ async fn configure_live_interrupt(actors: &RequestActors, target: &InferenceTarg
                 apply_desired_state_plan(
                     txn,
                     &plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
                 .map(|_| ())

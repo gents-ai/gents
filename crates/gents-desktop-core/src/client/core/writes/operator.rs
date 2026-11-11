@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use gents::store::config_client::ConfigAccess;
-use gents::store::identity::NodeIdentity as _;
+use gents_store::config_client::ConfigAccess;
+use gents_store::identity::NodeIdentity as _;
 
 use super::super::bootstrap::normalize_required;
 use super::{ux_local_runtime_record, ClientCore, LocalHomeAccessError};
@@ -108,7 +108,7 @@ impl ClientCore {
     pub fn operator_graphql(
         &self,
         node_did: &str,
-    ) -> Option<gents::store::config_client::GraphqlEndpoint> {
+    ) -> Option<gents_store::config_client::GraphqlEndpoint> {
         self.sync_state
             .records()
             .iter()
@@ -116,11 +116,11 @@ impl ClientCore {
             .and_then(|record| {
                 record.operator_graphql().and_then(|url| {
                     let capability =
-                        gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+                        gents_store::config_client::ClientSigningCapability::from_ed25519_key(
                             self.node_identity.private_key_bytes(),
                         )
                         .ok()?;
-                    gents::store::config_client::GraphqlEndpoint::as_principal(
+                    gents_store::config_client::GraphqlEndpoint::as_principal(
                         url,
                         self.node_identity.did(),
                     )
@@ -134,7 +134,7 @@ impl ClientCore {
     pub fn operator_observation_graphql(
         &self,
         node_did: &str,
-    ) -> Option<gents::store::config_client::GraphqlEndpoint> {
+    ) -> Option<gents_store::config_client::GraphqlEndpoint> {
         self.sync_state
             .records()
             .iter()
@@ -150,7 +150,7 @@ impl ClientCore {
     pub async fn operator_observation_endpoint(
         &self,
         node_did: &str,
-    ) -> Option<gents::store::config_client::GraphqlEndpoint> {
+    ) -> Option<gents_store::config_client::GraphqlEndpoint> {
         let record = self
             .sync_state
             .records()
@@ -168,7 +168,7 @@ impl ClientCore {
     pub fn operator_signer(
         &self,
         node_did: &str,
-    ) -> Result<std::sync::Arc<dyn gents::store::identity::NodeIdentity>> {
+    ) -> Result<std::sync::Arc<dyn gents_store::identity::NodeIdentity>> {
         let record = self
             .sync_state
             .records()
@@ -187,7 +187,7 @@ impl ClientCore {
     pub fn runtime_operator_signer(
         &self,
         node_did: &str,
-    ) -> Result<std::sync::Arc<dyn gents::store::identity::NodeIdentity>> {
+    ) -> Result<std::sync::Arc<dyn gents_store::identity::NodeIdentity>> {
         let record = self
             .sync_state
             .records()
@@ -208,11 +208,11 @@ impl ClientCore {
             .operator_graphql()
             .map(|url| -> Result<ConfigAccess> {
                 let capability =
-                    gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+                    gents_store::config_client::ClientSigningCapability::from_ed25519_key(
                         self.node_identity.private_key_bytes(),
                     )?;
                 Ok(ConfigAccess::Graphql(
-                    gents::store::config_client::GraphqlEndpoint::as_principal(
+                    gents_store::config_client::GraphqlEndpoint::as_principal(
                         url,
                         self.node_identity.did(),
                     )
@@ -240,23 +240,25 @@ impl ClientCore {
         &self,
         node_did: &str,
         home: &std::path::Path,
-    ) -> std::result::Result<gents::store::config_client::GraphqlEndpoint, LocalHomeAccessError>
+    ) -> std::result::Result<gents_store::config_client::GraphqlEndpoint, LocalHomeAccessError>
     {
         let records = self.sync_state.records();
         let record = ux_local_runtime_record(&records, node_did, home)?;
         let url = record
             .operator_graphql()
             .ok_or(LocalHomeAccessError::NoOperatorConnection)?;
-        let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+        let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
             self.node_identity.private_key_bytes(),
         )
         .map_err(LocalHomeAccessError::Signing)?;
-        Ok(gents::store::config_client::GraphqlEndpoint::as_principal(
-            url,
-            self.node_identity.did(),
+        Ok(
+            gents_store::config_client::GraphqlEndpoint::as_principal(
+                url,
+                self.node_identity.did(),
+            )
+            .with_client_signing_capability(capability)
+            .map_err(LocalHomeAccessError::Signing)?
+            .with_client_signed_agent_creates(),
         )
-        .with_client_signing_capability(capability)
-        .map_err(LocalHomeAccessError::Signing)?
-        .with_client_signed_agent_creates())
     }
 }

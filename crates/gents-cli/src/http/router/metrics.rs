@@ -145,8 +145,10 @@ pub(super) fn p2p_metrics_from_status(
         .get("p2p_sync_status")
         .filter(|value| !value.is_null())
         .and_then(|value| {
-            use gents::P2pSyncStatusAdapter;
-            gents::JsonP2pSyncStatusAdapter.adapt(value).ok()
+            use gents_p2p::p2p::observability::P2pSyncStatusAdapter;
+            gents_p2p::p2p::observability::JsonP2pSyncStatusAdapter
+                .adapt(value)
+                .ok()
         });
     let text_field = |name: &str| {
         p2p.get(name)

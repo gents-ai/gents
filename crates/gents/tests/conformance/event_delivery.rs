@@ -3,10 +3,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::{Node as EmbeddedNode, QueryResponse};
-use gents::{
-    ActiveRuntimeSnapshot, AgentRequest, ConcurrencyMode, DefraWatcher, EventSource, NodeIdentity,
-    ResolvedEventTrigger, ResolvedTask, TriggerSource, Watcher,
+use gents::AgentRequest;
+use gents_automation::{
+    triggers::engine::event_source::EventSource, triggers::engine::TriggerSource,
+    triggers::runtime_snapshot::ActiveRuntimeSnapshot,
 };
+use gents_documents::{
+    automation::ResolvedEventTrigger, automation::ResolvedTask, ConcurrencyMode,
+};
+use gents_session::{request::watcher::DefraWatcher, request::watcher::Watcher};
+use gents_store::identity::NodeIdentity;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
@@ -315,30 +321,31 @@ impl ProductionEventDeliveryDriver {
         let doc_id = match self.source.name {
             "Watcher" => {
                 let fixture = self.watcher_fixture.as_ref().expect("watcher fixture");
-                let spec = gents::request::lifecycle::RequestSpec::new(
+                let spec = gents_session::request::lifecycle::RequestSpec::new(
                     gents_protocol::request_admission::RequestPurpose::Normal,
-                    gents::request::lifecycle::RequestIdentity {
+                    gents_session::request::lifecycle::RequestIdentity {
                         requester_did: Some(fixture.user.did().to_owned()),
                         request_id: doc.to_owned(),
                         node_did: self.db.node_identity.did().to_owned(),
                         agent_did: fixture.agent.did().to_owned(),
                         session_id: format!("event-delivery-session-{}", sanitize_graphql_id(doc)),
                         content: "event delivery witness".to_owned(),
-                        execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
+                        execution_origin:
+                            gents_session::request::lifecycle::ExecutionOrigin::Interactive,
                         created_at: format!("2026-05-20T00:00:{:02}Z", sequence % 60),
                     },
                     gents_protocol::request_admission::AgentRequestAdmissionRecord::client(
                         fixture.user.did(),
                     ),
                 );
-                let create = gents::request::lifecycle::build_signed_client_request(
+                let create = gents_session::request::lifecycle::build_signed_client_request(
                     &fixture.access,
                     spec,
-                    gents::request::lifecycle::RequestSigner::Identity(&fixture.user),
+                    gents_session::request::lifecycle::RequestSigner::Identity(&fixture.user),
                 )
                 .await
                 .map_err(|error| format!("bind watcher request: {error:#}"))?;
-                gents::request::lifecycle::submit_client_request(&fixture.access, &create)
+                gents_session::request::lifecycle::submit_client_request(&fixture.access, &create)
                     .await
                     .map_err(|error| format!("submit watcher request: {error:#}"))?;
                 let response = fixture.access.execute(&format!(
@@ -368,7 +375,7 @@ impl ProductionEventDeliveryDriver {
             }}"#
         );
         let fixture = self.watcher_fixture.as_ref().expect("event fixture");
-        let access = gents::ConfigAccess::local_managed_agent(
+        let access = gents_store::config_client::ConfigAccess::local_managed_agent(
             self.db.node.clone(),
             fixture
                 .agent
@@ -553,7 +560,7 @@ impl Drop for ProductionEventDeliveryDriver {
 
 async fn spawn_event_source_runner(
     node: Arc<EmbeddedNode>,
-    node_identity: Arc<dyn gents::NodeIdentity>,
+    node_identity: Arc<dyn gents_store::identity::NodeIdentity>,
     fixture: &support::ManagedAgentFixture,
     mock_subs: MockUpdateSubscriptionSource,
     cancel: CancellationToken,
@@ -582,7 +589,7 @@ async fn spawn_event_source_runner(
     .with_rescan_interval(RESCAN_TEST_INTERVAL);
     let (tx, rx) = mpsc::channel(16);
     let observed: Box<dyn TriggerSource> = Box::new(AdmittedFireObserver { source, tx });
-    let runner = tokio::spawn(gents::run_trigger_engine(
+    let runner = tokio::spawn(gents_automation::triggers::engine::run_trigger_engine(
         node,
         snapshot_rx,
         vec![observed],
@@ -601,8 +608,13 @@ struct AdmittedFireObserver {
 impl TriggerSource for AdmittedFireObserver {
     fn next_fire(
         &mut self,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<gents::FireIntent>> + Send + '_>>
-    {
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Option<gents_automation::triggers::engine::FireIntent>>
+                + Send
+                + '_,
+        >,
+    > {
         Box::pin(async move {
             let mut intent = self.source.next_fire().await?;
             let doc_id = intent.event_vars["source_doc_id"]
@@ -614,7 +626,8 @@ impl TriggerSource for AdmittedFireObserver {
             intent.on_result = Box::new(move |result| {
                 let admitted = matches!(
                     &result,
-                    gents::FireResult::Fired { .. } | gents::FireResult::Duplicate { .. }
+                    gents_automation::triggers::engine::FireResult::Fired { .. }
+                        | gents_automation::triggers::engine::FireResult::Duplicate { .. }
                 );
                 let observed = if admitted {
                     doc_id
@@ -630,13 +643,13 @@ impl TriggerSource for AdmittedFireObserver {
 }
 
 async fn install_event_delivery_config(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     agent_did: &str,
 ) -> (String, String, String) {
-    use gents::documents::apply_desired_state_plan;
-    use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-    use gents::Collection;
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents_store::collection::Collection;
     use serde_json::json;
     let documents = [
         (Collection::Task, json!({"task_id":EVENT_SOURCE_TASK_ID, "agent_did":agent_did, "prompt_template":"handle event delivery doc"})),
@@ -650,7 +663,7 @@ async fn install_event_delivery_config(
     access.transact_write("test.event_delivery.configure", |txn| {
         let plan = &plan;
         Box::pin(async move {
-            apply_desired_state_plan(txn, plan, &gents::inference::resolved::ProviderProfilePolicy).await?;
+            apply_desired_state_plan(txn, plan, &gents_inference::resolved::ProviderProfilePolicy).await?;
             let query = format!("{{ Trigger(filter: {{node_did: {{_eq: \"{}\"}}, trigger_id: {{_eq: \"{}\"}}}}) {{_docID}} EventSource(filter: {{node_did: {{_eq: \"{}\"}}, event_source_id: {{_eq: \"{}\"}}}}) {{_docID}} Task(filter: {{node_did: {{_eq: \"{}\"}}, task_id: {{_eq: \"{}\"}}}}) {{_docID}} }}",
                 escape_graphql_string(node_did), escape_graphql_string(EVENT_SOURCE_TRIGGER_ID),
                 escape_graphql_string(node_did), escape_graphql_string(EVENT_SOURCE_ID),
@@ -678,18 +691,21 @@ async fn install_event_delivery_source_schema(db: &support::TestDb) {
             payload: String
         }
     "#;
-    gents::ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap())
-        .add_collection(schema)
-        .await
-        .expect("add_collection for EventDeliveryDoc");
+    gents_store::config_client::ConfigAccess::local_as(
+        db.node.clone(),
+        db.node_identity.did().parse().unwrap(),
+    )
+    .add_collection(schema)
+    .await
+    .expect("add_collection for EventDeliveryDoc");
 }
 
 fn active_snapshot_with_event_trigger(
     trigger_doc_id: &str,
     source_doc_id: &str,
     task_doc_id: &str,
-    node_identity: Arc<dyn gents::NodeIdentity>,
-    agent: Arc<dyn gents::NodeIdentity>,
+    node_identity: Arc<dyn gents_store::identity::NodeIdentity>,
+    agent: Arc<dyn gents_store::identity::NodeIdentity>,
 ) -> Arc<ActiveRuntimeSnapshot> {
     let task = ResolvedTask {
         emit_outcome: false,
@@ -711,7 +727,7 @@ fn active_snapshot_with_event_trigger(
         event_source_id: EVENT_SOURCE_ID.to_owned(),
         task_doc_id: task_doc_id.to_owned(),
         create_session: false,
-        max_fires_per_hour: gents::documents::DEFAULT_MAX_FIRES_PER_HOUR,
+        max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
         trigger_id: EVENT_SOURCE_TRIGGER_ID.to_string(),
         task_id: task.task_id.clone(),
         task: task.clone(),
@@ -720,7 +736,7 @@ fn active_snapshot_with_event_trigger(
         filter: None,
         enabled: true,
         concurrency: ConcurrencyMode::QueuedSerial,
-        fire_mode: gents::EventTriggerFireMode::PerDocument,
+        fire_mode: gents_documents::automation::EventTriggerFireMode::PerDocument,
         correlation_field: None,
         expected_count: None,
         expected_count_field: None,
@@ -739,10 +755,10 @@ fn active_snapshot_with_event_trigger(
 fn active_snapshot(
     active_event_triggers: RapidHashMap<String, ResolvedEventTrigger>,
     active_tasks: RapidHashMap<String, ResolvedTask>,
-    node_identity: Arc<dyn gents::NodeIdentity>,
-    agent: Arc<dyn gents::NodeIdentity>,
+    node_identity: Arc<dyn gents_store::identity::NodeIdentity>,
+    agent: Arc<dyn gents_store::identity::NodeIdentity>,
 ) -> Arc<ActiveRuntimeSnapshot> {
-    let node = Arc::new(gents::RuntimeNode {
+    let node = Arc::new(gents_store::identity::RuntimeNode {
         node_did: node_identity.did().to_string(),
         identity: node_identity,
         default_agent_did: agent.did().to_string(),

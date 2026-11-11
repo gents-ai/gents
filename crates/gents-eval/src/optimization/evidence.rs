@@ -6,7 +6,7 @@ use crate::report::{
     cell_usage, concat_paired, counted_verdicts, paired_evidence, CellUsage, RunRows,
 };
 use crate::VerdictRecord;
-use gents::documents::{EvalDefinition, EvalTier};
+use gents_documents::{EvalDefinition, EvalTier};
 
 pub const BASELINE_CELL: &str = "baseline";
 pub const CANDIDATE_CELL: &str = "candidate";

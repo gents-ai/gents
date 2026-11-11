@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;
 
-use crate::documents::Task;
+use gents_documents::Task;
 use gents_protocol::row::AgentRequest;
 
 pub(super) struct Policy {
@@ -14,18 +14,21 @@ pub(super) struct Policy {
 pub(super) async fn load(
     node: &Arc<EmbeddedNode>,
     parent: &AgentRequest,
-    selection: &crate::plugin::approval::workspace::ReviewTaskSelection,
+    selection: &gents_tools::plugin::approval::workspace::ReviewTaskSelection,
 ) -> Result<Policy> {
     let task_id = selection.task_id.as_str();
-    let definition = crate::session::message::load_configured_task(
-        &crate::ConfigAccess::local_as(node.clone(), identity::Did::new(&parent.agent_did)?),
+    let definition = gents_session::session::message::load_configured_task(
+        &gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(&parent.agent_did)?,
+        ),
         &parent.node_did,
         task_id,
     )
     .await?
     .context("access review Task is not configured")?;
     anyhow::ensure!(
-        crate::plugin::approval::workspace::review_task_matches_selection(
+        gents_tools::plugin::approval::workspace::review_task_matches_selection(
             &definition,
             selection,
             &parent.node_did,
@@ -33,7 +36,7 @@ pub(super) async fn load(
         ),
         "The access review policy changed. Select Approve for me again to use the updated policy."
     );
-    let text = crate::plugin::approval::workspace::review_task_policy(
+    let text = gents_tools::plugin::approval::workspace::review_task_policy(
         &definition,
         &parent.node_did,
         task_id,
@@ -49,8 +52,11 @@ impl Policy {
         node: &Arc<EmbeddedNode>,
         parent: &AgentRequest,
     ) -> Result<bool> {
-        Ok(crate::session::message::load_configured_task(
-            &crate::ConfigAccess::local_as(node.clone(), identity::Did::new(&parent.agent_did)?),
+        Ok(gents_session::session::message::load_configured_task(
+            &gents_store::config_client::ConfigAccess::local_as(
+                node.clone(),
+                identity::Did::new(&parent.agent_did)?,
+            ),
             &parent.node_did,
             &self.definition.task_id,
         )
@@ -86,9 +92,9 @@ mod tests {
             approved.task_id = case.task_id.clone();
             approved.prompt_template = case.approved_prompt.clone();
             let selection =
-                crate::plugin::approval::workspace::ReviewTaskSelection::for_task(&approved);
+                gents_tools::plugin::approval::workspace::ReviewTaskSelection::for_task(&approved);
             assert_eq!(
-                crate::plugin::approval::workspace::review_task_matches_selection(
+                gents_tools::plugin::approval::workspace::review_task_matches_selection(
                     &case.document,
                     &selection,
                     &case.node,
@@ -99,7 +105,7 @@ mod tests {
                 serde_json::to_string(&case.document).unwrap(),
             );
             assert_eq!(
-                crate::plugin::approval::workspace::review_task_is_eligible(
+                gents_tools::plugin::approval::workspace::review_task_is_eligible(
                     &case.document,
                     &case.node,
                     &case.task_id,

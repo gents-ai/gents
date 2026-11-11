@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use gents::store::identity::{
+use gents_store::identity::{
     load_file_identity, load_or_create_file_identity, register_ed25519_signing_identity,
     IdentityError, NodeIdentity, ServiceAccount,
 };
@@ -141,10 +141,10 @@ impl NodeIdentity for PrincipalIdentity {
     fn client_signing_capability(
         &self,
     ) -> std::result::Result<
-        gents::store::config_client::ClientSigningCapability,
-        gents::store::config_client::ConfigClientError,
+        gents_store::config_client::ClientSigningCapability,
+        gents_store::config_client::ConfigClientError,
     > {
-        gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+        gents_store::config_client::ClientSigningCapability::from_ed25519_key(
             self.private_key_bytes(),
         )
     }

@@ -10,9 +10,9 @@ use crate::optimization::target::{
     apply_text, capture_closure, closure_digests, current_text, target_digest, target_plan,
     Closure, FrozenDocument,
 };
-use gents::documents::apply_desired_state_plan;
-use gents::documents::{stale_expectation, DesiredStateApplyPlan};
-use gents::store::config_client::{ConfigAccess, TransactionFailure};
+use gents_documents::apply_desired_state_plan;
+use gents_documents::{stale_expectation, DesiredStateApplyPlan};
+use gents_store::config_client::{ConfigAccess, TransactionFailure};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Promotion {
@@ -226,7 +226,7 @@ pub async fn promote(
                 apply_desired_state_plan(
                     txn,
                     &plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await?;
                 let written =
@@ -348,7 +348,7 @@ pub async fn revert(access: &ConfigAccess, owner: &str, job_id: &str, digest: &s
                 apply_desired_state_plan(
                     txn,
                     &plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await?;
                 let entry = JournalEntry::Reverted { by: (*by).clone() };
@@ -381,8 +381,8 @@ mod tests {
     use crate::optimization::job::load_job;
     use crate::optimization::subject::tests::FIXTURE_TEMPLATE;
     use crate::optimization::target::TargetField;
-    use gents::documents::DesiredStateApplyPlan;
-    use gents::Collection;
+    use gents_documents::DesiredStateApplyPlan;
+    use gents_store::collection::Collection;
     use serde_json::json;
 
     async fn read_closure(harness: &Harness) -> Closure {
@@ -630,7 +630,7 @@ mod tests {
                     apply_desired_state_plan(
                         txn,
                         plan,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await
                     .map(|_| ())
@@ -830,8 +830,8 @@ mod tests {
 
     #[tokio::test]
     async fn held_user_promotion_and_revert_match_native_job_permissions() -> anyhow::Result<()> {
-        use gents::store::config_client::GraphqlEndpoint;
-        use gents::NodeIdentity;
+        use gents_store::config_client::GraphqlEndpoint;
+        use gents_store::identity::NodeIdentity;
 
         let modeled =
             &gents_lean_vocab::lean_contract_snapshot().identity_optimization_promotion_cases;
@@ -844,7 +844,10 @@ mod tests {
         let (harness, request) = accepting_harness("native-promotion").await;
         let digest = checkpoint_digest(&harness, &request.job_id).await;
         let keys = tempfile::tempdir()?;
-        let outsider = gents::KeyIdentity::load_or_create(keys.path().join("outsider.key"), None)?;
+        let outsider = gents_store::identity::KeyIdentity::load_or_create(
+            keys.path().join("outsider.key"),
+            None,
+        )?;
         let endpoint = match harness.access() {
             ConfigAccess::Graphql(endpoint) => endpoint.url(),
             _ => panic!("held evaluator must use HTTP"),
@@ -884,7 +887,7 @@ mod tests {
             .transact_readonly("test.promotion.node", |txn| {
                 let owner = &owner;
                 Box::pin(async move {
-                    let (doc_id, _) = gents::documents::read_desired_state_record_in_txn(
+                    let (doc_id, _) = gents_documents::read_desired_state_record_in_txn(
                         txn,
                         Collection::Node,
                         owner,
@@ -909,9 +912,9 @@ mod tests {
             .grant_node_permissions(
                 outsider.did(),
                 &[
-                    gents::store::config_client::NodePermission::CollectionGet,
-                    gents::store::config_client::NodePermission::DocumentRead,
-                    gents::store::config_client::NodePermission::DocumentUpdate,
+                    gents_store::config_client::NodePermission::CollectionGet,
+                    gents_store::config_client::NodePermission::DocumentRead,
+                    gents_store::config_client::NodePermission::DocumentUpdate,
                 ],
             )
             .await?;
@@ -933,7 +936,7 @@ mod tests {
                     apply_desired_state_plan(
                         txn,
                         &plan,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await?;
                     Err::<(), anyhow::Error>(anyhow::anyhow!("target probe rollback"))

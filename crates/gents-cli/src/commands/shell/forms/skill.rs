@@ -1,7 +1,7 @@
-use gents::documents::SkillDocument;
-use gents::store::config_client::ConfigAccess;
 use gents_desktop_core::inference::load_inference_setup_state;
+use gents_documents::SkillDocument;
 use gents_shell::source::{Doc, FieldKind, Form, FormError};
+use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 
 use super::{
@@ -18,7 +18,9 @@ pub(super) fn form(current: Option<&Value>, id: &str, users: &[String]) -> Form 
     let skill = current.unwrap_or(&stub);
     let text = |key: &str, label: &str, kind| field(key, label, kind, &shown(&skill[key]));
     let tags: Vec<String> = serde_json::from_value(skill["tags"].clone()).unwrap_or_default();
-    let pack = gents::pack::pack_origin_from_tags(&tags).ok().flatten();
+    let pack = gents_pack::pack::pack_origin_from_tags(&tags)
+        .ok()
+        .flatten();
     let users = match users {
         [] => "no agent yet".to_string(),
         users => users.join(", "),

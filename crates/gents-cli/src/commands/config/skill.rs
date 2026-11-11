@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
-use gents::documents::SkillDocument;
-use gents::store::graphql::escape_graphql_string;
-use gents::Collection;
+use gents_documents::SkillDocument;
+use gents_store::collection::Collection;
+use gents_store::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
 use crate::cli::*;
@@ -12,8 +12,8 @@ use crate::{print_json, EXPORT_SKILL_FIELDS};
 /// signs it as the client. `null` fields clear stale values on update, and
 /// `created_at` is set only when the Skill is created.
 async fn upsert_skill(access: &ConfigAccess, skill: &SkillDocument) -> Result<String> {
-    use gents::documents::apply_desired_state_plan;
-    use gents::documents::{
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     let mut update = serde_json::to_value(skill)?;
@@ -42,7 +42,7 @@ async fn upsert_skill(access: &ConfigAccess, skill: &SkillDocument) -> Result<St
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await?;
                 let (doc_id, _) =
@@ -192,7 +192,7 @@ pub(super) async fn skill_set_enabled(args: SkillRefArgs, enabled: bool) -> Resu
     Ok(())
 }
 
-use gents::documents::skills::import::load_skill_source;
+use gents_documents::skills::import::load_skill_source;
 
 fn skill_id_from_dir(dir: &std::path::Path) -> Option<String> {
     let raw = dir.file_name()?.to_string_lossy();

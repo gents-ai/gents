@@ -3,18 +3,18 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use chrono::{Duration, SecondsFormat, Utc};
 use gents::defra_node::Node as EmbeddedNode;
-use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
-use gents::NodeIdentity;
 use gents_protocol::enrollment::{
     derive_enrollment_id, EnrollmentOfferRecord, EnrollmentOperatorAction,
     EnrollmentOperatorDecisionCommand, EnrollmentOperatorQuery, EnrollmentOperatorQueryCommand,
 };
 use gents_protocol::network_token::{derive_network_id, NetworkRecord};
+use gents_store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
+use gents_store::identity::NodeIdentity;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::RwLock;
 
-pub use gents::runtime::agent::p2p_reconcile::{EnrollmentOfferIssuer, EnrollmentOfferStatus};
+pub use gents_p2p::p2p_reconcile::{EnrollmentOfferIssuer, EnrollmentOfferStatus};
 
 pub(crate) type EnrollmentOfferIssuerHandle = Arc<RwLock<Option<EnrollmentOfferIssuer>>>;
 pub(crate) type EnrollmentDecisionServiceHandle = Arc<RwLock<Option<EnrollmentDecisionService>>>;
@@ -23,13 +23,13 @@ pub(crate) type EnrollmentDecisionServiceHandle = Arc<RwLock<Option<EnrollmentDe
 pub(crate) struct EnrollmentDecisionService {
     identity: Arc<dyn NodeIdentity>,
     node: Arc<EmbeddedNode>,
-    store: gents::runtime::agent::p2p_reconcile::GraphqlEnrollmentStore,
+    store: gents_p2p::p2p_reconcile::GraphqlEnrollmentStore,
 }
 
 impl EnrollmentDecisionService {
     pub(crate) fn new(identity: Arc<dyn NodeIdentity>, node: Arc<EmbeddedNode>) -> Self {
         Self {
-            store: gents::runtime::agent::p2p_reconcile::GraphqlEnrollmentStore::new(
+            store: gents_p2p::p2p_reconcile::GraphqlEnrollmentStore::new(
                 node.clone(),
                 identity.clone(),
             ),
@@ -41,7 +41,7 @@ impl EnrollmentDecisionService {
     pub(crate) async fn decide(
         &self,
         command: &EnrollmentOperatorDecisionCommand,
-    ) -> Result<gents::runtime::agent::p2p_reconcile::EnrollmentDecisionOutcome> {
+    ) -> Result<gents_p2p::p2p_reconcile::EnrollmentDecisionOutcome> {
         let now = Utc::now();
         authenticate_operator_command(self.identity.as_ref(), command, now).await?;
         consume_operator_nonce(&self.node, &command.admin_did, &command.nonce, now).await?;
@@ -177,14 +177,14 @@ impl EnrollmentDecisionService {
             self.identity.verify(signer_did, payload, sig).await?,
             "operator command signature is invalid"
         );
-        let access = gents::store::config_client::ConfigAccess::local_as(
+        let access = gents_store::config_client::ConfigAccess::local_as(
             self.node.clone(),
             identity::Did::new(signer_did)?,
         );
         let response = access
             .execute(&format!(
                 "{{ Node(filter: {{ node_did: {{ _eq: \"{}\" }} }}) {{ _docID }} }}",
-                gents::store::graphql::escape_graphql_string(self.identity.did()),
+                gents_store::graphql::escape_graphql_string(self.identity.did()),
             ))
             .await?;
         anyhow::ensure!(
@@ -212,7 +212,7 @@ async fn consume_operator_nonce(
         node.node_identity_did()
             .context("enrollment nonce requires the configured runtime identity")?,
     )?;
-    let access = gents::store::config_client::ConfigAccess::local_as(node.clone(), runtime.clone());
+    let access = gents_store::config_client::ConfigAccess::local_as(node.clone(), runtime.clone());
     let nonce_key = derive_enrollment_id("gents-enrollment-operator-nonce-v1", &[admin_did, nonce]);
     let now = now.to_rfc3339_opts(SecondsFormat::Secs, true);
     let expires_at = (chrono::DateTime::parse_from_rfc3339(&now)?
@@ -241,7 +241,7 @@ async fn consume_operator_nonce(
                     &response,
                     "EnrollmentOperatorNonce",
                 )?;
-                gents::store::config_client::maybe_link_deferred_operation_in_txn(
+                gents_store::config_client::maybe_link_deferred_operation_in_txn(
                     txn,
                     "EnrollmentOperatorNonce",
                     &doc,
@@ -424,7 +424,7 @@ pub async fn ensure_enrollment_network(
                 node.node_identity_did() == Some(identity.did()),
                 "enrollment Network author must be the local runtime Node"
             );
-            gents::store::config_client::ConfigAccess::write_local(
+            gents_store::config_client::ConfigAccess::write_local(
                 node,
                 "cli.enrollment.create_agent_network",
                 &mutation,
@@ -450,7 +450,8 @@ mod tests {
     async fn operator_command_requires_the_live_admin_identity_and_exact_signature() {
         let temp = tempfile::tempdir().unwrap();
         let identity =
-            gents::KeyIdentity::load_or_create(temp.path().join("admin.key"), None).unwrap();
+            gents_store::identity::KeyIdentity::load_or_create(temp.path().join("admin.key"), None)
+                .unwrap();
         let now = Utc::now();
         let mut command = EnrollmentOperatorDecisionCommand {
             protocol_version: ENROLLMENT_PROTOCOL_VERSION,
@@ -474,7 +475,8 @@ mod tests {
             .await
             .is_err());
         let other =
-            gents::KeyIdentity::load_or_create(temp.path().join("other.key"), None).unwrap();
+            gents_store::identity::KeyIdentity::load_or_create(temp.path().join("other.key"), None)
+                .unwrap();
         assert!(authenticate_operator_command(&other, &command, now)
             .await
             .is_err());
@@ -511,8 +513,11 @@ mod tests {
     }
 
     async fn nonce_test_node(path: &std::path::Path) -> Arc<EmbeddedNode> {
-        let identity = gents::KeyIdentity::load_or_create(path.with_extension("node.key"), None)
-            .expect("nonce test identity");
+        let identity = gents_store::identity::KeyIdentity::load_or_create(
+            path.with_extension("node.key"),
+            None,
+        )
+        .expect("nonce test identity");
         let node = Arc::new(
             EmbeddedNode::builder()
                 .with_node_identity_did(identity.did())
@@ -522,7 +527,7 @@ mod tests {
                 .await
                 .expect("nonce test node"),
         );
-        gents::store::schema::migration::ensure_all_runtime_migrations(node.clone())
+        gents_store::schema::migration::ensure_all_runtime_migrations(node.clone())
             .await
             .expect("nonce schema");
         node
@@ -574,7 +579,7 @@ mod tests {
         .unwrap();
 
         let actor = identity::Did::new(node.node_identity_did().unwrap()).unwrap();
-        let response = gents::store::config_client::ConfigAccess::local_as(node.clone(), actor)
+        let response = gents_store::config_client::ConfigAccess::local_as(node.clone(), actor)
             .execute("{ EnrollmentOperatorNonce { nonce_key } }")
             .await
             .unwrap();

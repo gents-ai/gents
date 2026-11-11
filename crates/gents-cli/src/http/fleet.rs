@@ -1,4 +1,4 @@
-use gents::store::config_client::GraphqlEndpoint;
+use gents_store::config_client::GraphqlEndpoint;
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};

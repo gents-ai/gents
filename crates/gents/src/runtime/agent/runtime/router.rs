@@ -4,14 +4,14 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use tokio::sync::{watch, OwnedRwLockReadGuard, RwLock};
 
-use crate::request::lifecycle::{ExecutionOrigin, RequestLifecycle};
-use crate::request::watcher::{DefraWatcher, Watcher};
 use crate::runtime::status::RuntimeStatusHandle;
-use crate::triggers::runtime_snapshot::{
+use gents_automation::triggers::runtime_snapshot::{
     effective_agent_admission, ActiveRuntimeSnapshot, EffectiveAgentAdmission,
 };
-use crate::triggers::snapshot_observer::RuntimeSnapshotObserver;
+use gents_automation::triggers::snapshot_observer::RuntimeSnapshotObserver;
 use gents_protocol::row::AgentRequest;
+use gents_session::request::lifecycle::{ExecutionOrigin, RequestLifecycle};
+use gents_session::request::watcher::{DefraWatcher, Watcher};
 
 use super::context::AgentResolution;
 
@@ -115,7 +115,7 @@ pub(super) struct RouterConfig {
     pub(super) admission_gate: RuntimeAdmissionGate,
     pub(super) runtime_status: RuntimeStatusHandle,
     pub(super) runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
-    pub(super) backend_health: crate::inference::backends::health::BackendHealthMap,
+    pub(super) backend_health: gents_inference::backends::health::BackendHealthMap,
 }
 
 pub(super) async fn run_router(config: RouterConfig) -> Result<()> {
@@ -527,7 +527,7 @@ pub(super) async fn resolve_agent_for_request(
 ) -> Result<Option<AgentResolution>> {
     let agent_did = request.agent_did.clone();
     let actor = identity::Did::new(&agent_did)?;
-    let Some(session_agent_did) = crate::session::load_session_agent_selection(
+    let Some(session_agent_did) = gents_session::session::load_session_agent_selection(
         node,
         &actor,
         &request.node_did,
@@ -567,9 +567,11 @@ async fn fail_routed_request_from_snapshot(
         return Ok(());
     };
     let actor = identity::Did::new(agent_did)?;
-    if let Err(error) =
-        crate::ConfigAccess::local_managed_agent(node.clone(), actor, identity.as_ref())
-    {
+    if let Err(error) = gents_store::config_client::ConfigAccess::local_managed_agent(
+        node.clone(),
+        actor,
+        identity.as_ref(),
+    ) {
         tracing::warn!(request_id = %request.request_id, agent_did, %error, "routed request Agent signing capability unavailable; leaving request pending");
         return Ok(());
     }
@@ -589,7 +591,7 @@ pub(super) async fn fail_routed_request(
     node_did: &str,
     request: AgentRequest,
     agent_did: &str,
-    agent_identity: &dyn crate::store::identity::NodeIdentity,
+    agent_identity: &dyn gents_store::identity::NodeIdentity,
     error_message: &str,
 ) -> Result<()> {
     anyhow::ensure!(
@@ -601,17 +603,19 @@ pub(super) async fn fail_routed_request(
             Ok(origin) => origin,
             Err(error) => {
                 let reason = format!("request admission denied: {error:#}");
-                let outcome = crate::request::admission::terminalize_pending_request_rejection(
-                    &node,
-                    &request.doc_id,
-                    node_did,
-                    agent_did,
-                    agent_identity,
-                    &reason,
-                    "terminalize_invalid_execution_origin_before_route_rejection",
-                )
-                .await?;
-                if outcome == crate::request::admission::PendingRejectionOutcome::NotMatched {
+                let outcome =
+                    gents_session::request::admission::terminalize_pending_request_rejection(
+                        &node,
+                        &request.doc_id,
+                        node_did,
+                        agent_did,
+                        agent_identity,
+                        &reason,
+                        "terminalize_invalid_execution_origin_before_route_rejection",
+                    )
+                    .await?;
+                if outcome == gents_session::request::admission::PendingRejectionOutcome::NotMatched
+                {
                     tracing::warn!(
                         request_id = %request.request_id,
                         "request rejection did not match a visible pending request"

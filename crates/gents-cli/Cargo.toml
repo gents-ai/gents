@@ -50,6 +50,17 @@ gents-chatgpt-login.workspace = true
 gents-claude-login.workspace = true
 gents-desktop-core.workspace = true
 gents = { path = "../gents" }
+gents-store = { workspace = true }
+gents-documents = { workspace = true }
+gents-inference = { workspace = true }
+gents-p2p = { workspace = true }
+gents-pack = { workspace = true }
+gents-session = { workspace = true }
+gents-tools = { workspace = true }
+gents-toolcalls = { workspace = true }
+gents-automation = { workspace = true }
+gents-observe = { workspace = true }
+gents-loop = { workspace = true }
 gents-fs-runner = { path = "../gents-fs-runner" }
 gents-protocol.workspace = true
 gents-shell.workspace = true

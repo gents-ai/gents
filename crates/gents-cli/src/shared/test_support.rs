@@ -1,11 +1,12 @@
 use serde_json::Value;
 
 pub(crate) fn node_builder() -> defra_node::NodeBuilder {
-    use gents::NodeIdentity as _;
+    use gents_store::identity::NodeIdentity as _;
 
     let directory = tempfile::tempdir().unwrap();
     let identity =
-        gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
+        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("node.key"), None)
+            .unwrap();
     defra_node::Node::builder().with_node_identity_did(identity.did())
 }
 
@@ -13,7 +14,7 @@ pub(crate) fn node_builder() -> defra_node::NodeBuilder {
 /// household and wrote its config.
 pub(crate) struct Served {
     pub(crate) node: std::sync::Arc<defra_node::Node>,
-    pub(crate) user: gents::store::config_client::GraphqlEndpoint,
+    pub(crate) user: gents_store::config_client::GraphqlEndpoint,
     _user_key: tempfile::TempDir,
 }
 
@@ -23,9 +24,9 @@ pub(crate) struct Served {
 /// makes the User its household owner, as setup does, and the User writes the config, its Node
 /// included.
 pub(crate) async fn served_config(mut config: Value) -> Served {
-    use gents::documents::apply_desired_state_plan;
-    use gents::documents::DesiredStateApplyPlan;
-    use gents::NodeIdentity as _;
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::DesiredStateApplyPlan;
+    use gents_store::identity::NodeIdentity as _;
     const OWNER: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
 
     if config["node"].is_null() {
@@ -57,11 +58,18 @@ pub(crate) async fn served_config(mut config: Value) -> Served {
         policy.await.unwrap(),
         gents_protocol::schemas::MAILBOX_POLICY_ID
     );
-    gents::ensure_runtime_schemas(&node).await.unwrap();
-    let runtime = gents::ConfigAccess::local_as(node.clone(), ::identity::Did::new(OWNER).unwrap());
+    gents_store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
+    let runtime = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        ::identity::Did::new(OWNER).unwrap(),
+    );
     let keys = tempfile::tempdir().unwrap();
-    let user = gents::KeyIdentity::load_or_create(keys.path().join("user.key"), None).unwrap();
-    gents::store::identity::GrantSet::HouseholdOwner
+    let user =
+        gents_store::identity::KeyIdentity::load_or_create(keys.path().join("user.key"), None)
+            .unwrap();
+    gents_store::identity::GrantSet::HouseholdOwner
         .grant(&runtime, &::identity::Did::new(user.did()).unwrap())
         .await
         .unwrap();
@@ -74,7 +82,7 @@ pub(crate) async fn served_config(mut config: Value) -> Served {
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
@@ -121,7 +129,7 @@ fn rename_placeholders(
 /// A node whose runtime is the deterministic fixture signer
 /// (`caused_sessions::fixtures::FIXTURE_DID`), whose key this process holds.
 pub(crate) fn fixture_node_builder() -> defra_node::NodeBuilder {
-    use gents::NodeIdentity as _;
+    use gents_store::identity::NodeIdentity as _;
 
     let signer = crate::caused_sessions::fixtures::fixture_signer();
     defra_node::Node::builder().with_node_identity_did(signer.did())
@@ -138,7 +146,7 @@ pub(crate) fn fixture_agent_named(
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
-    let identity = gents::store::identity::derive_agent_identity(
+    let identity = gents_store::identity::derive_agent_identity(
         &crate::caused_sessions::fixtures::fixture_signer(),
         &creation_nonce,
     )
@@ -164,21 +172,25 @@ pub(crate) async fn publish_test_node(node: &std::sync::Arc<defra_node::Node>) -
 /// [`publish_test_node`] for a fixture that names its Node's DID; the DID
 /// must be the node's runtime.
 pub(crate) async fn publish_test_node_as(node: &std::sync::Arc<defra_node::Node>, node_did: &str) {
-    use gents::documents::apply_desired_state_plan;
-    use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-    use gents::store::config_client::ConfigAccess;
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents_store::config_client::ConfigAccess;
 
     assert_eq!(
         node.node_identity_did(),
         Some(node_did),
         "the fixture Node is published by its own runtime"
     );
-    if gents::load_node(node, node_did).await.unwrap().is_some() {
+    if gents_documents::load_node(node, node_did)
+        .await
+        .unwrap()
+        .is_some()
+    {
         return;
     }
     let value = serde_json::json!({"node_did": node_did});
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: gents::Collection::Node,
+        collection: gents_store::collection::Collection::Node,
         add: value.clone(),
         update: value,
     }])
@@ -190,7 +202,7 @@ pub(crate) async fn publish_test_node_as(node: &std::sync::Arc<defra_node::Node>
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
                 .map(|_| ())
@@ -221,17 +233,17 @@ pub(crate) async fn served_node(
 /// CLI's endpoint owner signs it.
 pub(crate) fn user_access(
     graphql: &str,
-    user: &dyn gents::NodeIdentity,
-) -> gents::store::config_client::ConfigAccess {
-    gents::store::config_client::ConfigAccess::Graphql(user_endpoint(graphql, user))
+    user: &dyn gents_store::identity::NodeIdentity,
+) -> gents_store::config_client::ConfigAccess {
+    gents_store::config_client::ConfigAccess::Graphql(user_endpoint(graphql, user))
 }
 
 /// The User client's signed endpoint, as [`user_access`] carries it.
 pub(crate) fn user_endpoint(
     graphql: &str,
-    user: &dyn gents::NodeIdentity,
-) -> gents::store::config_client::GraphqlEndpoint {
-    gents::store::config_client::GraphqlEndpoint::as_principal(graphql, user.did())
+    user: &dyn gents_store::identity::NodeIdentity,
+) -> gents_store::config_client::GraphqlEndpoint {
+    gents_store::config_client::GraphqlEndpoint::as_principal(graphql, user.did())
         .with_client_signing_capability(user.client_signing_capability().unwrap())
         .unwrap()
         .with_client_signed_agent_creates()
@@ -239,12 +251,13 @@ pub(crate) fn user_endpoint(
 
 /// Seeds an xAI backend whose profile effort will not be sent, as the
 /// fixture runtime. Returns the runtime's access and its Node DID.
-pub(crate) async fn seed_unsent_xai_effort() -> (gents::store::config_client::ConfigAccess, String)
-{
+pub(crate) async fn seed_unsent_xai_effort() -> (gents_store::config_client::ConfigAccess, String) {
     let node = std::sync::Arc::new(fixture_node_builder().build().await.unwrap());
-    gents::ensure_runtime_schemas(&node).await.unwrap();
+    gents_store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     let owner = publish_test_node(&node).await;
-    let access = gents::store::config_client::ConfigAccess::local_as(
+    let access = gents_store::config_client::ConfigAccess::local_as(
         node,
         ::identity::Did::new(owner.as_str()).unwrap(),
     );
@@ -252,11 +265,11 @@ pub(crate) async fn seed_unsent_xai_effort() -> (gents::store::config_client::Co
     let mut value = xai_effort_backend(owner);
     let catalogs = value.as_object_mut().unwrap().remove("catalogs").unwrap();
     value.as_object_mut().unwrap().remove("probe_status");
-    let backend: gents::InferenceBackend = serde_json::from_value(value).unwrap();
-    gents::documents::write_inference_backend_document(
+    let backend: gents_documents::InferenceBackend = serde_json::from_value(value).unwrap();
+    gents_documents::write_inference_backend_document(
         &access,
         &backend,
-        &gents::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -268,14 +281,14 @@ pub(crate) async fn seed_unsent_xai_effort() -> (gents::store::config_client::Co
         )
         .await
         .unwrap();
-    let catalog: gents::documents::BackendModelCatalog =
+    let catalog: gents_documents::BackendModelCatalog =
         serde_json::from_value(catalogs["entries"][0].clone()).unwrap();
     access
         .transact_write("test.backend.catalog", |txn| {
             let backend = &backend;
             let catalog = catalog.clone();
             Box::pin(async move {
-                gents::inference::backends::registry::record_model_catalog_in_txn(
+                gents_inference::backends::registry::record_model_catalog_in_txn(
                     txn, backend, catalog,
                 )
                 .await
@@ -283,7 +296,7 @@ pub(crate) async fn seed_unsent_xai_effort() -> (gents::store::config_client::Co
         })
         .await
         .unwrap();
-    gents::inference::backends::registry::set_backend_probe_status_as(
+    gents_inference::backends::registry::set_backend_probe_status_as(
         &access,
         owner,
         &backend.backend_id,
@@ -317,22 +330,25 @@ pub(crate) fn xai_effort_profile(owner: &str) -> Value {
 #[tokio::test]
 async fn catalog_freshness_reaches_cli_observation_reader() -> anyhow::Result<()> {
     let node = std::sync::Arc::new(fixture_node_builder().build().await?);
-    gents::ensure_runtime_schemas(&node).await?;
+    gents_store::schema::ensure_runtime_schemas(&node).await?;
     let owner = publish_test_node(&node).await;
-    let backend: gents::documents::InferenceBackend = serde_json::from_value(serde_json::json!({
+    let backend: gents_documents::InferenceBackend = serde_json::from_value(serde_json::json!({
         "node_did":owner, "backend_id":"catalog-backend", "name":"Catalog",
         "provider_kind":"OpenAiCompatible", "endpoint":"http://127.0.0.1:1/v1",
         "auth":{"kind":"unauthenticated"}
     }))?;
-    let access = gents::ConfigAccess::local_as(node.clone(), ::identity::Did::new(owner)?);
-    gents::documents::write_inference_backend_document(
+    let access = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        ::identity::Did::new(owner)?,
+    );
+    gents_documents::write_inference_backend_document(
         &access,
         &backend,
-        &gents::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await?;
     for observed_at in ["2026-10-28T01:00:00Z", "2026-10-28T02:00:00Z"] {
-        let catalog: gents::documents::BackendModelCatalog =
+        let catalog: gents_documents::BackendModelCatalog =
             serde_json::from_value(serde_json::json!({
                 "node_did":null, "observed_at":observed_at,
                 "models":[{"model_name":"retained-model"}]
@@ -342,7 +358,7 @@ async fn catalog_freshness_reaches_cli_observation_reader() -> anyhow::Result<()
                 let backend = &backend;
                 let catalog = catalog.clone();
                 Box::pin(async move {
-                    gents::inference::backends::registry::record_model_catalog_in_txn(
+                    gents_inference::backends::registry::record_model_catalog_in_txn(
                         txn, backend, catalog,
                     )
                     .await
@@ -366,27 +382,30 @@ async fn catalog_freshness_reaches_cli_observation_reader() -> anyhow::Result<()
 /// creates managed Agents that sign their own sessions and requests.
 pub(crate) struct ClientHome {
     pub(crate) home: gents::runtime::embedded::EmbeddedHome,
-    pub(crate) user: gents::KeyIdentity,
+    pub(crate) user: gents_store::identity::KeyIdentity,
     /// The User's client-signed access.
-    pub(crate) access: gents::store::config_client::ConfigAccess,
+    pub(crate) access: gents_store::config_client::ConfigAccess,
     _user_dir: tempfile::TempDir,
 }
 
 impl ClientHome {
     pub(crate) async fn new() -> Self {
-        use gents::documents::apply_desired_state_plan;
-        use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-        use gents::NodeIdentity as _;
+        use gents_documents::apply_desired_state_plan;
+        use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use gents_store::identity::NodeIdentity as _;
 
         let home = gents::runtime::embedded::EmbeddedHome::create_temp("cli-client-home")
             .await
             .unwrap();
         let user_dir = tempfile::tempdir().unwrap();
-        let user =
-            gents::KeyIdentity::load_or_create(user_dir.path().join("user.key"), None).unwrap();
-        gents::store::identity::GrantSet::OperatorUser
+        let user = gents_store::identity::KeyIdentity::load_or_create(
+            user_dir.path().join("user.key"),
+            None,
+        )
+        .unwrap();
+        gents_store::identity::GrantSet::OperatorUser
             .grant(
-                &gents::store::config_client::ConfigAccess::local_as(
+                &gents_store::config_client::ConfigAccess::local_as(
                     home.node.clone(),
                     ::identity::Did::new(home.did()).unwrap(),
                 ),
@@ -397,7 +416,7 @@ impl ClientHome {
         let access = user_access(home.graphql_endpoint().unwrap(), &user);
         let node = serde_json::json!({"node_did": home.did()});
         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-            collection: gents::Collection::Node,
+            collection: gents_store::collection::Collection::Node,
             add: node.clone(),
             update: node,
         }])
@@ -409,7 +428,7 @@ impl ClientHome {
                     apply_desired_state_plan(
                         txn,
                         plan,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await
                 })
@@ -429,10 +448,13 @@ impl ClientHome {
     }
 
     /// The User's key as a shareable signer, for owners that hold one.
-    pub(crate) fn user_signer(&self) -> std::sync::Arc<dyn gents::NodeIdentity> {
+    pub(crate) fn user_signer(&self) -> std::sync::Arc<dyn gents_store::identity::NodeIdentity> {
         std::sync::Arc::new(
-            gents::KeyIdentity::load_existing(self._user_dir.path().join("user.key"), None)
-                .unwrap(),
+            gents_store::identity::KeyIdentity::load_existing(
+                self._user_dir.path().join("user.key"),
+                None,
+            )
+            .unwrap(),
         )
     }
 
@@ -450,12 +472,12 @@ impl ClientHome {
         &self,
         display_name: &str,
     ) -> gents_protocol::agent_identity::AgentIdentityBinding {
-        use gents::documents::apply_desired_state_plan;
-        use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-        use gents::NodeIdentity as _;
+        use gents_documents::apply_desired_state_plan;
+        use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use gents_store::identity::NodeIdentity as _;
 
         let runtime = self.home.identity.as_ref();
-        let binding = gents::store::identity::provision_agent_identity_authorized(
+        let binding = gents_store::identity::provision_agent_identity_authorized(
             self.node(),
             runtime,
             &::identity::Did::new(self.user.did()).unwrap(),
@@ -466,7 +488,7 @@ impl ClientHome {
         let profile_id = format!("{}:inference", binding.agent_did);
         let documents = [
             (
-                gents::Collection::InferenceBackend,
+                gents_store::collection::Collection::InferenceBackend,
                 serde_json::json!({
                     "node_did": runtime.did(), "backend_id": backend_id, "name": "Test inference",
                     "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:1/v1",
@@ -474,14 +496,14 @@ impl ClientHome {
                 }),
             ),
             (
-                gents::Collection::InferenceProfile,
+                gents_store::collection::Collection::InferenceProfile,
                 serde_json::json!({
                     "node_did": runtime.did(), "profile_id": profile_id,
                     "backend_id": backend_id, "model_name": "test-model",
                 }),
             ),
             (
-                gents::Collection::Agent,
+                gents_store::collection::Collection::Agent,
                 serde_json::json!({
                     "node_did": runtime.did(), "agent_did": binding.agent_did,
                     "creation_nonce": binding.creation_nonce, "display_name": display_name,
@@ -507,7 +529,7 @@ impl ClientHome {
                     apply_desired_state_plan(
                         txn,
                         plan,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await
                 })
@@ -524,12 +546,12 @@ impl ClientHome {
     pub(crate) async fn agent_access(
         &self,
         binding: &gents_protocol::agent_identity::AgentIdentityBinding,
-    ) -> gents::store::config_client::ConfigAccess {
-        use gents::store::config_client::ConfigAccess;
+    ) -> gents_store::config_client::ConfigAccess {
+        use gents_store::config_client::ConfigAccess;
         let agent =
-            gents::store::identity::resolve_agent_identity(self.home.identity.as_ref(), binding)
+            gents_store::identity::resolve_agent_identity(self.home.identity.as_ref(), binding)
                 .unwrap();
-        gents::store::identity::GrantSet::AgentBaseline
+        gents_store::identity::GrantSet::AgentBaseline
             .grant(
                 &ConfigAccess::local_as(
                     self.node().clone(),
@@ -553,7 +575,7 @@ impl ClientHome {
         &self,
         binding: &gents_protocol::agent_identity::AgentIdentityBinding,
     ) {
-        gents::inference::backends::registry::set_backend_probe_status_as(
+        gents_inference::backends::registry::set_backend_probe_status_as(
             &self.access,
             self.node_did(),
             &format!("{}:backend", binding.agent_did),
@@ -578,9 +600,9 @@ impl ClientHome {
                 let (node_did, agent_did) = (&node_did, &agent_did);
                 Box::pin(async move {
                     let (agent_doc, _) =
-                        gents::documents::read_desired_state_record_in_txn(
+                        gents_documents::read_desired_state_record_in_txn(
                             txn,
-                            gents::Collection::Agent,
+                            gents_store::collection::Collection::Agent,
                             node_did,
                             agent_did,
                         )
@@ -598,7 +620,7 @@ impl ClientHome {
                         )
                         .await?;
                     let session_doc =
-                        gents::store::graphql::created_doc_id(&response, "AgentSession")?;
+                        gents_store::graphql::created_doc_id(&response, "AgentSession")?;
                     txn.add_resource_relationship(
                         "AgentSession",
                         &session_doc,

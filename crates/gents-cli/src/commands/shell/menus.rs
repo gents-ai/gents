@@ -1,23 +1,23 @@
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use gents::documents::mailbox_write_decl::MailboxKind;
-use gents::documents::patch::SelfConfigTarget;
-use gents::documents::InferenceProfile;
-use gents::pack::BindAccess;
-use gents::plugin::store::{list_records, InstalledPlugin};
-use gents::plugin::{allowed, ux};
-use gents::session::mailbox::MailboxItem;
-use gents::store::config_client::ConfigAccess;
-use gents::tools::background::job::promote::{list_promotions, PromotionRecord};
 use gents_desktop_core::client::{
     delete_event_source_on, delete_schedule_on, delete_skill_on, delete_tool_service_registry_on,
     delete_trigger_on, patch_config_components_on, set_default_agent_on, upsert_event_source_on,
     upsert_schedule_on, upsert_skill_on, upsert_trigger_on,
 };
 use gents_desktop_core::inference::{load_inference_setup_state, AgentView, InferenceSetupState};
+use gents_documents::mailbox_write_decl::MailboxKind;
+use gents_documents::patch::SelfConfigTarget;
+use gents_documents::InferenceProfile;
+use gents_pack::pack::BindAccess;
+use gents_pack::plugin::store::{list_records, InstalledPlugin};
+use gents_pack::plugin::{allowed, ux};
+use gents_session::session::mailbox::MailboxItem;
 use gents_shell::sample::{MenuId, Tone};
 use gents_shell::source::{Doc, MenuAct, MenuRow, PackAct};
+use gents_store::config_client::ConfigAccess;
+use gents_toolcalls::background::job::promote::{list_promotions, PromotionRecord};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
@@ -181,7 +181,7 @@ pub(super) async fn act(
                 .map_err(|error| format!("Couldn’t delete {label}: {error:#}"))
         }
         MenuAct::Dismiss { item } => {
-            gents::session::mailbox::dismiss_mailbox_item_on(&access, item)
+            gents_session::session::mailbox::dismiss_mailbox_item_on(&access, item)
                 .await
                 .map(|_| "dismissed".to_string())
                 .map_err(|error| format!("could not dismiss it: {error:#}"))

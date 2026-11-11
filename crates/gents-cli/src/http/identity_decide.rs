@@ -305,12 +305,12 @@ mod tests {
             crate::http::router::empty_activation_state();
         let router = crate::http::runtime_contract_router(
             format!("http://{addr}/api/v0/graphql"),
-            gents::store::config_client::GraphqlEndpoint::as_principal(
+            gents_store::config_client::GraphqlEndpoint::as_principal(
                 format!("http://{addr}/api/v0/graphql"),
                 owner.did(),
             )
             .with_client_signing_capability(
-                gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+                gents_store::config_client::ClientSigningCapability::from_ed25519_key(
                     owner.private_key_bytes(),
                 )?,
             )?,
@@ -354,12 +354,12 @@ mod tests {
             .post(format!("http://{runtime_addr}/identity/decide"))
             .header(
                 axum::http::header::AUTHORIZATION,
-                gents::store::config_client::GraphqlEndpoint::as_principal(
+                gents_store::config_client::GraphqlEndpoint::as_principal(
                     format!("http://{runtime_addr}/api/v0/graphql"),
                     owner.did(),
                 )
                 .with_client_signing_capability(
-                    gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+                    gents_store::config_client::ClientSigningCapability::from_ed25519_key(
                         owner.private_key_bytes(),
                     )?,
                 )?

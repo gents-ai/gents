@@ -1,22 +1,22 @@
 use std::sync::Arc;
 
-use gents::documents::apply_desired_state_plan;
-use gents::documents::{
+use gents_documents::apply_desired_state_plan;
+use gents_documents::{
     read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents::store::config_client::ConfigAccess;
-use gents::store::graphql::escape_graphql_string;
-use gents::tools::builtin::self_config::build_runtime_self_config_tools;
-use gents::tools::surface::{SelfConfigProcessCeiling, SelfConfigToolConfig};
-use gents::Collection;
-use gents::{BashMode, FileToolMode};
+use gents_documents::{BashMode, FileToolMode};
+use gents_store::collection::Collection;
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
+use gents_tools::builtin::self_config::build_runtime_self_config_tools;
+use gents_tools::surface::{SelfConfigProcessCeiling, SelfConfigToolConfig};
 use serde_json::{json, Value};
 
 use crate::support::agent_requests::RequestActors;
 use crate::support::{test_db, TestDb};
 
-fn test_plugins() -> Arc<gents::plugin::executor::PluginExecutor> {
-    Arc::new(gents::plugin::executor::PluginExecutor::default())
+fn test_plugins() -> Arc<gents_toolcalls::plugin::executor::PluginExecutor> {
+    Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::default())
 }
 
 const CONTEXT_ID: &str = "self-config-context";
@@ -57,7 +57,7 @@ impl SelfConfig {
     async fn tools(
         &self,
         config: &SelfConfigToolConfig,
-    ) -> Vec<Box<dyn gents::inference::llm::tool::ToolDyn>> {
+    ) -> Vec<Box<dyn gents_loop::tool::ToolDyn>> {
         build_runtime_self_config_tools(
             std::sync::Arc::default(),
             self.db.node.clone(),
@@ -94,7 +94,7 @@ impl SelfConfig {
                     apply_desired_state_plan(
                         txn,
                         plan,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await
                 })
@@ -127,7 +127,7 @@ impl SelfConfig {
             .transact_write("test.self_config.grant_selected", |txn| {
                 let node_did = &node_did;
                 Box::pin(async move {
-                    gents::documents::grant_selected_self_configuration(txn, node_did, agent_did)
+                    gents_documents::grant_selected_self_configuration(txn, node_did, agent_did)
                         .await
                 })
             })
@@ -139,7 +139,7 @@ impl SelfConfig {
             self.db.node.clone(),
             identity::Did::new(self.node_did()).unwrap(),
         );
-        gents::store::identity::GrantSet::PolicyDelegate
+        gents_store::identity::GrantSet::PolicyDelegate
             .grant(&admin, &identity::Did::new(agent_did).unwrap())
             .await
             .expect("init grants the default Agent its direct set");
@@ -214,7 +214,7 @@ fn tool_config(
 }
 
 async fn call_tool(
-    tools: &[Box<dyn gents::inference::llm::tool::ToolDyn>],
+    tools: &[Box<dyn gents_loop::tool::ToolDyn>],
     name: &str,
     args: Value,
 ) -> Result<String, String> {
@@ -588,7 +588,7 @@ async fn self_only_boundaries_reject_foreign_references_and_corrupted_bindings()
         "Sibling agent",
     )
     .await;
-    let sibling = gents::NodeIdentity::did(sibling.as_ref()).to_owned();
+    let sibling = gents_store::identity::NodeIdentity::did(sibling.as_ref()).to_owned();
     let node_did = f.node_did().to_owned();
     f.apply(vec![
         (

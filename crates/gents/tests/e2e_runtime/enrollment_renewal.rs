@@ -5,15 +5,15 @@
 
 use std::time::{Duration, Instant};
 
-use gents::runtime::agent::p2p_reconcile::{
+use gents_p2p::p2p_reconcile::{
     enrollment_authority_channel, run_enrollment_reconciler, run_pairing_reconciler,
     GraphqlEnrollmentStore,
 };
-use gents::store::config_client::ConfigAccess;
-use gents::store::graphql::escape_graphql_string;
 use gents_protocol::enrollment::{
     AuthorizationLease, AuthorizationLeaseState, EnrollmentDecisionKind, EnrollmentRenewalPolicy,
 };
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
 use tokio_util::sync::CancellationToken;
 
 use crate::support::enrollment::{authorize_enrollment_generation, EnrollmentGeneration};
@@ -61,8 +61,8 @@ async fn wait_for_route_sequence(db: &TestDb, peer: &str, sequence: i64) -> serd
 
 #[tokio::test]
 async fn opted_in_members_renew_over_authenticated_routes() {
-    use gents::runtime::agent::p2p_reconcile::enrollment_candidate::request_enrollment;
-    use gents::runtime::agent::p2p_reconcile::enrollment_member_authority::{
+    use gents_p2p::p2p_reconcile::enrollment_candidate::request_enrollment;
+    use gents_p2p::p2p_reconcile::enrollment_member_authority::{
         load_status_enrollment_approvals, EnrollmentAuthorityOutcome,
     };
 
@@ -80,10 +80,10 @@ async fn opted_in_members_renew_over_authenticated_routes() {
     };
     let server = support::test_p2p_db("automatic-renewal-server").await;
     let member = support::test_p2p_db("automatic-renewal-member").await;
-    gents::documents::ensure_node(&server.node, server.node_identity.did())
+    gents_documents::ensure_node(&server.node, server.node_identity.did())
         .await
         .unwrap();
-    gents::documents::ensure_node(&member.node, member.node_identity.did())
+    gents_documents::ensure_node(&member.node, member.node_identity.did())
         .await
         .unwrap();
     let (member_peer, _) = support::enrollment::wait_for_peer_identity(&member.node).await;
@@ -244,10 +244,10 @@ async fn re_enrolling_an_active_member_renews_its_lease_in_place() {
     let server = support::test_p2p_db("renewal-server").await;
     let member = support::test_p2p_db("renewal-member").await;
     let member_did = member.node_identity.did().to_string();
-    gents::documents::ensure_node(&server.node, server.node_identity.did())
+    gents_documents::ensure_node(&server.node, server.node_identity.did())
         .await
         .unwrap();
-    gents::documents::ensure_node(&member.node, &member_did)
+    gents_documents::ensure_node(&member.node, &member_did)
         .await
         .unwrap();
     let (peer, address) = support::enrollment::wait_for_peer_identity(&member.node).await;

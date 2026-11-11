@@ -97,8 +97,8 @@ fn configured_categories_equal(actual: &Value, expected: &Value) -> bool {
     let parse = |value: &Value| serde_json::from_value::<Vec<String>>(value.clone()).ok();
     match (parse(actual), parse(expected)) {
         (Some(actual), Some(expected)) => {
-            gents::tools::surface::configured_self_config_category_set(&actual)
-                == gents::tools::surface::configured_self_config_category_set(&expected)
+            gents_tools::surface::configured_self_config_category_set(&actual)
+                == gents_tools::surface::configured_self_config_category_set(&expected)
         }
         _ => false,
     }

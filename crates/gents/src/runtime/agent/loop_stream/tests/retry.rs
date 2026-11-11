@@ -10,7 +10,7 @@ async fn pre_stream_transport_failure_retries_and_succeeds() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("hi")),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -103,7 +103,7 @@ async fn transport_ladder_exhaustion_fails_with_last_error() {
 
     let stream = run_loop_stream(
         model,
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("hi")),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -142,7 +142,7 @@ async fn three_minute_outage_recovers_within_ladder() {
 
     let stream = run_loop_stream(
         model,
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("hi")),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -185,7 +185,7 @@ async fn parse_400_resamples_once_then_repairs_on_identical_error() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("use the echo tool")),
         Vec::new(),
         Arc::new(vec![echo_tool()]),
@@ -241,7 +241,7 @@ async fn first_stream_poll_parse_400_uses_pre_stream_retry_policy() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("hi")),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -275,7 +275,7 @@ async fn permanent_400_fails_immediately() {
 
     let stream = run_loop_stream(
         model,
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("hi")),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -301,7 +301,7 @@ async fn deadline_fail_fast_pre_sleep() {
         "too late",
     ))]);
     let mut loop_config = config(0);
-    loop_config.retry_policy = crate::runtime::agent::completion_retry::CompletionRetryPolicy {
+    loop_config.retry_policy = gents_loop::completion_retry::CompletionRetryPolicy {
         transport_backoff: vec![Duration::from_secs(30)],
         max_resample: 0,
         max_empty_resample: 0,
@@ -312,7 +312,7 @@ async fn deadline_fail_fast_pre_sleep() {
 
     let stream = run_loop_stream(
         model,
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("hi")),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -371,7 +371,7 @@ async fn mid_stream_decode_error_without_effects_retracts_and_resamples() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("hi")),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -413,7 +413,7 @@ async fn reasoning_only_completion_retracts_and_resamples() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("solve this")),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -456,7 +456,7 @@ async fn mid_stream_failure_after_tool_intent_retracts_without_dispatch() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("use the echo tool")),
         Vec::new(),
         Arc::new(tools),
@@ -508,7 +508,7 @@ async fn reasoning_rejection_repairs_once_without_resampling() {
     ]);
     let stream = run_loop_stream(
         model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("continue")),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -532,7 +532,7 @@ async fn repeated_reasoning_rejection_fails_after_its_one_repair() {
     ]);
     let stream = run_loop_stream(
         model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("continue")),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -549,8 +549,8 @@ async fn repeated_reasoning_rejection_fails_after_its_one_repair() {
 
 #[tokio::test]
 async fn owned_hook_observes_retry_and_clears_after_execution() {
-    use crate::inference::inference_observation::{InferenceKey, InferenceObservationRegistry};
-    use crate::inference::rendered_request::scope::{scope_request, test_scope};
+    use gents_inference::inference_observation::{InferenceKey, InferenceObservationRegistry};
+    use gents_inference::rendered_request::scope::{scope_request, test_scope};
     let (_node, hook, _writer, lifecycle) = owned_test_hook().await;
     let request = lifecycle.request();
     let registry = InferenceObservationRegistry::default();
@@ -562,7 +562,7 @@ async fn owned_hook_observes_retry_and_clears_after_execution() {
     };
     let guard = Arc::new(registry.begin(key.clone()).unwrap());
     let hook = hook.with_inference_observation(Some(guard.clone()));
-    let context = crate::inference::rendered_request::context_for_claimed_request(
+    let context = gents_inference::rendered_request::context_for_claimed_request(
         request,
         "",
         "test-model".into(),

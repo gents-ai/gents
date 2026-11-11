@@ -1,9 +1,9 @@
 pub use gents_loop::loop_stream::*;
 
 #[cfg(test)]
-use crate::inference::llm::rig_compat;
+use gents_inference::llm::rig_compat;
 #[cfg(test)]
-use crate::inference::rendered_request::{
+use gents_inference::rendered_request::{
     AssemblyBuildPath, AssemblyTrace, ContextCompactionReason,
 };
 #[cfg(test)]

@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use gents::session::{fork_on, ForkBoundary, ForkError, ForkOutcome, ForkParams};
-use gents::store::graphql::escape_graphql_string;
+use gents_session::session::{fork_on, ForkBoundary, ForkError, ForkOutcome, ForkParams};
+use gents_store::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
 use crate::cli::args::{ConfigListArgs, ConfigShowArgs, SessionCommand, SessionForkArgs};
@@ -153,8 +153,9 @@ async fn request_counts_by_session(
         return Ok(BTreeMap::new());
     }
     let sessions = graphql_string_list_literal(session_ids);
-    let scope =
-        gents::session::public_request_filter(&format!("session_id: {{ _in: {sessions} }}"));
+    let scope = gents_session::session::public_request_filter(&format!(
+        "session_id: {{ _in: {sessions} }}"
+    ));
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ {scope} }}) {{

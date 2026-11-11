@@ -4,10 +4,11 @@ use serde_json::Value;
 
 use crate::optimization::subject::{baseline_text, MaterializedPack};
 use crate::optimization::target::TargetField;
-use gents::documents::template::parse_template_for_validation;
-use gents::documents::DesiredStateApplyPlan;
-use gents::pack::interpolate;
-use gents::{Collection, ConfigReferences};
+use gents_documents::template::parse_template_for_validation;
+use gents_documents::ConfigReferences;
+use gents_documents::DesiredStateApplyPlan;
+use gents_pack::pack::interpolate;
+use gents_store::collection::Collection;
 
 mod seeds;
 pub(crate) use seeds::seed_gate;

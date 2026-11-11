@@ -1,0 +1,191 @@
+use super::super::admit::StepCall;
+use super::*;
+use crate::call::lifecycle::ToolRowKind;
+use gents_protocol::job::{DynamicMode, JobCeiling, JobPolicy, JobState};
+use gents_protocol::tool_call::AwaitMode;
+
+fn ceiling() -> JobCeiling {
+    JobCeiling {
+        targets: vec!["a".to_owned()],
+        max_live: 4,
+        max_spawns: 10,
+        max_messages_per_slot: 2,
+        result_bytes: 1024,
+        max_wall_secs: 60,
+    }
+}
+
+fn facts() -> HostFacts {
+    HostFacts {
+        engine_digest: "engine".to_owned(),
+        plugin_ref: "ns/plugin".to_owned(),
+        cwd: "/work".to_owned(),
+        args_digest: "args".to_owned(),
+        chain_root: "row".to_owned(),
+        origin: JobOrigin::Dynamic,
+        adopted_at: 1,
+        resume_of: None,
+        replayed_from: None,
+        ceiling_at_pin: ceiling(),
+    }
+}
+
+fn context() -> StepContext {
+    StepContext {
+        live: ceiling(),
+        available: true,
+        caller_targets: EndpointScope::All,
+        job_targets: EndpointScope::All,
+        policy: JobPolicy {
+            dynamic: DynamicMode::Run,
+            dynamic_targets: vec!["a".to_owned()],
+            ..Default::default()
+        },
+        engine_digest: "engine".to_owned(),
+        engine_provenance_operator: true,
+        max_hop: Some(8),
+        target_hops: vec![(("node".to_owned(), "a".to_owned()), 0)],
+        target_ids: vec![("a".to_owned(), ("node".to_owned(), "a".to_owned()))],
+        live_background: 0,
+        started_by_job: false,
+        cwd_allowed: Vec::new(),
+        within: Vec::new(),
+        script_digest: None,
+        adoption_facts: facts(),
+        caller_scope: ProcessControlScope {
+            request_id: "request".to_owned(),
+            session_id: "session".to_owned(),
+            node_did: "node".to_owned(),
+            requester_did: None,
+        },
+        control_targets: Vec::new(),
+        resume_targets: Vec::new(),
+        resume_facts: facts(),
+    }
+}
+
+fn step0_row() -> StepRow {
+    StepRow {
+        root: "row".to_owned(),
+        row_doc_id: "row".to_owned(),
+        caller_session: "session".to_owned(),
+        caller_cwd: String::new(),
+        handle: String::new(),
+        caller_hop: 0,
+        call: StepCall {
+            argv: vec!["run".to_owned()],
+            args: None,
+            script: None,
+            agent_budget: None,
+        },
+        root_call: None,
+        resume: None,
+        pin: None,
+        children: Vec::new(),
+        spent: 0,
+        observed_terminal: 0,
+        consecutive_failures: 0,
+        state: JobState::Running,
+    }
+}
+
+fn view() -> ToolCallView {
+    ToolCallView {
+        state: ToolCallState::Running,
+        kind: ToolRowKind::Native,
+        await_mode: AwaitMode::Foreground,
+    }
+}
+
+const PIN: &str =
+    r#""pin": {"script_id": "s", "source_digest": "sha256:s", "agent_budget": 2, "handle": "h"}"#;
+
+fn output(json: &str) -> JobStepOutput {
+    serde_json::from_str(json).unwrap()
+}
+
+fn pinned_effects() -> JobStepOutput {
+    output(&format!(
+        r#"{{"effects": {{{PIN}, "spawn": [{{"slot": "s", "attempt": 0, "target": "a", "prompt": "p", "title": "t"}}]}}}}"#
+    ))
+}
+
+#[test]
+fn pinless_or_refused_step0_leaves_the_call() {
+    let adopted = adopt(
+        &context(),
+        &view(),
+        &step0_row(),
+        &output(r#"{"result": "done"}"#),
+    )
+    .unwrap();
+    assert_eq!(adopted.call, view());
+    assert_eq!(adopted.delivery, None);
+
+    let full = StepContext {
+        live_background: 8,
+        ..context()
+    };
+    let refusal = adopt(&full, &view(), &step0_row(), &pinned_effects()).unwrap_err();
+    assert_eq!(refusal.code(), Some("background_tool_budget_exceeded"));
+}
+
+#[test]
+fn unique_handle_keeps_a_free_handle_and_suffixes_the_least_free_n() {
+    assert_eq!(unique_handle(&[], "h"), "h");
+    assert_eq!(unique_handle(&["x".to_owned()], "h"), "h");
+    assert_eq!(unique_handle(&["h".to_owned()], "h"), "h-2");
+    assert_eq!(
+        unique_handle(&["h".to_owned(), "h-2".to_owned()], "h"),
+        "h-3"
+    );
+}
+
+#[test]
+fn split_address_splits_at_the_last_colon() {
+    assert_eq!(
+        split_address("job-session:a:b:call1"),
+        Some(("job-session:a:b".to_owned(), "call1".to_owned()))
+    );
+    assert_eq!(split_address("nocolon"), None);
+}
+
+/// A step that spawns without a target, on a job whose targets the caller's
+/// Tools do not select, is told which targets are unwired; a named target or
+/// a fully offered job is an ordinary malformed output.
+#[test]
+fn a_targetless_spawn_names_the_job_targets_the_caller_has_not_wired() {
+    let binding = |targets: &[&str]| JobBinding {
+        tool_name: "workflow".into(),
+        plugin: gents_documents::PluginToolRef {
+            plugin: "gents/workflow".into(),
+            digest: None,
+            tool_calls: false,
+            input_fields: Vec::new(),
+            job: None,
+        },
+        settings: Some(gents_protocol::job::PluginJobSettings {
+            agent_targets: targets.iter().map(|target| (*target).to_owned()).collect(),
+            max_live: 1,
+            max_spawns: 1,
+            max_messages_per_slot: 1,
+            result_bytes: 1,
+            max_wall_secs: 1,
+            policy: Default::default(),
+        }),
+    };
+    let targetless = serde_json::json!({"effects": {"spawn": [{"slot": "a", "prompt": "p"}]}});
+    let unwired = unwired_spawn_targets(&targetless, &binding(&["wf-read-only"]), &[])
+        .expect("the job's only target is not offered");
+    assert_eq!(unwired.job, ["wf-read-only"]);
+    assert_eq!(unwired.missing, ["wf-read-only"]);
+    assert!(unwired_spawn_targets(
+        &targetless,
+        &binding(&["wf-read-only"]),
+        &["wf-read-only".to_owned()]
+    )
+    .is_none());
+    let named =
+        serde_json::json!({"effects": {"spawn": [{"slot": "a", "target": "wf-read-only"}]}});
+    assert!(unwired_spawn_targets(&named, &binding(&["wf-read-only"]), &[]).is_none());
+}

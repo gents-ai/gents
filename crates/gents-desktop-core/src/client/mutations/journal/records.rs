@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;
-use gents::store::config_client::ConfigApplyTxn;
-use gents::store::graphql::escape_graphql_string;
+use gents_store::config_client::ConfigApplyTxn;
+use gents_store::graphql::escape_graphql_string;
 
 pub(crate) mod goal;
 pub(crate) mod publication;
@@ -91,7 +91,7 @@ async fn read_in_txn(
 }
 
 fn require_written(response: &serde_json::Value, field: &str) -> Result<()> {
-    let rows = gents::store::graphql::mutation_documents(response, field)?
+    let rows = gents_store::graphql::mutation_documents(response, field)?
         .context("client journal mutation omitted its result")?;
     anyhow::ensure!(
         rows.len() == 1,
@@ -117,17 +117,21 @@ mod mutation_result_tests {
 mod signer_tests {
     use super::require_client_signer;
     use defra_node::Node as EmbeddedNode;
-    use gents::NodeIdentity as _;
+    use gents_store::identity::NodeIdentity as _;
 
     /// `Identity.ClientAgentJournal.privatePolicy`: only the local client key
     /// may write its private journal.
     #[tokio::test]
     async fn client_journal_refuses_a_different_local_signer() {
         let home = tempfile::tempdir().unwrap();
-        let client =
-            gents::KeyIdentity::load_or_create(home.path().join("client.key"), None).unwrap();
+        let client = gents_store::identity::KeyIdentity::load_or_create(
+            home.path().join("client.key"),
+            None,
+        )
+        .unwrap();
         let other =
-            gents::KeyIdentity::load_or_create(home.path().join("other.key"), None).unwrap();
+            gents_store::identity::KeyIdentity::load_or_create(home.path().join("other.key"), None)
+                .unwrap();
         let node = EmbeddedNode::builder()
             .with_node_identity_did(client.did())
             .build()

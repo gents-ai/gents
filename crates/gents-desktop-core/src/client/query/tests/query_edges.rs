@@ -21,14 +21,14 @@ async fn bounded_task_history_preserves_physical_twins_at_the_cutoff() {
             "purpose":"normal", "content":format!("physical twin {index}")
         }))
         .unwrap();
-        let result = gents::store::config_client::ConfigAccess::write_local(
+        let result = gents_store::config_client::ConfigAccess::write_local(
             &node,
             "test.task_history_twins",
             &format!("mutation {{ create_AgentRequest(input: {input}) {{ _docID }} }}"),
         )
         .await
         .unwrap();
-        docs.push(gents::store::graphql::created_doc_id(&result, "AgentRequest").unwrap());
+        docs.push(gents_store::graphql::created_doc_id(&result, "AgentRequest").unwrap());
     }
     for index in 0..9 {
         let input = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
@@ -38,7 +38,7 @@ async fn bounded_task_history_preserves_physical_twins_at_the_cutoff() {
             "purpose":null
         }))
         .unwrap();
-        gents::store::config_client::ConfigAccess::write_local(
+        gents_store::config_client::ConfigAccess::write_local(
             &node,
             "test.task_history_nonpublic",
             &format!("mutation {{ create_AgentRequest(input: {input}) {{ _docID }} }}"),
@@ -149,7 +149,7 @@ fn combined_snapshot_keeps_unknown_config_fields_rejected_and_observations_indep
     )
     .expect("trigger observation remains independently decodable")
     .0;
-    let backends: Vec<gents::documents::InferenceBackendMetadata> =
+    let backends: Vec<gents_documents::InferenceBackendMetadata> =
         parse_projected_query_rows(&data, "inference_backends", INFERENCE_BACKEND_FIELDS, "")
             .expect("row-level malformed config is skipped");
     let mut valid_backend_data = data.clone();
@@ -157,7 +157,7 @@ fn combined_snapshot_keeps_unknown_config_fields_rejected_and_observations_indep
         .as_object_mut()
         .expect("backend row")
         .remove("future_backend_config");
-    let valid_backends: Vec<gents::documents::InferenceBackendMetadata> =
+    let valid_backends: Vec<gents_documents::InferenceBackendMetadata> =
         parse_projected_query_rows(
             &valid_backend_data,
             "inference_backends",
@@ -524,7 +524,7 @@ async fn trigger_patch_counts_physical_documents_for_mixed_present_and_missing_i
     ensure_runtime_schemas(node.as_ref())
         .await
         .expect("schemas");
-    gents::store::config_client::ConfigAccess::write_local(
+    gents_store::config_client::ConfigAccess::write_local(
         &node,
         "test.trigger_patch",
         r#"mutation {
@@ -693,8 +693,8 @@ async fn load_agent_tool_calls_hydrates_background_projection_fields() {
 
 #[tokio::test]
 async fn load_agent_tool_calls_hydrates_job_pin_and_progress() {
-    use gents::store::config_client::ConfigAccess;
     use gents_protocol::job::{JobBudget, JobCeiling, JobOrigin, JobPin, JobProgress, JobState};
+    use gents_store::config_client::ConfigAccess;
 
     let node = Arc::new(
         crate::test_support::node_builder()

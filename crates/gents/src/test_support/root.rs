@@ -1,10 +1,10 @@
-use super::documents::{bootstrap_signed_test_node, set_test_default_agent_as};
-use super::inference::install_test_agent_binding_with_access;
+use gents_documents::test_support::{bootstrap_signed_test_node, set_test_default_agent_as};
+use gents_inference::test_support::install_test_agent_binding_with_access;
 
 const CAPTURED_EVENT_TARGETS: &[&str] = &[
-    crate::store::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET,
+    gents_store::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET,
     crate::runtime::status::RECONCILE_PHASE_EVENT_TARGET,
-    crate::session::REFUSAL_PROJECTION_EVENT_TARGET,
+    gents_session::session::REFUSAL_PROJECTION_EVENT_TARGET,
 ];
 
 pub(crate) fn enable_scoped_event_capture() {
@@ -41,8 +41,8 @@ pub(crate) async fn signed_test_node(
     name: &str,
 ) -> (
     crate::support::TestDb,
-    crate::store::identity::KeyIdentity,
-    crate::store::config_client::ConfigAccess,
+    gents_store::identity::KeyIdentity,
+    gents_store::config_client::ConfigAccess,
     gents_protocol::agent_identity::AgentIdentityBinding,
 ) {
     let db = crate::support::test_db(name).await;
@@ -53,8 +53,8 @@ pub(crate) async fn signed_test_node_without_agent(
     name: &str,
 ) -> (
     crate::support::TestDb,
-    crate::store::identity::KeyIdentity,
-    crate::store::config_client::ConfigAccess,
+    gents_store::identity::KeyIdentity,
+    gents_store::config_client::ConfigAccess,
 ) {
     let db = crate::support::test_db(name).await;
     signed_test_node_without_agent_from_db(db, name).await
@@ -65,15 +65,15 @@ pub(crate) async fn signed_test_node_without_agent_from_db(
     name: &str,
 ) -> (
     crate::support::TestDb,
-    crate::store::identity::KeyIdentity,
-    crate::store::config_client::ConfigAccess,
+    gents_store::identity::KeyIdentity,
+    gents_store::config_client::ConfigAccess,
 ) {
-    use crate::store::config_client::ConfigAccess;
-    use crate::store::identity::{GrantSet, NodeIdentity};
+    use gents_store::config_client::ConfigAccess;
+    use gents_store::identity::{GrantSet, NodeIdentity};
 
     let fixture_name = name.to_owned();
     let user = tokio::task::spawn_blocking(move || {
-        crate::store::test_support::test_identity(&fixture_name)
+        gents_store::test_support::test_identity(&fixture_name)
     })
     .await
     .unwrap();
@@ -95,17 +95,17 @@ pub async fn signed_test_node_from_db(
     name: &str,
 ) -> (
     crate::support::TestDb,
-    crate::store::identity::KeyIdentity,
-    crate::store::config_client::ConfigAccess,
+    gents_store::identity::KeyIdentity,
+    gents_store::config_client::ConfigAccess,
     gents_protocol::agent_identity::AgentIdentityBinding,
 ) {
-    use crate::store::identity::NodeIdentity;
+    use gents_store::identity::NodeIdentity;
 
     let (db, user, access) = signed_test_node_without_agent_from_db(db, name).await;
     let runtime = db.node_identity.as_ref();
     let user_did = identity::Did::new(user.did()).unwrap();
     let binding =
-        crate::store::identity::provision_agent_identity_authorized(&db.node, runtime, &user_did)
+        gents_store::identity::provision_agent_identity_authorized(&db.node, runtime, &user_did)
             .await
             .unwrap();
     install_test_agent_binding_with_access(

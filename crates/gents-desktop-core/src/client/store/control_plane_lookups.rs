@@ -140,17 +140,14 @@ impl ClientStore {
                 .filter(|trigger| {
                     matches!(
                         trigger.source,
-                        gents::documents::TriggerSource::Schedule { .. }
+                        gents_documents::TriggerSource::Schedule { .. }
                     )
                 })
                 .count(),
             event_count: triggers
                 .iter()
                 .filter(|trigger| {
-                    matches!(
-                        trigger.source,
-                        gents::documents::TriggerSource::Event { .. }
-                    )
+                    matches!(trigger.source, gents_documents::TriggerSource::Event { .. })
                 })
                 .count(),
         }

@@ -1,12 +1,12 @@
 use super::ReplayAssociations;
 use defra_node::Node as EmbeddedNode;
-use gents::inference::llm::message::{
-    AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
-    UserContent,
-};
 use gents::session::provider_context_reduction::{
     load_for_request, persist, reduction_key, rendered_capture_cites_reduction,
     NewProviderContextReduction,
+};
+use gents_inference::llm::message::{
+    AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
+    UserContent,
 };
 use gents_lean_vocab::lean_durable_reduction_cases;
 use gents_protocol::rendered_request::{AssemblyBuildPath, AssemblyTrace, ProvenanceManifest};
@@ -78,33 +78,38 @@ fn provenance(scope: &str, messages: Vec<Message>, keys: Vec<String>) -> String 
 
 #[tokio::test]
 async fn generated_durable_reduction_cases_pin_storage_and_capture_citations() {
-    use gents::NodeIdentity as _;
+    use gents_store::identity::NodeIdentity as _;
     let cases = lean_durable_reduction_cases();
     assert!(!cases.is_empty(), "Lean emitted no durable-reduction cases");
 
     for case in cases {
         let directory = tempfile::tempdir().unwrap();
-        let identity =
-            gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
+        let identity = gents_store::identity::KeyIdentity::load_or_create(
+            directory.path().join("node.key"),
+            None,
+        )
+        .unwrap();
         let node = std::sync::Arc::new(
             EmbeddedNode::builder()
-                .with_node_identity_did(gents::NodeIdentity::did(&identity))
+                .with_node_identity_did(gents_store::identity::NodeIdentity::did(&identity))
                 .build()
                 .await
                 .unwrap(),
         );
-        gents::ensure_runtime_schemas(&node).await.unwrap();
-        let binding = gents::store::identity::provision_agent_identity(&identity).unwrap();
-        let agent = gents::store::identity::resolve_agent_identity(&identity, &binding).unwrap();
+        gents_store::schema::ensure_runtime_schemas(&node)
+            .await
+            .unwrap();
+        let binding = gents_store::identity::provision_agent_identity(&identity).unwrap();
+        let agent = gents_store::identity::resolve_agent_identity(&identity, &binding).unwrap();
         let agent_did = agent.did().to_owned();
         let signer = agent.managed_agent_signer().unwrap();
-        let access = gents::ConfigAccess::local_managed_agent(
+        let access = gents_store::config_client::ConfigAccess::local_managed_agent(
             node.clone(),
             agent_did.parse().unwrap(),
             agent.as_ref(),
         )
         .unwrap();
-        access.write("test.reduction.session", &format!(r#"mutation {{ create_AgentSession(input: {{session_id: "session-11", node_did: "{}", agent_did: "{}", created_at: "2026-01-01T00:00:00Z"}}) {{ _docID }} }}"#, gents::store::graphql::escape_graphql_string(identity.did()), gents::store::graphql::escape_graphql_string(&agent_did))).await.unwrap();
+        access.write("test.reduction.session", &format!(r#"mutation {{ create_AgentSession(input: {{session_id: "session-11", node_did: "{}", agent_did: "{}", created_at: "2026-01-01T00:00:00Z"}}) {{ _docID }} }}"#, gents_store::graphql::escape_graphql_string(identity.did()), gents_store::graphql::escape_graphql_string(&agent_did))).await.unwrap();
         let request_doc_id = format!("request-doc-{}", case.request_doc_id);
         let key = reduction_key(
             identity.did(),

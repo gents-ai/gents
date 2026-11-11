@@ -1,16 +1,20 @@
 use std::sync::Arc;
 
-use crate::inference::llm::tool::Tool;
-use crate::inference::llm::tool::ToolDefinition;
+use gents_loop::tool::Tool;
+use gents_loop::tool::ToolDefinition;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::super::*;
-use crate::store::identity::KeyIdentity;
+use gents_store::identity::KeyIdentity;
 
 pub(super) async fn test_node(
     name: &str,
-) -> (crate::support::TestDb, KeyIdentity, crate::ConfigAccess) {
+) -> (
+    crate::support::TestDb,
+    KeyIdentity,
+    gents_store::config_client::ConfigAccess,
+) {
     let db = crate::support::test_db(name).await;
     crate::test_support::root::signed_test_node_without_agent_from_db(db, name).await
 }
@@ -18,18 +22,18 @@ pub(super) async fn test_node(
 pub(super) async fn install_agent(
     node: &Arc<EmbeddedNode>,
     identity: &dyn NodeIdentity,
-    owner: &crate::ConfigAccess,
+    owner: &gents_store::config_client::ConfigAccess,
     name: &str,
 ) -> String {
     let owner_did = owner.actor_did().expect("signed fixture owner");
-    let binding = crate::store::identity::provision_agent_identity_authorized(
+    let binding = gents_store::identity::provision_agent_identity_authorized(
         node,
         identity,
         &identity::Did::new(owner_did).unwrap(),
     )
     .await
     .unwrap();
-    crate::test_support::inference::install_test_agent_binding_with_access(
+    gents_inference::test_support::install_test_agent_binding_with_access(
         identity.did(),
         name,
         &binding,
@@ -42,10 +46,10 @@ pub(super) async fn install_agent(
 pub(super) async fn install_default_agent(
     node: &Arc<EmbeddedNode>,
     identity: &dyn NodeIdentity,
-    owner: &crate::ConfigAccess,
+    owner: &gents_store::config_client::ConfigAccess,
 ) -> String {
     let did = install_agent(node, identity, owner, "Default fixture agent").await;
-    crate::test_support::documents::set_test_default_agent_as(owner, identity.did(), &did).await;
+    gents_documents::test_support::set_test_default_agent_as(owner, identity.did(), &did).await;
     did
 }
 
@@ -97,7 +101,7 @@ impl Tool for EchoTool {
 
 pub(super) async fn insert_backend(
     node_did: &str,
-    owner: &crate::ConfigAccess,
+    owner: &gents_store::config_client::ConfigAccess,
     backend_id: &str,
     endpoint: &str,
 ) {
@@ -110,9 +114,9 @@ pub(super) async fn insert_backend(
         "auth": {"kind": "unauthenticated"},
         "max_concurrent": 2
     });
-    let plan = crate::documents::DesiredStateApplyPlan::new(vec![
-        crate::documents::DesiredStateApplyDocument {
-            collection: crate::Collection::InferenceBackend,
+    let plan = gents_documents::DesiredStateApplyPlan::new(vec![
+        gents_documents::DesiredStateApplyDocument {
+            collection: gents_store::collection::Collection::InferenceBackend,
             add: value.clone(),
             update: value,
         },
@@ -122,17 +126,17 @@ pub(super) async fn insert_backend(
         .transact_write("test.insert_backend", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::documents::apply_desired_state_plan(
+                gents_documents::apply_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
         })
         .await
         .unwrap();
-    crate::inference::backends::registry::set_backend_probe_status_as(
+    gents_inference::backends::registry::set_backend_probe_status_as(
         owner, node_did, backend_id, "healthy",
     )
     .await

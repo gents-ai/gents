@@ -10,15 +10,15 @@ use crate::accounts::{observe_provider_accounts, retry_pending_credential};
 use crate::accounts::{require_reachable_configuration, save_issued_credential};
 use std::time::Duration;
 
+use gents_desktop_core::client::ClientCore;
 #[cfg(test)]
-use gents::inference::auth::credential::list_oauth_credentials_on;
+use gents_inference::auth::credential::list_oauth_credentials_on;
 #[cfg(test)]
-use gents::inference::auth::credential::OAuthCredential;
-use gents::inference::auth::credential::SignIn;
-use gents::inference::backends::setup::{
+use gents_inference::auth::credential::OAuthCredential;
+use gents_inference::auth::credential::SignIn;
+use gents_inference::backends::setup::{
     InferenceAuthMethod, InferenceModelRecommendation, InferenceSetupCatalog,
 };
-use gents_desktop_core::client::ClientCore;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, Runtime, State};
@@ -201,7 +201,7 @@ pub(crate) async fn desktop_codex_login<R>(
 where
     R: Runtime,
 {
-    let provider = gents::inference::clients::chatgpt_codex::normalize_provider(
+    let provider = gents_inference::clients::chatgpt_codex::normalize_provider(
         request.provider.as_deref().unwrap_or_default(),
     );
     let signed = sign_in::run(
@@ -312,7 +312,7 @@ where
     let access = core
         .operator_access(request.node_did.trim())
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    gents::inference::auth::credential::set_account_enabled(
+    gents_inference::auth::credential::set_account_enabled(
         &access,
         request.node_did.trim(),
         &request.credential_id,
@@ -339,7 +339,7 @@ where
     let access = core
         .operator_access(node_did)
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    gents::inference::auth::credential::set_account_label(
+    gents_inference::auth::credential::set_account_label(
         &access,
         node_did,
         &request.credential_id,
@@ -421,7 +421,7 @@ pub(crate) async fn desktop_grok_login<R>(
 where
     R: Runtime,
 {
-    let provider = gents::inference::clients::xai_grok::normalize_provider(
+    let provider = gents_inference::clients::xai_grok::normalize_provider(
         request.provider.as_deref().unwrap_or_default(),
     );
     let signed = sign_in::run(
@@ -479,7 +479,7 @@ mod provider_account_tests {
             doc_id: None,
             credential_id: format!("claude-subscription:{node_did}"),
             node_did: node_did.to_string(),
-            provider: gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER.to_string(),
+            provider: gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER.to_string(),
             access_token: "issued-access".to_string(),
             refresh_token: "issued-refresh".to_string(),
             id_token: None,
@@ -498,11 +498,13 @@ mod provider_account_tests {
         }
     }
 
-    fn unreachable_operator() -> gents::ConfigAccess {
+    fn unreachable_operator() -> gents_store::config_client::ConfigAccess {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind temporary port");
         let address = listener.local_addr().expect("local address");
         drop(listener);
-        gents::ConfigAccess::graphql(format!("http://{address}/api/v0/graphql"))
+        gents_store::config_client::ConfigAccess::graphql(format!(
+            "http://{address}/api/v0/graphql"
+        ))
     }
 
     /// A runtime whose User saves sign-ins through the client-signed
@@ -529,7 +531,7 @@ mod provider_account_tests {
         let error = require_reachable_configuration(
             Ok(unreachable_operator()),
             "did:key:zAgent",
-            gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+            gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
         )
         .await
         .expect_err("an unreachable runtime must refuse to start sign-in");
@@ -542,7 +544,7 @@ mod provider_account_tests {
                 "managed node did:key:zAgent has no operator GraphQL endpoint"
             )),
             "did:key:zAgent",
-            gents::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+            gents_inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
         )
         .await
         .expect_err("unresolvable configuration access must refuse sign-in");
@@ -553,7 +555,7 @@ mod provider_account_tests {
         require_reachable_configuration(
             Ok(runtime.user_access()),
             runtime.node_did(),
-            gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+            gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
         )
         .await
         .expect("a serving runtime admits sign-in");
@@ -578,7 +580,7 @@ mod provider_account_tests {
     async fn a_desktop_sign_in_writes_its_own_key() {
         let runtime = served().await;
         let node_did = runtime.node_did();
-        let provider = gents::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
+        let provider = gents_inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
         let keyed = OAuthCredential {
             credential_id: format!("{provider}:{node_did}"),
             provider: provider.to_string(),
@@ -587,17 +589,17 @@ mod provider_account_tests {
             label: None,
             ..issued_credential(node_did)
         };
-        gents::inference::auth::credential::upsert_oauth_credential_on(
+        gents_inference::auth::credential::upsert_oauth_credential_on(
             &runtime.user_access(),
             &keyed,
         )
         .await
         .expect("seed a keyed row");
 
-        let keyless = gents::inference::auth::xai_login::credential_from_login_tokens(
+        let keyless = gents_inference::auth::xai_login::credential_from_login_tokens(
             node_did,
             provider,
-            &gents::inference::auth::xai_login::XaiLoginTokens {
+            &gents_inference::auth::xai_login::XaiLoginTokens {
                 access_token: "not-a-jwt".to_string(),
                 refresh_token: "keyless-refresh".to_string(),
                 id_token: None,
@@ -623,7 +625,7 @@ mod provider_account_tests {
         let pending = PendingOAuthCredentials::default();
         let runtime = served().await;
         let node_did = runtime.node_did();
-        let provider = gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
+        let provider = gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
 
         let error = save_issued_credential(
             &pending,
@@ -673,7 +675,7 @@ mod provider_account_tests {
         let pending = PendingOAuthCredentials::default();
         let runtime = served().await;
         let node_did = runtime.node_did();
-        let provider = gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
+        let provider = gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
 
         let unobserved = observe_provider_accounts(&pending, Ok(unreachable_operator()), node_did)
             .await
@@ -732,11 +734,11 @@ mod provider_account_tests {
         for (node_did, provider) in [
             (
                 "did:key:zOther",
-                gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+                gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
             ),
             (
                 "did:key:zAgent",
-                gents::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+                gents_inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
             ),
         ] {
             let error =
@@ -759,7 +761,7 @@ mod provider_account_tests {
         let pending = std::sync::Arc::new(PendingOAuthCredentials::default());
         let writes = Writes::default();
         let node_did = "did:key:zAgent";
-        let provider = gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
+        let provider = gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
 
         let older = pending.issue(credential_with_token(node_did, "token-a"));
         assert!(matches!(
@@ -834,7 +836,7 @@ mod provider_account_tests {
         let pending = std::sync::Arc::new(PendingOAuthCredentials::default());
         let writes = Writes::default();
         let node_did = "did:key:zAgent";
-        let provider = gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
+        let provider = gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
 
         let older = pending.issue(credential_with_token(node_did, "token-a"));
         let newer = pending.issue(credential_with_token(node_did, "token-b"));
@@ -913,10 +915,10 @@ mod provider_account_tests {
         account_id: &str,
         token: &str,
     ) -> OAuthCredential {
-        gents::inference::auth::claude::credential_from_login_tokens(
+        gents_inference::auth::claude::credential_from_login_tokens(
             node_did,
-            gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
-            &gents::inference::auth::claude::ClaudeLoginTokens {
+            gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+            &gents_inference::auth::claude::ClaudeLoginTokens {
                 access_token: token.into(),
                 refresh_token: format!("refresh-{token}"),
                 expires_in: Some(3600),
@@ -1068,7 +1070,7 @@ mod provider_account_tests {
         core.set_selected_node_did(Some(node_did.to_string()));
         assert!(matches!(
             core.operator_access(node_did),
-            Ok(gents::ConfigAccess::Graphql(_))
+            Ok(gents_store::config_client::ConfigAccess::Graphql(_))
         ));
 
         let pending = PendingOAuthCredentials::default();
@@ -1122,7 +1124,7 @@ mod provider_account_tests {
                 enabled,
                 ..issued_credential(node_did)
             };
-            gents::inference::auth::credential::upsert_oauth_credential_on(&access, &credential)
+            gents_inference::auth::credential::upsert_oauth_credential_on(&access, &credential)
                 .await
                 .expect("store account");
         }
@@ -1140,18 +1142,18 @@ mod provider_account_tests {
             .collect();
         assert_eq!(ids, ["c", "b", "a"]);
 
-        let provider = gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
+        let provider = gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
         let first_match = accounts
             .iter()
             .find(|account| {
                 account.provider == provider && account.enabled && !account.pending_save
             })
             .map(|account| account.credential_id.clone());
-        let resolved = gents::inference::auth::credential::resolve_oauth_credential(
+        let resolved = gents_inference::auth::credential::resolve_oauth_credential(
             &access,
             node_did,
             provider,
-            gents::inference::auth::credential::AccountPick::ProviderDefault,
+            gents_inference::auth::credential::AccountPick::ProviderDefault,
         )
         .await
         .expect("resolve")
@@ -1164,14 +1166,14 @@ mod provider_account_tests {
         let runtime = served().await;
         let access = runtime.user_access();
         let node_did = runtime.node_did();
-        gents::inference::auth::credential::store_sign_in(
+        gents_inference::auth::credential::store_sign_in(
             &access,
             claude_sign_in(node_did, None, "acct-a", "SECRET-a"),
             None,
         )
         .await
         .expect("store the first account");
-        gents::inference::auth::credential::store_sign_in(
+        gents_inference::auth::credential::store_sign_in(
             &access,
             OAuthCredential {
                 provider_account_key: Some("KEY-SENTINEL".to_string()),
@@ -1263,7 +1265,7 @@ mod provider_account_tests {
             &pending,
             access(),
             node_did,
-            gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+            gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
         )
         .await
         .expect("retry stores the held sign-in");
@@ -1318,7 +1320,7 @@ mod provider_account_tests {
             .unwrap();
         let labels: Vec<String> = stored
             .iter()
-            .map(gents::inference::auth::credential::effective_account_label)
+            .map(gents_inference::auth::credential::effective_account_label)
             .collect();
         assert_eq!(labels, ["Claude", "Work"]);
     }
@@ -1371,7 +1373,10 @@ mod provider_account_tests {
         format!("http://{address}")
     }
 
-    fn stored_backend(node_did: &str, backend: serde_json::Value) -> gents::InferenceBackend {
+    fn stored_backend(
+        node_did: &str,
+        backend: serde_json::Value,
+    ) -> gents_documents::InferenceBackend {
         let mut backend = backend;
         backend["node_did"] = node_did.into();
         serde_json::from_value(backend).expect("backend")
@@ -1379,15 +1384,15 @@ mod provider_account_tests {
 
     #[tokio::test]
     async fn usage_views_follow_each_backend_with_source_age_and_honest_unknowns() {
-        use gents::inference::usage_observation::account_usage::{
+        use gents_inference::usage_observation::account_usage::{
             UsageReport, UsageSource, UsageWindow,
         };
-        use gents::inference::usage_observation::{
+        use gents_inference::usage_observation::{
             read_account_usage, read_node_usage, record_usage, UsageAccount, UsageEndpoints,
             UsageRead, UsageTrigger,
         };
 
-        let cache = gents::inference::usage_observation::UsageCache::default();
+        let cache = gents_inference::usage_observation::UsageCache::default();
         let runtime = served().await;
         let node = runtime.node().clone();
         let access = runtime.user_access();
@@ -1407,7 +1412,7 @@ mod provider_account_tests {
             ..UsageReport::default()
         };
 
-        let a = gents::inference::auth::credential::store_sign_in(
+        let a = gents_inference::auth::credential::store_sign_in(
             &access,
             claude_sign_in(node_did, Some("account-a"), "acct-a", "SECRET-a"),
             None,
@@ -1415,7 +1420,7 @@ mod provider_account_tests {
         .await
         .expect("store the original account")
         .credential;
-        let b = gents::inference::auth::credential::store_sign_in(
+        let b = gents_inference::auth::credential::store_sign_in(
             &access,
             OAuthCredential {
                 provider_account_key: Some("KEY-SENTINEL".to_string()),
@@ -1461,22 +1466,22 @@ mod provider_account_tests {
                 }),
             ),
         ] {
-            gents::documents::write_inference_backend_document(
+            gents_documents::write_inference_backend_document(
                 &access,
                 &backend,
-                &gents::inference::resolved::ProviderProfilePolicy,
+                &gents_inference::resolved::ProviderProfilePolicy,
             )
             .await
             .expect("store backend");
         }
         // The runtime reads the stored connection, whose key the save moved
         // into a node credential.
-        let openrouter: gents::InferenceBackend = access
+        let openrouter: gents_documents::InferenceBackend = access
             .transact_readonly("test.read_openrouter", |txn| {
                 Box::pin(async move {
-                    gents::documents::read_desired_state_record_in_txn(
+                    gents_documents::read_desired_state_record_in_txn(
                         txn,
-                        gents::Collection::InferenceBackend,
+                        gents_store::collection::Collection::InferenceBackend,
                         node_did,
                         "openrouter",
                     )
@@ -1556,7 +1561,7 @@ mod provider_account_tests {
             UsageRead::Read
         );
 
-        let unbound = gents::inference::auth::credential::store_sign_in(
+        let unbound = gents_inference::auth::credential::store_sign_in(
             &access,
             claude_sign_in(
                 node_did,
@@ -1570,10 +1575,10 @@ mod provider_account_tests {
         .unwrap()
         .credential;
         let unbound_backend = format!("{}-{}", unbound.provider, unbound.account_ref.unwrap());
-        let removal = gents::documents::DesiredStateApplyPlan::new(Vec::new())
+        let removal = gents_documents::DesiredStateApplyPlan::new(Vec::new())
             .unwrap()
             .with_removals(vec![(
-                gents::Collection::InferenceBackend,
+                gents_store::collection::Collection::InferenceBackend,
                 node_did.to_owned(),
                 unbound_backend,
             )])
@@ -1582,10 +1587,10 @@ mod provider_account_tests {
             .transact_write("test.remove_unbound_backend", |txn| {
                 let removal = &removal;
                 Box::pin(async move {
-                    gents::documents::apply_desired_state_plan(
+                    gents_documents::apply_desired_state_plan(
                         txn,
                         removal,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await
                     .map(|_| ())
@@ -1681,14 +1686,14 @@ mod provider_account_tests {
 
     #[tokio::test]
     async fn discovery_reads_the_account_its_backend_names() {
-        use gents::documents::BackendAuth;
         use gents_desktop_core::inference::discovery_account;
+        use gents_documents::BackendAuth;
 
         let runtime = served().await;
         let access = runtime.user_access();
         let node_did = runtime.node_did();
-        let provider = gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
-        let a = gents::inference::auth::credential::store_sign_in(
+        let provider = gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
+        let a = gents_inference::auth::credential::store_sign_in(
             &access,
             claude_sign_in(node_did, Some("account-a"), "acct-a", "SECRET-a"),
             None,
@@ -1696,7 +1701,7 @@ mod provider_account_tests {
         .await
         .expect("store the original account")
         .credential;
-        let b = gents::inference::auth::credential::store_sign_in(
+        let b = gents_inference::auth::credential::store_sign_in(
             &access,
             claude_sign_in(node_did, Some("account-b"), "acct-b", "SECRET-b"),
             Some("Work"),
@@ -1730,7 +1735,7 @@ mod provider_account_tests {
         );
         assert_eq!(auth, BackendAuth::NodeOAuth { account_ref: None });
 
-        gents::inference::auth::credential::set_account_enabled(
+        gents_inference::auth::credential::set_account_enabled(
             &access,
             node_did,
             &b.credential_id,
@@ -1810,7 +1815,7 @@ pub(crate) async fn desktop_claude_login<R>(
 where
     R: Runtime,
 {
-    let provider = gents::inference::auth::claude::normalize_provider(
+    let provider = gents_inference::auth::claude::normalize_provider(
         request.provider.as_deref().unwrap_or_default(),
     );
     let signed = sign_in::run(

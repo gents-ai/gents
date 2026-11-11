@@ -1,11 +1,11 @@
 use anyhow::Result;
 #[cfg(test)]
-use gents::documents::read_desired_state_record_in_txn;
-use gents::documents::ToolServiceRegistry;
-use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::store::collection::Collection;
-use gents::store::config_client::ConfigAccess;
-use gents::Tools;
+use gents_documents::read_desired_state_record_in_txn;
+use gents_documents::ToolServiceRegistry;
+use gents_documents::Tools;
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents_store::collection::Collection;
+use gents_store::config_client::ConfigAccess;
 
 pub async fn upsert_tools_on(access: &ConfigAccess, document: &Tools) -> Result<()> {
     let value = serde_json::to_value(document)?;

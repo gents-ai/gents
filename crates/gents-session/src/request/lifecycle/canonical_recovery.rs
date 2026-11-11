@@ -1,0 +1,596 @@
+use std::collections::{BTreeMap, BTreeSet};
+
+use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
+use gents_protocol::output::reconstruction::ObservedSegment;
+use gents_protocol::output::recovery::plan_recovery_prefix;
+use gents_protocol::output::{
+    MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource, OutputWriter,
+    SourceClose, TerminalOutput, TranscriptMessage,
+};
+use gents_protocol::rendered_request::CaptureOrderKey;
+use gents_protocol::request_admission::RequestPurpose;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
+
+use crate::session;
+use gents_protocol::output::rows::{
+    OutputSegmentRow, TranscriptMessageRow, CREATE_AGENT_MESSAGE_MUTATION,
+    CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+};
+use gents_store::config_client::session_children::{
+    output_segment_bound_variables, transcript_message_bound_variables,
+};
+use gents_store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
+use gents_store::graphql::response_has_documents;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryResult {
+    Won { published: usize },
+    Lost,
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Model-driven conformance supplies explicit selections to the production recovery owner."
+    )
+)]
+pub enum RecoverySelectionChoice {
+    NoMessage,
+    MessageKey(String),
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("recovery terminal selection is not an exact reconstructable owned assistant header")]
+pub struct RecoverySelectionRejected;
+
+use gents_store::graphql::created_doc_id;
+
+pub(in crate::request::lifecycle) async fn request_segments(
+    txn: &ConfigApplyTxn<'_>,
+    request_doc_id: &str,
+    agent: &str,
+    session_id: &str,
+    requester: Option<&str>,
+) -> Result<Vec<OutputSegmentRow>> {
+    let value = txn
+        .execute_local_response(
+            &gents_protocol::output::rows::request_output_segments_query(request_doc_id),
+        )
+        .await?;
+    let rows = value
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentOutputSegment"))
+        .and_then(serde_json::Value::as_array)
+        .context("AgentOutputSegment query omitted rows")?;
+    gents_protocol::output::rows::decode_scoped_request_output_segments(
+        rows,
+        agent,
+        Some(session_id),
+        requester,
+    )
+    .map_err(anyhow::Error::from)
+}
+
+async fn validate_selection(
+    reader: &mut session::TxnCanonicalReader<'_, '_>,
+    headers: &[TranscriptMessageRow],
+    row: &AgentRequestRow,
+    selection: &TerminalOutput,
+) -> Result<Option<String>> {
+    if row
+        .purpose
+        .context("recovery request purpose missing")?
+        .is_auxiliary()
+    {
+        anyhow::ensure!(
+            matches!(selection, TerminalOutput::NoMessage) && headers.is_empty(),
+            "auxiliary recovery requires NoMessage and no transcript headers"
+        );
+        return Ok(None);
+    }
+    let eligible = |header: &&TranscriptMessageRow| {
+        header.message.role == MessageRole::Assistant
+            && matches!(
+                header.message.publication,
+                MessagePublication::RequestExecution { .. }
+                    | MessagePublication::RequestRecovery { .. }
+            )
+    };
+    match selection {
+        TerminalOutput::NoMessage => {
+            for header in headers.iter().filter(eligible) {
+                match reader.load_message(&header.doc_id).await {
+                    Ok(_) => return Err(RecoverySelectionRejected.into()),
+                    Err(error)
+                        if error
+                            .downcast_ref::<gents_protocol::output::ReconstructionError>()
+                            .is_some() => {}
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        TerminalOutput::Message { message_doc_id } => {
+            let matching = headers
+                .iter()
+                .filter(eligible)
+                .filter(|header| &header.doc_id == message_doc_id)
+                .collect::<Vec<_>>();
+            let [header] = matching.as_slice() else {
+                return Err(RecoverySelectionRejected.into());
+            };
+            let (_, message) = reader.load_message(&header.doc_id).await?;
+            return Ok(session::visible_reply_preview(&message));
+        }
+    }
+    Ok(None)
+}
+
+async fn ensure_auxiliary_has_no_tools(
+    txn: &ConfigApplyTxn<'_>,
+    request_doc_id: &str,
+) -> Result<()> {
+    use gents_protocol::document_query::{
+        fields::agent_tool_call as fields, Filter, Query, Selection,
+    };
+    let rendered = Query::select(Selection::doc_id())
+        .filter(Filter::eq(fields::REQUEST_DOC_ID, request_doc_id))
+        .limit(1)
+        .render();
+    let response = txn.run_local_response(&rendered).await?;
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(serde_json::Value::as_array)
+        .context("auxiliary recovery tool query omitted rows")?;
+    anyhow::ensure!(
+        rows.is_empty(),
+        "auxiliary recovery found a tool lifecycle row"
+    );
+    Ok(())
+}
+
+fn selection_from_choice(
+    headers: &[TranscriptMessageRow],
+    choice: &RecoverySelectionChoice,
+) -> Result<TerminalOutput> {
+    match choice {
+        RecoverySelectionChoice::NoMessage => Ok(TerminalOutput::NoMessage),
+        RecoverySelectionChoice::MessageKey(key) => {
+            let matching = headers
+                .iter()
+                .filter(|header| {
+                    header.message.message_key == *key
+                        && header.message.role == MessageRole::Assistant
+                        && matches!(
+                            header.message.publication,
+                            MessagePublication::RequestExecution { .. }
+                                | MessagePublication::RequestRecovery { .. }
+                        )
+                })
+                .collect::<Vec<_>>();
+            let [header] = matching.as_slice() else {
+                return Err(RecoverySelectionRejected.into());
+            };
+            Ok(TerminalOutput::Message {
+                message_doc_id: header.doc_id.clone(),
+            })
+        }
+    }
+}
+
+pub(super) async fn recover_expired_generation(
+    access: &ConfigAccess,
+    observed: &AgentRequestRow,
+    expected_generation: &str,
+    expected_expiry: &str,
+) -> Result<RecoveryResult> {
+    recover_expired_generation_with_access_and_facts(
+        access,
+        observed,
+        expected_generation,
+        expected_expiry,
+        uuid::Uuid::new_v4().to_string(),
+        Utc::now(),
+        None,
+        None,
+    )
+    .await
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the conformance adapter supplies deterministic recovery facts"
+)]
+pub async fn recover_expired_generation_with_access_for_test(
+    access: &ConfigAccess,
+    observed: &AgentRequestRow,
+    expected_generation: &str,
+    expected_expiry: &str,
+    fresh_generation: String,
+    observed_now: DateTime<Utc>,
+    selection_choice: Option<RecoverySelectionChoice>,
+    expected_outcome: Option<RequestLifecycleState>,
+) -> Result<RecoveryResult> {
+    recover_expired_generation_with_access_and_facts(
+        access,
+        observed,
+        expected_generation,
+        expected_expiry,
+        fresh_generation,
+        observed_now,
+        selection_choice,
+        expected_outcome,
+    )
+    .await
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "recovery facts are supplied by the conformance adapter"
+)]
+async fn recover_expired_generation_with_access_and_facts(
+    access: &ConfigAccess,
+    observed: &AgentRequestRow,
+    expected_generation: &str,
+    expected_expiry: &str,
+    fresh_generation: String,
+    observed_now: DateTime<Utc>,
+    selection_choice: Option<RecoverySelectionChoice>,
+    expected_outcome: Option<RequestLifecycleState>,
+) -> Result<RecoveryResult> {
+    let request_doc_id = observed
+        .doc_id
+        .as_deref()
+        .context("missing request document")?
+        .to_owned();
+    let actor = identity::Did::new(
+        observed
+            .agent_did
+            .clone()
+            .context("request is missing agent DID")?,
+    )?;
+    let node_did = observed
+        .node_did
+        .as_deref()
+        .context("request is missing node DID")?
+        .to_owned();
+    let session_id = observed
+        .session_id
+        .as_deref()
+        .context("request is missing session ID")?
+        .to_owned();
+    anyhow::ensure!(
+        access.actor_did().as_deref() == Some(actor.as_str()),
+        "recovery access actor mismatch"
+    );
+    let result = access.transact_idempotent(
+        IdempotentTransactionRetry::Standard,
+        "lifecycle.recover_expired_generation",
+        move |txn| {
+            let request_doc_id = request_doc_id.clone();
+            let fresh_generation = fresh_generation.clone();
+            let selection_choice = selection_choice.clone();
+            Box::pin(async move {
+            let rendered = {
+                use gents_protocol::document_query::{fields::agent_request as fields, Filter, Query, Selection};
+                Query::select(
+                    Selection::doc_id()
+                        .field(fields::REQUEST_ID)
+                        .field(fields::PURPOSE)
+                        .field(fields::NODE_DID)
+                        .field(fields::REQUESTER_DID)
+                        .field(fields::SESSION_ID)
+                        .field(fields::LIFECYCLE_STATE)
+                        .field(fields::INTERRUPT_REQUESTED_AT)
+                        .field(fields::EXECUTION_GENERATION)
+                        .field(fields::EXECUTION_LEASE_EXPIRES_AT)
+                        .field(fields::TERMINAL_OUTPUT),
+                )
+                .filter(Filter::eq(fields::DOC_ID, request_doc_id.as_str()))
+                .limit(1)
+                .render()
+            };
+            let value = txn.run_local_response(&rendered).await?;
+            let row = gents_store::graphql::first_row::<AgentRequestRow>(&value, "AgentRequest")?
+                .context("execution request disappeared")?;
+            let purpose = row.purpose.context("recovery request purpose missing")?;
+            let is_auxiliary = purpose.is_auxiliary();
+            let state = row.lifecycle_state.context("missing request lifecycle")?;
+            if let Some(terminal_output) = row.terminal_output.as_ref().filter(|_| {
+                state.is_terminal()
+                    && row.execution_generation.as_deref() == Some(fresh_generation.as_str())
+            }) {
+                if expected_outcome.is_some_and(|expected| state != expected) {
+                    return Err(RecoverySelectionRejected.into());
+                }
+                let headers = session::load_request_headers_in_txn(
+                    txn,
+                    row.session_id.as_deref().context("missing request session")?,
+                    row.node_did.as_deref().context("missing request agent")?,
+                    row.requester_did.as_deref(),
+                    &request_doc_id,
+                )
+                .await?;
+                if is_auxiliary {
+                    ensure_auxiliary_has_no_tools(txn, &request_doc_id).await?;
+                    let writer = OutputWriter::RequestExecution {
+                        execution_generation: expected_generation.to_owned(),
+                    };
+                    let segments = request_segments(
+                        txn,
+                        &request_doc_id,
+                        row.node_did.as_deref().context("missing request agent")?,
+                        row.session_id.as_deref().context("missing request session")?,
+                        row.requester_did.as_deref(),
+                    )
+                    .await?;
+                    for record in segments.iter().filter(|record| record.segment.writer == writer) {
+                        crate::request::streaming::canonical::validate_source_purpose(
+                            purpose,
+                            &record.segment.source,
+                        )?;
+                    }
+                    super::execution_lease::validate_auxiliary_sources_decided(
+                        &request_doc_id,
+                        &segments,
+                        purpose,
+                    )?;
+                }
+                let published = headers
+                    .iter()
+                    .filter(|header| matches!(
+                        &header.message.publication,
+                        MessagePublication::RequestRecovery { execution_generation }
+                            if execution_generation == &fresh_generation
+                    ))
+                    .count();
+                let agent = row.node_did.as_deref().context("missing request agent")?;
+                let mut reader = session::TxnCanonicalReader::new(txn, agent, row.requester_did.as_deref());
+                reader.observe_headers(&headers);
+                let _ = validate_selection(&mut reader, &headers, &row, terminal_output)
+                    .await?;
+                if let Some(choice) = &selection_choice {
+                    let expected = selection_from_choice(&headers, choice)?;
+                    if row.terminal_output.as_ref() != Some(&expected) {
+                        return Err(RecoverySelectionRejected.into());
+                    }
+                }
+                return Ok(RecoveryResult::Won { published });
+            }
+            if !matches!(state, RequestLifecycleState::Claimed | RequestLifecycleState::Processing)
+                || row.execution_generation.as_deref() != Some(expected_generation)
+                || row.execution_lease_expires_at.as_deref() != Some(expected_expiry)
+                || row.terminal_output.is_some()
+            {
+                return Ok(RecoveryResult::Lost);
+            }
+            let deadline = DateTime::parse_from_rfc3339(expected_expiry)?;
+            if deadline > observed_now {
+                return Ok(RecoveryResult::Lost);
+            }
+            let agent = row.node_did.as_deref().context("missing request agent")?;
+            let session_id = row.session_id.as_deref().context("missing request session")?;
+            let writer = OutputWriter::RequestExecution { execution_generation: expected_generation.to_owned() };
+            let mut segments = request_segments(
+                txn, &request_doc_id, agent, session_id, row.requester_did.as_deref(),
+            ).await?;
+            let existing_headers = session::load_request_headers_in_txn(
+                txn, session_id, agent, row.requester_did.as_deref(), &request_doc_id,
+            ).await?;
+            if is_auxiliary {
+                anyhow::ensure!(existing_headers.is_empty(), "auxiliary recovery found a transcript header");
+                ensure_auxiliary_has_no_tools(txn, &request_doc_id).await?;
+            }
+            let referenced = existing_headers.iter().flat_map(|header| header.message.payload_references())
+                .map(|reference| reference.close_doc_id.as_str()).collect::<BTreeSet<_>>();
+            let mut sources = BTreeMap::<CaptureOrderKey, OutputSource>::new();
+            for record in &segments {
+                if record.segment.writer == writer {
+                    if let OutputSource::ProviderTurn { scope, turn_index, attempt } = &record.segment.source {
+                        sources.insert(CaptureOrderKey {
+                            scope: *scope,
+                            turn_index: i64::from(*turn_index),
+                            attempt: i64::from(*attempt),
+                        }, record.segment.source.clone());
+                    }
+                }
+            }
+            let mut sequence = if is_auxiliary {
+                None
+            } else {
+                Some(super::queue::next_append_sequence_in_transaction(
+                    txn, agent, session_id,
+                ).await?)
+            };
+            let timestamp = observed_now.to_rfc3339();
+            let mut published = Vec::<TranscriptMessageRow>::new();
+            for source in sources.into_values() {
+                if is_auxiliary {
+                    crate::request::streaming::canonical::validate_source_purpose(
+                        purpose, &source,
+                    )?;
+                } else if crate::request::streaming::canonical::validate_source_purpose(
+                    RequestPurpose::Normal, &source,
+                ).is_err() {
+                    continue;
+                }
+                let closures = segments.iter().filter(|record| record.segment.source == source && record.segment.close.is_some()).collect::<Vec<_>>();
+                let observations = segments.iter().map(|record| ObservedSegment { doc_id: &record.doc_id, segment: &record.segment }).collect::<Vec<_>>();
+                let blocks = match closures.as_slice() {
+                    [] => {
+                        let plan = plan_recovery_prefix(&observations, &request_doc_id, &source, &writer)?;
+                        let exemplar = segments.iter().find(|record| record.segment.source == source).context("source disappeared")?;
+                        let closing = OutputSegment {
+                            node_did: exemplar.segment.node_did.clone(), requester_did: exemplar.segment.requester_did.clone(),
+                            session_id: exemplar.segment.session_id.clone(), request_doc_id: request_doc_id.clone(),
+                            source: source.clone(), writer: writer.clone(), ordinal: None, runs: Vec::new(), payload: String::new(),
+                            close: Some(plan.close.clone()), created_at: timestamp.clone(),
+                        };
+                        let response = txn.execute_with_variables(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION, &output_segment_bound_variables(txn, &closing).await?).await?;
+                        let id = created_doc_id(&response, "AgentOutputSegment")?;
+                        let blocks = plan.retained_blocks(&id)?;
+                        segments.push(OutputSegmentRow { doc_id: id.clone(), segment: closing });
+                        blocks
+                    }
+                    [closing] if is_auxiliary => {
+                        anyhow::ensure!(closing.segment.writer == writer,
+                            "auxiliary recovery closure belongs to another generation");
+                        Vec::new()
+                    }
+                    [closing] if closing.segment.writer == writer
+                        && matches!(closing.segment.close, Some(SourceClose::Closed { outcome: OutputOutcome::Partial, .. }))
+                        && !referenced.contains(closing.doc_id.as_str()) => {
+                        crate::request::streaming::canonical::retained_partial_blocks(
+                            &observations, &request_doc_id, &source, &writer, closing,
+                        )?
+                    }
+                    [_] => continue,
+                    _ => continue,
+                };
+                if is_auxiliary {
+                    anyhow::ensure!(blocks.is_empty(), "auxiliary recovery planned a public header");
+                    continue;
+                }
+                if blocks.is_empty() { continue; }
+                let next_sequence = sequence.as_mut().context("normal recovery has no sequence")?;
+                let message = TranscriptMessage {
+                    message_key: crate::request::streaming::canonical::partial_message_key(&request_doc_id, &source)?, session_id: session_id.to_owned(), node_did: agent.to_owned(),
+                    requester_did: row.requester_did.clone(), request_doc_id: Some(request_doc_id.clone()),
+                    publication: MessagePublication::RequestRecovery { execution_generation: fresh_generation.clone() },
+                    outcome: OutputOutcome::Partial, sequence: *next_sequence, role: MessageRole::Assistant, native_id: None, native_request_id: None,
+                    blocks, created_at: timestamp.clone(),
+                };
+                *next_sequence = next_sequence.checked_add(1).context("recovery transcript sequence overflow")?;
+                let response = txn.execute_with_variables(CREATE_AGENT_MESSAGE_MUTATION, &transcript_message_bound_variables(txn, &message).await?).await?;
+                let doc_id = created_doc_id(&response, "AgentMessage")?;
+                published.push(TranscriptMessageRow { doc_id, message });
+            }
+            if is_auxiliary {
+                for record in segments.iter().filter(|record| record.segment.writer == writer) {
+                    crate::request::streaming::canonical::validate_source_purpose(
+                        purpose,
+                        &record.segment.source,
+                    )?;
+                }
+                super::execution_lease::validate_auxiliary_sources_decided(
+                    &request_doc_id,
+                    &segments,
+                    purpose,
+                )?;
+            }
+            let read = existing_headers.len();
+            let mut headers = existing_headers;
+            headers.extend(published.iter().cloned());
+            let mut reader = session::TxnCanonicalReader::new(txn, agent, row.requester_did.as_deref());
+            reader.observe_headers(&headers[..read]);
+            for header in &published {
+                reader.load_message(&header.doc_id).await?;
+            }
+            if !is_auxiliary {
+                super::terminal_tools::account_tools_in_txn(
+                    txn,
+                    &mut reader,
+                    &row,
+                    &headers,
+                    expected_generation,
+                    false,
+                    &timestamp,
+                )
+                .await?;
+            }
+            let mut eligible = headers.iter().filter(|header| {
+                header.message.role == MessageRole::Assistant
+                    && matches!(header.message.publication,
+                        MessagePublication::RequestExecution { .. }
+                            | MessagePublication::RequestRecovery { .. })
+            }).collect::<Vec<_>>();
+            eligible.sort_by_key(|header| header.message.sequence);
+            let mut selected = published.last().map(|header| header.doc_id.clone());
+            if selected.is_none() {
+                for header in eligible.into_iter().rev() {
+                    if headers.iter().filter(|other|
+                        other.message.role == MessageRole::Assistant &&
+                        matches!(other.message.publication,
+                            MessagePublication::RequestExecution { .. }
+                                | MessagePublication::RequestRecovery { .. }) &&
+                        other.message.sequence == header.message.sequence
+                    ).count() != 1 {
+                        return Err(RecoverySelectionRejected.into());
+                    }
+                    match reader.load_message(&header.doc_id).await {
+                        Ok(_) => { selected = Some(header.doc_id.clone()); break; }
+                        Err(error) if error.downcast_ref::<gents_protocol::output::ReconstructionError>().is_some() => {}
+                        Err(error) => return Err(error),
+                    }
+                }
+            }
+            let selection = if let Some(message_doc_id) = selected {
+                TerminalOutput::Message { message_doc_id }
+            } else {
+                TerminalOutput::NoMessage
+            };
+            let selection = if is_auxiliary {
+                anyhow::ensure!(selection_choice.as_ref().is_none_or(|choice|
+                    matches!(choice, RecoverySelectionChoice::NoMessage)),
+                    "auxiliary recovery cannot select a transcript header");
+                anyhow::ensure!(matches!(selection, TerminalOutput::NoMessage),
+                    "auxiliary recovery selected a transcript header");
+                TerminalOutput::NoMessage
+            } else {
+                match &selection_choice {
+                    None => selection,
+                    Some(choice) => selection_from_choice(&headers, choice)?,
+                }
+            };
+            let reply_preview = validate_selection(&mut reader, &headers, &row, &selection).await?;
+            let target_state = if row.interrupt_requested_at.as_deref().is_some_and(|v| !v.trim().is_empty()) {
+                RequestLifecycleState::Interrupted
+            } else { RequestLifecycleState::Failed };
+            if expected_outcome.is_some_and(|expected| target_state != expected) {
+                return Err(RecoverySelectionRejected.into());
+            }
+            let response = {
+                use gents_protocol::document_query::{fields::agent_request as fields, Filter, Input, Selection, Update};
+                let filter = Filter::eq(fields::DOC_ID, request_doc_id.as_str())
+                    .and(Filter::eq(fields::LIFECYCLE_STATE, state.as_str()))
+                    .and(Filter::eq(fields::EXECUTION_GENERATION, expected_generation))
+                    .and(Filter::eq(fields::EXECUTION_LEASE_EXPIRES_AT, expected_expiry));
+                let input = Input::new()
+                    .set(fields::LIFECYCLE_STATE, target_state.as_str())
+                    .set(fields::EXECUTION_GENERATION, fresh_generation.as_str())
+                    .set(fields::EXECUTION_LEASE_EXPIRES_AT, timestamp.as_str())
+                    .set(fields::FAILURE_REASON, "execution lease expired")
+                    .set(fields::TERMINALIZED_AT, timestamp.as_str())
+                    .set(fields::TERMINAL_REDRIVE_ATTEMPTS, 0_i64)
+                    .set(fields::TERMINAL_OUTPUT, serde_json::to_value(&selection)?);
+                let rendered = Update::matching(filter, input).returning(Selection::doc_id()).render();
+                txn.run(&rendered).await?
+            };
+            if !response.get("data").and_then(|data| data.get("update_AgentRequest")).is_some_and(response_has_documents) {
+                anyhow::bail!("expired-generation recovery lost request CAS");
+            }
+            crate::triggers::engine::durable::publish_request_outcome(
+                txn, agent, &row.request_id, target_state, "execution lease expired", &timestamp,
+            ).await?;
+            if !is_auxiliary {
+                session::refresh_session_request_observation_in_txn(txn, agent, row.requester_did.as_deref(), session_id, session::SessionRequestRefresh { request_doc_id: &request_doc_id, request_id: &row.request_id, reply_preview: Some(reply_preview.as_deref()) }, &timestamp).await?;
+            }
+            Ok(RecoveryResult::Won { published: published.len() })
+        })},
+    ).await?;
+    gents_store::config_client::session_children::publish_agent_session_child_relationships_with_access(
+        access,
+        &node_did,
+        &actor,
+        &session_id,
+    )
+    .await?;
+    Ok(result)
+}

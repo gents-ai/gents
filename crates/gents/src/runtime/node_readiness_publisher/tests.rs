@@ -275,19 +275,21 @@ async fn saturated_command_queue_cannot_block_owner_close_forever() {
 
 async fn test_publisher() -> (NodeReadinessPublisherOwner, NodeReadinessPublisherHandle) {
     let node = Arc::new(
-        crate::store::test_support::node_builder()
+        gents_store::test_support::node_builder()
             .build()
             .await
             .unwrap(),
     );
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    gents_store::schema::ensure_runtime_schemas(node.as_ref())
+        .await
+        .unwrap();
     let node_did = node
         .node_identity_did()
         .expect("fixture node has an identity")
         .to_owned();
     // Readiness is published under the Node document; production creates it
     // through the runtime owner's signed access before the publisher starts.
-    crate::test_support::documents::ensure_test_node(&node, &node_did).await;
+    gents_documents::test_support::ensure_test_node(&node, &node_did).await;
     NodeReadinessPublisherHandle::start(node, node_did)
 }
 
@@ -607,7 +609,7 @@ async fn full_storage_stops_readiness_retries_and_keeps_close_bounded() {
         .await
         .unwrap()
         .unwrap_err();
-    assert!(crate::store::graphql::is_storage_full(error.as_ref()));
+    assert!(gents_store::graphql::is_storage_full(error.as_ref()));
     assert!(attempts_rx.try_recv().is_ok());
     assert!(attempts_rx.try_recv().is_err());
     assert!(writer.persisted.lock().await.is_empty());
@@ -638,9 +640,9 @@ fn generated_storage_failure_cases_bind_readiness_classification() {
 
 #[tokio::test]
 async fn readiness_parent_recovery_matches_native_owner_and_model() {
-    use crate::store::config_client::ConfigAccess;
-    use crate::store::identity::NodeIdentity;
     use gents_protocol::node_readiness::NODE_READINESS_FORMAT_VERSION;
+    use gents_store::config_client::ConfigAccess;
+    use gents_store::identity::NodeIdentity;
 
     async fn verify_native_owner(
         access: &ConfigAccess,
@@ -695,11 +697,19 @@ async fn readiness_parent_recovery_matches_native_owner_and_model() {
     }) {
         checked += 1;
         let dir = tempfile::tempdir().unwrap();
-        let runtime =
-            crate::KeyIdentity::load_or_create(dir.path().join("runtime.key"), None).unwrap();
-        let user = crate::KeyIdentity::load_or_create(dir.path().join("user.key"), None).unwrap();
-        let foreign =
-            crate::KeyIdentity::load_or_create(dir.path().join("foreign.key"), None).unwrap();
+        let runtime = gents_store::identity::KeyIdentity::load_or_create(
+            dir.path().join("runtime.key"),
+            None,
+        )
+        .unwrap();
+        let user =
+            gents_store::identity::KeyIdentity::load_or_create(dir.path().join("user.key"), None)
+                .unwrap();
+        let foreign = gents_store::identity::KeyIdentity::load_or_create(
+            dir.path().join("foreign.key"),
+            None,
+        )
+        .unwrap();
         // The User configures the Node through client-signed access; a local
         // non-node write without a managed signer is refused by design.
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -733,7 +743,7 @@ async fn readiness_parent_recovery_matches_native_owner_and_model() {
             .await
             .unwrap();
         let user_access = ConfigAccess::Graphql(
-            crate::store::config_client::GraphqlEndpoint::as_principal(&endpoint, user.did())
+            gents_store::config_client::GraphqlEndpoint::as_principal(&endpoint, user.did())
                 .with_client_signing_capability(user.client_signing_capability().unwrap())
                 .unwrap(),
         );
@@ -894,7 +904,7 @@ async fn readiness_parent_recovery_matches_native_owner_and_model() {
                 .transact_readonly("test.readiness.observe_owner", |txn| {
                     let actor = &actor;
                     Box::pin(async move {
-                        crate::store::config_client::node_readiness::observe_published_readiness(
+                        gents_store::config_client::node_readiness::observe_published_readiness(
                             txn, actor,
                         )
                         .await
@@ -909,7 +919,7 @@ async fn readiness_parent_recovery_matches_native_owner_and_model() {
             );
         }
         if case["name"] == "success" {
-            use crate::runtime::agent::directory_projection::DirectoryStore;
+            use gents_p2p::directory_projection::DirectoryStore;
             runtime_access.write("test.readiness.runtime_status", &format!(
                 r#"mutation {{ create_NodeRuntime(input: {{node_did: "{}", reconcile_phase: "idle", last_reconcile_result: "applied"}}) {{_docID}} }}"#,
                 escape_graphql_string(runtime.did()),
@@ -918,25 +928,32 @@ async fn readiness_parent_recovery_matches_native_owner_and_model() {
                 r#"mutation {{ create_Agent(input: {{node_did: "{}", agent_did: "private-agent"}}) {{_docID}} }}"#,
                 escape_graphql_string(runtime.did()),
             )).await.unwrap();
-            let goal = crate::goal::observe_goal_agent(&node, runtime.did(), Some("general"), None)
-                .await
-                .unwrap();
+            let goal = gents_automation::goal::observe_goal_agent(
+                &node,
+                runtime.did(),
+                Some("general"),
+                None,
+            )
+            .await
+            .unwrap();
             assert!(matches!(
                 goal.observation,
-                crate::goal::GoalAgentObservation::Ready { .. }
+                gents_automation::goal::GoalAgentObservation::Ready { .. }
             ));
             assert!(
                 !goal.settled,
                 "persisted NodeRuntime must not supply live settled state"
             );
-            assert!(
-                crate::goal::observe_goal_agent(&node, foreign.did(), Some("general"), None)
-                    .await
-                    .is_err()
-            );
-            let directory = crate::runtime::agent::directory_projection::GraphqlDirectoryStore::new(
-                node.clone(),
-            );
+            assert!(gents_automation::goal::observe_goal_agent(
+                &node,
+                foreign.did(),
+                Some("general"),
+                None
+            )
+            .await
+            .is_err());
+            let directory =
+                gents_p2p::directory_projection::GraphqlDirectoryStore::new(node.clone());
             let observed = directory.load_source_snapshot().await.unwrap();
             assert!(
                 observed.runtimes.is_empty(),
@@ -978,7 +995,7 @@ async fn readiness_parent_recovery_matches_native_owner_and_model() {
         .find(|case| case["name"] == "unbound")
         .unwrap();
     let node = Arc::new(
-        crate::store::test_support::node_builder()
+        gents_store::test_support::node_builder()
             .build()
             .await
             .unwrap(),
@@ -991,7 +1008,7 @@ async fn readiness_parent_recovery_matches_native_owner_and_model() {
         "",
     );
     node.add_collection(&unbound_sdl).await.unwrap();
-    let result = crate::ensure_runtime_schemas(node.as_ref()).await;
+    let result = gents_store::schema::ensure_runtime_schemas(node.as_ref()).await;
     assert_eq!(result.is_ok(), unbound["expected"].as_bool().unwrap());
     assert!(node
         .get_collection("NodeReadiness")

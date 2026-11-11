@@ -1,11 +1,11 @@
 use super::*;
-use gents::store::config_client::ConfigAccess;
-use gents::NodeIdentity as _;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
 use gents_protocol::request_input::GoalAssignmentInput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_store::config_client::ConfigAccess;
+use gents_store::identity::NodeIdentity as _;
 
 /// A served runtime after every modeled opening-provenance case has been
 /// checked before transcript publication and after reload.
@@ -25,18 +25,19 @@ async fn goal_provenance_cases() -> GoalProvenance {
     let identity = runtime.runtime().clone();
     let user = runtime.user().clone();
     let home = tempfile::tempdir().unwrap();
-    let guest = gents::KeyIdentity::load_or_create(home.path().join("guest.key"), None).unwrap();
+    let guest =
+        gents_store::identity::KeyIdentity::load_or_create(home.path().join("guest.key"), None)
+            .unwrap();
     // The guest is a second enrolled User whom the Agent lets write its
     // sessions.
-    gents::store::identity::GrantSet::OperatorUser
+    gents_store::identity::GrantSet::OperatorUser
         .grant(
             &runtime.runtime_access(),
             &::identity::Did::new(guest.did()).unwrap(),
         )
         .await
         .unwrap();
-    let agent =
-        gents::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
+    let agent = gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
     // The desktop reads its runtime as the User.
     let access = runtime.user_access();
     let agent_doc = runtime.agent_doc_id(&binding).await;
@@ -62,9 +63,10 @@ async fn goal_provenance_cases() -> GoalProvenance {
         "2026-10-25T00:00:00Z",
         AgentRequestAdmissionRecord::client(user.did()),
     );
-    let session_doc = gents::request::lifecycle::reserve_goal_session(&access, &reservation)
-        .await
-        .unwrap();
+    let session_doc =
+        gents_session::request::lifecycle::reserve_goal_session(&access, &reservation)
+            .await
+            .unwrap();
     let agent_access = runtime.agent_access(&binding).await;
     let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
     let modeled = contract["goal_client_start_cases"]
@@ -93,11 +95,12 @@ async fn goal_provenance_cases() -> GoalProvenance {
         (12, None, false, false, None),
     ] {
         let goal_id = format!("goal-{index}");
-        let author: &dyn gents::NodeIdentity = if index >= 11 { &guest } else { user.as_ref() };
+        let author: &dyn gents_store::identity::NodeIdentity =
+            if index >= 11 { &guest } else { user.as_ref() };
         // Each author writes as itself over the runtime's authenticated HTTP.
         let author_access = if index >= 11 {
             ConfigAccess::Graphql(
-                gents::store::config_client::GraphqlEndpoint::as_principal(
+                gents_store::config_client::GraphqlEndpoint::as_principal(
                     runtime.graphql(),
                     guest.did(),
                 )
@@ -130,7 +133,7 @@ async fn goal_provenance_cases() -> GoalProvenance {
         create.retry_key = Some(format!("session-goal:command-{index}"));
         create.session_doc_id = Some(session_doc.clone());
         create.agent_doc_id = Some(agent_doc.clone());
-        gents::sign_agent_request_create(author, &mut create)
+        gents_session::request::admission::sign_agent_request_create(author, &mut create)
             .await
             .unwrap();
         let written = author_access
@@ -140,7 +143,7 @@ async fn goal_provenance_cases() -> GoalProvenance {
             )
             .await
             .unwrap();
-        let doc = gents::store::graphql::created_doc_id(&written, "AgentRequest").unwrap();
+        let doc = gents_store::graphql::created_doc_id(&written, "AgentRequest").unwrap();
         // The author links its request to the Agent, the session and the
         // working Agent, as client admission stages a request.
         author_access
@@ -163,7 +166,7 @@ async fn goal_provenance_cases() -> GoalProvenance {
         if index == 0 {
             opening_doc = Some(doc.clone());
         }
-        let goal_literal = gents::store::graphql::escape_graphql_string(&goal_id);
+        let goal_literal = gents_store::graphql::escape_graphql_string(&goal_id);
         let goal_doc = if index != 10 {
             let request_binding = if index == 5 {
                 "other-physical-request"
@@ -175,11 +178,11 @@ async fn goal_provenance_cases() -> GoalProvenance {
                 session_doc_id: "{}", agent_did: "{}",
                 objective: "Review the changes", status: "active", assignment_root_request_doc_id: "{}",
                 created_at: "2026-10-25T00:00:00Z", updated_at: "2026-10-25T00:00:00Z"
-            }}) {{_docID}} }}"#, gents::store::graphql::escape_graphql_string(identity.did()),
-                gents::store::graphql::escape_graphql_string(&session_doc),
-                gents::store::graphql::escape_graphql_string(&binding.agent_did),
-                gents::store::graphql::escape_graphql_string(request_binding))).await.unwrap();
-            let goal_doc = gents::store::graphql::created_doc_id(&goal, "Goal").unwrap();
+            }}) {{_docID}} }}"#, gents_store::graphql::escape_graphql_string(identity.did()),
+                gents_store::graphql::escape_graphql_string(&session_doc),
+                gents_store::graphql::escape_graphql_string(&binding.agent_did),
+                gents_store::graphql::escape_graphql_string(request_binding))).await.unwrap();
+            let goal_doc = gents_store::graphql::created_doc_id(&goal, "Goal").unwrap();
             // A Goal is a session child, as the Goal owner links it.
             agent_access
                 .add_resource_relationship("Goal", &goal_doc, "parent", "sessions", &session_doc)
@@ -262,12 +265,12 @@ async fn goal_provenance_cases() -> GoalProvenance {
             command_id: "{}", requester_did: "{}", node_did: "{}", agent_did: "{}", session_id: "session",
             session_doc_id: "{}", intent_json: "{}"
         }}) {{_docID}} }}"#,
-                    gents::store::graphql::escape_graphql_string(&command.command_id),
-                    gents::store::graphql::escape_graphql_string(author.did()),
-                    gents::store::graphql::escape_graphql_string(identity.did()),
-                    gents::store::graphql::escape_graphql_string(&binding.agent_did),
-                    gents::store::graphql::escape_graphql_string(&session_doc),
-                    gents::store::graphql::escape_graphql_string(
+                    gents_store::graphql::escape_graphql_string(&command.command_id),
+                    gents_store::graphql::escape_graphql_string(author.did()),
+                    gents_store::graphql::escape_graphql_string(identity.did()),
+                    gents_store::graphql::escape_graphql_string(&binding.agent_did),
+                    gents_store::graphql::escape_graphql_string(&session_doc),
+                    gents_store::graphql::escape_graphql_string(
                         &serde_json::to_string(&command).unwrap()
                     )
                 ),
@@ -275,7 +278,7 @@ async fn goal_provenance_cases() -> GoalProvenance {
             .await
             .unwrap();
         let control_doc =
-            gents::store::graphql::created_doc_id(&control, "AgentSessionGoalControl").unwrap();
+            gents_store::graphql::created_doc_id(&control, "AgentSessionGoalControl").unwrap();
         author_access
             .add_resource_relationship(
                 "AgentSessionGoalControl",
@@ -302,7 +305,7 @@ async fn goal_provenance_cases() -> GoalProvenance {
                     &serde_json::json!({"input": {"command_doc_id": control_doc, "command_id": command.command_id,
                         "receipt_json": serde_json::to_string(&receipt)?}}),
                 ).await?;
-                gents::store::graphql::created_doc_id(&result, "AgentSessionGoalReceipt")
+                gents_store::graphql::created_doc_id(&result, "AgentSessionGoalReceipt")
             })).await.unwrap();
             agent_access
                 .add_resource_relationship(
@@ -327,7 +330,7 @@ async fn goal_provenance_cases() -> GoalProvenance {
         let response = access
             .execute(&format!(
                 "{{ AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ {} }} }}",
-                gents::store::graphql::escape_graphql_string(&doc),
+                gents_store::graphql::escape_graphql_string(&doc),
                 gents::SIGNED_REQUEST_FIELDS,
             ))
             .await
@@ -436,9 +439,7 @@ async fn goal_provenance_cases() -> GoalProvenance {
                         "goal_provenance.remove",
                         &format!(
                             "mutation {{ delete_Goal(docID: \"{}\") {{_docID}} }}",
-                            gents::store::graphql::escape_graphql_string(
-                                goal_doc.as_ref().unwrap()
-                            ),
+                            gents_store::graphql::escape_graphql_string(goal_doc.as_ref().unwrap()),
                         ),
                     )
                     .await
@@ -500,10 +501,12 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
         Some("goal-0")
     );
     let measured = crate::tests::support::CountingRead::new(access);
-    let roots =
-        gents::goal::load_applied_opening_goal_ids(&measured, &observed.iter().collect::<Vec<_>>())
-            .await
-            .unwrap();
+    let roots = gents_automation::goal::load_applied_opening_goal_ids(
+        &measured,
+        &observed.iter().collect::<Vec<_>>(),
+    )
+    .await
+    .unwrap();
     // The batched read agrees with the modeled per-case outcomes, including
     // the delegated author the User now reads alongside its own openings.
     assert_eq!(roots, applied);
@@ -574,7 +577,7 @@ async fn paged_native_forks_follow_goal_provenance() {
             "the opening turn",
             &format!(
                 r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID lifecycle_state }} }}"#,
-                gents::store::graphql::escape_graphql_string(&opening_request)
+                gents_store::graphql::escape_graphql_string(&opening_request)
             ),
             |data| data["AgentRequest"][0]["lifecycle_state"] == "processing",
         )
@@ -632,7 +635,7 @@ async fn paged_native_forks_follow_goal_provenance() {
     let messages = access
         .execute(&format!(
             r#"{{ AgentMessage(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "session" }}, role: {{ _eq: "user" }} }}) {{ message_key request_doc_id }} }}"#,
-            gents::store::graphql::escape_graphql_string(&node)
+            gents_store::graphql::escape_graphql_string(&node)
         ))
         .await
         .unwrap();

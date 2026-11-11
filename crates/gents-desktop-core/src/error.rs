@@ -135,22 +135,21 @@ impl BridgeError {
     }
 
     pub fn classify_transport_error(error: anyhow::Error) -> Self {
-        if gents::store::graphql::is_storage_full(error.as_ref()) {
+        if gents_store::graphql::is_storage_full(error.as_ref()) {
             return Self::storage_full();
         }
         if let Some(classified) = error.chain().find_map(|cause| cause.downcast_ref::<Self>()) {
             return classified.clone();
         }
-        if gents::store::config_client::TransactionFailure::permission_denied(&error) {
+        if gents_store::config_client::TransactionFailure::permission_denied(&error) {
             return Self::new(
                 BridgeErrorCode::PermissionDenied,
                 "Access was denied. Check this client's permissions with the runtime owner.",
             );
         }
-        let transport =
-            gents::store::config_client::TransactionFailure::config_client_error(&error)
-                .and_then(gents::store::config_client::ConfigClientError::transport_error)
-                .filter(|error| error.is_connect() || error.is_timeout() || error.is_body());
+        let transport = gents_store::config_client::TransactionFailure::config_client_error(&error)
+            .and_then(gents_store::config_client::ConfigClientError::transport_error)
+            .filter(|error| error.is_connect() || error.is_timeout() || error.is_body());
         let message = error.to_string();
         let Some(transport) = transport else {
             return Self::untyped(message);
@@ -189,9 +188,9 @@ impl BridgeError {
 
 /// A verified agent rejection is a denial; every unconfirmed control keeps its
 /// intent reference in the message because the action may still take effect.
-impl From<gents::tools::call::control::client::send::ControlSendError> for BridgeError {
-    fn from(error: gents::tools::call::control::client::send::ControlSendError) -> Self {
-        use gents::tools::call::control::client::send::ControlSendError;
+impl From<gents_toolcalls::call::control::client::send::ControlSendError> for BridgeError {
+    fn from(error: gents_toolcalls::call::control::client::send::ControlSendError) -> Self {
+        use gents_toolcalls::call::control::client::send::ControlSendError;
         let code = match &error {
             ControlSendError::NotAuthorized
             | ControlSendError::PermissionDenied
@@ -251,12 +250,12 @@ mod tests {
                 {"message":"opaque", "extensions":{"code":"PERMISSION_DENIED"}}
             ]),
         );
-        let error = gents::store::config_client::ConfigClientError::Database(denial);
+        let error = gents_store::config_client::ConfigClientError::Database(denial);
         let bridge = BridgeError::classify_transport_error(anyhow::Error::new(error));
         assert_eq!(bridge.code, BridgeErrorCode::PermissionDenied);
         assert!(!bridge.retryable);
         assert!(!bridge.message.contains("opaque"));
-        let hidden = gents::store::config_client::ConfigClientError::Database(
+        let hidden = gents_store::config_client::ConfigClientError::Database(
             gents_protocol::database_error::GraphqlFailure::new(
                 "read",
                 serde_json::json!([
@@ -313,9 +312,8 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         drop(listener);
-        let access = gents::store::config_client::ConfigAccess::graphql(format!(
-            "{endpoint}/api/v0/graphql"
-        ));
+        let access =
+            gents_store::config_client::ConfigAccess::graphql(format!("{endpoint}/api/v0/graphql"));
         let error = access
             .transact_readonly("test.desktop_transport", |_txn| {
                 Box::pin(async { Ok::<_, anyhow::Error>(()) })
@@ -329,10 +327,10 @@ mod tests {
 
     #[tokio::test]
     async fn classify_config_query_transport_uses_typed_protocol_source() {
-        let endpoint = gents::store::config_client::GraphqlEndpoint::anonymous(
+        let endpoint = gents_store::config_client::GraphqlEndpoint::anonymous(
             "http://127.0.0.1:0/api/v0/graphql",
         );
-        let result = gents::store::config_client::query_graphql_with_options(
+        let result = gents_store::config_client::query_graphql_with_options(
             &endpoint,
             "{__typename}",
             gents_protocol::graphql::GraphqlRequestOptions {

@@ -9,13 +9,15 @@ use tokio_util::task::AbortOnDropHandle;
 use super::super::context::{RuntimeContext, StartupBarrier};
 use super::lifecycle_coordinator::RuntimeLifecycleCoordinator;
 use super::BackgroundTaskResult;
-use crate::inference::admission::AdmissionRegistry;
-use crate::runtime::agent::p2p_reconcile::{EnrollmentAuthorityHandle, EnrollmentAuthorityOwner};
 use crate::runtime::agent::Gents;
 use crate::runtime::status::RuntimeStatusHandle;
-use crate::tools::mcp::health::{spawn_health_checker, ServiceHealthMap};
-use crate::tools::surface::ToolRuntimeContext;
-use crate::triggers::runtime_snapshot::{ActiveRuntimeSnapshot, ResolvedRuntimeSnapshot};
+use gents_automation::triggers::runtime_snapshot::{
+    ActiveRuntimeSnapshot, ResolvedRuntimeSnapshot,
+};
+use gents_inference::admission::AdmissionRegistry;
+use gents_p2p::p2p_reconcile::{EnrollmentAuthorityHandle, EnrollmentAuthorityOwner};
+use gents_tools::mcp::health::{spawn_health_checker, ServiceHealthMap};
+use gents_tools::surface::ToolRuntimeContext;
 
 #[derive(Clone, Copy)]
 pub(super) struct StartupTasks<'a> {
@@ -35,8 +37,8 @@ pub(super) fn runtime_context(
     runtime_status: &RuntimeStatusHandle,
     enrollment_handle: &EnrollmentAuthorityHandle,
 ) -> RuntimeContext {
-    let job_driver = crate::tools::background::job::driver::JobDriver::with_service_admission(
-        crate::tools::background::job::driver::JobRuntime {
+    let job_driver = gents_toolcalls::background::job::driver::JobDriver::with_service_admission(
+        gents_toolcalls::background::job::driver::JobRuntime {
             node: agent.node.clone(),
             agent_snapshots: Default::default(),
             plugins: agent.plugins().clone(),
@@ -89,7 +91,7 @@ pub(super) fn spawn_health_probes(
     ));
     let (backend_health_events_tx, backend_health_events_rx) = mpsc::channel::<()>(1);
     let backend_prober =
-        AbortOnDropHandle::new(crate::inference::backends::health::spawn_backend_prober(
+        AbortOnDropHandle::new(gents_inference::backends::health::spawn_backend_prober(
             agent.node.clone(),
             agent.backend_health.clone(),
             agent.backend_prober_options.clone(),
@@ -169,7 +171,7 @@ pub(super) fn spawn_trigger_engine(startup: StartupTasks<'_>) -> AbortOnDropHand
             .borrow()
             .watcher_identities();
         let workspace_recovery = match recovery_identities {
-            Ok(identities) => crate::triggers::engine::production_materializer::recover_workspace_binding_pending_requests(
+            Ok(identities) => gents_automation::triggers::engine::production_materializer::recover_workspace_binding_pending_requests(
                 &trigger_engine_node, &trigger_engine_node_did, &identities,
             ).await,
             Err(error) => Err(error),
@@ -181,32 +183,32 @@ pub(super) fn spawn_trigger_engine(startup: StartupTasks<'_>) -> AbortOnDropHand
             Ok(_) => {}
             Err(error) => tracing::warn!(%error, "workspace binding recovery sweep failed"),
         }
-        let schedule_source: Box<dyn crate::triggers::engine::TriggerSource> = Box::new(
-            crate::triggers::engine::schedule_source::ScheduleSource::new(
+        let schedule_source: Box<dyn gents_automation::triggers::engine::TriggerSource> = Box::new(
+            gents_automation::triggers::engine::schedule_source::ScheduleSource::new(
                 trigger_engine_schedule_snapshot_rx,
                 trigger_engine_node.clone(),
                 trigger_engine_cancel.clone(),
             ),
         );
-        let event_source: Box<dyn crate::triggers::engine::TriggerSource> = Box::new(
-            crate::triggers::engine::event_source::EventSource::new(
+        let event_source: Box<dyn gents_automation::triggers::engine::TriggerSource> = Box::new(
+            gents_automation::triggers::engine::event_source::EventSource::new(
                 trigger_engine_event_snapshot_rx,
                 trigger_engine_node.clone(),
                 trigger_engine_cancel.clone(),
             )
             .with_runtime_observer(trigger_engine_runtime_observer),
         );
-        let goal_source: Box<dyn crate::triggers::engine::TriggerSource> = Box::new(
-            crate::triggers::engine::goal_source::GoalSource::new(
+        let goal_source: Box<dyn gents_automation::triggers::engine::TriggerSource> = Box::new(
+            gents_automation::triggers::engine::goal_source::GoalSource::new(
                 trigger_engine_goal_snapshot_rx,
                 trigger_engine_node.clone(),
                 trigger_engine_cancel.clone(),
             )
             .with_runtime_status(trigger_engine_runtime_status),
         );
-        let sources: Vec<Box<dyn crate::triggers::engine::TriggerSource>> =
+        let sources: Vec<Box<dyn gents_automation::triggers::engine::TriggerSource>> =
             vec![schedule_source, event_source, goal_source];
-        crate::triggers::engine::run_trigger_engine(
+        gents_automation::triggers::engine::run_trigger_engine(
             trigger_engine_node,
             trigger_engine_materializer_snapshot_rx,
             sources,
@@ -231,7 +233,7 @@ pub(super) fn spawn_callback_engine(startup: StartupTasks<'_>) -> AbortOnDropHan
         .document_runtime_context()
         .and_then(|context| context.tool_ceiling.root())
         .map(std::path::Path::to_path_buf);
-    crate::workspace::install_process_operator_tool_root(callback_ceiling.clone());
+    gents_session::workspace::install_process_operator_tool_root(callback_ceiling.clone());
     let callback_plugins = agent.plugins().clone();
     let callback_cancel = cancel.child_token();
     let callback_snapshots = active_snapshot_rx.clone();
@@ -241,7 +243,7 @@ pub(super) fn spawn_callback_engine(startup: StartupTasks<'_>) -> AbortOnDropHan
             _ = callback_cancel.cancelled() => return,
             _ = callback_startup_barrier.wait_ready() => {}
         }
-        if let Err(error) = crate::triggers::callback::run_callback_engine(
+        if let Err(error) = gents_automation::triggers::callback::run_callback_engine(
             callback_node,
             callback_node_did,
             callback_ceiling,
@@ -343,9 +345,10 @@ pub(super) fn spawn_node_tasks(
     let completion_node_did = agent.node_did().to_string();
     let completion_background_executions = agent.background_execution_registry.clone();
     let completion_job_driver = runtime.job_driver.clone();
-    let completion_agents = crate::triggers::runtime_snapshot::ActiveSnapshotAgentIdentities::boxed(
-        active_snapshot_rx.clone(),
-    );
+    let completion_agents =
+        gents_automation::triggers::runtime_snapshot::ActiveSnapshotAgentIdentities::boxed(
+            active_snapshot_rx.clone(),
+        );
     let completion_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::BackgroundCompletion(
@@ -366,7 +369,7 @@ pub(super) fn spawn_node_tasks(
     let enrollment_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::EnrollmentReconcile(
-            crate::runtime::agent::p2p_reconcile::run_enrollment_reconciler(
+            gents_p2p::p2p_reconcile::run_enrollment_reconciler(
                 enrollment_node,
                 enrollment_identity,
                 enrollment_owner,
@@ -382,7 +385,7 @@ pub(super) fn spawn_node_tasks(
     let pairing_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::PairingReconcile(
-            crate::runtime::agent::p2p_reconcile::run_pairing_reconciler(
+            gents_p2p::p2p_reconcile::run_pairing_reconciler(
                 pairing_node,
                 pairing_identity,
                 pairing_enrollment,
@@ -397,10 +400,10 @@ pub(super) fn spawn_node_tasks(
     let registry_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::RegistryHeartbeat(
-            crate::runtime::agent::p2p_reconcile::run_registry_heartbeat(
+            gents_p2p::p2p_reconcile::run_registry_heartbeat(
                 registry_node,
                 registry_node_did,
-                crate::runtime::agent::p2p_reconcile::resolve_network_id(),
+                gents_p2p::p2p_reconcile::resolve_network_id(),
                 registry_cancel,
             )
             .await,
@@ -413,7 +416,7 @@ pub(super) fn spawn_node_tasks(
     let advertised_graphql_url = agent.advertised_graphql_url.clone();
     background_tasks.spawn(async move {
         BackgroundTaskResult::EndpointHeartbeat(
-            crate::runtime::agent::p2p_reconcile::run_endpoint_heartbeat(
+            gents_p2p::p2p_reconcile::run_endpoint_heartbeat(
                 endpoint_node,
                 endpoint_identity,
                 advertised_graphql_url,
@@ -456,18 +459,19 @@ pub(super) fn spawn_request_tasks(
     let control_node = agent.node.clone();
     let control_node_did = agent.node_did().to_owned();
     let control_executions = agent.background_execution_registry.clone();
-    let control_agents = crate::triggers::runtime_snapshot::ActiveSnapshotAgentIdentities::boxed(
-        active_snapshot_rx.clone(),
-    );
+    let control_agents =
+        gents_automation::triggers::runtime_snapshot::ActiveSnapshotAgentIdentities::boxed(
+            active_snapshot_rx.clone(),
+        );
     let control_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::ToolControlReconcile(
-            crate::tools::call::control::client::run(
+            gents_toolcalls::call::control::client::run(
                 control_node,
                 control_node_did,
                 control_executions,
                 control_agents,
-                crate::runtime::agent::p2p_reconcile::intervals::sweep_interval(),
+                gents_p2p::p2p_reconcile::intervals::sweep_interval(),
                 control_cancel,
             )
             .await,
@@ -479,7 +483,7 @@ pub(super) fn spawn_request_tasks(
     let directory_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::DirectoryProjection(
-            crate::runtime::agent::directory_projection::run_directory_projection(
+            gents_p2p::directory_projection::run_directory_projection(
                 directory_node,
                 directory_source_did,
                 directory_cancel,

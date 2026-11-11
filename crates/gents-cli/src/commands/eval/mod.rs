@@ -11,12 +11,12 @@ use tokio_util::sync::CancellationToken;
 use crate::cli::{EvalCommand, EvalScopeArgs};
 
 pub(crate) struct EvalContext {
-    pub(crate) access: gents::store::config_client::ConfigAccess,
+    pub(crate) access: gents_store::config_client::ConfigAccess,
     pub(crate) home_dir: PathBuf,
     pub(crate) owner: String,
     pub(crate) runtime: tokio::runtime::Handle,
-    pub(crate) evaluator: std::sync::Arc<dyn gents::NodeIdentity>,
-    pub(crate) client_signing: gents::store::config_client::ClientSigningCapability,
+    pub(crate) evaluator: std::sync::Arc<dyn gents_store::identity::NodeIdentity>,
+    pub(crate) client_signing: gents_store::config_client::ClientSigningCapability,
 }
 
 impl EvalContext {
@@ -28,10 +28,9 @@ impl EvalContext {
             crate::resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref()).await?;
         let owner = crate::resolve_node_did(Some(&home_dir), None)?;
         let evaluator = std::sync::Arc::new(crate::load_client_identity().await?);
-        let client_signing =
-            gents::store::config_client::ClientSigningCapability::from_ed25519_key(
-                evaluator.private_key_bytes(),
-            )?;
+        let client_signing = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
+            evaluator.private_key_bytes(),
+        )?;
         Ok(Self {
             access,
             home_dir,
@@ -46,27 +45,27 @@ impl EvalContext {
         self.access
             .transact_readonly("eval.default_inference_profile", |txn| {
                 Box::pin(async move {
-                    let (_, node) = gents::documents::read_desired_state_record_in_txn(
+                    let (_, node) = gents_documents::read_desired_state_record_in_txn(
                         txn,
-                        gents::Collection::Node,
+                        gents_store::collection::Collection::Node,
                         &self.owner,
                         &self.owner,
                     )
                     .await?
                     .context("node configuration is missing; select --profile explicitly")?;
-                    let node: gents::documents::Node = serde_json::from_value(node)?;
+                    let node: gents_documents::Node = serde_json::from_value(node)?;
                     let did = node
                         .default_agent_did
                         .context("node has no default agent; select --profile explicitly")?;
-                    let (_, agent) = gents::documents::read_desired_state_record_in_txn(
+                    let (_, agent) = gents_documents::read_desired_state_record_in_txn(
                         txn,
-                        gents::Collection::Agent,
+                        gents_store::collection::Collection::Agent,
                         &self.owner,
                         &did,
                     )
                     .await?
                     .context("default agent is unavailable; select --profile explicitly")?;
-                    let agent: gents::AgentDocument = serde_json::from_value(agent)?;
+                    let agent: gents_documents::Agent = serde_json::from_value(agent)?;
                     anyhow::ensure!(
                         agent.enabled,
                         "default agent is disabled; select --profile explicitly"
@@ -83,14 +82,14 @@ impl EvalContext {
 
     pub(crate) fn jobs_dir(&self) -> PathBuf {
         self.home_dir
-            .join(gents::store::local::home::EVAL_DIR_NAME)
+            .join(gents_store::local::home::EVAL_DIR_NAME)
             .join("jobs")
     }
 }
 
 pub(crate) fn runs_dir(home_dir: &Path) -> PathBuf {
     home_dir
-        .join(gents::store::local::home::EVAL_DIR_NAME)
+        .join(gents_store::local::home::EVAL_DIR_NAME)
         .join("runs")
 }
 

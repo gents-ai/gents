@@ -18,11 +18,11 @@ pub(super) async fn show(args: PackShowArgs) -> Result<()> {
             let (namespace, name) = super::split_namespace(dependency);
             Ok(json!({
                 "pack": dependency,
-                "origin_tag": gents::pack::pack_origin_tag(&format!("{namespace}/{name}"))?,
+                "origin_tag": gents_pack::pack::pack_origin_tag(&format!("{namespace}/{name}"))?,
             }))
         })
         .collect::<Result<Vec<_>>>()?;
-    let files = gents::pack::declared_paths(manifest)
+    let files = gents_pack::pack::declared_paths(manifest)
         .into_iter()
         .map(|path| {
             use sha2::Digest;
@@ -35,7 +35,7 @@ pub(super) async fn show(args: PackShowArgs) -> Result<()> {
         })
         .collect::<Result<Vec<_>>>()?;
     crate::print_json(&json!({
-        "origin_tag": gents::pack::pack_origin_tag(&format!("{}/{}", manifest.metadata.namespace, manifest.name))?,
+        "origin_tag": gents_pack::pack::pack_origin_tag(&format!("{}/{}", manifest.metadata.namespace, manifest.name))?,
         "source": pack.describe(),
         "dependency_origins": dependency_origins,
         "manifest": manifest,
@@ -45,7 +45,7 @@ pub(super) async fn show(args: PackShowArgs) -> Result<()> {
 }
 
 fn show_config(pack: &super::PackSource) -> Result<()> {
-    let preview = gents::pack::authoring::preview_config(pack.manifest(), &|path| {
+    let preview = gents_pack::pack::authoring::preview_config(pack.manifest(), &|path| {
         pack.asset(path).map(Vec::from)
     })?;
     crate::print_json(&preview)
@@ -54,10 +54,10 @@ fn show_config(pack: &super::PackSource) -> Result<()> {
 pub(super) fn verify(args: PackVerifyArgs) -> Result<()> {
     let header = if args.target.starts_with("sha256:") {
         let home = crate::home_state::resolve_home_dir(args.home.as_deref());
-        gents::pack::store::PackStore::new(&home).verify(&args.target)?
+        gents_pack::pack::store::PackStore::new(&home).verify(&args.target)?
     } else {
         let path = std::path::Path::new(&args.target);
-        gents::pack::authoring::verify_pack_file(path)?
+        gents_pack::pack::authoring::verify_pack_file(path)?
     };
     crate::print_json(&json!({ "verified": true, "pack": header }))
 }
@@ -84,7 +84,7 @@ pub(super) fn pack_diff(a: &super::PackSource, b: &super::PackSource) -> Result<
 
 fn file_digests(pack: &super::PackSource) -> Result<std::collections::BTreeMap<String, String>> {
     use sha2::Digest;
-    gents::pack::declared_paths(pack.manifest())
+    gents_pack::pack::declared_paths(pack.manifest())
         .into_iter()
         .map(|path| {
             let digest = format!("{:x}", sha2::Sha256::digest(pack.asset(&path)?));
@@ -99,9 +99,9 @@ fn document_digests(
     if pack.manifest().config.is_none() {
         return Ok(Default::default());
     }
-    let config = gents::pack::load_pack_authoring_config(
+    let config = gents_pack::pack::load_pack_authoring_config(
         pack.manifest(),
-        &gents::pack::PackInstallOptions {
+        &gents_pack::pack::PackInstallOptions {
             node_did: COMPARED_OWNER.into(),
         },
         &|path| pack.asset(path).map(Vec::from),
@@ -134,7 +134,7 @@ mod tests {
         let original =
             super::super::test_support::fixture_pack_source("documents_fixture", home.path());
         let dir = tempfile::tempdir().unwrap();
-        for path in gents::pack::declared_paths(original.manifest()) {
+        for path in gents_pack::pack::declared_paths(original.manifest()) {
             let target = dir.path().join(&path);
             std::fs::create_dir_all(target.parent().unwrap()).unwrap();
             std::fs::write(&target, original.asset(&path).unwrap()).unwrap();

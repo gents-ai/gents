@@ -311,7 +311,7 @@ async fn goal_resume_request_reuses_signed_predecessor_and_returns_same_child() 
             caused_by_parent_request_id caused_by_parent_request_doc_id
         }}
     }}"#,
-            gents::session::public_request_filter(&format!(
+            gents_session::session::public_request_filter(&format!(
                 r#"caused_by_parent_request_id: {{ _eq: "{}" }}"#,
                 escape_graphql_string(predecessor)
             ))

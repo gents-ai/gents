@@ -7,8 +7,8 @@ use crate::{
     append_verdict, complete_trial, create_trial, load_trials, TrialCompletion, TrialIdentity,
     TrialRecord, VerdictDraft,
 };
-use gents::documents::EvalSplit;
-use gents::store::config_client::ConfigAccess;
+use gents_documents::EvalSplit;
+use gents_store::config_client::ConfigAccess;
 
 #[async_trait::async_trait]
 pub trait Recorder: Send + Sync {
@@ -102,7 +102,7 @@ mod tests {
     use super::*;
     use crate::{load_verdicts, Anchor, OutcomeKind, TrialUsage};
     use futures::{stream, StreamExt, TryStreamExt};
-    use gents::documents::EvalTier;
+    use gents_documents::EvalTier;
     use serde_json::json;
     use std::sync::Arc;
 
@@ -118,7 +118,9 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        gents::ensure_runtime_schemas(&node).await.unwrap();
+        gents_store::schema::ensure_runtime_schemas(&node)
+            .await
+            .unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
                 if tokio::net::TcpStream::connect(address).await.is_ok() {
@@ -129,11 +131,13 @@ mod tests {
         })
         .await
         .unwrap();
-        use gents::store::identity::NodeIdentity;
+        use gents_store::identity::NodeIdentity;
         let keys = tempfile::tempdir().unwrap();
-        let user = gents::KeyIdentity::load_or_create(keys.path().join("user.key"), None).unwrap();
+        let user =
+            gents_store::identity::KeyIdentity::load_or_create(keys.path().join("user.key"), None)
+                .unwrap();
         let access = ConfigAccess::Graphql(
-            gents::store::config_client::GraphqlEndpoint::as_principal(
+            gents_store::config_client::GraphqlEndpoint::as_principal(
                 format!("http://{address}/api/v0/graphql"),
                 user.did(),
             )

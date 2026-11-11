@@ -1,5 +1,5 @@
-use crate::store::config_client::ConfigAccess;
-use crate::store::identity::agent::*;
+use gents_store::config_client::ConfigAccess;
+use gents_store::identity::agent::*;
 
 #[tokio::test]
 async fn authorized_provisioning_grants_no_direct_node_permission() {
@@ -15,12 +15,12 @@ async fn authorized_provisioning_grants_no_direct_node_permission() {
     let runtime = db.node_identity.clone();
     let runtime = runtime.as_ref();
     let outsider = tokio::task::spawn_blocking(|| {
-        crate::store::test_support::test_identity("provision-outsider")
+        gents_store::test_support::test_identity("provision-outsider")
     })
     .await
     .unwrap();
     let admin = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
-    crate::store::identity::GrantSet::OperatorUser
+    gents_store::identity::GrantSet::OperatorUser
         .grant(&admin, &identity::Did::new(outsider.did()).unwrap())
         .await
         .unwrap();
@@ -42,7 +42,7 @@ async fn authorized_provisioning_grants_no_direct_node_permission() {
     .unwrap();
     resolve_agent_identity(runtime, &binding).unwrap();
     let agent = identity::Did::new(&binding.agent_did).unwrap();
-    for permission in crate::store::identity::GrantSet::AgentBaseline.permissions() {
+    for permission in gents_store::identity::GrantSet::AgentBaseline.permissions() {
         assert!(
             !node
                 .nac_manager()

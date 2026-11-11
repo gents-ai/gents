@@ -1,6 +1,6 @@
 use super::{diff::canonical_records, DesiredStateManifest, DocRef};
 use anyhow::Result;
-use gents::documents::ConfigReferences;
+use gents_documents::ConfigReferences;
 
 pub(crate) fn prune_safe_deletes(
     desired: &DesiredStateManifest,

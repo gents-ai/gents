@@ -145,7 +145,7 @@ pub(super) async fn handle_request(
         ("GET", "/desktop/packs/installed") => {
             let home = fixture.node_home().to_path_buf();
             let node_did = fixture.node_did().to_owned();
-            let access = gents::ConfigAccess::Graphql(
+            let access = gents_store::config_client::ConfigAccess::Graphql(
                 fixture
                     .desktop_core()
                     .local_home_operator_endpoint(&node_did, &home)?,
@@ -186,7 +186,7 @@ pub(super) async fn handle_request(
                         request.expect_digest,
                     )
                     .await
-                    .map_err(gents::pack::PackChangeError::into_anyhow)
+                    .map_err(gents_pack::pack::PackChangeError::into_anyhow)
                 })
                 .await?,
             )
@@ -208,7 +208,7 @@ pub(super) async fn handle_request(
                 packs::ux_data_call(
                     fixture.node_home().to_path_buf(),
                     access,
-                    gents::observe::ux_data::UxDataCall {
+                    gents_tools::ux_data::UxDataCall {
                         ux: request.ux,
                         node_did: request.node_did,
                         surface: request.surface,
@@ -237,7 +237,7 @@ pub(super) async fn handle_request(
             let home = fixture.node_home().to_path_buf();
             let operator = if packs::plugin_call_uses_data(&home, &request.ux, &request.name)? {
                 let node_did = packs::ux_installing_node(&home)?;
-                let access = gents::ConfigAccess::Graphql(
+                let access = gents_store::config_client::ConfigAccess::Graphql(
                     fixture
                         .desktop_core()
                         .local_home_operator_endpoint(&node_did, &home)?,
@@ -280,10 +280,8 @@ pub(super) async fn handle_request(
                 "client".to_string(),
             );
             let enrollment = issuer.mint().await?;
-            let schema = gents::runtime::agent::p2p_reconcile::read_client_replicated_schema(
-                Arc::clone(node),
-            )
-            .await?;
+            let schema =
+                gents_p2p::p2p_reconcile::read_client_replicated_schema(Arc::clone(node)).await?;
             Ok(HttpResponse::json_ok(
                 serde_json::json!({
                     "enrollment": enrollment,
@@ -311,7 +309,7 @@ pub(super) async fn handle_request(
             Ok(HttpResponse::json_ok(serde_json::to_string(&snapshot)?))
         }
         ("GET", "/desktop/inference/setup/catalog") => Ok(HttpResponse::json_ok(
-            serde_json::to_string(&gents::inference::backends::setup::inference_setup_catalog())?,
+            serde_json::to_string(&gents_inference::backends::setup::inference_setup_catalog())?,
         )),
         ("POST", "/desktop/inference/models/discover") => {
             let request = decode::<InferenceDiscoveryRequest>(
@@ -961,5 +959,5 @@ where
     Fut: std::future::Future<Output = Result<T>>,
     T: Send + 'static,
 {
-    gents::store::local::storage_backend::drive_unsendable(runtime, operation).await?
+    gents_store::local::storage_backend::drive_unsendable(runtime, operation).await?
 }

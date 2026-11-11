@@ -7,34 +7,31 @@ use anyhow::Context as _;
 use defra_node::Node as EmbeddedNode;
 use tokio::sync::watch;
 
-use crate::documents::inference_defaults::{
+use crate::runtime::agent::retry::RetryPolicy;
+use gents_automation::triggers::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
+use gents_automation::triggers::snapshot_observer::RuntimeSnapshotObserver;
+use gents_documents::inference_defaults::{
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
-use crate::documents::AgentToolConfig;
-use crate::inference::backends::health::{BackendHealthMap, BackendProberOptions};
-use crate::inference::backends::registry::backend_fields;
-use crate::inference::resolved::{
+use gents_documents::AgentToolConfig;
+use gents_inference::backends::health::{BackendHealthMap, BackendProberOptions};
+use gents_inference::backends::registry::backend_fields;
+use gents_inference::resolved::{
     ResolvedAgent, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS,
 };
-use crate::runtime::agent::retry::RetryPolicy;
-use crate::store::identity::{NodeIdentity, RuntimeNode};
-use crate::store::schema::migration;
-use crate::tools::call::hook::{BackgroundExecutionRegistry, FailurePolicy};
-use crate::tools::mcp::health::HealthCheckerOptions;
-use crate::tools::mcp::pool::McpPool;
-use crate::tools::surface::{AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling};
-use crate::triggers::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
-use crate::triggers::snapshot_observer::RuntimeSnapshotObserver;
+use gents_store::identity::{NodeIdentity, RuntimeNode};
+use gents_store::schema::migration;
+use gents_toolcalls::call::hook::{BackgroundExecutionRegistry, FailurePolicy};
+use gents_tools::mcp::health::HealthCheckerOptions;
+use gents_tools::mcp::pool::McpPool;
+use gents_tools::surface::{AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling};
 
 mod builder;
-pub mod completion_retry;
 pub(crate) mod daemon;
-pub mod directory_projection;
 pub(crate) mod document_view;
 pub mod inference_read;
 pub(crate) mod loop_stream;
 pub(crate) mod output_obligation;
-pub mod p2p_reconcile;
 pub(crate) mod principal_assembly;
 mod reconcile;
 pub mod retry;
@@ -60,16 +57,16 @@ pub use builder::{AgentBuilder, GentsBuilder};
 pub(crate) async fn process_owned_request_with_model_for_test<M>(
     node: Arc<EmbeddedNode>,
     agent_config: Arc<ResolvedAgent>,
-    tool_surface: Arc<crate::tools::surface::ToolSurface>,
-    tool_runtime: &crate::tools::surface::ToolRuntimeContext,
+    tool_surface: Arc<gents_tools::surface::ToolSurface>,
+    tool_runtime: &gents_tools::surface::ToolRuntimeContext,
     model: M,
     request: gents_protocol::row::AgentRequest,
 ) -> anyhow::Result<()>
 where
-    M: crate::inference::llm::rig_compat::ProviderModel,
+    M: gents_inference::llm::rig_compat::ProviderModel,
 {
     let allowed_targets =
-        crate::tools::surface::resolve_agent_target_descriptions(tool_surface.as_ref());
+        gents_tools::surface::resolve_agent_target_descriptions(tool_surface.as_ref());
     let prompt_builder = crate::turn::prompt::LayeredPromptBuilder::new(
         agent_config.as_ref(),
         &tool_surface,
@@ -82,10 +79,10 @@ where
         node.clone(),
         agent_config.node_did().to_string(),
     );
-    let request_admission = crate::request::admission::AgentRequestAdmissionVerifier::new(
+    let request_admission = gents_session::request::admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
         agent_config.node_identity().clone(),
-        p2p_reconcile::enrollment_authority_channel().1,
+        gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
     );
     let mut daemon = daemon::AgentDaemon::new(daemon::AgentDaemonInit {
         node: node.clone(),
@@ -97,14 +94,14 @@ where
         prompt_builder,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+            gents_inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                 node.clone(),
                 agent_config.agent_identity.as_ref(),
             )?,
         ),
-        background_tool_registry: crate::tools::call::hook::BackgroundToolRegistry::default(),
+        background_tool_registry: gents_toolcalls::call::hook::BackgroundToolRegistry::default(),
         background_execution_registry:
-            crate::tools::call::hook::BackgroundExecutionRegistry::default(),
+            gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
         startup_barrier: Arc::new(runtime::StartupBarrier::ready_for_test()),
         runtime_status,
         slot_generation: 1,
@@ -144,7 +141,7 @@ pub trait ProcessLifecycleObserver: Send + Sync {
 
 #[derive(Clone, Default)]
 pub struct DocumentRuntimeOptions {
-    pub backend_admission: Option<crate::store::local::backend_protection::BackendAdmission>,
+    pub backend_admission: Option<gents_store::local::backend_protection::BackendAdmission>,
     pub tool_ceiling: ToolCeiling,
     pub mcp_pool: McpPool,
     pub local_hostname: Option<String>,
@@ -171,7 +168,7 @@ pub(crate) struct DocumentResolveContext {
     pub(crate) identity: Arc<dyn NodeIdentity>,
     pub(crate) tool_ceiling: ToolCeiling,
     pub(crate) backend_health: BackendHealthMap,
-    pub(crate) plugins: Arc<crate::plugin::executor::PluginExecutor>,
+    pub(crate) plugins: Arc<gents_toolcalls::plugin::executor::PluginExecutor>,
 }
 
 impl DocumentResolveContext {
@@ -192,15 +189,19 @@ impl DocumentResolveContext {
 
 #[derive(Clone)]
 pub struct Gents {
-    backend_admission: crate::store::local::backend_protection::BackendAdmission,
-    usage_cache: Arc<crate::inference::usage_observation::UsageCache>,
+    backend_admission: gents_store::local::backend_protection::BackendAdmission,
+    usage_cache: Arc<gents_inference::usage_observation::UsageCache>,
     node: Arc<EmbeddedNode>,
     runtime_node: Arc<RuntimeNode>,
     agents: Vec<Arc<ResolvedAgent>>,
     unavailable_agents: RapidHashMap<String, UnavailableAgent>,
     active_snapshot: Arc<
         std::sync::RwLock<
-            Option<watch::Receiver<Arc<crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot>>>,
+            Option<
+                watch::Receiver<
+                    Arc<gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot>,
+                >,
+            >,
         >,
     >,
     document_runtime_context: Option<DocumentResolveContext>,
@@ -211,7 +212,7 @@ pub struct Gents {
     retry_policy: RetryPolicy,
     hook_failure_policy: FailurePolicy,
     background_execution_registry: BackgroundExecutionRegistry,
-    inference_observations: crate::inference::inference_observation::InferenceObservationRegistry,
+    inference_observations: gents_inference::inference_observation::InferenceObservationRegistry,
     health_checker_options: HealthCheckerOptions,
     backend_prober_options: BackendProberOptions,
     backend_health: BackendHealthMap,
@@ -223,17 +224,20 @@ pub struct Gents {
     #[cfg(test)]
     router_dispatch_probe: Option<tokio::sync::mpsc::UnboundedSender<()>>,
     rendered_request_capture_factory:
-        Option<crate::inference::rendered_request::RenderedRequestCaptureFactory>,
-    enrollment_authority: Arc<std::sync::RwLock<Option<p2p_reconcile::EnrollmentAuthorityHandle>>>,
+        Option<gents_inference::rendered_request::RenderedRequestCaptureFactory>,
+    enrollment_authority:
+        Arc<std::sync::RwLock<Option<gents_p2p::p2p_reconcile::EnrollmentAuthorityHandle>>>,
     operator_tool_root: Option<PathBuf>,
-    plugins: Arc<crate::plugin::executor::PluginExecutor>,
+    plugins: Arc<gents_toolcalls::plugin::executor::PluginExecutor>,
 }
 
 pub(crate) fn plugin_executor(
     home: Option<PathBuf>,
-    models: crate::plugin::model_binding::AccessModels<crate::store::config_client::ConfigAccess>,
-) -> crate::plugin::executor::PluginExecutor {
-    crate::plugin::executor::PluginExecutor::new(home).with_models(Arc::new(models))
+    models: gents_pack::plugin::model_binding::AccessModels<
+        gents_store::config_client::ConfigAccess,
+    >,
+) -> gents_toolcalls::plugin::executor::PluginExecutor {
+    gents_toolcalls::plugin::executor::PluginExecutor::new(home).with_models(Arc::new(models))
 }
 
 impl Gents {
@@ -252,7 +256,7 @@ impl Gents {
             );
         }
         if let Some(url) = &options.advertised_graphql_url {
-            p2p_reconcile::endpoint::validate_advertised_graphql_url(url)?;
+            gents_p2p::p2p_reconcile::endpoint::validate_advertised_graphql_url(url)?;
         }
         let backend_admission = options
             .backend_admission
@@ -261,8 +265,8 @@ impl Gents {
         backend_admission.validate(&node).await?;
         migration::ensure_all_runtime_migrations(node.clone()).await?;
         let backend_health = options.backend_health.clone().unwrap_or_default();
-        let plugin_models = crate::plugin::model_binding::AccessModels(
-            crate::store::config_client::ConfigAccess::local(node.clone()),
+        let plugin_models = gents_pack::plugin::model_binding::AccessModels(
+            gents_store::config_client::ConfigAccess::local(node.clone()),
         );
         let plugins = Arc::new(plugin_executor(options.plugin_home, plugin_models));
         let document_runtime_context = DocumentResolveContext {
@@ -336,14 +340,14 @@ impl Gents {
     pub async fn watch_ux_data(
         &self,
         home: &std::path::Path,
-        request: crate::observe::ux_data::UxDataCall,
-    ) -> anyhow::Result<crate::observe::ux_data::UxDataWatch> {
-        crate::observe::ux_data::watch_local(home, self.node.clone(), request).await
+        request: gents_tools::ux_data::UxDataCall,
+    ) -> anyhow::Result<gents_tools::ux_data::UxDataWatch> {
+        gents_tools::ux_data::watch_local(home, self.node.clone(), request).await
     }
 
     pub fn inference_observations(
         &self,
-    ) -> &crate::inference::inference_observation::InferenceObservationRegistry {
+    ) -> &gents_inference::inference_observation::InferenceObservationRegistry {
         &self.inference_observations
     }
 
@@ -374,9 +378,11 @@ impl Gents {
     /// scope. The admission guard prevents publication racing retirement.
     pub async fn publish_runtime_notice(
         &self,
-        notice: crate::session::mailbox::RuntimeNotice,
-    ) -> Result<crate::session::mailbox::MailboxItem, crate::session::mailbox::RuntimeNoticeError>
-    {
+        notice: gents_session::session::mailbox::RuntimeNotice,
+    ) -> Result<
+        gents_session::session::mailbox::MailboxItem,
+        gents_session::session::mailbox::RuntimeNoticeError,
+    > {
         let _work = self
             .service_admission()
             .admit()
@@ -403,7 +409,7 @@ impl Gents {
                 identities
             }
         };
-        crate::session::mailbox::publish_runtime_notice(
+        gents_session::session::mailbox::publish_runtime_notice(
             &self.node,
             self.node_did(),
             &identities,
@@ -412,16 +418,16 @@ impl Gents {
         .await
     }
 
-    pub fn usage_cache(&self) -> &Arc<crate::inference::usage_observation::UsageCache> {
+    pub fn usage_cache(&self) -> &Arc<gents_inference::usage_observation::UsageCache> {
         &self.usage_cache
     }
 
     pub async fn read_usage(
         &self,
-        trigger: crate::inference::usage_observation::UsageTrigger,
+        trigger: gents_inference::usage_observation::UsageTrigger,
         provider: Option<&str>,
-    ) -> anyhow::Result<Vec<crate::inference::usage_observation::AccountUsageRead>> {
-        crate::inference::usage_observation::read_node_usage(
+    ) -> anyhow::Result<Vec<gents_inference::usage_observation::AccountUsageRead>> {
+        gents_inference::usage_observation::read_node_usage(
             &self.usage_cache,
             self.node.clone(),
             self.node_did(),
@@ -445,7 +451,7 @@ impl Gents {
         self.background_execution_registry.clone()
     }
 
-    pub fn service_admission(&self) -> crate::store::service::RuntimeServiceAdmission {
+    pub fn service_admission(&self) -> gents_store::service::RuntimeServiceAdmission {
         self.background_execution_registry
             .service_admission()
             .clone()
@@ -485,7 +491,7 @@ impl Gents {
         self.document_runtime_context.as_ref()
     }
 
-    pub(crate) fn plugins(&self) -> &Arc<crate::plugin::executor::PluginExecutor> {
+    pub(crate) fn plugins(&self) -> &Arc<gents_toolcalls::plugin::executor::PluginExecutor> {
         &self.plugins
     }
 
@@ -504,8 +510,8 @@ impl Gents {
             "file inventory belongs to another runtime"
         );
         let actor = identity::Did::new(actor)?;
-        crate::file_inventory::read_direct_inventory(
-            &crate::store::config_client::ConfigAccess::local_as(self.node.clone(), actor),
+        gents_observe::file_inventory::read_direct_inventory(
+            &gents_store::config_client::ConfigAccess::local_as(self.node.clone(), actor),
             request,
         )
         .await
@@ -530,18 +536,18 @@ pub(crate) async fn resolve_document_runtime_snapshot(
 }
 
 pub(crate) struct AgentDocumentInputs<'a> {
-    pub(crate) agent_config: &'a crate::documents::Agent,
+    pub(crate) agent_config: &'a gents_documents::Agent,
     pub(crate) node: Arc<defra_node::Node>,
     pub(crate) configuration_documents:
-        Vec<crate::inference::resolved::SelectedConfigurationDocument>,
-    pub(crate) context: Option<&'a crate::documents::AgentContext>,
-    pub(crate) compaction: Option<crate::documents::CompactionConfig>,
-    pub(crate) compaction_inference: Option<crate::inference::resolved::ResolvedInference>,
-    pub(crate) inference: &'a crate::inference::resolved::ResolvedInference,
+        Vec<gents_inference::resolved::SelectedConfigurationDocument>,
+    pub(crate) context: Option<&'a gents_documents::AgentContext>,
+    pub(crate) compaction: Option<gents_documents::CompactionConfig>,
+    pub(crate) compaction_inference: Option<gents_inference::resolved::ResolvedInference>,
+    pub(crate) inference: &'a gents_inference::resolved::ResolvedInference,
     pub(crate) tool_selection: ResolvedToolSelection,
     pub(crate) agent_tools: AgentToolConfig,
     pub(crate) tool_ceiling: &'a ToolCeiling,
-    pub(crate) skills: Vec<crate::documents::skills::Skill>,
+    pub(crate) skills: Vec<gents_documents::skills::Skill>,
     pub(crate) oauth_pool: Vec<String>,
 }
 
@@ -606,13 +612,13 @@ pub(crate) fn agent_config_from_documents(
         "Agent {} belongs to a different runtime node",
         agent_config.agent_did
     );
-    let agent_identity = crate::store::identity::resolve_agent_identity(
+    let agent_identity = gents_store::identity::resolve_agent_identity(
         principal.identity.as_ref(),
         &agent_config.identity_binding(),
     )?;
     Ok(ResolvedAgent {
-        configuration: crate::inference::resolved::ResolvedConfiguration::Documents(
-            crate::inference::resolved::SelectedConfiguration::new(
+        configuration: gents_inference::resolved::ResolvedConfiguration::Documents(
+            gents_inference::resolved::SelectedConfiguration::new(
                 node,
                 identity::Did::new(agent_identity.did())?,
                 configuration_documents,
@@ -652,7 +658,7 @@ pub(crate) fn agent_config_from_documents(
         stream_liveness_timeout: Duration::from_secs(liveness_secs),
         provider_idle_timeout: Duration::from_secs(provider_idle_secs),
         deadline_duration: Duration::from_secs(deadline_duration_secs),
-        completion_retry: completion_retry::CompletionRetryProfileFields {
+        completion_retry: gents_loop::completion_retry::CompletionRetryProfileFields {
             retry_max_transport: retry.max_transport_retries,
             retry_backoff_ms: retry.backoff_ms,
             retry_max_resample: retry.max_resample_retries,
@@ -679,7 +685,7 @@ fn positive_duration_secs_or_default(
 }
 
 pub(crate) fn tool_selection_from_document(
-    selection: &crate::documents::Tools,
+    selection: &gents_documents::Tools,
 ) -> anyhow::Result<ResolvedToolSelection> {
     ResolvedToolSelection::from_document(selection)
 }

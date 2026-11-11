@@ -1,12 +1,10 @@
 mod support;
 
 use gents::defra_node;
-use gents::runtime::agent::p2p_reconcile::{
-    EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin,
-};
-use gents::store::config_client::{ConfigAccess, NodePermission};
-use gents::store::graphql::escape_graphql_string;
-use gents::{KeyIdentity, NodeIdentity};
+use gents_p2p::p2p_reconcile::{EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin};
+use gents_store::config_client::{ConfigAccess, NodePermission};
+use gents_store::graphql::escape_graphql_string;
+use gents_store::identity::{KeyIdentity, NodeIdentity};
 use std::{sync::Arc, time::Duration};
 
 struct TestNode {
@@ -16,7 +14,7 @@ struct TestNode {
 
 fn client_http(endpoint: &str, identity: &KeyIdentity) -> ConfigAccess {
     ConfigAccess::Graphql(
-        gents::store::config_client::GraphqlEndpoint::as_principal(endpoint, identity.did())
+        gents_store::config_client::GraphqlEndpoint::as_principal(endpoint, identity.did())
             .with_client_signing_capability(identity.client_signing_capability().unwrap())
             .unwrap(),
     )
@@ -32,9 +30,9 @@ async fn runtime_http_test_node(identity: Arc<KeyIdentity>) -> (TestNode, String
             .with_node_identity_did(identity.did())
             .with_node_acp_enabled()
             .with_document_projector(
-                gents::store::local::document_projector(
+                gents_store::local::document_projector(
                     identity.clone(),
-                    std::sync::Arc::new(gents::tools::surface::ToolCeiling::meta_only()),
+                    std::sync::Arc::new(gents_tools::surface::ToolCeiling::meta_only()),
                 )
                 .unwrap(),
             )
@@ -47,7 +45,9 @@ async fn runtime_http_test_node(identity: Arc<KeyIdentity>) -> (TestNode, String
             .await
             .unwrap(),
     );
-    gents::ensure_runtime_schemas(&node).await.unwrap();
+    gents_store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     (
         TestNode {
             node,
@@ -85,7 +85,7 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
             _docID _version { cid }
         }
     }"#).await.unwrap();
-    let rows = gents::store::graphql::mutation_documents(&created, "create_PendingChatSubmission")
+    let rows = gents_store::graphql::mutation_documents(&created, "create_PendingChatSubmission")
         .unwrap()
         .unwrap();
     assert_eq!(rows.len(), 1);
@@ -171,10 +171,9 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
     }
     let outsider = client_http(&endpoint, &other);
     let denied = outsider.write("test.private_journal.deny_update", &format!(r#"mutation {{ update_PendingChatSubmission(docID: "{doc_id_escaped}", input: {{payload: "stolen"}}) {{ _docID }} }}"#)).await.unwrap();
-    let changed =
-        gents::store::graphql::mutation_documents(&denied, "update_PendingChatSubmission")
-            .unwrap()
-            .unwrap();
+    let changed = gents_store::graphql::mutation_documents(&denied, "update_PendingChatSubmission")
+        .unwrap()
+        .unwrap();
     assert!(
         changed.is_empty(),
         "outsider changed a private journal: {denied}"
@@ -257,7 +256,7 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
         )
         .await
         .unwrap();
-    let public_id = gents::store::graphql::created_doc_id(&public, "PeerRegistry").unwrap();
+    let public_id = gents_store::graphql::created_doc_id(&public, "PeerRegistry").unwrap();
     let public_id_escaped = escape_graphql_string(&public_id);
     let (_, source_address) = support::enrollment::wait_for_peer_identity(source).await;
     let (_, receiver_address) = support::enrollment::wait_for_peer_identity(receiver).await;
@@ -273,7 +272,7 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
         )
         .await
         .unwrap();
-    gents::store::identity::node_p2p(receiver)
+    gents_store::identity::node_p2p(receiver)
         .unwrap()
         .sync_documents(
             "PeerRegistry",
@@ -292,7 +291,7 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
         public_on_receiver["data"]["PeerRegistry"][0]["peer_id"],
         "journal-public-probe"
     );
-    let pull = gents::store::identity::node_p2p(receiver)
+    let pull = gents_store::identity::node_p2p(receiver)
         .unwrap()
         .sync_documents(
             "PendingChatSubmission",

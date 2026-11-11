@@ -73,7 +73,7 @@ impl LiveBridgeFixture {
             .node)
     }
 
-    pub(crate) fn runtime_identity(&self) -> Result<&Arc<dyn gents::NodeIdentity>> {
+    pub(crate) fn runtime_identity(&self) -> Result<&Arc<dyn gents_store::identity::NodeIdentity>> {
         Ok(&self
             .runtime_home
             .as_ref()
@@ -82,7 +82,7 @@ impl LiveBridgeFixture {
     }
 
     pub(crate) fn runtime_p2p(&self) -> Result<Arc<dyn defra_p2p_adapter::P2POperations>> {
-        gents::store::identity::node_p2p(self.runtime_node()?.as_ref())
+        gents_store::identity::node_p2p(self.runtime_node()?.as_ref())
             .context("live runtime P2P unavailable")
     }
 
@@ -214,7 +214,7 @@ impl LiveBridgeFixture {
             agent_target_backend.as_ref(),
         )
         .await?;
-        let runtime_p2p = gents::store::identity::node_p2p(&runtime_home.node)
+        let runtime_p2p = gents_store::identity::node_p2p(&runtime_home.node)
             .context("runtime P2P unavailable")?;
         let remote_addr =
             wait_for_runtime_iroh_addr(&runtime_p2p, DEFAULT_DEPLOYMENT_LABEL).await?;
@@ -850,11 +850,11 @@ mod tests {
         agent_did: &str,
         skill_id: &str,
     ) -> Result<()> {
-        use gents::documents::apply_desired_state_plan;
-        use gents::documents::{
+        use gents_documents::apply_desired_state_plan;
+        use gents_documents::{
             read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
         };
-        use gents::store::collection::Collection;
+        use gents_store::collection::Collection;
         fixture
             .desktop_core()
             .operator_access(node_did)?
@@ -868,7 +868,7 @@ mod tests {
                     )
                     .await?
                     .with_context(|| format!("agent {agent_did} is missing"))?;
-                    let agent: gents::AgentDocument = serde_json::from_value(agent)?;
+                    let agent: gents_documents::Agent = serde_json::from_value(agent)?;
                     let context_id = agent.context_id.context("fixture agent has no context")?;
                     let (_, context) = read_desired_state_record_in_txn(
                         txn,
@@ -878,7 +878,7 @@ mod tests {
                     )
                     .await?
                     .context("fixture context is missing")?;
-                    let mut context: gents::documents::AgentContext =
+                    let mut context: gents_documents::AgentContext =
                         serde_json::from_value(context)?;
                     context.skill_ids = vec![skill_id.to_owned()];
                     let value = serde_json::to_value(context)?;
@@ -890,7 +890,7 @@ mod tests {
                     apply_desired_state_plan(
                         txn,
                         &plan,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await?;
                     Ok::<_, anyhow::Error>(())
@@ -1224,7 +1224,7 @@ mod tests {
                 inference_url: Some(self.endpoint.clone()),
                 model_name: Some(model_name.to_string()),
                 provider: Some(
-                    gents::BackendProviderKind::OpenAiCompatible
+                    gents_inference::backends::provider::BackendProviderKind::OpenAiCompatible
                         .as_str()
                         .to_owned(),
                 ),

@@ -72,9 +72,10 @@ async fn tools_id(access: &ConfigAccess, owner: &str, id: &str) -> Result<Option
 async fn imports_complete_candidate_and_recreates_only_the_scoped_tombstone() -> Result<()> {
     let client = crate::shared::test_support::ClientHome::new().await;
     let peer_dir = tempfile::tempdir()?;
-    let peer = gents::KeyIdentity::load_or_create(peer_dir.path().join("peer.key"), None)?;
+    let peer =
+        gents_store::identity::KeyIdentity::load_or_create(peer_dir.path().join("peer.key"), None)?;
     let owner_a = client.node_did().to_owned();
-    let owner_b = gents::NodeIdentity::did(&peer).to_owned();
+    let owner_b = gents_store::identity::NodeIdentity::did(&peer).to_owned();
     let access = client.access.clone();
     let first = config(&owner_a, "tools");
     let foreign = config(&owner_b, "tools");

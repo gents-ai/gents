@@ -101,10 +101,10 @@ async fn node_shutdown_with_an_open_graphql_subscription_completes_within_the_bo
     node.add_collection("type ShutdownProbe { name: String }")
         .await
         .unwrap();
-    let access = gents::store::config_client::ConfigAccess::Graphql(
-        gents::store::config_client::GraphqlEndpoint::as_principal(graphql, owner.did())
+    let access = gents_store::config_client::ConfigAccess::Graphql(
+        gents_store::config_client::GraphqlEndpoint::as_principal(graphql, owner.did())
             .with_client_signing_capability(
-                gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+                gents_store::config_client::ClientSigningCapability::from_ed25519_key(
                     owner.private_key_bytes(),
                 )
                 .unwrap(),

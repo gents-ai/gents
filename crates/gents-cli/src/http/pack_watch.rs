@@ -20,7 +20,7 @@ const WATCH_LIFETIME: Duration = Duration::from_secs(30);
 
 pub(super) async fn watch(
     State(state): State<RuntimeHttpState>,
-    Json(request): Json<gents::observe::ux_data::UxDataCall>,
+    Json(request): Json<gents_tools::ux_data::UxDataCall>,
 ) -> Response {
     let Ok(permit) = WATCH_SLOTS.try_acquire() else {
         return (

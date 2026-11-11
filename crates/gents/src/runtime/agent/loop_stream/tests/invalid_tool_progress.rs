@@ -197,7 +197,7 @@ async fn invalid_tool_budget_closes_eighth_result_and_cancels_accepted_ninth() {
         assert_eq!(model.seen_requests().await.len(), 1);
         lifecycle
             .terminalize_owned(
-                crate::request::lifecycle::RequestTerminalOutcome::Failed,
+                gents_session::request::lifecycle::RequestTerminalOutcome::Failed,
                 writer.terminal_output(&lifecycle.request().doc_id).await,
                 Some(&error),
             )
@@ -262,7 +262,7 @@ async fn malformed_bash_feedback_reaches_next_request_and_corrected_argv_succeed
         RawStreamingChoice::FinalResponse(()),
     ]);
     let model = ScriptedModel::new_turns(turns);
-    let tools = crate::tools::native::ToolSet::builder()
+    let tools = gents_tools::native::ToolSet::builder()
         .read_root(root.path())
         .bash_read_only()
         .build()
@@ -366,7 +366,7 @@ async fn empty_bash_arguments_exhaust_owned_loop_without_side_effects() {
             RawStreamingChoice::FinalResponse(()),
         ]);
         let model = ScriptedModel::new_turns(turns);
-        let tools = crate::tools::native::ToolSet::builder()
+        let tools = gents_tools::native::ToolSet::builder()
             .read_root(root.path())
             .bash_read_only()
             .build()

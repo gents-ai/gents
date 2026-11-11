@@ -1,9 +1,9 @@
 use super::*;
-use gents::documents::apply_desired_state_plan;
-use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::documents::{IntegrationTools, PluginToolRef, Tools};
-use gents::store::config_client::{ConfigAccess, NodePermission};
-use gents::{Collection, NodeIdentity};
+use gents_documents::apply_desired_state_plan;
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents_documents::{IntegrationTools, PluginToolRef, Tools};
+use gents_store::config_client::{ConfigAccess, NodePermission};
+use gents_store::{collection::Collection, identity::NodeIdentity};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -29,7 +29,7 @@ async fn publish(access: &ConfigAccess, documents: Vec<(Collection, Value)>) -> 
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
                 .map(|_| ())
@@ -47,7 +47,7 @@ async fn prepare_data(home: &std::path::Path, init: &Value, agent_did: &str) -> 
     let node_did = identity.did().to_owned();
     let data = home.join("data");
     let node = Arc::new(
-        gents::store::local::store_key::open_home_store_key(home, &data)
+        gents_store::local::store_key::open_home_store_key(home, &data)
             .await?
             .encrypt(
                 gents::defra_node::Node::builder()
@@ -92,7 +92,7 @@ async fn prepare_data(home: &std::path::Path, init: &Value, agent_did: &str) -> 
             .context("Agent identity binding missing")?
             .into(),
     };
-    let signer = gents::store::identity::resolve_agent_identity(&identity, &binding)?;
+    let signer = gents_store::identity::resolve_agent_identity(&identity, &binding)?;
     let actor =
         ConfigAccess::local_managed_agent(node.clone(), agent_did.parse()?, signer.as_ref())?;
     let created = admin
@@ -101,7 +101,7 @@ async fn prepare_data(home: &std::path::Path, init: &Value, agent_did: &str) -> 
             &format!("mutation {{ create_{PARCEL}(input: {{status: \"original\"}}) {{_docID}} }}"),
         )
         .await?;
-    let parcel = gents::store::graphql::created_doc_id(&created, PARCEL)?;
+    let parcel = gents_store::graphql::created_doc_id(&created, PARCEL)?;
     admin
         .add_actor_relationship(PARCEL, &parcel, "reader", &agent_did.parse()?)
         .await?;
@@ -225,14 +225,14 @@ async fn live_glm_plugin_denial_rolls_back_data_and_terminalizes_tool() -> Resul
     server.capturing(async {
         wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
         run_cli_json_with_env(&home, &["config", "pack", "install", pack.to_str().context("pack path UTF-8")?, "--home", home_arg, "--graphql", &graphql], &owner_env)?;
-        let installed = gents::plugin::store::read_record(&home, "fixture", "job_fixture")?;
+        let installed = gents_pack::plugin::store::read_record(&home, "fixture", "job_fixture")?;
         let grant = installed.data_grant().context("installed plugin data grant missing")?;
         let writes: Vec<gents_protocol::job::DataWrite> = serde_json::from_value(args["args"]["plan"][0]["output"]["writes"].clone())?;
-        let stamps = gents::plugin::data::StampContext::ToolOutput {
+        let stamps = gents_toolcalls::plugin::data::StampContext::ToolOutput {
             caller_did: agent_did.clone(), session_id: "admission-preflight".into(),
             request_doc_id: "admission-preflight".into(), tool_call_doc_id: "admission-preflight".into(),
         };
-        gents::plugin::data::admit_write(&grant, &stamps, writes).context("fixture writes must pass the installed plugin grant before native ACP")?;
+        gents_toolcalls::plugin::data::admit_write(&grant, &stamps, writes).context("fixture writes must pass the installed plugin grant before native ACP")?;
         let core = ClientCore::start_with_paths_and_options(DesktopPaths::from_root(&client), ClientCoreOptions::local_only()).await?;
         let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}")).await?;
         let pending = core.request_status_enrollment_with_label(&status, Some("plugin denial")).await?;
@@ -257,7 +257,7 @@ async fn live_glm_plugin_denial_rolls_back_data_and_terminalizes_tool() -> Resul
         agent.context_id = Some(context.context_id.clone());
         core.save_agent(&agent).await?;
         let runtime_identity = identity_from_init(&init)?;
-        let runtime_endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(
+        let runtime_endpoint = gents_store::config_client::GraphqlEndpoint::as_principal(
             &graphql, &node_did,
         ).with_client_signing_capability(runtime_identity.client_signing_capability()?)?;
         let activation = runtime_endpoint.authorize(
@@ -291,11 +291,11 @@ async fn live_glm_plugin_denial_rolls_back_data_and_terminalizes_tool() -> Resul
         anyhow::ensure!(selected.len() == 1, "expected one plugin call; terminal response: {:?}; observed calls: {tools:?}", reply.text);
         let call = selected[0];
         anyhow::ensure!(call["lifecycle_state"] == "failed" && call["tool_failure_class"] == "toolReturnedError", "plugin did not settle failed: {call}");
-        let actual_args = gents::tools::call::lifecycle::load_tool_call_arguments(&access, call["_docID"].as_str().context("tool doc")?, &node_did, &session, call["requester_did"].as_str()).await?;
+        let actual_args = gents_session::tool_call::query::result::load_tool_call_arguments(&access, call["_docID"].as_str().context("tool doc")?, &node_did, &session, call["requester_did"].as_str()).await?;
         let actual_args: Value = serde_json::from_str(&actual_args).context("plugin argument JSON")?;
         anyhow::ensure!(actual_args == args, "model changed the fixture writes: {actual_args}");
-        let tool_result = gents::tools::call::lifecycle::load_tool_call_result(&access, call["_docID"].as_str().context("tool doc")?, &node_did, &session, call["requester_did"].as_str()).await?;
-        let text = gents::tools::call::lifecycle::render_tool_result(&tool_result)?;
+        let tool_result = gents_session::tool_call::query::result::load_tool_call_result(&access, call["_docID"].as_str().context("tool doc")?, &node_did, &session, call["requester_did"].as_str()).await?;
+        let text = gents_session::tool_call::query::result::render_tool_result(&tool_result)?;
         anyhow::ensure!(text.contains("plugin data writes were refused and nothing was committed"), "failure did not reach the deferred write owner: {text}");
         Arc::new(core).shutdown().await?;
         Ok::<(), anyhow::Error>(())
@@ -304,7 +304,7 @@ async fn live_glm_plugin_denial_rolls_back_data_and_terminalizes_tool() -> Resul
     let identity = identity_from_init(&init)?;
     let data = home.join("data");
     let node = Arc::new(
-        gents::store::local::store_key::open_home_store_key(&home, &data)
+        gents_store::local::store_key::open_home_store_key(&home, &data)
             .await?
             .encrypt(
                 gents::defra_node::Node::builder()

@@ -3,13 +3,13 @@ use anyhow::{anyhow, bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
 #[cfg(test)]
 use defra_node::Node as EmbeddedNode;
-use gents::documents::apply_desired_state_plan;
-use gents::documents::read_desired_state_record_in_txn;
-use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::documents::{EventSource, Schedule, Task, Trigger};
-use gents::store::collection::Collection;
-use gents::store::config_client::ConfigAccess;
-use gents::task_session_title;
+use gents_documents::apply_desired_state_plan;
+use gents_documents::read_desired_state_record_in_txn;
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents_documents::{EventSource, Schedule, Task, Trigger};
+use gents_session::request::lifecycle::task_session_title;
+use gents_store::collection::Collection;
+use gents_store::config_client::ConfigAccess;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -28,8 +28,8 @@ pub async fn prepare_access_review_task_on(
     node: &str,
     agent: &str,
     preferred: Option<&str>,
-) -> Result<gents::plugin::approval::workspace::ReviewTaskSelection> {
-    use gents::plugin::approval::workspace::{default_review_task, review_task_policy};
+) -> Result<gents_tools::plugin::approval::workspace::ReviewTaskSelection> {
+    use gents_tools::plugin::approval::workspace::{default_review_task, review_task_policy};
 
     let default = default_review_task(node, agent);
     let task_id = preferred.unwrap_or(&default.task_id);
@@ -50,13 +50,13 @@ pub async fn prepare_access_review_task_on(
                         add: value.clone(),
                         update: value,
                     }])?;
-                    apply_desired_state_plan(txn, &plan, &gents::inference::resolved::ProviderProfilePolicy).await?;
+                    apply_desired_state_plan(txn, &plan, &gents_inference::resolved::ProviderProfilePolicy).await?;
                     default.clone()
                 }
                 None => anyhow::bail!("The configured access reviewer is missing. Restore its Task in Runtime Settings."),
             };
             review_task_policy(&task, node, task_id, agent, "access-review")?;
-            Ok(gents::plugin::approval::workspace::ReviewTaskSelection::for_task(&task))
+            Ok(gents_tools::plugin::approval::workspace::ReviewTaskSelection::for_task(&task))
         })
     }).await
 }
@@ -294,13 +294,13 @@ fn render_task_invocation(
     if !task.enabled {
         bail!("task {task_id} is disabled");
     }
-    gents::documents::task_goal_declaration::validate_task_goal_declaration(
+    gents_documents::task_goal_declaration::validate_task_goal_declaration(
         task.goal_objective_template.as_deref(),
         task.goal_token_budget,
     )?;
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let (node_scope, ctx_scope) =
-        gents::documents::template::task_node_ctx(node_did, agent_did, &now);
+        gents_documents::template::task_node_ctx(node_did, agent_did, &now);
     let invocation_key = uuid::Uuid::new_v4().to_string();
     let identity = gents_protocol::trigger_delivery::FireIdentity {
         owner_did: node_did.into(),
@@ -308,10 +308,10 @@ fn render_task_invocation(
         source_collection: "Task".into(),
         source_doc_id: task_doc_id.into(),
     };
-    let fire_key = gents::triggers::task_fire_key(&identity);
+    let fire_key = gents_automation::triggers::task_fire_key(&identity);
     let session_id = format!("trigger-session:{fire_key}");
     let request_id = format!("trigger-request:{fire_key}");
-    let scope = gents::TemplateScope {
+    let scope = gents_documents::template::TemplateScope {
         session: Some(serde_json::json!({"session_id": session_id})),
         request: Some(serde_json::json!({"request_id": request_id})),
         event: serde_json::json!({
@@ -325,14 +325,15 @@ fn render_task_invocation(
         node: node_scope,
         ctx: ctx_scope,
     };
-    let content = gents::render_manual_template(task_id, prompt_template, &scope)?;
+    let content =
+        gents_documents::template::render_manual_template(task_id, prompt_template, &scope)?;
     let goal_objective = task
         .goal_objective_template
         .as_deref()
         .map(str::trim)
         .filter(|template| !template.is_empty())
         .map(|template| {
-            gents::render_template(template, &scope)
+            gents_documents::template::render_template(template, &scope)
                 .map_err(|error| anyhow!("render goal template for task {task_id}: {error}"))
         })
         .transpose()?;
@@ -468,7 +469,7 @@ pub async fn resolve_schedule_now_on(
         trigger.enabled
             && matches!(
                 &trigger.source,
-                gents::documents::TriggerSource::Schedule { schedule_id: id }
+                gents_documents::TriggerSource::Schedule { schedule_id: id }
                     if id == schedule_id
             )
     });
@@ -500,7 +501,7 @@ mod tests {
         let owner = runtime.node_did();
         let binding = runtime.provision_agent().await;
         let agent = binding.agent_did.as_str();
-        let config: gents::documents::PackConfig = serde_json::from_value(json!({
+        let config: gents_documents::PackConfig = serde_json::from_value(json!({
             "node":{"node_did":owner},
             "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Fixture","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
@@ -518,7 +519,7 @@ mod tests {
             prepare_access_review_task_on(&access, owner, agent, None).await?,
             id
         );
-        let mut task = gents::plugin::approval::workspace::default_review_task(owner, agent);
+        let mut task = gents_tools::plugin::approval::workspace::default_review_task(owner, agent);
         assert_eq!(task.task_id, id.task_id);
         task.prompt_template = "Ask about changes outside the requested project.".into();
         upsert_task_on(&access, &task).await?;
@@ -565,10 +566,13 @@ mod tests {
 
     #[tokio::test]
     async fn canonical_task_resolution_ignores_stale_desktop_revision() -> Result<()> {
-        use gents::NodeIdentity as _;
+        use gents_store::identity::NodeIdentity as _;
         let home = tempfile::tempdir()?;
-        let identity = gents::KeyIdentity::load_or_create(home.path().join("owner.key"), None)?;
-        let binding = gents::store::identity::provision_agent_identity(&identity)?;
+        let identity = gents_store::identity::KeyIdentity::load_or_create(
+            home.path().join("owner.key"),
+            None,
+        )?;
+        let binding = gents_store::identity::provision_agent_identity(&identity)?;
         let operator = Arc::new(
             EmbeddedNode::builder()
                 .with_node_identity_did(identity.did())
@@ -581,10 +585,10 @@ mod tests {
                 .build()
                 .await?,
         );
-        gents::ensure_runtime_schemas(operator.as_ref()).await?;
-        gents::ensure_runtime_schemas(&desktop).await?;
+        gents_store::schema::ensure_runtime_schemas(operator.as_ref()).await?;
+        gents_store::schema::ensure_runtime_schemas(&desktop).await?;
         let owner = identity.did();
-        let config: gents::documents::PackConfig = serde_json::from_value(json!({
+        let config: gents_documents::PackConfig = serde_json::from_value(json!({
             "node":{"node_did":owner},
             "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
@@ -602,7 +606,7 @@ mod tests {
                         apply_desired_state_plan(
                             txn,
                             plan,
-                            &gents::inference::resolved::ProviderProfilePolicy,
+                            &gents_inference::resolved::ProviderProfilePolicy,
                         )
                         .await?;
                         Ok::<_, anyhow::Error>(())
@@ -682,10 +686,10 @@ mod tests {
 
     #[tokio::test]
     async fn schedule_manual_fire_never_selects_another_nodes_same_named_task() -> Result<()> {
-        use gents::NodeIdentity as _;
+        use gents_store::identity::NodeIdentity as _;
 
         let identity_home = tempfile::tempdir()?;
-        let identity = gents::KeyIdentity::load_or_create(
+        let identity = gents_store::identity::KeyIdentity::load_or_create(
             identity_home.path().join("schedule-actor.key"),
             None,
         )?;
@@ -696,7 +700,7 @@ mod tests {
                 .build()
                 .await?,
         );
-        gents::ensure_runtime_schemas(&node).await?;
+        gents_store::schema::ensure_runtime_schemas(&node).await?;
         ConfigAccess::write_local(
             &node,
             "test.schedule_task_scope.seed",
@@ -752,7 +756,7 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.to_string(), "task shared-task is disabled");
-        let response = gents::store::graphql::graphql_with_transaction_retry(
+        let response = gents_store::graphql::graphql_with_transaction_retry(
             &node,
             "query { AgentRequest { _docID } }",
             "test.schedule_task_scope.requests",
@@ -781,7 +785,7 @@ mod tests {
         let agent_a = runtime.provision_agent().await;
         let agent_b = runtime.provision_agent().await;
         for (owner, binding) in [(&automation_a, &agent_a), (&automation_b, &agent_b)] {
-            let config: gents::documents::PackConfig = serde_json::from_value(json!({
+            let config: gents_documents::PackConfig = serde_json::from_value(json!({
                 "node":{"node_did":owner},
                 "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
                 "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
@@ -795,7 +799,7 @@ mod tests {
                         apply_desired_state_plan(
                             txn,
                             plan,
-                            &gents::inference::resolved::ProviderProfilePolicy,
+                            &gents_inference::resolved::ProviderProfilePolicy,
                         )
                         .await?;
                         Ok::<_, anyhow::Error>(())
@@ -839,7 +843,7 @@ mod tests {
             json!({"node_did":owner,"schedule_id":"schedule","cadence":{"kind":"interval","interval_secs":60}}),
         )?;
         upsert_schedule_on(&access, &schedule).await?;
-        trigger.source = gents::documents::TriggerSource::Schedule {
+        trigger.source = gents_documents::TriggerSource::Schedule {
             schedule_id: "schedule".into(),
         };
         upsert_trigger_on(&access, &trigger).await?;

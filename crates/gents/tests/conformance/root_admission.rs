@@ -75,20 +75,20 @@ fn generated_root_admission_cases_drive_production_root_policy() {
         }
         let mut documents = enabled
             .iter()
-            .map(|root| gents::tools::surface::WorkspaceRootDocument {
+            .map(|root| gents_tools::surface::WorkspaceRootDocument {
                 root_path: Some(root.to_string_lossy().into_owned()),
                 enabled: Some(true),
             })
             .collect::<Vec<_>>();
         if case.configured && documents.is_empty() && case.observation != "invalid_ceiling" {
-            documents.push(gents::tools::surface::WorkspaceRootDocument {
+            documents.push(gents_tools::surface::WorkspaceRootDocument {
                 root_path: ceiling
                     .as_ref()
                     .map(|root| root.to_string_lossy().into_owned()),
                 enabled: Some(false),
             });
         }
-        let policy = gents::tools::surface::project_workspace_root_policy(
+        let policy = gents_tools::surface::project_workspace_root_policy(
             documents,
             invalid_ceiling.as_deref().or(ceiling.as_deref()),
         );
@@ -181,12 +181,9 @@ fn generated_root_admission_cases_drive_production_root_policy() {
         };
         match case.operation.as_str() {
             "create" => {
-                let admitted = gents::tools::surface::admit_authored_root(
-                    &policy,
-                    &authored_root,
-                    case.stored,
-                )
-                .is_ok();
+                let admitted =
+                    gents_tools::surface::admit_authored_root(&policy, &authored_root, case.stored)
+                        .is_ok();
                 assert_eq!(
                     admitted, case.expected,
                     "production root admission disagrees with generated case {} ({})",
@@ -198,30 +195,30 @@ fn generated_root_admission_cases_drive_production_root_policy() {
                     .as_deref()
                     .expect("meet case models a process ceiling");
                 let meet = match candidate.as_deref() {
-                    Some(selection) => gents::tools::surface::resolve_effective_tool_root(
+                    Some(selection) => gents_tools::surface::resolve_effective_tool_root(
                         "conformance",
                         Some(selection),
                         Some(ceiling),
                     ),
                     None => {
-                        let mut tools = gents::documents::Tools {
-                            host: Some(gents::documents::HostTools {
+                        let mut tools = gents_documents::Tools {
+                            host: Some(gents_documents::HostTools {
                                 root: Some(case.authored.clone()),
-                                files: Some(gents::documents::FileTools {
-                                    mode: gents::FileToolMode::ReadOnly,
+                                files: Some(gents_documents::FileTools {
+                                    mode: gents_documents::FileToolMode::ReadOnly,
                                     ..Default::default()
                                 }),
                                 ..Default::default()
                             }),
                             ..Default::default()
                         };
-                        gents::tools::surface::canonicalize_tools_root(&mut tools, &policy, None)
+                        gents_tools::surface::canonicalize_tools_root(&mut tools, &policy, None)
                             .and_then(|()| {
                                 let configured = tools
                                     .host
                                     .and_then(|host| host.root)
                                     .filter(|root| !root.trim().is_empty());
-                                gents::tools::surface::resolve_effective_tool_root(
+                                gents_tools::surface::resolve_effective_tool_root(
                                     "conformance",
                                     configured.as_deref().map(std::path::Path::new),
                                     Some(ceiling),

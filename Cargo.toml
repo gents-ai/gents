@@ -6,6 +6,16 @@ members = [
     "apps/gents-desktop/src-tauri",
     "crates/fixture-domain-plugin",
     "crates/gents",
+    "crates/gents-store",
+    "crates/gents-documents",
+    "crates/gents-inference",
+    "crates/gents-p2p",
+    "crates/gents-pack",
+    "crates/gents-session",
+    "crates/gents-tools",
+    "crates/gents-toolcalls",
+    "crates/gents-automation",
+    "crates/gents-observe",
     "crates/gents-eval",
     "crates/gents-chatgpt-login",
     "crates/gents-claude",
@@ -38,6 +48,16 @@ default-members = [
     "apps/gents-desktop/src-tauri",
     "crates/fixture-domain-plugin",
     "crates/gents",
+    "crates/gents-store",
+    "crates/gents-documents",
+    "crates/gents-inference",
+    "crates/gents-p2p",
+    "crates/gents-pack",
+    "crates/gents-session",
+    "crates/gents-tools",
+    "crates/gents-toolcalls",
+    "crates/gents-automation",
+    "crates/gents-observe",
     "crates/gents-eval",
     "crates/gents-chatgpt-login",
     "crates/gents-claude",
@@ -85,6 +105,16 @@ defra-core = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "c
 db = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "ce4b566a5860f4ca6e858101d53ce8f413f8d957", default-features = false, features = ["native"] }
 document = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "ce4b566a5860f4ca6e858101d53ce8f413f8d957" }
 gents-protocol = { path = "crates/gents-protocol" }
+gents-store = { path = "crates/gents-store" }
+gents-documents = { path = "crates/gents-documents" }
+gents-inference = { path = "crates/gents-inference" }
+gents-p2p = { path = "crates/gents-p2p" }
+gents-pack = { path = "crates/gents-pack" }
+gents-session = { path = "crates/gents-session" }
+gents-tools = { path = "crates/gents-tools" }
+gents-toolcalls = { path = "crates/gents-toolcalls" }
+gents-automation = { path = "crates/gents-automation" }
+gents-observe = { path = "crates/gents-observe" }
 gents-loop = { path = "crates/gents-loop" }
 gents-chatgpt-login = { path = "crates/gents-chatgpt-login" }
 gents-login-ui = { path = "crates/gents-login-ui" }

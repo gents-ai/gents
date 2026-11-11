@@ -1,13 +1,13 @@
-use gents::store::config_client::GraphqlEndpoint;
+use gents_store::config_client::GraphqlEndpoint;
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use gents::store::graphql::escape_graphql_string;
 use gents_protocol::row::{
     decode_node_readiness_snapshot, project_node_readiness_summary, NodeReadinessRow,
     ProjectedNodeReadinessSummary,
 };
+use gents_store::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
 use crate::cli::args::StatusArgs;
@@ -100,18 +100,19 @@ pub(crate) async fn load_runtime_status_output(
     let home_dir = resolve_home_dir(home);
     let runtime_state = read_runtime_state(&home_dir)?;
     let p2p_status = crate::commands::p2p::load_live_http_p2p_status(home, graphql).await;
-    let background_completion = match gents::load_background_completion_diagnostics(
-        &ConfigAccess::Graphql(graphql.clone()),
-        node_did,
-    )
-    .await
-    {
-        Ok(diagnostics) => serde_json::to_value(diagnostics).unwrap_or(Value::Null),
-        Err(error) => json!({
-            "state": "unavailable",
-            "error": error.to_string(),
-        }),
-    };
+    let background_completion =
+        match gents_toolcalls::background::diagnostics::load_background_completion_diagnostics(
+            &ConfigAccess::Graphql(graphql.clone()),
+            node_did,
+        )
+        .await
+        {
+            Ok(diagnostics) => serde_json::to_value(diagnostics).unwrap_or(Value::Null),
+            Err(error) => json!({
+                "state": "unavailable",
+                "error": error.to_string(),
+            }),
+        };
     let mut output = json!({
         "home": home_dir,
         "graphql": graphql,

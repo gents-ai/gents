@@ -82,18 +82,20 @@ fn nested_fork_keeps_automated_input_origin_without_child_turn_membership() {
 
 #[tokio::test]
 async fn real_fork_reads_exact_input_metadata_and_preserves_provider_history() {
-    use gents::store::config_client::ConfigAccess;
-    use gents::NodeIdentity as _;
     use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
+    use gents_store::config_client::ConfigAccess;
+    use gents_store::identity::NodeIdentity as _;
     let home = tempfile::tempdir().unwrap();
-    let identity = gents::KeyIdentity::load_or_create(home.path().join("node.key"), None).unwrap();
+    let identity =
+        gents_store::identity::KeyIdentity::load_or_create(home.path().join("node.key"), None)
+            .unwrap();
     let amy = identity.did().to_owned();
     // A real provisioned Agent: its DID derives from the runtime key and the
     // creation nonce the canonical Agent document carries.
-    let binding = gents::store::identity::provision_agent_identity(&identity).unwrap();
+    let binding = gents_store::identity::provision_agent_identity(&identity).unwrap();
     let agent = binding.agent_did.clone();
     let node = std::sync::Arc::new(
         gents::defra_node::Node::builder()
@@ -102,7 +104,9 @@ async fn real_fork_reads_exact_input_metadata_and_preserves_provider_history() {
             .await
             .unwrap(),
     );
-    gents::ensure_runtime_schemas(&node).await.unwrap();
+    gents_store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     // The runtime itself creates the forks.
     let access = ConfigAccess::local_as(node.clone(), ::identity::Did::new(&amy).unwrap());
     for mutation in [
@@ -125,7 +129,7 @@ async fn real_fork_reads_exact_input_metadata_and_preserves_provider_history() {
             input:{{queue:{{source:"goal",policy:"coalesce",key:"goal:source"}},goal_continuation:{{sequence:3,wrapup:false}}}},
             created_at:"2026-10-26T00:00:00Z"}}) {{ _docID }}
     }}"#)).await.unwrap();
-    let request_doc = gents::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+    let request_doc = gents_store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
     let mut rows = ClientStoreRows::default();
     push_canonical_text_message(
         &mut rows,
@@ -150,7 +154,7 @@ async fn real_fork_reads_exact_input_metadata_and_preserves_provider_history() {
                     &output_segment_create_variables(&segment)?,
                 )
                 .await?;
-            let close = gents::store::graphql::created_doc_id(&response, "AgentOutputSegment")?;
+            let close = gents_store::graphql::created_doc_id(&response, "AgentOutputSegment")?;
             if let gents_protocol::output::MessageBlock::Text { text } = &mut header.blocks[0] {
                 text.output.close_doc_id = close;
             }
@@ -164,17 +168,17 @@ async fn real_fork_reads_exact_input_metadata_and_preserves_provider_history() {
     })
     .await
     .unwrap();
-    let original = gents::session::load_history(&node, "source", &amy, None)
+    let original = gents_session::session::load_history(&node, "source", &amy, None)
         .await
         .unwrap();
     assert_eq!(original.len(), 1);
     let mut source = "source".to_owned();
     for _ in 0..2 {
-        let fork = gents::session::fork_on(
+        let fork = gents_session::session::fork_on(
             &access,
-            gents::session::ForkParams {
+            gents_session::session::ForkParams {
                 source_session_id: &source,
-                boundary: gents::session::ForkBoundary::UserTurn(1),
+                boundary: gents_session::session::ForkBoundary::UserTurn(1),
                 caller_node_did: &amy,
                 caller_requester_did: None,
                 target_agent_did: None,
@@ -225,7 +229,7 @@ async fn real_fork_reads_exact_input_metadata_and_preserves_provider_history() {
     ));
     assert!(messages[0].runtime_control);
     assert!(messages[0].request_turn.is_none());
-    let copied = gents::session::load_history(&node, &source, &amy, None)
+    let copied = gents_session::session::load_history(&node, &source, &amy, None)
         .await
         .unwrap();
     assert_eq!(copied, original);

@@ -50,7 +50,7 @@ impl ToolDyn for RepeatProbe {
     }
 }
 
-async fn tool_call_rows(reader: &crate::ConfigAccess) -> Vec<serde_json::Value> {
+async fn tool_call_rows(reader: &gents_store::config_client::ConfigAccess) -> Vec<serde_json::Value> {
     let response = reader
         .execute(
             "query { AgentToolCall { _docID tool_call_id lifecycle_state tool_failure_class } }",
@@ -204,7 +204,7 @@ async fn generated_repeated_tool_failure_cases_drive_owned_loop() {
         if ending == Some("repeatedFailure") {
             lifecycle
                 .terminalize_owned(
-                    crate::request::lifecycle::RequestTerminalOutcome::Failed,
+                    gents_session::request::lifecycle::RequestTerminalOutcome::Failed,
                     writer.terminal_output(&lifecycle.request().doc_id).await,
                     error,
                 )
@@ -242,7 +242,7 @@ async fn repeated_identical_bash_failure_stops_the_loop() {
         RawStreamingChoice::FinalResponse(()),
     ]);
     let model = ScriptedModel::new_turns(turns);
-    let tools = crate::tools::native::ToolSet::builder()
+    let tools = gents_tools::native::ToolSet::builder()
         .read_root(root.path())
         .bash_read_only()
         .build()

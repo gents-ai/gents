@@ -1,19 +1,21 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use gents::error::InferenceError;
-use gents::inference::llm::rig_compat::classify_completion_error;
-use gents::runtime::agent::completion_retry::{
+use gents_inference::llm::rig_compat::classify_completion_error;
+use gents_loop::completion_retry::{
     failure_class, retry_wake_fits_deadline, CompletionRetryPolicy, CompletionRetryState,
     FailureClass, MidStreamDirective, PreStreamDirective, RetryKind,
 };
+use gents_loop::error::InferenceError;
 
 /// A synthetic attempt failure as the loop classifies one: the provider
 /// report reads the attempt text and the error's rendering.
-fn classified(error: &InferenceError, text: &str) -> gents::error::ClassifiedFailure {
-    gents::error::ClassifiedFailure {
+fn classified(error: &InferenceError, text: &str) -> gents_loop::error::ClassifiedFailure {
+    gents_loop::error::ClassifiedFailure {
         error: error.clone(),
-        report: gents::error::ProviderReport::classify_failure_text(&format!("{text}\n{error}")),
+        report: gents_loop::error::ProviderReport::classify_failure_text(&format!(
+            "{text}\n{error}"
+        )),
         text: text.to_string(),
     }
 }
@@ -218,7 +220,7 @@ fn assert_failure_origin_bridge(case: &LeanCompletionRetryCase, origin: &str) {
             rig::completion::CompletionError::ProviderError("connection reset".into()),
         ),
         "provider_stream_malformed" => {
-            use gents::inference::clients::claude_messages::{
+            use gents_inference::clients::claude_messages::{
                 parse_messages_sse, parse_messages_sse_typed, MessagesParseError,
                 ThinkingParseCause,
             };
@@ -318,7 +320,7 @@ fn assert_failure_origin_bridge(case: &LeanCompletionRetryCase, origin: &str) {
                 case.name
             );
             if origin == "provider_stream_malformed" {
-                let mut parser = gents::inference::clients::claude_messages::MessagesSseState::new(
+                let mut parser = gents_inference::clients::claude_messages::MessagesSseState::new(
                     Default::default(),
                 );
                 let preview_sse = "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"partial\"}}\n\n";
@@ -643,7 +645,7 @@ fn context_overflow() -> InferenceError {
 
 const ACCOUNT_LIMIT_TEXT: &str = "account limit reached";
 
-fn account_limited_failure() -> gents::error::ClassifiedFailure {
+fn account_limited_failure() -> gents_loop::error::ClassifiedFailure {
     let error = InferenceError::UsageLimited(gents_loop::provider_limit::UsageLimit {
         resets_at: None,
         detail: ACCOUNT_LIMIT_TEXT.to_string(),

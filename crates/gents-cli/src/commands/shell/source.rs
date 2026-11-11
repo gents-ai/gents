@@ -5,9 +5,6 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use chrono::{DateTime, Local, Utc};
-use gents::session::mailbox::MailboxItem;
-use gents::store::config_client::{ConfigAccess, GraphqlSubscription, SubscriptionEnd};
-use gents::store::graphql::escape_graphql_string;
 use gents_desktop_core::client::canonical_output::CanonicalLiveText;
 use gents_desktop_core::client::{
     interrupt_request_on, load_node_snapshot_on, load_session_compaction_entries_on,
@@ -19,6 +16,7 @@ use gents_protocol::node_readiness::AgentReadinessState;
 use gents_protocol::request_input::{QueueDelivery, RequestInput};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::session::SessionScope;
+use gents_session::session::mailbox::MailboxItem;
 use gents_shell::app::ChatLine;
 use gents_shell::keys::KeySet;
 use gents_shell::sample::{MenuId, Opens, RunState, Running, Tone};
@@ -26,6 +24,8 @@ use gents_shell::source::{
     BackgroundCall, Change, Connection, Doc, FormRef, FormValues, Input, Intent, Job, MenuAct,
     PackAct, Prompt, SavedAccount, Session, Skill, Update,
 };
+use gents_store::config_client::{ConfigAccess, GraphqlSubscription, SubscriptionEnd};
+use gents_store::graphql::escape_graphql_string;
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use serde_json::Value;
 use tokio::runtime::Handle;
@@ -1701,7 +1701,7 @@ impl Source {
             return;
         };
         let dismissed =
-            gents::session::mailbox::dismiss_mailbox_item_on(&work.access(), item).await;
+            gents_session::session::mailbox::dismiss_mailbox_item_on(&work.access(), item).await;
         if let Err(error) = dismissed {
             self.tell(Update::Notice(format!("{error:#}")));
         }
@@ -1870,7 +1870,7 @@ impl Source {
             .await?;
             let access = work.access();
             let create = &prepared.create;
-            gents::goal::submit_goal_backed_request(
+            gents_automation::goal::submit_goal_backed_request(
                 &access, principal, &session, &objective, None, create,
             )
             .await
@@ -1923,8 +1923,9 @@ async fn submit(
         ..Default::default()
     };
     let (access, steer) = (work.access(), QueueDelivery::Steer);
-    let input =
-        gents::request::lifecycle::prepare_user_message_input(&access, node, session, input, steer);
+    let input = gents_session::request::lifecycle::prepare_user_message_input(
+        &access, node, session, input, steer,
+    );
     let options = crate::RequestSubmitOptions {
         input: Some(input.await?),
         ..Default::default()
@@ -1992,7 +1993,7 @@ fn blank() -> ChatLine {
 mod tests {
     use std::time::Duration;
 
-    use gents::pack::PackChangeError;
+    use gents_pack::pack::PackChangeError;
 
     use super::super::tests::{home_serving, within};
     use super::*;

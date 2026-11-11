@@ -22,9 +22,10 @@ pub(crate) fn snapshot_query(node_did: Option<&str>) -> Result<String> {
     let request_args = snapshot_request_args(node_did);
     let mailbox_node = node_filter(node_did);
     let mailbox_args = format!("(filter: {{ {mailbox_node} status: {{ _eq: \"open\" }} }})");
-    let trigger_fields = gents::documents::config_projection(gents::Collection::Trigger, None)?
-        .0
-        .join(" ");
+    let trigger_fields =
+        gents_documents::config_projection(gents_store::collection::Collection::Trigger, None)?
+            .0
+            .join(" ");
     let backend_fields = INFERENCE_BACKEND_FIELDS;
     Ok(format!("query DesktopSnapshot {{
       nodes: {NODE_NAME}{args} {{ {NODE_FIELDS} }}
@@ -90,7 +91,7 @@ pub(super) fn snapshot_rows_with_requests(
         TRIGGER_FIELDS,
         &format!("{TRIGGER_OBSERVATION_FIELDS} {SCHEDULE_OBSERVATION_FIELDS}"),
     )?;
-    let metadata: Vec<gents::documents::InferenceBackendMetadata> =
+    let metadata: Vec<gents_documents::InferenceBackendMetadata> =
         parse_projected_query_rows(data, "inference_backends", INFERENCE_BACKEND_FIELDS, "")?;
     let inference_backends: Vec<InferenceBackend> = metadata
         .into_iter()
@@ -458,7 +459,7 @@ pub(super) async fn complete_local_snapshot_requests(
 }
 
 async fn complete_access_snapshot_requests(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     data: &Value,
     node_did: Option<&str>,
 ) -> Result<Vec<AgentRequestRow>> {
@@ -534,7 +535,7 @@ pub(super) fn parse_backend_observation_rows(
     let mut observations = Vec::with_capacity(rows.len());
     let mut observation_sources = Vec::with_capacity(rows.len());
     for (row, source) in rows.into_iter().zip(sources) {
-        match gents::inference::backends::registry::decode_backend_observation(row) {
+        match gents_inference::backends::registry::decode_backend_observation(row) {
             Ok(observation) => {
                 observations.push(observation);
                 observation_sources.push(source);
@@ -691,14 +692,14 @@ pub struct PeerSnapshots {
 
 pub async fn load_full_snapshot_with_peer_records(
     peers: &[PeerRecord],
-    capability: &gents::store::config_client::ClientSigningCapability,
+    capability: &gents_store::config_client::ClientSigningCapability,
 ) -> PeerSnapshots {
     let mut snapshots = PeerSnapshots::default();
     for peer in peers {
         let Some(graphql) = crate::local_runtime::operator_endpoint(peer, capability) else {
             continue;
         };
-        let access = gents::store::config_client::ConfigAccess::Graphql(graphql);
+        let access = gents_store::config_client::ConfigAccess::Graphql(graphql);
         match load_node_snapshot_on(&access, &peer.node_did).await {
             Ok(remote) => {
                 snapshots.store = snapshots.store.replace_node_scope(&peer.node_did, remote)
@@ -796,7 +797,7 @@ impl SnapshotReadError {
 }
 
 pub async fn load_node_snapshot_on(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
 ) -> std::result::Result<ClientStore, SnapshotReadError> {
     let query = snapshot_query(Some(node_did))?;
@@ -836,7 +837,7 @@ enum OperatorConfigScope {
 }
 
 pub async fn load_inference_configuration(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
 ) -> Result<ClientStore> {
     let did = escape_graphql_string(node_did);
@@ -878,7 +879,7 @@ fn operator_config_store_from_data_with_requests(
     let (agents, agents_complete) = parse_query_rows_with_completeness(data, "agents")?;
     let (inference_profiles, profiles_complete) =
         parse_query_rows_with_completeness(data, "inference_profiles")?;
-    let (metadata, backends_complete): (Vec<gents::documents::InferenceBackendMetadata>, _) =
+    let (metadata, backends_complete): (Vec<gents_documents::InferenceBackendMetadata>, _) =
         parse_projected_query_rows_with_completeness(
             data,
             "inference_backends",
@@ -957,7 +958,7 @@ fn operator_config_store_from_data_with_requests(
 pub async fn load_node_scoped_snapshot_with_peer_records(
     node_did: &str,
     peers: &[PeerRecord],
-    capability: &gents::store::config_client::ClientSigningCapability,
+    capability: &gents_store::config_client::ClientSigningCapability,
 ) -> Result<ClientStore> {
     let endpoint = peers
         .iter()
@@ -965,7 +966,7 @@ pub async fn load_node_scoped_snapshot_with_peer_records(
         .and_then(|peer| crate::local_runtime::operator_endpoint(peer, capability))
         .with_context(|| format!("runtime {node_did} has no authenticated database endpoint"))?;
     Ok(load_node_snapshot_on(
-        &gents::store::config_client::ConfigAccess::Graphql(endpoint),
+        &gents_store::config_client::ConfigAccess::Graphql(endpoint),
         node_did,
     )
     .await?)
@@ -994,7 +995,7 @@ pub(crate) async fn load_agent_tool_calls(node: &EmbeddedNode) -> Result<Vec<Age
 #[cfg(test)]
 mod remote_failure_tests {
     use super::*;
-    use gents::store::identity::KeyIdentity;
+    use gents_store::identity::KeyIdentity;
     use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
@@ -1012,7 +1013,7 @@ mod remote_failure_tests {
         crate::client::schema::ensure_runtime_schemas(&source)
             .await
             .unwrap();
-        gents::store::config_client::ConfigAccess::local(source.clone())
+        gents_store::config_client::ConfigAccess::local(source.clone())
             .write(
                 "test.snapshot.healthy",
                 &format!("mutation {{ create_Node(input: {{node_did: \"{healthy_did}\", display_name: \"healthy\", enabled: true, created_at: \"now\", created_by: \"test\"}}) {{ _docID }} }}"),

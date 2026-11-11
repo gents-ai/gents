@@ -1,5 +1,5 @@
 use super::*;
-use gents::{JsonP2pSyncStatusAdapter, P2pSyncStatusAdapter};
+use gents_p2p::p2p::observability::{JsonP2pSyncStatusAdapter, P2pSyncStatusAdapter};
 use std::sync::Arc;
 use support::mocks::fake_llm::{ChatAction, FakeLlm};
 use tokio::time::timeout;
@@ -391,7 +391,7 @@ async fn visible_turn(
                             escape_graphql_string(session),
                         );
                         let runtime_segments = graphql_query(graphql, &query).await;
-                        let client_segments = gents::store::graphql::graphql_with_transaction_retry(
+                        let client_segments = gents_store::graphql::graphql_with_transaction_retry(
                             core.node(), &query, "streaming failure diagnostics",
                         ).await;
                         tracing::error!(
@@ -545,13 +545,13 @@ async fn wait_for_runtime_reply(
             }
             let mut body = String::new();
             if let Some(row) = terminal_request_row {
-                match gents::session::observe_request_output(
+                match gents_session::session::observe_request_output(
                     &access,
                     &row,
                 )
                 .await
                 {
-                    Ok(gents::session::CanonicalRequestOutput::TerminalMessage {
+                    Ok(gents_session::session::CanonicalRequestOutput::TerminalMessage {
                         header,
                         presentation,
                         ..
@@ -1106,14 +1106,14 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
                 sleep(Duration::from_millis(50)).await;
             }
         }).await.context("waiting for activity request generation")??;
-        let key = gents::inference::inference_observation::InferenceKey {
+        let key = gents_inference::inference_observation::InferenceKey {
             node: node_did.clone(), session: session.clone(), request: request.clone(), generation,
         };
-        let url = format!("http://127.0.0.1:{port}{}", gents::inference::inference_observation::INFERENCE_ACTIVITY_PATH);
+        let url = format!("http://127.0.0.1:{port}{}", gents_inference::inference_observation::INFERENCE_ACTIVITY_PATH);
         let http = reqwest::Client::new();
-        let call = |actor: &dyn gents::NodeIdentity, key: gents::inference::inference_observation::InferenceKey| {
+        let call = |actor: &dyn gents_store::identity::NodeIdentity, key: gents_inference::inference_observation::InferenceKey| {
             let capability = actor.client_signing_capability().expect("held client signing key");
-            let endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(&graphql, capability.did())
+            let endpoint = gents_store::config_client::GraphqlEndpoint::as_principal(&graphql, capability.did())
                 .with_client_signing_capability(capability)
                 .expect("endpoint signs as its own principal");
             let request = endpoint.authorize(http.post(&url)).unwrap().json(&key);

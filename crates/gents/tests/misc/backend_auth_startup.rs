@@ -1,6 +1,7 @@
 use anyhow::Result;
 use gents::runtime::embedded::EmbeddedHome;
-use gents::{DocumentRuntimeOptions, Gents, ToolCeiling};
+use gents::{DocumentRuntimeOptions, Gents};
+use gents_tools::surface::ToolCeiling;
 use serde_json::Value;
 
 use crate::support::fixtures::{
@@ -88,7 +89,7 @@ async fn document_runtime_uses_backend_specific_api_key_env_var() -> Result<()> 
 
 #[tokio::test]
 async fn oneshot_refuses_admission_bound_to_another_node() -> Result<()> {
-    use gents::store::local::backend_protection::BackendProtectionError;
+    use gents_store::local::backend_protection::BackendProtectionError;
 
     let admitted = EmbeddedHome::create_temp("oneshot-admitted").await?;
     let other = EmbeddedHome::create_temp("oneshot-other").await?;
@@ -112,7 +113,7 @@ async fn oneshot_refuses_admission_bound_to_another_node() -> Result<()> {
 #[tokio::test]
 async fn admitted_openrouter_oneshot_completes_one_request_with_its_terminal_message() -> Result<()>
 {
-    use gents::BackendProviderKind;
+    use gents_inference::backends::provider::BackendProviderKind;
 
     let db = crate::support::test_db_from_home(
         EmbeddedHome::create_temp("oneshot-admitted-openrouter").await?,
@@ -129,7 +130,7 @@ async fn admitted_openrouter_oneshot_completes_one_request_with_its_terminal_mes
     behavior.backend_id = Some(format!("{}:backend", fixture.binding.agent_did));
     behavior.backend_provider_kind = BackendProviderKind::OpenRouter;
     behavior.backend_endpoint = mock_endpoint.endpoint().to_string();
-    behavior.backend_auth = gents::documents::BackendAuth::ApiKey {
+    behavior.backend_auth = gents_documents::BackendAuth::ApiKey {
         key: "openrouter-key".to_string(),
     };
     behavior.model_name = "openai/gpt-4o-mini".to_string();
@@ -166,7 +167,7 @@ async fn admitted_openrouter_oneshot_completes_one_request_with_its_terminal_mes
     let gents_protocol::output::TerminalOutput::Message { message_doc_id } = terminal else {
         panic!("one-shot completion must select a published message");
     };
-    let (header, message) = gents::session::load_canonical_message(
+    let (header, message) = gents_session::session::load_canonical_message(
         &fixture.access,
         &message_doc_id,
         request_row["node_did"]

@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::store::config_client::GraphqlEndpoint;
 use gents_protocol::serve_lifecycle::{
     control::{
         current_capabilities, RuntimeControlCommand, RuntimeControlDisposition,
@@ -15,6 +14,7 @@ use gents_protocol::serve_lifecycle::{
     },
     ServeLifecycle,
 };
+use gents_store::config_client::GraphqlEndpoint;
 use tokio::io::AsyncWriteExt as _;
 
 use crate::cli::{P2pTransportArg, PrepareRuntimeArgs};
@@ -57,8 +57,8 @@ fn refusal(reason: RuntimePreparationRefusal, message: impl Into<String>) -> any
 }
 
 fn refusal_reason(error: &anyhow::Error) -> RuntimePreparationRefusal {
-    if gents::store::local::store_key::store_key_unavailable(error.as_ref()).is_some()
-        || gents::store::identity::identity_key_unavailable(error.as_ref()).is_some()
+    if gents_store::local::store_key::store_key_unavailable(error.as_ref()).is_some()
+        || gents_store::identity::identity_key_unavailable(error.as_ref()).is_some()
     {
         RuntimePreparationRefusal::KeyAccess
     } else {
@@ -69,7 +69,7 @@ fn refusal_reason(error: &anyhow::Error) -> RuntimePreparationRefusal {
 }
 
 pub(crate) struct PreparedStartup {
-    pub(crate) reservation: gents::store::local::home::RuntimeStartupReservation,
+    pub(crate) reservation: gents_store::local::home::RuntimeStartupReservation,
     pub(crate) outcome: RuntimePreparationOutcome,
     pub(crate) pending_config: Option<(StoredInitConfig, StoredInitConfig)>,
 }
@@ -127,7 +127,7 @@ async fn prepare_inner(
     );
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let home = tokio::task::spawn_blocking(move || std::fs::canonicalize(home)).await??;
-    let build = gents::store::service::executable_build_id().await?;
+    let build = gents_store::service::executable_build_id().await?;
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         let check_home = home.clone();
@@ -148,7 +148,7 @@ async fn prepare_inner(
     }
     let reservation = tokio::time::timeout(
         STARTUP_WAIT,
-        gents::store::local::home::reserve_runtime_startup(&home),
+        gents_store::local::home::reserve_runtime_startup(&home),
     )
     .await
     .map_err(|_| {
@@ -246,7 +246,7 @@ async fn prepare_inner(
                     _ => return Err(refusal(RuntimePreparationRefusal::Unavailable, "The observed runtime changed before retirement. Retry to inspect its state.")),
                 }
             }
-            tokio::time::timeout(STARTUP_WAIT, gents::store::local::home::wait_for_store_release(&home, &gents::store::local::home::default_data_dir(&home)))
+            tokio::time::timeout(STARTUP_WAIT, gents_store::local::home::wait_for_store_release(&home, &gents_store::local::home::default_data_dir(&home)))
                 .await.map_err(|_| refusal(RuntimePreparationRefusal::StoreBusy, "The retiring runtime has not released its store. Retry after shutdown finishes."))??;
             outcome = RuntimePreparationOutcome::Replaced;
         }
@@ -254,7 +254,7 @@ async fn prepare_inner(
     }
     tokio::task::spawn_blocking({
         let home = home.clone();
-        move || gents::store::local::home::lock_home_store(&home).map(drop)
+        move || gents_store::local::home::lock_home_store(&home).map(drop)
     })
     .await?
     .map_err(|error| {
@@ -334,14 +334,14 @@ async fn prepare_inner(
 async fn load_runtime_identity(
     home: &Path,
     config: &StoredInitConfig,
-) -> Result<std::sync::Arc<dyn gents::NodeIdentity>> {
+) -> Result<std::sync::Arc<dyn gents_store::identity::NodeIdentity>> {
     let home = home.to_path_buf();
     let config = config.clone();
     tokio::task::spawn_blocking(move || {
         if let Some(encryption) = config.store_encryption.as_ref() {
             encryption.load(
-                &gents::store::local::store_key::home_key_file(&home),
-                &gents::store::local::home::default_data_dir(&home),
+                &gents_store::local::store_key::home_key_file(&home),
+                &gents_store::local::home::default_data_dir(&home),
             )?;
         }
         load_initialized_home_identity(&home, &config)
@@ -383,8 +383,8 @@ async fn ensure_requested_root_published(
     if matches!(config.tool_ceiling, crate::cli::ToolCeilingArg::MetaOnly) {
         return Ok(());
     }
-    let access = gents::ConfigAccess::Graphql(authorization.clone());
-    gents::tools::surface::ensure_root_published_for_node(&access, &config.node_did, root)
+    let access = gents_store::config_client::ConfigAccess::Graphql(authorization.clone());
+    gents_tools::surface::ensure_root_published_for_node(&access, &config.node_did, root)
         .await
         .map_err(|error| {
             refusal(
@@ -546,7 +546,7 @@ pub(crate) async fn control(
         bytes.extend_from_slice(&chunk);
     }
     let receipt = serde_json::from_slice(&bytes)?;
-    gents::store::service::verify_control_receipt(&command, &receipt).map_err(|error| {
+    gents_store::service::verify_control_receipt(&command, &receipt).map_err(|error| {
         refusal(
             RuntimePreparationRefusal::InvalidHome,
             format!("The live runtime could not authenticate this node: {error:#}"),

@@ -6,13 +6,13 @@
 
 use std::sync::Arc;
 
-use gents::documents::apply_desired_state_plan;
-use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents::runtime::embedded::EmbeddedHome;
-use gents::store::collection::Collection;
-use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
-use gents::store::identity::{GrantSet, KeyIdentity, NodeIdentity};
+use gents_documents::apply_desired_state_plan;
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents_protocol::agent_identity::AgentIdentityBinding;
+use gents_store::collection::Collection;
+use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
+use gents_store::identity::{GrantSet, KeyIdentity, NodeIdentity};
 
 /// A real runtime home served over authenticated DefraDB HTTP with node ACP.
 pub struct ServedRuntimeHome {
@@ -252,9 +252,8 @@ impl ServedRuntimeHome {
     /// The managed Agent's own signed local access, holding the baseline
     /// grants production projects from its Agent document.
     pub async fn agent_access(&self, binding: &AgentIdentityBinding) -> ConfigAccess {
-        let agent =
-            gents::store::identity::resolve_agent_identity(self.runtime().as_ref(), binding)
-                .unwrap();
+        let agent = gents_store::identity::resolve_agent_identity(self.runtime().as_ref(), binding)
+            .unwrap();
         GrantSet::AgentBaseline
             .grant(
                 &self.runtime_access(),
@@ -276,7 +275,7 @@ impl ServedRuntimeHome {
             .user_access()
             .execute(&format!(
                 r#"{{ Agent(filter: {{agent_did: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
-                gents::store::graphql::escape_graphql_string(&binding.agent_did)
+                gents_store::graphql::escape_graphql_string(&binding.agent_did)
             ))
             .await
             .unwrap();
@@ -315,7 +314,7 @@ impl ServedRuntimeHome {
                         )
                         .await?;
                     let session_doc =
-                        gents::store::graphql::created_doc_id(&response, "AgentSession")?;
+                        gents_store::graphql::created_doc_id(&response, "AgentSession")?;
                     txn.add_resource_relationship(
                         "AgentSession",
                         &session_doc,
@@ -399,7 +398,7 @@ impl ServedRuntimeHome {
                     apply_desired_state_plan(
                         txn,
                         plan,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await
                     .map(|_| ())

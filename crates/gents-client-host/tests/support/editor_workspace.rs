@@ -1,7 +1,7 @@
 use super::fake_llm::FakeLlm;
 use anyhow::{ensure, Context, Result};
-use gents::ConfigAccess;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -33,7 +33,7 @@ pub async fn verify(
                 .is_some_and(|content| content.starts_with(PROMPT))
         })
         .context("submitted workspace request")?;
-    gents::verify_request_receipt_signature(row)?;
+    gents_store::identity::request_receipt::verify_request_receipt_signature(row)?;
     ensure!(
         row.lifecycle_state == Some(RequestLifecycleState::Completed)
             && row.admission_signer_did.as_deref() == Some(author)
@@ -197,8 +197,8 @@ async fn requests(
 ) -> Result<Vec<gents_protocol::row::AgentRequestRow>> {
     let result = access.execute(&format!(
         r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, purpose: {{_eq: "normal"}}}}) {{ {} }} }}"#,
-        gents::store::graphql::escape_graphql_string(node),
-        gents::store::graphql::escape_graphql_string(session),
+        gents_store::graphql::escape_graphql_string(node),
+        gents_store::graphql::escape_graphql_string(session),
         gents::SIGNED_REQUEST_FIELDS,
     )).await?;
     Ok(serde_json::from_value(
@@ -207,7 +207,7 @@ async fn requests(
 }
 
 fn verify_completed(row: &gents_protocol::row::AgentRequestRow, author: &str) -> Result<()> {
-    gents::verify_request_receipt_signature(row)?;
+    gents_store::identity::request_receipt::verify_request_receipt_signature(row)?;
     ensure!(
         row.lifecycle_state == Some(RequestLifecycleState::Completed)
             && row.admission_signer_did.as_deref() == Some(author)

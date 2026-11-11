@@ -2,9 +2,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::plugin::executor::PluginExecutor;
-use gents::plugin::model_binding::AccessModels;
-use gents::plugin::BoundDir;
+use gents_pack::plugin::model_binding::AccessModels;
+use gents_pack::plugin::BoundDir;
+use gents_toolcalls::plugin::executor::PluginExecutor;
 
 use crate::cli::args::PluginRunArgs;
 
@@ -58,7 +58,7 @@ pub async fn call_installed_for_operator(
     namespace: &str,
     name: &str,
     input: serde_json::Value,
-    operator: Option<(gents::ConfigAccess, String)>,
+    operator: Option<(gents_store::config_client::ConfigAccess, String)>,
 ) -> Result<serde_json::Value> {
     call_installed_inner(home, namespace, name, input, operator, true).await
 }
@@ -68,7 +68,7 @@ async fn call_installed_inner(
     namespace: &str,
     name: &str,
     input: serde_json::Value,
-    operator: Option<(gents::ConfigAccess, String)>,
+    operator: Option<(gents_store::config_client::ConfigAccess, String)>,
     ux: bool,
 ) -> Result<serde_json::Value> {
     let record = store::read_record(home, namespace, name).with_context(|| {
@@ -91,7 +91,7 @@ async fn call_installed_inner(
     let data_caller = operator
         .as_ref()
         .map(|(access, node_did)| {
-            gents::plugin::data::DataCaller::operator(access.clone(), node_did)
+            gents_toolcalls::plugin::data::DataCaller::operator(access.clone(), node_did)
         })
         .transpose()?;
     let call = executor
@@ -120,13 +120,13 @@ async fn call_installed_inner(
                 "plugin writes require the user's identity"
             );
             let actor = identity::Did::new(caller_did.clone())?;
-            let stamps = gents::plugin::data::StampContext::Ux { caller_did };
+            let stamps = gents_toolcalls::plugin::data::StampContext::Ux { caller_did };
             let schemas = &record.data_collection_schemas;
             access
                 .transact_write("ux_plugin.writes", |txn| {
                     let (grant, stamps, writes, actor) = (&grant, &stamps, writes.clone(), &actor);
                     Box::pin(async move {
-                        gents::plugin::application_write::apply_signed_plugin_writes_in_txn(
+                        gents_toolcalls::plugin::application_write::apply_signed_plugin_writes_in_txn(
                             txn, actor, grant, stamps, writes, schemas,
                         )
                         .await
@@ -163,7 +163,7 @@ async fn run_plugin(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::plugin::PluginRunner;
+    use gents_pack::plugin::PluginRunner;
 
     async fn run_installed(
         bytes: &[u8],
@@ -320,7 +320,7 @@ mod tests {
             "properties": {"message": {"type": "string"}},
         });
         declaration.manifold = None;
-        gents::plugin::install::install_from_pack(
+        gents_pack::plugin::install::install_from_pack(
             home.path(),
             "team",
             "team/echo",
@@ -353,7 +353,7 @@ mod tests {
                 .is_err()
         );
         let empty_home = tempfile::tempdir().unwrap();
-        assert!(gents::plugin::install::install_from_pack(
+        assert!(gents_pack::plugin::install::install_from_pack(
             empty_home.path(),
             "team",
             "team/echo",
@@ -408,13 +408,13 @@ mod tests {
     #[tokio::test]
     async fn run_with_bind_dir_reads_only_the_bound_directory() {
         let fixture = crate::commands::plugin::testing::build_bind_plugin_fixture();
-        let manifest: gents::pack::PackManifest =
+        let manifest: gents_pack::pack::PackManifest =
             serde_json::from_slice(&std::fs::read(fixture.path().join("manifest.json")).unwrap())
                 .unwrap();
-        let (archive_bytes, _) = gents::pack::archive::pack_dir(fixture.path()).unwrap();
-        let archive = gents::pack::archive::PackArchive::from_bytes(&archive_bytes).unwrap();
+        let (archive_bytes, _) = gents_pack::pack::archive::pack_dir(fixture.path()).unwrap();
+        let archive = gents_pack::pack::archive::PackArchive::from_bytes(&archive_bytes).unwrap();
         let home = tempfile::tempdir().unwrap();
-        gents::plugin::install::install_pack_plugins(
+        gents_pack::plugin::install::install_pack_plugins(
             home.path(),
             &manifest,
             archive.digest(),
@@ -453,13 +453,13 @@ mod tests {
     #[tokio::test]
     async fn run_with_bind_dir_and_no_input_succeeds() {
         let fixture = crate::commands::plugin::testing::build_bind_plugin_fixture();
-        let manifest: gents::pack::PackManifest =
+        let manifest: gents_pack::pack::PackManifest =
             serde_json::from_slice(&std::fs::read(fixture.path().join("manifest.json")).unwrap())
                 .unwrap();
-        let (archive_bytes, _) = gents::pack::archive::pack_dir(fixture.path()).unwrap();
-        let archive = gents::pack::archive::PackArchive::from_bytes(&archive_bytes).unwrap();
+        let (archive_bytes, _) = gents_pack::pack::archive::pack_dir(fixture.path()).unwrap();
+        let archive = gents_pack::pack::archive::PackArchive::from_bytes(&archive_bytes).unwrap();
         let home = tempfile::tempdir().unwrap();
-        gents::plugin::install::install_pack_plugins(
+        gents_pack::plugin::install::install_pack_plugins(
             home.path(),
             &manifest,
             archive.digest(),
@@ -490,7 +490,7 @@ mod tests {
             "crypto": false, "child_process": false
         }));
         let home = tempfile::tempdir().unwrap();
-        let error = gents::plugin::install::install_from_pack(
+        let error = gents_pack::plugin::install::install_from_pack(
             home.path(),
             "team",
             "team/echo",
@@ -510,7 +510,7 @@ mod tests {
         );
         assert!(store::list_records(home.path()).unwrap().is_empty());
 
-        let record = gents::plugin::install::install_from_pack(
+        let record = gents_pack::plugin::install::install_from_pack(
             home.path(),
             "team",
             "team/echo",
@@ -525,7 +525,7 @@ mod tests {
         )
         .unwrap();
         assert!(record.granted.is_some());
-        gents::plugin::install::install_from_pack(
+        gents_pack::plugin::install::install_from_pack(
             home.path(),
             "team",
             "team/echo",
@@ -549,13 +549,13 @@ mod tests {
     #[tokio::test]
     async fn call_installed_binds_the_named_root_only_when_allowed() {
         let fixture = crate::commands::plugin::testing::build_bind_plugin_fixture();
-        let manifest: gents::pack::PackManifest =
+        let manifest: gents_pack::pack::PackManifest =
             serde_json::from_slice(&std::fs::read(fixture.path().join("manifest.json")).unwrap())
                 .unwrap();
-        let (archive_bytes, _) = gents::pack::archive::pack_dir(fixture.path()).unwrap();
-        let archive = gents::pack::archive::PackArchive::from_bytes(&archive_bytes).unwrap();
+        let (archive_bytes, _) = gents_pack::pack::archive::pack_dir(fixture.path()).unwrap();
+        let archive = gents_pack::pack::archive::PackArchive::from_bytes(&archive_bytes).unwrap();
         let home = tempfile::tempdir().unwrap();
-        gents::plugin::install::install_pack_plugins(
+        gents_pack::plugin::install::install_pack_plugins(
             home.path(),
             &manifest,
             archive.digest(),
@@ -575,8 +575,12 @@ mod tests {
         let message = format!("{error:#}");
         assert!(message.contains("cannot read \"root\""), "{message}");
 
-        gents::plugin::allowed::add(home.path(), listing.path(), gents::pack::BindAccess::Read)
-            .unwrap();
+        gents_pack::plugin::allowed::add(
+            home.path(),
+            listing.path(),
+            gents_pack::pack::BindAccess::Read,
+        )
+        .unwrap();
         let output = call_installed(home.path(), "fixture", "list_files", input)
             .await
             .expect("an allowed folder binds and the plugin lists it");

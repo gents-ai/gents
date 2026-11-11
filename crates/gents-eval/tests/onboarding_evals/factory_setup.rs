@@ -1,13 +1,13 @@
 use std::path::{Path, PathBuf};
 
-use gents::documents::{EvalDefinition, SurfaceToolDecl};
 use gents::eval::OutcomeKind;
-use gents::pack::{
+use gents_documents::{EvalDefinition, SurfaceToolDecl};
+use gents_eval::checks::CheckRegistry;
+use gents_eval::runner::ScriptedExecutor;
+use gents_pack::pack::{
     declared_paths, load_pack_authoring_config, AuthoredPackConfig, PackInstallOptions,
     PackManifest,
 };
-use gents_eval::checks::CheckRegistry;
-use gents_eval::runner::ScriptedExecutor;
 
 const OWNER: &str = "did:key:zFactorySetupEvalOwner";
 
@@ -73,7 +73,7 @@ fn every_subject_is_the_desktop_engineer_on_an_eval_node() {
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|tag| tag == gents::tools::builtin::self_config::ENGINEER_AGENT_TAG),
+                .any(|tag| tag == gents_tools::builtin::self_config::ENGINEER_AGENT_TAG),
             "{name}: the Engineer carries the protected Setup tag"
         );
         assert_eq!(
@@ -101,7 +101,7 @@ fn every_subject_is_the_desktop_engineer_on_an_eval_node() {
         let tools = &config.tools[0];
         assert_eq!(
             tools.self_config,
-            Some(gents::tools::builtin::self_config::engineer_self_config()),
+            Some(gents_tools::builtin::self_config::engineer_self_config()),
             "{name}: the Setup self-config grant"
         );
         assert_eq!(
@@ -122,14 +122,14 @@ fn every_subject_is_the_desktop_engineer_on_an_eval_node() {
         let host = tools.host.as_ref().unwrap();
         assert_eq!(
             host.bash.as_ref().map(|bash| bash.mode),
-            Some(gents::BashMode::Off),
+            Some(gents_documents::BashMode::Off),
             "{name}"
         );
         let [surface] = config.datastore_tool_surfaces.as_slice() else {
             panic!("{name}: one surface, engineer-mailbox");
         };
         let expected = vec![SurfaceToolDecl::Create(
-            gents::documents::mailbox_write_decl::canonical_mailbox_write_decl(),
+            gents_documents::mailbox_write_decl::canonical_mailbox_write_decl(),
         )];
         assert_eq!(
             surface.entries.as_ref(),
@@ -175,14 +175,14 @@ fn the_definition_validates_and_every_check_accepts_its_params() {
     assert!(stage.continuation.is_none() && repair.continuation.is_none());
     assert!(stage.checks.iter().all(|c| c.tier
         == if c.check == "crew_spec_match" {
-            gents::documents::EvalTier::Development
+            gents_documents::EvalTier::Development
         } else {
-            gents::documents::EvalTier::Acceptance
+            gents_documents::EvalTier::Acceptance
         }));
     assert!(repair
         .checks
         .iter()
-        .all(|c| c.tier == gents::documents::EvalTier::Acceptance));
+        .all(|c| c.tier == gents_documents::EvalTier::Acceptance));
     let mut evidence =
         ScriptedExecutor::passed_evidence(OWNER, &stage.stage_id, "unused", Vec::new())
             .stages

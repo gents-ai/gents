@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use gents::defra_node::{Node as EmbeddedNode, QueryResponse};
-use gents::store::graphql::escape_graphql_string;
 use gents_protocol::output::live::reconstruct_dense_prefix;
 use gents_protocol::output::reconstruction::ObservedSegment;
 use gents_protocol::output::rows::{
@@ -9,6 +8,7 @@ use gents_protocol::output::rows::{
 };
 use gents_protocol::output::OutputSource;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_store::graphql::escape_graphql_string;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -110,7 +110,7 @@ pub fn managed_runtime_builder(db: &super::TestDb, default_agent_did: &str) -> g
         .identity(db.node_identity.clone())
         .backend_admission(db.home.backend_admission())
         .default_agent_did(default_agent_did)
-        .tool_ceiling(gents::ToolCeiling::meta_only())
+        .tool_ceiling(gents_tools::surface::ToolCeiling::meta_only())
 }
 
 /// Runs a built runtime until it reports ready.
@@ -299,10 +299,10 @@ async fn create_runtime_request_inner(
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(node_did),
     );
     create.input = input;
-    create.max_retries = i64::from(gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES);
+    create.max_retries = i64::from(gents_session::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES);
     create.valid_until = valid_until.map(str::to_string);
     create.caused_by_source_doc_id = caused_by_source_doc_id.map(str::to_string);
-    gents::sign_agent_request_create_as_registered_target(&mut create)
+    gents_session::request::admission::sign_agent_request_create_as_registered_target(&mut create)
         .await
         .expect("sign local-self runtime test request");
     let mutation = create

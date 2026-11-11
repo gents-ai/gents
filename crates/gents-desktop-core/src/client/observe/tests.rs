@@ -3,12 +3,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::*;
 use crate::client::peer_directory::{PeerDirectory, PeerRecord};
 use crate::client::store::ClientStore;
-use gents::store::config_client::{GraphqlEndpoint, TransactionFailure};
-use gents::store::identity::{KeyIdentity, NodeIdentity};
+use gents_store::config_client::{GraphqlEndpoint, TransactionFailure};
+use gents_store::identity::{KeyIdentity, NodeIdentity};
 
 #[test]
 fn observer_stops_only_for_an_explicit_authorization_refusal() {
-    let denial = gents::store::config_client::ConfigClientError::Database(
+    let denial = gents_store::config_client::ConfigClientError::Database(
         gents_protocol::database_error::GraphqlFailure::new(
             "subscription",
             serde_json::json!([
@@ -289,7 +289,7 @@ impl ObservedRuntime {
         );
         let owner =
             ConfigAccess::local_as(runtime.clone(), runtime_identity.did().parse().unwrap());
-        let did = gents::store::graphql::escape_graphql_string(runtime_identity.did());
+        let did = gents_store::graphql::escape_graphql_string(runtime_identity.did());
         let created = access
             .write(
                 "test.observer.seed",
@@ -297,7 +297,7 @@ impl ObservedRuntime {
             )
             .await
             .unwrap();
-        let physical = gents::store::graphql::created_doc_id(&created, "Node").unwrap();
+        let physical = gents_store::graphql::created_doc_id(&created, "Node").unwrap();
         owner
             .add_actor_relationship(
                 "Node",
@@ -417,7 +417,7 @@ async fn authenticated_runtime_reconnect_reloads_and_resubscribes() {
     );
     let owner = ConfigAccess::local_as(runtime.clone(), runtime_identity.did().parse().unwrap());
     let reader = client.did().parse().unwrap();
-    let did = gents::store::graphql::escape_graphql_string(runtime_identity.did());
+    let did = gents_store::graphql::escape_graphql_string(runtime_identity.did());
     let mutation = |name: &str| {
         format!("mutation {{ create_Node(input: {{node_did: \"{did}\", display_name: \"{name}\", enabled: true, created_at: \"2026-11-04T00:00:00Z\", created_by: \"user\"}}) {{ _docID }} }}")
     };
@@ -425,7 +425,7 @@ async fn authenticated_runtime_reconnect_reloads_and_resubscribes() {
         .write("test.observer.seed", &mutation("remote"))
         .await
         .unwrap();
-    let physical = gents::store::graphql::created_doc_id(&created, "Node").unwrap();
+    let physical = gents_store::graphql::created_doc_id(&created, "Node").unwrap();
     owner
         .add_actor_relationship("Node", &physical, "runtime_reader", &reader)
         .await
@@ -439,7 +439,7 @@ async fn authenticated_runtime_reconnect_reloads_and_resubscribes() {
         )
         .await
         .unwrap();
-    let session_doc = gents::store::graphql::created_doc_id(&session, "AgentSession").unwrap();
+    let session_doc = gents_store::graphql::created_doc_id(&session, "AgentSession").unwrap();
     owner
         .add_actor_relationship("AgentSession", &session_doc, "reader", &reader)
         .await
@@ -499,7 +499,7 @@ async fn authenticated_runtime_reconnect_reloads_and_resubscribes() {
         Some(RuntimeConnectionStatus::Connected)
     );
     let physical_id = physical;
-    let physical = gents::store::graphql::escape_graphql_string(&physical_id);
+    let physical = gents_store::graphql::escape_graphql_string(&physical_id);
     set_proxy_online(&proxy_commands, false).await;
     wait_for_connection(
         &store,
@@ -582,11 +582,12 @@ async fn missing_endpoint_never_reads_runtime_data_from_desktop_store() {
     ConfigAccess::local(desktop.clone()).write("test.observer.local", "mutation { create_Node(input: {node_did: \"did:test:runtime\", display_name: \"stale\", enabled: true, created_at: \"now\", created_by: \"old\"}) {_docID} }").await.unwrap();
     let directory = tempfile::tempdir().unwrap();
     let key_path = directory.path().join("client.key");
-    let client =
-        tokio::task::spawn_blocking(move || gents::KeyIdentity::load_or_create(key_path, None))
-            .await
-            .unwrap()
-            .unwrap();
+    let client = tokio::task::spawn_blocking(move || {
+        gents_store::identity::KeyIdentity::load_or_create(key_path, None)
+    })
+    .await
+    .unwrap()
+    .unwrap();
     let capability = client.client_signing_capability().unwrap();
     let snapshots =
         crate::client::query::load_full_snapshot_with_peer_records(&[], &capability).await;
@@ -630,10 +631,10 @@ fn generated_runtime_connection_observations_drive_the_owner() {
     for case in ends {
         let end = match case["end"].as_str().unwrap() {
             "renewalDue" => {
-                remote::StreamEnd::Ended(gents::store::config_client::SubscriptionEnd::RenewalDue)
+                remote::StreamEnd::Ended(gents_store::config_client::SubscriptionEnd::RenewalDue)
             }
             "completed" => {
-                remote::StreamEnd::Ended(gents::store::config_client::SubscriptionEnd::Completed)
+                remote::StreamEnd::Ended(gents_store::config_client::SubscriptionEnd::Completed)
             }
             "refusedFailure" => remote::StreamEnd::Failed { refused: true },
             "transportFailure" => remote::StreamEnd::Failed { refused: false },
@@ -690,7 +691,7 @@ fn generated_runtime_connection_observations_drive_the_owner() {
         let next = remote::renewal_start(
             started,
             Duration::from_millis(case["armMs"].as_u64().unwrap()),
-            gents::store::config_client::SUBSCRIPTION_RENEWAL_PERIOD,
+            gents_store::config_client::SUBSCRIPTION_RENEWAL_PERIOD,
         );
         assert_eq!(
             u64::try_from(next.duration_since(base).as_millis()).unwrap(),
@@ -700,7 +701,7 @@ fn generated_runtime_connection_observations_drive_the_owner() {
     }
     for (rust, lean) in [
         (
-            gents::store::config_client::SUBSCRIPTION_RENEWAL_PERIOD,
+            gents_store::config_client::SUBSCRIPTION_RENEWAL_PERIOD,
             "renewalPeriodMs",
         ),
         (SNAPSHOT_RETRY_DELAY, "snapshotRetryDelayMs"),
@@ -717,7 +718,7 @@ fn generated_runtime_connection_observations_drive_the_owner() {
 /// only the access owner's classification is a refusal.
 #[test]
 fn snapshot_failures_classify_as_their_lean_outcome() {
-    let refused = anyhow::Error::new(gents::store::config_client::ConfigClientError::Database(
+    let refused = anyhow::Error::new(gents_store::config_client::ConfigClientError::Database(
         gents_protocol::database_error::GraphqlFailure::new(
             "snapshot",
             serde_json::json!([{"message":"opaque", "extensions":{"code":"PERMISSION_DENIED"}}]),
@@ -804,7 +805,7 @@ async fn refused_runtime_reconnects_until_access_returns_at_the_same_endpoint() 
     })
     .await
     .expect("a refusal reconnects on the backoff");
-    let physical = gents::store::graphql::escape_graphql_string(&fixture.physical);
+    let physical = gents_store::graphql::escape_graphql_string(&fixture.physical);
     fixture
         .access
         .write(
@@ -851,7 +852,7 @@ async fn failed_snapshot_read_keeps_the_streams_armed() {
     let before = handle.metrics_snapshot();
 
     set_proxy_mode(&fixture.proxy_commands, ProxyMode::FailingReads).await;
-    let physical = gents::store::graphql::escape_graphql_string(&fixture.physical);
+    let physical = gents_store::graphql::escape_graphql_string(&fixture.physical);
     fixture
         .access
         .write(
@@ -922,7 +923,7 @@ async fn stalled_runtime_snapshot_delays_neither_another_runtime_nor_shutdown() 
     )
     .await;
     let mut notices = store.subscribe_changes();
-    let physical = gents::store::graphql::escape_graphql_string(&fixture.physical);
+    let physical = gents_store::graphql::escape_graphql_string(&fixture.physical);
     fixture
         .access
         .write(
@@ -1185,7 +1186,7 @@ async fn node_doc_id(home: &crate::test_fixtures::ServedRuntimeHome) -> String {
         .user_graphql_access()
         .execute(&format!(
             "{{ Node(filter: {{node_did: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
-            gents::store::graphql::escape_graphql_string(home.node_did())
+            gents_store::graphql::escape_graphql_string(home.node_did())
         ))
         .await
         .unwrap();
@@ -1238,7 +1239,7 @@ async fn planned_renewal_keeps_the_runtime_connected() {
             "test.observer.after_renewal",
             &format!(
                 "mutation {{ update_Node(docID: \"{}\", input: {{display_name: \"after renewal\"}}) {{ _docID }} }}",
-                gents::store::graphql::escape_graphql_string(&physical)
+                gents_store::graphql::escape_graphql_string(&physical)
             ),
         )
         .await
@@ -1353,7 +1354,7 @@ async fn revoked_user_is_answered_with_omitted_roots() {
 
     let subscription = "subscription { Node(showDeleted: true) { _docID _deleted } }";
     let mut open = access.subscribe(subscription).await.unwrap();
-    gents::store::identity::GrantSet::HouseholdOwner
+    gents_store::identity::GrantSet::HouseholdOwner
         .revoke(
             &home.runtime_access(),
             &::identity::Did::new(home.user().did()).unwrap(),
@@ -1396,13 +1397,13 @@ async fn revoked_user_sees_connected_with_nothing_and_never_reconnects() {
     assert!(!store.snapshot().nodes.is_empty());
     let before = handle.metrics_snapshot();
     let user = ::identity::Did::new(home.user().did()).unwrap();
-    gents::store::identity::GrantSet::HouseholdOwner
+    gents_store::identity::GrantSet::HouseholdOwner
         .revoke(&home.runtime_access(), &user)
         .await
         .unwrap();
     let mut shown = vec![RuntimeConnectionStatus::Connected];
     let mut changes = store.subscribe_changes();
-    let renewal = gents::store::config_client::SUBSCRIPTION_RENEWAL_PERIOD;
+    let renewal = gents_store::config_client::SUBSCRIPTION_RENEWAL_PERIOD;
     tokio::time::timeout(renewal + Duration::from_secs(15), async {
         loop {
             if let Some(status) = store.runtime_connection(home.node_did()) {
@@ -1430,7 +1431,7 @@ async fn revoked_user_sees_connected_with_nothing_and_never_reconnects() {
     );
     assert_eq!(after.transport_failures, before.transport_failures);
 
-    gents::store::identity::GrantSet::HouseholdOwner
+    gents_store::identity::GrantSet::HouseholdOwner
         .grant(&home.runtime_access(), &user)
         .await
         .unwrap();

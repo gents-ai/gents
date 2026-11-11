@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
-use crate::store::config_client::node_deferred_operation::*;
-use crate::store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
-use crate::NodeIdentity;
 use gents_lean_vocab::{lean_contract_snapshot, lean_identity_household_cases, LeanIdentityAction};
+use gents_store::config_client::node_deferred_operation::*;
+use gents_store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
+use gents_store::identity::NodeIdentity;
 
 #[tokio::test]
 async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> Result<()> {
@@ -33,11 +33,14 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
         })
         .collect();
     let dir = tempfile::tempdir()?;
-    let user = crate::KeyIdentity::load_or_create(dir.path().join("user"), None)?;
-    let runtime = crate::KeyIdentity::load_or_create(dir.path().join("runtime"), None)?;
-    let agent = crate::KeyIdentity::load_or_create(dir.path().join("agent"), None)?;
-    let sibling = crate::KeyIdentity::load_or_create(dir.path().join("sibling"), None)?;
-    let outsider = crate::KeyIdentity::load_or_create(dir.path().join("outsider"), None)?;
+    let user = gents_store::identity::KeyIdentity::load_or_create(dir.path().join("user"), None)?;
+    let runtime =
+        gents_store::identity::KeyIdentity::load_or_create(dir.path().join("runtime"), None)?;
+    let agent = gents_store::identity::KeyIdentity::load_or_create(dir.path().join("agent"), None)?;
+    let sibling =
+        gents_store::identity::KeyIdentity::load_or_create(dir.path().join("sibling"), None)?;
+    let outsider =
+        gents_store::identity::KeyIdentity::load_or_create(dir.path().join("outsider"), None)?;
     let data_path = dir.path().join("data");
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let address = listener.local_addr()?;
@@ -69,7 +72,7 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
     ] {
         node.add_collection(schema).await?;
     }
-    let access = |actor: &crate::KeyIdentity| -> Result<ConfigAccess> {
+    let access = |actor: &gents_store::identity::KeyIdentity| -> Result<ConfigAccess> {
         Ok(ConfigAccess::Graphql(
             GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), actor.did())
                 .with_client_signing_capability(actor.client_signing_capability()?)?,
@@ -104,22 +107,16 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
         expires_at: "2027-01-01T00:00:00Z".into(),
         admin_sig: Vec::new(),
     };
-    crate::runtime::agent::p2p_reconcile::enrollment_candidate::confirm_network_admin_pin(
-        &node, &offer,
-    )
-    .await?;
-    crate::runtime::agent::p2p_reconcile::enrollment_candidate::confirm_network_admin_pin(
-        &node, &offer,
-    )
-    .await?;
+    gents_p2p::p2p_reconcile::enrollment_candidate::confirm_network_admin_pin(&node, &offer)
+        .await?;
+    gents_p2p::p2p_reconcile::enrollment_candidate::confirm_network_admin_pin(&node, &offer)
+        .await?;
     let mut conflict = offer.clone();
     conflict.admin_did = "did:test:other-admin".into();
     assert!(
-        crate::runtime::agent::p2p_reconcile::enrollment_candidate::confirm_network_admin_pin(
-            &node, &conflict
-        )
-        .await
-        .is_err()
+        gents_p2p::p2p_reconcile::enrollment_candidate::confirm_network_admin_pin(&node, &conflict)
+            .await
+            .is_err()
     );
     let applied_mutation = format!(
         r#"mutation {{ create_PeerPairingApplied(input: {{node_did:"{}", peer_id:"peer", parent_linked:false}}) {{_docID}} }}"#,
@@ -202,7 +199,7 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
             .build()
             .await?,
     );
-    let access = |actor: &crate::KeyIdentity| -> Result<ConfigAccess> {
+    let access = |actor: &gents_store::identity::KeyIdentity| -> Result<ConfigAccess> {
         Ok(ConfigAccess::Graphql(
             GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), actor.did())
                 .with_client_signing_capability(actor.client_signing_capability()?)?,
@@ -215,7 +212,7 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
             "test.deferred.node",
             &format!(
                 r#"mutation {{ create_Node(input: {{node_did: "{}"}}) {{_docID}} }}"#,
-                crate::store::graphql::escape_graphql_string(runtime.did()),
+                gents_store::graphql::escape_graphql_string(runtime.did()),
             ),
         )
         .await?;
@@ -223,10 +220,8 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
     user_access
         .add_actor_relationship("Node", &parent, "runtime_reader", &actor)
         .await?;
-    crate::runtime::agent::p2p_reconcile::enrollment_candidate::confirm_network_admin_pin(
-        &node, &offer,
-    )
-    .await?;
+    gents_p2p::p2p_reconcile::enrollment_candidate::confirm_network_admin_pin(&node, &offer)
+        .await?;
     let readiness = gents_protocol::node_readiness::NodeReadinessSnapshot {
         format_version: gents_protocol::node_readiness::NODE_READINESS_FORMAT_VERSION,
         process_state: gents_protocol::node_readiness::NodeReadinessProcessState::Recovering,
@@ -250,7 +245,7 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
         assert_eq!(row["node_doc_id"], parent);
         let mutation = format!(
             r#"mutation {{ update_{collection}(docID: "{}", input: {{node_doc_id: "forged"}}) {{_docID}} }}"#,
-            crate::store::graphql::escape_graphql_string(doc)
+            gents_store::graphql::escape_graphql_string(doc)
         );
         let updated = user_access.write("test.deferred.denied", &mutation).await;
         assert_eq!(
@@ -331,7 +326,7 @@ async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> 
     let observed = user_access
         .execute(&format!(
             r#"{{ NetworkAdminPin(filter: {{_docID: {{_eq: "{}"}}}}) {{parent_linked}} }}"#,
-            crate::store::graphql::escape_graphql_string(&foreign),
+            gents_store::graphql::escape_graphql_string(&foreign),
         ))
         .await?;
     assert_eq!(

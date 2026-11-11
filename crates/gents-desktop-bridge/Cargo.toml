@@ -28,6 +28,15 @@ chrono.workspace = true
 dirs.workspace = true
 futures = "0.3"
 gents = { path = "../gents", features = ["typescript"] }
+gents-store = { workspace = true }
+gents-documents = { workspace = true }
+gents-inference = { workspace = true }
+gents-pack = { workspace = true }
+gents-session = { workspace = true }
+gents-tools = { workspace = true }
+gents-toolcalls = { workspace = true }
+gents-automation = { workspace = true }
+gents-loop = { workspace = true }
 gents-server = { package = "gents-cli", path = "../gents-cli", default-features = false, features = ["typescript"] }
 gents-chatgpt-login.workspace = true
 gents-claude-login.workspace = true

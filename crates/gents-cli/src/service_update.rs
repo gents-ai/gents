@@ -124,7 +124,7 @@ fn service_config(plan: &Plan) -> Result<NativeServiceConfig> {
 }
 
 fn operation_dir(home: &Path, id: uuid::Uuid) -> PathBuf {
-    home.join(gents::store::local::home::SERVICE_UPDATES_DIR_NAME)
+    home.join(gents_store::local::home::SERVICE_UPDATES_DIR_NAME)
         .join(id.to_string())
 }
 
@@ -295,8 +295,8 @@ pub(crate) async fn check(home: Option<PathBuf>) -> Result<()> {
     };
     let _keychain = crate::process_resources::prevent_keychain_prompts(true)?;
     let (identity, state, settings) = tokio::task::spawn_blocking(move || -> Result<_> {
-        gents::store::local::storage_backend::reject_legacy_store(
-            &gents::store::local::home::default_data_dir(&home),
+        gents_store::local::storage_backend::reject_legacy_store(
+            &gents_store::local::home::default_data_dir(&home),
         )?;
         let config = read_init_config(&home)?.context("home must be initialized")?;
         let state = read_runtime_state(&home)?.context("runtime endpoint missing")?;
@@ -310,8 +310,8 @@ pub(crate) async fn check(home: Option<PathBuf>) -> Result<()> {
     })
     .await??;
     execute::endpoint(&state.graphql, &settings)?;
-    let access = gents::store::config_client::ConfigAccess::Graphql(
-        gents::store::config_client::GraphqlEndpoint::as_principal(state.graphql, identity.did())
+    let access = gents_store::config_client::ConfigAccess::Graphql(
+        gents_store::config_client::GraphqlEndpoint::as_principal(state.graphql, identity.did())
             .with_client_signing_capability(identity.client_signing_capability()?)?,
     );
     let versions = access
@@ -320,8 +320,8 @@ pub(crate) async fn check(home: Option<PathBuf>) -> Result<()> {
         .into_iter()
         .map(serde_json::from_value)
         .collect::<std::result::Result<Vec<gents::defra_node::CollectionVersion>, _>>()?;
-    gents::store::schema::migration::check_migration_compatibility(&versions)?;
-    let lineage = gents::store::schema::migration::non_canonical_store_lineages(&versions)?;
+    gents_store::schema::migration::check_migration_compatibility(&versions)?;
+    let lineage = gents_store::schema::migration::non_canonical_store_lineages(&versions)?;
     for mismatch in &lineage {
         eprintln!("warning: {mismatch}");
     }

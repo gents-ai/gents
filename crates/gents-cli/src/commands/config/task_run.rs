@@ -1,21 +1,21 @@
 use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
-pub(crate) use gents::request::task_run::TaskRunOutput;
-use gents::request::task_run::{
-    enqueue_task_run as enqueue_task_run_owner, read_runnable_task, TaskRunOptions,
-};
-#[cfg(test)]
-use gents::request::task_run::{
-    lookup_request_by_retry_key, prepare_task_run_goal_id, prepare_task_run_input,
-    resolve_invocation_key,
-};
-#[cfg(test)]
-use gents::store::graphql::escape_graphql_string;
 #[cfg(test)]
 use gents_protocol::request_input::RequestInput;
 #[cfg(test)]
 use gents_protocol::row::AgentRequestRow;
+pub(crate) use gents_session::request::task_run::TaskRunOutput;
+use gents_session::request::task_run::{
+    enqueue_task_run as enqueue_task_run_owner, read_runnable_task, TaskRunOptions,
+};
+#[cfg(test)]
+use gents_session::request::task_run::{
+    lookup_request_by_retry_key, prepare_task_run_goal_id, prepare_task_run_input,
+    resolve_invocation_key,
+};
+#[cfg(test)]
+use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;
 
 use crate::cli::ConfigTaskRunArgs;
@@ -84,7 +84,7 @@ pub(crate) async fn enqueue_task_run_on(
     let actor_did = access
         .actor_did()
         .context("Task invocation requires an authenticated client identity")?;
-    let signer = gents::store::identity::RegisteredIdentity::from_registered_did(&actor_did, None)?;
+    let signer = gents_store::identity::RegisteredIdentity::from_registered_did(&actor_did, None)?;
     let task = read_runnable_task(access, &node_did, task_id).await?;
     enqueue_task_run_owner(
         access,
@@ -126,7 +126,7 @@ pub(crate) fn resolve_task_id_for(
 mod tests {
     use super::*;
     use crate::request_helpers::goal_input_tests::{authored_input, fixture, reference};
-    use gents::NodeIdentity;
+    use gents_store::identity::NodeIdentity;
     use serde_json::json;
     use std::sync::Arc;
 
@@ -137,21 +137,22 @@ mod tests {
         input: RequestInput,
     ) -> Result<Value> {
         let user = source.user();
-        let create = gents::request::lifecycle::build_signed_client_request(
+        let create = gents_session::request::lifecycle::build_signed_client_request(
             &source.home.access,
-            gents::RequestSpec {
+            gents_session::request::lifecycle::RequestSpec {
                 input,
                 retry_key: Some("manual-fire".into()),
                 ..gents::RequestSpec::new(
                     gents_protocol::request_admission::RequestPurpose::Normal,
-                    gents::RequestIdentity {
+                    gents_session::request::lifecycle::RequestIdentity {
                         request_id: "manual-task".into(),
                         node_did: source.node_did.clone(),
                         requester_did: Some(source.agent_did.clone()),
                         agent_did: source.agent_did.clone(),
                         session_id: "chat".into(),
                         content: "Continue the Task".into(),
-                        execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
+                        execution_origin:
+                            gents_session::request::lifecycle::ExecutionOrigin::Interactive,
                         created_at: "2026-10-21T00:00:00Z".into(),
                     },
                     gents_protocol::request_admission::AgentRequestAdmissionRecord::client(
@@ -159,7 +160,7 @@ mod tests {
                     ),
                 )
             },
-            gents::RequestSigner::Identity(user),
+            gents_session::request::lifecycle::RequestSigner::Identity(user),
         )
         .await?;
         let mut row = serde_json::to_value(&create)?;
@@ -167,7 +168,9 @@ mod tests {
         row["admission_kind"] = json!("client");
         row["admission_signer_did"] = json!(create.admission.signer_did);
         row["admission_signature"] = json!(bs58::encode(create.admission.signature).into_string());
-        gents::verify_request_receipt_signature(&serde_json::from_value(row.clone())?)?;
+        gents_store::identity::request_receipt::verify_request_receipt_signature(
+            &serde_json::from_value(row.clone())?,
+        )?;
         Ok(row)
     }
 
@@ -205,7 +208,7 @@ mod tests {
             let before = source.exchanges();
             let actual = prepare_task_run_input(
                 &access,
-                &gents::store::identity::RegisteredIdentity::from_registered_did(
+                &gents_store::identity::RegisteredIdentity::from_registered_did(
                     access.actor_did().context("test actor")?,
                     None,
                 )?,

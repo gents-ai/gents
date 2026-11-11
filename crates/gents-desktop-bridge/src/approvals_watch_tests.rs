@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use gents::pack::BindAccess;
-use gents::plugin::approval::{self, Answer, Request};
+use gents_pack::pack::BindAccess;
+use gents_tools::plugin::approval::{self, Answer, Request};
 use notify::event::{AccessKind, CreateKind, Flag, ModifyKind, RenameMode};
 use notify::{Event, EventKind};
 use tokio::sync::{mpsc, watch};
@@ -22,7 +22,7 @@ fn now_ms() -> u64 {
 fn question(id: &str) -> Request {
     let mut request = Request::new(
         "team/ocr",
-        &gents::plugin::allowed::Resolved {
+        &gents_pack::plugin::allowed::Resolved {
             target: PathBuf::from("/data/x.pdf"),
             is_dir: false,
         },

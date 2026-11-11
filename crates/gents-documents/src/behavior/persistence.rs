@@ -1,0 +1,190 @@
+use anyhow::{Context, Result};
+
+use super::Agent;
+use crate::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents_store::collection::Collection;
+use gents_store::config_client::ConfigAccess;
+#[cfg(test)]
+use gents_store::config_client::ConfigApplyTxn;
+
+pub async fn write_agent_document(
+    access: &ConfigAccess,
+    behavior: &Agent,
+    policy: &dyn crate::inference_backend::AdvertisedProfilePolicy,
+) -> Result<String> {
+    access
+        .transact_write("config.agent.write", |txn| {
+            Box::pin(async move {
+                let value = serde_json::to_value(behavior)?;
+                let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+                    collection: Collection::Agent,
+                    add: value.clone(),
+                    update: value,
+                }])?;
+                crate::apply_desired_state_plan(txn, &plan, policy).await?;
+                crate::read_desired_state_record_in_txn(
+                    txn,
+                    Collection::Agent,
+                    &behavior.node_did,
+                    &behavior.agent_did,
+                )
+                .await?
+                .map(|(doc_id, _)| doc_id)
+                .context("replaced Agent missing")
+            })
+        })
+        .await
+}
+
+#[cfg(test)]
+async fn load_agent_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    node_did: &str,
+    agent_did: &str,
+) -> Result<Option<Agent>> {
+    crate::read_desired_state_document_in_txn(txn, Collection::Agent, node_did, agent_did)
+        .await?
+        .map(serde_json::from_value)
+        .transpose()
+        .context("decoding canonical Agent")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{write_inference_profile_document, InferenceProfile};
+
+    use serde_json::json;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn replacement_is_scoped_clears_context_and_rolls_back_dangling_links() -> Result<()> {
+        let node = Arc::new(gents_store::test_support::node_builder().build().await?);
+        gents_store::schema::ensure_runtime_schemas(&node).await?;
+        let access = ConfigAccess::local_as(
+            node.clone(),
+            identity::Did::new(
+                node.node_identity_did()
+                    .expect("fixture node has an identity"),
+            )
+            .unwrap(),
+        );
+        for owner in ["did:key:owner", "did:key:other"] {
+            crate::test_support::bootstrap_signed_test_node(&access, owner).await;
+            let backend = json!({"node_did":owner,"backend_id":"local","name":"Local",
+                "provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1",
+                "auth":{"kind":"unauthenticated"}});
+            let context =
+                json!({"node_did":owner,"context_id":"context","system_prompt":"literal"});
+            let plan = DesiredStateApplyPlan::new(vec![
+                DesiredStateApplyDocument {
+                    collection: Collection::InferenceBackend,
+                    add: backend.clone(),
+                    update: backend,
+                },
+                DesiredStateApplyDocument {
+                    collection: Collection::AgentContext,
+                    add: context.clone(),
+                    update: context,
+                },
+            ])?;
+            access
+                .transact_write("test.behavior.seed", |txn| {
+                    let plan = &plan;
+                    Box::pin(async move {
+                        crate::apply_desired_state_plan(
+                            txn,
+                            plan,
+                            &crate::inference::resolved::ProviderProfilePolicy,
+                        )
+                        .await
+                        .map(|_| ())
+                    })
+                })
+                .await?;
+            let profile: InferenceProfile = serde_json::from_value(
+                json!({"node_did":owner,"profile_id":"inference","backend_id":"local","model_name":"exact-model"}),
+            )?;
+            write_inference_profile_document(
+                &access,
+                &profile,
+                &crate::inference::resolved::ProviderProfilePolicy,
+            )
+            .await?;
+        }
+        let mut behavior: Agent = serde_json::from_value(json!({
+            "node_did":"did:key:owner","agent_did":"did:key:agent", "creation_nonce":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","inference_profile_id":"inference",
+            "context_id":"context","description":"old","tags":["old"]
+        }))?;
+        let original_id = write_agent_document(
+            &access,
+            &behavior,
+            &crate::inference::resolved::ProviderProfilePolicy,
+        )
+        .await?;
+        let mut foreign = behavior.clone();
+        foreign.node_did = "did:key:other".to_owned();
+        foreign.agent_did = "did:key:other-agent".to_owned();
+        let foreign_id = write_agent_document(
+            &access,
+            &foreign,
+            &crate::inference::resolved::ProviderProfilePolicy,
+        )
+        .await?;
+        assert_ne!(original_id, foreign_id);
+        behavior.context_id = None;
+        behavior.description = None;
+        behavior.tags.clear();
+        assert_eq!(
+            write_agent_document(
+                &access,
+                &behavior,
+                &crate::inference::resolved::ProviderProfilePolicy
+            )
+            .await?,
+            original_id
+        );
+        access
+            .transact_write("test.behavior.read", |txn| {
+                let behavior = &behavior;
+                let foreign = &foreign;
+                Box::pin(async move {
+                    let actual = load_agent_in_txn(txn, &behavior.node_did, &behavior.agent_did)
+                        .await?
+                        .unwrap();
+                    assert_eq!(actual, *behavior);
+                    let actual_foreign =
+                        load_agent_in_txn(txn, &foreign.node_did, &foreign.agent_did)
+                            .await?
+                            .unwrap();
+                    assert_eq!(actual_foreign, *foreign);
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await?;
+        let mut invalid = behavior.clone();
+        invalid.context_id = Some("missing".to_owned());
+        assert!(write_agent_document(
+            &access,
+            &invalid,
+            &crate::inference::resolved::ProviderProfilePolicy
+        )
+        .await
+        .is_err());
+        access
+            .transact_write("test.behavior.rollback", |txn| {
+                let behavior = &behavior;
+                Box::pin(async move {
+                    assert_eq!(
+                        load_agent_in_txn(txn, &behavior.node_did, &behavior.agent_did)
+                            .await?
+                            .as_ref(),
+                        Some(behavior)
+                    );
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await?;
+        Ok(())
+    }
+}

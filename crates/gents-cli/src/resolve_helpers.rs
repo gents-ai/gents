@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use gents::{cli_tool, BackendProviderKind, OpenAiWireApi};
+use gents_inference::backends::provider::BackendProviderKind;
+use gents_loop::openai_wire::OpenAiWireApi;
+use gents_tools::surface::cli_tool;
 
 use crate::cli::args::{BackendPresetArg, OpenAiWireApiArg, ToolCeilingArg, ToolPackageArg};
 use crate::shared::ResolvedBackendConfig;
@@ -114,7 +116,7 @@ fn resolve_backend_api_key_env_var(
     })
 }
 
-pub(crate) fn parse_cli_tool_arg(value: &str) -> Result<gents::CliToolConfig> {
+pub(crate) fn parse_cli_tool_arg(value: &str) -> Result<gents_tools::native::CliToolConfig> {
     let (name, path) = value
         .split_once('=')
         .ok_or_else(|| anyhow::anyhow!("--cli-tool must be NAME=/absolute/path"))?;
@@ -137,12 +139,16 @@ pub(crate) fn parse_cli_tool_arg(value: &str) -> Result<gents::CliToolConfig> {
 pub(crate) fn host_tool_ceiling(
     mode: ToolCeilingArg,
     root: Option<&Path>,
-) -> Result<gents::ToolCeiling> {
+) -> Result<gents_tools::surface::ToolCeiling> {
     Ok(match (mode, root) {
-        (ToolCeilingArg::MetaOnly, _) => gents::ToolCeiling::meta_only(),
-        (ToolCeilingArg::Readonly, Some(root)) => gents::ToolCeiling::readonly_at(root),
-        (ToolCeilingArg::Readonly, None) => gents::ToolCeiling::readonly(),
-        (ToolCeilingArg::Readwrite, Some(root)) => gents::ToolCeiling::readwrite(root),
+        (ToolCeilingArg::MetaOnly, _) => gents_tools::surface::ToolCeiling::meta_only(),
+        (ToolCeilingArg::Readonly, Some(root)) => {
+            gents_tools::surface::ToolCeiling::readonly_at(root)
+        }
+        (ToolCeilingArg::Readonly, None) => gents_tools::surface::ToolCeiling::readonly(),
+        (ToolCeilingArg::Readwrite, Some(root)) => {
+            gents_tools::surface::ToolCeiling::readwrite(root)
+        }
         (ToolCeilingArg::Readwrite, None) => {
             anyhow::bail!("--tool-root is required when --tool-ceiling readwrite")
         }

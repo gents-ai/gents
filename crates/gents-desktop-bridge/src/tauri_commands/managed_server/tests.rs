@@ -36,9 +36,9 @@ fn write(path: &Path, contents: &str) {
     std::fs::write(path, contents).unwrap();
 }
 
-fn lineage_refusal(data_path: PathBuf) -> gents::store::local::storage_backend::IncompatibleStore {
-    gents::store::local::storage_backend::IncompatibleStore {
-        kind: gents::store::local::storage_backend::IncompatibleStoreKind::UnknownLineage,
+fn lineage_refusal(data_path: PathBuf) -> gents_store::local::storage_backend::IncompatibleStore {
+    gents_store::local::storage_backend::IncompatibleStore {
+        kind: gents_store::local::storage_backend::IncompatibleStoreKind::UnknownLineage,
         data_path,
     }
 }
@@ -122,7 +122,7 @@ fn orchestration_state() -> (tempfile::TempDir, DesktopAppState) {
             },
             snapshot_grants: SnapshotGrants::core_only(),
             managed_server: ManagedServerPolicy::Allowed,
-            store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::File,
+            store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
             client_host: false,
         },
         None,

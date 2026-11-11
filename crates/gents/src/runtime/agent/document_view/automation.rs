@@ -1,10 +1,10 @@
 use super::DocumentRuntimeView;
-use crate::documents::automation::{
+use gents_automation::triggers::runtime_snapshot::UnavailableAgent;
+use gents_documents::automation::{
     resolved_task_from, EventTriggerFireMode, ResolvedAutomation, ResolvedEventTrigger,
     ResolvedSchedule, ResolvedTask,
 };
-use crate::documents::ConcurrencyMode;
-use crate::triggers::runtime_snapshot::UnavailableAgent;
+use gents_documents::ConcurrencyMode;
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 
 pub(super) fn resolve_automation(
@@ -63,10 +63,10 @@ pub(super) fn resolve_automation(
         let trigger_id = trigger.trigger_id.clone();
         if unavailable_triggers.contains(&trigger_id) {
             match &trigger.source {
-                crate::documents::TriggerSource::Schedule { .. } => {
+                gents_documents::TriggerSource::Schedule { .. } => {
                     unavailable_schedules.insert(trigger_id);
                 }
-                crate::documents::TriggerSource::Event { .. } => {
+                gents_documents::TriggerSource::Event { .. } => {
                     unavailable_event_triggers.insert(trigger_id);
                 }
             }
@@ -79,7 +79,7 @@ pub(super) fn resolve_automation(
         let concurrency = trigger.concurrency.unwrap_or_default();
 
         match &trigger.source {
-            crate::documents::TriggerSource::Schedule { schedule_id } => {
+            gents_documents::TriggerSource::Schedule { schedule_id } => {
                 resolve_schedule_trigger(
                     view,
                     schedule_id,
@@ -91,7 +91,7 @@ pub(super) fn resolve_automation(
                     &mut unavailable_schedules,
                 );
             }
-            crate::documents::TriggerSource::Event { event_source_id } => {
+            gents_documents::TriggerSource::Event { event_source_id } => {
                 resolve_event_trigger(
                     view,
                     event_source_id,
@@ -210,7 +210,7 @@ fn resolve_schedule_trigger(
         ResolvedSchedule {
             session_id_template: None,
             create_session: false,
-            max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
+            max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
             trigger_doc_id: trigger_doc_id.to_string(),
             schedule_doc_id: schedule_record.doc_id.clone(),
             schedule_id: schedule.schedule_id.clone(),
@@ -295,7 +295,7 @@ fn resolve_event_trigger(
             task_doc_id: task_record.doc_id.clone(),
             session_id_template: None,
             create_session: false,
-            max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
+            max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
             trigger_doc_id: trigger_doc_id.to_string(),
             trigger_id: trigger_id.to_string(),
             task_id: task.task_id.clone(),
@@ -320,7 +320,7 @@ fn resolve_event_trigger(
 }
 
 fn task_template_references_group(template: &str) -> bool {
-    crate::documents::template::parse_template_for_validation(template).is_ok_and(|refs| {
+    gents_documents::template::parse_template_for_validation(template).is_ok_and(|refs| {
         refs.iter()
             .any(|reference| reference.root() == Some("group"))
     })

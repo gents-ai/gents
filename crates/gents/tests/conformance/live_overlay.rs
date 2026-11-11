@@ -1,7 +1,7 @@
-use gents::request::lifecycle::{REMOVED_REASON, REPLACED_REASON};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::timeline::{has_durable_user_owner, DurableUserOwnerInput};
+use gents_session::request::lifecycle::{REMOVED_REASON, REPLACED_REASON};
 
 use gents_lean_vocab::{lean_pending_user_turn_cases, LeanPendingUserTurnCase};
 use gents_lean_vocab::{lean_queued_steering_guard_cases, lean_queued_steering_trace_cases};
@@ -55,13 +55,13 @@ fn pending_user_turn_cases_match_lean_table() {
                 ..AgentRequestRow::default()
             };
             assert_eq!(
-                gents::request::lifecycle::retired_by_author(&row),
+                gents_session::request::lifecycle::retired_by_author(&row),
                 case.retired_by_author,
                 "case {:?} retirement drifted for a {state:?} row",
                 case.name
             );
             let actual = !has_durable_user_owner(&messages, "request-under-test")
-                && !gents::request::lifecycle::retired_by_author(&row);
+                && !gents_session::request::lifecycle::retired_by_author(&row);
             assert_eq!(
                 actual, case.expect_pending_turn,
                 "case {:?} pending projection drifted with {} unrelated turns",

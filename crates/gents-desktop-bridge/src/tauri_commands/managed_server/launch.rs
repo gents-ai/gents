@@ -285,8 +285,8 @@ where
         .as_ref()
         .is_some_and(|error| error.code == BridgeErrorCode::IncompatibleLocalStore)
         || matches!(
-            gents::store::local::storage_backend::incompatible_store_kind(
-                &gents::store::local::home::default_data_dir(node_home)
+            gents_store::local::storage_backend::incompatible_store_kind(
+                &gents_store::local::home::default_data_dir(node_home)
             ),
             Ok(Some(_))
         );

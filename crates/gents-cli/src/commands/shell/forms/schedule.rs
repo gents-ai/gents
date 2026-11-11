@@ -1,4 +1,4 @@
-use gents::documents::Schedule;
+use gents_documents::Schedule;
 use gents_shell::source::{Doc, FieldKind, Form, FormAct, FormAction, FormError, FormField};
 use serde_json::{json, Value};
 
@@ -111,8 +111,8 @@ pub(super) fn document(
 
 #[cfg(test)]
 mod tests {
-    use gents::documents::schedule_cron::CronMissedRunPolicy;
-    use gents::documents::ScheduleCadence;
+    use gents_documents::schedule_cron::CronMissedRunPolicy;
+    use gents_documents::ScheduleCadence;
     use gents_shell::source::{FormAct, FormAction, FormRef};
     use serde_json::json;
 

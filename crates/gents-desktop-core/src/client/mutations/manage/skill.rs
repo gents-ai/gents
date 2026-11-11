@@ -1,10 +1,10 @@
 use anyhow::Result;
 #[cfg(test)]
-use gents::documents::apply_desired_state_plan;
-use gents::documents::SkillDocument;
-use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::store::collection::Collection;
-use gents::store::config_client::ConfigAccess;
+use gents_documents::apply_desired_state_plan;
+use gents_documents::SkillDocument;
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents_store::collection::Collection;
+use gents_store::config_client::ConfigAccess;
 
 pub async fn upsert_skill_on(access: &ConfigAccess, document: &SkillDocument) -> Result<()> {
     let value = serde_json::to_value(document)?;
@@ -31,7 +31,7 @@ pub async fn delete_skill_on(access: &ConfigAccess, node_did: &str, id: &str) ->
 mod tests {
     use super::*;
     use crate::test_fixtures::ServedRuntimeHome;
-    use gents::documents::read_desired_state_record_in_txn;
+    use gents_documents::read_desired_state_record_in_txn;
     use serde_json::json;
 
     #[tokio::test]
@@ -60,7 +60,7 @@ mod tests {
                     apply_desired_state_plan(
                         txn,
                         plan,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await?;
                     Ok::<_, anyhow::Error>(())
@@ -100,7 +100,7 @@ mod tests {
                     apply_desired_state_plan(
                         txn,
                         &plan,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await?;
                     Ok::<_, anyhow::Error>(())

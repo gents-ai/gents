@@ -46,7 +46,7 @@ fn expected_reasoning(chunks_per_second: u32) -> String {
 fn audit_item(
     scope: CaptureScope,
     event: ClaudeAuditEvent,
-) -> Result<LoopStreamItem, crate::error::LoopStreamError> {
+) -> Result<LoopStreamItem, gents_loop::error::LoopStreamError> {
     Ok(LoopStreamItem::ProviderAudit(ProviderAuditObservation {
         capture_scope: scope,
         turn: 0,
@@ -58,7 +58,7 @@ fn audit_item(
 async fn fixture(name: &str) -> SignedRun {
     let run = signed_run(
         name,
-        Duration::from_millis(crate::inference::resolved::DEFAULT_STREAM_BATCH_MS),
+        Duration::from_millis(gents_inference::resolved::DEFAULT_STREAM_BATCH_MS),
     )
     .await;
     assert!(matches!(
@@ -72,14 +72,14 @@ async fn fixture(name: &str) -> SignedRun {
 }
 
 async fn persisted(
-    access: &crate::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     request_doc_id: &str,
     source: &OutputSource,
     writer: &OutputWriter,
 ) -> Persisted {
     let result = exec(access, &format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#,
-            crate::store::graphql::escape_graphql_string(request_doc_id)
+            gents_store::graphql::escape_graphql_string(request_doc_id)
         ))
         .await;
     assert!(!result.has_errors(), "{:?}", result.errors);
@@ -236,11 +236,11 @@ async fn auxiliary_stream(end: End, chunks_per_second: u32) -> Persisted {
         DefraStreamWriter::new_for_lifecycle(
             node.clone(),
             &lifecycle,
-            Duration::from_millis(crate::inference::resolved::DEFAULT_STREAM_BATCH_MS),
+            Duration::from_millis(gents_inference::resolved::DEFAULT_STREAM_BATCH_MS),
         )
         .unwrap(),
     );
-    let sink = crate::request::streaming::auxiliary::sink_with_writer(
+    let sink = gents_session::request::streaming::auxiliary::sink_with_writer(
         Arc::clone(&auxiliary_writer),
         request.clone(),
         generation.clone(),
@@ -311,7 +311,7 @@ async fn auxiliary_stream(end: End, chunks_per_second: u32) -> Persisted {
 /// The first reasoning bytes flush at once, later reasoning once per five
 /// batch intervals, and the close carries the remainder.
 fn assert_reasoning_cadence(case: &str, persisted: &Persisted, chunks_per_second: u32) {
-    let batches = (SECONDS / crate::request::streaming::REASONING_BATCH_FACTOR) as usize;
+    let batches = (SECONDS / gents_session::request::streaming::REASONING_BATCH_FACTOR) as usize;
     assert!(
         (batches - 1..=batches + 2).contains(&persisted.flushes),
         "{case}: a {SECONDS}s reasoning stream appended {} segments, expected {}..={}",

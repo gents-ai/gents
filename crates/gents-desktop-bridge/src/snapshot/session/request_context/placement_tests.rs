@@ -20,8 +20,8 @@ async fn seed_placement_messages(
         let mutations = chunk
             .iter()
             .map(|(requester, request_doc_id, sequence)| {
-                let requester = gents::store::graphql::escape_graphql_string(requester);
-                let request_doc_id = gents::store::graphql::escape_graphql_string(request_doc_id);
+                let requester = gents_store::graphql::escape_graphql_string(requester);
+                let request_doc_id = gents_store::graphql::escape_graphql_string(request_doc_id);
                 format!(
                     r#"m{sequence}: create_AgentMessage(input: {{
                     message_key: "{request_doc_id}:{sequence}", session_id: "session",
@@ -58,7 +58,9 @@ fn placement_messages(
 #[tokio::test]
 async fn a_start_of_request_compaction_reads_one_first_message_per_request() {
     let node = std::sync::Arc::new(crate::tests::support::node_builder().build().await.unwrap());
-    gents::ensure_runtime_schemas(&node).await.unwrap();
+    gents_store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     let access = ConfigAccess::local(node.clone());
     let mut messages = placement_messages("reader", "earlier", 1..3);
     /* another requester's copy of the request is outside the read's scope */

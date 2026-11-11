@@ -1,4 +1,4 @@
-use gents::store::config_client::GraphqlEndpoint;
+use gents_store::config_client::GraphqlEndpoint;
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
@@ -6,12 +6,12 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use gents::store::graphql::escape_graphql_string;
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::graphql::GraphqlRequestOptions;
 use gents_protocol::request_admission::AgentRequestCreate;
 use gents_protocol::request_input::RequestInput;
 use gents_protocol::row::AgentRequestRow;
+use gents_store::graphql::escape_graphql_string;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -45,8 +45,8 @@ pub(crate) async fn load_canonical_tool_presentation(
     submitted: &SubmittedRequest,
     include_result: bool,
 ) -> Result<CanonicalToolPresentation> {
-    let access = gents::ConfigAccess::Graphql(graphql.clone());
-    let presentation = gents::session::load_tool_call_presentation(
+    let access = gents_store::config_client::ConfigAccess::Graphql(graphql.clone());
+    let presentation = gents_session::session::load_tool_call_presentation(
         &access,
         tool_call_doc_id,
         &submitted.node_did,
@@ -120,9 +120,12 @@ pub(crate) fn request_terminal_query(request_id: &str, physical: Option<&str>) -
 pub(crate) async fn observe_canonical_request_output(
     graphql: &GraphqlEndpoint,
     request: &AgentRequestRow,
-) -> Result<gents::session::CanonicalRequestOutput> {
-    gents::session::observe_request_output(&gents::ConfigAccess::Graphql(graphql.clone()), request)
-        .await
+) -> Result<gents_session::session::CanonicalRequestOutput> {
+    gents_session::session::observe_request_output(
+        &gents_store::config_client::ConfigAccess::Graphql(graphql.clone()),
+        request,
+    )
+    .await
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -180,7 +183,7 @@ pub(crate) struct RequestOutputEnvelope {
     pub(crate) output: CliOutputObservation,
 }
 
-fn cli_presentation(value: gents::session::CanonicalPresentation) -> CliOutputPresentation {
+fn cli_presentation(value: gents_session::session::CanonicalPresentation) -> CliOutputPresentation {
     CliOutputPresentation {
         body_markdown: value.body_markdown,
         reasoning_markdown: value.reasoning_markdown,
@@ -189,7 +192,7 @@ fn cli_presentation(value: gents::session::CanonicalPresentation) -> CliOutputPr
 
 pub(crate) fn request_output_envelope(
     request: &AgentRequestRow,
-    output: gents::session::CanonicalRequestOutput,
+    output: gents_session::session::CanonicalRequestOutput,
 ) -> Result<RequestOutputEnvelope> {
     let request = CliRequestMetadata {
         request_doc_id: request
@@ -214,22 +217,28 @@ pub(crate) fn request_output_envelope(
         terminalized_at: request.terminalized_at.clone(),
     };
     let output = match output {
-        gents::session::CanonicalRequestOutput::Absent => CliOutputObservation::Absent,
-        gents::session::CanonicalRequestOutput::Live(value) => CliOutputObservation::Live {
+        gents_session::session::CanonicalRequestOutput::Absent => CliOutputObservation::Absent,
+        gents_session::session::CanonicalRequestOutput::Live(value) => CliOutputObservation::Live {
             presentation: cli_presentation(value),
         },
-        gents::session::CanonicalRequestOutput::Settling(value) => CliOutputObservation::Settling {
-            presentation: cli_presentation(value),
-        },
-        gents::session::CanonicalRequestOutput::Loading => CliOutputObservation::Loading,
-        gents::session::CanonicalRequestOutput::Denied => CliOutputObservation::Denied,
-        gents::session::CanonicalRequestOutput::Conflicted => CliOutputObservation::Conflicted,
-        gents::session::CanonicalRequestOutput::Invalid => CliOutputObservation::Invalid,
-        gents::session::CanonicalRequestOutput::Retracted => CliOutputObservation::Retracted,
-        gents::session::CanonicalRequestOutput::RetainedPartial(_) => {
+        gents_session::session::CanonicalRequestOutput::Settling(value) => {
+            CliOutputObservation::Settling {
+                presentation: cli_presentation(value),
+            }
+        }
+        gents_session::session::CanonicalRequestOutput::Loading => CliOutputObservation::Loading,
+        gents_session::session::CanonicalRequestOutput::Denied => CliOutputObservation::Denied,
+        gents_session::session::CanonicalRequestOutput::Conflicted => {
+            CliOutputObservation::Conflicted
+        }
+        gents_session::session::CanonicalRequestOutput::Invalid => CliOutputObservation::Invalid,
+        gents_session::session::CanonicalRequestOutput::Retracted => {
+            CliOutputObservation::Retracted
+        }
+        gents_session::session::CanonicalRequestOutput::RetainedPartial(_) => {
             CliOutputObservation::RetainedPartial
         }
-        gents::session::CanonicalRequestOutput::Published {
+        gents_session::session::CanonicalRequestOutput::Published {
             header,
             message,
             presentation,
@@ -238,10 +247,10 @@ pub(crate) fn request_output_envelope(
             message,
             presentation: cli_presentation(presentation),
         },
-        gents::session::CanonicalRequestOutput::TerminalNoMessage => {
+        gents_session::session::CanonicalRequestOutput::TerminalNoMessage => {
             CliOutputObservation::TerminalNoMessage
         }
-        gents::session::CanonicalRequestOutput::TerminalMessage {
+        gents_session::session::CanonicalRequestOutput::TerminalMessage {
             header,
             message,
             presentation,
@@ -286,7 +295,7 @@ pub(crate) async fn prepare_agent_request(
     if let Some(session_id) = session_id.filter(|_| options.retry_parent_request.is_none()) {
         options.input = Some(
             prepare_cli_goal_input(
-                &gents::ConfigAccess::Graphql(graphql.clone()),
+                &gents_store::config_client::ConfigAccess::Graphql(graphql.clone()),
                 node_did,
                 session_id,
                 options.input.take().unwrap_or_default(),
@@ -330,19 +339,20 @@ pub(crate) async fn prepare_agent_request_with_input(
                 retry_parent_value.to_string()
             }
         });
-    let access = gents::ConfigAccess::Graphql(graphql.clone());
+    let access = gents_store::config_client::ConfigAccess::Graphql(graphql.clone());
     let actor_did = access
         .actor_did()
         .context("request submission requires an authenticated client identity")?;
-    let signer = gents::store::identity::RegisteredIdentity::from_registered_did(&actor_did, None)?;
+    let signer = gents_store::identity::RegisteredIdentity::from_registered_did(&actor_did, None)?;
     let requester_did =
-        gents::session::client_requester_scope(&access, node_did, &session_id, &actor_did).await?;
+        gents_session::session::client_requester_scope(&access, node_did, &session_id, &actor_did)
+            .await?;
     let admission =
         gents_protocol::request_admission::AgentRequestAdmissionRecord::client(&actor_did);
-    let create = gents::request::lifecycle::build_signed_client_request(
+    let create = gents_session::request::lifecycle::build_signed_client_request(
         &access,
-        gents::RequestSpec {
-            trigger_lineage: gents::request::lifecycle::TriggerLineage {
+        gents_session::request::lifecycle::RequestSpec {
+            trigger_lineage: gents_session::request::lifecycle::TriggerLineage {
                 source_doc_id: options.caused_by_source_doc_id,
                 ..Default::default()
             },
@@ -351,37 +361,40 @@ pub(crate) async fn prepare_agent_request_with_input(
                 .valid_until
                 .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
             retry_key: options.retry_key,
-            retry: Some(gents::RetryLink {
+            retry: Some(gents_session::request::lifecycle::RetryLink {
                 parent_request_id: (!retry_parent_value.is_empty())
                     .then(|| retry_parent_value.to_string()),
                 parent_request_doc_id: options.retry_parent_request_doc_id,
                 root_request_id: retry_root_value,
                 retry_count: 0,
-                max_retries: i64::from(gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES),
+                max_retries: i64::from(
+                    gents_session::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+                ),
             }),
             ..gents::RequestSpec::new(
                 gents_protocol::request_admission::RequestPurpose::Normal,
-                gents::RequestIdentity {
+                gents_session::request::lifecycle::RequestIdentity {
                     request_id: request_id.clone(),
                     node_did: node_did.to_string(),
                     requester_did: Some(requester_did),
                     agent_did: agent_did.clone(),
                     session_id: session_id.clone(),
                     content: request_content,
-                    execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
+                    execution_origin:
+                        gents_session::request::lifecycle::ExecutionOrigin::Interactive,
                     created_at: created_at.clone(),
                 },
                 admission,
             )
         },
-        gents::RequestSigner::Identity(&signer),
+        gents_session::request::lifecycle::RequestSigner::Identity(&signer),
     )
     .await?;
     Ok(PreparedAgentRequest { create })
 }
 
 pub(crate) async fn prepare_cli_goal_input(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     session_id: &str,
     input: RequestInput,
@@ -393,19 +406,24 @@ pub(crate) async fn prepare_cli_goal_input(
         .actor_did()
         .context("Goal input requires an authenticated client identity")?;
     let verifier =
-        gents::store::identity::RegisteredIdentity::from_registered_did(&actor_did, None)?;
-    gents::goal::prepare_client_goal_input(access, &verifier, node_did, session_id, input).await
+        gents_store::identity::RegisteredIdentity::from_registered_did(&actor_did, None)?;
+    gents_automation::goal::prepare_client_goal_input(
+        access, &verifier, node_did, session_id, input,
+    )
+    .await
 }
 
 pub(crate) async fn submit_prepared_agent_request_committed(
     graphql: &GraphqlEndpoint,
     prepared: &PreparedAgentRequest,
 ) -> Result<SubmittedRequest> {
-    let access = gents::ConfigAccess::Graphql(graphql.clone());
+    let access = gents_store::config_client::ConfigAccess::Graphql(graphql.clone());
     if let Err(error) =
-        gents::request::lifecycle::submit_client_request(&access, &prepared.create).await
+        gents_session::request::lifecycle::submit_client_request(&access, &prepared.create).await
     {
-        match gents::request::lifecycle::reconcile_client_request(&access, &prepared.create).await {
+        match gents_session::request::lifecycle::reconcile_client_request(&access, &prepared.create)
+            .await
+        {
             Ok(true) => {}
             Ok(false) => return Err(error.into()),
             Err(recovery) => {
@@ -462,7 +480,7 @@ async fn read_submitted_receipt(
         (!create.requester_did.is_empty()).then_some(create.requester_did.as_str()),
     );
     let logical = escape_graphql_string(&create.request_id);
-    let response = gents::store::config_client::query_graphql_with_options(
+    let response = gents_store::config_client::query_graphql_with_options(
         graphql,
         &format!(
             "{{AgentRequest(filter:{{{scope},request_id:{{_eq:\"{logical}\"}}}}){{{}}}}}",
@@ -493,7 +511,7 @@ async fn read_submitted_receipt(
                 == (!create.requester_did.is_empty()).then_some(create.requester_did.as_str()),
         "submission receipt crossed exact request scope"
     );
-    gents::verify_request_receipt_signature(&row)?;
+    gents_store::identity::request_receipt::verify_request_receipt_signature(&row)?;
     Ok(Some(row))
 }
 
@@ -504,13 +522,15 @@ async fn resolve_request_agent_did(
     requested: Option<&str>,
 ) -> Result<String> {
     let session_agent = if let Some(session_id) = session_id {
-        gents::ConfigAccess::Graphql(graphql.clone())
+        gents_store::config_client::ConfigAccess::Graphql(graphql.clone())
             .transact_readonly("cli.request.session_agent", |txn| {
                 Box::pin(async move {
                     Ok::<_, anyhow::Error>(
-                        gents::store::config_client::agent_session::load_agent_session_owner_in_txn(txn, node_did, session_id)
-                            .await?
-                            .map(|row| row.session.agent_did),
+                        gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
+                            txn, node_did, session_id,
+                        )
+                        .await?
+                        .map(|row| row.session.agent_did),
                     )
                 })
             })
@@ -526,7 +546,7 @@ async fn resolve_request_agent_did(
         );
     }
     let requested = session_agent.as_deref().or(requested);
-    let escaped_node_did = gents::store::graphql::escape_graphql_string(node_did);
+    let escaped_node_did = gents_store::graphql::escape_graphql_string(node_did);
     let response = post_graphql(
         graphql,
         &format!(
@@ -585,7 +605,7 @@ async fn resolve_request_agent_did(
     Ok(agent_did)
 }
 
-pub(crate) use gents::documents::skills::content_and_input_with_prompt_selected_skill_ids;
+pub(crate) use gents_documents::skills::content_and_input_with_prompt_selected_skill_ids;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct WaitProgressMarker {
@@ -607,12 +627,12 @@ struct WaitOutputProgress {
 }
 
 fn wait_output_progress(
-    output: &gents::session::CanonicalRequestOutput,
+    output: &gents_session::session::CanonicalRequestOutput,
 ) -> Option<WaitOutputProgress> {
     let (kind, presentation) = match output {
-        gents::session::CanonicalRequestOutput::Live(value) => ("live", value),
-        gents::session::CanonicalRequestOutput::Settling(value) => ("settling", value),
-        gents::session::CanonicalRequestOutput::Published { presentation, .. } => {
+        gents_session::session::CanonicalRequestOutput::Live(value) => ("live", value),
+        gents_session::session::CanonicalRequestOutput::Settling(value) => ("settling", value),
+        gents_session::session::CanonicalRequestOutput::Published { presentation, .. } => {
             ("published", presentation)
         }
         _ => return None,
@@ -626,7 +646,7 @@ fn wait_output_progress(
 
 fn wait_progress_marker(
     request_row: Option<&AgentRequestRow>,
-    output: Option<&gents::session::CanonicalRequestOutput>,
+    output: Option<&gents_session::session::CanonicalRequestOutput>,
 ) -> WaitProgressMarker {
     WaitProgressMarker {
         request_lifecycle_state: request_row.and_then(|row| row.lifecycle_state),
@@ -645,8 +665,8 @@ fn wait_progress_marker(
 }
 
 fn successor_output_target(row: &AgentRequestRow) -> Result<Option<(String, String)>> {
-    let Some(logical) = gents::request::lifecycle::folded_into(row)
-        .or_else(|| gents::request::lifecycle::replaced_by(row))
+    let Some(logical) = gents_session::request::lifecycle::folded_into(row)
+        .or_else(|| gents_session::request::lifecycle::replaced_by(row))
     else {
         return Ok(None);
     };
@@ -783,13 +803,13 @@ where
             None => None,
         };
         match observed_output.as_ref() {
-            Some(gents::session::CanonicalRequestOutput::Denied) => {
+            Some(gents_session::session::CanonicalRequestOutput::Denied) => {
                 anyhow::bail!("canonical output for request {request_id} is denied")
             }
-            Some(gents::session::CanonicalRequestOutput::Conflicted) => {
+            Some(gents_session::session::CanonicalRequestOutput::Conflicted) => {
                 anyhow::bail!("canonical output for request {request_id} is conflicted")
             }
-            Some(gents::session::CanonicalRequestOutput::Invalid) => {
+            Some(gents_session::session::CanonicalRequestOutput::Invalid) => {
                 anyhow::bail!("canonical output for request {request_id} is invalid")
             }
             _ => {}
@@ -810,7 +830,7 @@ where
                 .take()
                 .context("terminal request output observation is missing")?;
             match output {
-                gents::session::CanonicalRequestOutput::Loading => {
+                gents_session::session::CanonicalRequestOutput::Loading => {
                     if last_progress_at.elapsed() >= idle_timeout {
                         anyhow::bail!(
                             "timed out waiting for materialized AgentMessage {request_id} after {timeout_secs}s of inactivity\n{}",
@@ -820,29 +840,29 @@ where
                     tokio::time::sleep(Duration::from_secs(poll_secs)).await;
                     continue;
                 }
-                gents::session::CanonicalRequestOutput::Denied => {
+                gents_session::session::CanonicalRequestOutput::Denied => {
                     anyhow::bail!("canonical terminal output for request {request_id} is denied")
                 }
-                gents::session::CanonicalRequestOutput::Conflicted => anyhow::bail!(
+                gents_session::session::CanonicalRequestOutput::Conflicted => anyhow::bail!(
                     "canonical terminal output for request {request_id} is conflicted"
                 ),
-                gents::session::CanonicalRequestOutput::Invalid => {
+                gents_session::session::CanonicalRequestOutput::Invalid => {
                     anyhow::bail!("canonical terminal output for request {request_id} is invalid")
                 }
-                gents::session::CanonicalRequestOutput::Retracted => anyhow::bail!(
+                gents_session::session::CanonicalRequestOutput::Retracted => anyhow::bail!(
                     "canonical terminal output for request {request_id} is retracted"
                 ),
-                gents::session::CanonicalRequestOutput::RetainedPartial(_) => anyhow::bail!(
+                gents_session::session::CanonicalRequestOutput::RetainedPartial(_) => anyhow::bail!(
                     "canonical terminal output for request {request_id} resolved only to retained partial diagnostics"
                 ),
-                gents::session::CanonicalRequestOutput::TerminalNoMessage
-                | gents::session::CanonicalRequestOutput::TerminalMessage { .. } => {
+                gents_session::session::CanonicalRequestOutput::TerminalNoMessage
+                | gents_session::session::CanonicalRequestOutput::TerminalMessage { .. } => {
                     return request_output_envelope(request, output)
                 }
-                gents::session::CanonicalRequestOutput::Absent
-                | gents::session::CanonicalRequestOutput::Live(_)
-                | gents::session::CanonicalRequestOutput::Settling(_)
-                | gents::session::CanonicalRequestOutput::Published { .. } => anyhow::bail!(
+                gents_session::session::CanonicalRequestOutput::Absent
+                | gents_session::session::CanonicalRequestOutput::Live(_)
+                | gents_session::session::CanonicalRequestOutput::Settling(_)
+                | gents_session::session::CanonicalRequestOutput::Published { .. } => anyhow::bail!(
                     "terminal request {request_id} produced a nonterminal canonical output observation"
                 ),
             }
@@ -1066,8 +1086,8 @@ mod tests {
         Json, Router,
     };
     use futures_util::stream;
-    use gents::store::config_client::GraphqlEndpoint;
     use gents_protocol::row::AgentRequestRow;
+    use gents_store::config_client::GraphqlEndpoint;
     use serde_json::{json, Value};
     use std::collections::BTreeSet;
     use std::sync::{Arc, Mutex};
@@ -1149,7 +1169,7 @@ mod tests {
             }
         }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let endpoint = gents::store::config_client::GraphqlEndpoint::anonymous(format!(
+        let endpoint = gents_store::config_client::GraphqlEndpoint::anonymous(format!(
             "http://{}/graphql",
             listener.local_addr()?
         ));
@@ -1239,30 +1259,31 @@ mod tests {
         PreparedAgentRequest,
         Value,
     ) {
-        use gents::NodeIdentity;
+        use gents_store::identity::NodeIdentity;
         let client = crate::shared::test_support::ClientHome::new().await;
         let agent = client.agent("Receipt agent").await;
         let access = client.access.clone();
         let user = &client.user;
         let node_did = client.node_did().to_owned();
         let binding = agent;
-        let create = gents::request::lifecycle::build_signed_client_request(
+        let create = gents_session::request::lifecycle::build_signed_client_request(
             &access,
-            gents::RequestSpec::new(
+            gents_session::request::lifecycle::RequestSpec::new(
                 gents_protocol::request_admission::RequestPurpose::Normal,
-                gents::RequestIdentity {
+                gents_session::request::lifecycle::RequestIdentity {
                     request_id: "stable-request-id".into(),
                     node_did: node_did.clone(),
                     requester_did: Some(user.did().into()),
                     agent_did: binding.agent_did,
                     session_id: "session".into(),
                     content: "hello".into(),
-                    execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
+                    execution_origin:
+                        gents_session::request::lifecycle::ExecutionOrigin::Interactive,
                     created_at: "2026-09-01T00:00:00Z".into(),
                 },
                 gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
             ),
-            gents::RequestSigner::Identity(user),
+            gents_session::request::lifecycle::RequestSigner::Identity(user),
         )
         .await
         .unwrap();
@@ -1277,8 +1298,10 @@ mod tests {
             "admission_kind":"client", "admission_signer_did":create.admission.signer_did,
             "admission_signature":bs58::encode(&create.admission.signature).into_string()
         });
-        gents::verify_request_receipt_signature(&serde_json::from_value(receipt.clone()).unwrap())
-            .unwrap();
+        gents_store::identity::request_receipt::verify_request_receipt_signature(
+            &serde_json::from_value(receipt.clone()).unwrap(),
+        )
+        .unwrap();
         drop(access);
         (client, PreparedAgentRequest { create }, receipt)
     }
@@ -1329,7 +1352,7 @@ mod tests {
             .access
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{ _docID }} }}"#,
-                gents::store::graphql::escape_graphql_string(request_id)
+                gents_store::graphql::escape_graphql_string(request_id)
             ))
             .await
             .unwrap();
@@ -1408,7 +1431,7 @@ mod tests {
             .insert(prepared.create.request_id.clone());
         *state.receipt.lock().unwrap() = receipt;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = gents::store::config_client::GraphqlEndpoint::anonymous(format!(
+        let endpoint = gents_store::config_client::GraphqlEndpoint::anonymous(format!(
             "http://{}/",
             listener.local_addr().unwrap()
         ));
@@ -1436,9 +1459,9 @@ mod tests {
     async fn terminal_wait_follows_only_exact_same_scope_successor_output_owner(
     ) -> anyhow::Result<()> {
         for (cross_scope, reason) in [
-            (false, gents::request::lifecycle::FOLDED_REASON),
-            (true, gents::request::lifecycle::FOLDED_REASON),
-            (false, gents::request::lifecycle::REPLACED_REASON),
+            (false, gents_session::request::lifecycle::FOLDED_REASON),
+            (true, gents_session::request::lifecycle::FOLDED_REASON),
+            (false, gents_session::request::lifecycle::REPLACED_REASON),
         ] {
             let queries = Arc::new(Mutex::new(Vec::<String>::new()));
             let target_polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -1537,7 +1560,7 @@ mod tests {
         assert!(successor_output_target(&row).is_err());
         row.superseded_by_request_doc_id = Some("input".into());
         assert!(successor_output_target(&row).is_err());
-        row.failure_reason = Some(gents::request::lifecycle::REPLACED_REASON.into());
+        row.failure_reason = Some(gents_session::request::lifecycle::REPLACED_REASON.into());
         row.superseded_by_request_doc_id = Some("replacement".into());
         assert_eq!(
             successor_output_target(&row).unwrap(),

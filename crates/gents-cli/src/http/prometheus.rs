@@ -1,4 +1,4 @@
-use gents::store::config_client::GraphqlEndpoint;
+use gents_store::config_client::GraphqlEndpoint;
 use rapidhash::RapidHashMap;
 use std::collections::BTreeMap;
 
@@ -17,7 +17,7 @@ use crate::http::liveness::{
     LivenessActivityRow, LivenessRequestRow, LivenessToolCallRow, RuntimeLivenessSnapshot,
 };
 use crate::post_graphql;
-use gents::store::graphql::escape_graphql_string;
+use gents_store::graphql::escape_graphql_string;
 
 mod p2p_sync;
 mod process;
@@ -171,7 +171,7 @@ pub(crate) struct P2pMetricsSnapshot {
     pub(crate) connected_peers: usize,
     pub(crate) replicators: usize,
     pub(crate) admission: Option<crate::shared::P2pAdmissionState>,
-    pub(crate) sync_status: Option<gents::P2pSyncStatusSnapshot>,
+    pub(crate) sync_status: Option<gents_p2p::p2p::observability::P2pSyncStatusSnapshot>,
     pub(crate) stale: bool,
     pub(crate) peer_id: Option<String>,
     pub(crate) transport: Option<String>,
@@ -180,19 +180,23 @@ pub(crate) struct P2pMetricsSnapshot {
 pub(crate) async fn render_prometheus_metrics(
     graphql: &GraphqlEndpoint,
     local_node_did: &str,
-    measured_backend_health: &RapidHashMap<String, gents::BackendHealthSnapshot>,
+    measured_backend_health: &RapidHashMap<
+        String,
+        gents_inference::backends::health::BackendHealthSnapshot,
+    >,
     p2p: Option<&P2pMetricsSnapshot>,
     process: Option<&ProcessMetricsSnapshot>,
 ) -> Result<String> {
     let data = load_metrics_query_data(graphql, local_node_did).await?;
     let data = with_local_native_executors(data);
     let inference_metrics = load_inference_metrics_query_data(graphql).await?;
-    let background_completion = gents::load_background_completion_diagnostics(
-        &gents::store::config_client::ConfigAccess::Graphql(graphql.clone()),
-        local_node_did,
-    )
-    .await
-    .ok();
+    let background_completion =
+        gents_toolcalls::background::diagnostics::load_background_completion_diagnostics(
+            &gents_store::config_client::ConfigAccess::Graphql(graphql.clone()),
+            local_node_did,
+        )
+        .await
+        .ok();
 
     let mut lines = Vec::new();
     push_metric_prelude(
@@ -444,7 +448,7 @@ pub(crate) async fn render_prometheus_metrics(
     render_inference_metrics(&mut lines, &inference_metrics);
     render_command_policy_metrics(
         &mut lines,
-        gents::tools::native::command_observability::snapshot(),
+        gents_tools::native::command_observability::snapshot(),
     );
     render_background_completion_metrics(
         &mut lines,
@@ -460,7 +464,7 @@ pub(crate) async fn render_prometheus_metrics(
 
 fn render_command_policy_metrics(
     lines: &mut Vec<String>,
-    snapshot: gents::tools::native::command_observability::CommandPolicyMetrics,
+    snapshot: gents_tools::native::command_observability::CommandPolicyMetrics,
 ) {
     for (name, help, value) in [
         (
@@ -521,7 +525,7 @@ fn push_node_readiness_metrics_at(
 fn render_background_completion_metrics(
     lines: &mut Vec<String>,
     node_did: &str,
-    diagnostics: Option<&gents::BackgroundCompletionDiagnostics>,
+    diagnostics: Option<&gents_toolcalls::background::diagnostics::BackgroundCompletionDiagnostics>,
 ) {
     let labels = [("node_did", node_did.to_string())];
     push_metric_prelude(
@@ -720,7 +724,10 @@ fn render_p2p_metrics(lines: &mut Vec<String>, p2p: Option<&P2pMetricsSnapshot>)
     }
 }
 
-fn render_p2p_sync_metrics(lines: &mut Vec<String>, status: Option<&gents::P2pSyncStatusSnapshot>) {
+fn render_p2p_sync_metrics(
+    lines: &mut Vec<String>,
+    status: Option<&gents_p2p::p2p::observability::P2pSyncStatusSnapshot>,
+) {
     push_metric_prelude(
         lines,
         "gents_p2p_sync_status_available",
@@ -1534,14 +1541,17 @@ fn liveness_activity_query(requests: &[(&str, &str)]) -> String {
 }
 
 pub(crate) fn with_local_native_executors(mut data: MetricsQueryData) -> MetricsQueryData {
-    data.liveness = with_active_native_executors(data.liveness, gents::active_native_executors());
+    data.liveness = with_active_native_executors(
+        data.liveness,
+        gents_session::exec::status::active_native_executors(),
+    );
     data
 }
 
 pub(crate) fn push_backend_metrics(
     lines: &mut Vec<String>,
     backends: &[MetricsBackendRow],
-    measured: &RapidHashMap<String, gents::BackendHealthSnapshot>,
+    measured: &RapidHashMap<String, gents_inference::backends::health::BackendHealthSnapshot>,
 ) {
     for backend in backends {
         let observation = measured
@@ -1554,7 +1564,7 @@ pub(crate) fn push_backend_metrics(
 fn push_backend_metric(
     lines: &mut Vec<String>,
     backend: &MetricsBackendRow,
-    measured: Option<(gents::BackendHealthState, i64)>,
+    measured: Option<(gents_inference::backends::health::BackendHealthState, i64)>,
 ) {
     push_metric_sample(
         lines,
@@ -1568,7 +1578,7 @@ fn push_backend_metric(
         &[("backend_id", backend.backend_id.clone())],
         backend
             .max_concurrent
-            .unwrap_or(gents::documents::inference_defaults::DEFAULT_MAX_CONCURRENT),
+            .unwrap_or(gents_documents::inference_defaults::DEFAULT_MAX_CONCURRENT),
     );
     push_metric_sample(
         lines,
@@ -1576,7 +1586,7 @@ fn push_backend_metric(
         &[("backend_id", backend.backend_id.clone())],
         backend
             .max_queue_depth
-            .unwrap_or(gents::documents::inference_defaults::DEFAULT_MAX_QUEUE_DEPTH),
+            .unwrap_or(gents_documents::inference_defaults::DEFAULT_MAX_QUEUE_DEPTH),
     );
     let status = measured
         .map(|(state, _)| state.as_str().to_string())
@@ -1666,7 +1676,7 @@ mod tests {
         let mut lines = Vec::new();
         render_command_policy_metrics(
             &mut lines,
-            gents::tools::native::command_observability::CommandPolicyMetrics {
+            gents_tools::native::command_observability::CommandPolicyMetrics {
                 policy_rejections: 17,
                 credential_inspection_failures: 5,
             },
@@ -1682,7 +1692,7 @@ mod tests {
 
     #[test]
     fn backend_capacity_metrics_resolve_nullable_config_through_backend_defaults() {
-        use gents::documents::inference_defaults::{
+        use gents_documents::inference_defaults::{
             DEFAULT_MAX_CONCURRENT, DEFAULT_MAX_QUEUE_DEPTH,
         };
 
@@ -1771,7 +1781,7 @@ mod tests {
         });
 
         let data = load_metrics_query_data(
-            &gents::store::config_client::GraphqlEndpoint::anonymous(format!(
+            &gents_store::config_client::GraphqlEndpoint::anonymous(format!(
                 "http://{addr}/api/v0/graphql"
             )),
             "did:test:local",
@@ -1898,9 +1908,9 @@ mod tests {
             }
         }
         fn measured_entry(
-            state: gents::BackendHealthState,
+            state: gents_inference::backends::health::BackendHealthState,
             last_probe_at: &str,
-        ) -> (gents::BackendHealthState, i64) {
+        ) -> (gents_inference::backends::health::BackendHealthState, i64) {
             (
                 state,
                 chrono::DateTime::parse_from_rfc3339(last_probe_at)
@@ -1919,15 +1929,24 @@ mod tests {
         let measured = RapidHashMap::from_iter([
             (
                 "sparks-cluster".to_string(),
-                measured_entry(gents::BackendHealthState::Unhealthy, "2026-07-07T12:00:00Z"),
+                measured_entry(
+                    gents_inference::backends::health::BackendHealthState::Unhealthy,
+                    "2026-07-07T12:00:00Z",
+                ),
             ),
             (
                 "workstation-1".to_string(),
-                measured_entry(gents::BackendHealthState::Healthy, "2026-07-07T12:00:00Z"),
+                measured_entry(
+                    gents_inference::backends::health::BackendHealthState::Healthy,
+                    "2026-07-07T12:00:00Z",
+                ),
             ),
             (
                 "spark-2".to_string(),
-                measured_entry(gents::BackendHealthState::Degraded, "2026-07-07T12:00:00Z"),
+                measured_entry(
+                    gents_inference::backends::health::BackendHealthState::Degraded,
+                    "2026-07-07T12:00:00Z",
+                ),
             ),
         ]);
 
@@ -1979,7 +1998,7 @@ mod tests {
         render_background_completion_metrics(
             &mut lines,
             "did:agent:amy",
-            Some(&gents::BackgroundCompletionDiagnostics {
+            Some(&gents_toolcalls::background::diagnostics::BackgroundCompletionDiagnostics {
                 scanned_wakes: 1,
                 scanned_notifications: 10,
                 scan_truncated: false,
@@ -1987,7 +2006,7 @@ mod tests {
                 acknowledged_notifications: 7,
                 stranded_notifications: 2,
                 oldest_pending_age_seconds: Some(41),
-                epochs: vec![gents::BackgroundCompletionEpochDiagnostic {
+                epochs: vec![gents_toolcalls::background::diagnostics::BackgroundCompletionEpochDiagnostic {
                     root_request_id: "wake-1".to_string(),
                     active_request_id: "wake-1".to_string(),
                     session_id: "session-1".to_string(),
@@ -2039,8 +2058,8 @@ mod tests {
                     rate_limit_burst: 500,
                     rate_limit_rate: 50.0,
                 }),
-                sync_status: Some(gents::P2pSyncStatusSnapshot {
-                    push_backlog: gents::P2pPushBacklogSnapshot {
+                sync_status: Some(gents_p2p::p2p::observability::P2pSyncStatusSnapshot {
+                    push_backlog: gents_p2p::p2p::observability::P2pPushBacklogSnapshot {
                         queue_item_capacity: 128,
                         queue_byte_capacity: 1_048_576,
                         per_peer_active_cap: 2,
@@ -2056,7 +2075,7 @@ mod tests {
                         failed_total: 4,
                         stale_head_retirements_total: 17,
                         peer_capacity_parks_total: 13,
-                        per_peer: vec![gents::P2pPeerBacklogSnapshot {
+                        per_peer: vec![gents_p2p::p2p::observability::P2pPeerBacklogSnapshot {
                             peer_id: "peer-a".to_string(),
                             queued_items: 4,
                             queued_bytes: 2_048,
@@ -2223,9 +2242,9 @@ mod tests {
         }
     }
 
-    fn rich_sync_status() -> gents::P2pSyncStatusSnapshot {
-        gents::P2pSyncStatusSnapshot {
-            request_dispatch: gents::P2pRequestDispatchSnapshot {
+    fn rich_sync_status() -> gents_p2p::p2p::observability::P2pSyncStatusSnapshot {
+        gents_p2p::p2p::observability::P2pSyncStatusSnapshot {
+            request_dispatch: gents_p2p::p2p::observability::P2pRequestDispatchSnapshot {
                 request_capacity: 32,
                 active_requests: 5,
                 active_requests_high_water: 30,
@@ -2243,7 +2262,7 @@ mod tests {
                 recovery_saturated_total: 1_611_171,
                 rejection_dropped_total: 12,
             },
-            push_backlog: gents::P2pPushBacklogSnapshot {
+            push_backlog: gents_p2p::p2p::observability::P2pPushBacklogSnapshot {
                 enqueued_total: 512_729,
                 failed_total: 82_089,
                 head_hints_enqueued_document: 10,
@@ -2258,7 +2277,7 @@ mod tests {
                 head_hints_failed_local: 18,
                 ..Default::default()
             },
-            push_retry_markers: gents::P2pPushRetryMarkerSnapshot {
+            push_retry_markers: gents_p2p::p2p::observability::P2pPushRetryMarkerSnapshot {
                 document_markers: 3,
                 collection_markers: 4,
                 scheduled_peers: 2,
@@ -2266,7 +2285,7 @@ mod tests {
             },
             pending_dag_high_water: 900,
             persisted_pending_dag_high_water: 950,
-            inbound_budget: vec![gents::P2pInboundClassSnapshot {
+            inbound_budget: vec![gents_p2p::p2p::observability::P2pInboundClassSnapshot {
                 class: "sync".to_string(),
                 capacity_bytes: 1_048_576,
                 held_bytes: 4_096,
@@ -2275,7 +2294,7 @@ mod tests {
                 oversized_resets: 6,
             }],
             peer_fetches: vec![
-                gents::P2pPeerFetchSnapshot {
+                gents_p2p::p2p::observability::P2pPeerFetchSnapshot {
                     peer: "1dd587be-hub-peer".to_string(),
                     fetches: 82_928,
                     bytes: 13_600_000_000,
@@ -2293,7 +2312,7 @@ mod tests {
                     expected_useful_micros: Some(2_882_352),
                     ewma_age_millis: Some(1_500),
                 },
-                gents::P2pPeerFetchSnapshot {
+                gents_p2p::p2p::observability::P2pPeerFetchSnapshot {
                     peer: "abcdef0123-spoke".to_string(),
                     fetches: 10,
                     success_ppm: 1_000_000,
@@ -2323,20 +2342,22 @@ mod tests {
             pending_dag_attempt_ewma_max_ms: Some(35_000),
             pending_dag_no_progress_median_ppm: Some(500_007),
             pending_dag_tie_reorders: 12,
-            pending_dag_peer_occupancy: vec![gents::P2pPendingPeerOccupancySnapshot {
-                peer: "1dd587be-hub-peer".to_string(),
-                held: 3,
-                occupancy_q8: 640,
-            }],
+            pending_dag_peer_occupancy: vec![
+                gents_p2p::p2p::observability::P2pPendingPeerOccupancySnapshot {
+                    peer: "1dd587be-hub-peer".to_string(),
+                    held: 3,
+                    occupancy_q8: 640,
+                },
+            ],
             peers: vec![
-                gents::P2pPeerSummarySnapshot {
+                gents_p2p::p2p::observability::P2pPeerSummarySnapshot {
                     peer_id: "1dd587be-hub-peer".to_string(),
                     connected: true,
                     last_seen_at: "2026-11-02T15:14:50Z".to_string(),
                     last_block_received_at: Some("2026-11-02T15:14:00Z".to_string()),
                     last_head_acked_at: Some("2026-11-02T15:10:00Z".to_string()),
                 },
-                gents::P2pPeerSummarySnapshot {
+                gents_p2p::p2p::observability::P2pPeerSummarySnapshot {
                     peer_id: "abcdef0123-spoke".to_string(),
                     connected: false,
                     last_seen_at: "not a timestamp".to_string(),
@@ -2461,12 +2482,14 @@ mod tests {
 
     #[test]
     fn per_peer_series_are_capped_and_the_overflow_is_counted() {
-        let status = gents::P2pSyncStatusSnapshot {
+        let status = gents_p2p::p2p::observability::P2pSyncStatusSnapshot {
             peer_fetches: (0..300)
-                .map(|index| gents::P2pPeerFetchSnapshot {
-                    peer: format!("peer-{index:04}"),
-                    ..Default::default()
-                })
+                .map(
+                    |index| gents_p2p::p2p::observability::P2pPeerFetchSnapshot {
+                        peer: format!("peer-{index:04}"),
+                        ..Default::default()
+                    },
+                )
                 .collect(),
             ..Default::default()
         };

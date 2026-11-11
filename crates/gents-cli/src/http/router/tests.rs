@@ -23,7 +23,7 @@ fn desktop_endpoint(
 ) -> GraphqlEndpoint {
     GraphqlEndpoint::as_principal(url, identity.did())
         .with_client_signing_capability(
-            gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+            gents_store::config_client::ClientSigningCapability::from_ed25519_key(
                 identity.private_key_bytes(),
             )
             .unwrap(),
@@ -34,10 +34,10 @@ fn desktop_endpoint(
 fn state() -> RuntimeHttpState {
     let (activation_runtime, activation_observation) = empty_activation_state();
     RuntimeHttpState {
-        graphql: gents::store::config_client::GraphqlEndpoint::anonymous(
+        graphql: gents_store::config_client::GraphqlEndpoint::anonymous(
             "http://127.0.0.1:9181/api/v0/graphql",
         ),
-        p2p_graphql: gents::store::config_client::GraphqlEndpoint::anonymous(
+        p2p_graphql: gents_store::config_client::GraphqlEndpoint::anonymous(
             "http://127.0.0.1:9181/api/v0/graphql",
         ),
         node_name: "amy".to_string(),
@@ -66,7 +66,7 @@ fn state() -> RuntimeHttpState {
 async fn inference_activity_requires_authenticated_identity() {
     let app = Router::new()
         .route(
-            gents::inference::inference_observation::INFERENCE_ACTIVITY_PATH,
+            gents_inference::inference_observation::INFERENCE_ACTIVITY_PATH,
             post(crate::http::inference_activity::read),
         )
         .with_state(state());
@@ -76,7 +76,7 @@ async fn inference_activity_requires_authenticated_identity() {
         axum::serve(listener, app).await.unwrap();
     }));
     let response = reqwest::Client::new()
-        .post(format!("http://{address}{}", gents::inference::inference_observation::INFERENCE_ACTIVITY_PATH))
+        .post(format!("http://{address}{}", gents_inference::inference_observation::INFERENCE_ACTIVITY_PATH))
         .json(&json!({"node":"node", "session":"session", "request":"request", "generation":"generation"}))
         .send()
         .await
@@ -142,7 +142,7 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
         .node(node.clone())
         .backend_admission(home.home.backend_admission())
         .identity(identity.clone())
-        .tool_ceiling(gents::ToolCeiling::meta_only())
+        .tool_ceiling(gents_tools::surface::ToolCeiling::meta_only())
         .agent("fixture")
         .identity_binding(binding.clone())
         .backend_id(format!("{}:backend", binding.agent_did))
@@ -198,7 +198,7 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
     let starting: RuntimeControlReceipt = response.json().await.unwrap();
-    gents::store::service::verify_control_receipt(&observe, &starting).unwrap();
+    gents_store::service::verify_control_receipt(&observe, &starting).unwrap();
     assert_eq!(starting.disposition, RuntimeControlDisposition::Starting);
     lifecycle.mark_ready();
     let observe = command(RuntimeOperation::Observe);
@@ -211,17 +211,17 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
         .json()
         .await
         .unwrap();
-    gents::store::service::verify_control_receipt(&observe, &receipt).unwrap();
+    gents_store::service::verify_control_receipt(&observe, &receipt).unwrap();
     assert_eq!(receipt.disposition, RuntimeControlDisposition::Observed);
     let mut modified = receipt.clone();
     modified.capabilities.insert("request_input".into(), 999);
-    assert!(gents::store::service::verify_control_receipt(&observe, &modified).is_err());
+    assert!(gents_store::service::verify_control_receipt(&observe, &modified).is_err());
     let other_challenge = command(RuntimeOperation::Observe);
-    assert!(gents::store::service::verify_control_receipt(&other_challenge, &receipt).is_err());
+    assert!(gents_store::service::verify_control_receipt(&other_challenge, &receipt).is_err());
     let retire = command(RuntimeOperation::Retire {
         expected_build: receipt.build.clone(),
     });
-    assert!(gents::store::service::verify_control_receipt(&retire, &receipt).is_err());
+    assert!(gents_store::service::verify_control_receipt(&retire, &receipt).is_err());
     let response = client.post(&url).json(&retire).send().await.unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     let response = client
@@ -264,7 +264,7 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
         .json()
         .await
         .unwrap();
-    gents::store::service::verify_control_receipt(&changed, &refused).unwrap();
+    gents_store::service::verify_control_receipt(&changed, &refused).unwrap();
     assert_eq!(refused.disposition, RuntimeControlDisposition::BuildChanged);
     assert!(!admission.is_retiring().unwrap());
 
@@ -278,7 +278,7 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let accepted: RuntimeControlReceipt = response.json().await.unwrap();
-    gents::store::service::verify_control_receipt(&retire, &accepted).unwrap();
+    gents_store::service::verify_control_receipt(&retire, &accepted).unwrap();
     assert_eq!(accepted.disposition, RuntimeControlDisposition::Retiring);
     assert_eq!(
         accepted.lifecycle,
@@ -295,7 +295,7 @@ async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_
         .json()
         .await
         .unwrap();
-    gents::store::service::verify_control_receipt(&retire, &repeated).unwrap();
+    gents_store::service::verify_control_receipt(&retire, &repeated).unwrap();
     assert_eq!(repeated.disposition, RuntimeControlDisposition::Stopping);
     drop(server);
 }
@@ -323,10 +323,13 @@ async fn operator_inventory_authenticates_and_reads_native_metadata() {
     let owner = identity.did();
     // The foreign client may read documents on this Node, but no session of
     // the User's is visible to it.
-    let admin = gents::ConfigAccess::local_as(node.clone(), identity::Did::new(owner).unwrap());
+    let admin = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(owner).unwrap(),
+    );
     for permission in [
-        gents::store::config_client::NodePermission::DocumentRead,
-        gents::store::config_client::NodePermission::DocumentUpdate,
+        gents_store::config_client::NodePermission::DocumentRead,
+        gents_store::config_client::NodePermission::DocumentUpdate,
     ] {
         admin
             .grant_node_permission(&identity::Did::new(foreign.did()).unwrap(), permission)
@@ -346,7 +349,7 @@ async fn operator_inventory_authenticates_and_reads_native_metadata() {
         .node(node.clone())
         .backend_admission(home.home.backend_admission())
         .identity(identity.clone())
-        .tool_ceiling(gents::ToolCeiling::meta_only())
+        .tool_ceiling(gents_tools::surface::ToolCeiling::meta_only())
         .agent("fixture")
         .identity_binding(binding.clone())
         .backend_id(format!("{}:backend", binding.agent_did))
@@ -584,15 +587,16 @@ fn readiness(default_agent_did: &str) -> NodeReadinessRow {
 
 #[test]
 fn p2p_metrics_snapshot_decodes_pinned_live_sync_status() {
-    let mut sync_status = gents::P2pSyncStatusSnapshot::default();
+    let mut sync_status = gents_p2p::p2p::observability::P2pSyncStatusSnapshot::default();
     sync_status.push_backlog.queued_items = 7;
     sync_status.push_backlog.stale_head_retirements_total = 17;
     sync_status.push_backlog.peer_capacity_parks_total = 13;
-    sync_status.push_backlog.per_peer = vec![gents::P2pPeerBacklogSnapshot {
-        peer_id: "peer-a".to_string(),
-        consecutive_failures: 3,
-        ..Default::default()
-    }];
+    sync_status.push_backlog.per_peer =
+        vec![gents_p2p::p2p::observability::P2pPeerBacklogSnapshot {
+            peer_id: "peer-a".to_string(),
+            consecutive_failures: 3,
+            ..Default::default()
+        }];
     sync_status.push_updates_coalesced_total = 43;
     sync_status.persisted_pending_dags = 17;
     sync_status.missing_link_retries = 23;
@@ -638,8 +642,8 @@ async fn status_lifecycle_is_starting_until_serve_marks_it_ready() {
             .expect("status body");
         let body = serde_json::from_slice::<Value>(&body).expect("status json");
         assert_eq!(
-            body[gents::plugin::approval::workspace::STATUS_SUPPORT_FIELD],
-            json!(gents::plugin::approval::workspace::support()),
+            body[gents_tools::plugin::approval::workspace::STATUS_SUPPORT_FIELD],
+            json!(gents_tools::plugin::approval::workspace::support()),
         );
         body[gents_protocol::serve_lifecycle::STATUS_LIFECYCLE_FIELD].clone()
     }
@@ -778,7 +782,7 @@ async fn disabled_p2p_metrics_skip_live_status_fetch() {
 async fn usage_route(
     state: &RuntimeHttpState,
     command: crate::commands::accounts::UsageReadCommand,
-    bearer: Option<&dyn gents::NodeIdentity>,
+    bearer: Option<&dyn gents_store::identity::NodeIdentity>,
 ) -> (StatusCode, Value) {
     let app = Router::new()
         .route("/accounts/usage/read", post(account_usage_read_handler))
@@ -808,7 +812,7 @@ async fn usage_route(
 
 fn usage_command(signer_did: &str) -> crate::commands::accounts::UsageReadCommand {
     crate::commands::accounts::UsageReadCommand {
-        trigger: gents::inference::usage_observation::UsageTrigger::Open,
+        trigger: gents_inference::usage_observation::UsageTrigger::Open,
         provider: None,
         signer_did: signer_did.to_string(),
         issued_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -827,8 +831,11 @@ async fn account_usage_route_is_unavailable_before_activation() {
 #[tokio::test]
 async fn account_usage_route_refuses_unsigned_and_foreign_signers() {
     let temp = tempfile::tempdir().unwrap();
-    let key = |name: &str| -> Arc<dyn gents::NodeIdentity> {
-        Arc::new(gents::KeyIdentity::load_or_create(temp.path().join(name), None).unwrap())
+    let key = |name: &str| -> Arc<dyn gents_store::identity::NodeIdentity> {
+        Arc::new(
+            gents_store::identity::KeyIdentity::load_or_create(temp.path().join(name), None)
+                .unwrap(),
+        )
     };
     // The owner is the enrolled User that published the Node; the runtime
     // authenticates its signed reads against the Node it can see.
@@ -842,12 +849,12 @@ async fn account_usage_route_refuses_unsigned_and_foreign_signers() {
     *state.enrollment_decisions.write().await = Some(
         crate::http::enrollment::EnrollmentDecisionService::new(identity.clone(), node),
     );
-    let signed = |identity: &Arc<dyn gents::NodeIdentity>| {
+    let signed = |identity: &Arc<dyn gents_store::identity::NodeIdentity>| {
         let identity = identity.clone();
         async move {
             crate::commands::accounts::UsageReadCommand::signed(
                 identity.as_ref(),
-                gents::inference::usage_observation::UsageTrigger::Open,
+                gents_inference::usage_observation::UsageTrigger::Open,
                 None,
             )
             .await

@@ -6,14 +6,14 @@ use chrono::Utc;
 use tokio::sync::{watch, Mutex};
 use tokio::time::MissedTickBehavior;
 
-use crate::goal::GoalReconcileSettled;
 use crate::runtime::agent::ProcessLifecycleState;
 use crate::runtime::node_readiness_publisher::{
     NodeReadinessPublisherHandle, NodeReadinessPublisherOwner,
 };
-use crate::store::graphql::escape_graphql_string;
-use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
+use gents_automation::goal::GoalReconcileSettled;
+use gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use gents_protocol::node_readiness::{ReconcilePhase, ReconcileResult};
+use gents_store::graphql::escape_graphql_string;
 
 /// Reconcile-phase transitions are only observable through this event stream:
 /// `NodeRuntime.reconcile_phase` holds only the phase the runtime is in now.
@@ -71,7 +71,7 @@ impl GoalReconcileSettled for RuntimeStatusHandle {
     async fn goal_reconcile_settled(&self) -> bool {
         let row = self.state.lock().await;
         !row.last_reconcile_result.is_empty()
-            && crate::goal::goal_reconcile_settled(
+            && gents_automation::goal::goal_reconcile_settled(
                 Some(&row.reconcile_phase),
                 Some(&row.last_reconcile_result),
             )
@@ -370,7 +370,7 @@ async fn upsert_runtime_status(
         }}"#,
     );
     let runtime_did = row.node_did.as_str();
-    let access = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor.clone());
+    let access = gents_store::config_client::ConfigAccess::local_as(node.clone(), actor.clone());
     access
         .transact_write("upsert_runtime_status", |txn| {
             let mutation = &mutation;
@@ -406,7 +406,7 @@ async fn upsert_runtime_status(
                 let doc =
                     gents_protocol::graphql::extract_mutation_doc_id(&response, "NodeRuntime")?;
                 if rows.is_empty() {
-                    crate::documents::publish_node_child_in_txn(
+                    gents_documents::publish_node_child_in_txn(
                         txn,
                         "NodeRuntime",
                         &doc,

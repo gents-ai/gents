@@ -1,4 +1,4 @@
-use gents::store::config_client::GraphqlEndpoint;
+use gents_store::config_client::GraphqlEndpoint;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -45,7 +45,7 @@ pub(crate) struct RuntimeHttpState {
     pub(crate) home: Option<String>,
     pub(crate) started_at: String,
     pub(crate) started_instant: Instant,
-    pub(crate) backend_health: Option<gents::BackendHealthMap>,
+    pub(crate) backend_health: Option<gents_inference::backends::health::BackendHealthMap>,
     pub(crate) p2p_admission: Option<P2pAdmissionState>,
     pub(crate) p2p_metrics_cache: Arc<Mutex<Option<P2pMetricsSnapshot>>>,
     pub(crate) store_size: Arc<StoreSizeCache>,
@@ -125,7 +125,7 @@ pub(crate) fn runtime_contract_router(
     home: Option<String>,
     store_dir: Option<std::path::PathBuf>,
     mcp: Option<crate::http::mcp_server::McpServiceOptions>,
-    backend_health: Option<gents::BackendHealthMap>,
+    backend_health: Option<gents_inference::backends::health::BackendHealthMap>,
     p2p_admission: Option<P2pAdmissionState>,
     enrollment_offer_issuer: EnrollmentOfferIssuerHandle,
     enrollment_decisions: EnrollmentDecisionServiceHandle,
@@ -200,7 +200,7 @@ pub(crate) fn runtime_contract_router(
             post(crate::http::runtime_control::runtime_control_handler),
         )
         .route(
-            gents::inference::inference_observation::INFERENCE_ACTIVITY_PATH,
+            gents_inference::inference_observation::INFERENCE_ACTIVITY_PATH,
             post(crate::http::inference_activity::read),
         )
         .route(

@@ -1,13 +1,14 @@
 use std::io::{IsTerminal, Write};
 
 use anyhow::{Context, Result};
-use gents::documents::InferenceProfile;
-use gents::inference::auth::credential::{backend_account, AccountSummary};
-use gents::inference::backends::provider::BackendProviderOauthExt;
-use gents::inference::usage_observation::{
+use gents_documents::InferenceBackend;
+use gents_documents::InferenceProfile;
+use gents_inference::auth::credential::{backend_account, AccountSummary};
+use gents_inference::backends::provider::BackendProviderKind;
+use gents_inference::backends::provider::BackendProviderOauthExt;
+use gents_inference::usage_observation::{
     usage_view, AccountUsageRead, UsageRead, UsageTrigger, UsageView,
 };
-use gents::{BackendProviderKind, InferenceBackend};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -47,7 +48,7 @@ const USAGE_READ_SIGNATURE_DOMAIN: &str = "gents-account-usage-read-v1";
 
 impl UsageReadCommand {
     pub(crate) async fn signed(
-        identity: &dyn gents::NodeIdentity,
+        identity: &dyn gents_store::identity::NodeIdentity,
         trigger: UsageTrigger,
         provider: Option<&str>,
     ) -> Result<Self> {
@@ -195,7 +196,7 @@ pub(crate) async fn dispatch(command: AccountsCommand) -> Result<()> {
 
 async fn target_access(
     target: &AccountsTargetArgs,
-) -> Result<(gents::store::config_client::ConfigAccess, String)> {
+) -> Result<(gents_store::config_client::ConfigAccess, String)> {
     let (access, home_dir) =
         resolve_config_access(target.home.as_deref(), target.graphql.as_deref()).await?;
     let did = resolve_node_did(Some(&home_dir), target.node_did.as_deref())?;
@@ -209,13 +210,13 @@ pub(crate) struct Snapshot {
 }
 
 pub(crate) async fn snapshot(access: &ConfigAccess, node_did: &str) -> Result<Snapshot> {
-    let accounts = gents::inference::auth::credential::list_accounts(access, node_did).await?;
+    let accounts = gents_inference::auth::credential::list_accounts(access, node_did).await?;
     let (backends, profiles) = access
         .transact_write("accounts.config", |txn| {
             Box::pin(async move {
                 Ok::<_, anyhow::Error>((
-                    gents::documents::list_inference_backends_in_txn(txn, node_did).await?,
-                    gents::documents::list_inference_profiles_in_txn(txn, node_did).await?,
+                    gents_documents::list_inference_backends_in_txn(txn, node_did).await?,
+                    gents_documents::list_inference_profiles_in_txn(txn, node_did).await?,
                 ))
             })
         })
@@ -338,7 +339,7 @@ pub(crate) async fn account_rows(
     for backend in &snapshot.backends {
         let status = match backend_account(backend, &snapshot.accounts) {
             Some(Some(_)) => continue,
-            Some(None) => gents::inference::auth::credential::AccountState::Missing.as_str(),
+            Some(None) => gents_inference::auth::credential::AccountState::Missing.as_str(),
             None if backend.enabled => "enabled",
             None => "disabled",
         };
@@ -368,8 +369,8 @@ pub(crate) async fn account_rows(
 /// An unresponsive runtime must not leave the interactive usage request pending
 /// indefinitely after the signed command has been sent.
 pub async fn request_usage_reads(
-    identity: &dyn gents::NodeIdentity,
-    graphql: &gents::store::config_client::GraphqlEndpoint,
+    identity: &dyn gents_store::identity::NodeIdentity,
+    graphql: &gents_store::config_client::GraphqlEndpoint,
     trigger: UsageTrigger,
     provider: Option<&str>,
 ) -> Result<UsageReads> {
@@ -378,7 +379,7 @@ pub async fn request_usage_reads(
     url.set_path("/accounts/usage/read");
     url.set_query(None);
     url.set_fragment(None);
-    let access = gents::store::config_client::ConfigAccess::Graphql(graphql.clone());
+    let access = gents_store::config_client::ConfigAccess::Graphql(graphql.clone());
     anyhow::ensure!(
         access.actor_did().as_deref() == Some(identity.did()),
         "usage request actor does not match its signer"
@@ -400,7 +401,7 @@ pub async fn request_usage_reads(
             reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
         ) {
             return Err(
-                gents::store::config_client::ConfigClientError::HttpOperationStatus {
+                gents_store::config_client::ConfigClientError::HttpOperationStatus {
                     operation: "runtime usage request",
                     status,
                 }
@@ -537,13 +538,9 @@ fn usage_cells(row: &AccountRow) -> Vec<[String; 5]> {
                 )
             });
             let source = match window.source {
-                gents::inference::usage_observation::account_usage::UsageSource::Header => {
-                    "headers"
-                }
-                gents::inference::usage_observation::account_usage::UsageSource::Endpoint => "read",
-                gents::inference::usage_observation::account_usage::UsageSource::Error => {
-                    "rejected"
-                }
+                gents_inference::usage_observation::account_usage::UsageSource::Header => "headers",
+                gents_inference::usage_observation::account_usage::UsageSource::Endpoint => "read",
+                gents_inference::usage_observation::account_usage::UsageSource::Error => "rejected",
             };
             let source = match (&reason, index) {
                 (Some(reason), 0) => format!("{source} {reason}"),
@@ -636,7 +633,7 @@ pub(crate) async fn label_account(
     label: &str,
 ) -> Result<Value> {
     let account = resolve_account(access, node_did, account, provider).await?;
-    gents::inference::auth::credential::set_account_label(
+    gents_inference::auth::credential::set_account_label(
         access,
         node_did,
         &account.credential_id,
@@ -646,7 +643,7 @@ pub(crate) async fn label_account(
     Ok(json!({
         "credential_id": account.credential_id,
         "provider": account.provider,
-        "label": gents::inference::auth::credential::validate_account_label(label)?,
+        "label": gents_inference::auth::credential::validate_account_label(label)?,
     }))
 }
 
@@ -680,7 +677,7 @@ pub(crate) async fn disable_account(
     warn_profiles(access, node_did, account, provider, warnings).await?;
     let snapshot = snapshot(access, node_did).await?;
     let account = snapshot.pick(account, provider)?;
-    gents::inference::auth::credential::set_account_enabled(
+    gents_inference::auth::credential::set_account_enabled(
         access,
         node_did,
         &account.credential_id,
@@ -713,16 +710,16 @@ pub async fn remove_account(
         .transact_write("accounts.remove", |txn| {
             let account = account.clone();
             Box::pin(async move {
-                gents::inference::auth::credential::remove_account_in_txn(
+                gents_inference::auth::credential::remove_account_in_txn(
                     txn,
                     node_did,
                     &account.credential_id,
                 )
                 .await?;
                 let profiles =
-                    gents::documents::list_inference_profiles_in_txn(txn, node_did).await?;
+                    gents_documents::list_inference_profiles_in_txn(txn, node_did).await?;
                 let (kept, deleted): (Vec<_>, Vec<_>) =
-                    gents::documents::list_inference_backends_in_txn(txn, node_did)
+                    gents_documents::list_inference_backends_in_txn(txn, node_did)
                         .await?
                         .into_iter()
                         .filter(|backend| {
@@ -739,7 +736,7 @@ pub async fn remove_account(
                         });
                 crate::config_import::apply_delete_collection(
                     txn,
-                    gents::Collection::InferenceBackend,
+                    gents_store::collection::Collection::InferenceBackend,
                     node_did,
                     &deleted,
                 )
@@ -765,12 +762,12 @@ pub(crate) async fn probe_each_account<F, Fut>(
     probe: F,
 ) -> Result<Vec<String>>
 where
-    F: Fn(gents::inference::auth::credential::OAuthCredential) -> Fut,
+    F: Fn(gents_inference::auth::credential::OAuthCredential) -> Fut,
     Fut: std::future::Future<Output = Result<String>>,
 {
     let mut blocks = Vec::new();
     let mut failed = Vec::new();
-    for account in gents::inference::auth::credential::list_accounts(access, node_did)
+    for account in gents_inference::auth::credential::list_accounts(access, node_did)
         .await?
         .into_iter()
         .filter(|account| account.provider == provider)
@@ -779,11 +776,11 @@ where
             blocks.push(format!("{}: disabled, not probed", account.label));
             continue;
         }
-        let probed = match gents::inference::auth::credential::resolve_oauth_credential(
+        let probed = match gents_inference::auth::credential::resolve_oauth_credential(
             access,
             node_did,
             provider,
-            gents::inference::auth::credential::AccountPick::Reference(
+            gents_inference::auth::credential::AccountPick::Reference(
                 account.account_ref.as_deref(),
             ),
         )

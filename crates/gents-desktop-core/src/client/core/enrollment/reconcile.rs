@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_p2p_adapter::TransportPeerId;
 use futures::{stream, StreamExt};
-use gents::runtime::agent::p2p_reconcile::enrollment_candidate::validate_authenticated_server_did;
+use gents_p2p::p2p_reconcile::enrollment_candidate::validate_authenticated_server_did;
 use p2p::iroh::parse_public_peer_addr;
 use tokio::time::timeout;
 
@@ -15,11 +15,11 @@ use super::super::sync_state::ClientSyncStateOwner;
 use super::super::{EnrollmentActivationError, EnrollmentActivationStage, P2P_OPERATION_TIMEOUT};
 use super::map_p2p_error;
 use crate::client::peer_directory::RemovalCause;
-use gents::runtime::agent::p2p_reconcile::enrollment_member_authority::{
+use gents_p2p::p2p_reconcile::enrollment_member_authority::{
     load_status_enrollment_approvals, EnrollmentAuthorityOutcome,
 };
 
-use gents::runtime::agent::p2p_reconcile::enrollment_projection::ApprovedStatusEnrollment;
+use gents_p2p::p2p_reconcile::enrollment_projection::ApprovedStatusEnrollment;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::client::core) struct EnrollmentAuthorizationGeneration {
     pub request_digest: String,
@@ -195,8 +195,8 @@ pub(in crate::client::core) async fn reconcile_status_enrollment_approvals(
             .find(|record| record.peer_id == approval.server_peer);
         let applied = async {
             if !current.as_ref().is_some_and(|record| record.is_managed_runtime()) {
-                use gents::runtime::agent::p2p_reconcile::endpoint::{resolve_graphql_endpoint, EndpointError};
-                let access = gents::store::config_client::ConfigAccess::local_as(node.clone(), principal.did().parse()?);
+                use gents_p2p::p2p_reconcile::endpoint::{resolve_graphql_endpoint, EndpointError};
+                let access = gents_store::config_client::ConfigAccess::local_as(node.clone(), principal.did().parse()?);
                 match resolve_graphql_endpoint(&access, &approval.owner_node, principal.as_ref()).await {
                     Ok(endpoint) => {
                         if current.as_ref().and_then(|record| record.graphql.as_deref()) != Some(endpoint.url()) {

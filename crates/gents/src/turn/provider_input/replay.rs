@@ -32,24 +32,25 @@ pub(crate) fn owned_replay_input(
                     }
                 })?;
                 let access =
-                    crate::store::config_client::ConfigAccess::local_as(node.clone(), actor);
+                    gents_store::config_client::ConfigAccess::local_as(node.clone(), actor);
                 let started = std::time::Instant::now();
-                let boundary = crate::session::provider_context_reduction::capture_source_boundary(
-                    &access,
-                    &request.session_id,
-                    &request.node_did,
-                    request.requester_did.as_deref(),
-                    &request.doc_id,
-                    &request_commit_cid,
-                )
-                .await
-                .map_err(|error| ReplayEvidenceResolveError::Storage {
-                    source: error.into(),
-                })?;
+                let boundary =
+                    gents_session::session::provider_context_reduction::capture_source_boundary(
+                        &access,
+                        &request.session_id,
+                        &request.node_did,
+                        request.requester_did.as_deref(),
+                        &request.doc_id,
+                        &request_commit_cid,
+                    )
+                    .await
+                    .map_err(|error| ReplayEvidenceResolveError::Storage {
+                        source: error.into(),
+                    })?;
                 let boundary_elapsed_ms = started.elapsed().as_millis() as u64;
-                let resolved = crate::session::resolve_canonical_replay_tags_on(
+                let resolved = gents_session::session::resolve_canonical_replay_tags_on(
                     &access,
-                    crate::session::CanonicalReplayScope {
+                    gents_session::session::CanonicalReplayScope {
                         node_did: &request.node_did,
                         requester_did: request.requester_did.as_deref(),
                         session_id: &request.session_id,
@@ -93,7 +94,7 @@ pub(crate) fn owned_replay_input(
 }
 
 pub(crate) fn tag_canonical_history(
-    rows: &[crate::session::SequencedMessage],
+    rows: &[gents_session::session::SequencedMessage],
 ) -> Vec<TaggedMessage> {
     rows.iter()
         .map(|row| TaggedMessage {
@@ -134,7 +135,7 @@ mod tests {
         tag: ReplayTag,
         with_reasoning: bool,
         with_tool: bool,
-    ) -> crate::session::SequencedMessage {
+    ) -> gents_session::session::SequencedMessage {
         let mut content = vec![AssistantContent::Text(Text {
             text: "same visible text".to_string(),
         })];
@@ -153,7 +154,7 @@ mod tests {
                 },
             )));
         }
-        crate::session::SequencedMessage {
+        gents_session::session::SequencedMessage {
             provider_source: Some(tag),
             canonical_header_doc_id: Some(format!("header-{sequence}")),
             block_indices: (0..content.len()).collect(),

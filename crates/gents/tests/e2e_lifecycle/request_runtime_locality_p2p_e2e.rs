@@ -2,19 +2,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::Node as EmbeddedNode;
-use gents::request::lifecycle::{
-    build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
-    RequestSigner, RequestSpec,
-};
-use gents::runtime::agent::p2p_reconcile::{
+use gents_p2p::p2p_reconcile::{
     expand_p2p_collection_profile_ids, EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin,
 };
-use gents::store::config_client::{ConfigAccess, NodePermission};
-use gents::store::graphql::escape_graphql_string;
-use gents::{KeyIdentity, NodeIdentity};
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
+use gents_session::request::lifecycle::{
+    build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
+    RequestSigner, RequestSpec,
+};
+use gents_store::config_client::{ConfigAccess, NodePermission};
+use gents_store::graphql::escape_graphql_string;
+use gents_store::identity::{KeyIdentity, NodeIdentity};
 
 use crate::support::p2p_waits::wait_for_connected_peer;
 use crate::support::{test_p2p_db, TestDb};
@@ -60,7 +60,7 @@ impl DeliveryFixture {
         // The outsider speaks raw DID-authenticated GraphQL, outside the
         // client-signed owners, so the database's ACP is what refuses it.
         let outsider = ConfigAccess::Graphql(
-            gents::store::config_client::GraphqlEndpoint::as_principal(
+            gents_store::config_client::GraphqlEndpoint::as_principal(
                 owner.client_endpoint(),
                 outsider.did(),
             )
@@ -123,10 +123,16 @@ impl DeliveryFixture {
     async fn set_state(&self, doc_id: &str, state: &str) {
         // The Agent's watcher completes the client's delegated relationships
         // before the Agent writes the request it now owns.
-        let mut watcher =
-            gents::DefraWatcher::new(self.node.clone(), self.node_identity.did()).unwrap();
-        gents::Watcher::set_agent_identities(&mut watcher, vec![self.agent_identity.clone()])
-            .unwrap();
+        let mut watcher = gents_session::request::watcher::DefraWatcher::new(
+            self.node.clone(),
+            self.node_identity.did(),
+        )
+        .unwrap();
+        gents_session::request::watcher::Watcher::set_agent_identities(
+            &mut watcher,
+            vec![self.agent_identity.clone()],
+        )
+        .unwrap();
         watcher.try_fetch_request(doc_id).await.unwrap();
         let doc_id = escape_graphql_string(doc_id);
         let state = escape_graphql_string(state);
@@ -254,7 +260,7 @@ async fn discovery_replicates_while_request_documents_remain_runtime_local() {
     let created = ConfigAccess::local_as(fixture.node.clone(), fixture.node_identity.did().parse().unwrap())
         .write("test.discovery.probe", r#"mutation { create_PeerRegistry(input: {peer_id: "convergence-discovery-probe", node_did: "did:key:probe", addresses: ["probe"]}) { _docID } }"#)
         .await.unwrap();
-    let public_doc = gents::store::graphql::created_doc_id(&created, "PeerRegistry").unwrap();
+    let public_doc = gents_store::graphql::created_doc_id(&created, "PeerRegistry").unwrap();
     let (_, owner_address) =
         crate::support::enrollment::wait_for_peer_identity(&fixture.node).await;
     let (_, peer_address) =
@@ -271,7 +277,7 @@ async fn discovery_replicates_while_request_documents_remain_runtime_local() {
                 &PairingFilters::default(),
             )
             .await,
-        Err(gents::runtime::agent::p2p_reconcile::RemoteP2pAdminError::RuntimeLocalCollection(_))
+        Err(gents_p2p::p2p_reconcile::RemoteP2pAdminError::RuntimeLocalCollection(_))
     ));
     owner_admin
         .add_replicator(

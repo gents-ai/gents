@@ -8,11 +8,11 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use gents::store::graphql::escape_graphql_string;
-use gents::NodeIdentity;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
+use gents_store::graphql::escape_graphql_string;
+use gents_store::identity::NodeIdentity;
 
 use crate::support::agent_requests::{canonical_now, RequestActors};
 use crate::support::commit_race_proxy::{is_commit, CommitRaceProxy, ProxyHook};
@@ -26,8 +26,8 @@ const PUBLICATIONS: usize = 2;
 
 /// The User renames the selected Agent through the signed desired-state owner.
 async fn rename_agent(actors: &RequestActors, name: String) {
-    use gents::documents::apply_desired_state_plan;
-    use gents::documents::{
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     let node_did = actors.node_did().to_owned();
@@ -40,7 +40,7 @@ async fn rename_agent(actors: &RequestActors, name: String) {
             Box::pin(async move {
                 let (_, mut agent) = read_desired_state_record_in_txn(
                     txn,
-                    gents::Collection::Agent,
+                    gents_store::collection::Collection::Agent,
                     node_did,
                     agent_did,
                 )
@@ -48,14 +48,14 @@ async fn rename_agent(actors: &RequestActors, name: String) {
                 .expect("selected Agent");
                 agent["display_name"] = name.as_str().into();
                 let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                    collection: gents::Collection::Agent,
+                    collection: gents_store::collection::Collection::Agent,
                     add: agent.clone(),
                     update: agent,
                 }])?;
                 apply_desired_state_plan(
                     txn,
                     &plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
                 .map(|_| ())
@@ -105,7 +105,7 @@ async fn reservation_rebuilds_after_a_concurrent_agent_write() {
         AgentRequestAdmissionRecord::client(user.did()),
     );
 
-    let reserved = gents::request::lifecycle::reserve_goal_session(&contended, &request)
+    let reserved = gents_session::request::lifecycle::reserve_goal_session(&contended, &request)
         .await
         .expect("the reservation settles despite the concurrent Agent writes");
 

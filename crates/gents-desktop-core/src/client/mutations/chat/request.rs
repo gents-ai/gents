@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use gents::request::lifecycle::TriggerLineage;
-use gents::store::config_client::ConfigAccess;
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_input::RequestInput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
+use gents_session::request::lifecycle::TriggerLineage;
+use gents_store::config_client::ConfigAccess;
 use uuid::Uuid;
 
 use crate::client::store::ClientStore;
@@ -56,7 +56,7 @@ pub async fn submit_request(
     session_id: &str,
     node_did: &str,
     requester_did: &str,
-    signer: &dyn gents::NodeIdentity,
+    signer: &dyn gents_store::identity::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
     content: &str,
     agent_did: Option<&str>,
@@ -64,9 +64,9 @@ pub async fn submit_request(
 ) -> Result<SubmittedRequest> {
     let request_id = options.request_id.clone();
     if let Some(request_id) = request_id.as_deref() {
-        let held = gents::request::lifecycle::held_client_request(
+        let held = gents_session::request::lifecycle::held_client_request(
             access,
-            gents::request::lifecycle::ClientRequestScope {
+            gents_session::request::lifecycle::ClientRequestScope {
                 node_did,
                 session_id,
                 requester_did,
@@ -97,7 +97,7 @@ pub async fn submit_request(
         request_id.as_deref(),
     )
     .await?;
-    let held = gents::request::lifecycle::send_client_request(access, &create).await?;
+    let held = gents_session::request::lifecycle::send_client_request(access, &create).await?;
     Ok(SubmittedRequest {
         request_id: held,
         ..result
@@ -112,7 +112,7 @@ pub async fn submit_goal_backed_request(
     session_id: &str,
     node_did: &str,
     requester_did: &str,
-    signer: &dyn gents::NodeIdentity,
+    signer: &dyn gents_store::identity::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
     content: &str,
     agent_did: Option<&str>,
@@ -140,7 +140,7 @@ pub async fn submit_goal_backed_request(
         None,
     )
     .await?;
-    gents::goal::submit_goal_backed_request(
+    gents_automation::goal::submit_goal_backed_request(
         access,
         node_did,
         session_id,
@@ -158,7 +158,7 @@ pub async fn submit_task_request(
     access: &ConfigAccess,
     fire: &gents_protocol::trigger_delivery::TriggerFire,
     requester_did: &str,
-    signer: &dyn gents::NodeIdentity,
+    signer: &dyn gents_store::identity::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
     content: &str,
     agent_did: Option<&str>,
@@ -179,7 +179,8 @@ pub async fn submit_task_request(
         Some(&fire.request_id),
     )
     .await?;
-    let admitted = gents::triggers::write_task_delivery(access, fire, false, &create).await?;
+    let admitted =
+        gents_automation::triggers::write_task_delivery(access, fire, false, &create).await?;
     Ok(SubmittedRequest {
         request_id: admitted.request.request_id,
         session_id: admitted.request.session_id,
@@ -202,7 +203,7 @@ pub async fn resend_request(
     stale_request_id: &str,
     node_did: &str,
     requester_did: Option<&str>,
-    signer: &dyn gents::NodeIdentity,
+    signer: &dyn gents_store::identity::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
 ) -> Result<SubmittedRequest> {
     let stale = fetch_request_view(access, stale_request_id, node_did, requester_did).await?;

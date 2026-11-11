@@ -13,10 +13,10 @@ pub(crate) use diff::diff_manifests;
 pub(crate) use load::{load_manifest_root, load_manifest_root_for_owner};
 pub(crate) use write::write_manifest_root;
 
-use gents::Collection;
+use gents_store::collection::Collection;
 use serde::Serialize;
 
-pub(crate) use gents::documents::{Node as DesiredNode, PackConfig as DesiredStateManifest};
+pub(crate) use gents_documents::{Node as DesiredNode, PackConfig as DesiredStateManifest};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DocRef {

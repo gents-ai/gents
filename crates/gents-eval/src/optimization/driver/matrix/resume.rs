@@ -18,7 +18,7 @@ use crate::optimization::proposer::ScriptedProposer;
 use crate::optimization::subject::{baseline_text, materialize_candidate, materialize_pack};
 use crate::optimization::target::JobTarget;
 use crate::runner::ScriptedExecutor;
-use gents::documents::EvalSplit;
+use gents_documents::EvalSplit;
 
 #[tokio::test]
 async fn a_resumed_job_reaches_the_journal_of_its_uninterrupted_twin() {

@@ -1,7 +1,7 @@
 use gents::defra_node::Node as EmbeddedNode;
-use gents::store::graphql::escape_graphql_string;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
+use gents_store::graphql::escape_graphql_string;
 use serde::Deserialize;
 
 /// Snapshot readers run as a named actor: ACP-governed rows are visible only to
@@ -31,7 +31,7 @@ where
     }
 }
 
-impl SnapshotReader for gents::ConfigAccess {
+impl SnapshotReader for gents_store::config_client::ConfigAccess {
     async fn read_data(&self, query: &str) -> serde_json::Value {
         let mut response = self.execute(query).await.expect("snapshot query as actor");
         response["data"].take()
@@ -355,7 +355,7 @@ pub async fn fetch_runtime_snapshot(
 }
 
 pub async fn fetch_runtime_snapshot_as(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
 ) -> Option<RuntimeSnapshot> {
     let response = access
@@ -433,7 +433,7 @@ pub async fn fetch_message_snapshots_for_session(
         let header_id = row["_docID"].as_str().expect("physical message identity");
         let node_did = row["node_did"].as_str().expect("message principal");
         let requester_did = row["requester_did"].as_str();
-        let (header, native) = gents::session::load_canonical_message_from_node(
+        let (header, native) = gents_session::session::load_canonical_message_from_node(
             node,
             header_id,
             node_did,
@@ -448,7 +448,7 @@ pub async fn fetch_message_snapshots_for_session(
 
 /// The session's transcript as `access` reconstructs it.
 pub async fn fetch_message_snapshots_for_session_as(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     session_id: &str,
 ) -> Vec<MessageSnapshot> {
     let session_id = escape_graphql_string(session_id);
@@ -460,7 +460,7 @@ pub async fn fetch_message_snapshots_for_session_as(
     let mut snapshots = Vec::new();
     for row in data["AgentMessage"].as_array().expect("message rows") {
         let header_id = row["_docID"].as_str().expect("physical message identity");
-        let (header, native) = gents::session::load_canonical_message(
+        let (header, native) = gents_session::session::load_canonical_message(
             access,
             header_id,
             row["node_did"].as_str().expect("message principal"),
@@ -555,13 +555,16 @@ impl ToolCallSnapshot {
         &self,
         node: std::sync::Arc<EmbeddedNode>,
     ) -> anyhow::Result<String> {
-        self.try_load_result_as(&gents::store::config_client::ConfigAccess::local(node))
+        self.try_load_result_as(&gents_store::config_client::ConfigAccess::local(node))
             .await
     }
 
     /// The call's exact invocation reply as `access` reads it.
-    pub async fn try_load_result_as(&self, access: &gents::ConfigAccess) -> anyhow::Result<String> {
-        let message = gents::tools::call::lifecycle::load_tool_call_result(
+    pub async fn try_load_result_as(
+        &self,
+        access: &gents_store::config_client::ConfigAccess,
+    ) -> anyhow::Result<String> {
+        let message = gents_session::tool_call::query::result::load_tool_call_result(
             access,
             &self.doc_id,
             &self.node_did,
@@ -569,23 +572,23 @@ impl ToolCallSnapshot {
             self.requester_did.as_deref(),
         )
         .await?;
-        gents::tools::call::lifecycle::render_tool_result(&message)
+        gents_session::tool_call::query::result::render_tool_result(&message)
     }
 
     pub async fn try_load_arguments(
         &self,
         node: std::sync::Arc<EmbeddedNode>,
     ) -> anyhow::Result<String> {
-        self.try_load_arguments_as(&gents::store::config_client::ConfigAccess::local(node))
+        self.try_load_arguments_as(&gents_store::config_client::ConfigAccess::local(node))
             .await
     }
 
     /// The call's exact arguments as `access` reads them.
     pub async fn try_load_arguments_as(
         &self,
-        access: &gents::ConfigAccess,
+        access: &gents_store::config_client::ConfigAccess,
     ) -> anyhow::Result<String> {
-        gents::tools::call::lifecycle::load_tool_call_arguments(
+        gents_session::tool_call::query::result::load_tool_call_arguments(
             access,
             &self.doc_id,
             &self.node_did,
@@ -631,7 +634,7 @@ pub async fn fetch_tool_call_payloads_for_request(
 /// [`fetch_tool_call_payloads_for_request`] read as `access`, one of the
 /// call's related actors or the node's native admin.
 pub async fn fetch_tool_call_payloads_for_request_as(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     request_id: &str,
 ) -> Vec<ToolCallPayload> {
     let filter = format!(

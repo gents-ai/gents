@@ -1,14 +1,14 @@
 use super::support::*;
 use super::*;
-use crate::store::config_client::{ConfigAccess, NodePermission};
-use crate::store::identity::{GrantSet, NodeIdentity};
+use gents_store::config_client::{ConfigAccess, NodePermission};
+use gents_store::identity::{GrantSet, NodeIdentity};
 
 struct PrivateSessionFixture {
     db: crate::support::TestDb,
     runtime: Arc<dyn NodeIdentity>,
-    user: crate::store::identity::KeyIdentity,
-    selected: crate::store::identity::KeyIdentity,
-    other: crate::store::identity::KeyIdentity,
+    user: gents_store::identity::KeyIdentity,
+    selected: gents_store::identity::KeyIdentity,
+    other: gents_store::identity::KeyIdentity,
 }
 
 impl PrivateSessionFixture {

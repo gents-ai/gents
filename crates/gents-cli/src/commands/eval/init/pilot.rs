@@ -3,9 +3,9 @@ use std::fmt::Write as _;
 use std::io::Write;
 
 use anyhow::{anyhow, Context, Result};
-use gents::documents::EvalSplit;
 use gents::eval::scoring::PILOT_PURPOSE;
 use gents::eval::OutcomeKind;
+use gents_documents::EvalSplit;
 use gents_eval::report::{load_report, EvalReport, SlotClass};
 use gents_eval::runner::{self, Capture, TrialLocator};
 use serde_json::{json, Value};
@@ -145,9 +145,9 @@ async fn run_and_answer(
 
 async fn install_definition(ctx: &EvalContext, dir: &std::path::Path) -> Result<()> {
     let (manifest, assets) = super::dossier::read_pack(dir)?;
-    let config = gents::pack::load_pack_config(
+    let config = gents_pack::pack::load_pack_config(
         &manifest,
-        &gents::pack::PackInstallOptions {
+        &gents_pack::pack::PackInstallOptions {
             node_did: ctx.owner.clone(),
         },
         &|path| {
@@ -158,30 +158,30 @@ async fn install_definition(ctx: &EvalContext, dir: &std::path::Path) -> Result<
         },
         &|_name| None,
     )?;
-    let digest = gents::pack::digest_declared_assets(&manifest, |path| {
+    let digest = gents_pack::pack::digest_declared_assets(&manifest, |path| {
         assets
             .get(path)
             .map(Vec::as_slice)
             .with_context(|| format!("pack has no asset {path:?}"))
     })?;
-    let identity = gents::pack::PackIdentity::new(&manifest, digest, Vec::new());
+    let identity = gents_pack::pack::PackIdentity::new(&manifest, digest, Vec::new());
     let expected = config
         .eval_definitions
         .iter()
-        .map(|definition| gents::documents::DesiredStateExpectation {
-            collection: gents::Collection::EvalDefinition,
+        .map(|definition| gents_documents::DesiredStateExpectation {
+            collection: gents_store::collection::Collection::EvalDefinition,
             owner: ctx.owner.clone(),
             id: definition.definition_id.clone(),
             digest: None,
         })
         .collect();
-    gents::pack::install_pack_documents_with_expectations(
+    gents_pack::pack::install_pack_documents_with_expectations(
         &ctx.access,
         &ctx.owner,
         &identity,
         &config,
-        gents::pack::DriftPolicy::Refuse,
-        expected, &gents::inference::resolved::ProviderProfilePolicy,
+        gents_pack::pack::DriftPolicy::Refuse,
+        expected, &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .context(
@@ -535,9 +535,9 @@ mod tests {
         let mut existing =
             serde_json::to_value(&drafted.assembled.as_ref().unwrap().definition).unwrap();
         existing["title"] = json!("Existing instrument");
-        let plan = gents::documents::DesiredStateApplyPlan::new(vec![
-            gents::documents::DesiredStateApplyDocument {
-                collection: gents::Collection::EvalDefinition,
+        let plan = gents_documents::DesiredStateApplyPlan::new(vec![
+            gents_documents::DesiredStateApplyDocument {
+                collection: gents_store::collection::Collection::EvalDefinition,
                 add: existing.clone(),
                 update: existing,
             },
@@ -549,10 +549,10 @@ mod tests {
             .transact_write("eval.pilot.existing_definition_fixture", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    gents::documents::apply_desired_state_plan(
+                    gents_documents::apply_desired_state_plan(
                         txn,
                         plan,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await
                 })
@@ -563,7 +563,7 @@ mod tests {
         let before = fixture.ctx.access.execute(query).await.unwrap();
         let error = install_definition(&fixture.ctx, dir).await.unwrap_err();
         assert!(
-            gents::documents::stale_expectation(&error).is_some(),
+            gents_documents::stale_expectation(&error).is_some(),
             "{error:#}"
         );
         let after = fixture.ctx.access.execute(query).await.unwrap();
@@ -586,7 +586,7 @@ mod tests {
         assert_ne!(left.is_ok(), right.is_ok());
         let error = left.err().or_else(|| right.err()).unwrap();
         assert!(
-            gents::documents::stale_expectation(&error).is_some(),
+            gents_documents::stale_expectation(&error).is_some(),
             "{error:#}"
         );
     }

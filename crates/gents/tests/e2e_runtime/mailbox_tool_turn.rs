@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::session::mailbox::MailboxStatus;
-use gents::NodeIdentity;
+use gents_session::session::mailbox::MailboxStatus;
+use gents_store::identity::NodeIdentity;
 
 use crate::support::accepted_turn::boot_prepared_accepted_turn;
 use crate::support::streaming_backend::{StreamChunk, StreamPlan, StreamResponse};
@@ -17,7 +17,7 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
     let (prepared, turn) = crate::support::signed_mailbox::prepare_signed_mailbox_turn(
         &db, "mailbox-tool-turn-backend", "mailbox-tool-turn-model", request_id,
         "mailbox-tool-turn-session", prompt,
-        vec![StreamChunk::tool_call("mailbox-tool-turn-call", gents::documents::mailbox_write_decl::FILE_MAILBOX_ITEM_TOOL_NAME,
+        vec![StreamChunk::tool_call("mailbox-tool-turn-call", gents_documents::mailbox_write_decl::FILE_MAILBOX_ITEM_TOOL_NAME,
             serde_json::json!({"title":"Crew ready", "summary":"Two agents configured.\n\n- builder\n- reviewer"}).to_string())],
         Vec::new(), None,
     ).await.unwrap();
@@ -42,7 +42,7 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
     .await
     .unwrap();
     assert_eq!(state, "completed");
-    let items = gents::session::mailbox::list_mailbox_items_on(
+    let items = gents_session::session::mailbox::list_mailbox_items_on(
         &turn.client,
         turn.user.did(),
         Some(MailboxStatus::Open),
@@ -56,7 +56,7 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
         .agent_access
         .execute(&format!(
             r#"query {{_commits(docID: "{}") {{height fieldName signature {{identity type}}}}}}"#,
-            gents::store::graphql::escape_graphql_string(&items[0].doc_id)
+            gents_store::graphql::escape_graphql_string(&items[0].doc_id)
         ))
         .await
         .unwrap();
@@ -68,23 +68,26 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
         .min_by_key(|row| row["height"].as_i64())
         .unwrap();
     let expected_signer =
-        gents::store::identity::commit_signer_identity_for_did(turn.agent.did()).unwrap();
+        gents_store::identity::commit_signer_identity_for_did(turn.agent.did()).unwrap();
     assert_eq!(genesis["signature"]["identity"], expected_signer);
-    let outsider =
-        gents::KeyIdentity::load_or_create(db.data_path().join("mailbox-outsider.key"), None)
-            .unwrap();
-    let admin = gents::ConfigAccess::local_as(db.node.clone(), did.parse().unwrap());
+    let outsider = gents_store::identity::KeyIdentity::load_or_create(
+        db.data_path().join("mailbox-outsider.key"),
+        None,
+    )
+    .unwrap();
+    let admin =
+        gents_store::config_client::ConfigAccess::local_as(db.node.clone(), did.parse().unwrap());
     for permission in [
-        gents::store::config_client::NodePermission::DocumentRead,
-        gents::store::config_client::NodePermission::CollectionGet,
+        gents_store::config_client::NodePermission::DocumentRead,
+        gents_store::config_client::NodePermission::CollectionGet,
     ] {
         admin
             .grant_node_permission(&outsider.did().parse().unwrap(), permission)
             .await
             .unwrap();
     }
-    let outsider_access = gents::ConfigAccess::Graphql(
-        gents::store::config_client::GraphqlEndpoint::as_principal(
+    let outsider_access = gents_store::config_client::ConfigAccess::Graphql(
+        gents_store::config_client::GraphqlEndpoint::as_principal(
             db.client_endpoint(),
             outsider.did(),
         )
@@ -94,13 +97,13 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
     let hidden = outsider_access
         .execute(&format!(
             r#"{{MailboxItem(filter: {{_docID: {{_eq: "{}"}}}}) {{_docID}}}}"#,
-            gents::store::graphql::escape_graphql_string(&items[0].doc_id)
+            gents_store::graphql::escape_graphql_string(&items[0].doc_id)
         ))
         .await
         .unwrap();
     assert!(hidden["data"]["MailboxItem"].as_array().unwrap().is_empty());
     let outcome = serde_json::to_value(
-        gents::documents::mailbox_write_decl::NotificationIdentity::Event
+        gents_documents::mailbox_write_decl::NotificationIdentity::Event
             .write_outcome(false, false),
     )
     .unwrap();
@@ -127,7 +130,7 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
             let user = turn.user.did().to_owned();
             Box::pin(async move {
                 let session =
-                    gents::store::config_client::agent_session::load_agent_session_row_in_txn(
+                    gents_store::config_client::agent_session::load_agent_session_row_in_txn(
                         txn,
                         &did,
                         "mailbox-tool-turn-session",
@@ -188,7 +191,7 @@ async fn an_optional_question_skip_reaches_the_asking_session() {
         "mailbox-question-prompt",
         vec![StreamChunk::tool_call(
             "mailbox-question-call",
-            gents::documents::mailbox_write_decl::FILE_MAILBOX_ITEM_TOOL_NAME,
+            gents_documents::mailbox_write_decl::FILE_MAILBOX_ITEM_TOOL_NAME,
             serde_json::json!({"title":"Release", "question":question}).to_string(),
         )],
         vec![StreamPlan::new(
@@ -221,7 +224,7 @@ async fn an_optional_question_skip_reaches_the_asking_session() {
         .unwrap(),
         "completed"
     );
-    let items = gents::session::mailbox::list_mailbox_items_on(
+    let items = gents_session::session::mailbox::list_mailbox_items_on(
         &turn.client,
         turn.user.did(),
         Some(MailboxStatus::Open),
@@ -274,7 +277,7 @@ async fn an_optional_question_skip_reaches_the_asking_session() {
         "completed"
     );
     let answered =
-        gents::session::mailbox::load_mailbox_item_with_access(&turn.client, &item.doc_id)
+        gents_session::session::mailbox::load_mailbox_item_with_access(&turn.client, &item.doc_id)
             .await
             .unwrap()
             .unwrap();
@@ -337,7 +340,7 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
         prompt,
         vec![StreamChunk::tool_call(
             "mailbox-question-busy-call",
-            gents::documents::mailbox_write_decl::FILE_MAILBOX_ITEM_TOOL_NAME,
+            gents_documents::mailbox_write_decl::FILE_MAILBOX_ITEM_TOOL_NAME,
             serde_json::json!({"title":"Continue", "question":question}).to_string(),
         )],
         vec![StreamPlan::new(
@@ -363,7 +366,7 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
     let runtime = boot_prepared_accepted_turn(&db, prepared, agent).await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     let item = loop {
-        let open = gents::session::mailbox::list_mailbox_items_on(
+        let open = gents_session::session::mailbox::list_mailbox_items_on(
             &turn.client,
             turn.user.did(),
             Some(MailboxStatus::Open),
@@ -464,7 +467,7 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
     assert_eq!(asking_final, "completed");
     assert_eq!(reply_final, "completed");
     let answered =
-        gents::session::mailbox::load_mailbox_item_with_access(&turn.client, &item.doc_id)
+        gents_session::session::mailbox::load_mailbox_item_with_access(&turn.client, &item.doc_id)
             .await
             .unwrap()
             .unwrap();

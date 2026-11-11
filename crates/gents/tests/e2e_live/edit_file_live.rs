@@ -1,8 +1,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::documents::{FileTools, HostTools, Tools};
-use gents::{DocumentRuntimeOptions, FileToolMode, Gents, ToolCeiling};
+use gents::{DocumentRuntimeOptions, Gents};
+use gents_documents::FileToolMode;
+use gents_documents::{FileTools, HostTools, Tools};
+use gents_tools::surface::ToolCeiling;
 
 use crate::support::builder_runtime::submit_request;
 use crate::support::fixtures::configure_agent_tools_as;

@@ -13,8 +13,8 @@ use crate::runner::freeze::documents::{definition_ref, load_definition};
 use crate::runner::freeze::snapshot::read_frozen_definition;
 use crate::runner::{freeze_refused, run_dir};
 use crate::{load_run, load_trials, load_verdicts, RunHeader, RunRecord};
-use gents::store::config_client::ConfigAccess;
-use gents::store::graphql::escape_graphql_string;
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
 
 /// Every run `owner` has, oldest first (`created_at`, then `run_id`).
 pub async fn load_runs(access: &ConfigAccess, owner: &str) -> Result<Vec<RunRecord>> {
@@ -138,8 +138,8 @@ mod tests {
     use crate::runner::freeze::tests::Launching;
     use crate::runner::{run, CellRequest, CellSource, RunOptions, RunRequest, ScriptedExecutor};
     use crate::{create_run, invalidate_run};
-    use gents::documents::EvalSplit;
-    use gents::NodeIdentity;
+    use gents_documents::EvalSplit;
+    use gents_store::identity::NodeIdentity;
 
     fn request(launching: &Launching, pack: &Path, run_id: &str) -> RunRequest {
         RunRequest {
@@ -237,12 +237,14 @@ mod tests {
             .unwrap()
             .unwrap();
         let foreign_keys = tempfile::tempdir().unwrap();
-        let foreign_runtime =
-            gents::KeyIdentity::load_or_create(foreign_keys.path().join("runtime.key"), None)
-                .unwrap();
+        let foreign_runtime = gents_store::identity::KeyIdentity::load_or_create(
+            foreign_keys.path().join("runtime.key"),
+            None,
+        )
+        .unwrap();
         launching
             .install(vec![(
-                gents::Collection::Node,
+                gents_store::collection::Collection::Node,
                 json!({"node_did": foreign_runtime.did()}),
             )])
             .await;
@@ -288,7 +290,10 @@ mod tests {
         let mut edited = serde_json::to_value(&installed).unwrap();
         edited["comparability_version"] = json!(2);
         launching
-            .install(vec![(gents::Collection::EvalDefinition, edited)])
+            .install(vec![(
+                gents_store::collection::Collection::EvalDefinition,
+                edited,
+            )])
             .await;
 
         let report = load_report(
@@ -396,7 +401,10 @@ mod tests {
         scripted(&launching, &request(&launching, &pack, "run-old")).await;
         std::fs::remove_file(definition_file(&launching, "run-old")).unwrap();
         launching
-            .delete(gents::Collection::EvalDefinition, "monitor-findings")
+            .delete(
+                gents_store::collection::Collection::EvalDefinition,
+                "monitor-findings",
+            )
             .await;
 
         let error = load_report(
@@ -418,7 +426,10 @@ mod tests {
         let pack = launching.pack("pack", "Off");
         scripted(&launching, &request(&launching, &pack, "run-1")).await;
         launching
-            .delete(gents::Collection::EvalDefinition, "monitor-findings")
+            .delete(
+                gents_store::collection::Collection::EvalDefinition,
+                "monitor-findings",
+            )
             .await;
 
         let report = load_report(

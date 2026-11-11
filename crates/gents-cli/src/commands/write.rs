@@ -1,12 +1,13 @@
 use crate::cli::args::WriteArgs;
 use anyhow::Result;
-use gents::inference::llm::tool::Tool;
+use gents_loop::tool::Tool;
 
 pub(crate) async fn write(args: WriteArgs) -> Result<()> {
-    let call: gents::plugin::application_write::WriteParams = serde_json::from_str(&args.call)?;
+    let call: gents_toolcalls::plugin::application_write::WriteParams =
+        serde_json::from_str(&args.call)?;
     let (access, _) =
         crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let tool = gents::plugin::application_write::WriteTool::new(
+    let tool = gents_toolcalls::plugin::application_write::WriteTool::new(
         access,
         args.collections.into_iter().collect(),
         None,

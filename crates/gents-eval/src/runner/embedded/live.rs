@@ -12,8 +12,8 @@ use crate::runner::embedded::observe::request_evidence_from_query_data;
 use crate::runner::executor::{Capture, StageSpec};
 use crate::runner::progress::{LastToolCall, LiveSnapshot, ToolTally};
 use gents::defra_node::Node as EmbeddedNode;
-use gents::store::config_client::ConfigAccess;
-use gents::Collection;
+use gents_store::collection::Collection;
+use gents_store::config_client::ConfigAccess;
 
 const CONFIGURATION: [Collection; 11] = [
     Collection::Agent,
@@ -140,7 +140,7 @@ async fn collection_names(node: &std::sync::Arc<EmbeddedNode>) -> Result<BTreeSe
 }
 
 pub(super) async fn activity(access: &ConfigAccess) -> Result<LiveSnapshot> {
-    let requests = gents::session::public_request_filter("");
+    let requests = gents_session::session::public_request_filter("");
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ {requests} }}) {{ _docID node_did session_id requester_did }}
@@ -212,7 +212,7 @@ async fn last_tool_call(access: &ConfigAccess) -> Option<LastToolCall> {
         .first()?
         .clone();
     let text = |key: &str| row.get(key).and_then(Value::as_str).map(str::to_owned);
-    let result = gents::tools::call::lifecycle::load_tool_call_presentation(
+    let result = gents_session::tool_call::query::result::load_tool_call_presentation(
         access,
         row.get("_docID")?.as_str()?,
         row.get("node_did")?.as_str()?,
@@ -297,15 +297,15 @@ mod tests {
 
     #[tokio::test]
     async fn last_tool_reads_canonical_delivery_and_keeps_running_calls_visible() {
-        let fixture = gents::tools::call::lifecycle::admission_fixture::published_admission(
-            gents::tools::call::lifecycle::admission_fixture::PublishedAdmissionOptions {
+        let fixture = gents_toolcalls::call::lifecycle::admission_fixture::published_admission(
+            gents_toolcalls::call::lifecycle::admission_fixture::PublishedAdmissionOptions {
                 name: "eval-last-tool".to_owned(),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
-        let gents::tools::call::lifecycle::admission_fixture::PublishedAdmission {
+        let gents_toolcalls::call::lifecycle::admission_fixture::PublishedAdmission {
             node,
             path,
             mut tool,

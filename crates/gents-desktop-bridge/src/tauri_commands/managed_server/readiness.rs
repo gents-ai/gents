@@ -326,7 +326,7 @@ pub(super) async fn settle_adoption<'a>(
 }
 
 #[derive(Debug, Clone, Copy)]
-struct RefusedStoreKind(gents::store::local::storage_backend::IncompatibleStoreKind);
+struct RefusedStoreKind(gents_store::local::storage_backend::IncompatibleStoreKind);
 
 impl std::fmt::Display for RefusedStoreKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -339,7 +339,7 @@ impl std::fmt::Display for RefusedStoreKind {
 
 pub(super) fn refused_kind(
     error: &anyhow::Error,
-) -> Option<gents::store::local::storage_backend::IncompatibleStoreKind> {
+) -> Option<gents_store::local::storage_backend::IncompatibleStoreKind> {
     error
         .downcast_ref::<RefusedStoreKind>()
         .map(|refused| refused.0)
@@ -347,19 +347,19 @@ pub(super) fn refused_kind(
 
 pub(super) fn refused_runtime_store(
     node_home: &Path,
-    reported: Option<gents::store::local::storage_backend::IncompatibleStoreKind>,
-) -> gents::store::local::storage_backend::IncompatibleStore {
-    let data_path = gents::store::local::home::default_data_dir(node_home);
-    let kind = gents::store::local::storage_backend::incompatible_store_kind(&data_path)
+    reported: Option<gents_store::local::storage_backend::IncompatibleStoreKind>,
+) -> gents_store::local::storage_backend::IncompatibleStore {
+    let data_path = gents_store::local::home::default_data_dir(node_home);
+    let kind = gents_store::local::storage_backend::incompatible_store_kind(&data_path)
         .ok()
         .flatten()
         .or(reported)
-        .unwrap_or(gents::store::local::storage_backend::IncompatibleStoreKind::UnknownLineage);
+        .unwrap_or(gents_store::local::storage_backend::IncompatibleStoreKind::UnknownLineage);
     let data_path = match kind {
-        gents::store::local::storage_backend::IncompatibleStoreKind::InsecureKey => {
+        gents_store::local::storage_backend::IncompatibleStoreKind::InsecureKey => {
             node_home.join("keys")
         }
         _ => data_path,
     };
-    gents::store::local::storage_backend::IncompatibleStore { kind, data_path }
+    gents_store::local::storage_backend::IncompatibleStore { kind, data_path }
 }

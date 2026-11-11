@@ -39,12 +39,12 @@ pub(crate) use source::{
 };
 use std::collections::BTreeMap;
 
-use gents::pack::materialize::CacheRelease;
-use gents::pack::PackChangeError;
+use gents_pack::pack::materialize::CacheRelease;
+use gents_pack::pack::PackChangeError;
 
 pub(crate) fn parse_inference_slot_bindings(
     values: &[String],
-) -> Result<gents::pack::PackInferenceBindings> {
+) -> Result<gents_pack::pack::PackInferenceBindings> {
     let mut bindings = BTreeMap::new();
     for value in values {
         let (slot, profile_id) = value.split_once('=').with_context(|| {
@@ -143,7 +143,7 @@ pub(crate) mod test_support {
         Ok(())
     }
 
-    pub(crate) fn build_unbuilt_plugins(dir: &Path, manifest: &gents::pack::PackManifest) {
+    pub(crate) fn build_unbuilt_plugins(dir: &Path, manifest: &gents_pack::pack::PackManifest) {
         for plugin in &manifest.metadata.plugins {
             if plugin.source.is_some() && !dir.join(&plugin.artifact).is_file() {
                 super::build::build_plugin(dir, manifest, plugin)
@@ -181,7 +181,7 @@ pub(crate) mod test_support {
 }
 
 pub(crate) fn split_namespace(name: &str) -> (&str, &str) {
-    gents::pack::registry::split_pack_coordinate(name)
+    gents_pack::pack::registry::split_pack_coordinate(name)
 }
 
 async fn list(args: PackListArgs) -> Result<()> {
@@ -190,8 +190,8 @@ async fn list(args: PackListArgs) -> Result<()> {
 }
 
 fn list_packs(home: &std::path::Path) -> Result<serde_json::Value> {
-    let store = gents::pack::store::PackStore::new(home);
-    let (records, skipped) = gents::pack::list_home_installs_with_skips(home)?;
+    let store = gents_pack::pack::store::PackStore::new(home);
+    let (records, skipped) = gents_pack::pack::list_home_installs_with_skips(home)?;
     let installed: std::collections::BTreeMap<_, _> = records
         .into_iter()
         .map(|record| (record.coordinate.clone(), record))
@@ -203,9 +203,9 @@ fn list_packs(home: &std::path::Path) -> Result<serde_json::Value> {
     let mut entries = Vec::new();
     for (coordinate, versions) in names {
         let record = installed.get(&coordinate);
-        let listing = gents::pack::store::list_pack_versions(
+        let listing = gents_pack::pack::store::list_pack_versions(
             &versions,
-            record.map(|record| gents::pack::store::StoredName {
+            record.map(|record| gents_pack::pack::store::StoredName {
                 version: record.version.clone(),
                 digest: record.digest.clone(),
             }),

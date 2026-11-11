@@ -1,12 +1,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
-use gents::tools::call::control::client::{submit, ClientControlError};
-use gents::NodeIdentity as _;
 use gents_protocol::process_control::{
     OperatorProcessControlRequest, ProcessControlOutcome, ToolControlReceiptOutcome,
 };
+use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
+use gents_store::identity::NodeIdentity as _;
+use gents_toolcalls::call::control::client::{submit, ClientControlError};
 use serde_json::Value;
 
 #[path = "../../../../../gents/tests/support/streaming_backend.rs"]
@@ -28,7 +28,9 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     let home = crate::shared::test_support::ClientHome::new().await;
     let owner = home.home.identity.clone();
     let user = &home.user;
-    let foreign = gents::KeyIdentity::load_or_create(dir.path().join("foreign.key"), None).unwrap();
+    let foreign =
+        gents_store::identity::KeyIdentity::load_or_create(dir.path().join("foreign.key"), None)
+            .unwrap();
     let did = owner.did().to_owned();
     let binding = home.agent("process-control").await;
     let agent_did = binding.agent_did.clone();
@@ -37,9 +39,9 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     let admin = ConfigAccess::local_as(node.clone(), did.parse().unwrap());
     for actor in [foreign.did(), agent_did.as_str()] {
         for permission in [
-            gents::store::config_client::NodePermission::DocumentRead,
-            gents::store::config_client::NodePermission::DocumentUpdate,
-            gents::store::config_client::NodePermission::DacRelationAdd,
+            gents_store::config_client::NodePermission::DocumentRead,
+            gents_store::config_client::NodePermission::DocumentUpdate,
+            gents_store::config_client::NodePermission::DacRelationAdd,
         ] {
             admin
                 .grant_node_permission(&actor.parse().unwrap(), permission)
@@ -70,14 +72,14 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     let root = std::fs::canonicalize(dir.path()).unwrap();
     configure_background_bash(&home, &binding, &root, backend.endpoint(), "control-model").await;
     home.mark_backend_healthy(&binding).await;
-    let identity: Arc<dyn gents::NodeIdentity> = owner.clone();
+    let identity: Arc<dyn gents_store::identity::NodeIdentity> = owner.clone();
     let records = dir.path().join("process-records");
     let runtime = gents::Gents::from_default_agent_documents(
         node.clone(),
         identity,
         gents::DocumentRuntimeOptions {
             // Host tools run only under an explicit workspace root.
-            tool_ceiling: gents::ToolCeiling::readonly_at(&root),
+            tool_ceiling: gents_tools::surface::ToolCeiling::readonly_at(&root),
             backend_admission: Some(home.home.backend_admission()),
             ..Default::default()
         },
@@ -96,27 +98,27 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     }
 
     let session = "process-control-session";
-    let request = gents::request::lifecycle::build_signed_client_request(
+    let request = gents_session::request::lifecycle::build_signed_client_request(
         &user_access,
-        gents::RequestSpec::new(
+        gents_session::request::lifecycle::RequestSpec::new(
             gents_protocol::request_admission::RequestPurpose::Normal,
-            gents::RequestIdentity {
+            gents_session::request::lifecycle::RequestIdentity {
                 request_id: "process-control-request".into(),
                 node_did: did.clone(),
                 requester_did: Some(user.did().into()),
                 agent_did: agent_did.clone(),
                 session_id: session.into(),
                 content: prompt.into(),
-                execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
+                execution_origin: gents_session::request::lifecycle::ExecutionOrigin::Interactive,
                 created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             },
             gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
         ),
-        gents::RequestSigner::Identity(user),
+        gents_session::request::lifecycle::RequestSigner::Identity(user),
     )
     .await
     .unwrap();
-    gents::request::lifecycle::submit_client_request(&user_access, &request)
+    gents_session::request::lifecycle::submit_client_request(&user_access, &request)
         .await
         .unwrap();
 
@@ -150,7 +152,7 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     };
     let target_call = command(&workers[0].0);
     let sibling_call = command(&workers[1].0);
-    let target = gents::tools::call::control::client::prepare(
+    let target = gents_toolcalls::call::control::client::prepare(
         &user_access,
         user,
         &did,
@@ -160,7 +162,7 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     )
     .await
     .unwrap();
-    let sibling = gents::tools::call::control::client::prepare(
+    let sibling = gents_toolcalls::call::control::client::prepare(
         &user_access,
         user,
         &did,
@@ -220,14 +222,14 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     assert!(process_alive(workers[0].1));
     assert!(process_alive(workers[1].1));
     let mut changes =
-        gents::store::subscription_source::subscribe_collections(&node, ["AgentToolControl"])
+        gents_store::subscription_source::subscribe_collections(&node, ["AgentToolControl"])
             .unwrap();
     let intent_doc_id = submit(&owner_access, &target)
         .await
         .expect("control must save a durable intent");
     let receipt = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
-            if let Some(receipt) = gents::tools::call::control::client::read_receipt(
+            if let Some(receipt) = gents_toolcalls::call::control::client::read_receipt(
                 &user_access,
                 &did,
                 &intent_doc_id,
@@ -267,7 +269,7 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
         .expect("sibling control must save a durable intent");
     let receipt = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
-            if let Some(receipt) = gents::tools::call::control::client::read_receipt(
+            if let Some(receipt) = gents_toolcalls::call::control::client::read_receipt(
                 &user_access,
                 &did,
                 &intent_doc_id,
@@ -311,12 +313,12 @@ async fn configure_background_bash(
     endpoint: &str,
     model: &str,
 ) {
-    use gents::documents::apply_desired_state_plan;
-    use gents::documents::{
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
-    use gents::documents::{AgentContext, BashTools, HostTools, Tools};
-    use gents::Collection;
+    use gents_documents::{AgentContext, BashTools, HostTools, Tools};
+    use gents_store::collection::Collection;
 
     fn plan(docs: Vec<(Collection, Value)>) -> anyhow::Result<DesiredStateApplyPlan> {
         DesiredStateApplyPlan::new(
@@ -340,7 +342,7 @@ async fn configure_background_bash(
         host: Some(HostTools {
             root: Some(root.display().to_string()),
             bash: Some(BashTools {
-                mode: gents::BashMode::ReadOnly,
+                mode: gents_documents::BashMode::ReadOnly,
                 read_only_commands: Some(vec!["sleep".into(), "printf".into()]),
                 background_enabled: true,
                 ..Default::default()
@@ -375,7 +377,7 @@ async fn configure_background_bash(
                 apply_desired_state_plan(
                     txn,
                     projected,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
                 .map(|_| ())
@@ -384,7 +386,7 @@ async fn configure_background_bash(
         .await
         .unwrap();
     // Host tools run only under a User-published root their Agent may read.
-    gents::tools::surface::set_workspace_root_with_readers(
+    gents_tools::surface::set_workspace_root_with_readers(
         &home.access,
         &node_did,
         &root.display().to_string(),
@@ -426,7 +428,7 @@ async fn configure_background_bash(
                 apply_desired_state_plan(
                     txn,
                     &plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
                 .map(|_| ())

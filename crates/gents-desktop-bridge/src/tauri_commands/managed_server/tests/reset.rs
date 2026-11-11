@@ -247,7 +247,7 @@ fn starting_fresh_from_a_refused_client_store_retires_its_paired_home_before_rel
     plan.retire(HomeResetDisposition::Archive, Some(&backup))
         .unwrap();
 
-    let entries = gents::store::local::home::home_entries(&home, &[]).unwrap();
+    let entries = gents_store::local::home::home_entries(&home, &[]).unwrap();
     assert!(entries.owned.is_empty(), "{:?}", entries.owned);
     assert!(!gents_server::server_host::initialized_home(&home));
     assert!(home.join("grok-port-home/data/MANIFEST").is_file());

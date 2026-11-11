@@ -1,13 +1,13 @@
 use super::*;
-use crate::request::lifecycle::{
-    ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
-};
-use crate::request::streaming::DefraStreamWriter;
-use crate::store::identity::{KeyIdentity, NodeIdentity};
-use crate::tools::call::lifecycle::ToolCallLifecycle;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::tool_call::AwaitMode;
+use gents_session::request::lifecycle::{
+    ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
+};
+use gents_session::request::streaming::DefraStreamWriter;
+use gents_store::identity::{KeyIdentity, NodeIdentity};
+use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
 use serde_json::{json, Value};
 use std::{sync::Arc, time::Duration};
 
@@ -21,14 +21,16 @@ async fn rooted_node(root: &KeyIdentity) -> Arc<EmbeddedNode> {
             .await
             .unwrap(),
     );
-    crate::ensure_runtime_schemas(&node).await.unwrap();
+    gents_store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     node
 }
 
 /// An Agent DID derives from the runtime root and a creation nonce.
 fn derived_agent(root: &KeyIdentity) -> Arc<dyn NodeIdentity> {
-    let binding = crate::store::identity::provision_agent_identity(root).unwrap();
-    crate::store::identity::resolve_agent_identity(root, &binding).unwrap()
+    let binding = gents_store::identity::provision_agent_identity(root).unwrap();
+    gents_store::identity::resolve_agent_identity(root, &binding).unwrap()
 }
 
 async fn persist_request(
@@ -37,7 +39,7 @@ async fn persist_request(
     create: &AgentRequestCreate,
 ) -> AgentRequestRow {
     let actor = identity::Did::new(&create.agent_did).unwrap();
-    let access = crate::ConfigAccess::local_with_optional_agent_signer(
+    let access = gents_store::config_client::ConfigAccess::local_with_optional_agent_signer(
         node.clone(),
         actor.clone(),
         agent.managed_agent_signer(),
@@ -54,7 +56,7 @@ async fn persist_request(
             r#"mutation {{ create_AgentSession(input: {{ node_did: "{node_did}", session_id: "{session}", requester_did: "{}", agent_did: "{}", created_at: "2026-09-05T00:00:00Z" }}) {{ _docID }} }}"#,
             escape_graphql_string(&create.requester_did), escape_graphql_string(&create.agent_did),
         )).await.unwrap();
-        let doc = crate::store::graphql::created_doc_id(&created, "AgentSession").unwrap();
+        let doc = gents_store::graphql::created_doc_id(&created, "AgentSession").unwrap();
         access
             .add_actor_relationship("AgentSession", &doc, "working_agent", &actor)
             .await
@@ -71,7 +73,7 @@ async fn persist_request(
         )
         .await
         .unwrap();
-    let request_doc = crate::store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
+    let request_doc = gents_store::graphql::created_doc_id(&created, "AgentRequest").unwrap();
     access
         .add_actor_relationship("AgentRequest", &request_doc, "working_agent", &actor)
         .await
@@ -148,7 +150,7 @@ async fn publish_accepted_turn(
     tool_call_id: &str,
     tool_name: &str,
     arguments: &serde_json::Value,
-) -> (crate::tools::call::lifecycle::AcceptedToolCall, String) {
+) -> (gents_session::request::streaming::AcceptedToolCall, String) {
     writer
         .start_provider_attempt(
             &lifecycle.request().doc_id,
@@ -190,7 +192,7 @@ async fn publish_accepted_turn(
 async fn terminalize_accepted_tool(
     node: &Arc<EmbeddedNode>,
     lifecycle: &mut RequestLifecycle,
-    accepted: crate::tools::call::lifecycle::AcceptedToolCall,
+    accepted: gents_session::request::streaming::AcceptedToolCall,
     completed: bool,
 ) -> ToolCallLifecycle {
     let deadline = lifecycle
@@ -249,7 +251,7 @@ async fn non_deadline_request_terminalization_does_not_timeout_running_wait() {
             AgentRequestAdmissionRecord::local_self(identity.did()),
         );
         create.valid_until = Some(valid_until);
-        crate::sign_agent_request_create(&identity, &mut create)
+        gents_session::request::admission::sign_agent_request_create(&identity, &mut create)
             .await
             .unwrap();
         let row = persist_request(&node, &identity, &create).await;
@@ -278,8 +280,8 @@ async fn non_deadline_request_terminalization_does_not_timeout_running_wait() {
         tool.start_running().await.unwrap();
 
         if interrupted {
-            crate::request::interrupt::interrupt_request_by_doc_id_with_access(
-                &crate::ConfigAccess::local_as(
+            gents_session::request::interrupt::interrupt_request_by_doc_id_with_access(
+                &gents_store::config_client::ConfigAccess::local_as(
                     node.clone(),
                     identity::Did::new(identity.did()).unwrap(),
                 ),
@@ -306,7 +308,7 @@ async fn non_deadline_request_terminalization_does_not_timeout_running_wait() {
             TerminalizeResult::Won
         );
 
-        let response = crate::ConfigAccess::local_as(
+        let response = gents_store::config_client::ConfigAccess::local_as(
             node.clone(), identity::Did::new(identity.did()).unwrap(),
         ).execute(
             &format!(
@@ -365,12 +367,12 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             root.caused_by_trigger_context =
                 Some(json!({"source_fields":{"area_id":"area-a","expected_total":2}}).to_string());
         }
-        crate::sign_agent_request_create(agent.as_ref(), &mut root)
+        gents_session::request::admission::sign_agent_request_create(agent.as_ref(), &mut root)
             .await
             .unwrap();
         let root_row = persist_request(&node, agent.as_ref(), &root).await;
         let root_request = gents_protocol::row::AgentRequest::try_from(root_row.clone()).unwrap();
-        let mut child = crate::goal::continuation::prepare_goal_continuation(
+        let mut child = gents_automation::goal::continuation::prepare_goal_continuation(
             &root_request,
             agent.did().into(),
             "output-goal",
@@ -384,7 +386,7 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
         if !case["authenticated_child"].as_bool().unwrap() {
             child.caused_by_parent_request_doc_id = Some("wrong-physical-parent".into());
         }
-        crate::sign_agent_request_create(agent.as_ref(), &mut child)
+        gents_session::request::admission::sign_agent_request_create(agent.as_ref(), &mut child)
             .await
             .unwrap();
         let child_row = persist_request(&node, agent.as_ref(), &child).await;
@@ -409,7 +411,7 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             "2026-09-05T00:00:02Z",
             AgentRequestAdmissionRecord::local_self(agent.did()),
         );
-        crate::sign_agent_request_create(agent.as_ref(), &mut outsider)
+        gents_session::request::admission::sign_agent_request_create(agent.as_ref(), &mut outsider)
             .await
             .unwrap();
         let outsider_row = persist_request(&node, agent.as_ref(), &outsider).await;
@@ -485,11 +487,11 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
         assert!(writes_by_request.is_empty());
         let configured = vec![(
             "write_result".into(),
-            crate::documents::WriteToolOutputObligation {
+            gents_documents::WriteToolOutputObligation {
                 scope: if case["request_scope"].as_bool().unwrap() {
-                    crate::documents::WriteToolOutputObligationScope::Request
+                    gents_documents::WriteToolOutputObligationScope::Request
                 } else {
-                    crate::documents::WriteToolOutputObligationScope::Trigger
+                    gents_documents::WriteToolOutputObligationScope::Trigger
                 },
                 minimum_writes: case["minimum"].as_u64().unwrap() as usize,
                 expected_count_field: (case["expected_count"].is_number()
@@ -571,7 +573,7 @@ async fn dynamic_count_failures_are_observed_not_defaulted() {
             "2026-09-05T00:00:00Z",
             AgentRequestAdmissionRecord::local_self(identity.did()),
         );
-        crate::sign_agent_request_create(&identity, &mut create)
+        gents_session::request::admission::sign_agent_request_create(&identity, &mut create)
             .await
             .unwrap();
         let row = persist_request(&node, &identity, &create).await;
@@ -583,8 +585,8 @@ async fn dynamic_count_failures_are_observed_not_defaulted() {
                 .expect("persisted physical request ID"),
             vec![ActiveOutputObligation {
                 tool_name: "write_result".to_string(),
-                contract: crate::documents::WriteToolOutputObligation {
-                    scope: crate::documents::WriteToolOutputObligationScope::Trigger,
+                contract: gents_documents::WriteToolOutputObligation {
+                    scope: gents_documents::WriteToolOutputObligationScope::Trigger,
                     minimum_writes: 1,
                     expected_count_field: Some("expected_total".to_string()),
                 },
@@ -633,7 +635,7 @@ async fn same_tool_calls_with_conflicting_declared_counts_reject_the_gate() {
         "2026-09-05T00:00:00Z",
         AgentRequestAdmissionRecord::local_self(identity.did()),
     );
-    crate::sign_agent_request_create(&identity, &mut create)
+    gents_session::request::admission::sign_agent_request_create(&identity, &mut create)
         .await
         .unwrap();
     let row = persist_request(&node, &identity, &create).await;
@@ -709,8 +711,8 @@ async fn same_tool_calls_with_conflicting_declared_counts_reject_the_gate() {
         lifecycle.request().doc_id.clone(),
         vec![ActiveOutputObligation {
             tool_name: "write_result".to_string(),
-            contract: crate::documents::WriteToolOutputObligation {
-                scope: crate::documents::WriteToolOutputObligationScope::Trigger,
+            contract: gents_documents::WriteToolOutputObligation {
+                scope: gents_documents::WriteToolOutputObligationScope::Trigger,
                 minimum_writes: 1,
                 expected_count_field: Some("expected_total".to_string()),
             },

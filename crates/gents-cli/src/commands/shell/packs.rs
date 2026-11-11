@@ -2,15 +2,15 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 
-use gents::pack::{PackChangeError, SlotBindingError};
-use gents::plugin::authority::GrantError;
-use gents::store::config_client::ConfigAccess;
-use gents::store::local::storage_backend::drive_unsendable;
 use gents_desktop_core::inference::load_inference_setup_state;
+use gents_pack::pack::{PackChangeError, SlotBindingError};
+use gents_pack::plugin::authority::GrantError;
 use gents_shell::sample::Tone;
 use gents_shell::source::{
     EditedChoice, FieldKind, Form, FormError, FormRef, MenuAct, MenuRow, PackAct, Update,
 };
+use gents_store::config_client::ConfigAccess;
+use gents_store::local::storage_backend::drive_unsendable;
 use serde_json::Value;
 use tokio::runtime::Handle;
 
@@ -164,7 +164,7 @@ pub(super) fn adds(tags: &[Vec<Vec<String>>]) -> BTreeMap<String, String> {
     for (documents, (one, many)) in tags.iter().zip(KINDS) {
         let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
         for tags in documents {
-            if let Ok(Some(pack)) = gents::pack::pack_origin_from_tags(tags) {
+            if let Ok(Some(pack)) = gents_pack::pack::pack_origin_from_tags(tags) {
                 *counts.entry(pack).or_default() += 1;
             }
         }

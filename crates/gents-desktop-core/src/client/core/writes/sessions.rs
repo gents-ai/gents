@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use gents::store::config_client::ConfigAccess;
+use gents_store::config_client::ConfigAccess;
 
 use super::super::bootstrap::normalize_required;
 use super::{ensure_peer_chat_ready, ClientCore};
@@ -22,11 +22,12 @@ impl ClientCore {
     pub async fn dismiss_mailbox_item(
         &self,
         doc_id: &str,
-    ) -> Result<gents::session::mailbox::MailboxItem> {
+    ) -> Result<gents_session::session::mailbox::MailboxItem> {
         let snapshot = self.store.snapshot();
         let node_did = mailbox_node_for_document(&snapshot.mailbox_items, doc_id)?;
         let access = self.operator_access(node_did)?;
-        let result = gents::session::mailbox::dismiss_mailbox_item_on(&access, doc_id).await;
+        let result =
+            gents_session::session::mailbox::dismiss_mailbox_item_on(&access, doc_id).await;
         match result {
             Ok(item) => {
                 if self.refresh_node(node_did).await?.is_none() {
@@ -70,11 +71,11 @@ impl ClientCore {
         let access = self.operator_graphql(node_did)
             .map(ConfigAccess::Graphql)
             .context("Editing a message requires a direct runtime connection. Reconnect the local runtime and try again.")?;
-        gents::session::fork_edit_on(
+        gents_session::session::fork_edit_on(
             &access,
-            gents::session::ForkParams {
+            gents_session::session::ForkParams {
                 source_session_id: session_id,
-                boundary: gents::session::ForkBoundary::BeforeMessageKey(message_key),
+                boundary: gents_session::session::ForkBoundary::BeforeMessageKey(message_key),
                 caller_node_did: node_did,
                 caller_requester_did: Some(&requester),
                 target_agent_did: None,
@@ -94,7 +95,7 @@ impl ClientCore {
         archived: bool,
     ) -> Result<gents_protocol::session::SessionArchiveReceipt> {
         let access = self.operator_access(node_did)?;
-        let result = gents::session::set_session_archived_on(
+        let result = gents_session::session::set_session_archived_on(
             &access,
             node_did,
             session_id,
@@ -129,7 +130,7 @@ impl ClientCore {
         title: &str,
     ) -> Result<()> {
         let snapshot = self.store.snapshot();
-        let requester = gents::session::client_requester_scope(
+        let requester = gents_session::session::client_requester_scope(
             &self.session_queue_access(node_did)?,
             node_did,
             session_id,

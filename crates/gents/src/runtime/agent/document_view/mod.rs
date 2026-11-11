@@ -9,8 +9,8 @@ pub(crate) use load::load_document_runtime_view;
 pub(crate) use load::load_document_runtime_view_as;
 pub(crate) use snapshot::resolve_document_runtime_snapshot_from_view;
 
-use crate::documents::*;
-use crate::inference::auth::credential::OAuthCredential;
+use gents_documents::*;
+use gents_inference::auth::credential::OAuthCredential;
 use rapidhash::RapidHashMap;
 
 #[derive(Debug, Clone)]
@@ -55,9 +55,9 @@ impl DocumentRuntimeView {
     pub(super) fn resolves_oauth_credential(
         &self,
         provider: &str,
-        pick: crate::inference::auth::credential::AccountPick<'_>,
+        pick: gents_inference::auth::credential::AccountPick<'_>,
     ) -> bool {
-        crate::inference::auth::credential::pick_oauth_credential(
+        gents_inference::auth::credential::pick_oauth_credential(
             self.oauth_rows(),
             &self.node.value.node_did,
             provider,
@@ -77,10 +77,10 @@ impl DocumentRuntimeView {
         if !matches!(backend.auth, BackendAuth::NodeOAuthPool { .. }) {
             return Vec::new();
         }
-        crate::inference::auth::credential::pick_oauth_pool(
+        gents_inference::auth::credential::pick_oauth_pool(
             self.oauth_rows(),
             &self.node.value.node_did,
-            crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+            gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
         )
         .into_iter()
         .map(|row| row.credential_id.clone())
@@ -115,8 +115,8 @@ mod tests;
 pub(crate) fn merge_surface_tools(
     tools: &Tools,
     view: &DocumentRuntimeView,
-) -> anyhow::Result<crate::documents::MergedSurfaceTools> {
-    crate::documents::merge_datastore_tool_surfaces(
+) -> anyhow::Result<gents_documents::MergedSurfaceTools> {
+    gents_documents::merge_datastore_tool_surfaces(
         tools,
         view.datastore_tool_surfaces
             .values()

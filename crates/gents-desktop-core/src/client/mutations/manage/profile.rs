@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
-use gents::documents::apply_desired_state_plan;
-use gents::documents::list_inference_profiles_in_txn;
-use gents::documents::read_desired_state_record_in_txn;
-use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::store::collection::Collection;
-use gents::store::config_client::ConfigAccess;
-use gents::InferenceProfile;
+use gents_documents::apply_desired_state_plan;
+use gents_documents::list_inference_profiles_in_txn;
+use gents_documents::read_desired_state_record_in_txn;
+use gents_documents::InferenceProfile;
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents_store::collection::Collection;
+use gents_store::config_client::ConfigAccess;
 
 /// Profiles can be shared by other agents and compaction. Selecting a model
 /// replaces only this agent's binding, preserving those consumers and all
@@ -16,8 +16,8 @@ pub async fn select_agent_model_on(
     agent_did: &str,
     backend_id: &str,
     model_name: &str,
-    reasoning_effort: Option<gents::documents::inference_defaults::ReasoningEffort>,
-    service_tier: Option<gents::inference::resolved::ServiceTier>,
+    reasoning_effort: Option<gents_documents::inference_defaults::ReasoningEffort>,
+    service_tier: Option<gents_inference::resolved::ServiceTier>,
 ) -> Result<InferenceProfile> {
     anyhow::ensure!(!model_name.trim().is_empty(), "Choose a model.");
     access
@@ -78,7 +78,7 @@ pub async fn select_agent_model_on(
                 apply_desired_state_plan(
                     txn,
                     &DesiredStateApplyPlan::new(documents)?,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await?;
                 Ok(selected)
@@ -134,10 +134,10 @@ mod tests {
             "provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1",
             "auth":{"kind":"unauthenticated"}
         }))?;
-        gents::documents::write_inference_backend_document(
+        gents_documents::write_inference_backend_document(
             &access,
             &backend,
-            &gents::inference::resolved::ProviderProfilePolicy,
+            &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await?;
         let original: InferenceProfile = serde_json::from_value(json!({
@@ -237,7 +237,7 @@ mod tests {
                 first_did,
                 "backend",
                 "original",
-                Some(gents::documents::inference_defaults::ReasoningEffort::High),
+                Some(gents_documents::inference_defaults::ReasoningEffort::High),
                 None,
             )
             .await?,
@@ -249,13 +249,13 @@ mod tests {
             first_did,
             "backend",
             "original",
-            Some(gents::documents::inference_defaults::ReasoningEffort::High),
-            Some(gents::inference::resolved::ServiceTier::Fast),
+            Some(gents_documents::inference_defaults::ReasoningEffort::High),
+            Some(gents_inference::resolved::ServiceTier::Fast),
         )
         .await?;
         assert_eq!(
             fast.service_tier,
-            Some(gents::inference::resolved::ServiceTier::Fast)
+            Some(gents_inference::resolved::ServiceTier::Fast)
         );
         assert_ne!(fast.profile_id, original.profile_id);
         assert_eq!(
@@ -265,8 +265,8 @@ mod tests {
                 first_did,
                 "backend",
                 "original",
-                Some(gents::documents::inference_defaults::ReasoningEffort::High),
-                Some(gents::inference::resolved::ServiceTier::Fast),
+                Some(gents_documents::inference_defaults::ReasoningEffort::High),
+                Some(gents_inference::resolved::ServiceTier::Fast),
             )
             .await?,
             fast
@@ -277,23 +277,23 @@ mod tests {
             first_did,
             "backend",
             "original",
-            Some(gents::documents::inference_defaults::ReasoningEffort::High),
-            Some(gents::inference::resolved::ServiceTier::Default),
+            Some(gents_documents::inference_defaults::ReasoningEffort::High),
+            Some(gents_inference::resolved::ServiceTier::Default),
         )
         .await?;
         assert_eq!(
             standard.service_tier,
-            Some(gents::inference::resolved::ServiceTier::Default)
+            Some(gents_inference::resolved::ServiceTier::Default)
         );
         let unsupported = serde_json::from_value(json!({
             "node_did":owner,"backend_id":"unsupported","name":"Unsupported",
             "provider_kind":"AnthropicApiKey","endpoint":"https://api.anthropic.com/v1",
             "auth":{"kind":"api_key","key":"fixture"}
         }))?;
-        gents::documents::write_inference_backend_document(
+        gents_documents::write_inference_backend_document(
             &access,
             &unsupported,
-            &gents::inference::resolved::ProviderProfilePolicy,
+            &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await?;
         assert!(select_agent_model_on(
@@ -303,7 +303,7 @@ mod tests {
             "unsupported",
             "original",
             None,
-            Some(gents::inference::resolved::ServiceTier::Fast),
+            Some(gents_inference::resolved::ServiceTier::Fast),
         )
         .await
         .is_err());
@@ -314,8 +314,8 @@ mod tests {
                 first_did,
                 "backend",
                 "original",
-                Some(gents::documents::inference_defaults::ReasoningEffort::High),
-                Some(gents::inference::resolved::ServiceTier::Default),
+                Some(gents_documents::inference_defaults::ReasoningEffort::High),
+                Some(gents_inference::resolved::ServiceTier::Default),
             )
             .await?,
             standard
@@ -327,7 +327,7 @@ mod tests {
                 second_did,
                 "backend",
                 "original",
-                Some(gents::documents::inference_defaults::ReasoningEffort::High),
+                Some(gents_documents::inference_defaults::ReasoningEffort::High),
                 None,
             )
             .await?,
@@ -347,10 +347,10 @@ mod tests {
         let backend = serde_json::from_value(
             json!({"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}),
         )?;
-        gents::documents::write_inference_backend_document(
+        gents_documents::write_inference_backend_document(
             &access,
             &backend,
-            &gents::inference::resolved::ProviderProfilePolicy,
+            &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await?;
         let mut profile: InferenceProfile = serde_json::from_value(
@@ -381,7 +381,7 @@ mod tests {
                     assert_eq!(retained.max_output_tokens, Some(100));
                     assert_eq!(
                         retained.reasoning_effort,
-                        Some(gents::documents::inference_defaults::ReasoningEffort::High)
+                        Some(gents_documents::inference_defaults::ReasoningEffort::High)
                     );
                     Ok::<_, anyhow::Error>(())
                 })

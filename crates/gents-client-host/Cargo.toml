@@ -22,6 +22,15 @@ blake3 = "1"
 clap.workspace = true
 futures = "0.3"
 gents = { path = "../gents" }
+gents-store = { workspace = true }
+gents-documents = { workspace = true }
+gents-inference = { workspace = true }
+gents-pack = { workspace = true }
+gents-session = { workspace = true }
+gents-tools = { workspace = true }
+gents-automation = { workspace = true }
+gents-observe = { workspace = true }
+gents-loop = { workspace = true }
 gents-server = { package = "gents-cli", path = "../gents-cli", default-features = false }
 gents-desktop-core.workspace = true
 gents-protocol.workspace = true

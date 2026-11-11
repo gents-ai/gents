@@ -49,8 +49,7 @@ async fn dispatch_receipt_loss_gates_real_hook_loop_invocation() {
                 gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
             );
             let collected = if input.acknowledged {
-                let (collected, fired) = crate::store::config_client::ConfigApplyTxn::
-                    with_post_commit_receipt_loss_for_operation(
+                let (collected, fired) = gents_store::config_client::ConfigApplyTxn::with_post_commit_receipt_loss_for_operation(
                         Some("test.unrelated_transaction"), collect,
                     ).await;
                 assert!(
@@ -59,8 +58,7 @@ async fn dispatch_receipt_loss_gates_real_hook_loop_invocation() {
                 );
                 collected
             } else {
-                let (collected, fired) = crate::store::config_client::ConfigApplyTxn::
-                    with_post_commit_receipt_loss_for_operation(
+                let (collected, fired) = gents_store::config_client::ConfigApplyTxn::with_post_commit_receipt_loss_for_operation(
                         Some("tool_call.start_running_canonical"), collect,
                     ).await;
                 assert!(fired, "{}: dispatch commit must be reached", case.name);
@@ -134,7 +132,7 @@ impl PolicyDeniedOwner {
             Self::ReadOnlyBash => PolicyDeniedCall {
                 tool_name: "bash",
                 arguments: serde_json::json!({"command": "rm", "args": ["-rf", "."]}),
-                tools: vec![crate::tools::native::read_only_bash_for_test(
+                tools: vec![gents_tools::native::read_only_bash_for_test(
                     root,
                     vec!["ls".into()],
                 )],
@@ -142,8 +140,8 @@ impl PolicyDeniedOwner {
             Self::CliArgvPrefix => PolicyDeniedCall {
                 tool_name: "git",
                 arguments: serde_json::json!({"argv": ["push", "--force"]}),
-                tools: vec![crate::tools::native::cli_tool_for_test(
-                    crate::tools::native::CliToolConfig {
+                tools: vec![gents_tools::native::cli_tool_for_test(
+                    gents_tools::native::CliToolConfig {
                         name: "git".into(),
                         binary_path: "/bin/echo".into(),
                         description: String::new(),
@@ -162,20 +160,20 @@ impl PolicyDeniedOwner {
                     "tool_name": "unselected-tool",
                     "arguments": {}
                 }),
-                tools: vec![Box::new(crate::tools::mcp::meta::CallToolTool::new(
-                    crate::tools::mcp::meta::MetaToolContext {
-                        configuration: crate::inference::resolved::ResolvedConfiguration::Static,
-                        actor: identity::Did::new(crate::triggers::callback::test_agent_did()).unwrap(),
+                tools: vec![Box::new(gents_tools::mcp::meta::CallToolTool::new(
+                    gents_tools::mcp::meta::MetaToolContext {
+                        configuration: gents_inference::resolved::ResolvedConfiguration::Static,
+                        actor: identity::Did::new(gents_automation::triggers::callback::test_agent_did()).unwrap(),
                         node: node.clone(),
-                        mcp_pool: crate::tools::mcp::pool::McpPool::new()
+                        mcp_pool: gents_tools::mcp::pool::McpPool::new()
                             .for_agent(node.node_identity_did().expect("fixture node has an identity")),
-                        health: crate::tools::mcp::health::ServiceHealthMap::new(),
+                        health: gents_tools::mcp::health::ServiceHealthMap::new(),
                         local_hostname: "local".into(),
                         local_subnet: None,
                         node_did: node.node_identity_did().expect("fixture node has an identity").into(),
                         allowed_mcp_service_ids: vec!["selected-service".into()],
-                        remote_tools: crate::documents::RemoteTools {
-                            services: vec![crate::documents::RemoteServiceTools {
+                        remote_tools: gents_documents::RemoteTools {
+                            services: vec![gents_documents::RemoteServiceTools {
                                 mcp_service_id: "selected-service".into(),
                                 tool_names: vec!["selected-tool".into()],
                                 ..Default::default()
@@ -239,8 +237,7 @@ async fn policy_rejection_settles_pending_call_without_dispatch_election() {
                     &mut lifecycle,
                     gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
                 );
-                let (collected, fired) = crate::store::config_client::ConfigApplyTxn::
-                    with_post_commit_receipt_loss_for_operation(
+                let (collected, fired) = gents_store::config_client::ConfigApplyTxn::with_post_commit_receipt_loss_for_operation(
                         Some("tool_call.start_running_canonical"), collect,
                     ).await;
 
@@ -284,7 +281,7 @@ async fn policy_rejection_settles_pending_call_without_dispatch_election() {
 
                 let completion = lifecycle
                     .terminalize_owned(
-                        crate::request::lifecycle::RequestTerminalOutcome::Completed,
+                        gents_session::request::lifecycle::RequestTerminalOutcome::Completed,
                         writer.terminal_output(&lifecycle.request().doc_id).await,
                         None,
                     )
@@ -362,7 +359,7 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
         "fresh result must reach the next dispatch intact below threshold"
     );
 
-    let persisted = crate::session::load_history_with_access(
+    let persisted = gents_session::session::load_history_with_access(
         &lifecycle.access().unwrap(),
         &lifecycle.request().session_id,
         &lifecycle.request().node_did,
@@ -555,16 +552,16 @@ async fn oversized_tool_result_is_bounded_before_threading() {
 fn plugin_image_tool(image_bytes: usize) -> (tempfile::TempDir, Box<dyn ToolDyn>) {
     const PREFIX: &[u8] = br#"{"response":{"width":2,"height":2},"parts":[{"type":"image","mimeType":"image/png","data":""#;
     const SUFFIX: &[u8] = br#""}]}"#;
-    let (home, record) = crate::plugin::tests::executor::installed_plugin(
-        &crate::plugin::test_fixtures::filled_output_wat(PREFIX, image_bytes, SUFFIX),
+    let (home, record) = gents_toolcalls::plugin::tests::executor::installed_plugin(
+        &gents_pack::plugin::test_fixtures::filled_output_wat(PREFIX, image_bytes, SUFFIX),
         None,
     );
-    let executor = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+    let executor = Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(Some(
         home.path().to_owned(),
     )));
-    let tool = crate::plugin::tool::PluginTool::resolve(
+    let tool = gents_toolcalls::plugin::tool::PluginTool::resolve(
         executor,
-        &crate::documents::PluginToolRef {
+        &gents_documents::PluginToolRef {
             tool_calls: false,
             plugin: "team/plugin".into(),
             digest: Some(record.digest.clone()),
@@ -595,7 +592,7 @@ fn plugin_call_then_text_turns() -> Vec<Vec<RawStreamingChoice<()>>> {
 }
 
 async fn plugin_image_result_seen_by(
-    provider: crate::BackendProviderKind,
+    provider: gents_inference::backends::provider::BackendProviderKind,
     image_bytes: usize,
 ) -> Vec<ToolResultContent> {
     let (_home, tool) = plugin_image_tool(image_bytes);
@@ -605,7 +602,7 @@ async fn plugin_image_result_seen_by(
     config.provider_input_counter =
         Arc::new(crate::turn::provider_input::ProviderInputCounter::new(
             provider,
-            crate::OpenAiWireApi::ChatCompletions,
+            gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
             "test-model",
         ));
     let stream = run_loop_stream(
@@ -643,7 +640,7 @@ async fn plugin_image_result_seen_by(
 async fn plugin_image_parts_reach_the_provider_whole() {
     const IMAGE_BYTES: usize = 900_000;
     let result =
-        plugin_image_result_seen_by(crate::BackendProviderKind::AnthropicApiKey, IMAGE_BYTES).await;
+        plugin_image_result_seen_by(gents_inference::backends::provider::BackendProviderKind::AnthropicApiKey, IMAGE_BYTES).await;
     assert_eq!(result.len(), 2, "one text part and one image part");
     assert_eq!(tool_result_text(&result[0]), r#"{"height":2,"width":2}"#);
     let ToolResultContent::Image(image) = &result[1] else {
@@ -651,9 +648,9 @@ async fn plugin_image_parts_reach_the_provider_whole() {
     };
     assert_eq!(
         image.media_type,
-        Some(crate::inference::llm::message::ImageMediaType::PNG)
+        Some(gents_inference::llm::message::ImageMediaType::PNG)
     );
-    let crate::inference::llm::message::DocumentSourceKind::Base64(data) = &image.data else {
+    let gents_inference::llm::message::DocumentSourceKind::Base64(data) = &image.data else {
         panic!("the image arrives as base64 data");
     };
     assert_eq!(
@@ -693,7 +690,7 @@ async fn persisted_plugin_image_result_replay(image_bytes: usize) {
     assert_eq!(collected.final_text.as_deref(), Some("seen"));
 
     let session_id = hook.session_id().await.expect("session id");
-    let history = crate::session::load_history_with_access(
+    let history = gents_session::session::load_history_with_access(
         &lifecycle.access().unwrap(),
         &session_id,
         &lifecycle.request().node_did,
@@ -729,7 +726,7 @@ async fn persisted_plugin_image_result_replay(image_bytes: usize) {
 #[tokio::test]
 async fn plugin_image_parts_become_a_note_where_the_provider_refuses_them() {
     let result =
-        plugin_image_result_seen_by(crate::BackendProviderKind::OpenAiCompatible, 64).await;
+        plugin_image_result_seen_by(gents_inference::backends::provider::BackendProviderKind::OpenAiCompatible, 64).await;
     assert_eq!(
         result.iter().map(tool_result_text).collect::<Vec<_>>(),
         vec![
@@ -741,7 +738,7 @@ async fn plugin_image_parts_become_a_note_where_the_provider_refuses_them() {
 
 #[tokio::test]
 async fn dispatch_tool_types_unparseable_args_as_argument_invalid() {
-    use crate::inference::llm::tool::{Tool, ToolDefinition};
+    use gents_loop::tool::{Tool, ToolDefinition};
 
     struct StrictArgsTool {
         calls: Arc<AtomicUsize>,
@@ -821,7 +818,7 @@ async fn dispatch_tool_types_unparseable_args_as_argument_invalid() {
 
 #[tokio::test]
 async fn missing_tool_args_notify_model_and_terminalize_failed() {
-    use crate::inference::llm::tool::{Tool, ToolDefinition};
+    use gents_loop::tool::{Tool, ToolDefinition};
 
     struct StrictArgsTool;
     #[derive(Debug, thiserror::Error)]
@@ -967,15 +964,15 @@ async fn completed_terminalization_scans_request_output_once_for_many_tools() {
     assert!(collected.error.is_none(), "{:?}", collected.error);
     assert_eq!(collected.tool_results.len(), TOOL_TURNS);
     let selection = writer.terminal_output(&lifecycle.request().doc_id).await;
-    let (result, scans) = crate::session::count_request_output_scans(lifecycle.terminalize_owned(
-        crate::request::lifecycle::RequestTerminalOutcome::Completed,
+    let (result, scans) = gents_session::session::count_request_output_scans(lifecycle.terminalize_owned(
+        gents_session::request::lifecycle::RequestTerminalOutcome::Completed,
         selection,
         None,
     ))
     .await;
     assert_eq!(
         result.unwrap(),
-        crate::request::lifecycle::TerminalizeResult::Won
+        gents_session::request::lifecycle::TerminalizeResult::Won
     );
     assert_eq!(scans, 1, "request output scanned once per accepted tool");
     node.shutdown().await.expect("node shutdown");
@@ -1089,11 +1086,11 @@ async fn terminalization_with_principal_output(
     }
     let selection = writer.terminal_output(&request_doc_id).await;
     let started = std::time::Instant::now();
-    let result = crate::request::lifecycle::terminalize_owned_at_with_access(
+    let result = gents_session::request::lifecycle::terminalize_owned_at_with_access(
         &lifecycle.access().unwrap(),
         &request_doc_id,
         &generation,
-        crate::request::lifecycle::RequestTerminalOutcome::Completed,
+        gents_session::request::lifecycle::RequestTerminalOutcome::Completed,
         selection,
         finished_at,
     )
@@ -1101,7 +1098,7 @@ async fn terminalization_with_principal_output(
     let elapsed = started.elapsed();
     assert_eq!(
         result.unwrap(),
-        crate::request::lifecycle::TerminalizeResult::Won
+        gents_session::request::lifecycle::TerminalizeResult::Won
     );
     drop(lifecycle);
     eprintln!(
@@ -1208,7 +1205,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
                 create(&node, &segment).await;
             }
         }
-        let response = crate::store::graphql::graphql_with_transaction_retry(
+        let response = gents_store::graphql::graphql_with_transaction_retry(
             &node,
             &format!("query @explain(type: execute) {query}"),
             "explain request output",
@@ -1218,7 +1215,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
         let data = response.data.unwrap();
         let request_scan = scan(&data, "indexFetches")
             .unwrap_or_else(|| panic!("request output must report index execution work: {data}"));
-        let plan = crate::store::graphql::graphql_with_transaction_retry(
+        let plan = gents_store::graphql::graphql_with_transaction_retry(
             &node,
             &format!("query @explain {query}"),
             "explain request output plan",
@@ -1241,7 +1238,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
                 .as_u64()
                 .expect("execution must report index work"),
         );
-        let output = crate::session::tool_output_rows::canonical_tool_output(
+        let output = gents_session::session::tool_output_rows::canonical_tool_output(
             &node,
             "tool-doc",
             &request_id,
@@ -1253,8 +1250,8 @@ async fn background_output_query_work_is_independent_of_principal_history() {
         .unwrap();
         assert_eq!(output, "output");
         assert_eq!(
-            crate::session::tool_output_rows::observe_canonical_tool_output_with_access(
-                &crate::store::config_client::ConfigAccess::local(node.clone()),
+            gents_session::session::tool_output_rows::observe_canonical_tool_output_with_access(
+                &gents_store::config_client::ConfigAccess::local(node.clone()),
                 "tool-doc",
                 &request_id,
                 "session",
@@ -1263,7 +1260,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
             )
             .await
             .unwrap(),
-            crate::session::tool_output_rows::CanonicalToolOutputObservation::Closed(output)
+            gents_session::session::tool_output_rows::CanonicalToolOutputObservation::Closed(output)
         );
     }
     assert_eq!(
@@ -1298,7 +1295,7 @@ impl ToolDyn for ComposedChild {
         Box::pin(async move {
             if self.name == "slow" {
                 tokio::time::sleep(
-                    crate::plugin::PluginBudget::default().wall_clock + Duration::from_secs(1),
+                    gents_pack::plugin::PluginBudget::default().wall_clock + Duration::from_secs(1),
                 )
                 .await;
                 return Ok("\"slow done\"".into());
@@ -1320,8 +1317,8 @@ async fn composed_children_outlast_the_guest_clock_and_fail_without_ending_the_p
     let request = serde_json::json!({"tool_calls": {"requests": [
         {"id": "slow", "tool_name": "slow", "arguments": {}},
         {"id": "late", "tool_name": "late", "arguments": {}}]}});
-    let (home, record) = crate::plugin::tests::executor::installed_plugin(
-        &crate::plugin::tests::executor::asking_plugin_wat(
+    let (home, record) = gents_toolcalls::plugin::tests::executor::installed_plugin(
+        &gents_toolcalls::plugin::tests::executor::asking_plugin_wat(
             "tool_calls",
             "tool_results",
             &request,
@@ -1329,11 +1326,11 @@ async fn composed_children_outlast_the_guest_clock_and_fail_without_ending_the_p
         ),
         None,
     );
-    let plugin = crate::plugin::tool::PluginTool::resolve(
-        Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+    let plugin = gents_toolcalls::plugin::tool::PluginTool::resolve(
+        Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(Some(
             home.path().to_owned(),
         ))),
-        &crate::documents::PluginToolRef {
+        &gents_documents::PluginToolRef {
             tool_calls: true,
             plugin: "team/plugin".into(),
             digest: Some(record.digest.clone()),
@@ -1356,7 +1353,7 @@ async fn composed_children_outlast_the_guest_clock_and_fail_without_ending_the_p
         Arc::new(tools),
         owned_config(4),
     );
-    let collected = crate::tools::runtime_context::scope_request_tool_execution(
+    let collected = gents_tools::runtime_context::scope_request_tool_execution(
         Some(chrono::Utc::now() + chrono::Duration::seconds(60)),
         tokio_util::sync::CancellationToken::new(),
         Box::pin(collect_owned_scripted_stream(
@@ -1555,8 +1552,8 @@ async fn allow_general_agent_target(
     let agent_did = request.agent_did.as_str();
     let documents = [
         (
-            crate::Collection::AgentTarget,
-            serde_json::to_value(crate::documents::AgentTargetDocument {
+            gents_store::collection::Collection::AgentTarget,
+            serde_json::to_value(gents_documents::AgentTargetDocument {
                 target_id: "general:general".to_owned(),
                 node_did: node_did.to_owned(),
                 target_node_did: node_did.to_owned(),
@@ -1568,7 +1565,7 @@ async fn allow_general_agent_target(
             .unwrap(),
         ),
         (
-            crate::Collection::Tools,
+            gents_store::collection::Collection::Tools,
             serde_json::json!({
                 "node_did": node_did,
                 "tools_id": format!("{agent_did}:tools"),
@@ -1576,10 +1573,10 @@ async fn allow_general_agent_target(
             }),
         ),
     ];
-    let plan = crate::documents::DesiredStateApplyPlan::new(
+    let plan = gents_documents::DesiredStateApplyPlan::new(
         documents
             .into_iter()
-            .map(|(collection, value)| crate::documents::DesiredStateApplyDocument {
+            .map(|(collection, value)| gents_documents::DesiredStateApplyDocument {
                 collection,
                 add: value.clone(),
                 update: value,
@@ -1588,10 +1585,10 @@ async fn allow_general_agent_target(
     )
     .unwrap();
     let actor = node.node_identity_did().expect("fixture node has an identity");
-    crate::ConfigAccess::local_as(node.clone(), ::identity::Did::new(actor).unwrap())
+    gents_store::config_client::ConfigAccess::local_as(node.clone(), ::identity::Did::new(actor).unwrap())
         .transact_write("test.allow_general_agent_target", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan, &crate::inference::resolved::ProviderProfilePolicy).await })
+            Box::pin(async move { gents_documents::apply_desired_state_plan(txn, plan, &gents_inference::resolved::ProviderProfilePolicy).await })
         })
         .await
         .unwrap();
@@ -1605,7 +1602,7 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
         .unwrap();
     let hook_owned = hook_owned_children();
     let mut driven: Vec<&str> = hook_owned.iter().map(|(name, ..)| *name).collect();
-    let mut routes: Vec<&str> = crate::tools::call::hook::persistence::HookOwnedTool::ROUTES
+    let mut routes: Vec<&str> = gents_toolcalls::call::hook::persistence::HookOwnedTool::ROUTES
         .iter()
         .map(|(name, _)| *name)
         .collect();
@@ -1653,7 +1650,7 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
         let hook = hook
             .with_goal_tool_authority(true, true)
             .with_background_tool_registry(
-                crate::tools::call::hook::BackgroundToolRegistry::from_tools(
+                gents_toolcalls::call::hook::BackgroundToolRegistry::from_tools(
                     vec![Box::new(AdmissionChild {
                         name: "child",
                         invoked: invoked.clone(),
@@ -1670,7 +1667,7 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
             Arc::new(tools),
             owned_config(4),
         );
-        let collected = crate::tools::runtime_context::scope_request_tool_execution(
+        let collected = gents_tools::runtime_context::scope_request_tool_execution(
             Some(chrono::Utc::now() + chrono::Duration::seconds(60)),
             tokio_util::sync::CancellationToken::new(),
             Box::pin(collect_owned_scripted_stream(
@@ -1797,7 +1794,7 @@ async fn a_script_that_stops_mid_child_settles_the_child_and_the_request_finishe
         Arc::new(tools),
         owned_config(4),
     );
-    let collected = crate::tools::runtime_context::scope_request_tool_execution(
+    let collected = gents_tools::runtime_context::scope_request_tool_execution(
         Some(chrono::Utc::now() + chrono::Duration::seconds(60)),
         tokio_util::sync::CancellationToken::new(),
         Box::pin(collect_owned_scripted_stream(
@@ -1829,7 +1826,7 @@ async fn a_script_that_stops_mid_child_settles_the_child_and_the_request_finishe
     let selection = writer.terminal_output(&lifecycle.request().doc_id).await;
     lifecycle
         .terminalize_owned(
-            crate::request::lifecycle::RequestTerminalOutcome::Completed,
+            gents_session::request::lifecycle::RequestTerminalOutcome::Completed,
             selection,
             None,
         )
@@ -1961,8 +1958,8 @@ async fn assert_overlapping_reads_keep_call_order(fail_first: bool) {
 #[tokio::test]
 async fn parallel_native_reads_publish_distinct_bound_unchanged_receipts() {
     let identity_dir = tempfile::tempdir().unwrap();
-    let identity: Arc<dyn crate::NodeIdentity> = Arc::new(
-        crate::KeyIdentity::load_or_create(identity_dir.path().join("native-read.key"), None)
+    let identity: Arc<dyn gents_store::identity::NodeIdentity> = Arc::new(
+        gents_store::identity::KeyIdentity::load_or_create(identity_dir.path().join("native-read.key"), None)
             .unwrap(),
     );
     let (node, hook, writer, mut lifecycle) = owned_test_hook_with_identity(identity.clone()).await;
@@ -1975,7 +1972,7 @@ async fn parallel_native_reads_publish_distinct_bound_unchanged_receipts() {
     tokio::fs::write(root.path().join("b.txt"), "beta")
         .await
         .unwrap();
-    let tools = crate::tools::native::ToolSet::builder()
+    let tools = gents_tools::native::ToolSet::builder()
         .read_root(root.path())
         .read_file()
         .build()
@@ -2077,7 +2074,7 @@ async fn measure_parallel_native_read_turns() {
     let mut totals = [Duration::ZERO; 2];
     for round in 0..10 {
         for parallel in [round % 2 == 0, round % 2 != 0] {
-            let native = crate::tools::native::ToolSet::builder()
+            let native = gents_tools::native::ToolSet::builder()
                 .read_root(root.path())
                 .read_file()
                 .build()

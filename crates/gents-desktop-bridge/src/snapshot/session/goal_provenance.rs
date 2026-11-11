@@ -1,6 +1,5 @@
 use std::collections::BTreeSet;
 
-use gents::store::config_client::{ConfigRead, TransactionFailure};
 use gents_desktop_core::client::CanonicalTranscriptDependencies;
 use gents_protocol::output::rows::TranscriptMessageRow;
 use gents_protocol::output::{
@@ -8,6 +7,7 @@ use gents_protocol::output::{
     MessagePublication, MessageRole,
 };
 use gents_protocol::row::AgentRequestRow;
+use gents_store::config_client::{ConfigRead, TransactionFailure};
 
 use crate::types::{
     DesktopSessionSnapshot, MessageView, PendingTurnView, ReconstructionState, RenderedTimelineItem,
@@ -21,7 +21,7 @@ struct ProvenanceView<'a> {
 }
 
 struct ObservedProvenance<'source, 'request> {
-    confirmed: gents::goal::OpeningGoalProvenance,
+    confirmed: gents_automation::goal::OpeningGoalProvenance,
     candidates: Vec<&'request AgentRequestRow>,
     copied: Vec<(
         &'source str,
@@ -50,7 +50,7 @@ async fn observe<'source, 'request>(
         let Some(doc) = request.doc_id.as_deref() else {
             continue;
         };
-        let owner = gents::request::lifecycle::input_message_owner(request);
+        let owner = gents_session::request::lifecycle::input_message_owner(request);
         let has_message = owner.as_ref().is_some_and(|(_, key)| {
             view.messages.iter().any(|message| {
                 message.message_key == *key
@@ -107,7 +107,7 @@ async fn observe<'source, 'request>(
         .iter()
         .map(|(_, message)| *message)
         .collect::<Vec<_>>();
-    let confirmed = match gents::goal::load_applied_opening_goal_provenance(
+    let confirmed = match gents_automation::goal::load_applied_opening_goal_provenance(
         access,
         &candidates,
         &origins,
@@ -166,7 +166,7 @@ pub(crate) async fn attach(
         let Some(goal_id) = confirmed.by_request_doc_id.get(doc) else {
             continue;
         };
-        let owner = gents::request::lifecycle::input_message_owner(request);
+        let owner = gents_session::request::lifecycle::input_message_owner(request);
         let has_pending = snapshot
             .pending_turn
             .iter()
@@ -274,7 +274,7 @@ pub(super) async fn attach_messages(
         else {
             continue;
         };
-        let owner = gents::request::lifecycle::input_message_owner(request);
+        let owner = gents_session::request::lifecycle::input_message_owner(request);
         for message in messages.iter_mut() {
             if owner
                 .as_ref()

@@ -14,11 +14,11 @@ use gents_loop::claude_messages_body::{
 use gents_loop::loop_stream::LoopConfig;
 use gents_protocol::session::{SessionCreationCause, SessionScope};
 
-use crate::inference::resolved::ResolvedAgent;
-use crate::request::lifecycle::ExecutionOrigin;
-use crate::session::origin::{self, CreationOrigin};
-use crate::store::config_client::ConfigAccess;
 use crate::AgentRequest;
+use gents_inference::resolved::ResolvedAgent;
+use gents_session::request::lifecycle::ExecutionOrigin;
+use gents_session::session::origin::{self, CreationOrigin};
+use gents_store::config_client::ConfigAccess;
 
 /// Longest starter chain read to find the session a conversation started from.
 const MAX_CHAIN_HOPS: usize = 32;
@@ -230,7 +230,7 @@ pub(crate) fn with_context(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::origin::SessionLink;
+    use gents_session::session::origin::SessionLink;
     use rapidhash::{HashMapExt, RapidHashMap};
 
     fn scope(session_id: &str) -> SessionScope {

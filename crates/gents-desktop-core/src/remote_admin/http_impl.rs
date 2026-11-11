@@ -8,7 +8,7 @@ use reqwest::{header::CONTENT_TYPE, Client, Method, RequestBuilder};
 use serde::{Deserialize, Serialize};
 
 use defra_node::Node as EmbeddedNode;
-use gents::runtime::agent::p2p_reconcile::{
+use gents_p2p::p2p_reconcile::{
     resolve_embedded_collection_id, resolve_embedded_collection_name, to_replication_filters,
     PairingFilters, RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult, RemoteReplicator,
 };
@@ -28,7 +28,7 @@ pub struct HttpRemoteP2pAdmin {
     api_base_path: String,
     client: Client,
     actor: Option<Arc<PrincipalIdentity>>,
-    node_identity: Option<gents::store::config_client::GraphqlEndpoint>,
+    node_identity: Option<gents_store::config_client::GraphqlEndpoint>,
     local_resolver: Option<Arc<EmbeddedNode>>,
 }
 
@@ -46,7 +46,7 @@ impl HttpRemoteP2pAdmin {
 
     pub fn with_node_identity(
         mut self,
-        endpoint: gents::store::config_client::GraphqlEndpoint,
+        endpoint: gents_store::config_client::GraphqlEndpoint,
     ) -> Self {
         self.node_identity = Some(endpoint);
         self
@@ -501,7 +501,7 @@ mod tests {
         let server = MockServer::start().await;
         let filters = to_replication_filters(&BTreeMap::from([(
             "AgentRequest".to_string(),
-            gents::runtime::agent::p2p_reconcile::equality_filter("node_did", "did:key:mandrake"),
+            gents_p2p::p2p_reconcile::equality_filter("node_did", "did:key:mandrake"),
         )]))
         .expect("representable filter");
         let body = serde_json::json!([

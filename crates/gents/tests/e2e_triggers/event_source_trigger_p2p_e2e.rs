@@ -9,10 +9,10 @@
 use std::time::Duration;
 
 use gents::defra_node::Node as EmbeddedNode;
-use gents::runtime::agent::p2p_reconcile::{
+use gents_p2p::p2p_reconcile::{
     EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin, RemoteP2pAdminError,
 };
-use gents::store::graphql::escape_graphql_string;
+use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;
 
 use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
@@ -100,7 +100,7 @@ async fn p2p_refuses_to_replicate_an_application_event_source() {
 
     for node in [&db_writer.node, &db_agent.node] {
         assert!(
-            !gents::store::identity::node_p2p(node)
+            !gents_store::identity::node_p2p(node)
                 .expect("P2P transport")
                 .get_collections()
                 .await

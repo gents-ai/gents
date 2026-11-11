@@ -2,13 +2,13 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::store::config_client::ConfigAccess;
 use gents_desktop_core::client::{
     ClientCore, ClientCoreOptions, DesktopPaths, SubmitRequestOptions,
 };
 use gents_desktop_core::test_fixtures::ServedRuntimeHome;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
+use gents_store::config_client::ConfigAccess;
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -30,9 +30,9 @@ async fn submit_request_does_not_create_runtime_projections() -> Result<()> {
                     requester_did: {{ _eq: "{}" }}
                 }}) {{ _docID }}
             }}"#,
-            gents::store::graphql::escape_graphql_string(&session_id),
-            gents::store::graphql::escape_graphql_string(&node_did),
-            gents::store::graphql::escape_graphql_string(&node_did),
+            gents_store::graphql::escape_graphql_string(&session_id),
+            gents_store::graphql::escape_graphql_string(&node_did),
+            gents_store::graphql::escape_graphql_string(&node_did),
         ))
         .await?;
     let data = &response["data"];

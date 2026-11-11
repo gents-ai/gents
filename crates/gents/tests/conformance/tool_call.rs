@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn cancel_cause_vocabulary_matches_production() {
-    use gents::session::tool_call_state::CancelCause;
+    use gents_session::session::tool_call_state::CancelCause;
     assert_eq!(
         lean_vocabulary_values("CancelCause"),
         CancelCause::ALL

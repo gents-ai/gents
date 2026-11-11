@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use super::*;
 use crate::runtime::agent::DocumentResolveContext;
-use crate::store::graphql::escape_graphql_string;
-use crate::store::identity::{KeyIdentity, NodeIdentity};
-use crate::tools::surface::ToolCeiling;
+use gents_store::graphql::escape_graphql_string;
+use gents_store::identity::{KeyIdentity, NodeIdentity};
+use gents_tools::surface::ToolCeiling;
 
 fn test_identity(name: &str) -> KeyIdentity {
     let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
@@ -13,7 +13,7 @@ fn test_identity(name: &str) -> KeyIdentity {
 
 #[tokio::test]
 async fn runtime_view_uses_reader_grant_and_hides_unlinked_agents() -> anyhow::Result<()> {
-    use crate::store::config_client::{ConfigAccess, NodePermission};
+    use gents_store::config_client::{ConfigAccess, NodePermission};
 
     let (db, user, owner, binding) =
         crate::test_support::root::signed_test_node("runtime-view-reader").await;
@@ -70,11 +70,11 @@ async fn existing_document_runtime_view_does_not_wait_for_mutation_gate() {
         crate::test_support::root::signed_test_node("document-view-mutation-gate").await;
     let node = db.node.clone();
     let owner = db.node_identity.did();
-    let principal = crate::documents::ensure_node(&node, owner).await.unwrap();
+    let principal = gents_documents::ensure_node(&node, owner).await.unwrap();
     seed_automation(
         &access,
         vec![(
-            crate::Collection::Skill,
+            gents_store::collection::Collection::Skill,
             serde_json::json!({
                 "skill_id": "runtime-skill", "node_did": owner, "name": "Runtime skill",
                 "instructions": "Loaded through the snapshot.", "enabled": true,
@@ -83,7 +83,7 @@ async fn existing_document_runtime_view_does_not_wait_for_mutation_gate() {
     )
     .await;
     let skill_doc_id = find_owned_doc(&access, "Skill", "skill_id", "runtime-skill").await;
-    let held = crate::store::config_client::ConfigApplyTxn::begin_local(&node, None)
+    let held = gents_store::config_client::ConfigApplyTxn::begin_local(&node, None)
         .await
         .unwrap();
     let view = tokio::time::timeout(
@@ -148,7 +148,7 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::inference::backends::health::BackendHealthMap::new(),
+        gents_inference::backends::health::BackendHealthMap::new(),
     );
     let mut view = load_document_runtime_view(&node, identity.did())
         .await
@@ -157,19 +157,19 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
     let tools_id = format!("{default_agent_did}:tools");
     let tools_doc_id = view.tools[&tools_id].doc_id.clone();
     let mut tools_doc = view.tools[&tools_id].value.clone();
-    tools_doc.host.get_or_insert_with(Default::default).files = Some(crate::documents::FileTools {
-        mode: crate::documents::FileToolMode::ReadOnly,
+    tools_doc.host.get_or_insert_with(Default::default).files = Some(gents_documents::FileTools {
+        mode: gents_documents::FileToolMode::ReadOnly,
         ..Default::default()
     });
-    crate::documents::write_tools_document(
+    gents_documents::write_tools_document(
         &user_access,
         &tools_doc,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .expect("write read-only Tools patch");
 
-    let behavior_doc_id = crate::documents::load_agent_record(node.as_ref(), &default_agent_did)
+    let behavior_doc_id = gents_documents::load_agent_record(node.as_ref(), &default_agent_did)
         .await
         .unwrap()
         .expect("agent record")
@@ -196,7 +196,7 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
             .as_ref()
             .and_then(|host| host.files.as_ref())
             .map(|files| files.mode),
-        Some(crate::documents::FileToolMode::ReadOnly),
+        Some(gents_documents::FileToolMode::ReadOnly),
         "reloaded view must observe the read-only file-tools patch"
     );
     view = reloaded;
@@ -208,7 +208,7 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
         .agents
         .get(&default_agent_did)
         .expect("resolved agent");
-    let crate::inference::resolved::ResolvedConfiguration::Documents(selected) =
+    let gents_inference::resolved::ResolvedConfiguration::Documents(selected) =
         &resolved.configuration
     else {
         panic!("managed agents require document-bound configuration");
@@ -261,8 +261,8 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
 
 #[tokio::test]
 async fn resolve_composes_explicitly_selected_skill_into_prompt() {
-    use crate::inference::llm::tool::Tool;
     use crate::turn::prompt::LayeredPromptBuilder;
+    use gents_loop::tool::Tool;
 
     let (db, _user, access, binding) =
         crate::test_support::root::signed_test_node("document-view-skill").await;
@@ -272,7 +272,7 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
     seed_automation(
         &access,
         vec![(
-            crate::Collection::Skill,
+            gents_store::collection::Collection::Skill,
             serde_json::json!({
                 "skill_id": "skill-research", "node_did": identity.did(),
                 "name": "Research", "description": "Find and cite sources",
@@ -284,7 +284,7 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
     .await;
     patch_desired_document(
         &access,
-        crate::Collection::AgentContext,
+        gents_store::collection::Collection::AgentContext,
         identity.did(),
         &format!("{default_agent_did}:context"),
         serde_json::json!({"skill_ids": ["skill-research"]}),
@@ -294,7 +294,7 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::inference::backends::health::BackendHealthMap::new(),
+        gents_inference::backends::health::BackendHealthMap::new(),
     );
     let view = load_document_runtime_view(&node, identity.did())
         .await
@@ -339,11 +339,11 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
     );
 
     let ceiling =
-        crate::documents::skills::skill_tool_ceiling(tool_surface.tool_names(), &[], false);
+        gents_documents::skills::skill_tool_ceiling(tool_surface.tool_names(), &[], false);
     let load_skill =
-        crate::tools::native::skills::LoadSkillTool::new(agent_config.skills.clone(), ceiling);
+        gents_tools::native::skills::LoadSkillTool::new(agent_config.skills.clone(), ceiling);
     let loaded = load_skill
-        .call(crate::tools::native::skills::LoadSkillArgs {
+        .call(gents_tools::native::skills::LoadSkillArgs {
             name: "Research".to_string(),
         })
         .await
@@ -366,7 +366,7 @@ async fn skill_crud_mutations_round_trip() {
     seed_automation(
         &access,
         vec![(
-            crate::Collection::Skill,
+            gents_store::collection::Collection::Skill,
             serde_json::json!({
                 "skill_id": "s1", "node_did": db.node_identity.did(),
                 "name": "S", "tool_refs": ["read_file"], "enabled": true,
@@ -377,7 +377,7 @@ async fn skill_crud_mutations_round_trip() {
     let doc = find_owned_doc(&access, "Skill", "skill_id", "s1").await;
     patch_desired_document(
         &access,
-        crate::Collection::Skill,
+        gents_store::collection::Collection::Skill,
         db.node_identity.did(),
         "s1",
         serde_json::json!({"enabled": false}),
@@ -392,7 +392,7 @@ async fn skill_crud_mutations_round_trip() {
         Some(false),
         "disable must persist"
     );
-    delete_signed_document(&access, crate::Collection::Skill, &doc).await;
+    delete_signed_document(&access, gents_store::collection::Collection::Skill, &doc).await;
     let response = access
         .execute(r#"{ Skill(filter: { skill_id: { _eq: "s1" } }) { _docID } }"#)
         .await
@@ -416,7 +416,7 @@ async fn apply_control_update_hot_reloads_skill() {
     seed_automation(
         &access,
         vec![(
-            crate::Collection::Skill,
+            gents_store::collection::Collection::Skill,
             serde_json::json!({
                 "skill_id": "s-reload", "node_did": identity.did(),
                 "name": "Reload", "instructions": "Reload me.", "enabled": true,
@@ -438,11 +438,11 @@ async fn apply_control_update_hot_reloads_skill() {
     let foreign = tokio::task::spawn_blocking(|| test_identity("document-view-foreign-node"))
         .await
         .unwrap();
-    crate::test_support::documents::bootstrap_signed_test_node(&access, foreign.did()).await;
+    gents_documents::test_support::bootstrap_signed_test_node(&access, foreign.did()).await;
     seed_automation(
         &access,
         vec![(
-            crate::Collection::Skill,
+            gents_store::collection::Collection::Skill,
             serde_json::json!({
                 "skill_id": "s-foreign", "node_did": foreign.did(), "name": "F", "enabled": true,
             }),
@@ -459,7 +459,7 @@ async fn apply_control_update_hot_reloads_skill() {
         .unwrap();
     assert!(!view.skills.contains_key("s-foreign"));
 
-    delete_signed_document(&access, crate::Collection::Skill, &doc_id).await;
+    delete_signed_document(&access, gents_store::collection::Collection::Skill, &doc_id).await;
     let outcome = apply_control_update(identity.did(), "Skill", &doc_id, &mut view)
         .await
         .expect("apply skill delete");
@@ -474,14 +474,14 @@ async fn apply_control_update_hot_reloads_skill() {
 }
 
 async fn seed_raw_tools(
-    access: &crate::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     tools_id: &str,
     agent_target_ids: &[&str],
 ) {
     let doc = find_owned_doc(access, "Tools", "tools_id", tools_id).await;
     update_signed_document(
         access,
-        crate::Collection::Tools,
+        gents_store::collection::Collection::Tools,
         &doc,
         serde_json::json!({"agents": {"target_ids": agent_target_ids, "enabled": true}}),
     )
@@ -503,7 +503,7 @@ async fn resolve_quarantines_behavior_with_empty_agent_target_id() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::inference::backends::health::BackendHealthMap::new(),
+        gents_inference::backends::health::BackendHealthMap::new(),
     );
     let view = load_document_runtime_view(&node, node_did)
         .await
@@ -541,7 +541,7 @@ async fn resolve_quarantines_behavior_with_missing_local_agent_target() {
     seed_automation(
         &access,
         vec![(
-            crate::Collection::AgentTarget,
+            gents_store::collection::Collection::AgentTarget,
             serde_json::json!({
                 "target_id": "target-missing-agent", "node_did": node_did,
                 "target_node_did": node_did, "agent_did": "missing-agent", "name": "missing",
@@ -553,7 +553,7 @@ async fn resolve_quarantines_behavior_with_missing_local_agent_target() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::inference::backends::health::BackendHealthMap::new(),
+        gents_inference::backends::health::BackendHealthMap::new(),
     );
     let view = load_document_runtime_view(&node, node_did)
         .await
@@ -577,7 +577,7 @@ async fn resolve_quarantines_behavior_with_missing_local_agent_target() {
     );
 }
 
-fn signed_schema(collection: crate::Collection) -> &'static str {
+fn signed_schema(collection: gents_store::collection::Collection) -> &'static str {
     let name = collection.graphql_type();
     gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
         .iter()
@@ -592,7 +592,7 @@ fn signed_schema(collection: crate::Collection) -> &'static str {
 }
 
 async fn find_owned_doc(
-    access: &crate::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     name: &str,
     field: &str,
     value: &str,
@@ -611,8 +611,8 @@ async fn find_owned_doc(
 }
 
 async fn update_signed_document(
-    access: &crate::store::config_client::ConfigAccess,
-    collection: crate::Collection,
+    access: &gents_store::config_client::ConfigAccess,
+    collection: gents_store::collection::Collection,
     doc_id: &str,
     input: serde_json::Value,
 ) {
@@ -635,8 +635,8 @@ async fn update_signed_document(
 }
 
 async fn delete_signed_document(
-    access: &crate::store::config_client::ConfigAccess,
-    collection: crate::Collection,
+    access: &gents_store::config_client::ConfigAccess,
+    collection: gents_store::collection::Collection,
     doc_id: &str,
 ) {
     access
@@ -651,7 +651,7 @@ async fn delete_signed_document(
 }
 
 async fn grant_delete_permissions(db: &crate::support::TestDb, user: &dyn NodeIdentity) {
-    use crate::store::config_client::{ConfigAccess, NodePermission};
+    use gents_store::config_client::{ConfigAccess, NodePermission};
     let admin = ConfigAccess::local_as(
         db.node.clone(),
         identity::Did::new(db.node_identity.did()).unwrap(),
@@ -669,14 +669,14 @@ async fn grant_delete_permissions(db: &crate::support::TestDb, user: &dyn NodeId
 }
 
 async fn patch_desired_document(
-    access: &crate::store::config_client::ConfigAccess,
-    collection: crate::Collection,
+    access: &gents_store::config_client::ConfigAccess,
+    collection: gents_store::collection::Collection,
     node_did: &str,
     id: &str,
     patch: serde_json::Value,
 ) {
-    use crate::documents::apply_desired_state_plan;
-    use crate::documents::{
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     access
@@ -699,7 +699,7 @@ async fn patch_desired_document(
                 apply_desired_state_plan(
                     txn,
                     &plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
@@ -709,8 +709,8 @@ async fn patch_desired_document(
 }
 
 async fn seed_automation(
-    access: &crate::store::config_client::ConfigAccess,
-    documents: Vec<(crate::Collection, serde_json::Value)>,
+    access: &gents_store::config_client::ConfigAccess,
+    documents: Vec<(gents_store::collection::Collection, serde_json::Value)>,
 ) {
     for (collection, input) in documents {
         let name = collection.graphql_type();
@@ -737,7 +737,7 @@ async fn seed_automation(
             })
             .await
             .expect("seed replicated automation document");
-        let doc = crate::store::graphql::created_doc_id(&created, name).unwrap();
+        let doc = gents_store::graphql::created_doc_id(&created, name).unwrap();
         access
             .add_resource_relationship(name, &doc, "parent", "nodes", node_doc)
             .await
@@ -746,7 +746,7 @@ async fn seed_automation(
 }
 
 async fn create_task_bound(
-    access: &crate::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     task_id: &str,
     agent_did: &str,
@@ -756,7 +756,7 @@ async fn create_task_bound(
     seed_automation(
         access,
         vec![(
-            crate::Collection::Task,
+            gents_store::collection::Collection::Task,
             serde_json::json!({
                 "node_did": node_did,
                 "task_id": task_id,
@@ -770,7 +770,7 @@ async fn create_task_bound(
 }
 
 async fn create_schedule_with_concurrency(
-    access: &crate::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     trigger_id: &str,
     task_id: &str,
@@ -782,7 +782,7 @@ async fn create_schedule_with_concurrency(
         access,
         vec![
             (
-                crate::Collection::Schedule,
+                gents_store::collection::Collection::Schedule,
                 serde_json::json!({
                     "node_did": node_did,
                     "schedule_id": schedule_id,
@@ -790,7 +790,7 @@ async fn create_schedule_with_concurrency(
                 }),
             ),
             (
-                crate::Collection::Trigger,
+                gents_store::collection::Collection::Trigger,
                 serde_json::json!({
                     "node_did": node_did,
                     "trigger_id": trigger_id,
@@ -806,7 +806,7 @@ async fn create_schedule_with_concurrency(
 }
 
 async fn create_event_trigger(
-    access: &crate::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     trigger_id: &str,
     task_id: &str,
@@ -819,7 +819,7 @@ async fn create_event_trigger(
         access,
         vec![
             (
-                crate::Collection::EventSource,
+                gents_store::collection::Collection::EventSource,
                 serde_json::json!({
                     "node_did": node_did,
                     "event_source_id": event_source_id,
@@ -828,7 +828,7 @@ async fn create_event_trigger(
                 }),
             ),
             (
-                crate::Collection::Trigger,
+                gents_store::collection::Collection::Trigger,
                 serde_json::json!({
                     "node_did": node_did,
                     "trigger_id": trigger_id,
@@ -868,7 +868,7 @@ async fn retired_reserved_ids_are_never_visible() {
     let mut documents = Vec::new();
     for id in [graph_trigger.as_str(), "pkg-x", "ordinary"] {
         documents.push((
-            crate::Collection::Trigger,
+            gents_store::collection::Collection::Trigger,
             serde_json::json!({
                 "node_did": node_did, "trigger_id": id, "task_id": "task-1",
                 "source": {"kind": "event", "event_source_id": id}, "enabled": false,
@@ -876,21 +876,21 @@ async fn retired_reserved_ids_are_never_visible() {
             }),
         ));
         documents.push((
-            crate::Collection::EventSource,
+            gents_store::collection::Collection::EventSource,
             serde_json::json!({
                 "node_did": node_did, "event_source_id": id,
                 "source_collection": "CustomerSignup", "event_kind": "created",
             }),
         ));
         documents.push((
-            crate::Collection::Callback,
+            gents_store::collection::Collection::Callback,
             serde_json::json!({
                 "node_did": node_did, "callback_id": id,
                 "handler": {"kind": "built_in", "emitter": "create_workspace"},
             }),
         ));
         documents.push((
-            crate::Collection::CallbackBinding,
+            gents_store::collection::Collection::CallbackBinding,
             serde_json::json!({
                 "node_did": node_did, "binding_id": id, "event_source_id": id,
                 "callback_id": id,
@@ -944,7 +944,7 @@ async fn load_document_runtime_view_populates_tasks_and_schedules() {
     let node = &db.node;
     let node_did = db.node_identity.did();
     assert_eq!(
-        crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &agent)
+        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &agent)
             .unwrap()
             .did(),
         agent.agent_did
@@ -1000,7 +1000,7 @@ async fn load_document_runtime_view_populates_tasks_and_schedules() {
                 ).await
             })
         }).await.unwrap();
-        let doc = crate::store::graphql::created_doc_id(&created, name).unwrap();
+        let doc = gents_store::graphql::created_doc_id(&created, name).unwrap();
         access
             .add_resource_relationship(name, &doc, "parent", "nodes", node_doc)
             .await
@@ -1023,7 +1023,7 @@ async fn load_document_runtime_view_populates_tasks_and_schedules() {
         .expect("schedule-alpha present");
     assert_eq!(
         schedule_record.value.cadence,
-        crate::documents::ScheduleCadence::Interval { interval_secs: 60 },
+        gents_documents::ScheduleCadence::Interval { interval_secs: 60 },
         "schedule carries its interval cadence"
     );
     assert_eq!(view.triggers.len(), 1, "expected one Trigger document");
@@ -1036,7 +1036,7 @@ async fn load_document_runtime_view_populates_tasks_and_schedules() {
         "trigger references task-alpha"
     );
     match &trigger_record.value.source {
-        crate::documents::TriggerSource::Schedule { schedule_id } => {
+        gents_documents::TriggerSource::Schedule { schedule_id } => {
             assert_eq!(
                 schedule_id, "schedule-alpha",
                 "trigger references schedule-alpha"
@@ -1093,7 +1093,7 @@ async fn load_document_runtime_view_populates_event_triggers() {
         .expect("trig-1 present in triggers");
     assert_eq!(trigger_record.value.task_id, "task-1");
     match &trigger_record.value.source {
-        crate::documents::TriggerSource::Event { event_source_id } => {
+        gents_documents::TriggerSource::Event { event_source_id } => {
             assert_eq!(event_source_id, "trig-1:source");
         }
         other => panic!("trigger must carry an event source, got {other:?}"),
@@ -1132,7 +1132,7 @@ async fn resolve_produces_active_schedule_when_task_and_behavior_exist() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::inference::backends::health::BackendHealthMap::new(),
+        gents_inference::backends::health::BackendHealthMap::new(),
     );
     let view = load_document_runtime_view(&node, node_did)
         .await
@@ -1162,11 +1162,11 @@ async fn resolve_produces_active_schedule_when_task_and_behavior_exist() {
     assert_eq!(resolved.task.prompt_template, "do the thing");
     assert_eq!(
         resolved.cadence,
-        crate::documents::ScheduleCadence::Interval { interval_secs: 60 }
+        gents_documents::ScheduleCadence::Interval { interval_secs: 60 }
     );
     assert_eq!(
         resolved.concurrency,
-        crate::documents::ConcurrencyMode::Serial
+        gents_documents::ConcurrencyMode::Serial
     );
 }
 
@@ -1202,7 +1202,7 @@ async fn resolve_produces_active_event_trigger_when_task_and_behavior_exist() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::inference::backends::health::BackendHealthMap::new(),
+        gents_inference::backends::health::BackendHealthMap::new(),
     );
     let view = load_document_runtime_view(&node, node_did)
         .await
@@ -1234,7 +1234,7 @@ async fn resolve_produces_active_event_trigger_when_task_and_behavior_exist() {
     assert_eq!(resolved.event_kind, "created");
     assert_eq!(
         resolved.concurrency,
-        crate::documents::ConcurrencyMode::Serial
+        gents_documents::ConcurrencyMode::Serial
     );
 }
 
@@ -1280,7 +1280,7 @@ async fn persisted_required_source_fill_quarantines_and_recovers_event_trigger()
     seed_automation(
         &access,
         vec![(
-            crate::Collection::DatastoreToolSurface,
+            gents_store::collection::Collection::DatastoreToolSurface,
             serde_json::json!({
                 "node_did": owner,
                 "surface_id": "fill-surface",
@@ -1295,7 +1295,7 @@ async fn persisted_required_source_fill_quarantines_and_recovers_event_trigger()
     let tools_doc = find_owned_doc(&access, "Tools", "tools_id", &tools_id).await;
     update_signed_document(
         &access,
-        crate::Collection::Tools,
+        gents_store::collection::Collection::Tools,
         &tools_doc,
         serde_json::json!({"datastore": {"datastore_tool_surface_ids": ["fill-surface"]}}),
     )
@@ -1304,7 +1304,7 @@ async fn persisted_required_source_fill_quarantines_and_recovers_event_trigger()
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::inference::backends::health::BackendHealthMap::new(),
+        gents_inference::backends::health::BackendHealthMap::new(),
     );
     let view = load_document_runtime_view(&node, owner).await.unwrap();
     let snapshot = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
@@ -1326,7 +1326,7 @@ async fn persisted_required_source_fill_quarantines_and_recovers_event_trigger()
     .await;
     update_signed_document(
         &access,
-        crate::Collection::DatastoreToolSurface,
+        gents_store::collection::Collection::DatastoreToolSurface,
         &surface_doc,
         serde_json::json!({"entries": entries(false)}),
     )
@@ -1383,7 +1383,7 @@ async fn resolve_marks_event_trigger_unavailable_when_task_missing_or_disabled()
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::inference::backends::health::BackendHealthMap::new(),
+        gents_inference::backends::health::BackendHealthMap::new(),
     );
     let view = load_document_runtime_view(&node, identity.did())
         .await
@@ -1463,7 +1463,7 @@ async fn resolve_quarantines_event_trigger_with_invalid_source_collection() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::inference::backends::health::BackendHealthMap::new(),
+        gents_inference::backends::health::BackendHealthMap::new(),
     );
     let view = load_document_runtime_view(&node, node_did)
         .await
@@ -1530,7 +1530,7 @@ async fn resolve_marks_schedule_unavailable_when_task_missing_or_disabled() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::inference::backends::health::BackendHealthMap::new(),
+        gents_inference::backends::health::BackendHealthMap::new(),
     );
     let view = load_document_runtime_view(&node, node_did)
         .await
@@ -1601,7 +1601,7 @@ async fn resolve_populates_active_tasks_for_enabled_tasks_with_ready_behaviors()
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::inference::backends::health::BackendHealthMap::new(),
+        gents_inference::backends::health::BackendHealthMap::new(),
     );
     let view = load_document_runtime_view(&node, node_did)
         .await
@@ -1642,35 +1642,35 @@ async fn resolve_populates_active_tasks_for_enabled_tasks_with_ready_behaviors()
 }
 
 async fn bind_subscription_backend(
-    access: &crate::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     agent_did: &str,
     provider: &str,
     endpoint: &str,
     model: &str,
 ) {
-    use crate::documents::apply_desired_state_plan;
-    use crate::documents::{
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     access.transact_write("test.subscription_backend", |txn| {
         Box::pin(async move {
             let mut documents = Vec::new();
             for (collection, id, patch) in [
-                (crate::Collection::InferenceBackend, format!("{agent_did}:backend"), serde_json::json!({"provider_kind":provider, "endpoint":endpoint, "auth":{"kind":"node_oauth"}})),
-                (crate::Collection::InferenceProfile, format!("{agent_did}:inference"), serde_json::json!({"model_name":model})),
+                (gents_store::collection::Collection::InferenceBackend, format!("{agent_did}:backend"), serde_json::json!({"provider_kind":provider, "endpoint":endpoint, "auth":{"kind":"node_oauth"}})),
+                (gents_store::collection::Collection::InferenceProfile, format!("{agent_did}:inference"), serde_json::json!({"model_name":model})),
             ] {
                 let (_, mut value) = read_desired_state_record_in_txn(txn, collection, node_did, &id).await?.expect("installed canonical component");
                 value.as_object_mut().unwrap().extend(patch.as_object().unwrap().clone());
                 documents.push(DesiredStateApplyDocument {collection, add:value.clone(), update:value});
             }
-            apply_desired_state_plan(txn, &DesiredStateApplyPlan::new(documents)?, &crate::inference::resolved::ProviderProfilePolicy).await
+            apply_desired_state_plan(txn, &DesiredStateApplyPlan::new(documents)?, &gents_inference::resolved::ProviderProfilePolicy).await
         })
     }).await.unwrap();
 }
 
 async fn bind_default_agent_chatgpt_backend(
-    access: &crate::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     agent_did: &str,
 ) {
@@ -1686,14 +1686,14 @@ async fn bind_default_agent_chatgpt_backend(
 }
 
 async fn insert_enabled_oauth_credential(node: &Arc<defra_node::Node>, node_did: &str) {
-    let credential = crate::inference::auth::credential::OAuthCredential {
+    let credential = gents_inference::auth::credential::OAuthCredential {
         doc_id: None,
-        credential_id: crate::inference::auth::credential::oauth_credential_id(
+        credential_id: gents_inference::auth::credential::oauth_credential_id(
             node_did,
-            crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+            gents_inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
         ),
         node_did: node_did.to_string(),
-        provider: crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER.to_string(),
+        provider: gents_inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER.to_string(),
         access_token: "access-token".to_string(),
         refresh_token: "refresh-token".to_string(),
         id_token: None,
@@ -1708,7 +1708,7 @@ async fn insert_enabled_oauth_credential(node: &Arc<defra_node::Node>, node_did:
         provider_account_key: None,
         label: None,
     };
-    crate::inference::auth::credential::upsert_oauth_credential(node, &credential)
+    gents_inference::auth::credential::upsert_oauth_credential(node, &credential)
         .await
         .expect("publish OAuthCredential");
 }
@@ -1725,7 +1725,7 @@ async fn chatgpt_codex_behavior_without_credential_is_unavailable() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::inference::backends::health::BackendHealthMap::new(),
+        gents_inference::backends::health::BackendHealthMap::new(),
     );
     let view = load_document_runtime_view(&node, identity.did())
         .await
@@ -1759,14 +1759,14 @@ async fn runtime_snapshot_skips_an_unknown_provider_kind_backend() {
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let did = identity.did();
-    let future = crate::store::identity::provision_agent_identity_authorized(
+    let future = gents_store::identity::provision_agent_identity_authorized(
         &node,
         identity.as_ref(),
         &identity::Did::new(user.did()).unwrap(),
     )
     .await
     .unwrap();
-    crate::test_support::inference::install_test_agent_binding_with_access(
+    gents_inference::test_support::install_test_agent_binding_with_access(
         did, "future", &future, &access,
     )
     .await;
@@ -1800,7 +1800,7 @@ async fn runtime_snapshot_skips_an_unknown_provider_kind_backend() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::inference::backends::health::BackendHealthMap::new(),
+        gents_inference::backends::health::BackendHealthMap::new(),
     );
     let snapshot = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
         .await
@@ -1838,7 +1838,7 @@ async fn chatgpt_codex_behavior_with_enabled_credential_is_runnable() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::inference::backends::health::BackendHealthMap::new(),
+        gents_inference::backends::health::BackendHealthMap::new(),
     );
     let view = load_document_runtime_view(&node, identity.did())
         .await
@@ -1866,13 +1866,13 @@ async fn readiness_follows_the_backend_account_reference() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::inference::backends::health::BackendHealthMap::new(),
+        gents_inference::backends::health::BackendHealthMap::new(),
     );
     let mut view = load_document_runtime_view(&node, identity.did())
         .await
         .expect("document view");
     for backend in view.backends.values_mut() {
-        backend.value.auth = crate::documents::BackendAuth::NodeOAuth {
+        backend.value.auth = gents_documents::BackendAuth::NodeOAuth {
             account_ref: Some("acct-x".to_string()),
         };
     }
@@ -1924,7 +1924,7 @@ async fn readiness_follows_the_backend_account_reference() {
 
 #[tokio::test]
 async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
-    use crate::inference::auth::credential::{set_account_enabled, store_sign_in};
+    use gents_inference::auth::credential::{set_account_enabled, store_sign_in};
     let (db, _user, user_access, binding) =
         crate::test_support::root::signed_test_node("document-view-account-lifecycle").await;
     let node = db.node.clone();
@@ -1932,15 +1932,15 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
     let did = identity.did().to_string();
     let default_agent_did = binding.agent_did;
     bind_default_agent_claude_backend(&user_access, &did, &default_agent_did).await;
-    let access = crate::store::config_client::ConfigAccess::local_as(
+    let access = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
         identity::Did::new(&did).unwrap(),
     );
     let sign_in = |who: &str| {
-        crate::inference::auth::claude::credential_from_login_tokens(
+        gents_inference::auth::claude::credential_from_login_tokens(
             did.clone(),
-            crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
-            &crate::inference::auth::claude::ClaudeLoginTokens {
+            gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+            &gents_inference::auth::claude::ClaudeLoginTokens {
                 access_token: format!("access-{who}"),
                 refresh_token: format!("refresh-{who}"),
                 expires_in: Some(3600),
@@ -1958,7 +1958,7 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::inference::backends::health::BackendHealthMap::new(),
+        gents_inference::backends::health::BackendHealthMap::new(),
     );
     let ready_on = |account_ref: Option<String>| {
         let node = node.clone();
@@ -1970,7 +1970,7 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
                 .await
                 .expect("document view");
             for backend in view.backends.values_mut() {
-                backend.value.auth = crate::documents::BackendAuth::NodeOAuth {
+                backend.value.auth = gents_documents::BackendAuth::NodeOAuth {
                     account_ref: account_ref.clone(),
                 };
             }
@@ -1997,7 +1997,7 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
             let did = did.clone();
             let credential_id = b.credential.credential_id.clone();
             Box::pin(async move {
-                crate::inference::auth::credential::remove_account_in_txn(txn, &did, &credential_id)
+                gents_inference::auth::credential::remove_account_in_txn(txn, &did, &credential_id)
                     .await
             })
         })
@@ -2009,7 +2009,7 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
 
 #[tokio::test]
 async fn an_account_pool_agent_follows_its_enabled_accounts() {
-    use crate::inference::auth::credential::{set_account_enabled, store_sign_in};
+    use gents_inference::auth::credential::{set_account_enabled, store_sign_in};
     let (db, _user, user_access, binding) =
         crate::test_support::root::signed_test_node("document-view-account-pool").await;
     let node = db.node.clone();
@@ -2017,15 +2017,15 @@ async fn an_account_pool_agent_follows_its_enabled_accounts() {
     let did = identity.did().to_string();
     let default_agent_did = binding.agent_did;
     bind_default_agent_claude_backend(&user_access, &did, &default_agent_did).await;
-    let access = crate::store::config_client::ConfigAccess::local_as(
+    let access = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
         identity::Did::new(&did).unwrap(),
     );
     let sign_in = |who: &str| {
-        crate::inference::auth::claude::credential_from_login_tokens(
+        gents_inference::auth::claude::credential_from_login_tokens(
             did.clone(),
-            crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
-            &crate::inference::auth::claude::ClaudeLoginTokens {
+            gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+            &gents_inference::auth::claude::ClaudeLoginTokens {
                 access_token: format!("access-{who}"),
                 refresh_token: format!("refresh-{who}"),
                 expires_in: Some(3600),
@@ -2040,9 +2040,9 @@ async fn an_account_pool_agent_follows_its_enabled_accounts() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::inference::backends::health::BackendHealthMap::new(),
+        gents_inference::backends::health::BackendHealthMap::new(),
     );
-    let pool_with = |auth: crate::documents::BackendAuth| {
+    let pool_with = |auth: gents_documents::BackendAuth| {
         let node = node.clone();
         let did = did.clone();
         let resolve_context = &resolve_context;
@@ -2065,7 +2065,7 @@ async fn an_account_pool_agent_follows_its_enabled_accounts() {
             agent.oauth_pool.clone()
         }
     };
-    let pool = crate::documents::BackendAuth::NodeOAuthPool {
+    let pool = gents_documents::BackendAuth::NodeOAuthPool {
         allow_overage: false,
     };
     let a = store_sign_in(&access, sign_in("a"), None).await.unwrap();
@@ -2087,7 +2087,7 @@ async fn an_account_pool_agent_follows_its_enabled_accounts() {
         "a disabled account leaves the pool"
     );
     assert!(
-        pool_with(crate::documents::BackendAuth::NodeOAuth { account_ref: None })
+        pool_with(gents_documents::BackendAuth::NodeOAuth { account_ref: None })
             .await
             .is_empty(),
         "a single-account backend carries no pool"
@@ -2096,7 +2096,7 @@ async fn an_account_pool_agent_follows_its_enabled_accounts() {
 
 #[tokio::test]
 async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
-    use crate::inference::auth::credential::{set_account_enabled, store_sign_in};
+    use gents_inference::auth::credential::{set_account_enabled, store_sign_in};
     use gents_protocol::node_readiness::is_behavior_unavailable_rejection;
     use gents_protocol::node_readiness::AgentReadinessUnavailableReason as Reason;
     let (db, _user, user_access, binding) =
@@ -2106,15 +2106,15 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
     let did = identity.did().to_string();
     let x = binding.agent_did;
     bind_default_agent_claude_backend(&user_access, &did, &x).await;
-    let access = crate::store::config_client::ConfigAccess::local_as(
+    let access = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
         identity::Did::new(&did).unwrap(),
     );
     let sign_in = |who: &str| {
-        crate::inference::auth::claude::credential_from_login_tokens(
+        gents_inference::auth::claude::credential_from_login_tokens(
             did.clone(),
-            crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
-            &crate::inference::auth::claude::ClaudeLoginTokens {
+            gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+            &gents_inference::auth::claude::ClaudeLoginTokens {
                 access_token: format!("access-{who}"),
                 refresh_token: format!("refresh-{who}"),
                 expires_in: Some(3600),
@@ -2130,14 +2130,14 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
     let b = store_sign_in(&access, sign_in("b"), None).await.unwrap();
     let b_backend = format!(
         "{}-{}",
-        crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+        gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
         b.credential
             .account_ref
             .as_deref()
             .expect("b has a reference")
     );
-    crate::inference::backends::registry::set_backend_probe_status_as(
-        &crate::ConfigAccess::local(node.clone()),
+    gents_inference::backends::registry::set_backend_probe_status_as(
+        &gents_store::config_client::ConfigAccess::local(node.clone()),
         &did,
         &b_backend,
         "healthy",
@@ -2147,13 +2147,13 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::inference::backends::health::BackendHealthMap::new(),
+        gents_inference::backends::health::BackendHealthMap::new(),
     );
     let on_a = format!("{x}:inference");
     let on_b = format!("{x}:inference-b");
     // Y is a second real Agent: its DID must derive from the runtime root and
     // its creation nonce, or its identity resolution rejects the configuration.
-    let y_binding = crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+    let y_binding = gents_store::identity::provision_agent_identity(identity.as_ref()).unwrap();
     let y = y_binding.agent_did.clone();
     let reasons = |compaction_on_b: bool| {
         let node = node.clone();
@@ -2181,7 +2181,7 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
             view.agents.insert(y.clone(), y_record);
             let x_record = view.agents.get_mut(&x).unwrap();
             if compaction_on_b {
-                let compaction: crate::documents::CompactionConfig =
+                let compaction: gents_documents::CompactionConfig =
                     serde_json::from_value(serde_json::json!({
                         "compaction_id": "compaction-b", "node_did": did,
                         "inference_profile_id": on_b,
@@ -2236,7 +2236,7 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
             let did = did.clone();
             let credential_id = b.credential.credential_id.clone();
             Box::pin(async move {
-                crate::inference::auth::credential::remove_account_in_txn(txn, &did, &credential_id)
+                gents_inference::auth::credential::remove_account_in_txn(txn, &did, &credential_id)
                     .await
             })
         })
@@ -2247,7 +2247,7 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
 }
 
 async fn bind_default_agent_claude_backend(
-    access: &crate::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     agent_did: &str,
 ) {
@@ -2256,7 +2256,7 @@ async fn bind_default_agent_claude_backend(
         node_did,
         agent_did,
         "ClaudeCliSubscription",
-        crate::inference::clients::claude_subscription::default_backend_endpoint(),
+        gents_inference::clients::claude_subscription::default_backend_endpoint(),
         "default",
     )
     .await;
@@ -2273,7 +2273,7 @@ async fn claude_subscription_behavior_requires_enabled_credential() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::inference::backends::health::BackendHealthMap::new(),
+        gents_inference::backends::health::BackendHealthMap::new(),
     );
 
     let view = load_document_runtime_view(&node, identity.did())
@@ -2302,10 +2302,10 @@ async fn claude_subscription_behavior_requires_enabled_credential() {
         reason.diagnostic
     );
 
-    let credential = crate::inference::auth::claude::credential_from_login_tokens(
+    let credential = gents_inference::auth::claude::credential_from_login_tokens(
         identity.did(),
-        crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
-        &crate::inference::auth::claude::ClaudeLoginTokens {
+        gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+        &gents_inference::auth::claude::ClaudeLoginTokens {
             access_token: "access-token".to_string(),
             refresh_token: "refresh-token".to_string(),
             expires_in: Some(3600),
@@ -2316,7 +2316,7 @@ async fn claude_subscription_behavior_requires_enabled_credential() {
         },
         chrono::Utc::now(),
     );
-    crate::inference::auth::credential::upsert_oauth_credential(&node, &credential)
+    gents_inference::auth::credential::upsert_oauth_credential(&node, &credential)
         .await
         .expect("upsert credential");
 
@@ -2332,10 +2332,10 @@ async fn claude_subscription_behavior_requires_enabled_credential() {
         snapshot.unavailable_agents
     );
     for state in [
-        crate::inference::backends::health::BackendHealthState::CredentialsRequired,
-        crate::inference::backends::health::BackendHealthState::SubscriptionNotEntitled,
-        crate::inference::backends::health::BackendHealthState::Unhealthy,
-        crate::inference::backends::health::BackendHealthState::Healthy,
+        gents_inference::backends::health::BackendHealthState::CredentialsRequired,
+        gents_inference::backends::health::BackendHealthState::SubscriptionNotEntitled,
+        gents_inference::backends::health::BackendHealthState::Unhealthy,
+        gents_inference::backends::health::BackendHealthState::Healthy,
     ] {
         for backend in view.backends.values() {
             resolve_context
@@ -2373,7 +2373,7 @@ async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::inference::backends::health::BackendHealthMap::new(),
+        gents_inference::backends::health::BackendHealthMap::new(),
     );
 
     let mut view = load_document_runtime_view(&node, identity.did())
@@ -2387,14 +2387,14 @@ async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
         "agent_config must start unavailable without a credential"
     );
 
-    let credential = crate::inference::auth::credential::OAuthCredential {
+    let credential = gents_inference::auth::credential::OAuthCredential {
         doc_id: None,
-        credential_id: crate::inference::auth::credential::oauth_credential_id(
+        credential_id: gents_inference::auth::credential::oauth_credential_id(
             identity.did(),
-            crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+            gents_inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
         ),
         node_did: identity.did().to_string(),
-        provider: crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER.to_string(),
+        provider: gents_inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER.to_string(),
         access_token: "access-token".to_string(),
         refresh_token: "refresh-token".to_string(),
         id_token: None,
@@ -2409,7 +2409,7 @@ async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
         provider_account_key: None,
         label: None,
     };
-    let doc_id = crate::inference::auth::credential::upsert_oauth_credential(&node, &credential)
+    let doc_id = gents_inference::auth::credential::upsert_oauth_credential(&node, &credential)
         .await
         .expect("upsert credential");
 
@@ -2435,29 +2435,29 @@ async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
     );
 }
 
-fn finding_decl() -> crate::documents::WriteToolDecl {
-    crate::documents::WriteToolDecl {
+fn finding_decl() -> gents_documents::WriteToolDecl {
+    gents_documents::WriteToolDecl {
         notification: None,
         tool_name: "write_experiment_finding".to_string(),
         collection: "ExperimentFinding".to_string(),
         description: "Record a finding document for the next pipeline stage.".to_string(),
         fields: vec![
-            crate::documents::WriteToolField {
+            gents_documents::WriteToolField {
                 name: "job_id".to_string(),
                 required: true,
                 fill: None,
             },
-            crate::documents::WriteToolField {
+            gents_documents::WriteToolField {
                 name: "finding_id".to_string(),
                 required: true,
                 fill: None,
             },
-            crate::documents::WriteToolField {
+            gents_documents::WriteToolField {
                 name: "content".to_string(),
                 required: true,
                 fill: None,
             },
-            crate::documents::WriteToolField {
+            gents_documents::WriteToolField {
                 name: "stage".to_string(),
                 required: true,
                 fill: None,
@@ -2481,7 +2481,7 @@ async fn apply_control_update_evicts_surface_when_ownership_moves_away() {
     seed_automation(
         &access,
         vec![(
-            crate::Collection::DatastoreToolSurface,
+            gents_store::collection::Collection::DatastoreToolSurface,
             serde_json::json!({
                 "surface_id": "experiment-writes", "node_did": node_did, "enabled": true,
                 "entries": {"entries": [finding_decl()]},
@@ -2510,7 +2510,7 @@ async fn apply_control_update_evicts_surface_when_ownership_moves_away() {
 
     update_signed_document(
         &access,
-        crate::Collection::DatastoreToolSurface,
+        gents_store::collection::Collection::DatastoreToolSurface,
         &doc_id,
         serde_json::json!({"node_did": "did:key:zOtherOwner"}),
     )
@@ -2539,7 +2539,7 @@ async fn unavailable_agent_scan_identity_follows_lean_candidates() {
     let context = DocumentResolveContext::for_tests(
         root.clone(),
         ToolCeiling::readonly(),
-        crate::inference::backends::health::BackendHealthMap::new(),
+        gents_inference::backends::health::BackendHealthMap::new(),
     );
     let original = load_document_runtime_view(&node, root.did()).await.unwrap();
     for case in &gents_lean_vocab::lean_contract_snapshot().watcher_actor_cases {

@@ -426,7 +426,7 @@ async fn operator_reads_a_local_child_session_under_its_own_scope() {
 #[tokio::test]
 async fn transcript_payload_page_batches_exact_dependencies_without_reading_other_history() {
     use crate::client::canonical_output::{project_canonical_message, CanonicalMessageProjection};
-    use gents::store::config_client::ConfigAccess;
+    use gents_store::config_client::ConfigAccess;
 
     let node = std::sync::Arc::new(
         crate::test_support::node_builder()
@@ -601,11 +601,11 @@ async fn a_window_brings_results_delivered_after_its_cut_but_not_as_rows() {
 #[tokio::test]
 async fn running_tool_pages_read_only_their_open_output_source() {
     use crate::client::canonical_output::project_canonical_live;
-    use gents::store::config_client::ConfigAccess;
     use gents_protocol::output::{
         live::{LiveView, OwnerLiveness},
         OutputSource, OutputWriter,
     };
+    use gents_store::config_client::ConfigAccess;
 
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();

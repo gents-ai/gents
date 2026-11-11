@@ -4,17 +4,19 @@ use std::process::Command;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use gents::documents::{
+use gents::{DocumentRuntimeOptions, Gents};
+use gents_documents::{
     read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents::pack::archive::{pack_dir, PackArchive};
-use gents::pack::{
+use gents_pack::pack::archive::{pack_dir, PackArchive};
+use gents_pack::pack::{
     install_prepared_document_pack, prepare_document_pack_archive, DriftPolicy, InstalledVia,
     PackAgentBindings,
 };
-use gents::store::config_client::ConfigAccess;
-use gents::store::graphql::escape_graphql_string;
-use gents::{Collection, DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
+use gents_store::{collection::Collection, identity::NodeIdentity};
+use gents_tools::surface::ToolCeiling;
 use serde_json::{json, Value};
 
 use crate::support::streaming_backend::{
@@ -43,7 +45,7 @@ const REJECTER: &str = "change-unit-rejected";
 /// provisions one managed Agent per slot, and the User authors work units.
 struct Cycle {
     db: TestDb,
-    user: gents::KeyIdentity,
+    user: gents_store::identity::KeyIdentity,
     access: ConfigAccess,
     owner: String,
     agents: PackAgentBindings,
@@ -73,11 +75,11 @@ impl Cycle {
             agents,
         };
         select_default_agent(&cycle.access, &cycle.owner, cycle.agent(WRITER)).await;
-        gents::inference::backends::registry::set_backend_probe_status_as(
+        gents_inference::backends::registry::set_backend_probe_status_as(
             &cycle.access,
             &cycle.owner,
             "workspace-cycle-backend",
-            gents::HEALTHY_PROBE_STATUS,
+            gents_inference::backends::registry::HEALTHY_PROBE_STATUS,
         )
         .await
         .unwrap();
@@ -567,7 +569,7 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
     // supervisor Agent, so the User is its requester.
     let supervisor_session = "workspace-cycle-lead";
     let created_at = crate::support::agent_requests::canonical_now();
-    gents::request::lifecycle::reserve_goal_session(
+    gents_session::request::lifecycle::reserve_goal_session(
         access,
         &gents_protocol::request_admission::AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
@@ -705,10 +707,10 @@ async fn apply_documents(
         .transact_write(operation, |txn| {
             let plan = &plan;
             Box::pin(async move {
-                gents::documents::apply_desired_state_plan(
+                gents_documents::apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
@@ -1066,10 +1068,10 @@ async fn install_inference(access: &ConfigAccess, owner: &str, endpoint: &str) {
         .transact_write("workspace_cycle.install_inference", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                gents::documents::apply_desired_state_plan(
+                gents_documents::apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
@@ -1136,7 +1138,7 @@ async fn install_pack(access: &ConfigAccess, owner: &str, repo: &Path) -> PackAg
         false,
         InstalledVia::Operator,
         DriftPolicy::Refuse,
-        &gents::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .expect("canonical pack installer accepts the unit pack");
@@ -1151,7 +1153,7 @@ async fn install_workspace_root(cycle: &Cycle, root: &Path) {
         .into_iter()
         .map(str::to_owned)
         .collect::<Vec<_>>();
-    gents::tools::surface::set_workspace_root_with_readers(
+    gents_tools::surface::set_workspace_root_with_readers(
         &cycle.access,
         &cycle.owner,
         root.to_str().unwrap(),
@@ -1179,7 +1181,7 @@ async fn disable_pack_writer_trigger(access: &ConfigAccess, owner: &str) {
 /// failure-outcome and inbox triggers. Returns the supervisor's DID.
 async fn install_failure_inbox_triggers(cycle: &Cycle) -> String {
     let (owner, writer) = (cycle.owner.as_str(), cycle.agent(WRITER));
-    let supervisor = gents::store::identity::provision_agent_identity_authorized(
+    let supervisor = gents_store::identity::provision_agent_identity_authorized(
         &cycle.db.node,
         cycle.db.node_identity.as_ref(),
         &identity::Did::new(cycle.user.did()).unwrap(),
@@ -1251,7 +1253,7 @@ async fn install_failure_inbox_triggers(cycle: &Cycle) -> String {
             }
         ]
     });
-    let config: gents::documents::PackConfig =
+    let config: gents_documents::PackConfig =
         serde_json::from_value(config).expect("test event and Task documents deserialize");
     let plan = DesiredStateApplyPlan::from_pack_config(&config)
         .expect("test event and Task documents validate");
@@ -1260,10 +1262,10 @@ async fn install_failure_inbox_triggers(cycle: &Cycle) -> String {
         .transact_write("workspace_cycle.install_failure_inbox_triggers", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                gents::documents::apply_desired_state_plan(
+                gents_documents::apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
@@ -1322,7 +1324,7 @@ async fn create_work_unit(
             .join("tests/fixtures/workspace_cycle_pack/schemas/change_unit_work.graphql"),
     )
     .unwrap();
-    gents::store::config_client::create_authored_document(
+    gents_store::config_client::create_authored_document(
         access,
         "ChangeUnitWork",
         &json!({
@@ -1339,7 +1341,7 @@ async fn create_work_unit(
             "reply_session_id": "workspace-cycle-lead",
             "attempt": 1,
         }),
-        gents::store::config_client::DocumentSchemaSource::UserAuthored,
+        gents_store::config_client::DocumentSchemaSource::UserAuthored,
         &sdl,
     )
     .await
@@ -1479,7 +1481,7 @@ async fn cycle_failure_diagnostics(
                 ) else {
                     continue;
                 };
-                let result = gents::tools::call::lifecycle::load_tool_call_result(
+                let result = gents_session::tool_call::query::result::load_tool_call_result(
                     access,
                     tool_doc_id,
                     owner,
@@ -1487,7 +1489,9 @@ async fn cycle_failure_diagnostics(
                     request["requester_did"].as_str(),
                 )
                 .await
-                .and_then(|message| gents::tools::call::lifecycle::render_tool_result(&message));
+                .and_then(|message| {
+                    gents_session::tool_call::query::result::render_tool_result(&message)
+                });
                 tool_results.push(json!({
                     "tool": tool,
                     "result": result.unwrap_or_else(|error| format!("<unavailable: {error:#}>") )

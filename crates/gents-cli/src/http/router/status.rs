@@ -5,7 +5,7 @@ use axum::{
     http::{header, StatusCode},
     response::{IntoResponse, Response},
 };
-use gents::store::config_client::GraphqlEndpoint;
+use gents_store::config_client::GraphqlEndpoint;
 use serde_json::{json, Value};
 use tokio::sync::OnceCell;
 
@@ -157,7 +157,10 @@ pub(super) async fn status_handler(
 pub(crate) const BACKEND_PROBES_STATUS_FIELD: &str = "backend_probes";
 
 fn backend_probe_reports(
-    snapshot: &rapidhash::RapidHashMap<String, gents::BackendHealthSnapshot>,
+    snapshot: &rapidhash::RapidHashMap<
+        String,
+        gents_inference::backends::health::BackendHealthSnapshot,
+    >,
 ) -> Value {
     let mut reports = snapshot.values().collect::<Vec<_>>();
     reports.sort_by(|a, b| a.backend_id.cmp(&b.backend_id));
@@ -233,8 +236,8 @@ async fn append_status_contracts(state: &RuntimeHttpState, body: &mut Value) {
             json!(gents_protocol::goal_control::GOAL_STOP_CONTRACT_VERSION),
         );
         map.insert(
-            gents::plugin::approval::workspace::STATUS_SUPPORT_FIELD.to_owned(),
-            json!(gents::plugin::approval::workspace::support()),
+            gents_tools::plugin::approval::workspace::STATUS_SUPPORT_FIELD.to_owned(),
+            json!(gents_tools::plugin::approval::workspace::support()),
         );
         map.insert(
             gents_protocol::peer_schema::STATUS_REPLICATED_SCHEMA_FIELD.to_string(),
@@ -259,7 +262,7 @@ fn non_canonical_lineages_status(
     let Some(schema) = replicated_schema.get() else {
         return Value::Null;
     };
-    gents::store::schema::migration::non_canonical_lineages(
+    gents_store::schema::migration::non_canonical_lineages(
         schema
             .iter()
             .map(|(name, identity)| (name.as_str(), identity.version_id.as_str())),

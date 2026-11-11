@@ -1,7 +1,7 @@
 #![allow(dead_code, unused_imports)]
 
 pub mod fs;
-pub(crate) use gents::pack::authoring::export::document_handle;
+pub(crate) use gents_pack::pack::authoring::export::document_handle;
 pub mod graphql;
 #[path = "../../../gents/tests/support/inference_target.rs"]
 pub mod inference_target;
@@ -68,11 +68,11 @@ pub async fn initialized_node(
         .get("key_path")
         .and_then(serde_json::Value::as_str)
         .context("identity-only init output missing key_path")?;
-    let _identity = gents::KeyIdentity::load_or_create(key_path, None)
+    let _identity = gents_store::identity::KeyIdentity::load_or_create(key_path, None)
         .context("loading initialized node identity")?;
 
     let data = node_home.join("data");
-    gents::store::local::store_key::open_home_store_key(node_home, &data)
+    gents_store::local::store_key::open_home_store_key(node_home, &data)
         .await?
         .encrypt(
             gents::defra_node::Node::builder()
@@ -115,14 +115,17 @@ pub fn agent_did_from_init(init: &serde_json::Value) -> anyhow::Result<String> {
         .ok_or_else(|| anyhow::anyhow!("init output missing provisioned agent DID: {init}"))
 }
 
-pub fn identity_from_init(init: &serde_json::Value) -> anyhow::Result<gents::KeyIdentity> {
+pub fn identity_from_init(
+    init: &serde_json::Value,
+) -> anyhow::Result<gents_store::identity::KeyIdentity> {
     use anyhow::Context as _;
 
     let key_path = init
         .get("key_path")
         .and_then(serde_json::Value::as_str)
         .context("init output missing key_path")?;
-    gents::KeyIdentity::load_or_create(key_path, None).context("loading initialized node identity")
+    gents_store::identity::KeyIdentity::load_or_create(key_path, None)
+        .context("loading initialized node identity")
 }
 
 /// A GraphQL response from [`UserSeededHome`], shaped like the embedded
@@ -160,9 +163,9 @@ impl SeedResponse {
 /// actor every later offline CLI command in that `HOME` acts as.
 pub struct UserSeededHome {
     node: std::sync::Arc<gents::defra_node::Node>,
-    access: gents::ConfigAccess,
-    _claim: gents::store::local::home::StoreLock,
-    _runtime: std::sync::Arc<gents::KeyIdentity>,
+    access: gents_store::config_client::ConfigAccess,
+    _claim: gents_store::local::home::StoreLock,
+    _runtime: std::sync::Arc<gents_store::identity::KeyIdentity>,
 }
 
 impl UserSeededHome {
@@ -179,7 +182,7 @@ impl UserSeededHome {
         )?;
         let node_did = node_did_from_init(&init)?;
         let runtime = std::sync::Arc::new(
-            gents::KeyIdentity::load_existing(
+            gents_store::identity::KeyIdentity::load_existing(
                 init["key_path"]
                     .as_str()
                     .context("identity-only init output missing key_path")?,
@@ -189,26 +192,26 @@ impl UserSeededHome {
         );
         let tool_root = init["tool_root"].as_str().map(std::path::Path::new);
         let ceiling = match (init["tool_ceiling"].as_str(), tool_root) {
-            (Some("meta-only"), _) => gents::ToolCeiling::meta_only(),
-            (Some("readonly"), Some(root)) => gents::ToolCeiling::readonly_at(root),
-            (Some("readonly"), None) => gents::ToolCeiling::readonly(),
-            (Some("readwrite"), Some(root)) => gents::ToolCeiling::readwrite(root),
+            (Some("meta-only"), _) => gents_tools::surface::ToolCeiling::meta_only(),
+            (Some("readonly"), Some(root)) => gents_tools::surface::ToolCeiling::readonly_at(root),
+            (Some("readonly"), None) => gents_tools::surface::ToolCeiling::readonly(),
+            (Some("readwrite"), Some(root)) => gents_tools::surface::ToolCeiling::readwrite(root),
             other => anyhow::bail!("identity-only init output has no tool ceiling: {other:?}"),
         };
         let client = gents_desktop_core::client::PrincipalIdentity::load_existing(
             &graphql::cli_client_paths(cwd, &[]),
         )
         .context("loading the CLI User key")?;
-        let data = gents::store::local::home::default_data_dir(node_home);
-        let claim = gents::store::local::home::lock_store(node_home, &data)?;
-        let key = gents::store::local::store_key::open_home_store_key(node_home, &data).await?;
+        let data = gents_store::local::home::default_data_dir(node_home);
+        let claim = gents_store::local::home::lock_store(node_home, &data)?;
+        let key = gents_store::local::store_key::open_home_store_key(node_home, &data).await?;
         let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
         let url = format!("http://{}/api/v0/graphql", listener.local_addr()?);
         let node = std::sync::Arc::new(
-            gents::store::local::store_key::persistent_builder(&data, &key)?
+            gents_store::local::store_key::persistent_builder(&data, &key)?
                 // The home's own projector, as its runtime and CLI open it,
                 // projects published documents' native source edges.
-                .with_document_projector(gents::store::local::document_projector(
+                .with_document_projector(gents_store::local::document_projector(
                     runtime.clone(),
                     std::sync::Arc::new(ceiling),
                 )?)
@@ -219,10 +222,10 @@ impl UserSeededHome {
                 .await
                 .context("opening the identity-only home")?,
         );
-        let access = gents::ConfigAccess::Graphql(
-            gents::store::config_client::GraphqlEndpoint::as_principal(&url, client.did())
+        let access = gents_store::config_client::ConfigAccess::Graphql(
+            gents_store::config_client::GraphqlEndpoint::as_principal(&url, client.did())
                 .with_client_signing_capability(
-                    gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+                    gents_store::config_client::ClientSigningCapability::from_ed25519_key(
                         client.private_key_bytes(),
                     )?,
                 )?,
@@ -264,7 +267,7 @@ impl UserSeededHome {
     }
 
     pub fn node_did(&self) -> &str {
-        gents::NodeIdentity::did(self._runtime.as_ref())
+        gents_store::identity::NodeIdentity::did(self._runtime.as_ref())
     }
 
     /// Publishes the home's Node and a managed Agent as the User, then creates
@@ -274,12 +277,12 @@ impl UserSeededHome {
         &self,
         display_name: &str,
         session_id: &str,
-    ) -> anyhow::Result<std::sync::Arc<dyn gents::NodeIdentity>> {
+    ) -> anyhow::Result<std::sync::Arc<dyn gents_store::identity::NodeIdentity>> {
         use anyhow::Context as _;
-        use gents::documents::apply_desired_state_plan;
-        use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-        use gents::Collection;
-        use gents::NodeIdentity as _;
+        use gents_documents::apply_desired_state_plan;
+        use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use gents_store::collection::Collection;
+        use gents_store::identity::NodeIdentity as _;
         let node_did = self.node_did().to_owned();
         let user = identity::Did::new(
             self.access
@@ -304,7 +307,7 @@ impl UserSeededHome {
                         apply_desired_state_plan(
                             txn,
                             plan,
-                            &gents::inference::resolved::ProviderProfilePolicy,
+                            &gents_inference::resolved::ProviderProfilePolicy,
                         )
                         .await
                         .map(|_| ())
@@ -317,7 +320,7 @@ impl UserSeededHome {
             serde_json::json!({"node_did": node_did}),
         )])
         .await?;
-        let binding = gents::store::identity::provision_agent_identity_authorized(
+        let binding = gents_store::identity::provision_agent_identity_authorized(
             &self.node,
             self._runtime.as_ref(),
             &user,
@@ -353,14 +356,17 @@ impl UserSeededHome {
         ];
         apply(documents).await?;
         let agent =
-            gents::store::identity::resolve_agent_identity(self._runtime.as_ref(), &binding)?;
-        gents::store::identity::GrantSet::AgentBaseline
+            gents_store::identity::resolve_agent_identity(self._runtime.as_ref(), &binding)?;
+        gents_store::identity::GrantSet::AgentBaseline
             .grant(
-                &gents::ConfigAccess::local_as(self.node.clone(), identity::Did::new(&node_did)?),
+                &gents_store::config_client::ConfigAccess::local_as(
+                    self.node.clone(),
+                    identity::Did::new(&node_did)?,
+                ),
                 &identity::Did::new(agent.did())?,
             )
             .await?;
-        let agent_access = gents::ConfigAccess::local_managed_agent(
+        let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
             self.node.clone(),
             identity::Did::new(agent.did())?,
             agent.as_ref(),
@@ -370,7 +376,7 @@ impl UserSeededHome {
                 let (node_did, agent_did) = (&node_did, &agent_did);
                 Box::pin(async move {
                     let (agent_doc, _) =
-                        gents::documents::read_desired_state_record_in_txn(
+                        gents_documents::read_desired_state_record_in_txn(
                             txn,
                             Collection::Agent,
                             node_did,
@@ -390,7 +396,7 @@ impl UserSeededHome {
                         )
                         .await?;
                     let session_doc =
-                        gents::store::graphql::created_doc_id(&response, "AgentSession")?;
+                        gents_store::graphql::created_doc_id(&response, "AgentSession")?;
                     txn.add_resource_relationship(
                         "AgentSession",
                         &session_doc,

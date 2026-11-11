@@ -86,7 +86,7 @@ async fn a_retry_reports_a_previous_start_that_is_still_closing() {
 fn an_older_client_store_fails_start_as_an_incompatible_local_store() {
     let node = std::path::Path::new("/tmp/desktop/node");
     let refused = anyhow::Error::new(
-        gents::store::schema::migration::MigrationError::UnknownLineage {
+        gents_store::schema::migration::MigrationError::UnknownLineage {
             collection: "AgentSession".into(),
             versions: "bafy-old".into(),
         },
@@ -101,7 +101,7 @@ fn an_older_client_store_fails_start_as_an_incompatible_local_store() {
     );
     assert_eq!(
         store.map(|store| store.kind),
-        Some(gents::store::local::storage_backend::IncompatibleStoreKind::UnknownLineage)
+        Some(gents_store::local::storage_backend::IncompatibleStoreKind::UnknownLineage)
     );
 
     let refused =
@@ -120,7 +120,7 @@ fn test_state() -> (tempfile::TempDir, DesktopAppState) {
     let config = crate::config::BridgeConfig {
         home: crate::config::HomePolicy::FixedRoot(temp.path().join("desktop")),
         bootstrap: crate::config::BootstrapPolicy::PairedRemoteOnly,
-        store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::File,
+        store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice::File,
         ..Default::default()
     };
     let policy = crate::state::resolve_policy(&config, None).expect("policy");
@@ -210,7 +210,7 @@ async fn cancelled_exclusion_waiter_keeps_lifecycle_guard_until_shutdown_owner_r
     waiter.abort();
     assert!(waiter.await.unwrap_err().is_cancelled());
     assert_eq!(
-        gents::store::local::home::lock_store(&home, &data).is_err(),
+        gents_store::local::home::lock_store(&home, &data).is_err(),
         claim_held_for("caller_cancelled")
     );
     assert_eq!(
@@ -228,7 +228,7 @@ async fn cancelled_exclusion_waiter_keeps_lifecycle_guard_until_shutdown_owner_r
     .await
     .expect("client shutdown releases the store claim before exclusion ends");
     assert_eq!(
-        gents::store::local::home::lock_store(&home, &data).is_err(),
+        gents_store::local::home::lock_store(&home, &data).is_err(),
         claim_held_for("access_released")
     );
     assert_eq!(
@@ -253,7 +253,7 @@ async fn cancelled_exclusion_waiter_keeps_lifecycle_guard_until_shutdown_owner_r
         lifecycle_guard_held_for("lifecycle_guard_released")
     );
     assert_eq!(
-        gents::store::local::home::lock_store(&home, &data).is_err(),
+        gents_store::local::home::lock_store(&home, &data).is_err(),
         claim_held_for("lifecycle_guard_released"),
         "the native store claim is released before the lifecycle guard"
     );
@@ -332,7 +332,7 @@ async fn a_plaintext_client_upgrade_returns_a_started_core_with_lifecycle_exclus
     let lifecycle = Arc::clone(&lifecycle_owner).lock_owned().await;
     let (core, lifecycle) = start_client_core_async(
         paths.clone(),
-        gents::store::local::store_key::StoreKeyCustodyChoice::File,
+        gents_store::local::store_key::StoreKeyCustodyChoice::File,
         lifecycle,
     )
     .await
@@ -344,7 +344,7 @@ async fn a_plaintext_client_upgrade_returns_a_started_core_with_lifecycle_exclus
     assert!(paths.store_encryption_path().is_file());
     assert!(paths.store_key_path().is_file());
     assert!(
-        gents::store::local::store_key::upgrade::pending_record(paths.node_data_dir())
+        gents_store::local::store_key::upgrade::pending_record(paths.node_data_dir())
             .unwrap()
             .is_none()
     );
@@ -371,7 +371,7 @@ async fn an_insecure_old_client_key_fails_start_as_an_incompatible_local_store()
     use std::os::unix::fs::PermissionsExt;
     let temp = tempfile::tempdir().expect("tempdir");
     let paths = gents_desktop_core::client::DesktopPaths::from_root(temp.path());
-    gents::store::identity::load_or_create_file_identity(paths.identity_key_path()).unwrap();
+    gents_store::identity::load_or_create_file_identity(paths.identity_key_path()).unwrap();
     std::fs::set_permissions(
         paths.identity_key_path(),
         std::fs::Permissions::from_mode(0o644),
@@ -381,7 +381,7 @@ async fn an_insecure_old_client_key_fails_start_as_an_incompatible_local_store()
     let lifecycle = Arc::new(tokio::sync::Mutex::new(())).lock_owned().await;
     let Err((error, store)) = start_client_core_async(
         paths.clone(),
-        gents::store::local::store_key::StoreKeyCustodyChoice::File,
+        gents_store::local::store_key::StoreKeyCustodyChoice::File,
         lifecycle,
     )
     .await
@@ -397,7 +397,7 @@ async fn an_insecure_old_client_key_fails_start_as_an_incompatible_local_store()
     let store = store.expect("typed refusal");
     assert_eq!(
         store.kind,
-        gents::store::local::storage_backend::IncompatibleStoreKind::InsecureKey
+        gents_store::local::storage_backend::IncompatibleStoreKind::InsecureKey
     );
     assert_eq!(store.data_path, paths.identity_key_path());
     assert_eq!(

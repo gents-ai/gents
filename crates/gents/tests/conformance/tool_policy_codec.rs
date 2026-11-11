@@ -1,9 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use gents::tools::native::{CommandExecutionMode, CommandNetworkMode};
-use gents::tools::surface::ToolPolicySurface;
-use gents::tools::surface::{EndpointScope, ToolPolicyBash};
-use gents::{BashMode, FileToolMode};
+use gents_documents::{BashMode, FileToolMode};
+use gents_tools::native::{CommandExecutionMode, CommandNetworkMode};
+use gents_tools::surface::ToolPolicySurface;
+use gents_tools::surface::{EndpointScope, ToolPolicyBash};
 
 use gents_lean_vocab::{LeanToolPolicySurfaceView as View, LeanToolPolicyWriteGrant as WriteGrant};
 

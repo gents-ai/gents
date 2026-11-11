@@ -1,5 +1,5 @@
 use crate::client::source_matches_node;
-use gents::documents::inference_backend::observation_binding;
+use gents_documents::inference_backend::observation_binding;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,7 +50,7 @@ pub struct InferenceBackendView {
     pub enabled: Option<bool>,
     pub tags: Vec<String>,
     pub models: Vec<String>,
-    pub advertised_models: Vec<gents::documents::AdvertisedModel>,
+    pub advertised_models: Vec<gents_documents::AdvertisedModel>,
     pub probe_status: Option<String>,
     /// The account a subscription backend runs on; `None` is the original.
     pub account_ref: Option<String>,
@@ -65,17 +65,17 @@ pub struct InferenceSetupState {
     pub node_did: String,
     pub node: NodeView,
     pub agents: Vec<AgentView>,
-    pub agent_configs: Vec<gents::documents::Agent>,
+    pub agent_configs: Vec<gents_documents::Agent>,
     pub inference_backends: Vec<InferenceBackendView>,
-    pub inference_profiles: Vec<gents::documents::InferenceProfile>,
+    pub inference_profiles: Vec<gents_documents::InferenceProfile>,
     pub fast_mode_backend_ids: Vec<String>,
 }
 
 pub fn backend_config_view(
-    row: &gents::documents::InferenceBackend,
-    observation: Option<&gents::documents::InferenceBackendObservation>,
+    row: &gents_documents::InferenceBackend,
+    observation: Option<&gents_documents::InferenceBackendObservation>,
 ) -> InferenceBackendView {
-    use gents::documents::BackendAuth;
+    use gents_documents::BackendAuth;
     let (auth_kind, api_key_configured, api_key_env_var) = match &row.auth {
         BackendAuth::Unauthenticated => ("unauthenticated", false, None),
         BackendAuth::ApiKey { .. } => ("api_key", true, None),
@@ -86,7 +86,7 @@ pub fn backend_config_view(
         BackendAuth::AwsCredentials { .. } => ("aws_credentials", false, None),
         BackendAuth::GoogleCredentials { .. } => ("google_credentials", false, None),
     };
-    let advertised_models = match gents::inference::resolved::backend_catalog(row, observation) {
+    let advertised_models = match gents_inference::resolved::backend_catalog(row, observation) {
         Ok(catalog) => catalog,
         Err(error) => {
             tracing::warn!(backend_id = %row.backend_id, node_did = %row.node_did,
@@ -243,9 +243,11 @@ pub fn fast_mode_backend_ids(backends: &[InferenceBackendView]) -> Vec<String> {
     backends
         .iter()
         .filter_map(|backend| {
-            let kind = gents::BackendProviderKind::parse_optional(backend.provider_kind.as_deref())
-                .ok()?;
-            gents::inference::resolved::supports_service_tier(kind)
+            let kind = gents_inference::backends::provider::BackendProviderKind::parse_optional(
+                backend.provider_kind.as_deref(),
+            )
+            .ok()?;
+            gents_inference::resolved::supports_service_tier(kind)
                 .then(|| backend.backend_id.clone())
         })
         .collect()
@@ -255,7 +257,7 @@ pub fn fast_mode_backend_ids(backends: &[InferenceBackendView]) -> Vec<String> {
 /// type a model id it did not advertise.
 fn classify_discovery_failure(error: &anyhow::Error) -> (&'static str, bool, bool) {
     let http_error = error.chain().find_map(|cause| {
-        cause.downcast_ref::<gents::inference::backends::provider::ModelDiscoveryHttpError>()
+        cause.downcast_ref::<gents_inference::backends::provider::ModelDiscoveryHttpError>()
     });
     let is_decode = error
         .chain()
@@ -298,9 +300,9 @@ pub enum ModelDiscoveryError {
 
 /// What the provider answered: the connection asked, its models, or why there are none.
 pub struct ModelDiscovery {
-    pub spec: gents::inference::backends::setup::InferenceConnectionSpec,
+    pub spec: gents_inference::backends::setup::InferenceConnectionSpec,
     pub reachable: bool,
-    pub models: Vec<gents::inference::backends::setup::InferenceModelOption>,
+    pub models: Vec<gents_inference::backends::setup::InferenceModelOption>,
     /// The failure's kind and text, which may carry what the provider echoed.
     pub failure: Option<(&'static str, String)>,
     pub manual_entry_allowed: bool,
@@ -310,15 +312,15 @@ pub struct ModelDiscovery {
 /// node's stored sign-in, and records them on that connection's backends. Without `access` a
 /// sign-in cannot be read and nothing is recorded.
 pub async fn discover_models(
-    access: Option<&gents::ConfigAccess>,
+    access: Option<&gents_store::config_client::ConfigAccess>,
     node_did: &str,
-    provider: gents::inference::backends::setup::InferenceProviderId,
-    method: gents::inference::backends::setup::InferenceAuthMethod,
+    provider: gents_inference::backends::setup::InferenceProviderId,
+    method: gents_inference::backends::setup::InferenceAuthMethod,
     endpoint: &str,
     api_key: Option<&str>,
     account_ref: Option<&str>,
 ) -> Result<ModelDiscovery, ModelDiscoveryError> {
-    use gents::inference::backends::setup::{connection_spec, model_option};
+    use gents_inference::backends::setup::{connection_spec, model_option};
     let spec =
         connection_spec(provider, method, endpoint).map_err(ModelDiscoveryError::Connection)?;
     let api_key = api_key.map(str::trim).filter(|key| !key.is_empty());
@@ -341,7 +343,7 @@ pub async fn discover_models(
         .timeout(DISCOVERY_WAIT)
         .build()
         .map_err(ModelDiscoveryError::Client)?;
-    let found = gents::discover_backend_models(
+    let found = gents_inference::backends::provider::discover_models(
         &client,
         spec.provider_kind,
         &spec.endpoint,
@@ -363,7 +365,7 @@ pub async fn discover_models(
         }
     };
     if let Some(access) = access {
-        use gents::documents::BackendAuth;
+        use gents_documents::BackendAuth;
         let auth = match (oauth_auth, api_key) {
             (Some(auth), _) => auth,
             (None, Some(key)) => BackendAuth::ApiKey {
@@ -371,7 +373,7 @@ pub async fn discover_models(
             },
             (None, None) => BackendAuth::Unauthenticated,
         };
-        let recorded = gents::inference::backends::registry::record_connection_catalog_on(
+        let recorded = gents_inference::backends::registry::record_connection_catalog_on(
             access,
             node_did,
             spec.provider_kind,
@@ -421,31 +423,31 @@ pub async fn discover_models(
 
 /// The stored sign-in a discovery on `account_ref` uses, and the auth its backends record.
 pub async fn discovery_account(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     provider: &str,
     account_ref: Option<&str>,
 ) -> anyhow::Result<(
-    Option<gents::inference::auth::credential::OAuthCredential>,
-    gents::documents::BackendAuth,
+    Option<gents_inference::auth::credential::OAuthCredential>,
+    gents_documents::BackendAuth,
 )> {
-    let credential = gents::inference::auth::credential::resolve_oauth_credential(
+    let credential = gents_inference::auth::credential::resolve_oauth_credential(
         access,
         node_did,
         provider,
-        gents::inference::auth::credential::AccountPick::Reference(account_ref),
+        gents_inference::auth::credential::AccountPick::Reference(account_ref),
     )
     .await?;
     Ok((
         credential,
-        gents::documents::BackendAuth::NodeOAuth {
+        gents_documents::BackendAuth::NodeOAuth {
             account_ref: account_ref.map(str::to_owned),
         },
     ))
 }
 
 pub async fn load_inference_setup_state(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
 ) -> anyhow::Result<InferenceSetupState> {
     let store = crate::client::load_inference_configuration(access, node_did).await?;
@@ -532,7 +534,7 @@ async fn read_inference_setup_state_from(
     client_identity: &crate::client::PrincipalIdentity,
 ) -> anyhow::Result<InferenceSetupState> {
     use anyhow::Context;
-    use gents::store::config_client::GraphqlEndpoint;
+    use gents_store::config_client::GraphqlEndpoint;
     let mut url = reqwest::Url::parse(graphql).context("runtime endpoint is invalid")?;
     anyhow::ensure!(
         matches!(url.scheme(), "http" | "https")
@@ -552,7 +554,7 @@ async fn read_inference_setup_state_from(
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
-    let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+    let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
         client_identity.private_key_bytes(),
     )?;
     let endpoint = GraphqlEndpoint::as_principal(graphql, client_identity.did())
@@ -657,7 +659,7 @@ mod tests {
             .unwrap();
         assert!(authorization.starts_with("Bearer "));
         assert!(
-            gents::store::identity::defradb_bearer_authorization(node, "localhost").is_err(),
+            gents_store::identity::defradb_bearer_authorization(node, "localhost").is_err(),
             "the runtime signer must remain unavailable"
         );
     }
@@ -793,7 +795,7 @@ mod tests {
                 .expect(1)
                 .mount(&server)
                 .await;
-            let access = gents::store::config_client::ConfigAccess::graphql(format!(
+            let access = gents_store::config_client::ConfigAccess::graphql(format!(
                 "{}/api/v0/graphql",
                 server.uri()
             ));
@@ -813,7 +815,7 @@ mod tests {
 
     #[test]
     fn inference_metadata_never_exports_backend_credentials() {
-        let backend: gents::documents::InferenceBackend = serde_json::from_value(json!({
+        let backend: gents_documents::InferenceBackend = serde_json::from_value(json!({
             "node_did": "did:runtime", "backend_id": "backend", "name": "Provider",
             "provider_kind": "OpenAiCompatible", "openai_wire_api": "chat_completions",
             "endpoint": "https://user:private-url-password@example.com/v1?key=private-query-key",

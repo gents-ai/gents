@@ -3,13 +3,13 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use gents::documents::apply_desired_state_plan;
-use gents::documents::pack_spec::is_valid_pack_name;
-use gents::documents::{read_desired_state_record_in_txn, DesiredStateApplyPlan};
-use gents::documents::{EvalDefinition, EvalSplit};
-use gents::pack::{interpolate, load_pack_config, PackInstallOptions, PackManifest};
 use gents::runtime::embedded::EmbeddedHome;
-use gents::{Collection, ConfigAccess};
+use gents_documents::apply_desired_state_plan;
+use gents_documents::pack_spec::is_valid_pack_name;
+use gents_documents::{read_desired_state_record_in_txn, DesiredStateApplyPlan};
+use gents_documents::{EvalDefinition, EvalSplit};
+use gents_pack::pack::{interpolate, load_pack_config, PackInstallOptions, PackManifest};
+use gents_store::{collection::Collection, config_client::ConfigAccess};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -249,7 +249,7 @@ fn undeclared_entry(dir: &Path) -> Result<Option<PathBuf>> {
         &std::fs::read(dir.join("manifest.json")).context("reading the pack manifest")?,
     )
     .context("parsing the pack manifest")?;
-    let declared: std::collections::BTreeSet<PathBuf> = gents::pack::declared_paths(&manifest)
+    let declared: std::collections::BTreeSet<PathBuf> = gents_pack::pack::declared_paths(&manifest)
         .into_iter()
         .map(PathBuf::from)
         .collect();
@@ -526,7 +526,7 @@ fn write_files(
     // keeps every write inside `dir` whatever produced the name.
     if let Some(path) = files
         .keys()
-        .find(|path| !gents::pack::is_distributable_asset_path(path))
+        .find(|path| !gents_pack::pack::is_distributable_asset_path(path))
     {
         anyhow::bail!("refusing to write {path:?}: it is not a pack asset path");
     }
@@ -587,11 +587,11 @@ async fn install_and_read_back(
     // the client then installs through the home's client-signed endpoint, as
     // every User write does.
     let caller = std::sync::Arc::new(crate::load_client_identity().await?);
-    let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+    let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
         caller.private_key_bytes(),
     )?;
     home.set_evaluator(caller.clone(), capability);
-    gents::store::identity::GrantSet::OperatorUser
+    gents_store::identity::GrantSet::OperatorUser
         .grant(
             &ConfigAccess::local_as(home.node.clone(), owner.parse()?),
             &caller.did().parse()?,
@@ -606,7 +606,7 @@ async fn install_and_read_back(
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
                 .map(|_| ())

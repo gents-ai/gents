@@ -33,9 +33,9 @@ pub const FOREIGN_STORE_EXIT_CODE: i32 = 67;
 pub const INSECURE_KEY_EXIT_CODE: i32 = 66;
 
 pub fn incompatible_store_exit_code(
-    kind: gents::store::local::storage_backend::IncompatibleStoreKind,
+    kind: gents_store::local::storage_backend::IncompatibleStoreKind,
 ) -> i32 {
-    use gents::store::local::storage_backend::IncompatibleStoreKind;
+    use gents_store::local::storage_backend::IncompatibleStoreKind;
     match kind {
         IncompatibleStoreKind::InsecureKey => INSECURE_KEY_EXIT_CODE,
         IncompatibleStoreKind::ForeignVersion => FOREIGN_STORE_EXIT_CODE,
@@ -293,7 +293,7 @@ impl CommandRunner for ProcessCommandRunner {
             .stdin(Stdio::null())
             .stdout(stdout.try_clone()?)
             .stderr(stderr.try_clone()?);
-        let mut child = gents::exec::native_spawn::spawn_std(&mut command)
+        let mut child = gents_session::exec::native_spawn::spawn_std(&mut command)
             .with_context(|| format!("executing {}", Path::new(program).display()))?;
         let timeout = command_timeout(program, args);
         let waited = match child.wait_timeout(timeout) {
@@ -1404,16 +1404,16 @@ impl ServiceExit {
 
     pub fn refused_store(
         &self,
-    ) -> Option<gents::store::local::storage_backend::IncompatibleStoreKind> {
+    ) -> Option<gents_store::local::storage_backend::IncompatibleStoreKind> {
         match self.code {
             Some(INCOMPATIBLE_STORE_EXIT_CODE) => {
-                Some(gents::store::local::storage_backend::IncompatibleStoreKind::UnknownLineage)
+                Some(gents_store::local::storage_backend::IncompatibleStoreKind::UnknownLineage)
             }
             Some(FOREIGN_STORE_EXIT_CODE) => {
-                Some(gents::store::local::storage_backend::IncompatibleStoreKind::ForeignVersion)
+                Some(gents_store::local::storage_backend::IncompatibleStoreKind::ForeignVersion)
             }
             Some(INSECURE_KEY_EXIT_CODE) => {
-                Some(gents::store::local::storage_backend::IncompatibleStoreKind::InsecureKey)
+                Some(gents_store::local::storage_backend::IncompatibleStoreKind::InsecureKey)
             }
             _ => None,
         }

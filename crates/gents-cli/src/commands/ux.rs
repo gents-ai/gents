@@ -30,7 +30,7 @@ async fn module(args: UxModuleArgs) -> Result<()> {
 }
 
 async fn preview(args: UxPreviewArgs) -> Result<()> {
-    use gents::observe::ux_preview as preview;
+    use gents_tools::ux_preview as preview;
     use std::io::Write as _;
 
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
@@ -40,7 +40,7 @@ async fn preview(args: UxPreviewArgs) -> Result<()> {
             &home_for_run,
             &namespace,
             &plugin,
-            gents::plugin::ux::producer_input(),
+            gents_pack::plugin::ux::producer_input(),
         )
         .await
     })
@@ -70,7 +70,7 @@ async fn preview(args: UxPreviewArgs) -> Result<()> {
 }
 
 fn lint(args: UxLintArgs) -> Result<()> {
-    let findings = gents::plugin::ux::lint_file(&args.file)?;
+    let findings = gents_pack::plugin::ux::lint_file(&args.file)?;
     crate::print_json(&serde_json::json!({
         "file": args.file,
         "admitted": findings.is_empty(),
@@ -80,7 +80,7 @@ fn lint(args: UxLintArgs) -> Result<()> {
         findings.is_empty(),
         "{} is refused by the static lint:\n{}",
         args.file.display(),
-        gents::plugin::ux::lint::describe(&findings)
+        gents_pack::plugin::ux::lint::describe(&findings)
     );
     Ok(())
 }

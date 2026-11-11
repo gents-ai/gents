@@ -1,5 +1,5 @@
-use gents::inference::compaction::sanitize_history_for_provider;
-use gents::inference::llm::message::{
+use gents_inference::compaction::sanitize_history_for_provider;
+use gents_inference::llm::message::{
     AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResult,
     ToolResultContent, UserContent,
 };
@@ -7,10 +7,10 @@ use gents_loop::provider_input::ProviderInputProfile;
 
 use rapidhash::{HashSetExt, RapidHashSet};
 
-use gents::inference::clients::claude_messages::{parse_messages_sse, parse_messages_sse_typed};
-use gents::inference::clients::claude_subscription::ClaudeStreamResponse;
 use gents_claude::body::{Effort, ModelFacts};
 use gents_claude::{attribution, catalog, profile};
+use gents_inference::clients::claude_messages::{parse_messages_sse, parse_messages_sse_typed};
+use gents_inference::clients::claude_subscription::ClaudeStreamResponse;
 use gents_loop::claude_messages_body::{
     plan_with_ids, ClaudeAccountContext, ClaudeRequestContext, ClaudeRequestIds, MessagesBodyError,
 };
@@ -187,7 +187,7 @@ fn user_item_of(content: &UserContent) -> LeanPromptAssemblyItem {
 }
 
 fn reasoning_text(reasoning: &Reasoning) -> String {
-    use gents::inference::llm::message::ReasoningContent;
+    use gents_inference::llm::message::ReasoningContent;
     reasoning
         .content
         .iter()
@@ -550,7 +550,7 @@ fn claude_thinking_events_as_sse(events: &[LeanClaudeStreamEvent]) -> String {
 
 #[test]
 fn generated_claude_thinking_stream_cases_drive_native_sse_parser() {
-    use gents::inference::llm::message::ReasoningContent;
+    use gents_inference::llm::message::ReasoningContent;
 
     let cases = lean_prompt_assembly_claude_thinking_stream_cases();
     assert!(
@@ -562,7 +562,7 @@ fn generated_claude_thinking_stream_cases_drive_native_sse_parser() {
         let parsed =
             parse_messages_sse_typed(&claude_thinking_events_as_sse(&case.events), &surface);
         if case.outcome != "ok" {
-            use gents::inference::clients::claude_messages::{
+            use gents_inference::clients::claude_messages::{
                 MessagesParseError, ThinkingParseCause,
             };
             let error = parsed.expect_err("modeled malformed block must fail closed");
@@ -587,7 +587,7 @@ fn generated_claude_thinking_stream_cases_drive_native_sse_parser() {
         let parsed = parsed.unwrap_or_else(|error| panic!("{}: {error}", case.name));
         assert_eq!(case.steps.len(), case.events.len(), "{}", case.name);
         let mut state =
-            gents::inference::clients::claude_messages::MessagesSseState::new(surface.clone());
+            gents_inference::clients::claude_messages::MessagesSseState::new(surface.clone());
         let mut live_preview = String::new();
         for (event, (sse, step)) in case.events.iter().zip(
             claude_thinking_sse_events(&case.events)
@@ -629,7 +629,7 @@ fn generated_claude_thinking_stream_cases_drive_native_sse_parser() {
                     arguments: None,
                 }),
                 RawStreamingChoice::Reasoning { content, .. } => {
-                    let part = gents::inference::llm::rig_compat::from_rig_reasoning_part(content);
+                    let part = gents_inference::llm::rig_compat::from_rig_reasoning_part(content);
                     let part = match part {
                         ReasoningContent::Text { text, signature } => LeanClaudeReasoningPart {
                             kind: "text".into(),
@@ -684,7 +684,7 @@ fn generated_claude_decoded_abort_prefixes_emit_native_audit_events() {
     {
         assert_eq!(case.steps.len(), case.events.len(), "{}", case.name);
         let surface = case.surface.iter().cloned().collect::<RapidHashSet<_>>();
-        let mut state = gents::inference::clients::claude_messages::MessagesSseState::new(surface);
+        let mut state = gents_inference::clients::claude_messages::MessagesSseState::new(surface);
         let mut signature = None::<String>;
         let mut redacted = None::<String>;
         for ((event, sse), step) in case
@@ -745,7 +745,7 @@ fn generated_claude_decoded_abort_prefixes_emit_native_audit_events() {
 
 #[test]
 fn generated_claude_initial_thinking_text_seals_in_native_accumulator() {
-    use gents::inference::llm::message::ReasoningContent;
+    use gents_inference::llm::message::ReasoningContent;
     use gents_loop::provider_input::ProviderInputProfile;
     use gents_loop::stream_processor::AssistantTurnAccumulator;
 
@@ -778,7 +778,7 @@ fn generated_claude_initial_thinking_text_seals_in_native_accumulator() {
                     accumulator.push_reasoning_delta(id, &reasoning)
                 }
                 RawStreamingChoice::Reasoning { id, content } => {
-                    let part = gents::inference::llm::rig_compat::from_rig_reasoning_part(&content);
+                    let part = gents_inference::llm::rig_compat::from_rig_reasoning_part(&content);
                     match &part {
                         ReasoningContent::Text { .. } | ReasoningContent::Redacted { .. } => {}
                         other => panic!("unexpected Claude reasoning: {other:?}"),
@@ -840,7 +840,7 @@ fn profile_of_order(mode: gents_lean_vocab::LeanAssistantOrderMode) -> ProviderI
 
 #[test]
 fn generated_assistant_order_cases_bind_selected_provider_order() {
-    use gents::inference::compaction::history::normalize_assistant_content_order;
+    use gents_inference::compaction::history::normalize_assistant_content_order;
     let cases = gents_lean_vocab::lean_prompt_assembly_assistant_order_cases();
     assert!(!cases.is_empty());
     for case in cases {
@@ -1298,7 +1298,7 @@ fn claude_request(
     rig::completion::CompletionRequest {
         model: None,
         preamble: preamble.map(str::to_string),
-        chat_history: rig::OneOrMany::many(gents::inference::llm::rig_compat::to_rig_messages(
+        chat_history: rig::OneOrMany::many(gents_inference::llm::rig_compat::to_rig_messages(
             history,
         ))
         .expect("at least one history row"),
@@ -1317,7 +1317,7 @@ fn native_messages_body(history: &[Message]) -> Result<serde_json::Value, Messag
     if history.is_empty() {
         return Ok(serde_json::json!({"messages": []}));
     }
-    gents::inference::clients::claude_messages::build_messages_body(
+    gents_inference::clients::claude_messages::build_messages_body(
         "claude-sonnet-5",
         &claude_request(None, history, Vec::new()),
     )
@@ -1652,7 +1652,7 @@ fn generated_claude_body_cases_drive_the_body_builder() {
             .collect();
         let mut request = claude_request(case.preamble.as_deref(), &history, tools);
         request.additional_params = Some(serde_json::json!({
-            (gents::inference::clients::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM): case.supported_efforts,
+            (gents_inference::clients::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM): case.supported_efforts,
             "output_config": {"effort": case.effort}
         }));
         let context = ClaudeRequestContext::client_turn("conformance-session");

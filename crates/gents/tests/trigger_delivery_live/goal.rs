@@ -93,9 +93,9 @@ async fn goal_task_waits_for_claim_and_emits_only_after_model_completion() -> Re
     support::fixtures::configure_agent_tools(
         &db, &owner, &agents.lead,
         Some("Follow the current request and Goal objective. Initial Task deliveries and inbox replies must not call update_goal. On an explicit durable Goal controller continuation, perform the objective and call update_goal complete when instructed. Do not create another Goal or use unrelated tools.".into()),
-        gents::documents::Tools {
+        gents_documents::Tools {
             tools_id: format!("{}:tools", agents.lead), node_did: owner.clone(),
-            built_ins: Some(gents::documents::BuiltInTools {
+            built_ins: Some(gents_documents::BuiltInTools {
                 enable_goal_tools: Some(true), ..Default::default()
             }),
             ..Default::default()
@@ -122,7 +122,7 @@ async fn goal_task_waits_for_claim_and_emits_only_after_model_completion() -> Re
     support::agent_requests::submit_user_request(&owner, &fixture, SESSION, INITIAL,
         "Write a numbered list with 150 entries, each saying 'still working'. Do not call tools and do not complete the Goal.",
         gents_protocol::request_input::QueueDelivery::Queue).await;
-    gents::goal::set_goal_from_access(
+    gents_automation::goal::set_goal_from_access(
         &access,
         &owner,
         SESSION,

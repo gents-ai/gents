@@ -9,7 +9,8 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::defra_node::{Node as EmbeddedNode, P2PConfig, QueryResponse};
-use crate::{ensure_runtime_schemas, DocumentRuntimeOptions, Gents, KeyIdentity, NodeIdentity};
+use crate::{DocumentRuntimeOptions, Gents};
+use gents_store::{identity::KeyIdentity, identity::NodeIdentity, schema::ensure_runtime_schemas};
 
 // A full conformance run starts many embedded DefraDB nodes in parallel. On a
 // busy CI host, a healthy runtime can spend more than 60 seconds waiting for
@@ -37,15 +38,15 @@ pub struct EmbeddedHome {
     pub identity: Arc<dyn NodeIdentity>,
     evaluator: Option<(
         Arc<dyn NodeIdentity>,
-        crate::store::config_client::ClientSigningCapability,
+        gents_store::config_client::ClientSigningCapability,
     )>,
     client_endpoint: Option<String>,
     did: String,
     path: PathBuf,
     data_path: PathBuf,
-    store_key: crate::store::local::store_key::StoreKey,
-    store_lock: Option<crate::store::local::home::StoreLock>,
-    backend_admission: crate::store::local::backend_protection::BackendAdmission,
+    store_key: gents_store::local::store_key::StoreKey,
+    store_lock: Option<gents_store::local::home::StoreLock>,
+    backend_admission: gents_store::local::backend_protection::BackendAdmission,
     p2p: Option<P2PConfigForPath>,
     #[allow(dead_code)]
     tempdir: Option<TempDir>,
@@ -123,7 +124,7 @@ impl EmbeddedHome {
             "retained trial home {} is missing",
             dir.display()
         );
-        crate::store::local::storage_backend::require_existing_store(&dir.join("data"))?;
+        gents_store::local::storage_backend::require_existing_store(&dir.join("data"))?;
         let identity: Arc<dyn NodeIdentity> = Arc::new(
             KeyIdentity::load_existing(dir.join("node.key"), None)
                 .context("loading the retained trial identity")?,
@@ -155,7 +156,7 @@ impl EmbeddedHome {
         let lock_home = path.clone();
         let lock_data = data_path.clone();
         let store_lock = tokio::task::spawn_blocking(move || {
-            crate::store::local::home::lock_store(&lock_home, &lock_data)
+            gents_store::local::home::lock_store(&lock_home, &lock_data)
         })
         .await??;
         let fresh = tokio::fs::read_dir(&data_path)
@@ -166,7 +167,7 @@ impl EmbeddedHome {
         let fresh_store = if fresh {
             ensure!(initialize_schemas, "retained trial store is unavailable");
             Some(
-                crate::store::local::backend_protection::FreshBackendStore::observe(
+                gents_store::local::backend_protection::FreshBackendStore::observe(
                     &data_path,
                     &store_lock,
                 )
@@ -179,7 +180,7 @@ impl EmbeddedHome {
         if let Some(fresh_store) = fresh_store {
             fresh_store.initialize(&store_key, Some(&did)).await?;
         }
-        let protected = crate::store::local::backend_protection::ProtectedBackendStore::open(
+        let protected = gents_store::local::backend_protection::ProtectedBackendStore::open(
             &data_path,
             &store_key,
             &store_lock,
@@ -195,7 +196,7 @@ impl EmbeddedHome {
             identity.clone(),
             Some(http),
             p2p.as_ref().map(|p| p(&path)),
-            crate::tools::surface::ToolCeiling::meta_only(),
+            gents_tools::surface::ToolCeiling::meta_only(),
             &path,
         )
         .await?;
@@ -233,7 +234,7 @@ impl EmbeddedHome {
     pub fn set_evaluator(
         &mut self,
         identity: Arc<dyn NodeIdentity>,
-        capability: crate::store::config_client::ClientSigningCapability,
+        capability: gents_store::config_client::ClientSigningCapability,
     ) {
         self.evaluator = Some((identity, capability));
     }
@@ -251,7 +252,7 @@ impl EmbeddedHome {
         Ok(identity)
     }
 
-    pub fn client_access(&self, did: &str) -> Result<crate::ConfigAccess> {
+    pub fn client_access(&self, did: &str) -> Result<gents_store::config_client::ConfigAccess> {
         self.evaluator(did)?;
         let endpoint = self
             .client_endpoint
@@ -261,8 +262,8 @@ impl EmbeddedHome {
             .evaluator
             .as_ref()
             .context("evaluation requires the held client signing capability")?;
-        Ok(crate::ConfigAccess::Graphql(
-            crate::store::config_client::GraphqlEndpoint::as_principal(endpoint, did)
+        Ok(gents_store::config_client::ConfigAccess::Graphql(
+            gents_store::config_client::GraphqlEndpoint::as_principal(endpoint, did)
                 .with_client_signing_capability(capability.clone())?
                 .with_client_signed_agent_creates(),
         ))
@@ -273,7 +274,7 @@ impl EmbeddedHome {
     }
 
     /// The admission is bound to this home's protected native node.
-    pub fn backend_admission(&self) -> crate::store::local::backend_protection::BackendAdmission {
+    pub fn backend_admission(&self) -> gents_store::local::backend_protection::BackendAdmission {
         self.backend_admission.clone()
     }
 
@@ -318,7 +319,7 @@ impl EmbeddedHome {
             }
         }
 
-        let protected = crate::store::local::backend_protection::ProtectedBackendStore::open(
+        let protected = gents_store::local::backend_protection::ProtectedBackendStore::open(
             &self.data_path,
             &self.store_key,
             self.store_lock
@@ -336,7 +337,7 @@ impl EmbeddedHome {
             self.identity.clone(),
             Some(http),
             self.p2p.as_ref().map(|p| p(&self.path)),
-            crate::tools::surface::ToolCeiling::meta_only(),
+            gents_tools::surface::ToolCeiling::meta_only(),
             &self.path,
         )
         .await?;
@@ -449,7 +450,7 @@ fn agent_identity_routes(served: ServedNode) -> axum::Router {
                             "The requested node does not serve this endpoint.",
                         );
                     }
-                    match crate::store::identity::provision_agent_identity_authorized(
+                    match gents_store::identity::provision_agent_identity_authorized(
                         &node,
                         runtime.as_ref(),
                         &caller,
@@ -457,7 +458,7 @@ fn agent_identity_routes(served: ServedNode) -> axum::Router {
                     .await
                     {
                         Ok(binding) => axum::Json(binding).into_response(),
-                        Err(crate::store::identity::AgentProvisionError::Unauthorized) => failure(
+                        Err(gents_store::identity::AgentProvisionError::Unauthorized) => failure(
                             StatusCode::FORBIDDEN,
                             "This client cannot create an agent on this node.",
                         ),
@@ -479,8 +480,8 @@ async fn trial_store_key(
     path: &Path,
     data: &Path,
     fresh: bool,
-) -> Result<crate::store::local::store_key::StoreKey> {
-    use crate::store::local::store_key::{StoreEncryption, StoreKeyCustodyChoice};
+) -> Result<gents_store::local::store_key::StoreKey> {
+    use gents_store::local::store_key::{StoreEncryption, StoreKeyCustodyChoice};
     use tokio::io::AsyncWriteExt;
     let key_file = path.join("store.key");
     let record_path = path.join("store-custody.json");
@@ -661,7 +662,7 @@ async fn fetch_runtime_snapshot(
         .limit(1);
         QuerySet::new().plain(&readiness).plain(&runtime).render()
     };
-    let response = crate::store::graphql::read_rendered(node, &query, "runtime snapshot").await?;
+    let response = gents_store::graphql::read_rendered(node, &query, "runtime snapshot").await?;
     let Some(diagnostic) =
         optional_row::<gents_protocol::row::NodeRuntimeRow>(&response, "NodeRuntime")?
     else {
@@ -699,7 +700,7 @@ pub async fn fetch_node_readiness_snapshot(
             .render()
     };
     let response =
-        crate::store::graphql::read_rendered(node, &query, "agent readiness snapshot").await?;
+        gents_store::graphql::read_rendered(node, &query, "agent readiness snapshot").await?;
     Ok(response
         .data
         .as_ref()

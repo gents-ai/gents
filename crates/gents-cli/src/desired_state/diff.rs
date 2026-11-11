@@ -3,7 +3,8 @@ use super::{
     DesiredStateManifest,
 };
 use anyhow::{Context, Result};
-use gents::{documents::DesiredStateApplyPlan, Collection};
+use gents_documents::DesiredStateApplyPlan;
+use gents_store::collection::Collection;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;

@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::store::graphql::escape_graphql_string;
-use gents::ConfigAccess;
 use gents_protocol::row::{project_node_readiness, NodeReadinessRow, ProjectedAgentReadiness};
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
 
 /// Pack publication precedes router reconciliation, so an HTTP-ready server
 /// can still reject the author's first request as unassigned.

@@ -3,7 +3,6 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
-use gents::store::config_client::GraphqlEndpoint;
 use gents_protocol::serve_lifecycle::{
     control::{
         RuntimeControlCommand, RuntimeControlDisposition, RuntimeControlReceipt, RuntimeOperation,
@@ -14,6 +13,7 @@ use gents_protocol::serve_lifecycle::{
         RuntimePreparationResult, RUNTIME_PREPARATION_VERSION,
     },
 };
+use gents_store::config_client::GraphqlEndpoint;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt as _, BufReader};
 use tokio::process::{Child as PreparationChild, Command};
@@ -77,7 +77,7 @@ pub struct Fixture<'a> {
     pub session: &'a str,
     pub client_did: &'a str,
     pub original_doc_id: &'a str,
-    pub access: &'a gents::ConfigAccess,
+    pub access: &'a gents_store::config_client::ConfigAccess,
 }
 
 impl Fixture<'_> {
@@ -97,15 +97,15 @@ impl Fixture<'_> {
         let key = tokio::fs::read(key_path).await?;
         let p2p_secret = tokio::fs::read(
             self.home
-                .join(gents::store::local::home::P2P_SECRET_KEY_FILE_NAME),
+                .join(gents_store::local::home::P2P_SECRET_KEY_FILE_NAME),
         )
         .await?;
-        let provider_query = format!("{{ InferenceBackend(filter: {{node_did: {{_eq: \"{}\"}}}}) {{ _docID backend_id provider_kind endpoint }} }}", gents::store::graphql::escape_graphql_string(self.node_did));
+        let provider_query = format!("{{ InferenceBackend(filter: {{node_did: {{_eq: \"{}\"}}}}) {{ _docID backend_id provider_kind endpoint }} }}", gents_store::graphql::escape_graphql_string(self.node_did));
         let providers = rows(
             self.access.execute(&provider_query).await?,
             "InferenceBackend",
         )?;
-        let session_query = format!("{{ AgentSession(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{ _docID node_did session_id requester_did agent_did created_at }} }}", gents::store::graphql::escape_graphql_string(self.node_did), gents::store::graphql::escape_graphql_string(self.session));
+        let session_query = format!("{{ AgentSession(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{ _docID node_did session_id requester_did agent_did created_at }} }}", gents_store::graphql::escape_graphql_string(self.node_did), gents_store::graphql::escape_graphql_string(self.session));
         let sessions = rows(self.access.execute(&session_query).await?, "AgentSession")?;
         let (mut replacement, ready) = self.start_replacement(original).await?;
         let RuntimePreparationResult::Ready {
@@ -189,7 +189,7 @@ impl Fixture<'_> {
             }
         }).await;
         if !matches!(&completion, Ok(Ok(()))) {
-            let query = format!("{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{ _docID request_id lifecycle_state content admission_signer_did }} }}", gents::store::graphql::escape_graphql_string(followup));
+            let query = format!("{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{ _docID request_id lifecycle_state content admission_signer_did }} }}", gents_store::graphql::escape_graphql_string(followup));
             let observed = self.access.execute(&query).await;
             *id += 1;
             let snapshot = client.snapshot(*id).await;
@@ -197,7 +197,7 @@ impl Fixture<'_> {
             let routing_after = tokio::fs::read_to_string(self.home.join("runtime.json")).await?;
             anyhow::bail!("retained follow-up did not complete: {completion:?}; native input: {observed:?}; routing before: {routing_before}; routing after: {routing_after}; client: {snapshot}");
         }
-        let requests_query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}, purpose: {{_eq: \"normal\"}}}}) {{ {} }} }}", gents::store::graphql::escape_graphql_string(self.node_did), gents::store::graphql::escape_graphql_string(self.session), gents::SIGNED_REQUEST_FIELDS);
+        let requests_query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}, purpose: {{_eq: \"normal\"}}}}) {{ {} }} }}", gents_store::graphql::escape_graphql_string(self.node_did), gents_store::graphql::escape_graphql_string(self.session), gents::SIGNED_REQUEST_FIELDS);
         let requests = self.access.execute(&requests_query).await?;
         let requests: Vec<gents_protocol::row::AgentRequestRow> =
             serde_json::from_value(requests["data"]["AgentRequest"].clone())?;
@@ -223,14 +223,14 @@ impl Fixture<'_> {
                 request.admission_signer_did.as_deref() == Some(self.client_did),
                 "replacement changed the enrolled requester"
             );
-            gents::verify_request_receipt_signature(request)?;
+            gents_store::identity::request_receipt::verify_request_receipt_signature(request)?;
         }
         ensure!(tokio::fs::read(self.home.join("init.json")).await? == init);
         ensure!(tokio::fs::read(key_path).await? == key);
         ensure!(
             tokio::fs::read(
                 self.home
-                    .join(gents::store::local::home::P2P_SECRET_KEY_FILE_NAME)
+                    .join(gents_store::local::home::P2P_SECRET_KEY_FILE_NAME)
             )
             .await?
                 == p2p_secret
@@ -328,7 +328,7 @@ impl Fixture<'_> {
         // Runtime control is authorized by a bearer token signed with the Node's held key.
         let config: Value =
             serde_json::from_slice(&tokio::fs::read(self.home.join("init.json")).await?)?;
-        let identity = gents::KeyIdentity::load_or_create(
+        let identity = gents_store::identity::KeyIdentity::load_or_create(
             config["key_path"].as_str().context("runtime key path")?,
             None,
         )?;
@@ -358,7 +358,7 @@ impl Fixture<'_> {
                     .error_for_status()?
                     .json()
                     .await?;
-                gents::store::service::verify_control_receipt(&command, &receipt)?;
+                gents_store::service::verify_control_receipt(&command, &receipt)?;
                 match receipt.disposition {
                     RuntimeControlDisposition::Retiring => return Ok::<_, anyhow::Error>(()),
                     RuntimeControlDisposition::Busy => {

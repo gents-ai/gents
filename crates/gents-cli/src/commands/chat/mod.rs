@@ -4,8 +4,8 @@ pub(crate) mod streaming;
 use std::path::Path;
 
 use anyhow::{bail, Result};
-use gents::plugin::approval::Answer;
-use gents::store::config_client::GraphqlEndpoint;
+use gents_store::config_client::GraphqlEndpoint;
+use gents_tools::plugin::approval::Answer;
 
 use crate::request_helpers::wait_for_terminal_response_with_progress;
 use crate::{create_agent_request, RequestOutputEnvelope, RequestSubmitOptions};
@@ -31,8 +31,8 @@ pub(crate) async fn print_reply(
     // The turn is the User's: it is signed by the CLI's client key, never the Node's.
     crate::load_client_identity().await?;
     let session_id = session.map_or_else(|| uuid::Uuid::new_v4().to_string(), str::to_owned);
-    let input = gents::request::lifecycle::prepare_user_message_input(
-        &gents::ConfigAccess::Graphql(graphql.clone()),
+    let input = gents_session::request::lifecycle::prepare_user_message_input(
+        &gents_store::config_client::ConfigAccess::Graphql(graphql.clone()),
         node_did,
         &session_id,
         Default::default(),

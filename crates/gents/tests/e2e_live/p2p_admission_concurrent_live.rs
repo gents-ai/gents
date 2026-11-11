@@ -20,7 +20,7 @@ fn live_enabled() -> bool {
 async fn wait_for_connected_peer(node: &EmbeddedNode) {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        let peers = gents::store::identity::node_p2p(node)
+        let peers = gents_store::identity::node_p2p(node)
             .expect("p2p enabled")
             .connected_peers()
             .await
@@ -40,7 +40,7 @@ async fn wait_for_connected_peer(node: &EmbeddedNode) {
 async fn connect_discovery_peer(owner: &EmbeddedNode, peer: &EmbeddedNode) {
     let peer_addr = wait_for_listen_addr(peer).await;
     // Transport administration runs as the Node's own identity.
-    gents::store::identity::node_p2p(owner)
+    gents_store::identity::node_p2p(owner)
         .expect("owner p2p")
         .connect_peer(&peer_addr)
         .await
@@ -55,7 +55,7 @@ struct LiveTopologyGuard {
     peer_a: Option<TestDb>,
     peer_b: Option<TestDb>,
     shut_down: bool,
-    runtime: gents::store::drop_cleanup::DropCleanup,
+    runtime: gents_store::drop_cleanup::DropCleanup,
 }
 
 impl LiveTopologyGuard {
@@ -66,7 +66,7 @@ impl LiveTopologyGuard {
             peer_a: Some(peer_a),
             peer_b: Some(peer_b),
             shut_down: false,
-            runtime: gents::store::drop_cleanup::DropCleanup::current(),
+            runtime: gents_store::drop_cleanup::DropCleanup::current(),
         }
     }
 
@@ -195,7 +195,7 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_inference()
 
     for db in [topo.peer_a(), topo.peer_b()] {
         assert!(
-            !gents::store::identity::node_p2p(&db.node)
+            !gents_store::identity::node_p2p(&db.node)
                 .expect("peer p2p")
                 .connected_peers()
                 .await

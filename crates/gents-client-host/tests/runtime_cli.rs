@@ -269,9 +269,12 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
         changed_root.canonicalize().unwrap().to_str().unwrap()
     );
     assert_eq!(after["tool_ceiling"], before["tool_ceiling"]);
-    let identity =
-        gents::KeyIdentity::load_or_create(before["key_path"].as_str().unwrap(), None).unwrap();
-    use gents::NodeIdentity as _;
+    let identity = gents_store::identity::KeyIdentity::load_or_create(
+        before["key_path"].as_str().unwrap(),
+        None,
+    )
+    .unwrap();
+    use gents_store::identity::NodeIdentity as _;
     assert_eq!(identity.did(), changed_did);
     // Bearer authorization requires a held signing key; the home's operator reads status.
     let status: serde_json::Value = operator
@@ -300,11 +303,11 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
         .await
         .unwrap(),
     );
-    let custody: gents::store::local::store_key::StoreEncryption =
+    let custody: gents_store::local::store_key::StoreEncryption =
         serde_json::from_slice(&std::fs::read(paths.store_encryption_path()).unwrap()).unwrap();
     assert_eq!(
         custody.custody,
-        gents::store::local::store_key::StoreKeyCustody::File
+        gents_store::local::store_key::StoreKeyCustody::File
     );
     assert!(paths.store_key_path().is_file());
     core.shutdown().await.unwrap();
@@ -382,28 +385,28 @@ async fn publish_workspace_root(
     homes: &support::homes::ProcessHomes,
     port: u16,
     root: &std::path::Path,
-) -> gents::store::config_client::GraphqlEndpoint {
+) -> gents_store::config_client::GraphqlEndpoint {
     let config: serde_json::Value =
         serde_json::from_slice(&std::fs::read(home.join("init.json")).unwrap()).unwrap();
     let node_did = config["node_did"].as_str().unwrap();
     let user = gents_desktop_core::client::PrincipalIdentity::load_existing(&homes.cli_identity())
         .unwrap();
-    let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+    let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
         user.private_key_bytes(),
     )
     .unwrap();
-    let endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(
+    let endpoint = gents_store::config_client::GraphqlEndpoint::as_principal(
         format!("http://127.0.0.1:{port}/api/v0/graphql"),
         user.did(),
     )
     .with_client_signing_capability(capability)
     .unwrap()
     .with_client_signed_agent_creates();
-    let access = gents::ConfigAccess::Graphql(endpoint.clone());
+    let access = gents_store::config_client::ConfigAccess::Graphql(endpoint.clone());
     let nodes = access
         .execute(&format!(
             r#"{{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ default_agent_did }} }}"#,
-            gents::store::graphql::escape_graphql_string(node_did)
+            gents_store::graphql::escape_graphql_string(node_did)
         ))
         .await
         .unwrap();
@@ -413,7 +416,7 @@ async fn publish_workspace_root(
         .and_then(serde_json::Value::as_str)
         .unwrap_or_else(|| panic!("the Node names its default Agent: {nodes}"))
         .to_owned();
-    gents::tools::surface::set_workspace_root_with_readers(
+    gents_tools::surface::set_workspace_root_with_readers(
         &access,
         node_did,
         root.to_str().unwrap(),

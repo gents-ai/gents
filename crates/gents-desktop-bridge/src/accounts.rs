@@ -11,7 +11,7 @@ pub mod usage;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderSignInRequest {
     pub node_did: String,
-    pub method: gents::inference::backends::setup::InferenceAuthMethod,
+    pub method: gents_inference::backends::setup::InferenceAuthMethod,
     pub label: Option<String>,
 }
 
@@ -28,7 +28,7 @@ pub struct BackendAuthenticationSaveRequest {
     pub node_did: String,
     pub backend_id: String,
     pub revision: gents_desktop_core::client::ConfigEditorRevision,
-    pub auth: gents::documents::BackendAuth,
+    pub auth: gents_documents::BackendAuth,
 }
 
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
@@ -46,10 +46,10 @@ pub struct BackendAuthenticationView {
 impl BackendAuthenticationView {
     pub(crate) fn from_backend(
         revision: gents_desktop_core::client::ConfigEditorRevision,
-        backend: &gents::InferenceBackend,
+        backend: &gents_documents::InferenceBackend,
     ) -> Self {
-        use gents::documents::BackendAuth;
-        use gents::inference::backends::provider::BackendProviderOauthExt;
+        use gents_documents::BackendAuth;
+        use gents_inference::backends::provider::BackendProviderOauthExt;
         let (kind, variable, account_ref) = match &backend.auth {
             BackendAuth::Unauthenticated => ("unauthenticated", None, None),
             BackendAuth::ApiKey { .. } => ("api_key", None, None),
@@ -78,12 +78,13 @@ mod authentication_tests {
 
     #[test]
     fn authentication_metadata_and_command_debug_never_contain_the_api_key() {
-        let backend: gents::InferenceBackend = serde_json::from_value(serde_json::json!({
-            "node_did":"did:test:backend", "backend_id":"backend", "name":"Backend",
-            "provider_kind":"OpenAiCompatible", "endpoint":"http://localhost:8000/v1",
-            "auth":{"kind":"api_key","key":"private-authentication-fixture"}
-        }))
-        .unwrap();
+        let backend: gents_documents::InferenceBackend =
+            serde_json::from_value(serde_json::json!({
+                "node_did":"did:test:backend", "backend_id":"backend", "name":"Backend",
+                "provider_kind":"OpenAiCompatible", "endpoint":"http://localhost:8000/v1",
+                "auth":{"kind":"api_key","key":"private-authentication-fixture"}
+            }))
+            .unwrap();
         let revision = gents_desktop_core::client::ConfigEditorRevision {
             document_id: "physical".into(),
             composite_cid: "version".into(),
@@ -103,7 +104,7 @@ mod authentication_tests {
 
     #[test]
     fn authentication_metadata_reports_an_opaque_stored_credential() {
-        let backend: gents::InferenceBackend = serde_json::from_value(serde_json::json!({
+        let backend: gents_documents::InferenceBackend = serde_json::from_value(serde_json::json!({
             "node_did":"did:test:backend", "backend_id":"backend", "name":"Backend",
             "provider_kind":"ClaudeBedrock", "endpoint":"https://example.test",
             "auth":{"kind":"credential", "id":"private-reference-fixture", "version":"private-version-fixture"}
@@ -127,7 +128,7 @@ mod authentication_tests {
 
     #[test]
     fn rotation_requests_decode_the_operator_choice_and_reject_unknown_fields() {
-        use gents::inference::backends::rotation::BackendRotation;
+        use gents_inference::backends::rotation::BackendRotation;
         let decode = |rotation: serde_json::Value| {
             serde_json::from_value::<crate::types::BackendRotationSetRequest>(
                 serde_json::json!({"nodeDid":"did:test:backend","backendId":"claude","rotation":rotation}),
@@ -162,11 +163,11 @@ type CredentialKey = (String, String, String);
 
 pub struct IssuedOAuthCredential {
     sequence: u64,
-    credential: gents::inference::auth::credential::OAuthCredential,
+    credential: gents_inference::auth::credential::OAuthCredential,
 }
 
 impl IssuedOAuthCredential {
-    pub fn credential(&self) -> &gents::inference::auth::credential::OAuthCredential {
+    pub fn credential(&self) -> &gents_inference::auth::credential::OAuthCredential {
         &self.credential
     }
 
@@ -212,7 +213,7 @@ pub struct PendingOAuthCredentials {
 impl PendingOAuthCredentials {
     pub fn issue(
         &self,
-        credential: gents::inference::auth::credential::OAuthCredential,
+        credential: gents_inference::auth::credential::OAuthCredential,
     ) -> IssuedOAuthCredential {
         IssuedOAuthCredential {
             sequence: self
@@ -245,7 +246,7 @@ impl PendingOAuthCredentials {
         write: F,
     ) -> CredentialSave<T>
     where
-        F: FnOnce(gents::inference::auth::credential::OAuthCredential) -> Fut,
+        F: FnOnce(gents_inference::auth::credential::OAuthCredential) -> Fut,
         Fut: std::future::Future<Output = anyhow::Result<T>>,
     {
         let key = issued.key();
@@ -280,11 +281,11 @@ impl PendingOAuthCredentials {
         provider: &str,
         write: F,
     ) -> Option<(
-        gents::inference::auth::credential::OAuthCredential,
+        gents_inference::auth::credential::OAuthCredential,
         anyhow::Result<T>,
     )>
     where
-        F: FnOnce(gents::inference::auth::credential::OAuthCredential) -> Fut,
+        F: FnOnce(gents_inference::auth::credential::OAuthCredential) -> Fut,
         Fut: std::future::Future<Output = anyhow::Result<T>>,
     {
         let key = self
@@ -315,7 +316,7 @@ impl PendingOAuthCredentials {
     pub fn held_for(
         &self,
         node_did: &str,
-    ) -> Vec<gents::inference::auth::credential::OAuthCredential> {
+    ) -> Vec<gents_inference::auth::credential::OAuthCredential> {
         let mut held: Vec<_> = self
             .slots()
             .iter()

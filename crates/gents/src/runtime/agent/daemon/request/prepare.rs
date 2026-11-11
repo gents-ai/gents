@@ -3,25 +3,25 @@ use tracing::Instrument;
 
 use super::super::AgentDaemon;
 use super::is_stale_compaction_generation;
-use crate::inference::admission::{self, CallKind};
-use crate::inference::compaction;
-use crate::inference::llm::message::Message;
-use crate::observe::runtime_trace::RequestTraceAttrs;
 use crate::runtime::agent::loop_stream::{AggregateTokenBudget, FoldedPrompt};
-use crate::session;
-use crate::tools::runtime_context::ToolWorkspaceScope;
 use crate::turn::prompt::{BuiltPrompt, PromptBuilder};
 use crate::turn::provider_input::budget::ContextCalibration;
 use crate::turn::provider_input::ProviderInputProfile;
+use gents_inference::admission::{self, CallKind};
+use gents_inference::compaction;
+use gents_inference::llm::message::Message;
 use gents_loop::loop_stream::{
     provider_messages, provider_view_tagged, LoopReplayInput, TaggedMessage,
 };
+use gents_observe::observe::runtime_trace::RequestTraceAttrs;
 use gents_protocol::row::AgentRequest;
+use gents_session::session;
+use gents_tools::runtime_context::ToolWorkspaceScope;
 
 #[derive(Clone, Copy)]
 pub(super) struct RequestInputs<'a> {
     pub(super) request: &'a AgentRequest,
-    pub(super) lifecycle: &'a crate::request::lifecycle::RequestLifecycle,
+    pub(super) lifecycle: &'a gents_session::request::lifecycle::RequestLifecycle,
     pub(super) request_commit_cid: &'a String,
     pub(super) agent_name: &'a str,
     pub(super) trace_attrs: &'a RequestTraceAttrs,
@@ -55,7 +55,7 @@ struct SessionReduction<'a> {
     replay: &'a LoopReplayInput,
     provider_profile: ProviderInputProfile,
     sequenced_history: &'a [session::SequencedMessage],
-    compaction_access: &'a crate::ConfigAccess,
+    compaction_access: &'a gents_store::config_client::ConfigAccess,
     compaction_generation: &'a str,
     compaction_generation_is_latest: bool,
     assembly_attempt: i32,
@@ -63,7 +63,7 @@ struct SessionReduction<'a> {
 
 impl<M> AgentDaemon<M>
 where
-    M: crate::inference::llm::rig_compat::ProviderModel,
+    M: gents_inference::llm::rig_compat::ProviderModel,
 {
     pub(super) async fn load_admission(
         &self,
@@ -80,7 +80,7 @@ where
             && session::resumed_request_has_published_input(&self.node, request).await?;
         let resume_from_history =
             resume_same_request || session::retry_has_published_input(&self.node, request).await?;
-        let access = crate::store::config_client::ConfigAccess::local_managed_agent(
+        let access = gents_store::config_client::ConfigAccess::local_managed_agent(
             self.node.clone(),
             identity::Did::new(request.agent_did.clone())?,
             self.agent_config.agent_identity.as_ref(),
@@ -106,28 +106,24 @@ where
     pub(super) async fn request_capture_scope(
         &self,
         request: &AgentRequest,
-        lifecycle: &crate::request::lifecycle::RequestLifecycle,
-        stream_writer: &crate::request::streaming::DefraStreamWriter,
+        lifecycle: &gents_session::request::lifecycle::RequestLifecycle,
+        stream_writer: &gents_session::request::streaming::DefraStreamWriter,
         request_commit_cid: &str,
-    ) -> Result<
-        Option<std::sync::Arc<crate::inference::rendered_request::scope::RequestCaptureScope>>,
-    > {
-        let capture_context = crate::inference::rendered_request::context_for_claimed_request(
+    ) -> Result<Option<std::sync::Arc<gents_inference::rendered_request::scope::RequestCaptureScope>>>
+    {
+        let capture_context = gents_inference::rendered_request::context_for_claimed_request(
             request,
             request_commit_cid,
             self.agent_config.model_name.clone(),
             self.provider_family.clone(),
         );
-        let mut capture_scope = crate::inference::rendered_request::scope_from_factory(
+        let mut capture_scope = gents_inference::rendered_request::scope_from_factory(
             capture_context.clone(),
             self.rendered_request_capture_factory.as_ref(),
         );
         let previous_scopes = if lifecycle.resumed_from_backend() && capture_scope.is_some() {
-            crate::inference::rendered_request::load_scope_allocations(
-                &lifecycle.access()?,
-                request,
-            )
-            .await?
+            gents_inference::rendered_request::load_scope_allocations(&lifecycle.access()?, request)
+                .await?
         } else {
             Vec::new()
         };
@@ -169,18 +165,18 @@ where
         let skill_reminders = self
             .prompt_builder
             .selected_skill_reminders(selected_skill_ids);
-        let overlay = crate::workspace::resolve_request_workspace_overlay_with_identity(
+        let overlay = gents_session::workspace::resolve_request_workspace_overlay_with_identity(
             &self.node,
             self.agent_config.agent_identity.as_ref(),
             request,
             lifecycle.execution_generation()?,
             self.agent_config.tools.static_policy().bash.execution_mode
-                == crate::tools::native::CommandExecutionMode::ArtifactWrite,
+                == gents_tools::native::CommandExecutionMode::ArtifactWrite,
             self.operator_tool_root.as_deref(),
         )
         .await?;
         let frozen_instruction_manifest =
-            crate::workspace::frozen_instruction_manifest_from_overlay(overlay.as_ref())
+            gents_session::workspace::frozen_instruction_manifest_from_overlay(overlay.as_ref())
                 .map(str::to_owned);
         let request_context_message = super::super::inference::render_request_context_message(
             self.node.as_ref(),
@@ -188,20 +184,21 @@ where
             request,
             frozen_instruction_manifest.as_deref(),
         )?;
-        let prompt = |folded: crate::request::lifecycle::queue::FoldedInput| -> Result<_> {
+        let prompt = |folded: gents_session::request::lifecycle::queue::FoldedInput| -> Result<_> {
             Ok(crate::runtime::agent::loop_stream::FoldedPrompt {
                 key: folded.key(),
                 message: folded.message()?,
             })
         };
-        let consumed_prompts = crate::request::lifecycle::queue::load_consumed_folded_inputs(
-            &lifecycle.access()?,
-            request,
-        )
-        .await?
-        .into_iter()
-        .map(prompt)
-        .collect::<Result<Vec<_>>>()?;
+        let consumed_prompts =
+            gents_session::request::lifecycle::queue::load_consumed_folded_inputs(
+                &lifecycle.access()?,
+                request,
+            )
+            .await?
+            .into_iter()
+            .map(prompt)
+            .collect::<Result<Vec<_>>>()?;
         let selection = if resume_from_history {
             &[][..]
         } else {
@@ -216,21 +213,21 @@ where
                 .collect::<Result<Vec<_>>>()?,
         );
         let workspace = match overlay {
-            Some(overlay) => crate::tools::runtime_context::ToolWorkspaceScope {
+            Some(overlay) => gents_tools::runtime_context::ToolWorkspaceScope {
                 runtime_home: None,
                 workspace_cwd: Some(overlay.cwd),
                 workspace_root: Some(overlay.root),
                 workspace_authority: Some(overlay.authority),
                 workspace_artifact: overlay.workspace_artifact,
             },
-            None => crate::tools::runtime_context::ToolWorkspaceScope::cwd_only(
-                crate::workspace::request_workspace_cwd(request),
+            None => gents_tools::runtime_context::ToolWorkspaceScope::cwd_only(
+                gents_session::workspace::request_workspace_cwd(request),
             ),
         };
         let wake_notifications = if resume_from_history {
             Vec::new()
         } else {
-            let access = crate::ConfigAccess::local_managed_agent(
+            let access = gents_store::config_client::ConfigAccess::local_managed_agent(
                 self.node.clone(),
                 identity::Did::new(&request.agent_did)?,
                 self.agent_config.agent_identity.as_ref(),
@@ -310,7 +307,7 @@ where
         } = assembly;
         for assembly_attempt in 0..=1 {
             let background_cutoff = lifecycle.background_completion_input_through_sequence();
-            let compaction_access = crate::ConfigAccess::local_managed_agent(
+            let compaction_access = gents_store::config_client::ConfigAccess::local_managed_agent(
                 self.node.clone(),
                 identity::Did::new(&request.agent_did)?,
                 self.agent_config.agent_identity.as_ref(),
@@ -553,7 +550,7 @@ where
             );
             let (prefix, suffix) = projected.split_at(exact.compacted_prefix.len());
             let associations =
-                crate::session::provider_context_reduction::ReplayAssociations::from_tagged_split(
+                gents_session::session::provider_context_reduction::ReplayAssociations::from_tagged_split(
                     replay.required.clone(),
                     prefix,
                     suffix,
@@ -563,7 +560,7 @@ where
                 &projected,
                 exact,
             )?;
-            crate::session::provider_context_reduction::validate_replay_associations(
+            gents_session::session::provider_context_reduction::validate_replay_associations(
                 &associations,
                 native.exact().compacted_prefix,
                 native.exact().retained_suffix,

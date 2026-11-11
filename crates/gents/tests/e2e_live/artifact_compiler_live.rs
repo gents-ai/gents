@@ -4,11 +4,12 @@ use crate::support::{
     interrupt::{wait_for_runtime_ready, BootedAgent},
     test_db,
 };
-use gents::documents::{BashTools, FileTools, HostTools, Tools};
-use gents::{
-    workspace::*, BashMode, CommandExecutionMode, CommandNetworkMode, DocumentRuntimeOptions,
-    FileToolMode, Gents, NodeIdentity, ToolCeiling,
-};
+use gents::{DocumentRuntimeOptions, Gents};
+use gents_documents::{BashMode, FileToolMode};
+use gents_documents::{BashTools, FileTools, HostTools, Tools};
+use gents_session::workspace::*;
+use gents_store::identity::NodeIdentity;
+use gents_tools::{native::CommandExecutionMode, native::CommandNetworkMode, surface::ToolCeiling};
 use serde_json::{json, Value};
 use std::{path::Path, process::Command, sync::Arc, time::Duration};
 
@@ -46,8 +47,8 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
     // The node's client key bounds the live profile with an execution.
     access
         .transact_write("test.artifact_live.profile", |txn| {
-            use gents::documents::apply_desired_state_plan;
-            use gents::documents::{
+            use gents_documents::apply_desired_state_plan;
+            use gents_documents::{
                 read_desired_state_record_in_txn as read, DesiredStateApplyDocument,
                 DesiredStateApplyPlan,
             };
@@ -56,15 +57,20 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
             let backend_id = &backend_id;
             let model = target.model().to_owned();
             Box::pin(async move {
-                let (_, agent) = read(txn, gents::Collection::Agent, did, agent_did)
-                    .await?
-                    .ok_or_else(|| anyhow::anyhow!("the live Agent is missing"))?;
-                let mut agent: gents::documents::Agent = serde_json::from_value(agent)?;
+                let (_, agent) = read(
+                    txn,
+                    gents_store::collection::Collection::Agent,
+                    did,
+                    agent_did,
+                )
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("the live Agent is missing"))?;
+                let mut agent: gents_documents::Agent = serde_json::from_value(agent)?;
                 agent.inference_profile_id = "artifact-live-profile".into();
                 agent.enabled = true;
                 let documents = [
                     (
-                        gents::Collection::InferenceExecution,
+                        gents_store::collection::Collection::InferenceExecution,
                         json!({
                             "execution_id": "artifact-live-execution", "node_did": did,
                             "max_turns": 8, "deadline_duration_secs": 600,
@@ -72,7 +78,7 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
                         }),
                     ),
                     (
-                        gents::Collection::InferenceProfile,
+                        gents_store::collection::Collection::InferenceProfile,
                         json!({
                             "profile_id": "artifact-live-profile", "node_did": did,
                             "display_name": "Bounded artifact live QA", "backend_id": backend_id,
@@ -80,7 +86,10 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
                             "execution_id": "artifact-live-execution"
                         }),
                     ),
-                    (gents::Collection::Agent, serde_json::to_value(agent)?),
+                    (
+                        gents_store::collection::Collection::Agent,
+                        serde_json::to_value(agent)?,
+                    ),
                 ];
                 let plan = DesiredStateApplyPlan::new(
                     documents
@@ -95,7 +104,7 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
                 apply_desired_state_plan(
                     txn,
                     &plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
                 .map(|_| ())
@@ -156,7 +165,7 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
     // seals the read-only workspace through the production provisioning owner,
     // which publishes the workspace documents as that Agent.
     let workspace_id = uuid::Uuid::new_v4().to_string();
-    let sealed = gents::workspace::provision_read_only_workspace(
+    let sealed = gents_session::workspace::provision_read_only_workspace(
         &access,
         &actors.agent_access,
         &repo,

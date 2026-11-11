@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use gents::Collection;
+use gents_store::collection::Collection;
 use std::path::Path;
 
 use crate::cli::*;

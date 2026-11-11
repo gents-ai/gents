@@ -6,15 +6,15 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::documents::{
+use gents_documents::{
     apply_desired_state_plan, load_agent_context_and_tools_in_txn, DesiredStateApplyDocument,
     DesiredStateApplyPlan,
 };
-use gents::pack::installed_pack_documents;
-use gents::plugin::authority::describe_plugin_authority;
-use gents::plugin::store::read_record;
-use gents::store::collection::Collection;
-use gents::store::config_client::{
+use gents_pack::pack::installed_pack_documents;
+use gents_pack::plugin::authority::describe_plugin_authority;
+use gents_pack::plugin::store::read_record;
+use gents_store::collection::Collection;
+use gents_store::config_client::{
     ClientSigningCapability, ConfigAccess, ConfigApplyTxn, PackApprovalError, PackApprovalScope,
     PackEffectApprover, PackEvidence, PackMutation, PackRelationship, PackRelationshipEvidence,
 };
@@ -105,7 +105,7 @@ async fn wire_in_owned(
     let home_for_read = home.to_owned();
     let plugin_name = request.plugin.clone();
     let (_store_guard, plugin) = tokio::task::spawn_blocking(move || {
-        let guard = gents::plugin::store::try_lock_store(&home_for_read)?;
+        let guard = gents_pack::plugin::store::try_lock_store(&home_for_read)?;
         let (namespace, name) = split_namespace(&plugin_name);
         let plugin = read_record(&home_for_read, namespace, name).with_context(|| {
             format!("{plugin_name} is not installed. Next: gents config pack install <pack>")
@@ -127,7 +127,7 @@ async fn wire_in_owned(
         }
     }
 
-    let mut plan = gents::pack::wiring::PluginWiring::read(
+    let mut plan = gents_pack::pack::wiring::PluginWiring::read(
         access,
         owner,
         home,
@@ -140,7 +140,7 @@ async fn wire_in_owned(
     plan.preview = request.preview;
     plan.dynamic_consent = request
         .dynamic_consent
-        .then_some(gents::pack::consent_dynamic_run as _);
+        .then_some(gents_pack::pack::consent_dynamic_run as _);
     plan.tool_calls_consent = request.tool_calls_consent;
     plan.next_step = explain_tools_command(&request.agent);
     let report = if request.preview {
@@ -148,13 +148,13 @@ async fn wire_in_owned(
             .transact_readonly("cli.pack.wire.preview", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    plan.apply(txn, &gents::inference::resolved::ProviderProfilePolicy)
+                    plan.apply(txn, &gents_inference::resolved::ProviderProfilePolicy)
                         .await
                 })
             })
             .await?
     } else if matches!(access, ConfigAccess::Local(_)) {
-        use gents::NodeIdentity as _;
+        use gents_store::identity::NodeIdentity as _;
         let client = crate::home_state::load_client_identity().await?;
         anyhow::ensure!(
             access.actor_did().as_deref() == Some(client.did()),
@@ -175,7 +175,7 @@ async fn wire_in_owned(
                 Box::pin(async move {
                     plan.apply(
                         txn.approved_interpreter()?,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await
                 })
@@ -195,7 +195,7 @@ async fn wire_in_owned(
             .transact_write("cli.pack.wire", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    plan.apply(txn, &gents::inference::resolved::ProviderProfilePolicy)
+                    plan.apply(txn, &gents_inference::resolved::ProviderProfilePolicy)
                         .await
                 })
             })
@@ -215,8 +215,8 @@ async fn wire_in_owned(
 /// sealed sandbox, as `[{plugin, asks}]`: what an install grants only with
 /// the installer's consent.
 pub(crate) fn requested_authority(
-    manifest: &gents::pack::PackManifest,
-    dependencies: &[&gents::pack::PackManifest],
+    manifest: &gents_pack::pack::PackManifest,
+    dependencies: &[&gents_pack::pack::PackManifest],
 ) -> Result<Value> {
     Ok(super::review::identity_and_authority(manifest, dependencies)?["authority"].take())
 }
@@ -231,7 +231,7 @@ pub(crate) async fn grant_pack_root_readers(
     owner: &str,
     coordinate: &str,
 ) -> Result<Vec<Value>> {
-    use gents::tools::surface::ToolRootReader;
+    use gents_tools::surface::ToolRootReader;
     let mut granted = Vec::new();
     let agents: Vec<String> = installed_pack_documents(access, owner, coordinate)
         .await?
@@ -240,11 +240,11 @@ pub(crate) async fn grant_pack_root_readers(
         .map(|(_, agent)| agent)
         .collect();
     for (agent, reader) in
-        gents::tools::surface::agents_tool_root_readers(access, owner, &agents).await?
+        gents_tools::surface::agents_tool_root_readers(access, owner, &agents).await?
     {
         granted.push(match reader {
             ToolRootReader::Published(root) => {
-                gents::tools::surface::grant_workspace_root_reader(access, &root, &agent)
+                gents_tools::surface::grant_workspace_root_reader(access, &root, &agent)
                     .await
                     .with_context(|| format!("granting {agent} reader on {root}"))?;
                 json!({"agent": agent, "reader_on": root})
@@ -284,7 +284,7 @@ pub(crate) async fn attach_pack_skills(
         skills: &skills,
     };
     if matches!(access, ConfigAccess::Local(_)) {
-        use gents::NodeIdentity as _;
+        use gents_store::identity::NodeIdentity as _;
         let client = crate::home_state::load_client_identity().await?;
         anyhow::ensure!(
             access.actor_did().as_deref() == Some(client.did()),
@@ -352,7 +352,7 @@ impl SkillPlan<'_> {
         apply_desired_state_plan(
             txn,
             &plan,
-            &gents::inference::resolved::ProviderProfilePolicy,
+            &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await?;
         Ok(())
@@ -372,7 +372,7 @@ impl PackEffectApprover for LocalWireApprover {
         mutation: &PackMutation,
         history: Option<Value>,
     ) -> std::result::Result<PackEvidence, PackApprovalError> {
-        gents::store::config_client::prepare_pack_evidence_from_history(
+        gents_store::config_client::prepare_pack_evidence_from_history(
             &self.actor,
             &self.scope,
             mutation,
@@ -386,7 +386,7 @@ impl PackEffectApprover for LocalWireApprover {
         _txn: &ConfigApplyTxn<'_>,
         relationship: &PackRelationship,
     ) -> std::result::Result<PackRelationshipEvidence, PackApprovalError> {
-        gents::store::config_client::prepare_pack_relationship(
+        gents_store::config_client::prepare_pack_relationship(
             &self.actor,
             &self.scope,
             relationship,
@@ -399,7 +399,7 @@ impl PackEffectApprover for LocalWireApprover {
         _txn: &ConfigApplyTxn<'_>,
         _kind: &'static str,
     ) -> std::result::Result<String, PackApprovalError> {
-        Ok(gents::store::config_client::mint_recreate_identity_timestamp())
+        Ok(gents_store::config_client::mint_recreate_identity_timestamp())
     }
     async fn graph_applied(&self, _result: &Value) -> std::result::Result<(), PackApprovalError> {
         Ok(())

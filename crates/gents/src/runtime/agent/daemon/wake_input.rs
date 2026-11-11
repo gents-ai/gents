@@ -5,9 +5,9 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::Value;
 
 use crate::runtime::agent::loop_stream::TaggedMessage;
-use crate::store::config_client::ConfigAccess;
+use gents_store::config_client::ConfigAccess;
 #[cfg(test)]
-use crate::store::graphql::escape_graphql_string;
+use gents_store::graphql::escape_graphql_string;
 
 fn current_keys(claimed: &[String], acknowledged: &[String]) -> Vec<String> {
     let acknowledged = acknowledged.iter().collect::<BTreeSet<_>>();
@@ -47,7 +47,7 @@ fn rows<'a>(response: &'a Value, collection: &str) -> Result<&'a [Value]> {
 }
 
 fn receipt_keys(row: &Value) -> Result<Vec<String>> {
-    crate::request::lifecycle::notification_receipt_keys(
+    gents_session::request::lifecycle::notification_receipt_keys(
         row["background_completion_notification_keys_json"]
             .as_str()
             .context("wake claim lacks its notification receipt")?,
@@ -65,7 +65,7 @@ pub(super) async fn load(
     access
         .transact_readonly("request.wake_input", |txn| {
             Box::pin(async move {
-                let mut assignments = crate::goal::load_request_assignment_scopes(
+                let mut assignments = gents_automation::goal::load_request_assignment_scopes(
                     txn,
                     &request.node_did,
                     &request.session_id,
@@ -74,11 +74,11 @@ pub(super) async fn load(
                 let validate_wake = |row: &gents_protocol::row::AgentRequestRow| -> Result<()> {
                     anyhow::ensure!(
                         row.input.as_ref().is_some_and(
-                            crate::request::lifecycle::is_background_completion_request
+                            gents_session::request::lifecycle::is_background_completion_request
                         ),
                         "notification receipt does not belong to a background wake"
                     );
-                    crate::store::identity::request_receipt::verify_runtime_local_control_receipt(
+                    gents_store::identity::request_receipt::verify_runtime_local_control_receipt(
                         row,
                         &request.node_did,
                         row.caused_by_parent_request_id
@@ -233,7 +233,7 @@ pub(super) async fn load(
                     .into_iter()
                     .collect::<BTreeSet<_>>();
                 headers.retain(|header| current.contains(&header.message.message_key));
-                let mut reader = crate::session::TxnCanonicalReader::new(
+                let mut reader = gents_session::session::TxnCanonicalReader::new(
                     txn,
                     &request.node_did,
                     request.requester_did.as_deref(),
@@ -243,10 +243,7 @@ pub(super) async fn load(
                 for header in headers {
                     let (_, message) = reader.load_message(&header.doc_id).await?;
                     anyhow::ensure!(
-                        matches!(
-                            message,
-                            crate::inference::llm::message::Message::User { .. }
-                        ),
+                        matches!(message, gents_inference::llm::message::Message::User { .. }),
                         "wake notification is not user input"
                     );
                     let mut row = TaggedMessage::unassociated(message);
@@ -279,7 +276,7 @@ mod tests {
                     assert!(case.claimed.contains(key) || !case.current_keys.contains(key));
                 }
                 let mut native = TaggedMessage::unassociated(
-                    crate::inference::llm::message::Message::user("equal content"),
+                    gents_inference::llm::message::Message::user("equal content"),
                 );
                 native.physical_header = Some(row.header.clone());
                 native

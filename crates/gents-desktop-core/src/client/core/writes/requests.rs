@@ -51,7 +51,7 @@ impl ClientCore {
         let (signer, admission, requester_did) = self
             .request_authority(node_did, peer_record.as_ref())
             .await?;
-        let requester_did = gents::session::client_requester_scope(
+        let requester_did = gents_session::session::client_requester_scope(
             &self.session_queue_access(node_did)?,
             node_did,
             session_id,

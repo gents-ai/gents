@@ -1,8 +1,8 @@
 use defra_node::Node as EmbeddedNode;
 
-use crate::inference::admission::{InferenceCall, InferenceCallRecoveryReport};
-use crate::request::lifecycle::{RecoveryReport, RequestLifecycle};
-use crate::tools::call::lifecycle::{ToolCallLifecycle, ToolCallRecoveryReport};
+use gents_inference::admission::{InferenceCall, InferenceCallRecoveryReport};
+use gents_session::request::lifecycle::{RecoveryReport, RequestLifecycle};
+use gents_toolcalls::call::lifecycle::{ToolCallLifecycle, ToolCallRecoveryReport};
 
 #[derive(Debug)]
 pub struct StartupRecoveryOutcome {
@@ -15,13 +15,13 @@ pub struct StartupRecoveryOutcome {
 pub async fn run_startup_recovery_with_identities(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
-    identities: &[std::sync::Arc<dyn crate::store::identity::NodeIdentity>],
+    identities: &[std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
 ) -> StartupRecoveryOutcome {
     run_startup_recovery_with_executions_and_identities(
         node,
         node_did,
         identities,
-        &crate::tools::call::hook::BackgroundExecutionRegistry::default(),
+        &gents_toolcalls::call::hook::BackgroundExecutionRegistry::default(),
     )
     .await
 }
@@ -29,8 +29,8 @@ pub async fn run_startup_recovery_with_identities(
 pub async fn run_startup_recovery_with_executions_and_identities(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
-    identities: &[std::sync::Arc<dyn crate::store::identity::NodeIdentity>],
-    executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
+    identities: &[std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
+    executions: &gents_toolcalls::call::hook::BackgroundExecutionRegistry,
 ) -> StartupRecoveryOutcome {
     let tool_calls =
         ToolCallLifecycle::recover_all_with_executions(node, node_did, identities, executions)
@@ -38,7 +38,7 @@ pub async fn run_startup_recovery_with_executions_and_identities(
     let requests = RequestLifecycle::recover_all_with_identities(node, node_did, identities).await;
     let inference_calls =
         InferenceCall::recover_all_with_identities(node, node_did, identities).await;
-    let task_hooks = crate::tools::call::task_hooks::recover_task_hook_records(
+    let task_hooks = gents_toolcalls::call::task_hooks::recover_task_hook_records(
         node,
         node_did,
         identities,

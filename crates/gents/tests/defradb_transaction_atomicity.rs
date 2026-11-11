@@ -9,8 +9,8 @@
 
 use anyhow::{bail, Context, Result};
 use gents::defra_node::Node as EmbeddedNode;
-use gents::store::config_client::{ConfigAccess, ConfigApplyTxn};
-use gents::store::graphql::escape_graphql_string;
+use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
+use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
@@ -48,7 +48,7 @@ fn assert_acknowledged(value: &Value, collection: &str) -> Result<()> {
         value.get("data").context("mutation omitted data")?.clone(),
     );
     let field = format!("create_{collection}");
-    let row = gents::store::graphql::single_mutation_document(&response, &field)?
+    let row = gents_store::graphql::single_mutation_document(&response, &field)?
         .context("mutation returned no document")?;
     anyhow::ensure!(
         row.get("_docID")
@@ -82,7 +82,7 @@ async fn counts(node: &EmbeddedNode) -> Result<(usize, usize)> {
 }
 
 async fn pair_counts(node: &EmbeddedNode) -> Result<(usize, usize)> {
-    let response = gents::store::graphql::graphql_with_transaction_retry(
+    let response = gents_store::graphql::graphql_with_transaction_retry(
         node,
         "query { TxnAtomicityLeft { label } TxnAtomicityRight { label } }",
         "txn_atomicity_independent_reader",

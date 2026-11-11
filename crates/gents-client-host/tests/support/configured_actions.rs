@@ -1,8 +1,8 @@
 use anyhow::{ensure, Context, Result};
-use gents::documents::apply_desired_state_plan;
-use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::store::graphql::escape_graphql_string;
-use gents::{Collection, ConfigAccess};
+use gents_documents::apply_desired_state_plan;
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents_store::graphql::escape_graphql_string;
+use gents_store::{collection::Collection, config_client::ConfigAccess};
 use serde_json::{json, Value};
 
 use super::Attachment;
@@ -26,7 +26,7 @@ pub async fn seed_editor_settings(
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await?;
                 Ok(())

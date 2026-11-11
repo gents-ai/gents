@@ -1,0 +1,67 @@
+[package]
+name = "gents-inference"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Inference backends, auth, admission and provider clients for Gents"
+
+[features]
+default = ["defra-node/http", "defra-node/p2p", "defra-node/wasmtime-runtime"]
+typescript = ["dep:ts-rs", "gents-loop/typescript", "gents-protocol/typescript", "gents-store/typescript", "gents-documents/typescript"]
+live-e2e = ["gents-store/live-e2e", "gents-documents/live-e2e"]
+test-home-guard = ["gents-store/test-home-guard", "gents-documents/test-home-guard"]
+test-fixtures = ["test-home-guard", "axum/ws", "gents-store/test-fixtures", "gents-documents/test-fixtures"]
+
+[dependencies]
+gents-store.workspace = true
+gents-documents.workspace = true
+acp.workspace = true
+schema.workspace = true
+db.workspace = true
+document.workspace = true
+rapidhash = { workspace = true }
+ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat", "no-serde-warnings"] }
+anyhow.workspace = true
+axum = "0.8"
+async-stream = "0.3"
+async-trait = "0.1"
+aws-lc-rs = { version = "1", default-features = false, features = ["aws-lc-sys"] }
+base64.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+defra-core.workspace = true
+defra-http.workspace = true
+gents-claude = { workspace = true, features = ["transport"] }
+gents-loop = { workspace = true, features = ["native"] }
+gents-protocol.workspace = true
+defra-node.workspace = true
+futures = "0.3"
+identity.workspace = true
+opentelemetry.workspace = true
+query.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars = "1"
+sha2.workspace = true
+hmac.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-opentelemetry.workspace = true
+uuid.workspace = true
+rig-core.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
+reqwest-provider = { package = "reqwest", version = "0.13", default-features = false }
+tokio-util = "0.7"
+tempfile = "3"
+kovan-map = "0.2.2"
+flate2 = "1"
+
+[dev-dependencies]
+gents-store = { workspace = true, features = ["test-fixtures"] }
+gents-documents = { workspace = true, features = ["test-fixtures"] }
+axum = { version = "0.8", features = ["ws"] }
+gents-lean-contract.workspace = true
+gents-lean-vocab.workspace = true

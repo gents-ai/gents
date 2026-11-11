@@ -1,9 +1,9 @@
-use gents::request::lifecycle::ClaimOutcome;
-use gents::request::watcher::DefraWatcher;
-use gents::Watcher as _;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequest;
 use gents_protocol::row::AgentRequestRow;
+use gents_session::request::lifecycle::ClaimOutcome;
+use gents_session::request::watcher::DefraWatcher;
+use gents_session::request::watcher::Watcher as _;
 
 use crate::support::{first_row, test_db};
 
@@ -58,7 +58,7 @@ async fn queued_request_interrupt_wins_before_queue_block() {
     let mut lifecycle = actors.lifecycle(
         request,
         300,
-        gents::request::lifecycle::ExecutionOrigin::Interactive,
+        gents_session::request::lifecycle::ExecutionOrigin::Interactive,
         "",
     );
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Interrupted);
@@ -121,7 +121,7 @@ async fn queued_request_valid_until_wins_before_queue_block() {
     let mut lifecycle = actors.lifecycle(
         request,
         300,
-        gents::request::lifecycle::ExecutionOrigin::Interactive,
+        gents_session::request::lifecycle::ExecutionOrigin::Interactive,
         "",
     );
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Expired);
@@ -170,7 +170,7 @@ async fn same_timestamp_queue_order_uses_request_id_tie_break() {
     let mut second_lifecycle = actors.lifecycle(
         second_request,
         300,
-        gents::request::lifecycle::ExecutionOrigin::Interactive,
+        gents_session::request::lifecycle::ExecutionOrigin::Interactive,
         "",
     );
     assert_eq!(
@@ -185,7 +185,7 @@ async fn same_timestamp_queue_order_uses_request_id_tie_break() {
     let mut first_lifecycle = actors.lifecycle(
         first_request,
         300,
-        gents::request::lifecycle::ExecutionOrigin::Interactive,
+        gents_session::request::lifecycle::ExecutionOrigin::Interactive,
         "",
     );
     assert_eq!(
@@ -199,7 +199,7 @@ async fn same_timestamp_queue_order_uses_request_id_tie_break() {
 #[tokio::test]
 async fn agent_change_is_rejected_without_mutating_the_session() {
     use crate::support::accepted_turn::enqueue_managed_accepted_request;
-    use gents::NodeIdentity as _;
+    use gents_store::identity::NodeIdentity as _;
     let db = test_db("lifecycle-agent-pin").await;
     // The User opens the session with its first Agent, then addresses a
     // second Agent it enrolled on the same Node under that session label.
@@ -219,7 +219,7 @@ async fn agent_change_is_rejected_without_mutating_the_session() {
         crate::support::agent_requests::canonical_now(),
         gents_protocol::request_admission::AgentRequestAdmissionRecord::client(switched.user.did()),
     );
-    let error = gents::request::lifecycle::reserve_goal_session(&switched.access, &switch)
+    let error = gents_session::request::lifecycle::reserve_goal_session(&switched.access, &switch)
         .await
         .expect_err("agent switch must fail");
     let error = gents_protocol::error_chain::ErrorChain(&error).to_string();
@@ -246,9 +246,9 @@ async fn agent_change_is_rejected_without_mutating_the_session() {
             .transact_readonly("test.agent_pin.agent", |txn| {
                 Box::pin(async move {
                     Ok::<_, anyhow::Error>(
-                        gents::documents::read_desired_state_record_in_txn(
+                        gents_documents::read_desired_state_record_in_txn(
                             txn,
-                            gents::Collection::Agent,
+                            gents_store::collection::Collection::Agent,
                             node_did,
                             switched_agent,
                         )
@@ -261,10 +261,10 @@ async fn agent_change_is_rejected_without_mutating_the_session() {
             .await
             .expect("read switched Agent"),
     );
-    gents::sign_agent_request_create(&switched.user, &mut switch)
+    gents_session::request::admission::sign_agent_request_create(&switched.user, &mut switch)
         .await
         .expect("sign switch as the User");
-    let error = gents::request::lifecycle::submit_client_request(&switched.access, &switch)
+    let error = gents_session::request::lifecycle::submit_client_request(&switched.access, &switch)
         .await
         .expect_err("publishing an agent switch must fail");
     let error = gents_protocol::error_chain::ErrorChain(&error).to_string();
@@ -335,7 +335,7 @@ async fn claim_synthesizes_deadline_when_request_deadline_is_invalid() {
     let mut lifecycle = actors.lifecycle(
         request,
         120,
-        gents::request::lifecycle::ExecutionOrigin::Interactive,
+        gents_session::request::lifecycle::ExecutionOrigin::Interactive,
         "",
     );
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);

@@ -46,7 +46,7 @@ where
         .map_err(|_| anyhow::anyhow!("Sign-in cancelled."))
 }
 
-pub(crate) fn print_sign_in_notes(sign_in: &gents::inference::auth::credential::SignIn) {
+pub(crate) fn print_sign_in_notes(sign_in: &gents_inference::auth::credential::SignIn) {
     if let Some(hint) = sign_in.account_chooser_hint() {
         eprintln!("{hint}");
     }

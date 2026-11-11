@@ -12,7 +12,7 @@ use rig::one_or_many::OneOrMany;
 use rig::wasm_compat::WasmCompatSend;
 
 use super::*;
-use crate::inference::llm::message::{AssistantContent, Message, Reasoning};
+use gents_inference::llm::message::{AssistantContent, Message, Reasoning};
 
 fn core_request(reasoning: &str) -> CompletionRequest {
     let messages = vec![
@@ -28,10 +28,8 @@ fn core_request(reasoning: &str) -> CompletionRequest {
     CompletionRequest {
         model: None,
         preamble: Some("system preamble".to_string()),
-        chat_history: OneOrMany::many(crate::inference::llm::rig_compat::to_rig_messages(
-            &messages,
-        ))
-        .expect("non-empty history"),
+        chat_history: OneOrMany::many(gents_inference::llm::rig_compat::to_rig_messages(&messages))
+            .expect("non-empty history"),
         documents: vec![rig::completion::Document {
             id: "document-1".to_string(),
             text: "provider-visible document payload".to_string(),
@@ -71,7 +69,7 @@ fn core_request(reasoning: &str) -> CompletionRequest {
 #[derive(Debug)]
 struct StaticBearer;
 
-impl crate::inference::auth::credential::BearerSource for StaticBearer {
+impl gents_inference::auth::credential::BearerSource for StaticBearer {
     async fn current_bearer(&self) -> anyhow::Result<String> {
         Ok("test-oauth-token".to_string())
     }
@@ -169,7 +167,7 @@ async fn chat_projection_matches_actual_rig_wire_body_and_omits_reasoning() {
 
     let transport = WireCapturingClient::default();
     let bodies = transport.bodies.clone();
-    let client = crate::inference::clients::inference_http::build_openai_chat_completions_client(
+    let client = gents_inference::clients::inference_http::build_openai_chat_completions_client(
         "test-key",
         "http://provider.invalid",
         transport,
@@ -269,8 +267,8 @@ async fn normalized_responses_projection_matches_the_terminal_wire_body() {
     let terminal = WireCapturingClient::default();
     let bodies = terminal.bodies.clone();
     let transport =
-        crate::inference::clients::inference_http::ResponsesNormalizingHttpClient::new(terminal);
-    let client = crate::inference::clients::inference_http::build_openai_responses_client(
+        gents_inference::clients::inference_http::ResponsesNormalizingHttpClient::new(terminal);
+    let client = gents_inference::clients::inference_http::build_openai_responses_client(
         "test-key",
         "http://provider.invalid",
         transport,
@@ -299,11 +297,11 @@ async fn normalized_responses_projection_matches_the_terminal_wire_body() {
 async fn codex_responses_projection_matches_the_terminal_rewritten_body() {
     let terminal = WireCapturingClient::default();
     let bodies = terminal.bodies.clone();
-    let transport = crate::inference::clients::chatgpt_codex::ChatGptCodexHttpClient::with_inner(
+    let transport = gents_inference::clients::chatgpt_codex::ChatGptCodexHttpClient::with_inner(
         Arc::new(StaticBearer),
         terminal,
     );
-    let client = crate::inference::clients::inference_http::build_openai_responses_client(
+    let client = gents_inference::clients::inference_http::build_openai_responses_client(
         "managed-test-key",
         "http://provider.invalid",
         transport,
@@ -332,11 +330,11 @@ async fn codex_responses_projection_matches_the_terminal_rewritten_body() {
 async fn xai_responses_projection_matches_the_terminal_rewritten_body() {
     let terminal = WireCapturingClient::default();
     let bodies = terminal.bodies.clone();
-    let transport = crate::inference::clients::xai_grok::XaiGrokOAuthHttpClient::with_inner(
+    let transport = gents_inference::clients::xai_grok::XaiGrokOAuthHttpClient::with_inner(
         Arc::new(StaticBearer),
         terminal,
     );
-    let client = crate::inference::clients::inference_http::build_openai_responses_client(
+    let client = gents_inference::clients::inference_http::build_openai_responses_client(
         "managed-test-key",
         "http://provider.invalid",
         transport,
@@ -389,7 +387,7 @@ async fn openrouter_projection_matches_the_actual_rig_wire_body() {
 }
 
 fn claude_image_request(images: usize, as_images: bool) -> CompletionRequest {
-    use crate::inference::llm::message::{
+    use gents_inference::llm::message::{
         DocumentSourceKind, Image, ImageMediaType, ToolCall, ToolFunction, ToolResultContent,
         UserContent,
     };
@@ -427,10 +425,8 @@ fn claude_image_request(images: usize, as_images: bool) -> CompletionRequest {
         },
     ];
     let mut request = core_request("unused");
-    request.chat_history = OneOrMany::many(crate::inference::llm::rig_compat::to_rig_messages(
-        &messages,
-    ))
-    .unwrap();
+    request.chat_history =
+        OneOrMany::many(gents_inference::llm::rig_compat::to_rig_messages(&messages)).unwrap();
     request
 }
 
@@ -473,13 +469,13 @@ fn claude_images_are_estimated_at_their_token_ceiling() {
 #[test]
 fn claude_messages_projection_is_the_messages_body_regardless_of_wire() {
     let mut request = core_request("claude-visible reasoning");
-    request.chat_history = OneOrMany::many(crate::inference::llm::rig_compat::to_rig_messages(&[
+    request.chat_history = OneOrMany::many(gents_inference::llm::rig_compat::to_rig_messages(&[
         Message::Assistant {
             request_id: None,
             id: None,
             content: vec![AssistantContent::Reasoning(Reasoning {
                 id: None,
-                content: vec![crate::inference::llm::message::ReasoningContent::Text {
+                content: vec![gents_inference::llm::message::ReasoningContent::Text {
                     text: "claude-visible reasoning".to_owned(),
                     signature: Some("provider-signature".to_owned()),
                 }],
@@ -497,7 +493,7 @@ fn claude_messages_projection_is_the_messages_body_regardless_of_wire() {
             assert_eq!(counter.profile(), ProviderInputProfile::ClaudeMessages);
             assert_eq!(
                 counter.project_body(&request).expect("provider body"),
-                crate::inference::clients::claude_messages::build_messages_body(
+                gents_inference::clients::claude_messages::build_messages_body(
                     "claude-sonnet-5",
                     &request
                 )
@@ -529,7 +525,7 @@ async fn terminal_body<H>(
 where
     H: Clone + Default + HttpClientExt + std::fmt::Debug + WasmCompatSend + Sync + 'static,
 {
-    let client = crate::inference::clients::inference_http::build_openai_responses_client(
+    let client = gents_inference::clients::inference_http::build_openai_responses_client(
         "test-key",
         "http://provider.invalid",
         transport,
@@ -561,7 +557,7 @@ async fn xai_wire_body_without_effort_requests_encrypted_reasoning() {
         .is_some_and(|params| params.get("reasoning").is_none()));
     let terminal = WireCapturingClient::default();
     let bodies = terminal.bodies.clone();
-    let transport = crate::inference::clients::xai_grok::XaiGrokOAuthHttpClient::with_inner(
+    let transport = gents_inference::clients::xai_grok::XaiGrokOAuthHttpClient::with_inner(
         Arc::new(StaticBearer),
         terminal,
     );
@@ -585,7 +581,7 @@ async fn openai_responses_wire_body_never_adds_encrypted_reasoning_even_when_sta
     let terminal = WireCapturingClient::default();
     let bodies = terminal.bodies.clone();
     let transport =
-        crate::inference::clients::inference_http::ResponsesNormalizingHttpClient::new(terminal);
+        gents_inference::clients::inference_http::ResponsesNormalizingHttpClient::new(terminal);
     let body = terminal_body(transport, bodies, request).await;
 
     assert_eq!(projected_body, body);
@@ -600,7 +596,7 @@ async fn openai_responses_wire_body_leaves_include_to_the_server_default_store()
     let terminal = WireCapturingClient::default();
     let bodies = terminal.bodies.clone();
     let transport =
-        crate::inference::clients::inference_http::ResponsesNormalizingHttpClient::new(terminal);
+        gents_inference::clients::inference_http::ResponsesNormalizingHttpClient::new(terminal);
     let body = terminal_body(transport, bodies, request).await;
 
     assert!(body.get("store").is_none());
@@ -613,7 +609,7 @@ async fn modeled_service_tiers_match_the_terminal_responses_body() {
         if !case.allowed || !matches!(case.family.as_str(), "OpenAiCompatible" | "ChatGptCodex") {
             continue;
         }
-        let tier: Option<crate::inference::resolved::ServiceTier> =
+        let tier: Option<gents_inference::resolved::ServiceTier> =
             serde_json::from_value(serde_json::to_value(&case.requested).unwrap()).unwrap();
         let family = BackendProviderKind::parse_optional(Some(&case.family)).unwrap();
         let terminal = WireCapturingClient::default();
@@ -624,16 +620,16 @@ async fn modeled_service_tiers_match_the_terminal_responses_body() {
         let expected = counter.project_body(&request).unwrap();
         if family == BackendProviderKind::ChatGptCodex {
             let transport =
-                crate::inference::clients::chatgpt_codex::ChatGptCodexHttpClient::with_inner(
+                gents_inference::clients::chatgpt_codex::ChatGptCodexHttpClient::with_inner(
                     Arc::new(StaticBearer),
                     terminal,
                 )
                 .with_policy(
-                    crate::inference::clients::chatgpt_codex::ChatGptCodexPolicy {
+                    gents_inference::clients::chatgpt_codex::ChatGptCodexPolicy {
                         service_tier: tier,
                     },
                 );
-            let client = crate::inference::clients::inference_http::build_openai_responses_client(
+            let client = gents_inference::clients::inference_http::build_openai_responses_client(
                 "managed-test-key",
                 "http://provider.invalid",
                 transport,
@@ -645,11 +641,11 @@ async fn modeled_service_tiers_match_the_terminal_responses_body() {
             }
         } else {
             let transport =
-                crate::inference::clients::inference_http::ResponsesNormalizingHttpClient::new(
+                gents_inference::clients::inference_http::ResponsesNormalizingHttpClient::new(
                     terminal,
                 )
                 .with_service_tier(tier);
-            let client = crate::inference::clients::inference_http::build_openai_responses_client(
+            let client = gents_inference::clients::inference_http::build_openai_responses_client(
                 "test-key",
                 "http://provider.invalid",
                 transport,

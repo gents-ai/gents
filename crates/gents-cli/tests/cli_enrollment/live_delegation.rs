@@ -1,10 +1,11 @@
 use super::*;
-use gents::documents::apply_desired_state_plan;
-use gents::documents::{
+use gents_documents::apply_desired_state_plan;
+use gents_documents::Tools;
+use gents_documents::{
     read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents::store::config_client::ConfigAccess;
-use gents::{Collection, Tools};
+use gents_store::collection::Collection;
+use gents_store::config_client::ConfigAccess;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -26,7 +27,7 @@ async fn publish(access: &ConfigAccess, documents: Vec<(Collection, Value)>) -> 
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
                 .map(|_| ())
@@ -145,14 +146,14 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
         let root_rows = roots["data"]["WorkspaceRoot"].as_array().context("User cannot observe WorkspaceRoot")?;
         let [root] = root_rows.as_slice() else { anyhow::bail!("expected one configured WorkspaceRoot: {roots}") };
         let root_doc = root["_docID"].as_str().context("WorkspaceRoot missing physical ID")?.to_owned();
-        let target = gents::documents::AgentTargetDocument {
+        let target = gents_documents::AgentTargetDocument {
             target_id: "live-delegation-child".into(), node_did: node_did.clone(),
             target_node_did: node_did.clone(), agent_did: b.agent_did.clone(),
             name: "child".into(), description: Some("A child worker".into()), tags: Vec::new(),
         };
         publish(&access, vec![(Collection::AgentTarget, serde_json::to_value(&target)?)]).await?;
         let mut tools_a = tools_a;
-        tools_a.agents = Some(gents::documents::AgentTools { enabled: Some(true), target_ids: vec![target.target_id.clone()] });
+        tools_a.agents = Some(gents_documents::AgentTools { enabled: Some(true), target_ids: vec![target.target_id.clone()] });
         publish(&access, vec![(Collection::Tools, serde_json::to_value(&tools_a)?)]).await?;
         let parent_session = Uuid::new_v4().to_string();
         let prompt = format!("Use agent_new once to delegate to child: 'Say hello and identify yourself as child.' Reference {}. Do not answer in place of the child.", Uuid::new_v4());
@@ -233,9 +234,9 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
             })
         }).await?;
         let runtime_identity = identity_from_init(&init)?;
-        let a_signer = gents::store::identity::resolve_agent_identity(&runtime_identity, &a)?;
+        let a_signer = gents_store::identity::resolve_agent_identity(&runtime_identity, &a)?;
         let agent_access = ConfigAccess::Graphql(
-            gents::store::config_client::GraphqlEndpoint::as_principal(&graphql, &a.agent_did)
+            gents_store::config_client::GraphqlEndpoint::as_principal(&graphql, &a.agent_did)
                 .with_client_signing_capability(a_signer.client_signing_capability()?)?,
         );
         for did in [&b.agent_did, &format!("{}:missing", b.agent_did)] {
@@ -286,7 +287,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
     let runtime_identity = identity_from_init(&init)?;
     let data = runtime_home.join("data");
     let node = Arc::new(
-        gents::store::local::store_key::open_home_store_key(&runtime_home, &data)
+        gents_store::local::store_key::open_home_store_key(&runtime_home, &data)
             .await?
             .encrypt(
                 gents::defra_node::Node::builder()
@@ -312,7 +313,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
         node.nac_manager()
             .check_permission(
                 &caller_did,
-                gents::store::config_client::NodePermission::DocumentUpdate,
+                gents_store::config_client::NodePermission::DocumentUpdate,
             )
             .await?,
         "the caller must pass the Node permission gate before checking Agent invoke"
@@ -328,8 +329,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
                     std::slice::from_ref(target),
                     gents::defra_node::DocumentAccessMode::Named {
                         permission: "invoke".into(),
-                        node_permission:
-                            gents::store::config_client::NodePermission::DocumentUpdate,
+                        node_permission: gents_store::config_client::NodePermission::DocumentUpdate,
                     },
                 )
                 .await
@@ -373,7 +373,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
             ],
         ),
     ] {
-        let signer = gents::store::identity::resolve_agent_identity(&runtime_identity, binding)?;
+        let signer = gents_store::identity::resolve_agent_identity(&runtime_identity, binding)?;
         let access = ConfigAccess::local_managed_agent(
             node.clone(),
             binding.agent_did.parse()?,

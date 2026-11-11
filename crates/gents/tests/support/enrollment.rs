@@ -2,15 +2,15 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gents::defra_node::Node as EmbeddedNode;
-use gents::runtime::agent::p2p_reconcile::GraphqlEnrollmentStore;
-use gents::store::graphql::escape_graphql_string;
-use gents::NodeIdentity;
+use gents_p2p::p2p_reconcile::GraphqlEnrollmentStore;
 use gents_protocol::enrollment::{
     derive_enrollment_id, encode_offer, enrollment_schema_fingerprint, EnrollmentDecisionKind,
     EnrollmentOfferRecord, EnrollmentRequestRecord, DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
     ENROLLMENT_PROTOCOL_VERSION,
 };
 use gents_protocol::network_token::NetworkRecord;
+use gents_store::graphql::escape_graphql_string;
+use gents_store::identity::NodeIdentity;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthorizedEnrollment {

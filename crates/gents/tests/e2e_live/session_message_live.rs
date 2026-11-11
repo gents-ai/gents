@@ -9,17 +9,17 @@ use std::sync::Once;
 use std::time::Duration;
 
 use anyhow::Result;
-use gents::documents::{AgentTools, BashTools, HostTools, Tools};
-use gents::goal::set_goal_from_access;
-use gents::observe::run_timeline_fetch::load_run_timeline_rows;
-use gents::store::graphql::escape_graphql_string;
-use gents::{
-    AgentTargetDocument, BashMode, Collection, DocumentRuntimeOptions, Gents, NodeIdentity,
-    ToolCeiling,
-};
+use gents::{DocumentRuntimeOptions, Gents};
+use gents_automation::goal::set_goal_from_access;
+use gents_documents::{AgentTargetDocument, BashMode};
+use gents_documents::{AgentTools, BashTools, HostTools, Tools};
+use gents_observe::observe::run_timeline_fetch::load_run_timeline_rows;
 use gents_protocol::goal_status::GoalStatus;
 use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_store::graphql::escape_graphql_string;
+use gents_store::{collection::Collection, identity::NodeIdentity};
+use gents_tools::surface::ToolCeiling;
 use serde::Deserialize;
 
 use crate::support::fixtures::{agent_target, configure_agent_tools};
@@ -337,7 +337,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     )
     .await;
 
-    gents::inference::backends::registry::probe_and_promote_enabled_backends(&db.node).await;
+    gents_inference::backends::registry::probe_and_promote_enabled_backends(&db.node).await;
     let loaded_agent = Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
@@ -3950,12 +3950,18 @@ struct ToolCallRow {
     child_request_id: Option<String>,
 }
 
-async fn timeline_tools(node: &LiveUser, request_id: &str) -> Vec<gents::TimelineToolCallRow> {
+async fn timeline_tools(
+    node: &LiveUser,
+    request_id: &str,
+) -> Vec<gents_observe::observe::run_timeline::TimelineToolCallRow> {
     load_timeline(node, request_id).await.tool_calls
 }
 
 /// The request's canonical run timeline as the User reads it.
-async fn load_timeline(node: &LiveUser, request_id: &str) -> gents::RunTimelineRows {
+async fn load_timeline(
+    node: &LiveUser,
+    request_id: &str,
+) -> gents_observe::observe::run_timeline::RunTimelineRows {
     // A published header can name a closing segment whose parent link the
     // writer has not committed yet; that dependency is incomplete, not denied.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
@@ -3977,7 +3983,7 @@ async fn load_timeline(node: &LiveUser, request_id: &str) -> gents::RunTimelineR
     }
 }
 
-fn tool_row(row: gents::TimelineToolCallRow) -> ToolCallRow {
+fn tool_row(row: gents_observe::observe::run_timeline::TimelineToolCallRow) -> ToolCallRow {
     ToolCallRow {
         doc_id: row
             .doc_id

@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use gents::defra_node::Node as EmbeddedNode;
-use gents::store::graphql::escape_graphql_string;
+use gents_store::graphql::escape_graphql_string;
 
 use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
 use crate::support::{test_p2p_db_with_admission, TestP2pAdmission};
@@ -16,8 +16,8 @@ async fn install_one_way_replicator(
     let sender_addr = wait_for_listen_addr(sender).await;
     let receiver_addr = wait_for_listen_addr(receiver).await;
     // Transport administration runs as each Node's own identity.
-    let sender_p2p = gents::store::identity::node_p2p(sender).expect("sender p2p");
-    let receiver_p2p = gents::store::identity::node_p2p(receiver).expect("receiver p2p");
+    let sender_p2p = gents_store::identity::node_p2p(sender).expect("sender p2p");
+    let receiver_p2p = gents_store::identity::node_p2p(receiver).expect("receiver p2p");
 
     sender_p2p
         .connect_peer(&receiver_addr)

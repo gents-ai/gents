@@ -1,0 +1,253 @@
+use serde_json::Value;
+
+use super::{ConfigAccess, SchemaInstallError};
+use crate::graphql::GraphqlResponseError;
+
+/// The provenance of SDL supplied to a client-side signing operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentSchemaSource {
+    /// The caller explicitly selected its own authored schema bytes.
+    UserAuthored,
+    /// A schema observed from a remote server cannot authorize local signatures.
+    RemoteObservation,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AuthoredDocumentCreateError {
+    #[error("provide a locally authored schema for exactly one matching application collection")]
+    InvalidSchema,
+    #[error("canonical and runtime collections require their dedicated publication owner")]
+    ProtectedCollection,
+    #[error("document fields must be a nonempty object and cannot contain empty lists")]
+    InvalidFields,
+    #[error("{collection} is declared @branchable, and a client-signed create cannot write a document of a branchable collection: its collection-level history is committed on the node. No operator command creates this document. An agent on the node creates it, with a collection write tool its Tools select (in its config tool: [\"help\",\"datastore\"])")]
+    BranchableCollection { collection: String },
+    #[error("the create omits {}, which {collection} declares with @default. A client-signed create cannot apply a default, so supply a value for each of them in the document's fields", .fields.join(", "))]
+    DefaultedFieldsOmitted {
+        collection: String,
+        fields: Vec<String>,
+    },
+    #[error("authored document publication requires a held User and a running HTTP endpoint")]
+    ClientSignerRequired,
+    #[error("the authored schema does not match the live collection")]
+    Schema(#[source] SchemaInstallError),
+    #[error("client-signed document publication failed")]
+    Publication(#[source] GraphqlResponseError),
+    #[error("document publication outcome is unconfirmed; inspect the collection before retrying")]
+    Unconfirmed(#[source] GraphqlResponseError),
+}
+
+pub(super) fn document_create_allowed(
+    source: DocumentSchemaSource,
+    single_collection: bool,
+    application_collection: bool,
+    matches_live: bool,
+    held_signer: bool,
+    http: bool,
+) -> bool {
+    source == DocumentSchemaSource::UserAuthored
+        && single_collection
+        && application_collection
+        && matches_live
+        && held_signer
+        && http
+}
+
+/// The DefraDB client-create rule this document would break. DefraDB's
+/// builder (`ClientCreateSignatures::build`) answers each with the same
+/// `UnsupportedDocument`, so the rule is named here from the authored schema
+/// before anything is signed. `None` leaves every other rule to the builder.
+fn unsupported_client_create(
+    sdl: &str,
+    collection: &str,
+    fields: &Value,
+) -> Option<AuthoredDocumentCreateError> {
+    let schema = super::client_signed_agent::signing_schema(sdl, collection).ok()?;
+    if schema.is_branchable {
+        return Some(AuthoredDocumentCreateError::BranchableCollection {
+            collection: collection.to_owned(),
+        });
+    }
+    let omitted: Vec<String> = schema
+        .fields
+        .iter()
+        .filter(|field| field.default_value.is_some() && fields.get(&field.name).is_none())
+        .map(|field| field.name.clone())
+        .collect();
+    (!omitted.is_empty()).then(|| AuthoredDocumentCreateError::DefaultedFieldsOmitted {
+        collection: collection.to_owned(),
+        fields: omitted,
+    })
+}
+
+fn contains_empty_list(value: &Value) -> bool {
+    match value {
+        Value::Array(values) => values.is_empty() || values.iter().any(contains_empty_list),
+        Value::Object(values) => values.values().any(contains_empty_list),
+        _ => false,
+    }
+}
+
+/// Create one application document using the held client's native signing key.
+/// The caller supplies locally authored SDL; observed server SDL is not signing authority.
+/// The live collection is checked before signing, and an ambiguous commit is not replayed.
+pub async fn create_authored_document(
+    access: &ConfigAccess,
+    collection: &str,
+    fields: &Value,
+    source: DocumentSchemaSource,
+    sdl: &str,
+) -> Result<String, AuthoredDocumentCreateError> {
+    if source != DocumentSchemaSource::UserAuthored {
+        return Err(AuthoredDocumentCreateError::InvalidSchema);
+    }
+    let application = !gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(&collection)
+        && !gents_protocol::schemas::RUNTIME_COLLECTION_NAMES.contains(&collection);
+    if !application {
+        return Err(AuthoredDocumentCreateError::ProtectedCollection);
+    }
+    if !fields.as_object().is_some_and(|fields| !fields.is_empty()) || contains_empty_list(fields) {
+        return Err(AuthoredDocumentCreateError::InvalidFields);
+    }
+    if let Some(unsupported) = unsupported_client_create(sdl, collection, fields) {
+        return Err(unsupported);
+    }
+    // Offline access publishes through its owned node's signed loopback
+    // endpoint, so the signing route, not the read transport, decides.
+    let (held_signer, http) = match access.write_route() {
+        super::WriteRoute::Http(endpoint) => (
+            endpoint.pack_replay.is_none() && endpoint.held_client_signing_capability().is_ok(),
+            true,
+        ),
+        super::WriteRoute::Local(_) => (false, false),
+    };
+    if !held_signer || !http {
+        return Err(AuthoredDocumentCreateError::ClientSignerRequired);
+    }
+    let plan = super::preview_schema_install(access, sdl)
+        .await
+        .map_err(AuthoredDocumentCreateError::Schema)?;
+    let single =
+        plan.collection_contracts.len() == 1 && plan.collection_contracts.contains_key(collection);
+    let matches_live = !plan.requires_publication;
+    if !document_create_allowed(source, single, application, matches_live, held_signer, http) {
+        return Err(AuthoredDocumentCreateError::InvalidSchema);
+    }
+    let mutation = format!(
+        "mutation($input: {collection}MutationInputArg!) {{ create_{collection}(input: $input) {{ _docID }} }}"
+    );
+    let variables = serde_json::json!({"input": fields});
+    access
+        .transact_write_with_finality("document.create_authored", |txn| {
+            let (mutation, variables) = (&mutation, &variables);
+            Box::pin(async move {
+                let response = txn
+                    .execute_client_signed_create(mutation, variables, sdl)
+                    .await?;
+                crate::graphql::created_doc_id(&response, collection)
+            })
+        })
+        .await
+        .map_err(|failure| {
+            if failure.unconfirmed {
+                AuthoredDocumentCreateError::Unconfirmed(failure.error)
+            } else {
+                AuthoredDocumentCreateError::Publication(failure.error)
+            }
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::identity::NodeIdentity;
+    use serde_json::json;
+
+    /// The two client-create rules an operator can act on are named, each
+    /// with what to do; a document that breaks neither goes on to be signed.
+    #[test]
+    fn a_refused_client_create_names_the_rule_it_broke() {
+        let branchable = unsupported_client_create(
+            "type Ledger @branchable { name: String }",
+            "Ledger",
+            &json!({"name": "a"}),
+        )
+        .expect("a branchable collection is refused");
+        let message = branchable.to_string();
+        assert!(
+            message.starts_with("Ledger is declared @branchable")
+                && message.contains("No operator command creates this document")
+                && message.contains("An agent on the node creates it"),
+            "{message}"
+        );
+        const DEFAULTED: &str =
+            "type Entry { name: String, weight: Int @default(value: 1), done: Boolean @default(value: false) }";
+        let omitted =
+            unsupported_client_create(DEFAULTED, "Entry", &json!({"name": "a", "done": true}))
+                .expect("an omitted defaulted field is refused");
+        assert_eq!(
+            omitted.to_string(),
+            "the create omits weight, which Entry declares with @default. A client-signed create cannot apply a default, so supply a value for each of them in the document's fields"
+        );
+        assert!(unsupported_client_create(
+            DEFAULTED,
+            "Entry",
+            &json!({"name": "a", "weight": 2, "done": true})
+        )
+        .is_none());
+    }
+
+    #[tokio::test]
+    async fn offline_access_publishes_through_its_signed_loopback_endpoint() -> anyhow::Result<()> {
+        const SDL: &str = "type OfflineAuthoredFixture { name: String }";
+        let directory = tempfile::tempdir()?;
+        let root =
+            crate::identity::KeyIdentity::load_or_create(directory.path().join("node"), None)?;
+        let user =
+            crate::identity::KeyIdentity::load_or_create(directory.path().join("user"), None)?;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let url = format!("http://{}/api/v0/graphql", listener.local_addr()?);
+        let node = std::sync::Arc::new(
+            defra_node::Node::builder()
+                .with_node_identity_did(root.did())
+                .with_http(defra_node::HttpConfig::with_listener(listener)?)
+                .build()
+                .await?,
+        );
+        node.add_collection(SDL).await?;
+        let offline =
+            || ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap());
+        assert!(matches!(
+            create_authored_document(
+                &offline(),
+                "OfflineAuthoredFixture",
+                &json!({"name": "unrouted"}),
+                DocumentSchemaSource::UserAuthored,
+                SDL,
+            )
+            .await,
+            Err(AuthoredDocumentCreateError::ClientSignerRequired)
+        ));
+        let routed = offline().with_client_signed_writes_through(
+            super::super::GraphqlEndpoint::as_principal(&url, user.did())
+                .with_client_signing_capability(user.client_signing_capability()?)?,
+        )?;
+        let doc = create_authored_document(
+            &routed,
+            "OfflineAuthoredFixture",
+            &json!({"name": "offline"}),
+            DocumentSchemaSource::UserAuthored,
+            SDL,
+        )
+        .await?;
+        let read = routed
+            .execute(&format!(
+                r#"{{ OfflineAuthoredFixture(docID: "{}") {{ name }} }}"#,
+                crate::graphql::escape_graphql_string(&doc)
+            ))
+            .await?;
+        assert_eq!(read["data"]["OfflineAuthoredFixture"][0]["name"], "offline");
+        node.shutdown().await?;
+        Ok(())
+    }
+}

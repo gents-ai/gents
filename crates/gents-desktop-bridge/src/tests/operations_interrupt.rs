@@ -3,9 +3,9 @@ use crate::tests::support::{
     reject_admission, served_desktop, served_desktop_pair, submit_request, try_submit_request,
 };
 use crate::types::DesktopInterruptRequest;
-use gents::store::config_client::ConfigAccess;
-use gents::store::graphql::escape_graphql_string;
 use gents_desktop_core::client::ClientCore;
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
 
 fn user_cancel(request_id: &str, node: Option<&str>) -> DesktopInterruptRequest {
     DesktopInterruptRequest {

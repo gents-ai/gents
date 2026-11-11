@@ -1,15 +1,15 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Local};
-use gents::documents::mailbox_write_decl::{MailboxAction, MailboxKind};
-use gents::session::mailbox::MailboxItem;
-use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
-use gents::tools::background::job::view::{list_jobs, JobFilter, StateFilter};
+use gents_documents::mailbox_write_decl::{MailboxAction, MailboxKind};
 use gents_protocol::job::{
     JobChildState, JobPauseReason, JobPhaseState, JobReadError, JobState, JobView,
 };
 use gents_protocol::mailbox_question::{MailboxQuestion, MailboxQuestionAnswer};
+use gents_session::session::mailbox::MailboxItem;
 use gents_shell::source::{Answer, BackgroundCall, Job, JobEnd, Prompt, PromptKind};
+use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
+use gents_toolcalls::background::job::view::{list_jobs, JobFilter, StateFilter};
 
 use crate::commands::background::{load_background_tool_calls, BackgroundToolCallRow};
 use crate::commands::mailbox::{needs_answer, Reply};

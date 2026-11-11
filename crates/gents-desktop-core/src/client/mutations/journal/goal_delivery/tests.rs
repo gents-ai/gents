@@ -1,12 +1,12 @@
 use super::*;
 use anyhow::{Context, Result};
-use gents::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::goal_control::{
     GoalControlOutcome, GoalOperation, GoalRevision, SESSION_GOAL_CONTROL_VERSION,
 };
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
+use gents_store::identity::{KeyIdentity, NodeIdentity};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 

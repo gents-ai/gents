@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
-use gents::{documents::PackConfig, Collection};
+use gents_documents::PackConfig;
+use gents_store::collection::Collection;
 use serde_json::Value;
 
 fn document_roots() -> impl Iterator<Item = &'static str> {

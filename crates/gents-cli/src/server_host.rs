@@ -123,7 +123,7 @@ pub struct ProvisionOptions {
     pub node_name: String,
     pub tool_ceiling: ManagedToolCeiling,
     pub tool_root: Option<PathBuf>,
-    pub store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice,
+    pub store_key_custody: gents_store::local::store_key::StoreKeyCustodyChoice,
     /// Install the Engineer's default packs into a home this call creates.
     pub default_packs: bool,
 }
@@ -135,7 +135,7 @@ pub async fn ensure_standard_home(
     runtime: &tokio::runtime::Handle,
     options: ProvisionOptions,
 ) -> Result<()> {
-    gents::store::local::storage_backend::drive_unsendable(runtime, move || {
+    gents_store::local::storage_backend::drive_unsendable(runtime, move || {
         ensure_standard_home_inner(options)
     })
     .await
@@ -175,7 +175,7 @@ async fn ensure_standard_home_inner(options: ProvisionOptions) -> Result<()> {
         argv.push("--tool-root".to_string());
         argv.push(tool_root.display().to_string());
     }
-    if options.store_key_custody == gents::store::local::store_key::StoreKeyCustodyChoice::File {
+    if options.store_key_custody == gents_store::local::store_key::StoreKeyCustodyChoice::File {
         argv.extend(["--store-key-custody".to_string(), "file".to_string()]);
     }
     let cli = Cli::try_parse_from(argv).context("building standard Gents provision request")?;
@@ -267,7 +267,7 @@ pub async fn admit_managed_enrollment(
 /// User that owns the Node writes its `administrator` relation.
 pub async fn admit_managed_enrollment_as(
     home: &Path,
-    owner: gents::store::config_client::GraphqlEndpoint,
+    owner: gents_store::config_client::GraphqlEndpoint,
     request_id: &str,
     lease_seconds: u64,
 ) -> Result<ManagedEnrollmentDecisionOutcome> {

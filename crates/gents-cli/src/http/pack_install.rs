@@ -10,8 +10,8 @@ use axum::{
     Json,
 };
 use base64::{display::Base64Display, engine::general_purpose::STANDARD, Engine};
-use gents::pack::archive::PackArchive;
-use gents::pack::PackKind;
+use gents_pack::pack::archive::PackArchive;
+use gents_pack::pack::PackKind;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::router::RuntimeHttpState;
@@ -24,7 +24,7 @@ pub(crate) mod session;
 const PATH: &str = "/packs/install";
 /// The root and its dependencies share one pack's compressed bound, so a
 /// remote install never buffers more archive bytes than one maximal pack.
-pub(crate) const MAX_ARCHIVE_BYTES: usize = gents::pack::archive::MAX_PACK_BYTES;
+pub(crate) const MAX_ARCHIVE_BYTES: usize = gents_pack::pack::archive::MAX_PACK_BYTES;
 /// Room for JSON framing and option strings beside the encoded archives.
 const MAX_FIELD_BYTES: usize = 1024 * 1024;
 pub(crate) const MAX_BODY: usize = MAX_ARCHIVE_BYTES.div_ceil(3) * 4 + MAX_FIELD_BYTES;
@@ -69,8 +69,8 @@ struct InstallRequest {
     node_did: String,
     root: Archive,
     dependencies: Vec<Archive>,
-    root_source: gents::pack::PackSource,
-    dependency_sources: Vec<gents::pack::PackSource>,
+    root_source: gents_pack::pack::PackSource,
+    dependency_sources: Vec<gents_pack::pack::PackSource>,
     inference_slots: Vec<String>,
     dependency_variables: Vec<String>,
     overwrite: bool,
@@ -88,7 +88,7 @@ fn pack_archive(archive: &PackArchive) -> Result<Vec<u8>> {
     let temp = tempfile::tempdir()?;
     archive.write_to(temp.path())?;
     let mut bytes = Vec::new();
-    let header = gents::pack::archive::write_pack(temp.path(), &mut bytes)?;
+    let header = gents_pack::pack::archive::write_pack(temp.path(), &mut bytes)?;
     anyhow::ensure!(
         header.digest == archive.digest(),
         "repacked archive digest changed"
@@ -120,7 +120,7 @@ fn encode_request(
 }
 
 pub(crate) async fn install_remote(
-    endpoint: &gents::store::config_client::GraphqlEndpoint,
+    endpoint: &gents_store::config_client::GraphqlEndpoint,
     owner: &str,
     pack: &PackSource,
     dependencies: &[PackSource],
@@ -304,8 +304,8 @@ fn delegated_install_access(
     state: &RuntimeHttpState,
     headers: &HeaderMap,
     actor: identity::Did,
-) -> Result<gents::store::config_client::ConfigAccess> {
-    Ok(gents::store::config_client::ConfigAccess::Graphql(
+) -> Result<gents_store::config_client::ConfigAccess> {
+    Ok(gents_store::config_client::ConfigAccess::Graphql(
         crate::http::private_reader::caller_endpoint(state, headers, actor)?,
     ))
 }
@@ -378,7 +378,7 @@ fn ensure_exact_closure(root: &PackSource, dependencies: &[PackSource]) -> Resul
         .dependencies
         .iter()
         .map(|coordinate| {
-            let (namespace, name) = gents::pack::registry::split_pack_coordinate(coordinate);
+            let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(coordinate);
             format!("{namespace}/{name}")
         })
         .collect::<Vec<_>>();
@@ -405,7 +405,7 @@ async fn install_owned(
     state: RuntimeHttpState,
     home: PathBuf,
     received: Received,
-    access: gents::store::config_client::ConfigAccess,
+    access: gents_store::config_client::ConfigAccess,
 ) -> Result<serde_json::Value> {
     let Received {
         root,
@@ -443,7 +443,7 @@ async fn install_owned(
         dependencies,
     )
     .await
-    .map_err(gents::pack::PackChangeError::into_anyhow)?;
+    .map_err(gents_pack::pack::PackChangeError::into_anyhow)?;
     if !args.wire.is_empty() && !args.preview {
         result["wired"] = crate::commands::pack::wire_pack_plugins(
             &access,

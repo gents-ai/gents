@@ -1,8 +1,8 @@
 use super::{local, registry};
 use anyhow::{Context, Result};
-use gents::pack::archive::PackArchive;
-use gents::pack::resolve::{resolve_named, ResolveOptions, ResolvedFrom};
-use gents::pack::PackManifest;
+use gents_pack::pack::archive::PackArchive;
+use gents_pack::pack::resolve::{resolve_named, ResolveOptions, ResolvedFrom};
+use gents_pack::pack::PackManifest;
 
 pub(crate) struct PackSource {
     pub(super) archive: std::sync::Arc<PackArchive>,
@@ -24,13 +24,16 @@ pub(super) enum Source {
 
 impl PackSource {
     /// A verified archive the runtime received from its operator.
-    pub(crate) fn received(archive: PackArchive, source: gents::pack::PackSource) -> Result<Self> {
+    pub(crate) fn received(
+        archive: PackArchive,
+        source: gents_pack::pack::PackSource,
+    ) -> Result<Self> {
         source.validate()?;
         let (from, file_name) = match source {
-            gents::pack::PackSource::Local { file_name } => (Source::Local, file_name),
-            gents::pack::PackSource::Installed => (Source::Installed, None),
-            gents::pack::PackSource::Store => (Source::Store, None),
-            gents::pack::PackSource::Registry {
+            gents_pack::pack::PackSource::Local { file_name } => (Source::Local, file_name),
+            gents_pack::pack::PackSource::Installed => (Source::Installed, None),
+            gents_pack::pack::PackSource::Store => (Source::Store, None),
+            gents_pack::pack::PackSource::Registry {
                 namespace,
                 name,
                 version,
@@ -91,7 +94,7 @@ impl PackSource {
 
     /// Records the provenance of `root` and `dependencies` under their pack coordinates.
     pub(crate) fn record_graph_sources(
-        prepared: &mut gents::pack::PreparedDocumentPackInstall,
+        prepared: &mut gents_pack::pack::PreparedDocumentPackInstall,
         root: &Self,
         dependencies: &[Self],
     ) {
@@ -104,19 +107,19 @@ impl PackSource {
         }
     }
 
-    pub(crate) fn provenance(&self) -> gents::pack::PackSource {
+    pub(crate) fn provenance(&self) -> gents_pack::pack::PackSource {
         match &self.from {
-            Source::Local => gents::pack::PackSource::Local {
+            Source::Local => gents_pack::pack::PackSource::Local {
                 file_name: self.file_name.clone(),
             },
-            Source::Installed => gents::pack::PackSource::Installed,
-            Source::Store => gents::pack::PackSource::Store,
+            Source::Installed => gents_pack::pack::PackSource::Installed,
+            Source::Store => gents_pack::pack::PackSource::Store,
             Source::Registry {
                 namespace,
                 name,
                 version,
                 artifact_digest,
-            } => gents::pack::PackSource::Registry {
+            } => gents_pack::pack::PackSource::Registry {
                 namespace: namespace.clone(),
                 name: name.clone(),
                 version: version.clone(),
@@ -149,12 +152,12 @@ pub(crate) async fn resolve_pack_source(
     if let Some(local) = local::classify(spec) {
         let archive = local::open(&local, home)?;
         let (from, file_name) = match &local {
-            gents::pack::local::LocalName::Path(path) => (
+            gents_pack::pack::local::LocalName::Path(path) => (
                 Source::Local,
                 path.file_name()
                     .map(|name| name.to_string_lossy().into_owned()),
             ),
-            gents::pack::local::LocalName::Digest(_) => (Source::Store, None),
+            gents_pack::pack::local::LocalName::Digest(_) => (Source::Store, None),
         };
         return Ok(PackSource {
             archive: archive.into(),
@@ -162,14 +165,15 @@ pub(crate) async fn resolve_pack_source(
             file_name,
         });
     }
-    let installed: Vec<gents::pack::InstalledPack> = gents::pack::list_home_installs(home)?
-        .into_iter()
-        .map(|record| gents::pack::InstalledPack {
-            coordinate: record.coordinate,
-            version: record.version,
-            digest: record.digest,
-        })
-        .collect();
+    let installed: Vec<gents_pack::pack::InstalledPack> =
+        gents_pack::pack::list_home_installs(home)?
+            .into_iter()
+            .map(|record| gents_pack::pack::InstalledPack {
+                coordinate: record.coordinate,
+                version: record.version,
+                digest: record.digest,
+            })
+            .collect();
     let options = ResolveOptions {
         home: Some(home),
         registry_url: registry::resolve_registry_url(registry_override),
@@ -183,7 +187,7 @@ pub(crate) async fn resolve_pack_source(
             artifact_digest,
             version,
         } => {
-            let parsed = gents::documents::pack_spec::parse_pack_spec(spec)?;
+            let parsed = gents_documents::pack_spec::parse_pack_spec(spec)?;
             Source::Registry {
                 namespace: parsed.namespace.to_owned(),
                 name: parsed.name.to_owned(),
@@ -202,14 +206,14 @@ pub(crate) async fn resolve_pack_source(
 pub(super) fn materialize_cached_pack(
     home: &std::path::Path,
     pack: &PackSource,
-) -> Result<(std::path::PathBuf, gents::store::local::file_lock::FileLock)> {
-    gents::pack::materialize::cached(home, &pack.archive)
+) -> Result<(std::path::PathBuf, gents_store::local::file_lock::FileLock)> {
+    gents_pack::pack::materialize::cached(home, &pack.archive)
 }
 
 pub(crate) struct SubjectPack {
     pub(crate) source: gents_eval::runner::CellSource,
     pub(crate) manifest: PackManifest,
-    _lease: Option<gents::store::local::file_lock::FileLock>,
+    _lease: Option<gents_store::local::file_lock::FileLock>,
 }
 
 impl SubjectPack {
@@ -268,7 +272,7 @@ pub(crate) async fn resolve_subject_pack(
     })
 }
 
-pub(crate) fn single_slot(manifest: &PackManifest) -> Result<&gents::pack::PackInferenceSlot> {
+pub(crate) fn single_slot(manifest: &PackManifest) -> Result<&gents_pack::pack::PackInferenceSlot> {
     match manifest.metadata.inference_slots.as_slice() {
         [only] => Ok(only),
         slots => anyhow::bail!(
@@ -301,7 +305,7 @@ pub(super) fn asset_cache_root(
     home: &std::path::Path,
     pack: &PackSource,
 ) -> Result<std::path::PathBuf> {
-    gents::pack::materialize::cache_root(
+    gents_pack::pack::materialize::cache_root(
         home,
         &pack.manifest().metadata.namespace,
         &pack.manifest().name,

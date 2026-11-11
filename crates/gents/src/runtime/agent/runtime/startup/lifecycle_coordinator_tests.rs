@@ -43,12 +43,14 @@ impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for FailFirst
 #[tokio::test]
 async fn admission_gate_waits_for_durable_ready_retry_ack() {
     let node = Arc::new(
-        crate::store::test_support::node_builder()
+        gents_store::test_support::node_builder()
             .build()
             .await
             .unwrap(),
     );
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    gents_store::schema::ensure_runtime_schemas(node.as_ref())
+        .await
+        .unwrap();
     let writer = Arc::new(FailFirstReadyWriter {
         calls: AtomicUsize::new(0),
         ready_attempted: Barrier::new(2),
@@ -90,17 +92,19 @@ async fn admission_gate_waits_for_durable_ready_retry_ack() {
 #[tokio::test]
 async fn shutdown_wins_over_a_late_startup_barrier_release() {
     let node = Arc::new(
-        crate::store::test_support::node_builder()
+        gents_store::test_support::node_builder()
             .build()
             .await
             .unwrap(),
     );
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    gents_store::schema::ensure_runtime_schemas(node.as_ref())
+        .await
+        .unwrap();
     let node_did = node
         .node_identity_did()
         .expect("fixture node has an identity")
         .to_owned();
-    crate::test_support::documents::ensure_test_node(&node, &node_did).await;
+    gents_documents::test_support::ensure_test_node(&node, &node_did).await;
     let status = RuntimeStatusHandle::new(node.clone(), node_did);
     status.initialize_startup("general").await.unwrap();
     let gate = super::super::router::RuntimeAdmissionGate::closed();

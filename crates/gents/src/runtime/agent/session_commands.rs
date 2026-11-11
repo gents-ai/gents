@@ -9,9 +9,9 @@ use gents_protocol::session_input_edit::SessionInputEdit;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
-use crate::store::graphql::escape_graphql_string;
-use crate::store::identity::NodeIdentity;
-pub use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot as SessionCommandAgentSnapshot;
+pub use gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot as SessionCommandAgentSnapshot;
+use gents_store::graphql::escape_graphql_string;
+use gents_store::identity::NodeIdentity;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) enum CommandKind {
@@ -50,7 +50,7 @@ pub(super) async fn unanswered_commands(
         Sweep::Unanswered => (", receipt_json: { _eq: null }", "_docID"),
         Sweep::Unverified => ("", "_docID intent_json receipt_json"),
     };
-    let access = crate::ConfigAccess::local_managed_agent(
+    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         ::identity::Did::new(agent_identity.did())?,
         agent_identity,
@@ -70,7 +70,7 @@ pub(super) async fn unanswered_commands(
             doc_id: String,
         }
         return Ok(
-            crate::store::graphql::rows::<DocIdRow>(&response, collection)?
+            gents_store::graphql::rows::<DocIdRow>(&response, collection)?
                 .into_iter()
                 .map(|row| row.doc_id)
                 .collect(),
@@ -85,7 +85,7 @@ pub(super) async fn unanswered_commands(
         receipt_json: Option<String>,
     }
     let mut unanswered = Vec::new();
-    for row in crate::store::graphql::rows::<Row>(&response, collection)? {
+    for row in gents_store::graphql::rows::<Row>(&response, collection)? {
         let Some(intent) = row.intent_json.as_deref() else {
             if row.receipt_json.is_none() {
                 unanswered.push(row.doc_id);
@@ -93,7 +93,7 @@ pub(super) async fn unanswered_commands(
             continue;
         };
         let answered = if kind == CommandKind::GoalControl {
-            crate::goal::session_goal_control::has_verified_receipt(
+            gents_automation::goal::session_goal_control::has_verified_receipt(
                 identity,
                 intent,
                 row.receipt_json.as_deref(),
@@ -142,7 +142,7 @@ pub(crate) async fn unanswered_goal_commands(
                 .field(receipt::RELATIONSHIPS_PENDING),
         ))
         .render();
-    let access = crate::ConfigAccess::local_managed_agent(
+    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         ::identity::Did::new(agent_identity.did())?,
         agent_identity,
@@ -183,7 +183,7 @@ pub(crate) async fn unanswered_goal_commands(
             .unwrap_or((None, false));
         let answered = match row["intent_json"].as_str() {
             Some(intent) => {
-                crate::goal::session_goal_control::has_verified_receipt(
+                gents_automation::goal::session_goal_control::has_verified_receipt(
                     runtime,
                     intent,
                     raw_receipt,
@@ -213,19 +213,25 @@ pub(crate) async fn run_session_command_reconciler_with_agents(
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
     agents: Option<
-        tokio::sync::watch::Receiver<Arc<crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot>>,
+        tokio::sync::watch::Receiver<
+            Arc<gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot>,
+        >,
     >,
     cancel: CancellationToken,
 ) -> Result<()> {
     let watched = CommandKind::ALL
         .into_iter()
         .map(CommandKind::collection)
-        .chain(crate::goal::GOAL_OBSERVATION_SOURCES.iter().copied());
-    let changes = crate::store::subscription_source::subscribe_collections(&node, watched)?;
+        .chain(
+            gents_automation::goal::GOAL_OBSERVATION_SOURCES
+                .iter()
+                .copied(),
+        );
+    let changes = gents_store::subscription_source::subscribe_collections(&node, watched)?;
     let changes = futures::stream::unfold(changes, |mut changes| async move {
         changes.recv().await.map(|batch| (batch, changes))
     });
-    let mut interval = tokio::time::interval(super::p2p_reconcile::intervals::sweep_interval());
+    let mut interval = tokio::time::interval(gents_p2p::p2p_reconcile::intervals::sweep_interval());
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let ticks = futures::stream::unfold(interval, |mut interval| async move {
         interval.tick().await;
@@ -242,7 +248,9 @@ pub(crate) async fn run_session_command_reconciler_observing<S, T>(
     mut changes: S,
     mut ticks: T,
     agents: Option<
-        tokio::sync::watch::Receiver<Arc<crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot>>,
+        tokio::sync::watch::Receiver<
+            Arc<gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot>,
+        >,
     >,
 ) -> Result<()>
 where
@@ -257,7 +265,7 @@ where
         collections.insert(collection.collection_id, kind);
     }
     let mut goal_sources = RapidHashMap::new();
-    for source in crate::goal::GOAL_OBSERVATION_SOURCES {
+    for source in gents_automation::goal::GOAL_OBSERVATION_SOURCES {
         let collection = node
             .get_collection(source)?
             .context("goal observation schema missing")?;
@@ -395,7 +403,7 @@ where
                             agent_identity.did() == selected,
                             "goal command Agent identity differs from snapshot"
                         );
-                        crate::goal::session_goal_control::process_command(
+                        gents_automation::goal::session_goal_control::process_command(
                             &node,
                             &identity,
                             &id,
@@ -427,7 +435,7 @@ where
                 Some(snapshot) => snapshot.borrow().watcher_identities()?,
                 None => Vec::new(),
             };
-            match crate::goal::reconcile_goal_observations_with_identities(
+            match gents_automation::goal::reconcile_goal_observations_with_identities(
                 &node,
                 &identity,
                 &recovery_identities,
@@ -496,20 +504,20 @@ mod notification_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::config_client::ConfigAccess;
     use gents_protocol::goal_control::{
         GoalOperation, GoalRevision, SessionGoalControl, SESSION_GOAL_CONTROL_VERSION,
     };
+    use gents_store::config_client::ConfigAccess;
 
     #[tokio::test]
     async fn generated_session_command_discovery_uses_held_agent_and_native_visibility() {
         let temp = tempfile::tempdir().unwrap();
         let identity = Arc::new(
-            crate::store::identity::KeyIdentity::load_or_create(temp.path().join("node.key"), None)
+            gents_store::identity::KeyIdentity::load_or_create(temp.path().join("node.key"), None)
                 .unwrap(),
         );
         let user =
-            crate::store::identity::KeyIdentity::load_or_create(temp.path().join("user.key"), None)
+            gents_store::identity::KeyIdentity::load_or_create(temp.path().join("user.key"), None)
                 .unwrap();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -521,14 +529,14 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        crate::store::schema::ensure_runtime_schemas(&node)
+        gents_store::schema::ensure_runtime_schemas(&node)
             .await
             .unwrap();
-        let binding = crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+        let binding = gents_store::identity::provision_agent_identity(identity.as_ref()).unwrap();
         let agent =
-            crate::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
+            gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
         let access = ConfigAccess::Graphql(
-            crate::store::config_client::GraphqlEndpoint::as_principal(
+            gents_store::config_client::GraphqlEndpoint::as_principal(
                 format!("http://{address}/api/v0/graphql"),
                 user.did(),
             )
@@ -539,15 +547,15 @@ mod tests {
         let (session_doc_id, agent_doc_id) = access.transact_write("test.sweep.session", |txn| Box::pin(async {
             let root = txn.execute_client_signed_create("mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
                 &serde_json::json!({"input": {"node_did":identity.did()}}), gents_protocol::schemas::NODE).await?;
-            let node_doc = crate::store::graphql::created_doc_id(&root, "Node")?;
+            let node_doc = gents_store::graphql::created_doc_id(&root, "Node")?;
             let selected = txn.execute_client_signed_create("mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
                 &serde_json::json!({"input": {"node_did":identity.did(),"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"enabled":true}}), gents_protocol::schemas::AGENT).await?;
-            let agent_doc = crate::store::graphql::created_doc_id(&selected, "Agent")?;
+            let agent_doc = gents_store::graphql::created_doc_id(&selected, "Agent")?;
             txn.add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node_doc).await?;
             txn.add_actor_relationship("Agent", &agent_doc, "executor", &::identity::Did::new(agent.did())?).await?;
             let response = txn.execute_client_signed_create("mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
                 &serde_json::json!({"input": {"session_id": "session", "node_did": identity.did(), "requester_did": user.did(), "agent_did": agent.did(), "created_at": "2026-10-10T00:00:00Z", "relationships_pending":false}}), gents_protocol::schemas::AGENT_SESSION).await?;
-            let session = crate::store::graphql::created_doc_id(&response, "AgentSession")?;
+            let session = gents_store::graphql::created_doc_id(&response, "AgentSession")?;
             txn.add_resource_relationship("AgentSession", &session, "parent", "agents", &agent_doc).await?;
             txn.add_actor_relationship("AgentSession", &session, "working_agent", &::identity::Did::new(agent.did())?).await?;
             Ok::<_, anyhow::Error>((session, agent_doc))
@@ -585,7 +593,7 @@ mod tests {
                     &serde_json::json!({"input": {"command_id": id, "node_did":identity.did(),
                         "requester_did": user.did(), "agent_did": agent.did(),
                         "session_id": "session", "session_doc_id": session_doc_id, "intent_json":intent}}), gents_protocol::schemas::AGENT_SESSION_GOAL_CONTROL).await?;
-                let doc = crate::store::graphql::created_doc_id(&response, "AgentSessionGoalControl")?;
+                let doc = gents_store::graphql::created_doc_id(&response, "AgentSessionGoalControl")?;
                 txn.add_resource_relationship("AgentSessionGoalControl", &doc, "parent", "sessions", &session_doc_id).await?;
                 txn.add_actor_relationship("AgentSessionGoalControl", &doc, "working_agent", &::identity::Did::new(agent.did())?).await?;
                 ids.push(doc);
@@ -594,9 +602,9 @@ mod tests {
         })).await.unwrap();
         expected.sort();
         let other_binding =
-            crate::store::identity::provision_agent_identity(identity.as_ref()).unwrap();
+            gents_store::identity::provision_agent_identity(identity.as_ref()).unwrap();
         let other =
-            crate::store::identity::resolve_agent_identity(identity.as_ref(), &other_binding)
+            gents_store::identity::resolve_agent_identity(identity.as_ref(), &other_binding)
                 .unwrap();
         let cases =
             &gents_lean_vocab::lean_contract_snapshot().session_input_edit_native_discovery_cases;
@@ -620,7 +628,7 @@ mod tests {
             let response = access.execute(&query).await.unwrap();
             let response: defra_node::QueryResponse = serde_json::from_value(response)
                 .expect("decode native session-command query response");
-            let visible = !crate::store::graphql::rows::<serde_json::Value>(
+            let visible = !gents_store::graphql::rows::<serde_json::Value>(
                 &response,
                 "AgentSessionGoalControl",
             )

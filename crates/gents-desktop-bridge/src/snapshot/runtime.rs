@@ -2,8 +2,8 @@
 use gents_desktop_core::inference::backend_config_view;
 use rapidhash::RapidHashMap;
 
-use gents::{BashMode, FileToolMode};
 use gents_desktop_core::client::{ClientCore, ClientPeerStatus};
+use gents_documents::{BashMode, FileToolMode};
 use gents_protocol::row::{
     AgentReadinessUnavailableReason, AgentReadinessUnknownReason, NodeReadinessRow,
     ProjectedAgentReadiness,
@@ -27,9 +27,9 @@ static STARTERS: std::sync::LazyLock<super::runtime_tasks::StarterCache> =
 pub(crate) fn node_reads(
     core: &ClientCore,
     node_did: &str,
-) -> anyhow::Result<gents::store::config_client::ConfigAccess> {
+) -> anyhow::Result<gents_store::config_client::ConfigAccess> {
     core.operator_observation_graphql(node_did)
-        .map(gents::store::config_client::ConfigAccess::Graphql)
+        .map(gents_store::config_client::ConfigAccess::Graphql)
         .ok_or_else(|| anyhow::anyhow!("Runtime {node_did} has no authenticated GraphQL endpoint"))
 }
 
@@ -396,7 +396,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
 }
 
 fn project_task_view(
-    task: &gents::documents::Task,
+    task: &gents_documents::Task,
     recent_runs: TaskRecentRunsView,
     run_history: Vec<TaskRunSummaryView>,
 ) -> TaskView {
@@ -424,7 +424,7 @@ mod task_view_tests {
 
     #[test]
     fn canonical_task_hooks_and_tags_survive_projection() {
-        let task : gents :: documents :: Task = serde_json :: from_value (serde_json :: json ! ({ "node_did" : "did:test:owner" , "task_id" : "release" , "display_name" : "Release" , "agent_did" : "operator" , "prompt_template" : "Ship it" , "emit_outcome" : true , "output_schema_ref" : "schemas/release-result.json" , "hooks" : [{ "hook_id" : "prepare" , "phase" : "before" , "command" : ["sh" , "-c" , "./prepare.sh"] , "timeout_secs" : 45 } , { "hook_id" : "cleanup" , "phase" : "finally" , "command" : ["./cleanup"] }] , "tags" : ["release" , "operator"] })) . expect ("canonical task") ;
+        let task : gents_documents::Task = serde_json :: from_value (serde_json :: json ! ({ "node_did" : "did:test:owner" , "task_id" : "release" , "display_name" : "Release" , "agent_did" : "operator" , "prompt_template" : "Ship it" , "emit_outcome" : true , "output_schema_ref" : "schemas/release-result.json" , "hooks" : [{ "hook_id" : "prepare" , "phase" : "before" , "command" : ["sh" , "-c" , "./prepare.sh"] , "timeout_secs" : 45 } , { "hook_id" : "cleanup" , "phase" : "finally" , "command" : ["./cleanup"] }] , "tags" : ["release" , "operator"] })) . expect ("canonical task") ;
         let view = project_task_view(
             &task,
             TaskRecentRunsView {
@@ -602,7 +602,7 @@ fn resolve_agent_environments(
                         .map(str::trim)
                         .filter(|root| !root.is_empty())
                         .map(std::path::Path::new);
-                    gents::tools::surface::resolve_effective_tool_root(
+                    gents_tools::surface::resolve_effective_tool_root(
                         &agent.agent_did,
                         stored_root,
                         operator_root,
@@ -919,7 +919,7 @@ mod backend_config_view_tests {
 
     #[test]
     fn backend_view_never_serializes_key_and_uses_exact_oauth_catalog() {
-        let mut backend: gents::documents::InferenceBackend =
+        let mut backend: gents_documents::InferenceBackend =
             serde_json::from_value(serde_json::json!({
                 "node_did":"owner","backend_id":"backend","name":"Backend",
                 "provider_kind":"OpenAiCompatible","endpoint":"http://localhost/v1",
@@ -931,7 +931,7 @@ mod backend_config_view_tests {
         assert!(!serde_json::to_string(&view)
             .unwrap()
             .contains("NEVER-EXPORT-KEY"));
-        backend.auth = gents::documents::BackendAuth::NodeOAuth { account_ref: None };
+        backend.auth = gents_documents::BackendAuth::NodeOAuth { account_ref: None };
         let observation = serde_json::from_value(serde_json::json!({
             "backend_id":"backend","catalogs":[
                 {"node_did":"foreign","observed_at":"now","models":[{"model_name":"foreign-model"}]},
@@ -947,7 +947,7 @@ mod backend_config_view_tests {
         assert_eq!(view.models, ["own-model"]);
         assert_eq!(view.advertised_models[0].context_window, Some(272_000));
         assert_eq!(view.advertised_models[0].max_context_window, Some(872_000));
-        backend.auth = gents::documents::BackendAuth::NodeOAuth {
+        backend.auth = gents_documents::BackendAuth::NodeOAuth {
             account_ref: Some("acct-2".into()),
         };
         let view = backend_config_view(&backend, Some(&observation));

@@ -15,7 +15,9 @@
 //! logic). They pin scheduling invariants only; they make no claim about
 //! detecting wedged or unhealthy busy sessions.
 
-use gents::request::lifecycle::{background_wake_next_retry_at, background_wake_retry_delay};
+use gents_session::request::lifecycle::{
+    background_wake_next_retry_at, background_wake_retry_delay,
+};
 
 #[test]
 fn background_wake_backoff_uses_exponential_delay_up_to_the_cap() {

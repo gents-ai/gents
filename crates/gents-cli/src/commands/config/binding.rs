@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use gents::{KeyIdentity, NodeIdentity};
 use gents_protocol::row::{
     decode_node_readiness_snapshot, NodeReadinessProcessState, NodeReadinessRow,
 };
+use gents_store::identity::{KeyIdentity, NodeIdentity};
 use serde_json::Value;
 
 use crate::cli::ManifestNodeDidBindingArg;

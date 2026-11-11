@@ -8,7 +8,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use futures_util::StreamExt;
-use gents::store::config_client::{
+use gents_store::config_client::{
     ConfigAccess, ConfigApplyTxn, PackApprovalError, PackApprovalScope, PackEffectApprover,
     PackEvidence, PackMutation, PackRelationship, PackRelationshipEvidence, PackSchemaEvidence,
 };
@@ -362,7 +362,7 @@ async fn run_inner(
             let runtime_did = &runtime_did;
             let actor = &actor;
             Box::pin(async move {
-                gents::store::config_client::require_node_update_in_txn(txn, runtime_did, actor)
+                gents_store::config_client::require_node_update_in_txn(txn, runtime_did, actor)
                     .await
                     .map_err(anyhow::Error::from)
             })
@@ -387,7 +387,7 @@ async fn run_inner(
         let overrides = crate::commands::pack::parse_dependency_variables(
             &received.request.dependency_variables,
         )?;
-        let mut prepared = gents::pack::prepare_document_pack_archive(
+        let mut prepared = gents_pack::pack::prepare_document_pack_archive(
             &access,
             &state.node_did,
             received.root.archive(),
@@ -397,7 +397,7 @@ async fn run_inner(
                 .iter()
                 .map(|source| source.archive())
                 .collect::<Vec<_>>(),
-            gents::pack::InstalledVia::Operator,
+            gents_pack::pack::InstalledVia::Operator,
             Some(&home),
             &|name| std::env::var(name).ok(),
             &overrides,
@@ -409,7 +409,7 @@ async fn run_inner(
             &received.dependencies,
         );
         let prepared = Arc::new(prepared);
-        let stage = gents::pack::stage_hosted_pack(
+        let stage = gents_pack::pack::stage_hosted_pack(
             &state.node_did,
             &home,
             received.root.shared_archive(),
@@ -436,7 +436,7 @@ async fn run_inner(
             let mut dependency_assets = Vec::new();
             for dependency in &dependencies {
                 if let Some((assets, lease)) =
-                    gents::pack::home_install::materialize_asset_pack(&cache_home, dependency)?
+                    gents_pack::pack::home_install::materialize_asset_pack(&cache_home, dependency)?
                 {
                     dependency_assets.push((
                         format!(
@@ -450,7 +450,7 @@ async fn run_inner(
                 }
             }
             let assets = if let Some((assets, lease)) =
-                gents::pack::home_install::materialize_asset_pack(&cache_home, &root)?
+                gents_pack::pack::home_install::materialize_asset_pack(&cache_home, &root)?
             {
                 leases.push(lease);
                 assets
@@ -500,16 +500,17 @@ async fn run_inner(
             ))
         }
     };
-    gents::store::config_client::verify_pack_schema_approval(actor.as_str(), &scope, evidence)
+    gents_store::config_client::verify_pack_schema_approval(actor.as_str(), &scope, evidence)
         .map_err(|error| (anyhow::Error::new(error), "not_installed"))?;
-    gents::pack::apply_prepared_dependency_schemas(&runtime_access, &prepared)
+    gents_pack::pack::apply_prepared_dependency_schemas(&runtime_access, &prepared)
         .await
         .map_err(|error| (error, "not_installed"))?;
-    let schemas = if received.root.manifest().metadata.kind == gents::pack::PackKind::Documents {
+    let schemas = if received.root.manifest().metadata.kind == gents_pack::pack::PackKind::Documents
+    {
         let root = received.root.shared_archive();
         let temp = tokio::task::spawn_blocking(move || {
             let temp = tempfile::tempdir()?;
-            gents::pack::materialize::materialize(&root, temp.path())?;
+            gents_pack::pack::materialize::materialize(&root, temp.path())?;
             Ok::<_, anyhow::Error>(temp)
         })
         .await
@@ -522,11 +523,11 @@ async fn run_inner(
         None
     };
     let policy = if received.request.overwrite {
-        gents::pack::DriftPolicy::Overwrite
+        gents_pack::pack::DriftPolicy::Overwrite
     } else if received.request.keep {
-        gents::pack::DriftPolicy::Keep
+        gents_pack::pack::DriftPolicy::Keep
     } else {
-        gents::pack::DriftPolicy::Refuse
+        gents_pack::pack::DriftPolicy::Refuse
     };
     let approver = Arc::new(SessionApprover {
         socket: socket.clone(),
@@ -539,7 +540,7 @@ async fn run_inner(
             received.root.manifest().metadata.namespace,
             received.root.manifest().name
         );
-        let record = gents::pack::HomePackInstall {
+        let record = gents_pack::pack::HomePackInstall {
             coordinate: coordinate.clone(),
             version: received.root.manifest().version.clone(),
             digest: received.root.digest().to_owned(),
@@ -551,19 +552,19 @@ async fn run_inner(
                 .filter(|plugin| {
                     plugin.owner_pack_coordinate.as_deref() == Some(coordinate.as_str())
                 })
-                .map(|plugin| gents::pack::InstalledPackPlugin {
+                .map(|plugin| gents_pack::pack::InstalledPackPlugin {
                     name: plugin.name.clone(),
                     digest: plugin.digest.clone(),
                 })
                 .collect(),
             ux: received.root.manifest().metadata.ux.clone(),
             installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            installed_via: Some(gents::pack::InstalledVia::Operator),
+            installed_via: Some(gents_pack::pack::InstalledVia::Operator),
             source: Some(received.root.provenance()),
             source_history: Vec::new(),
             created_collections: Vec::new(),
         };
-        Some(gents::pack::HostedHomePublication {
+        Some(gents_pack::pack::HostedHomePublication {
             home,
             record,
             leases: materialized.2,
@@ -579,20 +580,20 @@ async fn run_inner(
             approver,
             policy,
             home_publication,
-            &gents::inference::resolved::ProviderProfilePolicy,
+            &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await
         .map_err(|error| {
             let outcome = match &error {
-                gents::pack::HostedPackStageError::Rejected(_) => "not_installed",
-                gents::pack::HostedPackStageError::Unconfirmed(_) => "unconfirmed",
+                gents_pack::pack::HostedPackStageError::Rejected(_) => "not_installed",
+                gents_pack::pack::HostedPackStageError::Unconfirmed(_) => "unconfirmed",
             };
             (anyhow::Error::new(error), outcome)
         })?;
-    let report = gents::pack::assemble_document_graph_report(&prepared, reports)
+    let report = gents_pack::pack::assemble_document_graph_report(&prepared, reports)
         .map_err(|error| (error, "unconfirmed"))?;
     let manifest = received.root.manifest();
-    let origin_tag = gents::pack::pack_origin_tag(&format!(
+    let origin_tag = gents_pack::pack::pack_origin_tag(&format!(
         "{}/{}",
         manifest.metadata.namespace, manifest.name
     ))

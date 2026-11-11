@@ -16,7 +16,7 @@ pub async fn observe_mailbox_item(
         !request.item_id.trim().is_empty(),
         "a mailbox item is required"
     );
-    gents::session::mailbox::load_mailbox_item_with_access(
+    gents_session::session::mailbox::load_mailbox_item_with_access(
         &core.operator_access(&request.node_did)?,
         &request.item_id,
     )
@@ -32,7 +32,7 @@ pub async fn observe_mailbox_item(
 }
 
 fn mailbox_observation(
-    item: &gents::session::mailbox::MailboxItem,
+    item: &gents_session::session::mailbox::MailboxItem,
 ) -> Result<MailboxItemObservation> {
     let terminal = item
         .parsed_status()
@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn exact_observation_preserves_closed_items_and_requester_provenance() {
-        let mut item: gents::session::mailbox::MailboxItem =
+        let mut item: gents_session::session::mailbox::MailboxItem =
             serde_json::from_value(serde_json::json!({
                 "_docID": "question", "item_key": "key", "requester_did": "reader",
                 "node_did": "node", "status": "open", "kind": "ask",
@@ -185,7 +185,7 @@ mod tests {
                 "target_agent_did": "agent", "created_at": "2026-10-28T00:00:00Z"
             }))
             .unwrap();
-        for status in gents::session::mailbox::MailboxStatus::ALL {
+        for status in gents_session::session::mailbox::MailboxStatus::ALL {
             item.status = status.as_str().to_owned();
             let observation = mailbox_observation(&item).unwrap();
             assert_eq!(observation.item.item_id, "question");

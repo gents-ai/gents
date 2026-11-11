@@ -6,7 +6,7 @@
 //! go on.
 
 use anyhow::{Context, Result};
-use gents::pack::{PackInferenceBindingPreview, PackInferenceBindings, PackManifest};
+use gents_pack::pack::{PackInferenceBindingPreview, PackInferenceBindings, PackManifest};
 use serde_json::{json, Value};
 
 /// One pack's inference as its install would bind it, and the required slots
@@ -41,7 +41,7 @@ fn coordinate(manifest: &PackManifest) -> String {
 /// non-enforcing owner reports the slots and profiles, and those slots are
 /// unbound. Any other refusal is the install's own: `None`.
 pub(super) async fn pack_inference(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     owner: &str,
     manifest: &PackManifest,
     requested: &PackInferenceBindings,
@@ -59,13 +59,14 @@ pub(super) async fn pack_inference(
         .map(|(slot, profile)| (slot.clone(), profile.clone()))
         .collect();
     if let Ok(preview) =
-        gents::pack::preview_pack_inference_bindings(access, manifest, owner, &requested).await
+        gents_pack::pack::preview_pack_inference_bindings(access, manifest, owner, &requested).await
     {
         return Some(PackInference::bound(manifest, preview));
     }
-    let preview = gents::pack::inspect_pack_inference_bindings(access, manifest, owner, &requested)
-        .await
-        .ok()?;
+    let preview =
+        gents_pack::pack::inspect_pack_inference_bindings(access, manifest, owner, &requested)
+            .await
+            .ok()?;
     let unbound: Vec<String> = preview
         .slots
         .iter()
@@ -152,8 +153,10 @@ pub(super) fn identity_and_authority(
     let packs = || std::iter::once(manifest).chain(dependencies.iter().copied());
     let mut authority = Vec::new();
     for plugin in packs().flat_map(|pack| &pack.metadata.plugins) {
-        let declared = gents::plugin::authority::declared_manifold(plugin)?;
-        if let Some(asks) = gents::plugin::authority::describe_plugin_authority(plugin, &declared) {
+        let declared = gents_pack::plugin::authority::declared_manifold(plugin)?;
+        if let Some(asks) =
+            gents_pack::plugin::authority::describe_plugin_authority(plugin, &declared)
+        {
             authority.push(json!({ "plugin": plugin.name, "asks": asks }));
         }
     }
@@ -172,8 +175,8 @@ pub(super) fn identity_and_authority(
 /// install mints its own. Every document that refers to the agent refers to
 /// its slot instead, and the agent's creation nonce is left out.
 pub(super) fn documents_by_slot(
-    config: &gents::documents::PackConfig,
-    bindings: &gents::pack::PackAgentBindings,
+    config: &gents_documents::PackConfig,
+    bindings: &gents_pack::pack::PackAgentBindings,
     variables: &VariableFields,
 ) -> Result<Vec<Value>> {
     let slots: std::collections::BTreeMap<&str, &str> = bindings
@@ -206,7 +209,7 @@ pub(super) fn documents_by_slot(
 /// to Agent DIDs, as a preview with unbound inference shows them: each agent
 /// by its slot, since its DID is minted only when it is installed.
 pub(super) fn authored_documents(
-    config: &gents::pack::AuthoredPackConfig,
+    config: &gents_pack::pack::AuthoredPackConfig,
     variables: &VariableFields,
 ) -> Result<Vec<Value>> {
     let mut documents = documents(&config.documents, variables)?;
@@ -218,7 +221,7 @@ pub(super) fn authored_documents(
         .flatten()
     {
         let slot = agent.get("agent_slot").and_then(Value::as_str);
-        let masked = variables.fields_of(gents::Collection::Agent, slot, &[]);
+        let masked = variables.fields_of(gents_store::collection::Collection::Agent, slot, &[]);
         let mut content = agent.clone();
         mask_variable_fields(&mut content, &masked);
         let name = content
@@ -242,11 +245,11 @@ pub(super) fn authored_documents(
 /// tool surface the tools it declares. The node document is the install's
 /// owner, not something the pack adds.
 pub(super) fn documents(
-    config: &gents::documents::PackConfig,
+    config: &gents_documents::PackConfig,
     variables: &VariableFields,
 ) -> Result<Vec<Value>> {
-    let plan = gents::documents::DesiredStateApplyPlan::from_pack_config(config)?;
-    let ids = |collection: gents::Collection| -> Vec<&str> {
+    let plan = gents_documents::DesiredStateApplyPlan::from_pack_config(config)?;
+    let ids = |collection: gents_store::collection::Collection| -> Vec<&str> {
         plan.documents()
             .iter()
             .filter(|document| document.collection == collection)
@@ -260,7 +263,7 @@ pub(super) fn documents(
     };
     plan.documents()
         .iter()
-        .filter(|document| document.collection != gents::Collection::Node)
+        .filter(|document| document.collection != gents_store::collection::Collection::Node)
         .map(|document| {
             let field = |key: &str| document.add.get(key).and_then(Value::as_str);
             let id = field(document.collection.unique_field());
@@ -274,12 +277,12 @@ pub(super) fn documents(
                 "content": content,
             });
             if let Some((field, readers)) =
-                gents::pack::declared_readers(document.collection, &document.add)
+                gents_pack::pack::declared_readers(document.collection, &document.add)
                     .filter(|(_, readers)| !readers.is_empty())
             {
                 item["declared_access"] = json!({ "field": field, "readers": readers });
             }
-            if document.collection == gents::Collection::DatastoreToolSurface {
+            if document.collection == gents_store::collection::Collection::DatastoreToolSurface {
                 let tools: Vec<&str> = config
                     .datastore_tool_surfaces
                     .iter()
@@ -320,7 +323,9 @@ const REDACTED: &str = "[redacted]";
 /// to. A variable may carry a secret, so a review names variables and where
 /// their values come from, and shows the fields they set only as redacted.
 #[derive(Debug, Default)]
-pub(super) struct VariableFields(Vec<(gents::Collection, Option<String>, String)>);
+pub(super) struct VariableFields(
+    Vec<(gents_store::collection::Collection, Option<String>, String)>,
+);
 
 impl VariableFields {
     /// From the `uses` of install-variable previews.
@@ -336,7 +341,7 @@ impl VariableFields {
             };
             let mut segments = path.trim_start_matches('/').splitn(3, '/');
             let dir = segments.next().unwrap_or_default();
-            let Some(collection) = gents::Collection::ALL
+            let Some(collection) = gents_store::collection::Collection::ALL
                 .iter()
                 .copied()
                 .find(|collection| collection.dir_name() == Some(dir))
@@ -359,7 +364,7 @@ impl VariableFields {
     /// document of its collection, so it applies to each.
     fn fields_of(
         &self,
-        collection: gents::Collection,
+        collection: gents_store::collection::Collection,
         id: Option<&str>,
         ids: &[&str],
     ) -> Vec<String> {
@@ -402,16 +407,20 @@ fn mask_variable_fields(content: &mut Value, masked: &[String]) {
 /// install variable set replaced: a pack may carry the secret its backend
 /// authenticates with, which the review shows only by kind, and a variable's
 /// value is not shown.
-fn content(collection: gents::Collection, document: &Value, masked: &[String]) -> Result<Value> {
+fn content(
+    collection: gents_store::collection::Collection,
+    document: &Value,
+    masked: &[String],
+) -> Result<Value> {
     let mut content = document.clone();
     mask_variable_fields(&mut content, masked);
     let fields = content
         .as_object_mut()
         .context("a configuration document is an object")?;
     fields.retain(|_, value| !value.is_null());
-    if collection == gents::Collection::InferenceBackend {
+    if collection == gents_store::collection::Collection::InferenceBackend {
         if let Some(auth) = fields.get_mut("auth") {
-            let stored: gents::documents::BackendAuth = serde_json::from_value(auth.clone())
+            let stored: gents_documents::BackendAuth = serde_json::from_value(auth.clone())
                 .context("decode the backend's authentication")?;
             if stored.is_stored_secret() {
                 if let Some(auth) = auth.as_object_mut() {
@@ -435,7 +444,7 @@ pub(super) fn collections(
     manifest: &PackManifest,
     asset: impl Fn(&str) -> Result<Vec<u8>>,
 ) -> Result<Option<Vec<String>>> {
-    let Ok(paths) = gents::pack::document_pack_schema_paths(manifest) else {
+    let Ok(paths) = gents_pack::pack::document_pack_schema_paths(manifest) else {
         return Ok(None);
     };
     let mut names = Vec::new();
@@ -457,15 +466,15 @@ pub(super) fn collections(
 /// known before the install: the pack carries schema patches, or the owner
 /// refuses a schema, which the install then reports.
 pub(super) async fn shared_collections(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     manifest: &PackManifest,
     asset: impl Fn(&str) -> Result<Vec<u8>>,
 ) -> Option<Vec<String>> {
     let mut shared = Vec::new();
-    for path in gents::pack::document_pack_schema_paths(manifest).ok()? {
+    for path in gents_pack::pack::document_pack_schema_paths(manifest).ok()? {
         let bytes = asset(path).ok()?;
         let sdl = std::str::from_utf8(&bytes).ok()?;
-        let plan = gents::store::config_client::preview_schema_install(access, sdl)
+        let plan = gents_store::config_client::preview_schema_install(access, sdl)
             .await
             .ok()?;
         shared.extend(plan.field_deltas.into_keys());
@@ -478,13 +487,13 @@ pub(super) async fn shared_collections(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::pack::archive::PackArchive;
+    use gents_pack::pack::archive::PackArchive;
 
     fn fixture(name: &str) -> PackArchive {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../gents/tests/fixtures/packs")
             .join(name);
-        let (bytes, _) = gents::pack::archive::pack_dir(&root).unwrap();
+        let (bytes, _) = gents_pack::pack::archive::pack_dir(&root).unwrap();
         PackArchive::from_bytes(&bytes).unwrap()
     }
 
@@ -501,9 +510,9 @@ mod tests {
             collections(manifest, asset).unwrap(),
             Some(vec!["FixtureJob".to_owned()])
         );
-        let config = gents::pack::load_pack_authoring_config(
+        let config = gents_pack::pack::load_pack_authoring_config(
             manifest,
-            &gents::pack::PackInstallOptions {
+            &gents_pack::pack::PackInstallOptions {
                 node_did: "did:key:zReviewOwner".into(),
             },
             &|path| Ok(archive.asset(path)?.to_vec()),
@@ -539,9 +548,9 @@ mod tests {
     #[test]
     fn a_pack_reports_the_access_policy_its_documents_declare() {
         let archive = fixture("placement_fixture");
-        let config = gents::pack::load_pack_authoring_config(
+        let config = gents_pack::pack::load_pack_authoring_config(
             archive.manifest(),
-            &gents::pack::PackInstallOptions {
+            &gents_pack::pack::PackInstallOptions {
                 node_did: "did:key:zReviewOwner".into(),
             },
             &|path| Ok(archive.asset(path)?.to_vec()),
@@ -579,7 +588,7 @@ mod tests {
             })
         };
         let redacted = content(
-            gents::Collection::InferenceBackend,
+            gents_store::collection::Collection::InferenceBackend,
             &backend(json!({"kind": "api_key", "key": "sk-live-secret"})),
             &[],
         )
@@ -590,7 +599,7 @@ mod tests {
         );
         assert_eq!(redacted["endpoint"], "https://api.example.com/v1");
         let aws = content(
-            gents::Collection::InferenceBackend,
+            gents_store::collection::Collection::InferenceBackend,
             &backend(json!({
                 "kind": "aws_credentials", "access_key_id": "AKIA", "secret_access_key": "s",
             })),
@@ -600,7 +609,12 @@ mod tests {
         assert!(!aws.to_string().contains("AKIA"));
         let named = backend(json!({"kind": "environment", "variable": "HOSTED_KEY"}));
         assert_eq!(
-            content(gents::Collection::InferenceBackend, &named, &[]).unwrap()["auth"],
+            content(
+                gents_store::collection::Collection::InferenceBackend,
+                &named,
+                &[]
+            )
+            .unwrap()["auth"],
             named["auth"]
         );
     }
@@ -609,11 +623,11 @@ mod tests {
     fn a_data_tool_surface_reports_its_tools() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../examples/ux-plugins/board_docs");
-        let (bytes, _) = gents::pack::archive::pack_dir(&root).unwrap();
+        let (bytes, _) = gents_pack::pack::archive::pack_dir(&root).unwrap();
         let archive = PackArchive::from_bytes(&bytes).unwrap();
-        let config = gents::pack::load_pack_config(
+        let config = gents_pack::pack::load_pack_config(
             archive.manifest(),
-            &gents::pack::PackInstallOptions {
+            &gents_pack::pack::PackInstallOptions {
                 node_did: "did:key:zReviewOwner".into(),
             },
             &|path| Ok(archive.asset(path)?.to_vec()),

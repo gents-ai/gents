@@ -2,10 +2,10 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use gents::documents::{EvalSplit, EvalTier};
 use gents::eval::{
     load_run, load_verdicts, Invalidation, OutcomeKind, ProviderReason, RunHeader, VerdictRecord,
 };
+use gents_documents::{EvalSplit, EvalTier};
 use gents_eval::checks::verdict_detail;
 use gents_eval::report::build::reason_code;
 use gents_eval::report::{

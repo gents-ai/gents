@@ -53,7 +53,7 @@ fn generated_turn_budget_cases_drive_every_completion_dispatch() {
             .turn_input_tokens
             .iter()
             .map(|tokens| {
-                crate::inference::compaction::ReductionAdmission::for_context(
+                gents_inference::compaction::ReductionAdmission::for_context(
                     crate::turn::provider_input::budget::ContextCalibration::default()
                         .context(*tokens),
                     compaction_budget,
@@ -258,7 +258,7 @@ fn generated_aggregate_token_budget_cases_drive_the_owned_loop_ledger() {
             "{}: each prior usage row needs both durable components",
             case.name
         );
-        let used = crate::provider_usage::sum_charged_from_persisted_parts(
+        let used = gents_loop::provider_usage::sum_charged_from_persisted_parts(
             case.prior_prompt_tokens
                 .iter()
                 .zip(&case.prior_completion_tokens)
@@ -300,7 +300,7 @@ fn generated_aggregate_token_budget_cases_drive_the_owned_loop_ledger() {
         });
         assert_eq!(
             usage
-                .map(crate::provider_usage::charged_usage_total)
+                .map(gents_loop::provider_usage::charged_usage_total)
                 .unwrap_or_default(),
             case.charged_tokens,
             "{}: charged total drifted from Lean",
@@ -375,7 +375,7 @@ async fn aggregate_budget_charges_tool_turn_before_clamping_later_dispatch() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("use the tool")),
         Vec::new(),
         Arc::new(vec![echo_tool()]),
@@ -427,7 +427,7 @@ async fn nested_compaction_charges_the_same_request_budget() {
                 config,
             )
             .await
-            .map_err(crate::inference::compaction::CompactionError::GuidedBudgetExhausted)?;
+            .map_err(gents_inference::compaction::CompactionError::GuidedBudgetExhausted)?;
             Ok(TurnCompactionOutcome::Reduced {
                 messages: vec![TaggedMessage::unassociated(Message::user(
                     "compacted prompt",
@@ -440,7 +440,7 @@ async fn nested_compaction_charges_the_same_request_budget() {
 
     let collected = collect_scripted_stream(run_loop_stream(
         outer_model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("x".repeat(8_000))),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -489,7 +489,7 @@ async fn provider_view_repair_is_not_reported_as_a_durable_compaction() {
 
     let collected = collect_scripted_stream(run_loop_stream(
         model,
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("x".repeat(8_000))),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -510,7 +510,7 @@ async fn provider_view_repair_is_not_reported_as_a_durable_compaction() {
 /// `commitRequestLocalAfterRebuild` for the matching rebuilt result.
 #[tokio::test]
 async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fits() {
-    use crate::store::identity::NodeIdentity as _;
+    use gents_store::identity::NodeIdentity as _;
     let cases = gents_lean_vocab::lean_compaction_projection_join_cases();
     let committed = |result: &str| {
         cases
@@ -528,15 +528,15 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
         let data_path =
             std::env::temp_dir().join(format!("staged-turn-reduction-{}", uuid::Uuid::new_v4()));
         let identity_home = tempfile::tempdir().unwrap();
-        let root = crate::store::identity::KeyIdentity::load_or_create(
+        let root = gents_store::identity::KeyIdentity::load_or_create(
             identity_home.path().join("node.key"),
             None,
         )
         .unwrap();
-        let binding = crate::store::identity::provision_agent_identity(&root).unwrap();
-        let agent = crate::store::identity::resolve_agent_identity(&root, &binding).unwrap();
+        let binding = gents_store::identity::provision_agent_identity(&root).unwrap();
+        let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
         let node = Arc::new(
-            crate::store::test_support::node_builder()
+            gents_store::test_support::node_builder()
                 .data_path(&data_path)
                 .with_node_identity_did(root.did())
                 .build()
@@ -544,9 +544,9 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
                 .unwrap(),
         );
         ensure_runtime_schemas(&node).await.unwrap();
-        let root_did = crate::store::graphql::escape_graphql_string(root.did());
-        let agent_did = crate::store::graphql::escape_graphql_string(agent.did());
-        crate::ConfigAccess::local_managed_agent(node.clone(), agent.did().parse().unwrap(), agent.as_ref()).unwrap()
+        let root_did = gents_store::graphql::escape_graphql_string(root.did());
+        let agent_did = gents_store::graphql::escape_graphql_string(agent.did());
+        gents_store::config_client::ConfigAccess::local_managed_agent(node.clone(), agent.did().parse().unwrap(), agent.as_ref()).unwrap()
             .write("test.reduction.session", &format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "session-3283", node_did: "{root_did}", agent_did: "{agent_did}", created_at: "2026-01-01T00:00:00Z" }}) {{ _docID }} }}"#)).await.unwrap();
         let request_doc_id = "request-doc-3283";
         let model = ScriptedModel::new(vec![
@@ -578,7 +578,7 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
                         .collect::<Vec<_>>()
                 };
                 let associations =
-                    crate::session::provider_context_reduction::ReplayAssociations::from_tagged_split(
+                    gents_session::session::provider_context_reduction::ReplayAssociations::from_tagged_split(
                         Vec::new(),
                         &tagged(&compacted_prefix),
                         &tagged(&retained_suffix),
@@ -589,8 +589,8 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
                     request_commit_cid: "claim-cid-3283".to_string(),
                     canonical_through: None,
                 };
-                crate::session::provider_context_reduction::stage(
-                    crate::session::provider_context_reduction::NewProviderContextReduction {
+                gents_session::session::provider_context_reduction::stage(
+                    gents_session::session::provider_context_reduction::NewProviderContextReduction {
                         agent_did: &agent_did,
                         node_did: &node_did,
                         requester_did: None,
@@ -621,7 +621,7 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
         // real clock rather than the paused-clock scripted collector.
         let stream = run_loop_stream(
             model,
-            None::<crate::tools::call::hook::DefraSessionHook>,
+            None::<gents_toolcalls::call::hook::DefraSessionHook>,
             TaggedMessage::unassociated(Message::user("x".repeat(8_000))),
             Vec::new(),
             Arc::new(Vec::new()),
@@ -643,13 +643,13 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
 
         // The reduction rows are agent-owned, so they are read as the Agent that
         // wrote them; the node identity cannot see them.
-        let agent_access = crate::ConfigAccess::local_managed_agent(
+        let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
             node.clone(),
             agent.did().parse().unwrap(),
             agent.as_ref(),
         )
         .unwrap();
-        let rows = crate::session::provider_context_reduction::load_for_request(
+        let rows = gents_session::session::provider_context_reduction::load_for_request(
             &agent_access,
             request_doc_id,
         )
@@ -688,10 +688,10 @@ async fn per_turn_compaction_preserves_canonical_budget_exhaustion() {
     loop_config.turn_compactor = Some(Arc::new(move |_request| {
         Box::pin(async move {
             Err(
-                crate::inference::compaction::CompactionError::GuidedBudgetExhausted(
+                gents_inference::compaction::CompactionError::GuidedBudgetExhausted(
                     gents_loop::loop_stream::OneShotError::LoopStream(
                         rig_compat::loop_verdict_error(
-                            crate::error::LoopVerdict::AggregateTokenBudgetExhausted,
+                            gents_loop::error::LoopVerdict::AggregateTokenBudgetExhausted,
                             format!(
                                 "{AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX}limit=10000, used=9000, \
                      estimated_input_tokens=2000, remaining=1000"
@@ -706,7 +706,7 @@ async fn per_turn_compaction_preserves_canonical_budget_exhaustion() {
 
     let collected = collect_scripted_stream(run_loop_stream(
         model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("x".repeat(8_000))),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -748,7 +748,7 @@ async fn aggregate_budget_charges_retracted_structured_output_attempt() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("return json")),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -780,7 +780,7 @@ async fn exact_aggregate_exhaustion_allows_a_valid_terminal_response() {
 
     let collected = collect_scripted_stream(run_loop_stream(
         model,
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("finish")),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -804,7 +804,7 @@ async fn exact_aggregate_exhaustion_rejects_tool_intent_before_dispatch() {
 
     let collected = collect_scripted_stream(run_loop_stream(
         model,
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("use the tool")),
         Vec::new(),
         Arc::new(vec![Box::new(CountingTool {
@@ -837,7 +837,7 @@ async fn aggregate_budget_fails_closed_on_provider_reported_overrun() {
 
     let collected = collect_scripted_stream(run_loop_stream(
         model,
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("finish")),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -877,7 +877,7 @@ async fn completion_output_ceiling_is_clamped_to_remaining_context() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(prompt),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -918,7 +918,7 @@ async fn zero_remaining_capacity_is_not_captured_or_dispatched() {
 
     let collected = collect_scripted_stream(run_loop_stream(
         model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(prompt),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -991,7 +991,7 @@ async fn reduction_cannot_fit_is_typed_and_never_dispatched() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("an indivisible current prompt")),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -1007,8 +1007,8 @@ async fn reduction_cannot_fit_is_typed_and_never_dispatched() {
     assert!(
         matches!(
             error.cause(),
-            crate::error::LoopFailureCause::Completion {
-                failure: crate::error::CompletionFailure::Request,
+            gents_loop::error::LoopFailureCause::Completion {
+                failure: gents_loop::error::CompletionFailure::Request,
                 ..
             }
         ),
@@ -1018,10 +1018,10 @@ async fn reduction_cannot_fit_is_typed_and_never_dispatched() {
         Some(&error as &(dyn std::error::Error + 'static)),
         |cause| cause.source(),
     )
-    .find_map(|cause| cause.downcast_ref::<crate::inference::compaction::ReductionError>());
+    .find_map(|cause| cause.downcast_ref::<gents_inference::compaction::ReductionError>());
     assert!(matches!(
         reduction,
-        Some(crate::inference::compaction::ReductionError::CannotFit)
+        Some(gents_inference::compaction::ReductionError::CannotFit)
     ));
     assert_eq!(capture_calls.load(Ordering::SeqCst), 0);
     assert!(model.seen_max_tokens().await.is_empty());
@@ -1070,7 +1070,7 @@ async fn final_fit_failure_after_compaction_is_typed_and_never_dispatched() {
 
     let collected = collect_scripted_stream(run_loop_stream(
         model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(prompt),
         (vec![Message::assistant("x".repeat(20_000))])
             .into_iter()
@@ -1170,7 +1170,7 @@ async fn later_completion_turn_is_compacted_before_provider_dispatch() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(prompt),
         Vec::new(),
         tools,
@@ -1252,7 +1252,7 @@ async fn aggregate_budget_fails_closed_on_mid_stream_error_before_retry() {
 
         let collected = collect_scripted_stream(run_loop_stream(
             model.clone(),
-            None::<crate::tools::call::hook::DefraSessionHook>,
+            None::<gents_toolcalls::call::hook::DefraSessionHook>,
             TaggedMessage::unassociated(if with_tool {
                 Message::user("use the echo tool")
             } else {
@@ -1299,7 +1299,7 @@ async fn mid_stream_failure_after_tool_budget_exhausted_fails() {
         calls: calls.clone(),
     })];
     let mut loop_config = config(4);
-    loop_config.retry_policy = crate::runtime::agent::completion_retry::CompletionRetryPolicy {
+    loop_config.retry_policy = gents_loop::completion_retry::CompletionRetryPolicy {
         transport_backoff: Vec::new(),
         max_resample: 0,
         max_empty_resample: 0,
@@ -1309,7 +1309,7 @@ async fn mid_stream_failure_after_tool_budget_exhausted_fails() {
 
     let stream = run_loop_stream(
         model,
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("use the echo tool")),
         Vec::new(),
         Arc::new(tools),
@@ -1395,7 +1395,7 @@ fn generated_budget_cases_drive_dynamic_output_compaction_trigger() {
             case.name
         );
         assert_eq!(
-            crate::inference::compaction::ReductionAdmission::for_context(
+            gents_inference::compaction::ReductionAdmission::for_context(
                 crate::turn::provider_input::budget::ContextCalibration::default()
                     .context(input_tokens),
                 compaction_budget,
@@ -1463,7 +1463,7 @@ fn generated_compaction_trigger_cases_drive_the_production_trigger() {
             case.name
         );
         let admission =
-            crate::inference::compaction::ReductionAdmission::for_context(context, budget)
+            gents_inference::compaction::ReductionAdmission::for_context(context, budget)
                 .map(|admission| (admission.input_tokens(), admission.effective_input_budget()));
         assert_eq!(
             admission,
@@ -1525,7 +1525,7 @@ async fn provider_context_overflow_compacts_once_and_retries() {
 
     let collected = collect_scripted_stream(run_loop_stream(
         model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         live_sized_prompt(),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -1626,7 +1626,7 @@ async fn each_completion_turn_may_compact_once_after_an_overflow() {
 
     let collected = collect_scripted_stream(run_loop_stream(
         model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         live_sized_prompt(),
         Vec::new(),
         Arc::new(vec![echo_tool()]),
@@ -1662,7 +1662,7 @@ async fn provider_context_overflow_without_a_compactor_fails_with_its_reason() {
 
     let collected = collect_scripted_stream(run_loop_stream(
         model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         live_sized_prompt(),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -1682,7 +1682,7 @@ async fn provider_context_overflow_without_a_compactor_fails_with_its_reason() {
 }
 
 type CapturedAccounting =
-    Arc<std::sync::Mutex<Vec<crate::inference::rendered_request::ContextAccounting>>>;
+    Arc<std::sync::Mutex<Vec<gents_inference::rendered_request::ContextAccounting>>>;
 
 fn capture_accounting(loop_config: &mut LoopConfig) -> CapturedAccounting {
     let captured = CapturedAccounting::default();
@@ -1713,7 +1713,7 @@ async fn calibrated_estimate_compacts_before_the_provider_rejects_the_input() {
 
     let collected = collect_scripted_stream(run_loop_stream(
         model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         live_sized_prompt(),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -1787,7 +1787,7 @@ async fn provider_usage_calibrates_the_next_dispatch() {
 
     let collected = collect_scripted_stream(run_loop_stream(
         model,
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("x".repeat(40_000))),
         Vec::new(),
         Arc::new(vec![echo_tool()]),
@@ -1837,7 +1837,7 @@ async fn anchored_compaction_run(
     first_output_tokens: u64,
 ) -> (
     Vec<(usize, usize)>,
-    Vec<crate::inference::rendered_request::ContextAccounting>,
+    Vec<gents_inference::rendered_request::ContextAccounting>,
 ) {
     let model = UsageScriptedModel::new(vec![
         usage_echo_tool_turn(UsageResponse {
@@ -1860,7 +1860,7 @@ async fn anchored_compaction_run(
 
     let collected = collect_scripted_stream(run_loop_stream(
         model,
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("x".repeat(1_600_000))),
         Vec::new(),
         Arc::new(vec![echo_tool()]),
@@ -1927,7 +1927,7 @@ async fn pre_turn_admissions(incoming_bytes: usize) -> usize {
 
     let collected = collect_scripted_stream(run_loop_stream(
         model,
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("y".repeat(incoming_bytes))),
         history,
         Arc::new(Vec::new()),

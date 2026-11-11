@@ -4,9 +4,9 @@ pub(crate) mod configuration;
 pub(crate) mod replay;
 
 #[cfg(test)]
-use crate::inference::backends::provider::BackendProviderKind;
+use gents_inference::backends::provider::BackendProviderKind;
 #[cfg(test)]
-use crate::openai_wire::OpenAiWireApi;
+use gents_loop::openai_wire::OpenAiWireApi;
 #[cfg(test)]
 use serde_json::Value;
 

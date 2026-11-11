@@ -10,12 +10,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::store::config_client::ConfigAccess;
-use gents::tools::background::job::keys::{job_session_id, job_spawn_key};
+use gents_protocol::job::keys::{job_session_id, job_spawn_key};
 use gents_protocol::job::{
     JobBudget, JobCeiling, JobEffects, JobGuestPin, JobOrigin, JobPauseReason, JobPin, JobProgress,
     JobSpawn, JobState, JobStepOutput,
 };
+use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -488,7 +488,7 @@ async fn children_of(graphql: &str, request_id: &str) -> Result<Vec<Value>> {
             _docID request_id input caused_by_trigger_kind caused_by_parent_request_id
         }}
     }}"#,
-            gents::session::public_request_filter(&format!(
+            gents_session::session::public_request_filter(&format!(
                 r#"caused_by_parent_request_id: {{ _eq: "{}" }}"#,
                 escape_graphql_string(request_id)
             ))

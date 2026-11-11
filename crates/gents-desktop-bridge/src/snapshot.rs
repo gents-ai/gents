@@ -112,10 +112,10 @@ async fn build_bootstrap_summary_raw(
 fn read_stored_init_config(
     node_home: &std::path::Path,
 ) -> (
-    Option<gents::store::local::home::StoredInitConfig<String, String>>,
+    Option<gents_store::local::home::StoredInitConfig<String, String>>,
     InitConfigStatus,
 ) {
-    let path = gents::store::local::home::init_config_path(node_home);
+    let path = gents_store::local::home::init_config_path(node_home);
     let file = match std::fs::File::open(&path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -125,7 +125,7 @@ fn read_stored_init_config(
     };
     let config = match serde_json::from_reader::<
         _,
-        gents::store::local::home::StoredInitConfig<String, String>,
+        gents_store::local::home::StoredInitConfig<String, String>,
     >(file)
     {
         Ok(config) if !config.node_did.trim().is_empty() => config,
@@ -136,9 +136,12 @@ fn read_stored_init_config(
 
 pub(crate) fn resolve_node_home_tool_ceiling(
     node_home: &std::path::Path,
-) -> Result<(gents::ToolCeiling, &'static str), String> {
+) -> Result<(gents_tools::surface::ToolCeiling, &'static str), String> {
     let Some(config) = read_init_ceiling(node_home) else {
-        return Ok((gents::ToolCeiling::meta_only(), "default_no_init_json"));
+        return Ok((
+            gents_tools::surface::ToolCeiling::meta_only(),
+            "default_no_init_json",
+        ));
     };
 
     let tool_root = config
@@ -155,12 +158,14 @@ pub(crate) fn resolve_node_home_tool_ceiling(
         .as_deref()
     {
         None | Some("metaonly") | Some("meta_only") => {
-            Ok((gents::ToolCeiling::meta_only(), "init_json"))
+            Ok((gents_tools::surface::ToolCeiling::meta_only(), "init_json"))
         }
         Some("readonly") => Ok((
             match tool_root.as_deref() {
-                Some(root) => gents::ToolCeiling::readonly_at(std::path::PathBuf::from(root)),
-                None => gents::ToolCeiling::readonly(),
+                Some(root) => {
+                    gents_tools::surface::ToolCeiling::readonly_at(std::path::PathBuf::from(root))
+                }
+                None => gents_tools::surface::ToolCeiling::readonly(),
             },
             "init_json",
         )),
@@ -169,7 +174,7 @@ pub(crate) fn resolve_node_home_tool_ceiling(
                 "init.json has readwrite tool_ceiling but no tool_root".to_string()
             })?;
             Ok((
-                gents::ToolCeiling::readwrite(std::path::PathBuf::from(root)),
+                gents_tools::surface::ToolCeiling::readwrite(std::path::PathBuf::from(root)),
                 "init_json",
             ))
         }

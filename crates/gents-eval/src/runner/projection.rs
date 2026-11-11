@@ -2,7 +2,7 @@ use sha2::{Digest, Sha256};
 
 use crate::runner::{TrialEvidence, VerdictRow};
 use crate::{OutcomeKind, StageCompletion, TrialCompletion, VerdictDraft};
-use gents::documents::{EvalCase, EvalSplit};
+use gents_documents::{EvalCase, EvalSplit};
 
 pub(super) fn verdict_draft(
     run_id: &str,

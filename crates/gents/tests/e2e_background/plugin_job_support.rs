@@ -1,19 +1,20 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use gents::documents::{AgentTools, IntegrationTools, PluginToolRef, Tools};
-use gents::pack::archive::{pack_dir, PackArchive};
-use gents::pack::{
+use gents::runtime::embedded::EmbeddedHome;
+use gents::{DocumentRuntimeOptions, Gents};
+use gents_documents::{AgentTools, IntegrationTools, PluginToolRef, Tools};
+use gents_pack::pack::archive::{pack_dir, PackArchive};
+use gents_pack::pack::{
     install_prepared_document_pack, load_pack_config, prepare_document_pack_install, DriftPolicy,
     InstalledVia, PackInferenceBindings, PackInstallOptions,
 };
-use gents::runtime::embedded::EmbeddedHome;
-use gents::tools::background::job::job::{
+use gents_store::{config_client::ConfigAccess, identity::NodeIdentity};
+use gents_toolcalls::background::job::job::{
     JobChildState, JobControlRequest, JobEffects, JobGuestPin, JobPolicy, JobReadError, JobSpawn,
     JobState, JobStepOutput, JobView, PluginJobSettings,
 };
-use gents::tools::background::job::view::{load_job_view, JobKey};
-use gents::{ConfigAccess, DocumentRuntimeOptions, Gents, NodeIdentity};
+use gents_toolcalls::background::job::view::{load_job_view, JobKey};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -191,7 +192,7 @@ pub(crate) async fn install_job_fixture(
         false,
         InstalledVia::Operator,
         DriftPolicy::Refuse,
-        &gents::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .expect("install the job fixture pack");
@@ -238,7 +239,7 @@ pub(crate) async fn install_job_fixture(
             ..Default::default()
         },
         vec![(
-            gents::Collection::AgentTarget,
+            gents_store::collection::Collection::AgentTarget,
             serde_json::to_value(agent_target(&did, CHILD, &did, &child_did))
                 .expect("serialize the child target"),
         )],
@@ -368,7 +369,7 @@ pub(crate) async fn reboot_job_harness(
             .expect("parent creation nonce")
             .into(),
     };
-    let agent = gents::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+    let agent = gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
         .expect("resolve retained parent Agent");
     let child_did = rows
         .iter()
@@ -500,7 +501,7 @@ async fn scripted_job_adopts_one_child_and_completes() {
         .clone()
         .execute(&format!(
             r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state plugin_execution_receipt }} }}"#,
-            gents::store::graphql::escape_graphql_string(&row_doc_id),
+            gents_store::graphql::escape_graphql_string(&row_doc_id),
         ))
         .await
         .expect("read the job row");

@@ -40,7 +40,7 @@ pub fn reply(request: &Value) -> Option<ChatAction> {
 }
 
 pub async fn verify(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     client: &mut Attachment,
     id: &mut u32,
     node_did: &str,
@@ -61,7 +61,7 @@ pub async fn verify(
         .as_str()
         .context("missing retained caller identity in dropped reply")?;
     let query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}, purpose: {{_eq: \"normal\"}}}}) {{_docID request_id session_id content admission_signature lifecycle_state}} }}",
-    gents::store::graphql::escape_graphql_string(node_did), gents::store::graphql::escape_graphql_string(session));
+    gents_store::graphql::escape_graphql_string(node_did), gents_store::graphql::escape_graphql_string(session));
     let rows = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             let rows = access.execute(&query).await?;
@@ -126,13 +126,13 @@ pub async fn verify(
             let source = source_id.clone();
             Box::pin(async move {
                 let child =
-                    gents::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                    gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
                         txn, &node, &child,
                     )
                     .await?
                     .context("missing retained child")?;
                 let source =
-                    gents::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                    gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
                         txn, &node, &source,
                     )
                     .await?
@@ -158,7 +158,7 @@ pub async fn verify(
             && provenance.edit_client_did.as_deref() == Some(client_did),
         "the child changed its exact retained edit binding"
     );
-    let query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}, purpose: {{_eq: \"normal\"}}}}) {{_docID request_id content lifecycle_state}} AgentMessage(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{_docID sequence message_key}} }}", gents::store::graphql::escape_graphql_string(node_did),gents::store::graphql::escape_graphql_string(&child_id),gents::store::graphql::escape_graphql_string(node_did),gents::store::graphql::escape_graphql_string(&child_id));
+    let query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}, purpose: {{_eq: \"normal\"}}}}) {{_docID request_id content lifecycle_state}} AgentMessage(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{_docID sequence message_key}} }}", gents_store::graphql::escape_graphql_string(node_did),gents_store::graphql::escape_graphql_string(&child_id),gents_store::graphql::escape_graphql_string(node_did),gents_store::graphql::escape_graphql_string(&child_id));
     let fork_rows = access.execute(&query).await?;
     let requests = fork_rows["data"]["AgentRequest"]
         .as_array()

@@ -1,25 +1,25 @@
 use std::sync::Arc;
 
-use crate::inference::llm::message::Message;
-use crate::inference::llm::rig_compat::{ProviderClient, ProviderModel};
-use crate::inference::llm::tool::ToolDyn;
 use anyhow::{anyhow, Context, Result};
 use defra_node::Node as EmbeddedNode;
+use gents_inference::llm::message::Message;
+use gents_inference::llm::rig_compat::{ProviderClient, ProviderModel};
 use gents_loop::loop_stream::TaggedMessage;
 use gents_loop::output_obligation::OutputObligationCheck;
+use gents_loop::tool::ToolDyn;
 
-use crate::inference::resolved::ResolvedAgent;
-use crate::request::lifecycle::TerminalizeResult;
-use crate::request::lifecycle::{
-    ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome, TriggerLineage,
-};
-use crate::request::streaming::DefraStreamWriter;
 use crate::runtime::agent::stream_processor::{StreamAction, StreamProcessor};
-use crate::tools::call::hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
-use crate::tools::surface::{self, ToolRuntimeContext};
 use crate::turn::completion_factory::loop_config;
 use crate::turn::prompt::{LayeredPromptBuilder, PromptBuilder};
 use futures::StreamExt;
+use gents_inference::resolved::ResolvedAgent;
+use gents_session::request::lifecycle::TerminalizeResult;
+use gents_session::request::lifecycle::{
+    ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome, TriggerLineage,
+};
+use gents_session::request::streaming::DefraStreamWriter;
+use gents_toolcalls::call::hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
+use gents_tools::surface::{self, ToolRuntimeContext};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OneshotRunResult {
@@ -31,7 +31,7 @@ pub async fn run_openai_oneshot_admitted(
     node: Arc<EmbeddedNode>,
     agent: &ResolvedAgent,
     prompt: &str,
-    admission: &crate::store::local::backend_protection::BackendAdmission,
+    admission: &gents_store::local::backend_protection::BackendAdmission,
 ) -> Result<OneshotRunResult> {
     run_openai_oneshot_with_tools_admitted(node, agent, Vec::new(), prompt, admission).await
 }
@@ -41,14 +41,14 @@ pub async fn run_openai_oneshot_with_tools_admitted(
     agent: &ResolvedAgent,
     extra_tools: Vec<Box<dyn ToolDyn>>,
     prompt: &str,
-    admission: &crate::store::local::backend_protection::BackendAdmission,
+    admission: &gents_store::local::backend_protection::BackendAdmission,
 ) -> Result<OneshotRunResult> {
     admission.validate(&node).await?;
-    crate::store::schema::migration::ensure_all_runtime_migrations(node.clone()).await?;
+    gents_store::schema::migration::ensure_all_runtime_migrations(node.clone()).await?;
 
     let api_key = if matches!(
         &agent.backend_auth,
-        crate::documents::BackendAuth::Credential { .. }
+        gents_documents::BackendAuth::Credential { .. }
     ) {
         "no-key".to_owned()
     } else {
@@ -61,7 +61,7 @@ pub async fn run_openai_oneshot_with_tools_admitted(
         .resolve(
             &node,
             agent.node_did(),
-            &crate::tools::plugin_host::NoPluginHost,
+            &gents_tools::plugin_host::NoPluginHost,
         )
         .await?;
     let allowed_targets = surface::resolve_agent_target_descriptions(&tool_surface);
@@ -77,7 +77,7 @@ pub async fn run_openai_oneshot_with_tools_admitted(
         tool_surface.background_tools(),
     );
 
-    let client = crate::inference::llm::backend_client::build_backend_client(
+    let client = gents_inference::llm::backend_client::build_backend_client(
         tool_runtime.usage_cache.clone(),
         node.clone(),
         agent,
@@ -88,7 +88,7 @@ pub async fn run_openai_oneshot_with_tools_admitted(
     let provider_family = Some(client.provider_family().to_owned());
     let replay_issuer = client.replay_issuer()?;
 
-    crate::inference::llm::backend_client::with_backend_client!(client, |client| {
+    gents_inference::llm::backend_client::with_backend_client!(client, |client| {
         run_oneshot_with_completion_client(
             node,
             agent,
@@ -113,10 +113,10 @@ struct OneshotInputs<'a> {
     replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
     prompt: &'a str,
     prompt_builder: LayeredPromptBuilder,
-    output_obligations: &'a [(String, crate::documents::WriteToolOutputObligation)],
+    output_obligations: &'a [(String, gents_documents::WriteToolOutputObligation)],
     tools: Arc<Vec<Box<dyn ToolDyn>>>,
     background_tool_registry: BackgroundToolRegistry,
-    lsp_pool: crate::tools::native::lsp::LspPool,
+    lsp_pool: gents_tools::native::lsp::LspPool,
 }
 
 async fn run_oneshot_with_completion_client<C>(
@@ -143,7 +143,7 @@ where
         agent,
         prompt_builder.preamble().to_owned(),
         tools.len(),
-        crate::inference::rendered_request::CaptureScopeKind::OneShot,
+        gents_inference::rendered_request::CaptureScopeKind::OneShot,
     );
     config.replay.issuer = replay_issuer;
     crate::claude_request_context::apply(
@@ -168,7 +168,7 @@ where
 
 async fn terminalize_oneshot_setup_failure(
     lifecycle: &mut RequestLifecycle,
-    lsp_pool: &crate::tools::native::lsp::LspPool,
+    lsp_pool: &gents_tools::native::lsp::LspPool,
     error: anyhow::Error,
 ) -> anyhow::Error {
     let reason = error.to_string();
@@ -203,9 +203,9 @@ async fn run_oneshot_owned<M>(
     prompt: &str,
     tools: Arc<Vec<Box<dyn ToolDyn>>>,
     mut config: crate::runtime::agent::loop_stream::LoopConfig,
-    output_obligations: &[(String, crate::documents::WriteToolOutputObligation)],
+    output_obligations: &[(String, gents_documents::WriteToolOutputObligation)],
     background_tool_registry: BackgroundToolRegistry,
-    lsp_pool: crate::tools::native::lsp::LspPool,
+    lsp_pool: gents_tools::native::lsp::LspPool,
 ) -> Result<OneshotRunResult>
 where
     M: ProviderModel,
@@ -226,7 +226,7 @@ where
     anyhow::ensure!(
         matches!(
             lifecycle.claim_with_identity().await?,
-            crate::request::lifecycle::ClaimOutcome::Claimed
+            gents_session::request::lifecycle::ClaimOutcome::Claimed
         ),
         "new one-shot request was not claimed"
     );
@@ -281,15 +281,15 @@ where
     let output_obligation_gate =
         output_obligation_gate.map(|gate| Arc::new(gate) as Arc<dyn OutputObligationCheck>);
     config.output_obligation_gate = output_obligation_gate.clone();
-    let capture_scope = crate::inference::rendered_request::scope_from_factory(
-        crate::inference::rendered_request::context_for_claimed_request(
+    let capture_scope = gents_inference::rendered_request::scope_from_factory(
+        gents_inference::rendered_request::context_for_claimed_request(
             &request,
             &request_commit_cid,
             agent.model_name.clone(),
             provider_family,
         ),
         Some(
-            &crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+            &gents_inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                 node.clone(),
                 agent.agent_identity.as_ref(),
             )?,
@@ -385,12 +385,12 @@ where
             "provider stream ended without an explicit terminal response"
         ))
     };
-    let scoped_inference = crate::tools::runtime_context::scope_tool_request_identity(
+    let scoped_inference = gents_loop::tool_call_lifecycle::runtime::scope_tool_request_identity(
         request.requester_did.clone(),
         Some(request.node_did.clone()),
         Some(request.agent_did.clone()),
         Some(request.request_id.clone()),
-        crate::tools::runtime_context::scope_request_tool_execution_with_trigger_context(
+        gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
             deadline,
             tokio_util::sync::CancellationToken::new(),
             None,
@@ -402,7 +402,7 @@ where
             async {
                 match capture_scope {
                     Some(scope) => {
-                        crate::inference::rendered_request::scope::scope_request(scope, inference)
+                        gents_inference::rendered_request::scope::scope_request(scope, inference)
                             .await
                     }
                     None => inference.await,
@@ -461,8 +461,8 @@ where
                     std::slice::from_ref(&agent.agent_identity),
                 )
                 .await?;
-                crate::triggers::engine::durable::recover_outcomes_with_access(
-                    &crate::ConfigAccess::local_managed_agent(
+                gents_automation::triggers::engine::durable::recover_outcomes_with_access(
+                    &gents_store::config_client::ConfigAccess::local_managed_agent(
                         node.clone(),
                         identity::Did::new(&request.agent_did)?,
                         agent.agent_identity.as_ref(),

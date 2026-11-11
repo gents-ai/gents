@@ -4,9 +4,9 @@
 // terminality before the owner's transaction; a request that becomes terminal
 // concurrently may still be latched, which the runtime tolerates.
 
-use gents::store::config_client::ConfigAccess;
-use gents::store::graphql::escape_graphql_string;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;
 
 /// The request's interrupt latch, and whether an earlier interrupt set it.
@@ -99,7 +99,7 @@ pub async fn interrupt_request_on(
             "request {request_id} is already terminal and cannot be interrupted"
         ));
     }
-    gents::request::interrupt::interrupt_request_by_doc_id_with_access(
+    gents_session::request::interrupt::interrupt_request_by_doc_id_with_access(
         access,
         &target.doc_id,
         &target.node_did,

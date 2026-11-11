@@ -2,15 +2,15 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
 use chrono::Utc;
-use gents::documents::ToolServiceRegistry;
-use gents::store::graphql::escape_graphql_string;
-use gents::{
-    run_health_check_cycle_for_actor, HealthCheckerOptions, McpHealthCheckService, McpPool,
-    ServiceHealthMap,
-};
 use gents_desktop_core::client::ClientCore;
+use gents_documents::ToolServiceRegistry;
 use gents_protocol::row::ToolServiceHealthStateRow;
 use gents_protocol::tool_service_health::ToolServiceHealthState;
+use gents_store::graphql::escape_graphql_string;
+use gents_tools::{
+    mcp::health::run_health_check_cycle_for_actor, mcp::health::HealthCheckerOptions,
+    mcp::health::McpHealthCheckService, mcp::health::ServiceHealthMap, mcp::pool::McpPool,
+};
 
 use super::super::types::{MCPServiceHealthView, McpServiceProbeResult};
 
@@ -236,11 +236,11 @@ mod probe_scope_tests {
         let first = served.node_did();
         let second = other_runtime.node_did();
         for (node, hostname) in [(first, "first"), (second, "second")] {
-            use gents::documents::apply_desired_state_plan;
-            use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+            use gents_documents::apply_desired_state_plan;
+            use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
             let value = serde_json::json!({"node_did":node,"service_id":"shared","hostname":hostname,"mcp_port":8080,"enabled":true});
             let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                collection: gents::Collection::ToolServiceRegistry,
+                collection: gents_store::collection::Collection::ToolServiceRegistry,
                 add: value.clone(),
                 update: value,
             }])?;
@@ -251,7 +251,7 @@ mod probe_scope_tests {
                         apply_desired_state_plan(
                             txn,
                             plan,
-                            &gents::inference::resolved::ProviderProfilePolicy,
+                            &gents_inference::resolved::ProviderProfilePolicy,
                         )
                         .await
                     })

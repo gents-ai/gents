@@ -1,11 +1,12 @@
 use gents::defra_node::{EventName, Node as EmbeddedNode};
-use gents::inference::llm::message::{
+use gents_inference::llm::message::{
     AssistantContent, Message, Text, ToolResultContent, UserContent,
 };
-use gents::session::tool_call_state::{CancelCause, ToolCallState};
-use gents::store::graphql::escape_graphql_string;
-use gents::tools::call::lifecycle::ToolCallLifecycle;
-use gents::{BackgroundExecutionRegistry, NodeIdentity};
+use gents_session::session::tool_call_state::{CancelCause, ToolCallState};
+use gents_store::graphql::escape_graphql_string;
+use gents_store::identity::NodeIdentity;
+use gents_toolcalls::call::hook::BackgroundExecutionRegistry;
+use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
 use serde::Deserialize;
 use serde_json::Value;
 use std::fmt::Debug;
@@ -51,8 +52,8 @@ struct AcceptedBackgroundTurn {
 }
 
 impl AcceptedBackgroundTurn {
-    fn agent_access(&self) -> gents::ConfigAccess {
-        gents::ConfigAccess::local_managed_agent(
+    fn agent_access(&self) -> gents_store::config_client::ConfigAccess {
+        gents_store::config_client::ConfigAccess::local_managed_agent(
             self.db.node.clone(),
             ::identity::Did::new(self.agent_identity.did()).unwrap(),
             self.agent_identity.as_ref(),
@@ -102,7 +103,7 @@ async fn boot_background_turn_with_bounds(
     .await;
     if let Some(deadline_duration_secs) = execution_deadline_secs {
         assert!(deadline_duration_secs > 1);
-        use gents::documents::{
+        use gents_documents::{
             read_desired_state_record_in_txn as read, DesiredStateApplyDocument,
             DesiredStateApplyPlan,
         };
@@ -114,7 +115,7 @@ async fn boot_background_turn_with_bounds(
                     let profile_id = format!("{agent_did}:inference");
                     let (_, mut profile) = read(
                         txn,
-                        gents::Collection::InferenceProfile,
+                        gents_store::collection::Collection::InferenceProfile,
                         node_did,
                         &profile_id,
                     )
@@ -122,7 +123,7 @@ async fn boot_background_turn_with_bounds(
                     .expect("R6 inference profile");
                     let execution_id = format!("{agent_did}-deadline");
                     profile["execution_id"] = execution_id.clone().into();
-                    let execution = serde_json::to_value(gents::documents::InferenceExecution {
+                    let execution = serde_json::to_value(gents_documents::InferenceExecution {
                         node_did: node_did.to_string(),
                         execution_id,
                         stream_liveness_timeout_secs: Some(deadline_duration_secs - 1),
@@ -131,20 +132,20 @@ async fn boot_background_turn_with_bounds(
                     })?;
                     let plan = DesiredStateApplyPlan::new(vec![
                         DesiredStateApplyDocument {
-                            collection: gents::Collection::InferenceProfile,
+                            collection: gents_store::collection::Collection::InferenceProfile,
                             add: profile.clone(),
                             update: profile,
                         },
                         DesiredStateApplyDocument {
-                            collection: gents::Collection::InferenceExecution,
+                            collection: gents_store::collection::Collection::InferenceExecution,
                             add: execution.clone(),
                             update: execution,
                         },
                     ])?;
-                    gents::documents::apply_desired_state_plan(
+                    gents_documents::apply_desired_state_plan(
                         txn,
                         &plan,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await
                     .map(|_| ())
@@ -159,12 +160,12 @@ async fn boot_background_turn_with_bounds(
         db.node_identity.did(),
         agent_did,
         None,
-        gents::documents::Tools {
+        gents_documents::Tools {
             tools_id: format!("{agent_did}:tools"),
             node_did: db.node_identity.did().to_string(),
-            host: Some(gents::documents::HostTools {
-                bash: Some(gents::documents::BashTools {
-                    mode: gents::BashMode::ReadOnly,
+            host: Some(gents_documents::HostTools {
+                bash: Some(gents_documents::BashTools {
+                    mode: gents_documents::BashMode::ReadOnly,
                     read_only_commands: Some(vec![
                         "sleep".to_string(),
                         "printf".to_string(),
@@ -180,13 +181,13 @@ async fn boot_background_turn_with_bounds(
         Vec::new(),
     )
     .await;
-    let identity: Arc<dyn gents::NodeIdentity> = db.node_identity.clone();
+    let identity: Arc<dyn gents_store::identity::NodeIdentity> = db.node_identity.clone();
     let agent = gents::Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions {
             backend_admission: Some(db.home.backend_admission()),
-            tool_ceiling: gents::ToolCeiling::readonly(),
+            tool_ceiling: gents_tools::surface::ToolCeiling::readonly(),
             ..Default::default()
         },
     )
@@ -206,7 +207,10 @@ async fn boot_background_turn_with_bounds(
     }
 }
 
-async fn fetch_messages(access: &gents::ConfigAccess, session_id: &str) -> Vec<MessageRow> {
+async fn fetch_messages(
+    access: &gents_store::config_client::ConfigAccess,
+    session_id: &str,
+) -> Vec<MessageRow> {
     let session_id = escape_graphql_string(session_id);
     let query = format!(
         r#"{{
@@ -248,10 +252,14 @@ async fn fetch_messages(access: &gents::ConfigAccess, session_id: &str) -> Vec<M
         let node_did = header["node_did"].as_str().expect("message header agent");
         let requester_did = header["requester_did"].as_str();
         let request_doc_id = header["request_doc_id"].as_str().map(str::to_owned);
-        let (_, message) =
-            gents::session::load_canonical_message(access, header_doc_id, node_did, requester_did)
-                .await
-                .expect("reconstruct canonical message");
+        let (_, message) = gents_session::session::load_canonical_message(
+            access,
+            header_doc_id,
+            node_did,
+            requester_did,
+        )
+        .await
+        .expect("reconstruct canonical message");
         let content = match message {
             Message::System { content } => content,
             Message::User { content } => content
@@ -298,7 +306,7 @@ where
 
 async fn wait_for_tool_completion_message(
     node: &EmbeddedNode,
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     session_id: &str,
     tool_call_id: &str,
 ) -> MessageRow {
@@ -334,7 +342,7 @@ async fn wait_for_tool_completion_message(
 }
 
 async fn fetch_background_wakes(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     session_id: &str,
 ) -> Vec<serde_json::Value> {
     let session_id = escape_graphql_string(session_id);
@@ -357,7 +365,7 @@ async fn fetch_background_wakes(
 }
 
 async fn load_tool_call(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     session_id: &str,
     tool_call_id: &str,
 ) -> ToolCallRow {
@@ -367,7 +375,7 @@ async fn load_tool_call(
 }
 
 async fn fetch_tool_call(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     session_id: &str,
     tool_call_id: &str,
 ) -> Option<ToolCallRow> {
@@ -545,7 +553,7 @@ async fn canonical_latest_tool_payload_json(
 }
 
 async fn wait_for_named_tool_call(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     session_id: &str,
     tool_name: &str,
 ) -> ToolCallRow {
@@ -586,7 +594,7 @@ async fn wait_for_named_tool_call(
 }
 
 async fn wait_for_running_tool_call(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     session_id: &str,
     tool_call_id: &str,
 ) -> ToolCallRow {
@@ -723,7 +731,7 @@ async fn wait_for_initial_request_terminal(turn: &AcceptedBackgroundTurn) {
 }
 
 async fn count_tool_calls_by_name(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     session_id: &str,
     tool_name: &str,
 ) -> usize {
@@ -1036,12 +1044,12 @@ async fn periodic_recovery_without_process_record_settles_orphan_lost() {
         r#"mutation {{ update_AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{}" }} }}, input: {{ deadline_at: "{}" }}) {{ _docID }} }}"#,
         escape_graphql_string(&tool_call_id), escape_graphql_string(&expired)
     )).await.expect("expire accepted background row");
-    assert!(gents::store::graphql::response_has_documents(
+    assert!(gents_store::graphql::response_has_documents(
         &response["data"]["update_AgentToolCall"]
     ));
     set_parent_state(&turn.agent_access(), &turn.request_id, "completed").await;
 
-    gents::tools::call::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
+    gents_toolcalls::call::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
         &turn.db.node,
         turn.db.node_identity.did(),
         std::slice::from_ref(&turn.agent_identity),
@@ -1098,7 +1106,7 @@ async fn malformed_running_row_does_not_hide_valid_orphan_recovery() {
     );
 
     let report =
-        gents::tools::call::lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
+        gents_toolcalls::call::lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
             &turn.db.node,
             turn.db.node_identity.did(),
             std::slice::from_ref(&turn.agent_identity),
@@ -1130,7 +1138,11 @@ async fn malformed_running_row_does_not_hide_valid_orphan_recovery() {
     turn.runtime.shutdown().await;
 }
 
-async fn set_parent_state(access: &gents::ConfigAccess, request_id: &str, lifecycle_state: &str) {
+async fn set_parent_state(
+    access: &gents_store::config_client::ConfigAccess,
+    request_id: &str,
+    lifecycle_state: &str,
+) {
     let request_id = escape_graphql_string(request_id);
     let lifecycle_state = escape_graphql_string(lifecycle_state);
     let mutation = format!(
@@ -1477,7 +1489,7 @@ async fn wait_tool_caller_interrupt_returns_without_cancelling_background_row() 
     let request_doc_id = response["data"]["AgentRequest"][0]["_docID"]
         .as_str()
         .expect("physical interrupt target");
-    gents::request::interrupt::interrupt_request_by_doc_id_with_access(
+    gents_session::request::interrupt::interrupt_request_by_doc_id_with_access(
         &turn.fixture.access,
         request_doc_id,
         turn.db.node_identity.did(),
@@ -1537,8 +1549,8 @@ async fn wait_tool_caller_interrupt_returns_without_cancelling_background_row() 
         observer_case.result.as_deref()
     );
     assert_eq!(row.cancel_cause.as_deref(), None);
-    gents::tools::call::control::cancel_background_tool_call(
-        &gents::ConfigAccess::local_managed_agent(
+    gents_toolcalls::call::control::cancel_background_tool_call(
+        &gents_store::config_client::ConfigAccess::local_managed_agent(
             turn.db.node.clone(),
             identity::Did::new(turn.agent_identity.did()).unwrap(),
             turn.agent_identity.as_ref(),
@@ -1669,15 +1681,15 @@ async fn second_signed_principal_runtime_is_denied_foreign_process_handle() {
     .await
     .unwrap();
     let foreign_did = ::identity::Did::new(foreign_user.did()).unwrap();
-    let admin = gents::ConfigAccess::local_as(
+    let admin = gents_store::config_client::ConfigAccess::local_as(
         turn.db.node.clone(),
         ::identity::Did::new(turn.db.node_identity.did()).unwrap(),
     );
     for permission in [
-        gents::store::config_client::NodePermission::CollectionGet,
-        gents::store::config_client::NodePermission::DocumentRead,
-        gents::store::config_client::NodePermission::DocumentUpdate,
-        gents::store::config_client::NodePermission::DacRelationAdd,
+        gents_store::config_client::NodePermission::CollectionGet,
+        gents_store::config_client::NodePermission::DocumentRead,
+        gents_store::config_client::NodePermission::DocumentUpdate,
+        gents_store::config_client::NodePermission::DacRelationAdd,
     ] {
         admin
             .grant_node_permission(&foreign_did, permission)
@@ -1692,9 +1704,9 @@ async fn second_signed_principal_runtime_is_denied_foreign_process_handle() {
         .transact_readonly("test.foreign.agent", |txn| {
             Box::pin(async move {
                 Ok::<_, anyhow::Error>(
-                    gents::documents::read_desired_state_record_in_txn(
+                    gents_documents::read_desired_state_record_in_txn(
                         txn,
-                        gents::Collection::Agent,
+                        gents_store::collection::Collection::Agent,
                         node_did,
                         agent_did,
                     )

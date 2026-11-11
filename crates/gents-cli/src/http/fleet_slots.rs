@@ -1,15 +1,15 @@
-use gents::store::config_client::GraphqlEndpoint;
+use gents_store::config_client::GraphqlEndpoint;
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use gents::call_state_holds_backend_slot;
-use gents::documents::inference_backend::UNKNOWN_PROBE_STATUS;
-use gents::tools::call::lifecycle::deadline_is_expired;
+use gents_documents::inference_backend::UNKNOWN_PROBE_STATUS;
+use gents_inference::admission::call_state_holds_backend_slot;
 use gents_protocol::row::{
     project_node_readiness_summary, AgentReadinessState, AgentRequestRow, NodeReadinessRow,
     ProjectedNodeReadinessSummary,
 };
+use gents_toolcalls::call::lifecycle::deadline_is_expired;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -236,7 +236,7 @@ pub(super) fn attach_backend_observations(data: &mut Value) {
             backend["_docID"].as_str(),
         ) {
             (Some(node), Some(id), Some(doc)) => {
-                gents::documents::inference_backend::observation_binding::bind_rows(
+                gents_documents::inference_backend::observation_binding::bind_rows(
                     node,
                     id,
                     doc,

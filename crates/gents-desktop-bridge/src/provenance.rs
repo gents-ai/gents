@@ -1,16 +1,18 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use gents::session::origin::{group_caused, lineage, single_caused, starting_request, SessionLink};
-use gents::session::public_request_filter;
-use gents::store::config_client::ConfigAccess;
-use gents::store::graphql::graphql_string_list_literal;
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::session::session_scope_filter;
 use gents_protocol::session::SessionScope;
 use gents_protocol::tool_names::is_session_message_tool;
+use gents_session::session::origin::{
+    group_caused, lineage, single_caused, starting_request, SessionLink,
+};
+use gents_session::session::public_request_filter;
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::graphql_string_list_literal;
 use serde_json::Value;
 
 use crate::types::{
@@ -229,7 +231,9 @@ pub(crate) fn project_caused_calls(
         .collect())
 }
 
-fn turn_senders(lineage: &gents::session::origin::SessionLineage) -> Vec<(String, &SessionLink)> {
+fn turn_senders(
+    lineage: &gents_session::session::origin::SessionLineage,
+) -> Vec<(String, &SessionLink)> {
     let links = lineage
         .started_by
         .iter()
@@ -321,13 +325,13 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use gents::store::graphql::escape_graphql_string;
     use gents_protocol::request_admission::RequestPurpose;
+    use gents_store::graphql::escape_graphql_string;
 
     async fn run(node: &gents::defra_node::Node, mutation: String, collection: &str) -> String {
         let response = node.execute(&mutation).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
-        gents::store::graphql::single_mutation_document(&response, &format!("create_{collection}"))
+        gents_store::graphql::single_mutation_document(&response, &format!("create_{collection}"))
             .unwrap()
             .and_then(|document| document["_docID"].as_str().map(str::to_owned))
             .expect("created doc id")
@@ -527,7 +531,7 @@ mod tests {
                     .await
                     .unwrap(),
             );
-            gents::store::schema::ensure_runtime_schemas(node.as_ref())
+            gents_store::schema::ensure_runtime_schemas(node.as_ref())
                 .await
                 .unwrap();
             let ids = seed_lineage_case(&node, case, did).await;

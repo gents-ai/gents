@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
-use gents::store::identity::NodeIdentity;
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+use gents_store::identity::NodeIdentity;
 use serde_json::{json, Value};
 #[cfg(unix)]
 use tokio::process::Child;
@@ -923,7 +923,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .await?;
     let init: Value = serde_json::from_slice(&output)?;
     let node_did = init["node_did"].as_str().context("initialized node DID")?;
-    let identity = gents::KeyIdentity::load_or_create(
+    let identity = gents_store::identity::KeyIdentity::load_or_create(
         init["key_path"]
             .as_str()
             .context("initialized identity path")?,
@@ -1020,8 +1020,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     // requests; the Node key holds no relation on them.
     let operator =
         gents_desktop_core::client::PrincipalIdentity::load_existing(&homes.cli_identity())?;
-    let access = gents::ConfigAccess::Graphql(
-        gents::store::config_client::GraphqlEndpoint::as_principal(graphql, operator.did())
+    let access = gents_store::config_client::ConfigAccess::Graphql(
+        gents_store::config_client::GraphqlEndpoint::as_principal(graphql, operator.did())
             .with_client_signing_capability(operator.client_signing_capability()?)?,
     );
     if matches!(journey, Journey::Conversation | Journey::RuntimeReplacement) {
@@ -1064,7 +1064,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             .context("pending enrollment")?;
         let pending_query = format!(
             "{{ NetworkEnrollmentRequest(filter: {{ request_id: {{ _eq: \"{}\" }} }}) {{ _docID }} }}",
-            gents::store::graphql::escape_graphql_string(pending_id)
+            gents_store::graphql::escape_graphql_string(pending_id)
         );
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
@@ -1238,7 +1238,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let request = receipt["requestId"].as_str().context("submitted request")?;
     let signed_query = format!(
         "{{ AgentRequest(filter: {{ request_id: {{ _eq: \"{}\" }} }}) {{ {} }} }}",
-        gents::store::graphql::escape_graphql_string(request),
+        gents_store::graphql::escape_graphql_string(request),
         gents::SIGNED_REQUEST_FIELDS,
     );
     let row: gents_protocol::row::AgentRequestRow =
@@ -1256,7 +1256,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         })
         .await
         .context("submitted request did not reach the runtime")??;
-    gents::verify_request_receipt_signature(&row)?;
+    gents_store::identity::request_receipt::verify_request_receipt_signature(&row)?;
     let original_doc_id = row.doc_id.clone().context("submitted physical request")?;
     ensure!(row.admission_signer_did.as_deref() == Some(client_did.as_str()));
     ensure!(client_did != node_did);
@@ -1374,8 +1374,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             let snapshot = read_session(&mut client, &mut id, node_did, session).await?;
             let requests = access.execute(&format!(
                 r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} superseded_by_request_doc_id }} }}"#,
-                gents::store::graphql::escape_graphql_string(node_did),
-                gents::store::graphql::escape_graphql_string(session),
+                gents_store::graphql::escape_graphql_string(node_did),
+                gents_store::graphql::escape_graphql_string(session),
                 gents::SIGNED_REQUEST_FIELDS,
             )).await?;
             let name = "editor-steering-failure.json";
@@ -1424,7 +1424,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         let current = access
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_id lifecycle_state interrupt_requested_at }} }}"#,
-                gents::store::graphql::escape_graphql_string(&original_doc_id)
+                gents_store::graphql::escape_graphql_string(&original_doc_id)
             ))
             .await?;
         let rows = current["data"]["AgentRequest"]
@@ -1458,7 +1458,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             view = wait_goal(&mut client, &mut id, node_did, session, status).await?;
             let requests = access.execute(&format!(r#"{{ AgentRequest(filter: {{ node_did: {{_eq: "{}"}},
                 session_id: {{_eq: "{}"}}, purpose: {{_eq: "normal"}} }}) {{ _docID request_id lifecycle_state interrupt_requested_at }} }}"#,
-                gents::store::graphql::escape_graphql_string(node_did), gents::store::graphql::escape_graphql_string(session))).await?;
+                gents_store::graphql::escape_graphql_string(node_did), gents_store::graphql::escape_graphql_string(session))).await?;
             let rows = requests["data"]["AgentRequest"]
                 .as_array()
                 .context("goal request rows")?;
@@ -1498,8 +1498,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 AgentMessage(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ message_key request_doc_id }}
                 AgentOutputSegment(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ payload }}
             }}"#,
-            gents::store::graphql::escape_graphql_string(session),
-            gents::store::graphql::escape_graphql_string(session),
+            gents_store::graphql::escape_graphql_string(session),
+            gents_store::graphql::escape_graphql_string(session),
         )).await?;
         ensure!(
             context["data"]["AgentMessage"]
@@ -1546,7 +1546,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         std::fs::write(&approval_path, "fixture access")?;
         let approval_session = session.to_owned();
         let approval_wait = tokio::spawn(async move {
-            let mark = gents::plugin::approval::queue_dir(&approval_home).join(".listening");
+            let mark = gents_tools::plugin::approval::queue_dir(&approval_home).join(".listening");
             tokio::time::timeout(Duration::from_secs(90), async {
                 loop {
                     if std::fs::metadata(&mark)
@@ -1560,18 +1560,22 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             })
             .await
             .context("the editor did not open an approval listener")?;
-            let resolved = gents::plugin::allowed::Resolved {
+            let resolved = gents_pack::plugin::allowed::Resolved {
                 target: approval_path,
                 is_dir: false,
             };
-            let question = gents::plugin::approval::Request::new(
+            let question = gents_tools::plugin::approval::Request::new(
                 "fixture/files",
                 &resolved,
-                gents::pack::BindAccess::Read,
+                gents_pack::pack::BindAccess::Read,
                 Some(approval_session),
             );
-            gents::plugin::approval::ask(&approval_home, &question, gents::plugin::approval::WAIT)
-                .await
+            gents_tools::plugin::approval::ask(
+                &approval_home,
+                &question,
+                gents_tools::plugin::approval::WAIT,
+            )
+            .await
         });
         let result = run_editor_journey(
             root,
@@ -1589,7 +1593,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         let stopped = access
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ node_did: {{_eq: "{}"}}, purpose: {{_eq: "normal"}} }}) {{ content session_id lifecycle_state }} }}"#,
-                gents::store::graphql::escape_graphql_string(node_did),
+                gents_store::graphql::escape_graphql_string(node_did),
             ))
             .await?;
         let stopped = stopped["data"]["AgentRequest"]
@@ -1615,7 +1619,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         configured_actions::verify_editor_settings(&access, node_did, agent_did).await?;
         let submitted = access.execute(&format!(
             r#"{{ AgentRequest(filter: {{ node_did: {{_eq: "{}"}}, purpose: {{_eq: "normal"}} }}) {{ content input }} }}"#,
-            gents::store::graphql::escape_graphql_string(node_did),
+            gents_store::graphql::escape_graphql_string(node_did),
         )).await?;
         let rows = submitted["data"]["AgentRequest"]
             .as_array()
@@ -1687,7 +1691,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             .await
             .context("the editor's approval did not reach the waiting call")???);
         ensure!(
-            gents::plugin::allowed::list(&node_home)?.is_empty(),
+            gents_pack::plugin::allowed::list(&node_home)?.is_empty(),
             "allow-once must not persist a file or folder grant"
         );
         id += 1;
@@ -1790,8 +1794,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ node_did: {{_eq: "{}"}},
             session_id: {{_eq: "{}"}}, purpose: {{_eq: "normal"}} }}) {{ request_id }} }}"#,
-                gents::store::graphql::escape_graphql_string(node_did),
-                gents::store::graphql::escape_graphql_string(session)
+                gents_store::graphql::escape_graphql_string(node_did),
+                gents_store::graphql::escape_graphql_string(session)
             ))
             .await?;
         ensure!(
@@ -2072,7 +2076,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             captured.iter().any(|body| body["tools"]
                 .as_array()
                 .is_some_and(|tools| tools.iter().any(|tool| tool["function"]["name"]
-                    == gents::documents::mailbox_write_decl::FILE_MAILBOX_ITEM_TOOL_NAME))),
+                    == gents_documents::mailbox_write_decl::FILE_MAILBOX_ITEM_TOOL_NAME))),
             "the default Engineer must advertise its question tool"
         );
         editor_result?;
@@ -2623,7 +2627,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             )
             .await?,
         );
-        let local = gents::store::config_client::ConfigAccess::local(reopened.node_arc())
+        let local = gents_store::config_client::ConfigAccess::local(reopened.node_arc())
             .execute("{ Goal { _docID } PendingChatSubmission { _docID } }")
             .await;
         reopened.shutdown().await?;
@@ -2643,7 +2647,7 @@ async fn wait_chat_deployment(
     client: &mut Attachment,
     id: &mut u32,
     node_did: &str,
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
 ) -> Result<Value> {
     let mut last_snapshot = Value::Null;
     let observed = tokio::time::timeout(Duration::from_secs(30), async {
@@ -2673,7 +2677,7 @@ async fn wait_chat_deployment(
         Err(error) => {
             let query = format!(
                 "{{ NodeReadiness(filter: {{node_did: {{_eq: \"{}\"}}}}, limit: 2) {{_docID node_did snapshot_json updated_at}} }}",
-                gents::store::graphql::escape_graphql_string(node_did),
+                gents_store::graphql::escape_graphql_string(node_did),
             );
             let source = tokio::time::timeout(Duration::from_secs(2), access.execute(&query)).await;
             Err(error).with_context(|| {
@@ -2690,7 +2694,7 @@ struct EditRecoveryHost<'a> {
     binary: &'a Path,
     root: &'a Path,
     paths: &'a DesktopPaths,
-    access: &'a gents::ConfigAccess,
+    access: &'a gents_store::config_client::ConfigAccess,
     editor_store: bool,
 }
 
@@ -2810,8 +2814,8 @@ async fn exercise_message_edit(
     .await?;
     *id += 1;
     let query = format!("{{ AgentSession(filter: {{ node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}} }}) {{ _docID session_id provenance }} AgentMessage(filter: {{ node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}} }}, order: {{sequence: ASC}}) {{_docID message_key sequence}} }}",
-        gents::store::graphql::escape_graphql_string(node_did), gents::store::graphql::escape_graphql_string(&child_session_id),
-        gents::store::graphql::escape_graphql_string(node_did), gents::store::graphql::escape_graphql_string(&child_session_id));
+        gents_store::graphql::escape_graphql_string(node_did), gents_store::graphql::escape_graphql_string(&child_session_id),
+        gents_store::graphql::escape_graphql_string(node_did), gents_store::graphql::escape_graphql_string(&child_session_id));
     let committed = access.execute(&query).await?;
     client.close().await;
     recovery.restart().await?;
@@ -2868,7 +2872,7 @@ async fn exercise_message_edit(
     .await?;
     *id += 1;
     let request_query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}) {{_docID request_id session_id requester_did agent_did content input admission_signer_did admission_signature created_at valid_until}} }}",
-        gents::store::graphql::escape_graphql_string(node_did), gents::store::graphql::escape_graphql_string(&request_id));
+        gents_store::graphql::escape_graphql_string(node_did), gents_store::graphql::escape_graphql_string(&request_id));
     let admitted = access.execute(&request_query).await?;
     ensure!(
         admitted["data"]["AgentRequest"]

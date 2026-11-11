@@ -11,9 +11,9 @@ async fn managed_readiness_reads_status_as_the_user_and_never_the_node_key() {
     std::fs::create_dir_all(&home).unwrap();
     std::fs::create_dir_all(&root).unwrap();
     let key_path = home.join("node.key");
-    let identity = gents::store::identity::load_or_create_file_identity(&key_path).unwrap();
+    let identity = gents_store::identity::load_or_create_file_identity(&key_path).unwrap();
     let did = identity.did().unwrap().to_string();
-    assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
+    assert!(!gents_store::identity::can_mint_defradb_bearer(&did));
     let server = MockServer::start().await;
     let endpoint = reqwest::Url::parse(&server.uri()).unwrap();
     let config = gents_server::server_host::ServerConfig {
@@ -80,7 +80,9 @@ async fn managed_readiness_reads_status_as_the_user_and_never_the_node_key() {
     let error = status_unreadable_error(&cause);
     assert_eq!(error.code, BridgeErrorCode::ClientNotRunning);
 
-    let user = gents::KeyIdentity::load_or_create(temp.path().join("user.key"), None).unwrap();
+    let user =
+        gents_store::identity::KeyIdentity::load_or_create(temp.path().join("user.key"), None)
+            .unwrap();
     let user = user.client_signing_capability().unwrap();
     let signed = observe_port_readiness_at(&config, Some(&user))
         .await
@@ -101,7 +103,7 @@ async fn managed_readiness_reads_status_as_the_user_and_never_the_node_key() {
     else {
         panic!("the status read never depended on the node key")
     };
-    assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
+    assert!(!gents_store::identity::can_mint_defradb_bearer(&did));
     let count = server
         .received_requests()
         .await
@@ -148,7 +150,7 @@ async fn generated_fresh_startup_preserves_enrollment_authority() {
         .await
         .unwrap(),
     );
-    let access = gents::ConfigAccess::local_as(
+    let access = gents_store::config_client::ConfigAccess::local_as(
         core.node_arc(),
         ::identity::Did::new(core.node_identity().did()).unwrap(),
     );

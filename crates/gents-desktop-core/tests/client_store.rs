@@ -63,7 +63,7 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
                             &serde_json::json!({"input": input}),
                         )
                         .await?;
-                    gents::store::graphql::created_doc_id(&response, collection)
+                    gents_store::graphql::created_doc_id(&response, collection)
                 };
                 let request = create("AgentRequest", serde_json::json!({
                     "purpose": "normal", "request_id": "request-1", "node_did": node,
@@ -309,7 +309,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
         .node()
         .execute(&format!(
             r#"query {{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ default_agent_did }} }}"#,
-            gents::store::graphql::escape_graphql_string(NODE_DID)
+            gents_store::graphql::escape_graphql_string(NODE_DID)
         ))
         .await;
     assert!(
@@ -418,8 +418,8 @@ async fn bootstrap_then_observer_no_lost_writes() -> Result<()> {
     runtime
         .publish_node(serde_json::json!({"enabled": true}))
         .await;
-    let node_did = gents::store::graphql::escape_graphql_string(runtime.node_did());
-    let requester = gents::store::graphql::escape_graphql_string(core.node_identity().did());
+    let node_did = gents_store::graphql::escape_graphql_string(runtime.node_did());
+    let requester = gents_store::graphql::escape_graphql_string(core.node_identity().did());
     for i in 0..20usize {
         runtime
             .user_graphql_access()
@@ -589,14 +589,14 @@ async fn routed_snapshot_excludes_a_neighbouring_node() -> Result<()> {
     };
     until(&core, "the routed node", only_alpha).await?;
 
-    let escaped = gents::store::graphql::escape_graphql_string(&alpha);
+    let escaped = gents_store::graphql::escape_graphql_string(&alpha);
     let doc = runtime
         .user_graphql_access()
         .execute(&format!(
             "{{ Node(filter: {{node_did: {{_eq: \"{escaped}\"}}}}) {{ _docID }} }}"
         ))
         .await?;
-    let doc = gents::store::graphql::escape_graphql_string(
+    let doc = gents_store::graphql::escape_graphql_string(
         doc["data"]["Node"][0]["_docID"]
             .as_str()
             .context("routed Node document")?,
@@ -643,11 +643,13 @@ async fn routed_snapshot_excludes_a_neighbouring_node() -> Result<()> {
 fn default_agent_did_does_not_require_a_gossiped_node() {
     let node_did = "did:key:z6MkAmy";
     let directory = tempfile::tempdir().unwrap();
-    let root = gents::KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
-    let binding = gents::store::identity::provision_agent_identity(&root).unwrap();
+    let root =
+        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("node.key"), None)
+            .unwrap();
+    let binding = gents_store::identity::provision_agent_identity(&root).unwrap();
     let agent_did = binding.agent_did;
     let store = ClientStore::from_rows(ClientStoreRows {
-        agents: vec![gents::documents::Agent {
+        agents: vec![gents_documents::Agent {
             creation_nonce: binding.creation_nonce,
             agent_did: agent_did.clone(),
             node_did: node_did.to_string(),

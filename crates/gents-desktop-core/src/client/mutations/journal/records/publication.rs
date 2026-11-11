@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use anyhow::{bail, ensure, Context, Result};
-use gents::store::config_client::{
+use gents_store::config_client::{
     AgentPublicationObserver, ClientAgentJournal, ConfigAccess, ConfigClientError,
     ConfigRelationshipGrant, IdempotentTransactionRetry, PublicationStage, PublicationStatus,
 };
-use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents_store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 use super::{Entry, Envelope};
 
@@ -66,7 +66,7 @@ fn encode(record: &Record) -> Result<String> {
 }
 
 async fn write(
-    txn: &gents::store::config_client::ConfigApplyTxn<'_>,
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     doc_id: &str,
     record: &Record,
 ) -> Result<()> {
@@ -408,7 +408,7 @@ mod tests {
     #[tokio::test]
     async fn matching_attempt_id_cannot_replace_physical_grant_bindings() -> Result<()> {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
-        gents::ensure_runtime_schemas(&node).await?;
+        gents_store::schema::ensure_runtime_schemas(&node).await?;
         let client = node.node_identity_did().context("client identity")?;
         let mut journal = ClientAgentJournal::new(
             client.into(),

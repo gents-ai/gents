@@ -20,6 +20,14 @@ clap.workspace = true
 chrono.workspace = true
 defra-p2p-adapter.workspace = true
 gents = { path = "../../../crates/gents" }
+gents-store = { workspace = true }
+gents-documents = { workspace = true }
+gents-inference = { workspace = true }
+gents-p2p = { workspace = true }
+gents-pack = { workspace = true }
+gents-session = { workspace = true }
+gents-tools = { workspace = true }
+gents-observe = { workspace = true }
 gents-fs-runner = { path = "../../../crates/gents-fs-runner" }
 gents-desktop-bridge = { workspace = true }
 gents-desktop-core.workspace = true

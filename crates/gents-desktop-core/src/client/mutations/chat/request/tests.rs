@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
-use gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES;
 use gents_protocol::request_admission::AgentRequestCreate;
+use gents_session::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES;
 use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;
@@ -149,7 +149,7 @@ async fn retry_preserves_attachment_only_input_and_its_signed_snapshot() -> Resu
         .await?;
         core.refresh_store().await?;
         let parent = fetch_request_row_for_test(&chat.owner(), &request_id).await?;
-        gents::verify_request_receipt_signature(&parent)?;
+        gents_store::identity::request_receipt::verify_request_receipt_signature(&parent)?;
         let snapshot = core.store().snapshot();
         let retry = retry_request(
             &chat.runtime.user_access(),
@@ -161,7 +161,7 @@ async fn retry_preserves_attachment_only_input_and_its_signed_snapshot() -> Resu
         )
         .await?;
         let row = fetch_request_row_for_test(&chat.owner(), &retry.request_id).await?;
-        gents::verify_request_receipt_signature(&row)?;
+        gents_store::identity::request_receipt::verify_request_receipt_signature(&row)?;
         assert_eq!(row.content.as_deref(), Some(""));
         assert_eq!(row.input, parent.input);
         assert_eq!(row.retry_parent_request_doc_id, parent.doc_id);
@@ -182,7 +182,7 @@ async fn retry_preserves_attachment_only_input_and_its_signed_snapshot() -> Resu
 #[tokio::test]
 async fn mailbox_submission_cause_is_owner_and_route_scoped() -> Result<()> {
     let node = Arc::new(crate::test_support::node_builder().build().await?);
-    gents::ensure_runtime_schemas(&node).await?;
+    gents_store::schema::ensure_runtime_schemas(&node).await?;
     let response = node
         .execute(
             r#"mutation {
@@ -227,7 +227,7 @@ async fn mailbox_submission_cause_is_owner_and_route_scoped() -> Result<()> {
         .context("mailbox item id")?;
 
     validate_mailbox_submission_cause(
-        &gents::store::config_client::ConfigAccess::local(node.clone()),
+        &gents_store::config_client::ConfigAccess::local(node.clone()),
         item_id,
         "did:test:owner",
         "did:test:node",
@@ -236,7 +236,7 @@ async fn mailbox_submission_cause_is_owner_and_route_scoped() -> Result<()> {
     )
     .await?;
     assert!(validate_mailbox_submission_cause(
-        &gents::store::config_client::ConfigAccess::local(node.clone()),
+        &gents_store::config_client::ConfigAccess::local(node.clone()),
         item_id,
         "did:test:other",
         "did:test:node",
@@ -248,7 +248,7 @@ async fn mailbox_submission_cause_is_owner_and_route_scoped() -> Result<()> {
     .to_string()
     .contains("another requester"));
     assert!(validate_mailbox_submission_cause(
-        &gents::store::config_client::ConfigAccess::local(node.clone()),
+        &gents_store::config_client::ConfigAccess::local(node.clone()),
         item_id,
         "did:test:owner",
         "did:test:node",
@@ -260,7 +260,7 @@ async fn mailbox_submission_cause_is_owner_and_route_scoped() -> Result<()> {
     .to_string()
     .contains("target agent"));
     assert!(validate_mailbox_submission_cause(
-        &gents::store::config_client::ConfigAccess::local(node.clone()),
+        &gents_store::config_client::ConfigAccess::local(node.clone()),
         item_id,
         "did:test:owner",
         "did:test:node",
@@ -582,10 +582,11 @@ async fn submit_client_create_for_test(
 ) -> Result<()> {
     let access = chat.runtime.user_access();
     create.session_doc_id =
-        Some(gents::request::lifecycle::reserve_goal_session(&access, create).await?);
+        Some(gents_session::request::lifecycle::reserve_goal_session(&access, create).await?);
     create.agent_doc_id = Some(chat.runtime.agent_doc_id(&chat.agent).await);
-    gents::sign_agent_request_create(chat.core.node_identity(), create).await?;
-    gents::request::lifecycle::submit_client_request(&access, create).await?;
+    gents_session::request::admission::sign_agent_request_create(chat.core.node_identity(), create)
+        .await?;
+    gents_session::request::lifecycle::submit_client_request(&access, create).await?;
     Ok(())
 }
 
@@ -1517,7 +1518,7 @@ async fn generated_reissued_inputs_preserve_retry_goal_opening_request() -> Resu
             .await?;
             core.refresh_store().await?;
             let parent = fetch_request_row_for_test(&chat.owner(), &request_id).await?;
-            gents::verify_request_receipt_signature(&parent)?;
+            gents_store::identity::request_receipt::verify_request_receipt_signature(&parent)?;
             let mut expected: RequestInput =
                 serde_json::from_value(case["expected_reissued_input"].clone())?;
             let model_parent = case["reissued_source_doc_id"].as_str().unwrap();
@@ -1537,7 +1538,7 @@ async fn generated_reissued_inputs_preserve_retry_goal_opening_request() -> Resu
             )
             .await?;
             let retried = fetch_request_row_for_test(&chat.owner(), &submitted.request_id).await?;
-            gents::verify_request_receipt_signature(&retried)?;
+            gents_store::identity::request_receipt::verify_request_receipt_signature(&retried)?;
             assert_eq!(retried.input.as_ref(), Some(&expected), "{}", case["name"]);
             assert_eq!(retried.retry_parent_request_doc_id, parent.doc_id);
             assert_eq!(

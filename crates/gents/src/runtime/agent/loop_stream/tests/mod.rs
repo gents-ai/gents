@@ -3,19 +3,19 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::inference::llm::message::{AssistantContent, ToolResultContent, UserContent};
-use crate::inference::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use futures::{stream, Stream, StreamExt};
+use gents_inference::llm::message::{AssistantContent, ToolResultContent, UserContent};
+use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
 
-use crate::inference::llm::message::Message;
+use gents_inference::llm::message::Message;
 use rig::streaming::{RawStreamingChoice, RawStreamingToolCall, StreamingCompletionResponse};
 use tokio::sync::Mutex;
 
 use super::*;
-use crate::ensure_runtime_schemas;
-use crate::store::test_support::first_content;
-use crate::tools::call::hook::{DefraSessionHook, FailurePolicy};
+use gents_store::schema::ensure_runtime_schemas;
+use gents_store::test_support::first_content;
+use gents_toolcalls::call::hook::{DefraSessionHook, FailurePolicy};
 
 mod support;
 use support::*;

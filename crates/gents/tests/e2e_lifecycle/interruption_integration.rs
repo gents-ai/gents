@@ -1,10 +1,10 @@
-use gents::interrupt_request;
-use gents::request::lifecycle::{ClaimOutcome, ExecutionOrigin};
-use gents::store::graphql::escape_graphql_string;
 use gents_protocol::output::{OutputOutcome, SourceClose, TerminalOutput};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::transcript::present_message;
+use gents_session::request::interrupt::interrupt_request;
+use gents_session::request::lifecycle::{ClaimOutcome, ExecutionOrigin};
+use gents_store::graphql::escape_graphql_string;
 
 use crate::support::agent_requests::{canonical_now, RequestActors, RequestSeed};
 use crate::support::interrupt::{
@@ -183,7 +183,7 @@ fn interrupt_mid_stream_preserves_partial_and_cancels_inference_call() {
         else {
             panic!("interrupted request must select its retained partial message")
         };
-        let (header, native) = gents::session::load_canonical_message(
+        let (header, native) = gents_session::session::load_canonical_message(
             &actors.agent_access,
             &message_doc_id,
             agent.node_did.as_str(),
@@ -291,7 +291,7 @@ fn interrupting_one_request_does_not_affect_another() {
         else {
             panic!("completed survivor must select its canonical message")
         };
-        let (header, native) = gents::session::load_canonical_message(
+        let (header, native) = gents_session::session::load_canonical_message(
             &survivor.agent_access,
             &message_doc_id,
             agent.node_did.as_str(),
@@ -350,8 +350,8 @@ async fn set_backend_max_concurrent(
     fixture: &crate::support::ManagedAgentFixture,
     max_concurrent: i64,
 ) {
-    use gents::documents::apply_desired_state_plan;
-    use gents::documents::{
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     let owner = db.node_identity.did();
@@ -361,7 +361,7 @@ async fn set_backend_max_concurrent(
             Box::pin(async move {
                 let (_, mut backend) = read_desired_state_record_in_txn(
                     txn,
-                    gents::Collection::InferenceBackend,
+                    gents_store::collection::Collection::InferenceBackend,
                     owner,
                     STREAM_BACKEND_ID,
                 )
@@ -369,14 +369,14 @@ async fn set_backend_max_concurrent(
                 .expect("streaming backend is configured");
                 backend["max_concurrent"] = max_concurrent.into();
                 let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                    collection: gents::Collection::InferenceBackend,
+                    collection: gents_store::collection::Collection::InferenceBackend,
                     add: backend.clone(),
                     update: backend,
                 }])?;
                 apply_desired_state_plan(
                     txn,
                     &plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })

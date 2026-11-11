@@ -1,10 +1,11 @@
 use super::*;
-use gents::documents::apply_desired_state_plan;
-use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::goal::{resume_goal_request, set_goal_from_access};
-use gents::store::config_client::ConfigAccess;
-use gents::{Collection, NodeIdentity, Tools};
+use gents_automation::goal::{resume_goal_request, set_goal_from_access};
+use gents_documents::apply_desired_state_plan;
+use gents_documents::Tools;
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents_protocol::goal_status::GoalStatus;
+use gents_store::config_client::ConfigAccess;
+use gents_store::{collection::Collection, identity::NodeIdentity};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -26,7 +27,7 @@ async fn publish(access: &ConfigAccess, documents: Vec<(Collection, Value)>) -> 
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
                 .map(|_| ())

@@ -35,7 +35,7 @@ where
         }
         let installed = normalize_absolute(&self.definition_executable(&fs::read(path)?)?)?;
         let root = normalize_absolute(&self.config.home)?
-            .join(gents::store::local::home::SERVICE_UPDATES_DIR_NAME);
+            .join(gents_store::local::home::SERVICE_UPDATES_DIR_NAME);
         let Ok(relative) = installed.strip_prefix(root) else {
             return Ok(false);
         };
@@ -54,7 +54,7 @@ where
         let root = self
             .config
             .home
-            .join(gents::store::local::home::SERVICE_UPDATES_DIR_NAME);
+            .join(gents_store::local::home::SERVICE_UPDATES_DIR_NAME);
         if !root.is_dir() {
             return Ok(None);
         }
@@ -380,7 +380,7 @@ mod tests {
             let id = uuid::Uuid::new_v4();
             let operation = config
                 .home
-                .join(gents::store::local::home::SERVICE_UPDATES_DIR_NAME)
+                .join(gents_store::local::home::SERVICE_UPDATES_DIR_NAME)
                 .join(id.to_string());
             fs::create_dir_all(&operation).unwrap();
             config.executable = operation.join("gents");

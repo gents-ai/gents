@@ -1,6 +1,6 @@
 use super::support::*;
 use super::*;
-use crate::store::identity::NodeIdentity;
+use gents_store::identity::NodeIdentity;
 
 const STARTUP_DEADLOCK_GUARD: Duration = Duration::from_secs(30);
 
@@ -99,7 +99,11 @@ impl crate::runtime::node_readiness_publisher::NodeReadinessWriter for ExhaustRe
     }
 }
 
-async fn wait_for_held_request_state(access: &crate::ConfigAccess, doc_id: &str, expected: &str) {
+async fn wait_for_held_request_state(
+    access: &gents_store::config_client::ConfigAccess,
+    doc_id: &str,
+    expected: &str,
+) {
     let doc_id = escape_graphql_string(doc_id);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
@@ -252,7 +256,7 @@ async fn run_agent_starts_when_startup_probe_discovers_selected_model() {
     );
 }
 
-async fn delete_tools_document(access: &crate::ConfigAccess, tools_id: &str) {
+async fn delete_tools_document(access: &gents_store::config_client::ConfigAccess, tools_id: &str) {
     let response = access
         .execute(&format!(
             r#"{{ Tools(filter: {{ tools_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
@@ -291,7 +295,7 @@ async fn run_agent_fails_when_all_agents_are_unavailable_due_to_invalid_config()
     write_runtime_documents(
         &fixture.user_access,
         vec![(
-            crate::Collection::Tools,
+            gents_store::collection::Collection::Tools,
             serde_json::json!({"node_did": identity.did(), "tools_id": "missing-tools"}),
         )],
     )
@@ -299,7 +303,7 @@ async fn run_agent_fails_when_all_agents_are_unavailable_due_to_invalid_config()
     merge_fixture_document(
         &fixture.user_access,
         "test.invalid_context",
-        crate::Collection::AgentContext,
+        gents_store::collection::Collection::AgentContext,
         identity.did(),
         &context_id,
         serde_json::json!({"tools_id": "missing-tools"}),
@@ -391,7 +395,7 @@ async fn router_generation_persistence_failure_terminates_run_agent_before_dispa
     )
     .await
     .unwrap();
-    let agent_access = crate::ConfigAccess::local_managed_agent(
+    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         fixture.agent.did().parse().unwrap(),
         fixture.agent.as_ref(),
@@ -768,7 +772,7 @@ async fn run_agent_starts_with_all_agents_unavailable_and_rejects_requests_at_ru
         Some(AgentReadinessUnavailableReason::BackendTemporarilyUnavailable)
     );
 
-    let agent_access = crate::ConfigAccess::local_managed_agent(
+    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         fixture.agent.did().parse().unwrap(),
         fixture.agent.as_ref(),
@@ -895,11 +899,11 @@ async fn submit_capacity_request(
     request_id: &str,
     session_id: &str,
 ) -> String {
-    use crate::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec};
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+    use gents_session::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec};
     let user_did = fixture.user.did();
     let node_did = fixture.db.node_identity.did();
-    let create = crate::request::lifecycle::build_signed_client_request(
+    let create = gents_session::request::lifecycle::build_signed_client_request(
         &fixture.user_access,
         RequestSpec::new(
             RequestPurpose::Normal,
@@ -910,7 +914,7 @@ async fn submit_capacity_request(
                 agent_did: agent_did.to_owned(),
                 session_id: session_id.to_owned(),
                 content: "hello".to_owned(),
-                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                execution_origin: gents_session::request::lifecycle::ExecutionOrigin::Interactive,
                 created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             },
             AgentRequestAdmissionRecord::client(user_did),
@@ -919,7 +923,7 @@ async fn submit_capacity_request(
     )
     .await
     .unwrap();
-    crate::session::update_session_title_with_source(
+    gents_session::session::update_session_title_with_source(
         &fixture.user_access,
         node_did,
         Some(user_did),
@@ -929,7 +933,7 @@ async fn submit_capacity_request(
     )
     .await
     .unwrap();
-    crate::request::lifecycle::submit_client_request(&fixture.user_access, &create)
+    gents_session::request::lifecycle::submit_client_request(&fixture.user_access, &create)
         .await
         .unwrap();
     let request = escape_graphql_string(request_id);
@@ -948,7 +952,7 @@ async fn submit_capacity_request(
 }
 
 async fn wait_for_held_inference_state(
-    access: &crate::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     request_id: &str,
     expected: &str,
 ) {
@@ -984,7 +988,7 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
     let node = fixture.db.node.clone();
     let identity = fixture.db.node_identity.clone();
     let first_agent = fixture.agent.clone();
-    let second_binding = crate::store::identity::provision_agent_identity_authorized(
+    let second_binding = gents_store::identity::provision_agent_identity_authorized(
         &node,
         identity.as_ref(),
         &fixture.user.did().parse().unwrap(),
@@ -992,14 +996,14 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
     .await
     .unwrap();
     let second_agent =
-        crate::store::identity::resolve_agent_identity(identity.as_ref(), &second_binding).unwrap();
+        gents_store::identity::resolve_agent_identity(identity.as_ref(), &second_binding).unwrap();
     grant_held_agent_operations(&node, identity.as_ref(), second_agent.as_ref()).await;
     let first_did = first_agent.did().to_owned();
     let second_did = second_agent.did().to_owned();
     write_runtime_documents(
         &fixture.user_access,
         vec![(
-            crate::Collection::Agent,
+            gents_store::collection::Collection::Agent,
             serde_json::json!({
                 "node_did": identity.did(), "agent_did": second_did,
                 "creation_nonce": second_binding.creation_nonce,
@@ -1008,13 +1012,13 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
         )],
     )
     .await;
-    let first_access = crate::ConfigAccess::local_managed_agent(
+    let first_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         first_did.parse().unwrap(),
         first_agent.as_ref(),
     )
     .unwrap();
-    let second_access = crate::ConfigAccess::local_managed_agent(
+    let second_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         second_did.parse().unwrap(),
         second_agent.as_ref(),
@@ -1069,7 +1073,7 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
     for request_doc_id in [&first_request_doc_id, &queued_request_doc_id] {
         let response = fixture.user_access.execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ request_id lifecycle_state terminalized_at terminal_output }} }}"#,
-            crate::store::graphql::escape_graphql_string(request_doc_id),
+            gents_store::graphql::escape_graphql_string(request_doc_id),
         )).await.unwrap();
         let rows = response["data"]["AgentRequest"].as_array().unwrap();
         assert_eq!(
@@ -1090,7 +1094,7 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
 
 #[tokio::test]
 async fn generated_snapshot_demotions_preserve_healthy_agents() {
-    use crate::triggers::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
+    use gents_automation::triggers::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
     use rapidhash::{RapidHashMap, RapidHashSet};
 
     fn ids(value: &Value) -> Vec<String> {
@@ -1208,10 +1212,10 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
 }
 
 async fn write_runtime_documents(
-    access: &crate::ConfigAccess,
-    documents: Vec<(crate::Collection, Value)>,
+    access: &gents_store::config_client::ConfigAccess,
+    documents: Vec<(gents_store::collection::Collection, Value)>,
 ) {
-    use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     let plan = DesiredStateApplyPlan::new(
         documents
             .into_iter()
@@ -1227,10 +1231,10 @@ async fn write_runtime_documents(
         .transact_write("test.runtime.configure", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::documents::apply_desired_state_plan(
+                gents_documents::apply_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
@@ -1274,10 +1278,10 @@ fn agent_document(
     node_did: &str,
     binding: &gents_protocol::agent_identity::AgentIdentityBinding,
     default_agent_did: &str,
-) -> (crate::Collection, Value) {
+) -> (gents_store::collection::Collection, Value) {
     let agent_did = &binding.agent_did;
     (
-        crate::Collection::Agent,
+        gents_store::collection::Collection::Agent,
         serde_json::json!({"node_did": node_did, "agent_did": agent_did,
             "creation_nonce": binding.creation_nonce,
             "context_id": format!("{agent_did}:context"),
@@ -1285,17 +1289,23 @@ fn agent_document(
     )
 }
 
-fn context_document(node_did: &str, agent_did: &str) -> (crate::Collection, Value) {
+fn context_document(
+    node_did: &str,
+    agent_did: &str,
+) -> (gents_store::collection::Collection, Value) {
     (
-        crate::Collection::AgentContext,
+        gents_store::collection::Collection::AgentContext,
         serde_json::json!({"node_did": node_did, "context_id": format!("{agent_did}:context"),
             "tools_id": format!("{agent_did}:tools")}),
     )
 }
 
-fn tools_naming_missing_plugin(node_did: &str, tools_id: &str) -> (crate::Collection, Value) {
+fn tools_naming_missing_plugin(
+    node_did: &str,
+    tools_id: &str,
+) -> (gents_store::collection::Collection, Value) {
     (
-        crate::Collection::Tools,
+        gents_store::collection::Collection::Tools,
         serde_json::json!({"node_did": node_did, "tools_id": tools_id,
             "integrations": {"plugins": [{"plugin": "acme/missing_plugin"}]}}),
     )
@@ -1307,7 +1317,7 @@ async fn run_agent_starts_without_an_agent_whose_tools_name_a_missing_plugin() {
     let node = fixture.db.node.clone();
     let identity = fixture.db.node_identity.clone();
     let default_agent_did = fixture.agent.did().to_owned();
-    let broken_binding = crate::store::identity::provision_agent_identity_authorized(
+    let broken_binding = gents_store::identity::provision_agent_identity_authorized(
         &node,
         identity.as_ref(),
         &fixture.user.did().parse().unwrap(),
@@ -1348,9 +1358,9 @@ async fn run_agent_starts_without_an_agent_whose_tools_name_a_missing_plugin() {
     );
 
     let broken_identity =
-        crate::store::identity::resolve_agent_identity(identity.as_ref(), &broken_binding).unwrap();
+        gents_store::identity::resolve_agent_identity(identity.as_ref(), &broken_binding).unwrap();
     grant_held_agent_operations(&node, identity.as_ref(), broken_identity.as_ref()).await;
-    let broken_access = crate::ConfigAccess::local_managed_agent(
+    let broken_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         broken.parse().unwrap(),
         broken_identity.as_ref(),
@@ -1429,14 +1439,14 @@ async fn startup_demotion_cascades_to_targets_schedules_and_tasks() {
     let node = fixture.db.node.clone();
     let identity = fixture.db.node_identity.clone();
     let default_agent_did = fixture.agent.did().to_owned();
-    let broken_binding = crate::store::identity::provision_agent_identity_authorized(
+    let broken_binding = gents_store::identity::provision_agent_identity_authorized(
         &node,
         identity.as_ref(),
         &fixture.user.did().parse().unwrap(),
     )
     .await
     .unwrap();
-    let caller_binding = crate::store::identity::provision_agent_identity_authorized(
+    let caller_binding = gents_store::identity::provision_agent_identity_authorized(
         &node,
         identity.as_ref(),
         &fixture.user.did().parse().unwrap(),
@@ -1454,27 +1464,27 @@ async fn startup_demotion_cascades_to_targets_schedules_and_tasks() {
             agent_document(&node_did, &caller_binding, &default_agent_did),
             context_document(&node_did, caller),
             (
-                crate::Collection::Tools,
+                gents_store::collection::Collection::Tools,
                 serde_json::json!({"node_did": node_did, "tools_id": format!("{caller}:tools"),
                     "agents": {"target_ids": ["target-web-persona"], "enabled": true}}),
             ),
             (
-                crate::Collection::AgentTarget,
+                gents_store::collection::Collection::AgentTarget,
                 serde_json::json!({"node_did": node_did, "target_id": "target-web-persona",
                     "target_node_did": node_did, "agent_did": broken, "name": "web"}),
             ),
             (
-                crate::Collection::Task,
+                gents_store::collection::Collection::Task,
                 serde_json::json!({"node_did": node_did, "task_id": "task-web", "agent_did": broken,
                     "prompt_template": "tick", "enabled": true}),
             ),
             (
-                crate::Collection::Schedule,
+                gents_store::collection::Collection::Schedule,
                 serde_json::json!({"node_did": node_did, "schedule_id": "schedule-web",
                     "cadence": {"kind": "interval", "interval_secs": 300}}),
             ),
             (
-                crate::Collection::Trigger,
+                gents_store::collection::Collection::Trigger,
                 serde_json::json!({"node_did": node_did, "trigger_id": "trigger-web", "task_id": "task-web",
                     "source": {"kind": "schedule", "schedule_id": "schedule-web"}, "enabled": true}),
             ),
@@ -1482,10 +1492,10 @@ async fn startup_demotion_cascades_to_targets_schedules_and_tasks() {
     )
     .await;
     let (agent, _plugin_home) = documents_agent(&fixture).await;
-    let tool_runtime = crate::tools::surface::ToolRuntimeContext::new_with_node_did(
+    let tool_runtime = gents_tools::surface::ToolRuntimeContext::new_with_node_did(
         agent.node.clone(),
         agent.mcp_pool.clone(),
-        crate::tools::mcp::health::ServiceHealthMap::new(),
+        gents_tools::mcp::health::ServiceHealthMap::new(),
         agent.local_hostname.clone(),
         agent.local_subnet.clone(),
         node_did.clone(),

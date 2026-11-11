@@ -1,8 +1,8 @@
 use anyhow::{anyhow, bail, Result};
-use gents::documents::{Schedule, Task};
-use gents::store::graphql::escape_graphql_string;
 use gents_desktop_core::client::ClientCore;
+use gents_documents::{Schedule, Task};
 use gents_protocol::row::AgentRequestRow;
+use gents_store::graphql::escape_graphql_string;
 
 use super::super::types::{
     EventSourceDeleteRequest, EventSourceSaveRequest, ScheduleRunRequest, ScheduleSaveRequest,

@@ -11,10 +11,8 @@ use serde_json::Value;
 use crate::optimization::target::{JobTarget, TargetField};
 use crate::runner::freeze::pack::{load_pack, write_pack_files};
 use crate::runner::CellSource;
-use gents::documents::{
-    EvalDefinition, EvalSplit, EventSource, PackConfig, Trigger, TriggerSource,
-};
-use gents::pack::{declared_paths, interpolate, PackManifest};
+use gents_documents::{EvalDefinition, EvalSplit, EventSource, PackConfig, Trigger, TriggerSource};
+use gents_pack::pack::{declared_paths, interpolate, PackManifest};
 
 /// The canonical config bundle a sidecar reference or an inline prompt lives in.
 const CONFIG_ASSET: &str = "pack_config.json";
@@ -54,7 +52,7 @@ pub fn materialize_pack(
             .map(str::to_owned)
             .with_context(|| format!("agent slot {agent_slot:?} names no context to optimize"))?,
         JobTarget::Task(task_id) => {
-            let reference = gents::pack::agent_slot_reference(agent_slot);
+            let reference = gents_pack::pack::agent_slot_reference(agent_slot);
             pack.config
                 .tasks
                 .iter()

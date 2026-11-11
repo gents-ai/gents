@@ -9,7 +9,6 @@ mod trigger;
 use std::fmt::Display;
 use std::path::Path;
 
-use gents::store::config_client::ConfigAccess;
 use gents_desktop_core::client::{
     apply_config_components_on, resolve_schedule_now_on, upsert_event_source_on,
     upsert_schedule_on, upsert_skill_on, upsert_tool_service_registry_on, upsert_trigger_on,
@@ -18,6 +17,7 @@ use gents_shell::sample::Tone;
 use gents_shell::source::{
     Doc, FieldKind, Form, FormAct, FormAction, FormError, FormField, FormRef,
 };
+use gents_store::config_client::ConfigAccess;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 

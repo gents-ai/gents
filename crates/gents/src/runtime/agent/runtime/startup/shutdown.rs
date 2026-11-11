@@ -7,7 +7,7 @@ use tokio_util::task::AbortOnDropHandle;
 use super::lifecycle_coordinator::RuntimeLifecycleCoordinator;
 use super::BackgroundTaskResult;
 use crate::runtime::agent::Gents;
-use crate::tools::native::lsp::LspPool;
+use gents_tools::native::lsp::LspPool;
 
 pub(super) struct OwnedRuntimeTasks {
     pub(super) background_tasks: JoinSet<BackgroundTaskResult>,

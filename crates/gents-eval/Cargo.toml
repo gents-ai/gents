@@ -8,6 +8,15 @@ description = "Evaluation and optimization drivers for Gents"
 
 [dependencies]
 gents = { path = "../gents" }
+gents-store = { workspace = true }
+gents-documents = { workspace = true }
+gents-inference = { workspace = true }
+gents-pack = { workspace = true }
+gents-session = { workspace = true }
+gents-tools = { workspace = true }
+gents-toolcalls = { workspace = true }
+gents-automation = { workspace = true }
+gents-observe = { workspace = true }
 schema.workspace = true
 rapidhash = { workspace = true }
 anyhow.workspace = true

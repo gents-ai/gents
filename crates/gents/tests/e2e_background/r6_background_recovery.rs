@@ -12,8 +12,11 @@ struct ToolCallRow {
 }
 
 /// Reads as the working Agent, which owns its tool calls under document ACP.
-async fn wait_for_running_tool(access: &gents::ConfigAccess, session_id: &str) -> String {
-    let session_id = gents::store::graphql::escape_graphql_string(session_id);
+async fn wait_for_running_tool(
+    access: &gents_store::config_client::ConfigAccess,
+    session_id: &str,
+) -> String {
+    let session_id = gents_store::graphql::escape_graphql_string(session_id);
     for _ in 0..100 {
         let response = access
             .execute(&format!(
@@ -62,7 +65,7 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
     let fixture = crate::support::managed_agent_fixture(&db).await;
     let agent_binding = fixture.binding.clone();
     let agent_did = agent_binding.agent_did.as_str();
-    let agent_access = gents::ConfigAccess::local_managed_agent(
+    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         db.node.clone(),
         agent_did.parse().expect("valid Agent DID"),
         fixture.agent.as_ref(),
@@ -97,12 +100,12 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
         &node_did,
         agent_did,
         None,
-        gents::documents::Tools {
+        gents_documents::Tools {
             tools_id: format!("{agent_did}:tools"),
             node_did: node_did.clone(),
-            host: Some(gents::documents::HostTools {
-                bash: Some(gents::documents::BashTools {
-                    mode: gents::BashMode::ReadOnly,
+            host: Some(gents_documents::HostTools {
+                bash: Some(gents_documents::BashTools {
+                    mode: gents_documents::BashMode::ReadOnly,
                     read_only_commands: Some(vec!["sleep".to_string()]),
                     background_enabled: true,
                     ..Default::default()
@@ -114,13 +117,14 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
         Vec::new(),
     )
     .await;
-    let identity: std::sync::Arc<dyn gents::NodeIdentity> = db.node_identity.clone();
+    let identity: std::sync::Arc<dyn gents_store::identity::NodeIdentity> =
+        db.node_identity.clone();
     let agent = gents::Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions {
             backend_admission: Some(db.home.backend_admission()),
-            tool_ceiling: gents::ToolCeiling::readonly(),
+            tool_ceiling: gents_tools::surface::ToolCeiling::readonly(),
             ..Default::default()
         },
     )
@@ -153,8 +157,11 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
     std::future::pending::<()>().await;
 }
 
-async fn load_tool_call(access: &gents::ConfigAccess, tool_call_id: &str) -> ToolCallRow {
-    let tool_call_id = gents::store::graphql::escape_graphql_string(tool_call_id);
+async fn load_tool_call(
+    access: &gents_store::config_client::ConfigAccess,
+    tool_call_id: &str,
+) -> ToolCallRow {
+    let tool_call_id = gents_store::graphql::escape_graphql_string(tool_call_id);
     let query = format!(
         r#"{{
             AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tool_call_id}" }} }}, limit: 1) {{
@@ -171,8 +178,11 @@ async fn load_tool_call(access: &gents::ConfigAccess, tool_call_id: &str) -> Too
         .expect("one recovered tool call")
 }
 
-async fn load_messages(access: &gents::ConfigAccess, session_id: &str) -> Vec<MessageRow> {
-    let session_id = gents::store::graphql::escape_graphql_string(session_id);
+async fn load_messages(
+    access: &gents_store::config_client::ConfigAccess,
+    session_id: &str,
+) -> Vec<MessageRow> {
+    let session_id = gents_store::graphql::escape_graphql_string(session_id);
     let query = format!(
         r#"{{
             AgentMessage(
@@ -191,7 +201,7 @@ async fn load_messages(access: &gents::ConfigAccess, session_id: &str) -> Vec<Me
         .unwrap_or_default();
     let mut messages = Vec::new();
     for header in headers {
-        let (_, message) = gents::session::load_canonical_message(
+        let (_, message) = gents_session::session::load_canonical_message(
             access,
             header["_docID"].as_str().expect("message header _docID"),
             header["node_did"].as_str().expect("message header agent"),
@@ -200,19 +210,19 @@ async fn load_messages(access: &gents::ConfigAccess, session_id: &str) -> Vec<Me
         .await
         .expect("reconstruct recovery notification");
         let content = match message {
-            gents::inference::llm::message::Message::System { content } => content,
-            gents::inference::llm::message::Message::User { content } => content
+            gents_inference::llm::message::Message::System { content } => content,
+            gents_inference::llm::message::Message::User { content } => content
                 .into_iter()
                 .filter_map(|item| match item {
-                    gents::inference::llm::message::UserContent::Text(text) => Some(text.text),
+                    gents_inference::llm::message::UserContent::Text(text) => Some(text.text),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
                 .join("\n"),
-            gents::inference::llm::message::Message::Assistant { content, .. } => content
+            gents_inference::llm::message::Message::Assistant { content, .. } => content
                 .into_iter()
                 .filter_map(|item| match item {
-                    gents::inference::llm::message::AssistantContent::Text(text) => Some(text.text),
+                    gents_inference::llm::message::AssistantContent::Text(text) => Some(text.text),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
@@ -223,8 +233,11 @@ async fn load_messages(access: &gents::ConfigAccess, session_id: &str) -> Vec<Me
     messages
 }
 
-async fn load_wakes(access: &gents::ConfigAccess, session_id: &str) -> Vec<serde_json::Value> {
-    let session_id = gents::store::graphql::escape_graphql_string(session_id);
+async fn load_wakes(
+    access: &gents_store::config_client::ConfigAccess,
+    session_id: &str,
+) -> Vec<serde_json::Value> {
+    let session_id = gents_store::graphql::escape_graphql_string(session_id);
     let query = format!(
         r#"{{
             AgentRequest(
@@ -289,15 +302,15 @@ async fn recover_all_interrupts_backgrounded_running_tool_with_live_parent() {
     killed.wait().expect("reap recovery crash worker");
 
     let reopened_identity =
-        gents::KeyIdentity::load_or_create(ready.data_path.join("node.key"), None)
+        gents_store::identity::KeyIdentity::load_or_create(ready.data_path.join("node.key"), None)
             .expect("reload crashed worker signing identity");
     assert_eq!(
-        gents::NodeIdentity::did(&reopened_identity),
+        gents_store::identity::NodeIdentity::did(&reopened_identity),
         ready.node_did,
         "persisted crash-worker key must retain the exact node principal"
     );
     let agent_identity =
-        gents::store::identity::resolve_agent_identity(&reopened_identity, &ready.agent_binding)
+        gents_store::identity::resolve_agent_identity(&reopened_identity, &ready.agent_binding)
             .expect("reload crashed worker's managed Agent identity");
     // Reopen through the home owner: the store is protected by its home key
     // and lives under the home's data directory.
@@ -323,8 +336,9 @@ async fn recover_all_interrupts_backgrounded_running_tool_with_live_parent() {
         process_alive(orphan_pid),
         "the spawned process must survive its runtime's crash"
     );
-    let executions = gents::BackgroundExecutionRegistry::default().with_process_records(records);
-    let report = gents::tools::call::lifecycle::ToolCallLifecycle::recover_all_with_executions(
+    let executions = gents_toolcalls::call::hook::BackgroundExecutionRegistry::default()
+        .with_process_records(records);
+    let report = gents_toolcalls::call::lifecycle::ToolCallLifecycle::recover_all_with_executions(
         &node,
         &ready.node_did,
         std::slice::from_ref(&agent_identity),
@@ -345,7 +359,7 @@ async fn recover_all_interrupts_backgrounded_running_tool_with_live_parent() {
     );
 
     // The recovered rows belong to the working Agent; read them as it.
-    let agent_access = gents::ConfigAccess::local_managed_agent(
+    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         agent_identity.did().parse().expect("valid Agent DID"),
         agent_identity.as_ref(),

@@ -1,11 +1,11 @@
 use super::*;
-use crate::store::config_client::{GraphqlEndpoint, NodePermission};
-use crate::store::identity::KeyIdentity;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
 use gents_protocol::request_input::{QueueDelivery, QueuePolicy, QueueSource, RequestQueue};
 use gents_protocol::session_input_edit::{PendingMessageEdit, PendingQueueEdit};
+use gents_store::config_client::{GraphqlEndpoint, NodePermission};
+use gents_store::identity::KeyIdentity;
 
 /// Native document ACP governs block reads, so the signer is verified from the
 /// block material a reader of that document is authorized to load.
@@ -44,9 +44,9 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
                 .build()
                 .await?,
         );
-        crate::ensure_runtime_schemas(&node).await?;
-        let binding = crate::store::identity::provision_agent_identity(root.as_ref())?;
-        let agent = crate::store::identity::resolve_agent_identity(root.as_ref(), &binding)?;
+        gents_store::schema::ensure_runtime_schemas(&node).await?;
+        let binding = gents_store::identity::provision_agent_identity(root.as_ref())?;
+        let agent = gents_store::identity::resolve_agent_identity(root.as_ref(), &binding)?;
         let admin = ConfigAccess::local_as(node.clone(), root.did().parse()?);
         for did in [user.did(), collaborator.did(), binding.agent_did.as_str()] {
             for permission in [
@@ -72,13 +72,13 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
                 "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
                 &serde_json::json!({"input":{"node_did":root.did()}}), gents_protocol::schemas::NODE,
             ).await?;
-            let node_doc = crate::store::graphql::created_doc_id(&node_response, "Node")?;
+            let node_doc = gents_store::graphql::created_doc_id(&node_response, "Node")?;
             let agent_response = txn.execute_client_signed_create(
                 "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
                 &serde_json::json!({"input":{"node_did":root.did(),"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"inference_profile_id":"fixture","enabled":true}}),
                 gents_protocol::schemas::AGENT,
             ).await?;
-            let agent_doc = crate::store::graphql::created_doc_id(&agent_response, "Agent")?;
+            let agent_doc = gents_store::graphql::created_doc_id(&agent_response, "Agent")?;
             Ok::<_, anyhow::Error>((node_doc, agent_doc))
         })}).await?;
         access
@@ -130,11 +130,12 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
             interrupted_request_id: None,
             background_completion_wake_version: None,
         });
-        original.session_doc_id =
-            Some(crate::request::lifecycle::reserve_goal_session(&access, &original).await?);
+        original.session_doc_id = Some(
+            gents_session::request::lifecycle::reserve_goal_session(&access, &original).await?,
+        );
         original.agent_doc_id = Some(agent_doc.clone());
-        crate::sign_agent_request_create(&user, &mut original).await?;
-        crate::request::lifecycle::submit_client_request(&access, &original).await?;
+        gents_session::request::admission::sign_agent_request_create(&user, &mut original).await?;
+        gents_session::request::lifecycle::submit_client_request(&access, &original).await?;
         let old = access
             .execute("{ AgentRequest { _docID request_id } }")
             .await?;
@@ -165,7 +166,7 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
         // so the client helper refuses to prepare that edit. The modeled
         // denial is the Agent's: the collaborator's command is crafted from
         // the User's queue view and signed by the collaborator.
-        let mut replacements = crate::request::lifecycle::queue::prepare_pending_user_edit(
+        let mut replacements = gents_session::request::lifecycle::queue::prepare_pending_user_edit(
             &access,
             &user,
             AgentRequestAdmissionRecord::client(user.did()),
@@ -176,20 +177,23 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
         )
         .await?;
         if author.did() != user.did() {
-            assert!(crate::request::lifecycle::queue::prepare_pending_user_edit(
-                &edit_access,
-                author,
-                AgentRequestAdmissionRecord::client(author.did()),
-                root.did(),
-                "session",
-                user.did(),
-                &edit,
-            )
-            .await
-            .is_err());
+            assert!(
+                gents_session::request::lifecycle::queue::prepare_pending_user_edit(
+                    &edit_access,
+                    author,
+                    AgentRequestAdmissionRecord::client(author.did()),
+                    root.did(),
+                    "session",
+                    user.did(),
+                    &edit,
+                )
+                .await
+                .is_err()
+            );
             for replacement in &mut replacements {
                 replacement.admission = AgentRequestAdmissionRecord::client(author.did());
-                crate::sign_agent_request_create(author, replacement).await?;
+                gents_session::request::admission::sign_agent_request_create(author, replacement)
+                    .await?;
             }
         }
         let (session_doc_id, agent_did, agent_doc_id, replacement_evidence) =
@@ -219,19 +223,19 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
             .context("signature evidence missing")?;
         let byte = signature[0].as_u64().context("signature byte missing")?;
         signature[0] = serde_json::json!(byte ^ 1);
-        let input = crate::store::config_client::client_request_input(&command.replacements[0])?;
-        let tampered_accepted =
-            crate::store::config_client::verify_request_evidence(input, altered)
-                .await
-                .is_ok();
+        let input = gents_store::config_client::client_request_input(&command.replacements[0])?;
+        let tampered_accepted = gents_store::config_client::verify_request_evidence(input, altered)
+            .await
+            .is_ok();
         assert_eq!(
             tampered_accepted,
             case["tamperedAccepted"].as_bool().unwrap()
         );
         let command_doc =
-            crate::request::lifecycle::queue::publish_edit_command(&edit_access, &command).await?;
+            gents_session::request::lifecycle::queue::publish_edit_command(&edit_access, &command)
+                .await?;
         let command_row = access.execute(&format!(r#"{{ AgentSessionInputEdit(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _version {{ cid height fieldName }} }} }}"#, escape_graphql_string(&command_doc))).await?;
-        let command_version = crate::store::graphql::document_composite_version(
+        let command_version = gents_store::graphql::document_composite_version(
             &command_row["data"]["AgentSessionInputEdit"][0],
             "edit command",
         )?
@@ -359,7 +363,7 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
                 receipt.request_doc_ids[0]
             );
             let replacement = access.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _version {{ cid height fieldName }} }} }}"#, escape_graphql_string(&receipt.request_doc_ids[0]))).await?;
-            let version = crate::store::graphql::document_composite_version(
+            let version = gents_store::graphql::document_composite_version(
                 &replacement["data"]["AgentRequest"][0],
                 "replacement",
             )?
@@ -383,9 +387,8 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
             let row: gents_protocol::row::AgentRequestRow =
                 serde_json::from_value(request["data"]["AgentRequest"][0].clone())?;
             let request = gents_protocol::row::AgentRequest::try_from(row)?;
-            let (_owner, authority) =
-                crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
-            let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+            let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
+            let verifier = gents_session::request::admission::AgentRequestAdmissionVerifier::new(
                 node.clone(),
                 root.clone(),
                 authority,
@@ -398,18 +401,18 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
                 "User-authored replacement requires native client claim admission"
             );
             let mut lifecycle =
-                crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
+                gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
                     node.clone(),
                     request,
                     60,
-                    crate::request::lifecycle::ExecutionOrigin::Interactive,
+                    gents_session::request::lifecycle::ExecutionOrigin::Interactive,
                     String::new(),
                 );
             lifecycle.bind_managed_agent(agent.as_ref())?;
             lifecycle.set_client_claim_admission(admission);
             assert!(matches!(
                 lifecycle.claim_with_identity().await?,
-                crate::request::lifecycle::ClaimOutcome::Claimed
+                gents_session::request::lifecycle::ClaimOutcome::Claimed
             ));
             let claimed = agent_access.execute(&format!(
                 r#"{{ AgentRequest(docID: "{}") {{ lifecycle_state _version {{ cid height fieldName }} }} }}"#,
@@ -419,7 +422,7 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
                 claimed["data"]["AgentRequest"][0]["lifecycle_state"],
                 "claimed"
             );
-            let claim_version = crate::store::graphql::document_composite_version(
+            let claim_version = gents_store::graphql::document_composite_version(
                 &claimed["data"]["AgentRequest"][0],
                 "claimed replacement",
             )?
@@ -431,8 +434,13 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
             let mut removed_request = original.clone();
             removed_request.request_id = "removal-only".into();
             removed_request.content = "remove this pending message".into();
-            crate::sign_agent_request_create(&user, &mut removed_request).await?;
-            crate::request::lifecycle::submit_client_request(&access, &removed_request).await?;
+            gents_session::request::admission::sign_agent_request_create(
+                &user,
+                &mut removed_request,
+            )
+            .await?;
+            gents_session::request::lifecycle::submit_client_request(&access, &removed_request)
+                .await?;
             let pending = access
                 .execute(
                     r#"{ AgentRequest(filter: {request_id: {_eq: "removal-only"}}) {_docID} }"#,
@@ -465,7 +473,8 @@ async fn signed_user_graph_and_agent_effect_share_the_claim_transaction() -> any
             };
             removal.signature = user.sign(&removal.signing_payload()).await?;
             let removal_doc =
-                crate::request::lifecycle::queue::publish_edit_command(&access, &removal).await?;
+                gents_session::request::lifecycle::queue::publish_edit_command(&access, &removal)
+                    .await?;
             process_command(&node, &root, &removal_doc, agent.as_ref()).await?;
             let removed = access
                 .execute(&format!(

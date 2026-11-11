@@ -1,0 +1,368 @@
+use super::*;
+use anyhow::Context;
+use futures::FutureExt;
+use gents_loop::session_hook::{ForegroundCall, ForegroundResult};
+use gents_tools::runtime_context::{
+    current_tool_runtime_context, scope_request_tool_execution_with_workspace_overlay,
+    ToolWorkspaceScope,
+};
+use std::panic::AssertUnwindSafe;
+use std::sync::Arc;
+use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
+
+impl DefraSessionHook {
+    pub(in crate::call::hook) async fn foreground_background_request(
+        &self,
+        doc: &str,
+    ) -> anyhow::Result<Option<String>> {
+        let query = {
+            use gents_protocol::document_query::{
+                fields::agent_tool_call as fields, Filter, Query, Selection,
+            };
+            Query::select(Selection::new().field(fields::BACKGROUND_REQUESTED_AT))
+                .filter(Filter::eq(fields::DOC_ID, doc))
+                .limit(2)
+                .render()
+        };
+        let response = self.actor_access()?.read(&query).await?;
+        let rows = response["data"]["AgentToolCall"]
+            .as_array()
+            .context("foreground background request query omitted rows")?;
+        let [row] = rows.as_slice() else {
+            anyhow::bail!("foreground background request is unavailable or ambiguous");
+        };
+        match row.get("background_requested_at") {
+            Some(serde_json::Value::Null) => Ok(None),
+            Some(serde_json::Value::String(value)) => Ok(Some(value.clone())),
+            _ => anyhow::bail!("foreground background request timestamp is unavailable"),
+        }
+    }
+
+    pub(in crate::call::hook) async fn handoff_unverified_process(
+        &self,
+        lifecycle: &mut ToolCallLifecycle,
+        internal_id: &str,
+        doc: &str,
+    ) -> anyhow::Result<String> {
+        let receipt = json!({"tool_call_id": lifecycle.tool_call_id(), "status": "running", "await_mode": "background", "message": "Process exit could not be confirmed; the call remains available for control."}).to_string();
+        lifecycle.background_with_recovery_receipt(&receipt).await?;
+        self.in_flight_lifecycles.lock().await.remove(internal_id);
+        self.foreground_process_evidence.lock().await.remove(doc);
+        Ok(receipt)
+    }
+
+    pub(in crate::call::hook) async fn run_backgroundable_foreground(
+        &self,
+        name: &str,
+        internal_id: &str,
+        call: ForegroundCall,
+    ) -> ForegroundResult {
+        let context = current_tool_runtime_context();
+        if !gents_tools::native::is_bash_tool_name(name) {
+            return ForegroundResult::Settled(
+                call(
+                    context
+                        .map(|value| value.cancellation_token)
+                        .unwrap_or_default(),
+                    None,
+                )
+                .await,
+            );
+        }
+        let Some(context) = context else {
+            return ForegroundResult::Settled(
+                gents_loop::tool_call_lifecycle::ToolOutcome::from_tool_call_error(
+                    "native process requires an owned execution context",
+                ),
+            );
+        };
+        let Some(lifecycle) = self
+            .in_flight_lifecycles
+            .lock()
+            .await
+            .get(internal_id)
+            .cloned()
+        else {
+            return ForegroundResult::Settled(
+                gents_loop::tool_call_lifecycle::ToolOutcome::from_tool_call_error(
+                    "native process requires an accepted invocation",
+                ),
+            );
+        };
+        let changes = match gents_store::subscription_source::subscribe_collections(
+            &self.node,
+            ["AgentToolCall"],
+        ) {
+            Ok(changes) => changes,
+            Err(error) => {
+                tracing::warn!(%error, "foreground handoff observation unavailable");
+                return ForegroundResult::Settled(
+                    gents_loop::tool_call_lifecycle::ToolOutcome::from_tool_call_error(
+                        "native process observation is unavailable",
+                    ),
+                );
+            }
+        };
+        let parent_token = context.cancellation_token.clone();
+        let (answer, result) = oneshot::channel();
+        let hook = self.clone();
+        let internal_id = internal_id.to_owned();
+        let doc = lifecycle
+            .doc_id()
+            .expect("accepted foreground tool")
+            .to_owned();
+        let process_token = CancellationToken::new();
+        let reservation = match self.background_executions.reserve(
+            lifecycle.tool_call_id().to_owned(),
+            doc.clone(),
+            process_token.clone(),
+        ) {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                return ForegroundResult::Settled(
+                    gents_loop::tool_call_lifecycle::ToolOutcome::from_tool_call_error(
+                        &error.to_string(),
+                    ),
+                );
+            }
+        };
+        // Serialize the pre-spawn ownership registration with interruption sweeps.
+        let in_flight = hook.in_flight_lifecycles.lock().await;
+        if !in_flight.contains_key(&internal_id) || parent_token.is_cancelled() {
+            drop(in_flight);
+            drop(reservation);
+            return ForegroundResult::Settled(
+                gents_loop::tool_call_lifecycle::ToolOutcome::Cancelled,
+            );
+        }
+        let recorder = hook
+            .background_executions
+            .process_recorder(lifecycle.tool_call_id(), &doc);
+        let evidence = hook
+            .background_executions
+            .live_process_evidence_owner(lifecycle.tool_call_id(), &doc)
+            .expect("reserved foreground execution has evidence");
+        hook.foreground_process_evidence
+            .lock()
+            .await
+            .insert(doc.clone(), evidence);
+        drop(in_flight);
+        tokio::spawn(gents_tools::plugin::approval::carry_interactive(
+            async move {
+                let mut lifecycle = lifecycle;
+                let check_registry = hook.background_executions.clone();
+                let check_call = lifecycle.tool_call_id().to_owned();
+                let check_doc = doc.clone();
+                let cleanup: gents_loop::session_hook::NativeCleanupCheck =
+                    Arc::new(move |outcome| {
+                        if let Some(outcome) = outcome.filter(|outcome| {
+                            gents_session::exec::ownership::native_terminal_needs_confirmation(
+                                Some(outcome),
+                            )
+                        }) {
+                            check_registry.set_stop_receipt(
+                                &check_call,
+                                &check_doc,
+                                crate::call::hook::RetainedStopReceipt::from_outcome(outcome),
+                            );
+                        }
+                        check_registry.live_process_evidence(&check_call, &check_doc)
+                            != gents_session::exec::ownership::LiveProcessEvidence::NeverSpawned
+                    });
+                let workspace = ToolWorkspaceScope {
+                    runtime_home: context.runtime_home,
+                    workspace_cwd: context.workspace_cwd,
+                    workspace_root: context.workspace_root,
+                    workspace_authority: context.workspace_authority,
+                    workspace_artifact: context.workspace_artifact,
+                };
+                let execution =
+                    AssertUnwindSafe(gents_session::exec::ownership::scope_process_recorder(
+                        recorder,
+                        scope_request_tool_execution_with_workspace_overlay(
+                            context.deadline_at,
+                            process_token.clone(),
+                            workspace,
+                            None,
+                            context.session_id,
+                            context.correlation,
+                            context.source_fields,
+                            false,
+                            call(process_token.clone(), Some(cleanup)),
+                        ),
+                    ))
+                    .catch_unwind();
+                tokio::pin!(execution);
+                let mut changes = Some(changes);
+                let mut answer = Some(answer);
+                let mut backgrounded = false;
+                let mut inspect = true;
+                loop {
+                    if inspect && !backgrounded {
+                        inspect = false;
+                        match hook.foreground_background_request(&doc).await {
+                            Ok(Some(requested_at)) => {
+                                let receipt = json!({
+                                "tool_call_id": lifecycle.tool_call_id(),
+                                "status": "running", "await_mode": "background",
+                                "message": "The same process continues in the background. Its result will arrive in this conversation."
+                            }).to_string();
+                                // Cancellation drains this same request-local map. Hold it through
+                                // the receipt commit so it cannot terminalize a stale foreground copy.
+                                let mut in_flight = hook.in_flight_lifecycles.lock().await;
+                                let admitted = if in_flight.contains_key(&internal_id)
+                                    && !parent_token.is_cancelled()
+                                {
+                                    lifecycle.background_with_receipt(&receipt).await
+                                } else {
+                                    Err(anyhow::anyhow!("foreground request already stopped"))
+                                };
+                                match admitted {
+                                    Ok(()) => {
+                                        // The receipt and mode commit before releasing the parent. Once
+                                        // committed, dropping the parent's receiver must not cancel this process.
+                                        backgrounded = true;
+                                        hook.foreground_process_evidence.lock().await.remove(&doc);
+                                        changes = None;
+                                        in_flight.remove(&internal_id);
+                                        if let Some(answer) = answer.take() {
+                                            let _ = answer
+                                                .send(ForegroundResult::Backgrounded(receipt));
+                                        }
+                                    }
+                                    Err(error) => {
+                                        drop(in_flight);
+                                        tracing::warn!(%error, tool_call_doc_id = %doc, "foreground background handoff refused");
+                                        if let Err(error) = lifecycle
+                                            .clear_background_request(Some(&requested_at))
+                                            .await
+                                        {
+                                            tracing::warn!(%error, "could not clear refused background request");
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(None) => {}
+                            Err(error) => tracing::warn!(%error, tool_call_doc_id = %doc,
+                            "foreground background request read failed"),
+                        }
+                    }
+                    tokio::select! {
+                        biased;
+                        _ = async {
+                            tokio::select! {
+                                _ = parent_token.cancelled() => {},
+                                _ = async {
+                                    if let Some(answer) = answer.as_mut() { answer.closed().await }
+                                    else { std::future::pending::<()>().await }
+                                } => {},
+                            }
+                        }, if !backgrounded => {
+                            process_token.cancel();
+                            if let Err(error) = lifecycle.clear_background_request(None).await {
+                                tracing::warn!(%error, "could not clear cancelled background request");
+                            }
+                            let outcome = execution.await.unwrap_or_else(|_| {
+                                if let Some(evidence) = hook.background_executions.live_process_evidence_owner(lifecycle.tool_call_id(), &doc) { evidence.mark_unverified_failure(); }
+                                gents_loop::tool_call_lifecycle::ToolOutcome::tool_returned_error("native command panicked")
+                            });
+                            let outcome = hook.background_executions.finalize_pending_failure(lifecycle.tool_call_id(), &doc).unwrap_or(outcome);
+                            if gents_session::exec::ownership::native_terminal_needs_confirmation(Some(&outcome))
+                                && !hook.background_executions.process_exit_confirmed(lifecycle.tool_call_id(), &doc).await {
+                                hook.background_executions.set_stop_receipt(lifecycle.tool_call_id(), &doc, crate::call::hook::RetainedStopReceipt::from_outcome(&outcome));
+                                match hook.handoff_unverified_process(&mut lifecycle, &internal_id, &doc).await {
+                                    Ok(receipt) => {
+                                        if let Some(answer) = answer.take() { let _ = answer.send(ForegroundResult::Backgrounded(receipt)); }
+                                        reservation.retain_stopped_worker(lifecycle, false);
+                                    }
+                                    Err(error) => {
+                                        tracing::warn!(%error, tool_call_doc_id = %doc, "foreground recovery handoff retained for retry");
+                                        reservation.retain_for_recovery(lifecycle);
+                                        if let Some(answer) = answer.take() { let _ = answer.send(ForegroundResult::Settled(outcome)); }
+                                    }
+                                }
+                                return;
+                            }
+                            if gents_session::exec::ownership::native_terminal_needs_confirmation(Some(&outcome)) {
+                                let receipt = crate::call::hook::RetainedStopReceipt::from_outcome(&outcome);
+                                hook.background_executions.retain_confirmed_worker(lifecycle, reservation, receipt);
+                                if let Some(answer) = answer.take() { let _ = answer.send(ForegroundResult::Settled(outcome)); }
+                                return;
+                            }
+                            if hook.background_executions.process_exit_confirmed(lifecycle.tool_call_id(), &doc).await {
+                                if let Some(evidence) = hook.background_executions.live_process_evidence_owner(lifecycle.tool_call_id(), &doc) { evidence.exited(); }
+                                hook.background_executions.release_process_record(lifecycle.tool_call_id(), &doc).await;
+                            }
+                            if let Some(answer) = answer.take() { let _ = answer.send(ForegroundResult::Settled(outcome)); }
+                            drop(reservation);
+                            return;
+                        }
+                        outcome = &mut execution => {
+                            if backgrounded {
+                                super::background_tools::finish::finish_background_execution(
+                                    lifecycle, hook.node.clone(), hook.background_live_outputs.clone(),
+                                    hook.background_executions.clone(), reservation, outcome,
+                                ).await;
+                            } else {
+                                let outcome = outcome.unwrap_or_else(|_| {
+                                    if let Some(evidence) = hook.background_executions.live_process_evidence_owner(lifecycle.tool_call_id(), &doc) { evidence.mark_unverified_failure(); }
+                                    gents_loop::tool_call_lifecycle::ToolOutcome::tool_returned_error("native command panicked")
+                                });
+                                let outcome = hook.background_executions.finalize_pending_failure(lifecycle.tool_call_id(), &doc).unwrap_or(outcome);
+                                let needs_confirmation = gents_session::exec::ownership::native_terminal_needs_confirmation(Some(&outcome));
+                                if needs_confirmation && !hook.background_executions.process_exit_confirmed(lifecycle.tool_call_id(), &doc).await {
+                                    hook.background_executions.set_stop_receipt(lifecycle.tool_call_id(), &doc, crate::call::hook::RetainedStopReceipt::from_outcome(&outcome));
+                                    match hook.handoff_unverified_process(&mut lifecycle, &internal_id, &doc).await {
+                                        Ok(receipt) => {
+                                            if let Some(answer) = answer.take() { let _ = answer.send(ForegroundResult::Backgrounded(receipt)); }
+                                            reservation.retain_stopped_worker(lifecycle, false);
+                                        }
+                                        Err(error) => {
+                                            tracing::warn!(%error, tool_call_doc_id = %doc, "foreground recovery handoff retained for retry");
+                                            reservation.retain_for_recovery(lifecycle);
+                                            if let Some(answer) = answer.take() { let _ = answer.send(ForegroundResult::Settled(outcome)); }
+                                        }
+                                    }
+                                    return;
+                                }
+                                if needs_confirmation {
+                                    let receipt = crate::call::hook::RetainedStopReceipt::from_outcome(&outcome);
+                                    hook.background_executions.retain_confirmed_worker(lifecycle, reservation, receipt);
+                                    if let Some(answer) = answer.take() { let _ = answer.send(ForegroundResult::Settled(outcome)); }
+                                    return;
+                                }
+                                if hook.background_executions.process_exit_confirmed(lifecycle.tool_call_id(), &doc).await {
+                                    if let Some(evidence) = hook.background_executions.live_process_evidence_owner(lifecycle.tool_call_id(), &doc) { evidence.exited(); }
+                                    hook.background_executions.release_process_record(lifecycle.tool_call_id(), &doc).await;
+                                }
+                                if let Some(answer) = answer.take() {
+                                    let _ = answer.send(ForegroundResult::Settled(outcome));
+                                }
+                                drop(reservation);
+                            }
+                            return;
+                        }
+                        batch = async {
+                            match changes.as_mut() {
+                                Some(changes) => changes.recv().await,
+                                None => std::future::pending().await,
+                            }
+                        }, if !backgrounded => match batch {
+                            Some(batch) => inspect = batch.resync_required
+                                || batch.changes.iter().any(|change| change.doc_id == doc),
+                            None => changes = None,
+                        },
+                    }
+                }
+            },
+        ));
+        result.await.unwrap_or_else(|_| {
+            ForegroundResult::Settled(
+                gents_loop::tool_call_lifecycle::ToolOutcome::tool_returned_error(
+                    "native execution owner stopped",
+                ),
+            )
+        })
+    }
+}

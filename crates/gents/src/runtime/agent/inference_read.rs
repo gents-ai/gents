@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::inference::inference_observation::{InferenceKey, InferenceSnapshot};
+use gents_inference::inference_observation::{InferenceKey, InferenceSnapshot};
 
 /// Lean `ClientInferenceObservation.ActivityResponse`.
 #[derive(Debug)]
@@ -60,7 +60,7 @@ async fn observation_visible(
         ))
         .limit(2);
     let query = QuerySet::new().plain(&sessions).plain(&requests).render();
-    crate::store::config_client::ConfigAccess::transact_local_readonly(
+    gents_store::config_client::ConfigAccess::transact_local_readonly(
         node,
         Some(actor.clone()),
         "inference_observation.authorize",
@@ -68,7 +68,7 @@ async fn observation_visible(
             Box::pin(async {
                 if !txn
                     .actor_holds_node_permission(
-                        crate::store::config_client::NodePermission::DocumentRead,
+                        gents_store::config_client::NodePermission::DocumentRead,
                     )
                     .await?
                 {
@@ -175,11 +175,14 @@ mod tests {
 
     #[tokio::test]
     async fn delegated_reader_requires_both_document_permissions() {
-        use crate::NodeIdentity;
+        use gents_store::identity::NodeIdentity;
         let home = tempfile::tempdir().unwrap();
-        let owner = crate::KeyIdentity::load_or_create(home.path().join("owner"), None).unwrap();
+        let owner =
+            gents_store::identity::KeyIdentity::load_or_create(home.path().join("owner"), None)
+                .unwrap();
         let requester =
-            crate::KeyIdentity::load_or_create(home.path().join("requester"), None).unwrap();
+            gents_store::identity::KeyIdentity::load_or_create(home.path().join("requester"), None)
+                .unwrap();
         let node = Arc::new(
             defra_node::Node::builder()
                 .with_node_identity_did(owner.did())
@@ -206,14 +209,14 @@ resources:
             )
             .await
             .unwrap();
-        let access = crate::store::config_client::ConfigAccess::local(node.clone());
+        let access = gents_store::config_client::ConfigAccess::local(node.clone());
         for schema in [
             format!("type AgentSession @branchable @policy(id: \"{policy}\", resource: \"documents\") {{ node_did: String session_id: String requester_did: String }}"),
             format!("type AgentRequest @branchable @policy(id: \"{policy}\", resource: \"documents\") {{ node_did: String session_id: String requester_did: String request_id: String execution_generation: String lifecycle_state: String }}"),
         ] { access.add_collection(&schema).await.unwrap(); }
         let actor: identity::Did = requester.did().parse().unwrap();
         let owner_did: identity::Did = owner.did().parse().unwrap();
-        crate::store::config_client::ConfigAccess::local_as(node.clone(), owner_did.clone())
+        gents_store::config_client::ConfigAccess::local_as(node.clone(), owner_did.clone())
             .grant_node_permission(&actor, acp::nac::NodePermission::DocumentRead)
             .await
             .unwrap();
@@ -224,11 +227,11 @@ resources:
             generation: "generation".into(),
         };
         let requester_did = owner.did();
-        let (session_doc, request_doc) = crate::store::config_client::ConfigAccess::transact_local_write(&node, Some(owner_did), "test.activity.acp", |txn| {
+        let (session_doc, request_doc) = gents_store::config_client::ConfigAccess::transact_local_write(&node, Some(owner_did), "test.activity.acp", |txn| {
             Box::pin(async move {
                 let session = txn.execute_with_variables("mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }", &serde_json::json!({"input":{"node_did":"runtime","session_id":"session","requester_did":requester_did}})).await?;
                 let request = txn.execute_with_variables("mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }", &serde_json::json!({"input":{"node_did":"runtime","session_id":"session","requester_did":requester_did,"request_id":"request","execution_generation":"generation","lifecycle_state":"processing"}})).await?;
-                Ok::<_, anyhow::Error>((crate::store::graphql::created_doc_id(&session, "AgentSession")?, crate::store::graphql::created_doc_id(&request, "AgentRequest")?))
+                Ok::<_, anyhow::Error>((gents_store::graphql::created_doc_id(&session, "AgentSession")?, gents_store::graphql::created_doc_id(&request, "AgentRequest")?))
             })
         }).await.unwrap();
         assert_eq!(
@@ -263,7 +266,7 @@ resources:
         );
         // A revoked node read refuses the route even though both documents
         // stay visible to the actor (Lean `without_node_read_activity_is_forbidden`).
-        crate::store::config_client::ConfigAccess::local_as(
+        gents_store::config_client::ConfigAccess::local_as(
             node.clone(),
             owner.did().parse().unwrap(),
         )

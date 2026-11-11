@@ -1,10 +1,10 @@
 use super::*;
 use crate::commands::prepare_runtime::control;
-use gents::store::config_client::GraphqlEndpoint;
 use gents_protocol::serve_lifecycle::{
     control::{RuntimeControlDisposition, RuntimeOperation},
     ServeLifecycle,
 };
+use gents_store::config_client::GraphqlEndpoint;
 
 pub(super) fn endpoint(raw: &str, settings: &NetworkSettings) -> Result<reqwest::Url> {
     let endpoint = reqwest::Url::parse(raw)?;
@@ -34,7 +34,7 @@ pub(super) fn endpoint(raw: &str, settings: &NetworkSettings) -> Result<reqwest:
 pub(super) async fn apply(
     plan: &Plan,
     receipt: &mut Receipt,
-    reservation: &mut Option<gents::store::local::home::RuntimeStartupReservation>,
+    reservation: &mut Option<gents_store::local::home::RuntimeStartupReservation>,
 ) -> Result<()> {
     let directory = operation_dir(&plan.home, plan.id);
     let acceptance_deadline =
@@ -78,7 +78,7 @@ pub(super) async fn apply(
         *reservation = Some(
             tokio::time::timeout(
                 Duration::from_secs(60),
-                gents::store::local::home::reserve_runtime_startup(&plan.home),
+                gents_store::local::home::reserve_runtime_startup(&plan.home),
             )
             .await
             .context("startup reservation is busy")??,
@@ -160,9 +160,9 @@ pub(super) async fn apply(
         }
         tokio::time::timeout(
             Duration::from_secs(120),
-            gents::store::local::home::wait_for_store_release(
+            gents_store::local::home::wait_for_store_release(
                 &plan.home,
-                &gents::store::local::home::default_data_dir(&plan.home),
+                &gents_store::local::home::default_data_dir(&plan.home),
             ),
         )
         .await
@@ -184,7 +184,7 @@ pub(super) async fn apply(
         let dir = directory.clone();
         let phase = receipt.phase;
         tokio::task::spawn_blocking(move || -> Result<()> {
-            let _store = gents::store::local::home::lock_home_store(&copy.home)?;
+            let _store = gents_store::local::home::lock_home_store(&copy.home)?;
             let manager = NativeServiceManager::new(service_config(&copy)?)?;
             anyhow::ensure!(
                 !manager.status()?.is_active_or_transitioning(),
@@ -211,7 +211,7 @@ pub(super) async fn apply(
         let copy = plan.clone();
         let dir = directory.clone();
         tokio::task::spawn_blocking(move || -> Result<()> {
-            let _store = gents::store::local::home::lock_home_store(&copy.home)?;
+            let _store = gents_store::local::home::lock_home_store(&copy.home)?;
             let network = NetworkSettings::read(&copy.home)?;
             anyhow::ensure!(
                 network == copy.prior_network || network == copy.intent.network,
@@ -345,7 +345,7 @@ pub(super) async fn apply(
     let state: crate::shared::StoredRuntimeState = files::read_json_async(
         &plan
             .home
-            .join(gents::store::local::home::RUNTIME_STATE_FILE_NAME),
+            .join(gents_store::local::home::RUNTIME_STATE_FILE_NAME),
     )
     .await?;
     anyhow::ensure!(
@@ -371,7 +371,7 @@ async fn client() -> Result<reqwest::Client> {
     .await?
     .map_err(Into::into)
 }
-async fn operator(plan: &Plan) -> Result<std::sync::Arc<dyn gents::store::identity::NodeIdentity>> {
+async fn operator(plan: &Plan) -> Result<std::sync::Arc<dyn gents_store::identity::NodeIdentity>> {
     let home = plan.home.clone();
     let identity = tokio::task::spawn_blocking(move || {
         let config = read_init_config(&home)?.context("initialized home missing")?;

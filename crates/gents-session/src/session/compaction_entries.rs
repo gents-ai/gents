@@ -1,0 +1,853 @@
+use super::rows::dedupe_paths;
+use super::*;
+use anyhow::Context;
+use rapidhash::RapidHashSet;
+use std::collections::BTreeSet;
+
+/// Another writer appended a compaction generation since this one was read;
+/// the caller rebuilds from the winner.
+#[derive(Debug, thiserror::Error)]
+#[error("stale compaction generation for session {session_id}")]
+pub struct StaleCompactionGeneration {
+    session_id: String,
+}
+
+#[derive(Serialize)]
+struct FilePathDelta<'a> {
+    version: u32,
+    paths: &'a [String],
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredFilePathDelta {
+    version: u32,
+    paths: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StoredFilePaths {
+    Cumulative(Vec<String>),
+    Delta(StoredFilePathDelta),
+}
+
+#[derive(Deserialize)]
+struct PromptCompactionRow {
+    compaction_key: String,
+    sequence: u32,
+    summary: String,
+    messages_compacted: u32,
+    #[serde(default)]
+    compacted_through_sequence: Option<u32>,
+}
+
+#[derive(Clone, Deserialize)]
+pub(super) struct CompactionGenerationRow {
+    #[serde(
+        default,
+        deserialize_with = "gents_documents::deserialize_default_on_null"
+    )]
+    compaction_key: String,
+    sequence: u32,
+    summary: String,
+    messages_compacted: u32,
+    #[serde(default)]
+    compacted_through_sequence: Option<u32>,
+    #[serde(
+        default,
+        deserialize_with = "gents_documents::deserialize_default_on_null"
+    )]
+    files_read: String,
+    #[serde(
+        default,
+        deserialize_with = "gents_documents::deserialize_default_on_null"
+    )]
+    files_modified: String,
+    #[serde(default)]
+    node_did: String,
+    #[serde(default)]
+    requester_did: Option<String>,
+    #[serde(default)]
+    request_id: Option<String>,
+    #[serde(default)]
+    request_doc_id: Option<String>,
+    #[serde(default)]
+    original_tokens: i64,
+    #[serde(default)]
+    compacted_tokens: i64,
+    #[serde(default)]
+    created_at: String,
+}
+
+pub(super) trait CompactionProjection {
+    fn key(&self) -> &str;
+    fn sequence(&self) -> u32;
+    fn summary(&self) -> &str;
+    fn messages_compacted(&self) -> u32;
+    fn cursor(&self) -> Option<u32>;
+}
+
+impl CompactionProjection for PromptCompactionRow {
+    fn key(&self) -> &str {
+        &self.compaction_key
+    }
+    fn sequence(&self) -> u32 {
+        self.sequence
+    }
+    fn summary(&self) -> &str {
+        &self.summary
+    }
+    fn messages_compacted(&self) -> u32 {
+        self.messages_compacted
+    }
+    fn cursor(&self) -> Option<u32> {
+        self.compacted_through_sequence
+    }
+}
+
+impl CompactionProjection for CompactionGenerationRow {
+    fn key(&self) -> &str {
+        &self.compaction_key
+    }
+    fn sequence(&self) -> u32 {
+        self.sequence
+    }
+    fn summary(&self) -> &str {
+        &self.summary
+    }
+    fn messages_compacted(&self) -> u32 {
+        self.messages_compacted
+    }
+    fn cursor(&self) -> Option<u32> {
+        self.compacted_through_sequence
+    }
+}
+
+pub fn compaction_key(
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    sequence: u32,
+) -> String {
+    format!(
+        "compaction:{}",
+        serde_json::to_string(&(node_did, session_id, requester_did, sequence))
+            .expect("session scope serializes")
+    )
+}
+
+pub(super) fn validate_compaction_chain<T>(
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    rows: &[T],
+) -> Result<()>
+where
+    T: CompactionProjection,
+{
+    let mut prior_cursor = None;
+    for (index, row) in rows.iter().enumerate() {
+        let expected_sequence = u32::try_from(index + 1).context("compaction sequence overflow")?;
+        let expected_key = compaction_key(node_did, session_id, requester_did, expected_sequence);
+        anyhow::ensure!(
+            row.sequence() == expected_sequence && row.key() == expected_key,
+            "ambiguous compaction chain for session {session_id}: expected {expected_key}, found {} at sequence {}",
+            row.key(),
+            row.sequence()
+        );
+        let cursor = row.cursor().with_context(|| {
+            format!(
+                "compaction entry for session {session_id} at sequence {} has no canonical cursor",
+                row.sequence()
+            )
+        })?;
+        anyhow::ensure!(
+            prior_cursor.is_none_or(|prior| cursor > prior),
+            "compaction cursor regression for session {session_id} at sequence {}",
+            row.sequence()
+        );
+        prior_cursor = Some(cursor);
+    }
+    Ok(())
+}
+
+fn compaction_generation<T>(rows: &[T]) -> Result<String>
+where
+    T: CompactionProjection,
+{
+    let projection = rows
+        .iter()
+        .map(|row| {
+            serde_json::json!([
+                row.key(),
+                row.sequence(),
+                row.summary(),
+                row.messages_compacted(),
+                row.cursor()
+            ])
+        })
+        .collect::<Vec<_>>();
+    Ok(gents_inference::rendered_request::sha256_canonical_json(
+        &serde_json::json!(projection),
+    )?)
+}
+
+#[cfg(test)]
+pub(crate) async fn load_prompt_compaction_state(
+    node: &std::sync::Arc<EmbeddedNode>,
+    agent_did: &str,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+    through_sequence: Option<u32>,
+) -> Result<PromptCompactionState> {
+    let access = gents_store::config_client::ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(agent_did)?,
+    );
+    load_prompt_compaction_state_with_access(
+        &access,
+        session_id,
+        node_did,
+        requester_did,
+        through_sequence,
+    )
+    .await
+}
+
+pub async fn load_prompt_compaction_state_with_access(
+    access: &gents_store::config_client::ConfigAccess,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+    through_sequence: Option<u32>,
+) -> Result<PromptCompactionState> {
+    use gents_protocol::document_query::{
+        fields::compaction_entry as fields, session_scope, Direction, Query, Selection,
+    };
+    // A background request is claimed against an immutable transcript high
+    // water mark. A compaction produced later may only shape that request when
+    // its cumulative canonical cursor is itself inside the claimed snapshot.
+    let query = Query::select(
+        Selection::new()
+            .field(fields::COMPACTION_KEY)
+            .field(fields::SEQUENCE)
+            .field(fields::SUMMARY)
+            .field(fields::MESSAGES_COMPACTED)
+            .field(fields::COMPACTED_THROUGH_SEQUENCE),
+    )
+    .filter(session_scope(node_did, session_id, requester_did))
+    .order_by(fields::SEQUENCE, Direction::Asc)
+    .render();
+    let resp = access
+        .transact_readonly("session.load_prompt_compaction_state", |txn| {
+            Box::pin(txn.run(&query))
+        })
+        .await?;
+    let rows: Vec<PromptCompactionRow> = match resp.pointer("/data/CompactionEntry") {
+        Some(value) => serde_json::from_value(value.clone())?,
+        None => anyhow::bail!("compaction state query omitted rows"),
+    };
+    validate_compaction_chain(node_did, session_id, requester_did, &rows)?;
+    let active_len = through_sequence.map_or(rows.len(), |cutoff| {
+        rows.iter()
+            .rposition(|row| {
+                row.compacted_through_sequence
+                    .is_some_and(|cursor| cursor <= cutoff)
+            })
+            .map_or(0, |index| index + 1)
+    });
+    let active_rows = &rows[..active_len];
+    let total_messages_compacted = active_rows.iter().try_fold(0usize, |total, row| {
+        total
+            .checked_add(row.messages_compacted as usize)
+            .context("CompactionEntry messages_compacted total overflowed usize")
+    })?;
+    let state = PromptCompactionState {
+        summaries: active_rows.iter().map(|row| row.summary.clone()).collect(),
+        total_messages_compacted,
+        compacted_through_sequence: active_rows
+            .last()
+            .and_then(|row| row.compacted_through_sequence),
+        generation: compaction_generation(active_rows)?,
+        is_latest_generation: active_len == rows.len(),
+    };
+    tracing::Span::current().record("compaction_entry_count", rows.len() as i64);
+    tracing::Span::current().record(
+        "compacted_message_count",
+        state.total_messages_compacted as i64,
+    );
+    tracing::Span::current().record("summary_count", state.summaries.len() as i64);
+    Ok(state)
+}
+
+pub async fn load_compaction_entries(
+    access: &gents_store::config_client::ConfigAccess,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+) -> Result<Vec<CompactionEntry>> {
+    use gents_protocol::document_query::{
+        fields::compaction_entry as fields, session_scope, Direction, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::new()
+            .field(fields::COMPACTION_KEY)
+            .field(fields::SESSION_ID)
+            .field(fields::NODE_DID)
+            .field(fields::REQUESTER_DID)
+            .field(fields::SEQUENCE)
+            .field(fields::SUMMARY)
+            .field(fields::FILES_READ)
+            .field(fields::FILES_MODIFIED)
+            .field(fields::MESSAGES_COMPACTED)
+            .field(fields::COMPACTED_THROUGH_SEQUENCE)
+            .field(fields::ORIGINAL_TOKENS)
+            .field(fields::COMPACTED_TOKENS)
+            .field(fields::CREATED_AT),
+    )
+    .filter(session_scope(node_did, session_id, requester_did))
+    .order_by(fields::SEQUENCE, Direction::Asc)
+    .render();
+
+    let resp = access.read(&query).await?;
+
+    let rows: Vec<CompactionGenerationRow> = match resp
+        .get("data")
+        .and_then(|data| data.get("CompactionEntry"))
+    {
+        Some(value) => serde_json::from_value(value.clone())?,
+        None => anyhow::bail!("compaction entries query omitted rows"),
+    };
+
+    validate_file_path_projection_chain(node_did, session_id, requester_did, &rows)?;
+
+    let mut files_read = FilePathAccumulator::default();
+    let mut files_modified = FilePathAccumulator::default();
+    let entries = rows
+        .into_iter()
+        .map(|row| {
+            files_read.push(&row.files_read)?;
+            files_modified.push(&row.files_modified)?;
+            let original_tokens = usize::try_from(row.original_tokens)
+                .context("compaction original_tokens must be a non-negative usize")?;
+            let compacted_tokens = usize::try_from(row.compacted_tokens)
+                .context("compaction compacted_tokens must be a non-negative usize")?;
+            Ok(CompactionEntry {
+                session_id: session_id.to_owned(),
+                sequence: row.sequence,
+                summary: row.summary,
+                files_read: files_read.snapshot(),
+                files_modified: files_modified.snapshot(),
+                messages_compacted: row.messages_compacted,
+                compacted_through_sequence: row.compacted_through_sequence,
+                original_tokens,
+                compacted_tokens,
+                created_at: row.created_at,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let compacted_message_count = entries
+        .iter()
+        .map(|entry| entry.messages_compacted as i64)
+        .sum::<i64>();
+    tracing::Span::current().record("compaction_entry_count", entries.len() as i64);
+    tracing::Span::current().record("compacted_message_count", compacted_message_count);
+    Ok(entries)
+}
+
+pub(crate) struct NewExactSessionCompaction<'a> {
+    pub(crate) agent_did: &'a str,
+    pub(crate) session_id: &'a str,
+    pub(crate) node_did: &'a str,
+    pub(crate) requester_did: Option<&'a str>,
+    pub(crate) request_id: &'a str,
+    pub(crate) request_doc_id: &'a str,
+    pub(crate) files_read: &'a [String],
+    pub(crate) files_modified: &'a [String],
+    pub(crate) compacted_through_sequence: u32,
+    pub(crate) original_tokens: usize,
+    pub(crate) compacted_tokens: usize,
+    pub(crate) expected_generation: &'a str,
+}
+
+/// Commit the shared exact reduction as one session-prefix fact. The summary
+/// and compacted count are derived from the artifact, so callers cannot pair a
+/// cursor with a different split or checkpoint.
+pub(crate) async fn save_exact_compaction_entry(
+    access: &gents_store::config_client::ConfigAccess,
+    input: NewExactSessionCompaction<'_>,
+    reduction: gents_inference::compaction::ExactReduction<'_>,
+) -> Result<CompactionEntry> {
+    save_compaction_entry_with_access(
+        access,
+        input.agent_did,
+        input.session_id,
+        input.node_did,
+        input.requester_did,
+        input.request_id,
+        input.request_doc_id,
+        reduction.checkpoint,
+        input.files_read,
+        input.files_modified,
+        reduction.messages_compacted()?,
+        input.compacted_through_sequence,
+        input.original_tokens,
+        input.compacted_tokens,
+        input.expected_generation,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn save_compaction_entry_with_access(
+    access: &gents_store::config_client::ConfigAccess,
+    agent_did: &str,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+    request_id: &str,
+    request_doc_id: &str,
+    summary: &str,
+    files_read: &[String],
+    files_modified: &[String],
+    messages_compacted: u32,
+    compacted_through_sequence: u32,
+    original_tokens: usize,
+    compacted_tokens: usize,
+    expected_generation: &str,
+) -> Result<CompactionEntry> {
+    let compacted_through_sequence = Some(compacted_through_sequence);
+    let summary = summary.trim().to_string();
+    let summary = &summary;
+    access
+        .transact_idempotent(
+            gents_store::config_client::IdempotentTransactionRetry::Standard,
+            "session.save_compaction_entry",
+            move |txn| {
+                Box::pin(async move {
+                    let (session_doc_id, selected_agent) =
+                        gents_store::config_client::session_children::agent_session_child_binding_in_txn(
+                            txn,
+                            node_did,
+                            session_id,
+                            requester_did,
+                        )
+                        .await?;
+                    anyhow::ensure!(
+                        selected_agent == agent_did,
+                        "compaction agent differs from session agent"
+                    );
+                    use gents_protocol::document_query::{
+                        fields::compaction_entry as fields, session_scope, Direction, Query,
+                        Selection,
+                    };
+                    let query = Query::select(
+                        Selection::new()
+                            .field(fields::COMPACTION_KEY)
+                            .field(fields::SEQUENCE)
+                            .field(fields::SUMMARY)
+                            .field(fields::MESSAGES_COMPACTED)
+                            .field(fields::COMPACTED_THROUGH_SEQUENCE)
+                            .field(fields::FILES_READ)
+                            .field(fields::FILES_MODIFIED)
+                            .field(fields::NODE_DID)
+                            .field(fields::REQUESTER_DID)
+                            .field(fields::REQUEST_ID)
+                            .field(fields::REQUEST_DOC_ID)
+                            .field(fields::ORIGINAL_TOKENS)
+                            .field(fields::COMPACTED_TOKENS)
+                            .field(fields::CREATED_AT),
+                    )
+                    .filter(session_scope(node_did, session_id, requester_did))
+                    .order_by(fields::SEQUENCE, Direction::Asc)
+                    .render();
+                    let value = txn.run(&query).await?;
+                    let rows: Vec<CompactionGenerationRow> = serde_json::from_value(
+                        value
+                            .get("data")
+                            .and_then(|data| data.get("CompactionEntry"))
+                            .cloned()
+                            .unwrap_or_else(|| serde_json::json!([])),
+                    )?;
+                    validate_compaction_chain(node_did, session_id, requester_did, &rows)?;
+                    let actual_generation = compaction_generation(&rows)?;
+                    if actual_generation != expected_generation {
+                        if let Some(entry) = reconcile_exact_redelivery(
+                            &rows,
+                            expected_generation,
+                            session_id,
+                            node_did,
+                            requester_did,
+                            request_id,
+                            request_doc_id,
+                            summary,
+                            files_read,
+                            files_modified,
+                            messages_compacted,
+                            compacted_through_sequence,
+                            original_tokens,
+                            compacted_tokens,
+                        )? {
+                            return Ok(entry);
+                        }
+                    }
+                    if actual_generation != expected_generation {
+                        return Err(StaleCompactionGeneration {
+                            session_id: session_id.to_string(),
+                        }
+                        .into());
+                    }
+                    if let Some(cursor) = compacted_through_sequence {
+                        let prior_cursor = rows
+                            .iter()
+                            .rev()
+                            .find_map(|row| row.compacted_through_sequence);
+                        anyhow::ensure!(
+                            prior_cursor.is_none_or(|prior| cursor > prior),
+                            "compaction cursor regression for session {session_id}"
+                        );
+                    }
+
+                    let mut cumulative_files_read =
+                        cumulative_file_paths(&rows, |row| &row.files_read)?;
+                    let file_read_delta = new_file_paths(&cumulative_files_read, files_read);
+                    cumulative_files_read.extend(files_read.iter().cloned());
+                    dedupe_paths(&mut cumulative_files_read);
+                    let mut cumulative_files_modified =
+                        cumulative_file_paths(&rows, |row| &row.files_modified)?;
+                    let file_modified_delta =
+                        new_file_paths(&cumulative_files_modified, files_modified);
+                    cumulative_files_modified.extend(files_modified.iter().cloned());
+                    dedupe_paths(&mut cumulative_files_modified);
+
+                    let sequence =
+                        u32::try_from(rows.len() + 1).context("compaction sequence overflow")?;
+                    let compaction_key =
+                        compaction_key(node_did, session_id, requester_did, sequence);
+                    let created_at =
+                        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+                    use gents_protocol::document_query::{Create, Input};
+                    let input = Input::new()
+                        .set(fields::COMPACTION_KEY, &compaction_key)
+                        .set(fields::SESSION_ID, session_id)
+                        .set(fields::NODE_DID, node_did)
+                        .set(fields::REQUEST_ID, request_id)
+                        .set(fields::REQUEST_DOC_ID, request_doc_id)
+                        .set(fields::SEQUENCE, sequence)
+                        .set(fields::SUMMARY, summary)
+                        .set(fields::FILES_READ, encode_file_path_delta(&file_read_delta)?)
+                        .set(
+                            fields::FILES_MODIFIED,
+                            encode_file_path_delta(&file_modified_delta)?,
+                        )
+                        .set(fields::MESSAGES_COMPACTED, messages_compacted)
+                        .set_optional(
+                            fields::COMPACTED_THROUGH_SEQUENCE,
+                            compacted_through_sequence,
+                        )
+                        .set(fields::ORIGINAL_TOKENS, original_tokens)
+                        .set(fields::COMPACTED_TOKENS, compacted_tokens)
+                        .set(fields::CREATED_AT, &created_at);
+                    let input = match requester_did.map(str::trim).filter(|did| !did.is_empty()) {
+                        Some(did) => input.set(fields::REQUESTER_DID, did),
+                        None => input,
+                    };
+                    let mutation = Create::new(input).render();
+                    let response = txn.run(&mutation).await?;
+                    let doc_id =
+                        gents_store::graphql::created_doc_id(&response, "CompactionEntry")?;
+                    txn.add_resource_relationship(
+                        "CompactionEntry",
+                        &doc_id,
+                        "parent",
+                        "sessions",
+                        &session_doc_id,
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(CompactionEntry {
+                        session_id: session_id.to_string(),
+                        sequence,
+                        summary: summary.clone(),
+                        files_read: cumulative_files_read,
+                        files_modified: cumulative_files_modified,
+                        messages_compacted,
+                        compacted_through_sequence,
+                        original_tokens,
+                        compacted_tokens,
+                        created_at,
+                    })
+                })
+            },
+        )
+        .await
+}
+
+fn encode_file_path_delta(paths: &[String]) -> Result<String> {
+    Ok(serde_json::to_string(&FilePathDelta { version: 1, paths })?)
+}
+
+fn new_file_paths(cumulative: &[String], current: &[String]) -> Vec<String> {
+    let mut seen = cumulative
+        .iter()
+        .map(String::as_str)
+        .collect::<RapidHashSet<_>>();
+    let mut delta = current
+        .iter()
+        .filter(|path| seen.insert(path.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    dedupe_paths(&mut delta);
+    delta
+}
+
+fn decode_file_paths(encoded: &str) -> Result<StoredFilePaths> {
+    if encoded.trim().is_empty() {
+        return Ok(StoredFilePaths::Cumulative(Vec::new()));
+    }
+    Ok(serde_json::from_str::<StoredFilePaths>(encoded)?)
+}
+
+#[derive(Default)]
+struct FilePathAccumulator {
+    cumulative: Vec<String>,
+    deltas: Option<BTreeSet<String>>,
+}
+
+impl FilePathAccumulator {
+    fn push(&mut self, encoded: &str) -> Result<()> {
+        match decode_file_paths(encoded)? {
+            StoredFilePaths::Cumulative(paths) => {
+                self.cumulative = paths;
+                self.deltas = None;
+            }
+            StoredFilePaths::Delta(delta) => {
+                anyhow::ensure!(
+                    delta.version == 1,
+                    "unsupported compaction file-list version"
+                );
+                let paths = self.deltas.get_or_insert_with(|| {
+                    std::mem::take(&mut self.cumulative).into_iter().collect()
+                });
+                paths.extend(delta.paths);
+            }
+        }
+        Ok(())
+    }
+
+    fn snapshot(&self) -> Vec<String> {
+        self.deltas.as_ref().map_or_else(
+            || self.cumulative.clone(),
+            |paths| paths.iter().cloned().collect(),
+        )
+    }
+
+    fn finish(self) -> Vec<String> {
+        self.deltas
+            .map_or(self.cumulative, |paths| paths.into_iter().collect())
+    }
+}
+
+fn cumulative_file_paths(
+    rows: &[CompactionGenerationRow],
+    paths: impl for<'a> Fn(&'a CompactionGenerationRow) -> &'a str,
+) -> Result<Vec<String>> {
+    let mut accumulator = FilePathAccumulator::default();
+    for row in rows {
+        accumulator.push(paths(row))?;
+    }
+    Ok(accumulator.finish())
+}
+
+fn is_cumulative_file_paths(encoded: &str) -> bool {
+    encoded.trim().is_empty() || encoded.trim_start().starts_with('[')
+}
+
+fn validate_file_path_projection_chain(
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    rows: &[CompactionGenerationRow],
+) -> Result<()> {
+    if rows.iter().any(|row| {
+        !is_cumulative_file_paths(&row.files_read) || !is_cumulative_file_paths(&row.files_modified)
+    }) {
+        validate_compaction_chain(node_did, session_id, requester_did, rows)?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn reconcile_exact_redelivery(
+    rows: &[CompactionGenerationRow],
+    expected_generation: &str,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+    request_id: &str,
+    request_doc_id: &str,
+    summary: &str,
+    files_read: &[String],
+    files_modified: &[String],
+    messages_compacted: u32,
+    compacted_through_sequence: Option<u32>,
+    original_tokens: usize,
+    compacted_tokens: usize,
+) -> Result<Option<CompactionEntry>> {
+    let Some(predecessor_len) = (0..rows.len()).find(|length| {
+        compaction_generation(&rows[..*length]).ok().as_deref() == Some(expected_generation)
+    }) else {
+        return Ok(None);
+    };
+    let predecessor = &rows[..predecessor_len];
+    let persisted = &rows[predecessor_len];
+
+    let mut expected_files_read = cumulative_file_paths(predecessor, |row| &row.files_read)?;
+    expected_files_read.extend(files_read.iter().cloned());
+    dedupe_paths(&mut expected_files_read);
+    let mut expected_files_modified =
+        cumulative_file_paths(predecessor, |row| &row.files_modified)?;
+    expected_files_modified.extend(files_modified.iter().cloned());
+    dedupe_paths(&mut expected_files_modified);
+
+    let persisted_files_read =
+        cumulative_file_paths(&rows[..=predecessor_len], |row| &row.files_read)?;
+    let persisted_files_modified =
+        cumulative_file_paths(&rows[..=predecessor_len], |row| &row.files_modified)?;
+    let requester_matches = persisted.requester_did.as_deref() == requester_did;
+    let matches = persisted.node_did == node_did
+        && requester_matches
+        && persisted.request_id.as_deref() == Some(request_id)
+        && persisted.request_doc_id.as_deref() == Some(request_doc_id)
+        && persisted.summary == summary
+        && persisted.messages_compacted == messages_compacted
+        && persisted.compacted_through_sequence == compacted_through_sequence
+        && usize::try_from(persisted.original_tokens).ok() == Some(original_tokens)
+        && usize::try_from(persisted.compacted_tokens).ok() == Some(compacted_tokens)
+        && persisted_files_read == expected_files_read
+        && persisted_files_modified == expected_files_modified;
+    if !matches {
+        return Ok(None);
+    }
+
+    Ok(Some(CompactionEntry {
+        session_id: session_id.to_string(),
+        sequence: persisted.sequence,
+        summary: persisted.summary.clone(),
+        files_read: persisted_files_read,
+        files_modified: persisted_files_modified,
+        messages_compacted: persisted.messages_compacted,
+        compacted_through_sequence: persisted.compacted_through_sequence,
+        original_tokens,
+        compacted_tokens,
+        created_at: persisted.created_at.clone(),
+    }))
+}
+
+#[cfg(test)]
+mod file_path_tests {
+    use super::*;
+
+    fn compaction_row(
+        sequence: u32,
+        files_read: &str,
+        files_modified: &str,
+    ) -> CompactionGenerationRow {
+        CompactionGenerationRow {
+            compaction_key: compaction_key("did:test:files", "session", None, sequence),
+            sequence,
+            summary: format!("summary-{sequence}"),
+            messages_compacted: 1,
+            compacted_through_sequence: Some(sequence * 10),
+            files_read: files_read.to_owned(),
+            files_modified: files_modified.to_owned(),
+            node_did: "did:test:files".to_owned(),
+            requester_did: None,
+            request_id: Some(format!("request-{sequence}")),
+            request_doc_id: Some(format!("request-doc-{sequence}")),
+            original_tokens: 10,
+            compacted_tokens: 5,
+            created_at: format!("2026-10-15T00:00:{sequence:02}Z"),
+        }
+    }
+
+    #[test]
+    fn cumulative_arrays_and_versioned_deltas_keep_legacy_views() {
+        let mut paths = FilePathAccumulator::default();
+        paths.push(r#"["/b.rs","/a.rs"]"#).unwrap();
+        assert_eq!(paths.snapshot(), vec!["/b.rs", "/a.rs"]);
+        paths.push(r#"["/b.rs","/a.rs","/c.rs"]"#).unwrap();
+        assert_eq!(paths.snapshot(), vec!["/b.rs", "/a.rs", "/c.rs"]);
+        paths
+            .push(r#"{"version":1,"paths":["/d.rs","/a.rs"]}"#)
+            .unwrap();
+        assert_eq!(paths.snapshot(), vec!["/a.rs", "/b.rs", "/c.rs", "/d.rs"]);
+
+        paths.push(r#"["/historical.rs"]"#).unwrap();
+        assert_eq!(paths.snapshot(), vec!["/historical.rs"]);
+    }
+
+    #[test]
+    fn file_path_deltas_reject_unknown_versions_and_shapes() {
+        let mut paths = FilePathAccumulator::default();
+        assert!(paths.push(r#"{"version":2,"paths":[]}"#).is_err());
+        assert!(paths
+            .push(r#"{"version":1,"paths":[],"extra":true}"#)
+            .is_err());
+        assert!(paths.push(r#"{"version":1}"#).is_err());
+    }
+
+    #[test]
+    fn delta_projection_rejects_missing_prefix_and_interior_chain_rows() {
+        let missing_prefix = [compaction_row(
+            2,
+            r#"{"version":1,"paths":["/b.rs"]}"#,
+            r#"{"version":1,"paths":[]}"#,
+        )];
+        assert!(validate_file_path_projection_chain(
+            "did:test:files",
+            "session",
+            None,
+            &missing_prefix
+        )
+        .is_err());
+
+        let interior_gap = [
+            compaction_row(1, r#"["/a.rs"]"#, "[]"),
+            compaction_row(
+                3,
+                r#"{"version":1,"paths":["/c.rs"]}"#,
+                r#"{"version":1,"paths":[]}"#,
+            ),
+        ];
+        assert!(validate_file_path_projection_chain(
+            "did:test:files",
+            "session",
+            None,
+            &interior_gap
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn delta_projection_accepts_complete_mixed_legacy_chain() {
+        let complete = [
+            compaction_row(1, r#"["/a.rs"]"#, r#"["/x.rs"]"#),
+            compaction_row(
+                2,
+                r#"{"version":1,"paths":["/b.rs"]}"#,
+                r#"{"version":1,"paths":[]}"#,
+            ),
+        ];
+        validate_file_path_projection_chain("did:test:files", "session", None, &complete).unwrap();
+        assert_eq!(
+            cumulative_file_paths(&complete, |row| &row.files_read).unwrap(),
+            vec!["/a.rs", "/b.rs"]
+        );
+        assert_eq!(
+            cumulative_file_paths(&complete, |row| &row.files_modified).unwrap(),
+            vec!["/x.rs"]
+        );
+    }
+}

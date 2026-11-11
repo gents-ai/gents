@@ -5,9 +5,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents::defra_node::{HttpConfig, Node as EmbeddedNode, StorageBackend};
-use gents::runtime::agent::p2p_reconcile::{EmbeddedRemoteP2pAdmin, RemoteP2pAdmin};
-use gents::store::config_client::ConfigAccess;
-use gents::{KeyIdentity, NodeIdentity};
+use gents_p2p::p2p_reconcile::{EmbeddedRemoteP2pAdmin, RemoteP2pAdmin};
+use gents_store::config_client::ConfigAccess;
+use gents_store::identity::{KeyIdentity, NodeIdentity};
 
 const SCHEMA: &str = "type NodeAccessProbe { name: String }";
 
@@ -55,7 +55,7 @@ async fn served_home(data_dir: &Path, principal: &str, address: SocketAddr) -> A
 fn insert(name: &str) -> String {
     format!(
         r#"mutation {{ create_NodeAccessProbe(input: {{ name: "{}" }}) {{ _docID }} }}"#,
-        gents::store::graphql::escape_graphql_string(name)
+        gents_store::graphql::escape_graphql_string(name)
     )
 }
 
@@ -100,7 +100,7 @@ async fn assert_access_control(
     );
 
     let signed = ConfigAccess::Graphql(
-        gents::store::config_client::GraphqlEndpoint::as_principal(endpoint, identity.did())
+        gents_store::config_client::GraphqlEndpoint::as_principal(endpoint, identity.did())
             .with_client_signing_capability(identity.client_signing_capability().unwrap())
             .unwrap(),
     );
@@ -122,16 +122,16 @@ async fn assert_access_control(
                 .add_replicator(
                     &[],
                     &["NodeAccessProbe".to_string()],
-                    &gents::runtime::agent::p2p_reconcile::PairingFilters::default(),
+                    &gents_p2p::p2p_reconcile::PairingFilters::default(),
                 )
                 .await,
-            Err(gents::runtime::agent::p2p_reconcile::RemoteP2pAdminError::RuntimeLocalCollection(
+            Err(gents_p2p::p2p_reconcile::RemoteP2pAdminError::RuntimeLocalCollection(
                 ref name
             )) if name == "NodeAccessProbe"
         ),
         "P2P carries only discovery and enrollment documents"
     );
-    let replicated = gents::store::identity::node_p2p(node)
+    let replicated = gents_store::identity::node_p2p(node)
         .expect("P2P transport")
         .get_collections()
         .await
@@ -192,7 +192,7 @@ fn served_home_admits_only_its_principal_across_restart() -> Result<()> {
         Box::pin(async move {
             assert_access_control(node, identity.as_ref(), address, "restarted").await;
             let signed = ConfigAccess::Graphql(
-                gents::store::config_client::GraphqlEndpoint::as_principal(
+                gents_store::config_client::GraphqlEndpoint::as_principal(
                     format!("http://{address}/api/v0/graphql"),
                     identity.did(),
                 )

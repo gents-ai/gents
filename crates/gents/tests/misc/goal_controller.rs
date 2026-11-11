@@ -3,14 +3,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::Node as EmbeddedNode;
-use gents::goal::{
+use gents_automation::goal::{
     session_token_usage, set_goal_from_access, CreateGoalForSessionError,
     CreateGoalForSessionOutcome,
 };
-use gents::store::graphql::escape_graphql_string;
-use gents::store::subscription_source::UpdateSubscriptionSource;
-use gents::{ActiveRuntimeSnapshot, ConfigAccess, GoalSource, NodeIdentity, TriggerSource};
+use gents_automation::{
+    triggers::engine::goal_source::GoalSource, triggers::engine::TriggerSource,
+    triggers::runtime_snapshot::ActiveRuntimeSnapshot,
+};
 use gents_protocol::goal_status::GoalStatus;
+use gents_store::graphql::escape_graphql_string;
+use gents_store::subscription_source::UpdateSubscriptionSource;
+use gents_store::{config_client::ConfigAccess, identity::NodeIdentity};
 use serde::Deserialize;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -41,14 +45,16 @@ async fn atomic_goal_link_case(actor: &'static str, collection: &'static str) ->
     .unwrap()
 }
 
-async fn goal_creation_actors(db: &TestDb) -> (gents::KeyIdentity, Arc<dyn NodeIdentity>) {
+async fn goal_creation_actors(
+    db: &TestDb,
+) -> (gents_store::identity::KeyIdentity, Arc<dyn NodeIdentity>) {
     let fixture = crate::support::managed_agent_fixture(db).await;
     let admin = ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap());
     for actor in [fixture.user.did(), fixture.agent.did()] {
         for permission in [
-            gents::store::config_client::NodePermission::DocumentDelete,
-            gents::store::config_client::NodePermission::CollectionGet,
-            gents::store::config_client::NodePermission::DacRelationDelete,
+            gents_store::config_client::NodePermission::DocumentDelete,
+            gents_store::config_client::NodePermission::CollectionGet,
+            gents_store::config_client::NodePermission::DacRelationDelete,
         ] {
             admin
                 .grant_node_permission(&actor.parse().unwrap(), permission)
@@ -62,7 +68,7 @@ async fn goal_creation_actors(db: &TestDb) -> (gents::KeyIdentity, Arc<dyn NodeI
 
 async fn goal_fixture_request(
     db: &TestDb,
-    user: &gents::KeyIdentity,
+    user: &gents_store::identity::KeyIdentity,
     agent: &Arc<dyn NodeIdentity>,
     request_id: &str,
 ) -> String {
@@ -131,7 +137,7 @@ async fn goal_fixture_usage_for_node(
                 "mutation($input: InferenceCallMutationInputArg!) { add_InferenceCall(input: $input) { _docID } }",
                 &serde_json::json!({"input": input}),
             ).await?;
-            let doc = gents::store::graphql::created_doc_id(&created, "InferenceCall")?;
+            let doc = gents_store::graphql::created_doc_id(&created, "InferenceCall")?;
             txn.add_resource_relationship("InferenceCall", &doc, "parent", "sessions", session_doc).await?;
             Ok::<_, anyhow::Error>(())
         })
@@ -148,10 +154,13 @@ fn agent_access(db: &TestDb, agent: &Arc<dyn NodeIdentity>) -> ConfigAccess {
     .unwrap()
 }
 
-async fn load_goal_as(access: &ConfigAccess, node_did: &str) -> Option<gents::goal::GoalDocument> {
+async fn load_goal_as(
+    access: &ConfigAccess,
+    node_did: &str,
+) -> Option<gents_automation::goal::GoalDocument> {
     access
         .transact_readonly("test.load_client_goal", |txn| {
-            Box::pin(gents::goal::load_canonical_goal_in_txn(
+            Box::pin(gents_automation::goal::load_canonical_goal_in_txn(
                 txn, node_did, SESSION,
             ))
         })
@@ -206,9 +215,9 @@ async fn publish_node_readiness_for_agent(
             reason: behavior,
         }],
     };
-    let did = gents::store::graphql::escape_graphql_string(db.node_identity.did());
+    let did = gents_store::graphql::escape_graphql_string(db.node_identity.did());
     let snapshot_json =
-        gents::store::graphql::escape_graphql_string(&serde_json::to_string(&snapshot).unwrap());
+        gents_store::graphql::escape_graphql_string(&serde_json::to_string(&snapshot).unwrap());
     let updated_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
     let access = ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap());
     let response = access
@@ -236,7 +245,7 @@ async fn publish_node_readiness_for_agent(
     } else {
         let escaped_parent = escape_graphql_string(parent);
         let response = access.write("test.goal_readiness.create", &format!(r#"mutation {{create_NodeReadiness(input: {{node_did: "{did}", node_doc_id: "{escaped_parent}", parent_linked: false, snapshot_json: "{snapshot_json}", updated_at: "{updated_at}"}}) {{_docID}}}}"#)).await.unwrap();
-        let doc = gents::store::graphql::created_doc_id(&response, "NodeReadiness").unwrap();
+        let doc = gents_store::graphql::created_doc_id(&response, "NodeReadiness").unwrap();
         access
             .add_resource_relationship("NodeReadiness", &doc, "parent", "nodes", parent)
             .await
@@ -307,7 +316,7 @@ struct GoalBackgroundHandoff {
     runtime: crate::support::accepted_turn::AcceptedTurnRuntime,
     agent_identity: Arc<dyn NodeIdentity>,
     parent_doc_id: String,
-    background_executions: gents::tools::call::hook::BackgroundExecutionRegistry,
+    background_executions: gents_toolcalls::call::hook::BackgroundExecutionRegistry,
     process_tool_call_id: String,
 }
 
@@ -365,12 +374,12 @@ async fn boot_goal_background_handoff_with_plans(
         did,
         behavior,
         None,
-        gents::documents::Tools {
+        gents_documents::Tools {
             tools_id: format!("{behavior}:tools"),
             node_did: did.to_string(),
-            host: Some(gents::documents::HostTools {
-                bash: Some(gents::documents::BashTools {
-                    mode: gents::BashMode::ReadOnly,
+            host: Some(gents_documents::HostTools {
+                bash: Some(gents_documents::BashTools {
+                    mode: gents_documents::BashMode::ReadOnly,
                     read_only_commands: Some(vec!["sh".into()]),
                     background_enabled: true,
                     ..Default::default()
@@ -382,13 +391,13 @@ async fn boot_goal_background_handoff_with_plans(
         Vec::new(),
     )
     .await;
-    let identity: Arc<dyn gents::NodeIdentity> = db.node_identity.clone();
+    let identity: Arc<dyn gents_store::identity::NodeIdentity> = db.node_identity.clone();
     let agent = gents::Gents::from_default_agent_documents(
         db.node.clone(),
         identity,
         gents::DocumentRuntimeOptions {
             backend_admission: Some(db.home.backend_admission()),
-            tool_ceiling: gents::ToolCeiling::readonly(),
+            tool_ceiling: gents_tools::surface::ToolCeiling::readonly(),
             ..Default::default()
         },
     )
@@ -409,7 +418,7 @@ async fn boot_goal_background_handoff_with_plans(
     assert_eq!(rows.len(), 1);
     let parent_doc = rows[0]["_docID"].as_str().unwrap().to_owned();
     for _ in 0..200 {
-        let response = fixture.access.execute(&format!(r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "bash" }}, lifecycle_state: {{ _eq: "running" }} }}, limit: 1) {{ _docID tool_call_id }} }}"#, gents::store::graphql::escape_graphql_string(&parent_doc))).await.unwrap();
+        let response = fixture.access.execute(&format!(r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "bash" }}, lifecycle_state: {{ _eq: "running" }} }}, limit: 1) {{ _docID tool_call_id }} }}"#, gents_store::graphql::escape_graphql_string(&parent_doc))).await.unwrap();
         if let Some(row) = response
             .get("data")
             .and_then(|data| data["AgentToolCall"].as_array())
@@ -438,7 +447,7 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
     use crate::support::streaming_backend::{
         StreamChunk, StreamPlan, StreamResponse, StreamScript,
     };
-    use gents::inference::llm::message::{Message, Text, ToolResultContent, UserContent};
+    use gents_inference::llm::message::{Message, Text, ToolResultContent, UserContent};
 
     let db = test_db("goal-real-process-wait-wake").await;
     let fixture = crate::support::managed_agent_fixture(&db).await;
@@ -501,7 +510,7 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
     );
     let process = access.execute(&format!(
         r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "bash" }} }}, limit: 1) {{ _docID tool_call_id lifecycle_state await_mode }} }}"#,
-        gents::store::graphql::escape_graphql_string(&parent_doc_id)
+        gents_store::graphql::escape_graphql_string(&parent_doc_id)
     )).await.unwrap();
     let process = &process["data"]["AgentToolCall"][0];
     let process_doc_id = process["_docID"].as_str().unwrap().to_owned();
@@ -598,7 +607,7 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
         assert!(entered_path.exists() && !release_path.exists());
         let process = access.execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state }} }}"#,
-            gents::store::graphql::escape_graphql_string(&process_doc_id)
+            gents_store::graphql::escape_graphql_string(&process_doc_id)
         )).await.unwrap();
         assert_eq!(
             process["data"]["AgentToolCall"][0]["lifecycle_state"],
@@ -633,7 +642,7 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
         loop {
             let response = fixture.access.execute(&format!(
                 r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{}" }} }}, limit: 2) {{ _docID message_key node_did requester_did request_doc_id }} }}"#,
-                gents::store::graphql::escape_graphql_string(&notification_key)
+                gents_store::graphql::escape_graphql_string(&notification_key)
             )).await.unwrap();
             let rows = response["data"]["AgentMessage"].as_array().unwrap();
             assert!(rows.len() <= 1, "ambiguous process completion notification");
@@ -646,7 +655,7 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
     let wake_doc_id = notification["request_doc_id"]
         .as_str()
         .expect("notification wake binding");
-    let (header, reconstructed) = gents::session::load_canonical_message(
+    let (header, reconstructed) = gents_session::session::load_canonical_message(
         &fixture.access,
         notification["_docID"].as_str().unwrap(),
         notification["node_did"].as_str().unwrap(),
@@ -676,7 +685,7 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
     );
     let wake_response = fixture.access.execute(&format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_id lifecycle_state execution_origin }} }}"#,
-        gents::store::graphql::escape_graphql_string(wake_doc_id)
+        gents_store::graphql::escape_graphql_string(wake_doc_id)
     )).await.unwrap();
     let wakes = wake_response["data"]["AgentRequest"].as_array().unwrap();
     assert_eq!(wakes.len(), 1, "the exact notification must bind one wake");
@@ -727,7 +736,7 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
     assert_eq!(goal.infrastructure_retry_count.unwrap_or_default(), 0);
     let process = access.execute(&format!(
         r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state completion_notification_delivered_at }} }}"#,
-        gents::store::graphql::escape_graphql_string(&process_handle)
+        gents_store::graphql::escape_graphql_string(&process_handle)
     )).await.unwrap();
     let process = &process["data"]["AgentToolCall"][0];
     assert_eq!(process["lifecycle_state"], "completed");
@@ -830,13 +839,14 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
         .continuation_sequence;
     drop(source);
     for _ in 0..2 {
-        let recovered = gents::RequestLifecycle::recover_all_with_identities(
-            &db.node,
-            did,
-            std::slice::from_ref(&agent_identity),
-        )
-        .await
-        .unwrap();
+        let recovered =
+            gents_session::request::lifecycle::RequestLifecycle::recover_all_with_identities(
+                &db.node,
+                did,
+                std::slice::from_ref(&agent_identity),
+            )
+            .await
+            .unwrap();
         assert_eq!(recovered.requests_recovered, 0);
         let (mut restarted, _restart_tx) = source_for_agent(&db, &agent_identity).await;
         assert!(
@@ -1129,7 +1139,7 @@ async fn restart_materializes_a_claimed_continuation_after_crash() {
     )
     .await
     .expect("set goal");
-    assert!(gents::goal::claim_continuation_from_access(
+    assert!(gents_automation::goal::claim_continuation_from_access(
         &agent_access(&db, &agent),
         &goal,
         "parent-claimed"
@@ -1162,15 +1172,17 @@ async fn restart_materializes_claimed_wrapup_retry_without_charging_it_twice() {
     )
     .await
     .expect("set budget-limited goal");
-    assert!(gents::goal::claim_retry_continuation_from_access(
-        &agent_access(&db, &agent),
-        &goal,
-        "parent-claimed-wrapup-retry",
-        1,
-        "failed",
-    )
-    .await
-    .expect("atomically charge and claim wrap-up retry"));
+    assert!(
+        gents_automation::goal::claim_retry_continuation_from_access(
+            &agent_access(&db, &agent),
+            &goal,
+            "parent-claimed-wrapup-retry",
+            1,
+            "failed",
+        )
+        .await
+        .expect("atomically charge and claim wrap-up retry")
+    );
 
     let (mut restarted, _tx) = source_for_agent(&db, &agent).await;
     tokio::time::timeout(Duration::from_secs(2), restarted.next_fire())
@@ -1221,7 +1233,7 @@ async fn continuation_claim_rejects_a_stale_active_status_snapshot() {
     )
     .await
     .expect("user pauses goal");
-    assert!(!gents::goal::claim_continuation_from_access(
+    assert!(!gents_automation::goal::claim_continuation_from_access(
         &agent_access(&db, &agent),
         &stale,
         "parent-stale"
@@ -1263,14 +1275,16 @@ async fn controller_status_cas_never_overwrites_a_newer_completion() {
     )
     .await
     .expect("user completes goal");
-    assert!(!gents::goal::update_goal_fields_if_status_from_access(
-        &agent_access(&db, &agent),
-        &stale,
-        GoalStatus::Active,
-        r#"status: "paused", last_failure: "stale controller""#,
-    )
-    .await
-    .expect("conditional controller update"));
+    assert!(
+        !gents_automation::goal::update_goal_fields_if_status_from_access(
+            &agent_access(&db, &agent),
+            &stale,
+            GoalStatus::Active,
+            r#"status: "paused", last_failure: "stale controller""#,
+        )
+        .await
+        .expect("conditional controller update")
+    );
     let current = load_goal_as(&access, db.node_identity.did())
         .await
         .expect("goal exists");
@@ -1299,7 +1313,7 @@ async fn assert_stale_controller_cannot_mutate_new_continuation(status: GoalStat
     .await
     .expect("set active goal");
     assert_eq!(stale.continuation_sequence(), 0);
-    assert!(gents::goal::claim_continuation_from_access(
+    assert!(gents_automation::goal::claim_continuation_from_access(
         &agent_access(&db, &agent),
         &stale,
         "newly-claimed-parent"
@@ -1320,7 +1334,7 @@ async fn assert_stale_controller_cannot_mutate_new_continuation(status: GoalStat
         status.as_str()
     );
     assert!(
-        !gents::goal::update_goal_fields_if_status_from_access(
+        !gents_automation::goal::update_goal_fields_if_status_from_access(
             &agent_access(&db, &agent),
             &stale,
             GoalStatus::Active,
@@ -1343,14 +1357,16 @@ async fn assert_stale_controller_cannot_mutate_new_continuation(status: GoalStat
         claimed.last_continued_from_request_id
     );
     assert_eq!(current.last_failure, claimed.last_failure);
-    assert!(gents::goal::update_goal_fields_if_status_from_access(
-        &agent_access(&db, &agent),
-        &current,
-        GoalStatus::Active,
-        &fields,
-    )
-    .await
-    .expect("current controller mutation"));
+    assert!(
+        gents_automation::goal::update_goal_fields_if_status_from_access(
+            &agent_access(&db, &agent),
+            &current,
+            GoalStatus::Active,
+            &fields,
+        )
+        .await
+        .expect("current controller mutation")
+    );
     let updated = load_goal_as(&access, db.node_identity.did())
         .await
         .expect("goal exists");
@@ -1373,7 +1389,7 @@ async fn model_goal_create_is_idempotent_and_never_mutates_a_conflict() {
     let db = crate::support::test_db("goal-model-create").await;
     let (user, agent) = goal_creation_actors(&db).await;
     let client = db.client_access(&user);
-    let created = gents::goal::create_goal_for_session_from_access(
+    let created = gents_automation::goal::create_goal_for_session_from_access(
         &client,
         db.node_identity.did(),
         SESSION,
@@ -1416,7 +1432,7 @@ async fn model_goal_create_is_idempotent_and_never_mutates_a_conflict() {
         );
     }
 
-    let duplicate = gents::goal::create_goal_for_session_from_access(
+    let duplicate = gents_automation::goal::create_goal_for_session_from_access(
         &client,
         db.node_identity.did(),
         SESSION,
@@ -1437,7 +1453,7 @@ async fn model_goal_create_is_idempotent_and_never_mutates_a_conflict() {
         1
     );
 
-    let error = gents::goal::create_goal_for_session_from_access(
+    let error = gents_automation::goal::create_goal_for_session_from_access(
         &client,
         db.node_identity.did(),
         SESSION,
@@ -1467,7 +1483,7 @@ async fn clearing_a_goal_also_clears_its_creation_claim() {
         agent.as_ref(),
     )
     .unwrap();
-    gents::goal::create_goal_for_session_from_access(
+    gents_automation::goal::create_goal_for_session_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -1486,7 +1502,7 @@ async fn clearing_a_goal_also_clears_its_creation_claim() {
         })
     }).await.expect("clear Goal and creation claim as their Agent owner");
     assert_eq!(cleared, (1, 1));
-    let replacement = gents::goal::create_goal_for_session_from_access(
+    let replacement = gents_automation::goal::create_goal_for_session_from_access(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -1520,7 +1536,7 @@ async fn fresh_goal_baseline_snapshots_prior_session_usage_and_charges_only_new_
 
     // The fresh create must snapshot the session's usage at creation time so
     // pre-goal spend is never charged against the new goal.
-    let created = gents::goal::create_goal_for_session_from_access(
+    let created = gents_automation::goal::create_goal_for_session_from_access(
         &client,
         db.node_identity.did(),
         SESSION,
@@ -1558,7 +1574,7 @@ async fn fresh_goal_baseline_snapshots_prior_session_usage_and_charges_only_new_
         agent.as_ref(),
     )
     .unwrap();
-    let tokens = gents::goal::refresh_goal_usage_from_access(&agent_access, &refreshed)
+    let tokens = gents_automation::goal::refresh_goal_usage_from_access(&agent_access, &refreshed)
         .await
         .expect("refresh usage");
     assert_eq!(tokens, 450);
@@ -1585,7 +1601,7 @@ async fn idempotent_goal_recreate_preserves_the_existing_baseline() {
         50,
     )
     .await;
-    let created = gents::goal::create_goal_for_session_from_access(
+    let created = gents_automation::goal::create_goal_for_session_from_access(
         &client,
         db.node_identity.did(),
         SESSION,
@@ -1613,7 +1629,7 @@ async fn idempotent_goal_recreate_preserves_the_existing_baseline() {
         50,
     )
     .await;
-    let duplicate = gents::goal::create_goal_for_session_from_access(
+    let duplicate = gents_automation::goal::create_goal_for_session_from_access(
         &client,
         db.node_identity.did(),
         SESSION,
@@ -1665,7 +1681,7 @@ async fn fresh_goal_with_zero_prior_usage_starts_charging_from_zero() {
     let (user, agent) = goal_creation_actors(&db).await;
     let client = db.client_access(&user);
     let request_doc = goal_fixture_request(&db, &user, &agent, "parent-zero").await;
-    let created = gents::goal::create_goal_for_session_from_access(
+    let created = gents_automation::goal::create_goal_for_session_from_access(
         &client,
         db.node_identity.did(),
         SESSION,
@@ -1699,7 +1715,7 @@ async fn fresh_goal_with_zero_prior_usage_starts_charging_from_zero() {
         agent.as_ref(),
     )
     .unwrap();
-    let tokens = gents::goal::refresh_goal_usage_from_access(&agent_access, &refreshed)
+    let tokens = gents_automation::goal::refresh_goal_usage_from_access(&agent_access, &refreshed)
         .await
         .expect("refresh usage");
     assert_eq!(tokens, 450);
@@ -1763,7 +1779,7 @@ async fn set_goal_over_http_transactions_computes_the_same_baseline() {
 
     let client_session = "http-client-goal";
     let client_session_doc = reserve_goal_session(&db, &user, &agent, client_session).await;
-    let created = gents::goal::create_goal_for_session_from_access(
+    let created = gents_automation::goal::create_goal_for_session_from_access(
         &access,
         did,
         client_session,
@@ -1773,7 +1789,7 @@ async fn set_goal_over_http_transactions_computes_the_same_baseline() {
     .await
     .expect("create client Goal over HTTP");
     assert!(matches!(created, CreateGoalForSessionOutcome::Created(_)));
-    let retried = gents::goal::create_goal_for_session_from_access(
+    let retried = gents_automation::goal::create_goal_for_session_from_access(
         &access,
         did,
         client_session,
@@ -1833,7 +1849,7 @@ async fn signed_goal_backed_request(
     // Agent document; the Agent reserves its own local-self session first.
     let access = agent_access(db, agent);
     create.session_doc_id = Some(
-        gents::request::lifecycle::reserve_goal_session(&access, &create)
+        gents_session::request::lifecycle::reserve_goal_session(&access, &create)
             .await
             .expect("reserve Agent-owned session"),
     );
@@ -1843,9 +1859,9 @@ async fn signed_goal_backed_request(
                 let agent_did = agent.did();
                 Box::pin(async move {
                     Ok::<_, anyhow::Error>(
-                        gents::documents::read_desired_state_record_in_txn(
+                        gents_documents::read_desired_state_record_in_txn(
                             txn,
-                            gents::Collection::Agent,
+                            gents_store::collection::Collection::Agent,
                             did,
                             agent_did,
                         )
@@ -1858,7 +1874,7 @@ async fn signed_goal_backed_request(
             .await
             .expect("read goal-backed request Agent"),
     );
-    gents::sign_agent_request_create(agent.as_ref(), &mut create)
+    gents_session::request::admission::sign_agent_request_create(agent.as_ref(), &mut create)
         .await
         .expect("sign goal-backed request");
     create
@@ -1875,7 +1891,7 @@ async fn goal_backed_submission_commits_goal_before_request_visibility_and_retri
     )
     .unwrap();
     let create = signed_goal_backed_request(&db, &agent, "goal-backed-first").await;
-    let first = gents::goal::submit_goal_backed_request(
+    let first = gents_automation::goal::submit_goal_backed_request(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -1885,7 +1901,10 @@ async fn goal_backed_submission_commits_goal_before_request_visibility_and_retri
     )
     .await
     .expect("atomic goal submission");
-    assert_eq!(first, gents::goal::GoalBackedRequestDisposition::Created);
+    assert_eq!(
+        first,
+        gents_automation::goal::GoalBackedRequestDisposition::Created
+    );
     let binding = access.execute(
         "{ AgentSession { _docID agent_did requester_did } Goal { _docID session_doc_id agent_did creator_did parent_linked assignment_root_request_doc_id } GoalCreationClaim { _docID session_doc_id agent_did creator_did parent_linked } AgentRequest { _docID } }",
     ).await.unwrap();
@@ -1928,7 +1947,7 @@ async fn goal_backed_submission_commits_goal_before_request_visibility_and_retri
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0]["lifecycle_state"], "pending");
 
-    let retry = gents::goal::submit_goal_backed_request(
+    let retry = gents_automation::goal::submit_goal_backed_request(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -1938,11 +1957,14 @@ async fn goal_backed_submission_commits_goal_before_request_visibility_and_retri
     )
     .await
     .expect("idempotent atomic retry");
-    assert_eq!(retry, gents::goal::GoalBackedRequestDisposition::Idempotent);
+    assert_eq!(
+        retry,
+        gents_automation::goal::GoalBackedRequestDisposition::Idempotent
+    );
 
     let committed_goal = access
         .transact_readonly("test.load_committed_goal", |txn| {
-            Box::pin(gents::goal::load_canonical_goal_in_txn(
+            Box::pin(gents_automation::goal::load_canonical_goal_in_txn(
                 txn,
                 db.node_identity.did(),
                 SESSION,
@@ -1955,7 +1977,7 @@ async fn goal_backed_submission_commits_goal_before_request_visibility_and_retri
         r#"mutation {{ update_Goal(docID: "{}", input: {{ status: "complete" }}) {{ _docID }} }}"#,
         escape_graphql_string(&committed_goal.doc_id),
     )).await.expect("simulate progress after an ambiguous commit acknowledgement");
-    let late_retry = gents::goal::submit_goal_backed_request(
+    let late_retry = gents_automation::goal::submit_goal_backed_request(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -1967,7 +1989,7 @@ async fn goal_backed_submission_commits_goal_before_request_visibility_and_retri
     .expect("exact retry remains idempotent after goal progress");
     assert_eq!(
         late_retry,
-        gents::goal::GoalBackedRequestDisposition::Idempotent
+        gents_automation::goal::GoalBackedRequestDisposition::Idempotent
     );
 }
 
@@ -1982,7 +2004,7 @@ async fn goal_backed_retry_rejects_changed_logical_request_fields() {
     )
     .unwrap();
     let create = signed_goal_backed_request(&db, &agent, "goal-backed-fingerprint").await;
-    gents::goal::submit_goal_backed_request(
+    gents_automation::goal::submit_goal_backed_request(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -1998,10 +2020,10 @@ async fn goal_backed_retry_rejects_changed_logical_request_fields() {
         "queue": {"source": "goal", "policy": "coalesce", "key": "changed"}
     }))
     .unwrap();
-    gents::sign_agent_request_create(agent.as_ref(), &mut changed)
+    gents_session::request::admission::sign_agent_request_create(agent.as_ref(), &mut changed)
         .await
         .expect("re-sign changed request");
-    let error = gents::goal::submit_goal_backed_request(
+    let error = gents_automation::goal::submit_goal_backed_request(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -2038,7 +2060,7 @@ async fn goal_backed_submission_rejects_a_matching_terminal_goal_without_publish
     )
     .await
     .expect("set terminal goal");
-    let error = gents::goal::submit_goal_backed_request(
+    let error = gents_automation::goal::submit_goal_backed_request(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -2076,7 +2098,7 @@ async fn goal_backed_submission_discards_goal_when_request_staging_fails() {
     let mut invalid = signed_goal_backed_request(&db, &agent, "goal-backed-invalid").await;
     invalid.initial_lifecycle_state =
         gents_protocol::client_protocol::RequestLifecycleState::Processing;
-    gents::sign_agent_request_create(agent.as_ref(), &mut invalid)
+    gents_session::request::admission::sign_agent_request_create(agent.as_ref(), &mut invalid)
         .await
         .expect("re-sign invalid request");
     let reserved = access
@@ -2084,7 +2106,7 @@ async fn goal_backed_submission_discards_goal_when_request_staging_fails() {
         .await
         .expect("load reserved session")["data"]["AgentSession"]
         .clone();
-    let error = gents::goal::submit_goal_backed_request(
+    let error = gents_automation::goal::submit_goal_backed_request(
         &access,
         db.node_identity.did(),
         SESSION,
@@ -2120,7 +2142,7 @@ async fn concurrent_model_goal_create_converges_to_one_physical_goal() {
     let did = db.node_identity.did().to_owned();
     let left_did = did.clone();
     let left = tokio::spawn(async move {
-        gents::goal::create_goal_for_session_from_access(
+        gents_automation::goal::create_goal_for_session_from_access(
             &left_client,
             &left_did,
             SESSION,
@@ -2130,7 +2152,7 @@ async fn concurrent_model_goal_create_converges_to_one_physical_goal() {
         .await
     });
     let right = tokio::spawn(async move {
-        gents::goal::create_goal_for_session_from_access(
+        gents_automation::goal::create_goal_for_session_from_access(
             &client,
             &did,
             SESSION,
@@ -2190,17 +2212,17 @@ async fn retired_queued_inputs_do_not_pause_completed_goal_execution() {
         (
             "folded",
             "superseded",
-            gents::request::lifecycle::FOLDED_REASON,
+            gents_session::request::lifecycle::FOLDED_REASON,
         ),
         (
             "replaced",
             "superseded",
-            gents::request::lifecycle::REPLACED_REASON,
+            gents_session::request::lifecycle::REPLACED_REASON,
         ),
         (
             "removed",
             "interrupted",
-            gents::request::lifecycle::REMOVED_REASON,
+            gents_session::request::lifecycle::REMOVED_REASON,
         ),
     ] {
         let db = test_db(&format!("goal-retired-input-{name}")).await;
@@ -2399,7 +2421,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         .await;
         let observed = fixture.access.execute(&format!(
             r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{}" }} }}) {{ _docID lifecycle_state status completion_notification_delivered_at }} }}"#,
-            gents::store::graphql::escape_graphql_string(&process_tool_call_id),
+            gents_store::graphql::escape_graphql_string(&process_tool_call_id),
         )).await.unwrap();
         let delivery = observed["data"].clone();
         assert!(
@@ -2412,7 +2434,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             rows[0]["completion_notification_delivered_at"].is_string(),
             "the worker must publish its completion before ownership ends: {delivery}"
         );
-        gents::tools::call::lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(
+        gents_toolcalls::call::lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(
             &db.node,
             db.node_identity.did(),
             std::slice::from_ref(&agent_identity),
@@ -2458,7 +2480,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         let messages = data["AgentMessage"].as_array().unwrap();
         let mut completions = Vec::new();
         for header in messages {
-            let (_, message) = gents::session::load_canonical_message(
+            let (_, message) = gents_session::session::load_canonical_message(
                 &fixture.access,
                 header["_docID"].as_str().unwrap(),
                 header["node_did"].as_str().unwrap(),
@@ -2585,9 +2607,11 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
     )
     .await;
     let foreign_dir = tempfile::tempdir().unwrap();
-    let foreign_node =
-        gents::KeyIdentity::load_or_create(foreign_dir.path().join("foreign-node.key"), None)
-            .unwrap();
+    let foreign_node = gents_store::identity::KeyIdentity::load_or_create(
+        foreign_dir.path().join("foreign-node.key"),
+        None,
+    )
+    .unwrap();
     seed_foreign_goal_usage(
         &access,
         &agent_identity,
@@ -2677,13 +2701,14 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
     );
     drop(source);
     for _ in 0..2 {
-        let recovered = gents::RequestLifecycle::recover_all_with_identities(
-            &db.node,
-            db.node_identity.did(),
-            std::slice::from_ref(&agent_identity),
-        )
-        .await
-        .expect("repeat lease recovery");
+        let recovered =
+            gents_session::request::lifecycle::RequestLifecycle::recover_all_with_identities(
+                &db.node,
+                db.node_identity.did(),
+                std::slice::from_ref(&agent_identity),
+            )
+            .await
+            .expect("repeat lease recovery");
         assert_eq!(recovered.requests_recovered, 0);
         assert_eq!(recovered.responses_recovered, 0);
         let (mut restarted, _restart_tx) = source_for_agent(&db, &agent_identity).await;
@@ -2912,7 +2937,11 @@ async fn a_later_limited_call_wins_over_an_earlier_retry() {
 async fn seed_a_passed_reset(
     db: &TestDb,
     opted_in: bool,
-) -> (gents::KeyIdentity, Arc<dyn NodeIdentity>, ConfigAccess) {
+) -> (
+    gents_store::identity::KeyIdentity,
+    Arc<dyn NodeIdentity>,
+    ConfigAccess,
+) {
     let (user, agent, access) = goal_recovery_actors(db, "usage-limited-request", "failed").await;
     let result = access.execute("{AgentRequest(filter: {request_id: {_eq: \"usage-limited-request\"}}) {_docID session_doc_id}}").await.unwrap();
     let parent = &result["data"]["AgentRequest"][0];
@@ -3025,7 +3054,7 @@ async fn a_database_update_leaves_a_passed_reset_to_the_rescan_tick() {
         goal_and_children(&db, &access).await,
         (Some(GoalStatus::UsageLimited), 0)
     );
-    let goal_collection_id = gents::store::subscription_source::collection_ids(&db.node, ["Goal"])
+    let goal_collection_id = gents_store::subscription_source::collection_ids(&db.node, ["Goal"])
         .unwrap()
         .remove(0);
     updates.publish_update(goal_collection_id, "goal-doc");
@@ -3216,7 +3245,7 @@ async fn continuation_sequence_exhaustion_rejects_claims_without_retry_charge() 
         .await;
         let before = load_goal_as(&access, db.node_identity.did()).await.unwrap();
         let claimed = if retry {
-            gents::goal::claim_retry_continuation_from_access(
+            gents_automation::goal::claim_retry_continuation_from_access(
                 &agent_access(&db, &agent),
                 &before,
                 "last-parent",
@@ -3225,7 +3254,7 @@ async fn continuation_sequence_exhaustion_rejects_claims_without_retry_charge() 
             )
             .await
         } else {
-            gents::goal::claim_continuation_from_access(
+            gents_automation::goal::claim_continuation_from_access(
                 &agent_access(&db, &agent),
                 &before,
                 "last-parent",
@@ -3241,7 +3270,7 @@ async fn continuation_sequence_exhaustion_rejects_claims_without_retry_charge() 
         );
         assert_eq!(exhausted.infrastructure_retry_count, Some(i64::from(retry)));
         let rejected = if retry {
-            gents::goal::claim_retry_continuation_from_access(
+            gents_automation::goal::claim_retry_continuation_from_access(
                 &agent_access(&db, &agent),
                 &exhausted,
                 "must-not-be-claimed",
@@ -3250,7 +3279,7 @@ async fn continuation_sequence_exhaustion_rejects_claims_without_retry_charge() 
             )
             .await
         } else {
-            gents::goal::claim_continuation_from_access(
+            gents_automation::goal::claim_continuation_from_access(
                 &agent_access(&db, &agent),
                 &exhausted,
                 "must-not-be-claimed",
@@ -3321,7 +3350,7 @@ async fn stale_usage_refresh_preserves_completed_goal_time_accounting() {
     assert_eq!(completed.active_time_seconds, Some(73));
     assert!(completed.active_started_at.is_none());
 
-    gents::goal::refresh_goal_usage_from_access(&access, &stale)
+    gents_automation::goal::refresh_goal_usage_from_access(&access, &stale)
         .await
         .expect("stale usage observation must safely skip obsolete accounting writes");
     let after = load_goal_as(&access, db.node_identity.did()).await.unwrap();
@@ -3379,9 +3408,10 @@ async fn operator_resume_publishes_one_lineage_child_and_fences_old_pause() {
     )
     .await
     .unwrap();
-    let receipt = gents::goal::resume_goal_request(&client, &user, did, SESSION, "resume-parent")
-        .await
-        .unwrap();
+    let receipt =
+        gents_automation::goal::resume_goal_request(&client, &user, did, SESSION, "resume-parent")
+            .await
+            .unwrap();
     assert!(receipt.created);
     let goal = load_goal_as(&client, did).await.unwrap();
     assert_eq!(receipt.goal_id, goal.goal_id);
@@ -3427,7 +3457,7 @@ async fn operator_resume_publishes_one_lineage_child_and_fences_old_pause() {
     assert_eq!(child["workspace_owner_node_did"], did);
     assert_eq!(child["workspace_seal_hash"], "resume-seal");
     assert!(
-        !gents::goal::update_goal_fields_if_status_from_access(
+        !gents_automation::goal::update_goal_fields_if_status_from_access(
             &agent_access(&db, &agent),
             &stale_active,
             GoalStatus::Active,
@@ -3469,9 +3499,10 @@ async fn resume_resets_blocked_audit_identity_and_count() {
     .unwrap();
     seed_goal_fields_from_access(&agent_access, &goal,
         r#"status: "blocked", consecutive_blocked_audits: 3, last_blocked_request_id: "request-3", last_blocked_reason: "needs approval", active_started_at: null"#).await;
-    let receipt = gents::goal::resume_goal_request(&access, &user, did, SESSION, "request-3")
-        .await
-        .unwrap();
+    let receipt =
+        gents_automation::goal::resume_goal_request(&access, &user, did, SESSION, "request-3")
+            .await
+            .unwrap();
     assert!(receipt.created);
     let resumed = load_goal_as(&access, did).await.unwrap();
     assert_eq!(resumed.parsed_status(), Some(GoalStatus::Active));
@@ -3506,8 +3537,20 @@ async fn concurrent_operator_resumes_publish_one_child() {
     .await
     .unwrap();
     let (left, right) = tokio::join!(
-        gents::goal::resume_goal_request(&access, &user, did, SESSION, "concurrent-parent"),
-        gents::goal::resume_goal_request(&access, &user, did, SESSION, "concurrent-parent"),
+        gents_automation::goal::resume_goal_request(
+            &access,
+            &user,
+            did,
+            SESSION,
+            "concurrent-parent"
+        ),
+        gents_automation::goal::resume_goal_request(
+            &access,
+            &user,
+            did,
+            SESSION,
+            "concurrent-parent"
+        ),
     );
     let left = left.unwrap();
     let right = right.unwrap();
@@ -3546,9 +3589,10 @@ async fn operator_resume_rejects_corrupted_child_receipt_without_reactivation() 
     )
     .await
     .unwrap();
-    let first = gents::goal::resume_goal_request(&client, &user, did, SESSION, "corrupt-parent")
-        .await
-        .unwrap();
+    let first =
+        gents_automation::goal::resume_goal_request(&client, &user, did, SESSION, "corrupt-parent")
+            .await
+            .unwrap();
     set_request_state_as(&access, &first.doc_id, "interrupted").await;
     let goal_before = set_goal_from_access(
         &client,
@@ -3564,7 +3608,7 @@ async fn operator_resume_rejects_corrupted_child_receipt_without_reactivation() 
     let original = client.execute(&format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
             request_id purpose node_did requester_did session_doc_id agent_doc_id admission_kind admission_signer_did admission_signature enrollment_request_id enrollment_request_digest enrollment_admin_did enrollment_authorization_sequence enrollment_authorization_expires_at runtime_issuer_did runtime_source_request_id runtime_source_kind agent_did session_id retry_parent_request retry_parent_request_doc_id retry_root_request retry_key content max_total_tokens input execution_origin caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id created_at retry_count max_retries valid_until request_hop caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id workspace_id workspace_authority workspace_owner_node_did workspace_seal_hash lifecycle_state
-        }} }}"#, gents::store::graphql::escape_graphql_string(&first.doc_id),
+        }} }}"#, gents_store::graphql::escape_graphql_string(&first.doc_id),
     )).await.unwrap();
     let mut forged = original["data"]["AgentRequest"][0].clone();
     forged["content"] = serde_json::json!("unsigned replacement");
@@ -3617,7 +3661,7 @@ async fn operator_resume_rejects_corrupted_child_receipt_without_reactivation() 
                         "mutation {{add_AgentRequest(input: {input}) {{_docID}}}}"
                     ))
                     .await?;
-                let doc = gents::store::graphql::created_doc_id(&result, "AgentRequest")?;
+                let doc = gents_store::graphql::created_doc_id(&result, "AgentRequest")?;
                 txn.add_resource_relationship("AgentRequest", &doc, "parent", "agents", agent_doc)
                     .await?;
                 txn.add_resource_relationship(
@@ -3643,7 +3687,7 @@ async fn operator_resume_rejects_corrupted_child_receipt_without_reactivation() 
     let child_before = operator_resume_child_row_from_access(&client, &forged_doc_id).await;
     assert_eq!(child_before["content"], "unsigned replacement");
     assert!(
-        gents::goal::resume_goal_request(&client, &user, did, SESSION, "corrupt-parent",)
+        gents_automation::goal::resume_goal_request(&client, &user, did, SESSION, "corrupt-parent",)
             .await
             .is_err(),
         "a matching retry key must not authenticate changed content"
@@ -3680,16 +3724,11 @@ async fn operator_resume_rejects_older_unfinished_siblings_without_mutation() {
         let sibling = seed_operator_resume_parent_with_actors(&db, &user, &agent, "a-older").await;
         seed_operator_resume_parent_with_actors(&db, &user, &agent, "z-parent").await;
         let state = state
-            .map(|value| {
-                format!(
-                    "\"{}\"",
-                    gents::store::graphql::escape_graphql_string(value)
-                )
-            })
+            .map(|value| format!("\"{}\"", gents_store::graphql::escape_graphql_string(value)))
             .unwrap_or_else(|| "null".to_owned());
         let response = agent_access.write("test.resume_sibling_state", &format!(
             r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: {state} }}) {{ _docID }} }}"#,
-            gents::store::graphql::escape_graphql_string(&sibling)
+            gents_store::graphql::escape_graphql_string(&sibling)
         )).await.unwrap();
         assert_eq!(
             response["data"]["update_AgentRequest"]
@@ -3709,9 +3748,10 @@ async fn operator_resume_rejects_older_unfinished_siblings_without_mutation() {
         )
         .await
         .unwrap();
-        let error = gents::goal::resume_goal_request(&client, &user, did, SESSION, "z-parent")
-            .await
-            .expect_err("every unfinished sibling must block resume");
+        let error =
+            gents_automation::goal::resume_goal_request(&client, &user, did, SESSION, "z-parent")
+                .await
+                .expect_err("every unfinished sibling must block resume");
         let detail = format!("{error:#}");
         assert!(
             !detail.contains("no longer the latest"),
@@ -3759,9 +3799,10 @@ async fn operator_resume_preserves_pending_wrapup_in_child_policy() {
         "wrapup_requested: true, wrapup_completed: false",
     )
     .await;
-    let receipt = gents::goal::resume_goal_request(&client, &user, did, SESSION, "wrapup-parent")
-        .await
-        .unwrap();
+    let receipt =
+        gents_automation::goal::resume_goal_request(&client, &user, did, SESSION, "wrapup-parent")
+            .await
+            .unwrap();
     let goal = load_goal_as(&client, did).await.unwrap();
     assert_eq!(goal.parsed_status(), Some(GoalStatus::BudgetLimited));
     assert_eq!(goal.wrapup_requested, Some(true));
@@ -3784,17 +3825,17 @@ async fn operator_resume_preserves_pending_wrapup_in_child_policy() {
 
 async fn seed_same_second_canonical_goal_child(
     db: &TestDb,
-    user: &gents::KeyIdentity,
+    user: &gents_store::identity::KeyIdentity,
     agent: &Arc<dyn NodeIdentity>,
     access: &ConfigAccess,
     parent_id: &str,
     paused: bool,
 ) -> (String, String) {
-    use gents::request::lifecycle::{
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+    use gents_session::request::lifecycle::{
         build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
         RequestSigner, RequestSpec,
     };
-    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     use sha2::{Digest, Sha256};
     let did = db.node_identity.did();
     let parent_doc = goal_fixture_request_with_state_at(
@@ -3848,7 +3889,7 @@ async fn seed_same_second_canonical_goal_child(
     );
     spec.trigger_lineage.trigger_id = Some(goal.goal_id.clone());
     spec.trigger_lineage.trigger_kind = Some("goal".to_owned());
-    spec.parent = Some(gents::ParentLink {
+    spec.parent = Some(gents_session::request::lifecycle::ParentLink {
         parent_request_id: parent_id.to_owned(),
         parent_request_doc_id: parent_doc.clone(),
         ..Default::default()
@@ -3973,7 +4014,7 @@ async fn operator_resume_accepts_same_second_child_that_sorts_before_root() {
         let (child_id, child_doc) =
             seed_same_second_canonical_goal_child(&db, &user, &agent, &access, parent_id, true)
                 .await;
-        let receipt = gents::goal::resume_goal_request(
+        let receipt = gents_automation::goal::resume_goal_request(
             &client,
             &user,
             db.node_identity.did(),
@@ -4044,9 +4085,9 @@ async fn unready_behavior_defers_goal_continuation_without_writes_or_retry_charg
             serde_json::to_value(load_goal_as(&access, db.node_identity.did()).await.unwrap())
                 .unwrap();
         assert!(
-            waiting["last_failure"]
-                .as_str()
-                .is_some_and(|reason| reason.starts_with(gents::goal::GOAL_READINESS_WAIT_PREFIX)),
+            waiting["last_failure"].as_str().is_some_and(
+                |reason| reason.starts_with(gents_automation::goal::GOAL_READINESS_WAIT_PREFIX)
+            ),
             "{process:?}/{reason:?}: the wait must be recorded: {waiting}"
         );
         for field in [
@@ -4124,7 +4165,7 @@ async fn readiness_rejected_goal_children_never_spend_the_retry_budget() {
     .expect("set goal");
     let (mut source, _tx) = source_for_agent(&db, &agent).await;
 
-    for round in 1..=(gents::goal::MAX_INFRASTRUCTURE_RETRIES as usize + 1) {
+    for round in 1..=(gents_automation::goal::MAX_INFRASTRUCTURE_RETRIES as usize + 1) {
         tokio::time::timeout(Duration::from_secs(2), source.next_fire())
             .await
             .unwrap_or_else(|_| panic!("round {round}: goal source timed out"))
@@ -4237,7 +4278,7 @@ async fn claimed_continuation_waits_for_readiness_before_materializing() {
     )
     .await
     .expect("set goal");
-    assert!(gents::goal::claim_continuation_from_access(
+    assert!(gents_automation::goal::claim_continuation_from_access(
         &agent_access(&db, &agent),
         &goal,
         "parent-claimed-waits"
@@ -4342,7 +4383,7 @@ mod control_failure;
 
 async fn goal_fixture_request_with_state(
     db: &TestDb,
-    user: &gents::KeyIdentity,
+    user: &gents_store::identity::KeyIdentity,
     agent: &Arc<dyn NodeIdentity>,
     request_id: &str,
     state: &str,
@@ -4353,7 +4394,7 @@ async fn goal_fixture_request_with_state(
 
 async fn goal_fixture_request_with_state_at(
     db: &TestDb,
-    user: &gents::KeyIdentity,
+    user: &gents_store::identity::KeyIdentity,
     agent: &Arc<dyn NodeIdentity>,
     request_id: &str,
     state: &str,
@@ -4365,18 +4406,18 @@ async fn goal_fixture_request_with_state_at(
 
 async fn goal_fixture_request_in_session_at(
     db: &TestDb,
-    user: &gents::KeyIdentity,
+    user: &gents_store::identity::KeyIdentity,
     agent: &Arc<dyn NodeIdentity>,
     session: &str,
     request_id: &str,
     state: &str,
     created_at: &str,
 ) -> String {
-    use gents::request::lifecycle::{
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+    use gents_session::request::lifecycle::{
         build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
         RequestSigner, RequestSpec,
     };
-    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     let client = db.client_access(user);
     let spec = RequestSpec::new(
         RequestPurpose::Normal,
@@ -4428,14 +4469,14 @@ async fn goal_fixture_request_in_session_at(
 
 async fn reserve_goal_session(
     db: &TestDb,
-    user: &gents::KeyIdentity,
+    user: &gents_store::identity::KeyIdentity,
     agent: &Arc<dyn NodeIdentity>,
     session: &str,
 ) -> String {
-    use gents::request::lifecycle::{
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+    use gents_session::request::lifecycle::{
         build_signed_client_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
     };
-    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
 
     let access = db.client_access(user);
     let spec = RequestSpec::new(
@@ -4538,11 +4579,11 @@ async fn publish_owned_terminal_activity(
             variables["input"]["creator_did"] = serde_json::json!(agent.did());
             variables["input"]["parent_linked"] = serde_json::json!(true);
             let created = txn.execute_with_variables(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION, &variables).await?;
-            let close_doc_id = gents::store::graphql::created_doc_id(&created, "AgentOutputSegment")?;
+            let close_doc_id = gents_store::graphql::created_doc_id(&created, "AgentOutputSegment")?;
             txn.add_resource_relationship("AgentOutputSegment", &close_doc_id, "parent", "sessions", session_doc).await?;
             txn.add_actor_relationship("AgentOutputSegment", &close_doc_id, "working_agent", &agent.did().parse()?).await?;
             let message = TranscriptMessage {
-                native_request_id: None, message_key: gents::session::sequence_message_key(node_did, session_id, requester_did, sequence),
+                native_request_id: None, message_key: gents_session::session::sequence_message_key(node_did, session_id, requester_did, sequence),
                 session_id: session_id.into(), node_did: node_did.into(), requester_did: requester_did.map(Into::into),
                 request_doc_id: Some(request_doc_id.into()), publication: MessagePublication::RequestExecution {execution_generation: generation.clone()},
                 outcome: OutputOutcome::Complete, sequence, role: MessageRole::Assistant, native_id: Some(format!("goal-terminal-{sequence}")),
@@ -4555,7 +4596,7 @@ async fn publish_owned_terminal_activity(
             variables["input"]["creator_did"] = serde_json::json!(agent.did());
             variables["input"]["parent_linked"] = serde_json::json!(true);
             let created = txn.execute_with_variables(CREATE_AGENT_MESSAGE_MUTATION, &variables).await?;
-            let message_doc_id = gents::store::graphql::created_doc_id(&created, "AgentMessage")?;
+            let message_doc_id = gents_store::graphql::created_doc_id(&created, "AgentMessage")?;
             txn.add_resource_relationship("AgentMessage", &message_doc_id, "parent", "sessions", session_doc).await?;
             txn.add_actor_relationship("AgentMessage", &message_doc_id, "working_agent", &agent.did().parse()?).await?;
             let terminal = gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(TerminalOutput::Message {message_doc_id})?)?;
@@ -4569,7 +4610,11 @@ async fn goal_recovery_actors(
     db: &TestDb,
     request_id: &str,
     state: &str,
-) -> (gents::KeyIdentity, Arc<dyn NodeIdentity>, ConfigAccess) {
+) -> (
+    gents_store::identity::KeyIdentity,
+    Arc<dyn NodeIdentity>,
+    ConfigAccess,
+) {
     let (user, agent) = goal_creation_actors(db).await;
     let doc = goal_fixture_request_with_state(db, &user, &agent, request_id, state).await;
     let access = ConfigAccess::local_managed_agent(
@@ -4597,7 +4642,7 @@ async fn goal_children_from_access(access: &ConfigAccess) -> Vec<ChildRow> {
 
 async fn seed_goal_fields_from_access(
     access: &ConfigAccess,
-    goal: &gents::goal::GoalDocument,
+    goal: &gents_automation::goal::GoalDocument,
     fields: &str,
 ) {
     let doc = escape_graphql_string(&goal.doc_id);
@@ -4617,8 +4662,8 @@ async fn wait_for_goal_transition_as(
     node_did: &str,
     source: &mut GoalSource,
     description: &str,
-    reached: impl Fn(&gents::goal::GoalDocument) -> bool,
-) -> gents::goal::GoalDocument {
+    reached: impl Fn(&gents_automation::goal::GoalDocument) -> bool,
+) -> gents_automation::goal::GoalDocument {
     let mut updates = node.subscribe_updates();
     tokio::time::timeout(Duration::from_secs(10), async {
         tokio::select! {
@@ -4661,7 +4706,7 @@ async fn seed_failed_call_from_access(
                     "queued_at": "2026-07-15T00:00:00Z", "started_at": "2026-07-15T00:00:00Z",
                     "ended_at": ended_at, "failure_reason": failure_reason}}),
             ).await?;
-            let doc = gents::store::graphql::created_doc_id(&response, "InferenceCall")?;
+            let doc = gents_store::graphql::created_doc_id(&response, "InferenceCall")?;
             txn.add_resource_relationship("InferenceCall", &doc, "parent", "sessions", session_doc).await?;
             Ok::<_, anyhow::Error>(())
         })
@@ -4687,7 +4732,7 @@ async fn operator_resume_child_row_from_access(
 
 async fn seed_operator_resume_parent_with_actors(
     db: &TestDb,
-    user: &gents::KeyIdentity,
+    user: &gents_store::identity::KeyIdentity,
     agent: &Arc<dyn NodeIdentity>,
     request_id: &str,
 ) -> String {
@@ -4711,29 +4756,33 @@ async fn create_visible_foreign_collision(
     request_id: &str,
     retry_key: Option<&str>,
 ) -> String {
-    use gents::request::lifecycle::{
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+    use gents_session::request::lifecycle::{
         build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
         RequestSigner, RequestSpec,
     };
-    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     let directory = tempfile::tempdir().unwrap();
-    let foreign_node =
-        gents::KeyIdentity::load_or_create(directory.path().join("foreign-node.key"), None)
-            .unwrap();
-    let binding = gents::store::identity::provision_agent_identity(&foreign_node).unwrap();
+    let foreign_node = gents_store::identity::KeyIdentity::load_or_create(
+        directory.path().join("foreign-node.key"),
+        None,
+    )
+    .unwrap();
+    let binding = gents_store::identity::provision_agent_identity(&foreign_node).unwrap();
     let foreign_agent =
-        gents::store::identity::resolve_agent_identity(&foreign_node, &binding).unwrap();
-    let foreign_user =
-        gents::KeyIdentity::load_or_create(directory.path().join("foreign-user.key"), None)
-            .unwrap();
+        gents_store::identity::resolve_agent_identity(&foreign_node, &binding).unwrap();
+    let foreign_user = gents_store::identity::KeyIdentity::load_or_create(
+        directory.path().join("foreign-user.key"),
+        None,
+    )
+    .unwrap();
     let admin = ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap());
     for actor in [foreign_user.did(), foreign_agent.did()] {
         for permission in [
-            gents::store::config_client::NodePermission::DocumentRead,
-            gents::store::config_client::NodePermission::DocumentUpdate,
-            gents::store::config_client::NodePermission::CollectionGet,
-            gents::store::config_client::NodePermission::DacRelationAdd,
-            gents::store::config_client::NodePermission::DacRelationDelete,
+            gents_store::config_client::NodePermission::DocumentRead,
+            gents_store::config_client::NodePermission::DocumentUpdate,
+            gents_store::config_client::NodePermission::CollectionGet,
+            gents_store::config_client::NodePermission::DacRelationAdd,
+            gents_store::config_client::NodePermission::DacRelationDelete,
         ] {
             admin
                 .grant_node_permission(&actor.parse().unwrap(), permission)
@@ -4753,16 +4802,22 @@ async fn create_visible_foreign_collision(
     let agent = serde_json::json!({"node_did": foreign_node.did(), "agent_did": foreign_agent.did(),
         "creation_nonce": binding.creation_nonce, "display_name": "Foreign collision Agent",
         "inference_profile_id": profile_id, "enabled": true});
-    let plan = gents::documents::DesiredStateApplyPlan::new(
+    let plan = gents_documents::DesiredStateApplyPlan::new(
         [
-            (gents::Collection::Node, node),
-            (gents::Collection::InferenceBackend, backend),
-            (gents::Collection::InferenceProfile, profile),
-            (gents::Collection::Agent, agent),
+            (gents_store::collection::Collection::Node, node),
+            (
+                gents_store::collection::Collection::InferenceBackend,
+                backend,
+            ),
+            (
+                gents_store::collection::Collection::InferenceProfile,
+                profile,
+            ),
+            (gents_store::collection::Collection::Agent, agent),
         ]
         .into_iter()
         .map(
-            |(collection, value)| gents::documents::DesiredStateApplyDocument {
+            |(collection, value)| gents_documents::DesiredStateApplyDocument {
                 collection,
                 add: value.clone(),
                 update: value,
@@ -4775,10 +4830,10 @@ async fn create_visible_foreign_collision(
         .transact_write("test.foreign_collision.configuration", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                gents::documents::apply_desired_state_plan(
+                gents_documents::apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
@@ -4874,7 +4929,7 @@ async fn seed_foreign_goal_usage(
                 "request_doc_id":request_doc, "call_seq":1, "call_kind":"inference", "attempt":1,
                 "call_state":"completed", "prompt_tokens":10000, "completion_tokens":10000, "cached_input_tokens":0});
             let result = txn.execute_with_variables("mutation($input: InferenceCallMutationInputArg!) {add_InferenceCall(input:$input) {_docID}}", &serde_json::json!({"input":input})).await?;
-            let doc = gents::store::graphql::created_doc_id(&result, "InferenceCall")?;
+            let doc = gents_store::graphql::created_doc_id(&result, "InferenceCall")?;
             txn.add_resource_relationship("InferenceCall", &doc, "parent", "sessions", session_doc).await?;
             Ok::<_, anyhow::Error>(doc)
         })
@@ -4920,7 +4975,7 @@ async fn load_history_as(
     node_did: &str,
     requester_did: &str,
     session_id: &str,
-) -> Vec<gents::inference::llm::message::Message> {
+) -> Vec<gents_inference::llm::message::Message> {
     let node = escape_graphql_string(node_did);
     let requester = escape_graphql_string(requester_did);
     let session = escape_graphql_string(session_id);
@@ -4928,10 +4983,14 @@ async fn load_history_as(
     let mut messages = Vec::new();
     for row in response["data"]["AgentMessage"].as_array().unwrap() {
         let doc = row["_docID"].as_str().unwrap();
-        let (_, message) =
-            gents::session::load_canonical_message(access, doc, node_did, Some(requester_did))
-                .await
-                .unwrap();
+        let (_, message) = gents_session::session::load_canonical_message(
+            access,
+            doc,
+            node_did,
+            Some(requester_did),
+        )
+        .await
+        .unwrap();
         messages.push(message);
     }
     messages
@@ -4957,7 +5016,7 @@ async fn fail_request_with_usage(
                 "call_state":"failed", "failure_reason":"provider stream interrupted after reporting usage",
                 "prompt_tokens":100, "completion_tokens":5});
             let created = txn.execute_with_variables("mutation($input: InferenceCallMutationInputArg!) {add_InferenceCall(input:$input) {_docID}}", &serde_json::json!({"input":input})).await?;
-            let doc = gents::store::graphql::created_doc_id(&created, "InferenceCall")?;
+            let doc = gents_store::graphql::created_doc_id(&created, "InferenceCall")?;
             txn.add_resource_relationship("InferenceCall", &doc, "parent", "sessions", session_doc).await?;
             Ok::<_, anyhow::Error>(())
         })
@@ -4967,7 +5026,7 @@ async fn fail_request_with_usage(
 async fn seed_lineage_tool(
     access: &ConfigAccess,
     agent: &Arc<dyn NodeIdentity>,
-    user: &gents::KeyIdentity,
+    user: &gents_store::identity::KeyIdentity,
     node_did: &str,
     request_id: &str,
     request_doc: &str,
@@ -4991,7 +5050,7 @@ async fn seed_lineage_tool(
                 "request_id":request_id,"request_doc_id":request_doc,"tool_name":"agent_message",
                 "status":"completed","lifecycle_state":"completed"});
             let result = txn.execute_with_variables("mutation($input: AgentToolCallMutationInputArg!) {create_AgentToolCall(input:$input) {_docID}}", &serde_json::json!({"input":input})).await?;
-            let doc = gents::store::graphql::created_doc_id(&result, "AgentToolCall")?;
+            let doc = gents_store::graphql::created_doc_id(&result, "AgentToolCall")?;
             txn.add_resource_relationship("AgentToolCall", &doc, "parent", "sessions", session_doc).await?;
             txn.add_actor_relationship("AgentToolCall", &doc, "working_agent", &agent.did().parse()?).await?;
             Ok::<_, anyhow::Error>(doc)
@@ -5005,7 +5064,7 @@ async fn seed_lineage_tool(
 )]
 async fn seed_lineage_parent(
     db: &TestDb,
-    user: &gents::KeyIdentity,
+    user: &gents_store::identity::KeyIdentity,
     agent: &Arc<dyn NodeIdentity>,
     access: &ConfigAccess,
     request_id: &str,
@@ -5013,11 +5072,11 @@ async fn seed_lineage_parent(
     workspace_id: &str,
     seal_hash: &str,
 ) -> (String, String) {
-    use gents::request::lifecycle::{
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+    use gents_session::request::lifecycle::{
         build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
         RequestSigner, RequestSpec,
     };
-    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     let client = db.client_access(user);
     let root_id = "upstream-root";
     let root = goal_fixture_request_with_state_at(
@@ -5089,7 +5148,7 @@ async fn seed_lineage_parent(
             request.workspace_owner_node_did = Some(db.node_identity.did().into());
             request.workspace_seal_hash = Some(seal_hash.into());
         }
-        gents::sign_agent_request_create(user, &mut request)
+        gents_session::request::admission::sign_agent_request_create(user, &mut request)
             .await
             .unwrap();
         submit_client_request(&client, &request).await.unwrap();

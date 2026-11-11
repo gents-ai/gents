@@ -1,0 +1,327 @@
+use serde_json::{json, Value};
+
+use super::{graphql_api_base, ConfigAccess, ConfigClientError};
+
+type Result<T, E = ConfigClientError> = std::result::Result<T, E>;
+
+fn actor_context(actor: Option<&identity::Did>) -> defra_core::RequestContext {
+    defra_core::RequestContext::default().with_identity(actor.map(ToString::to_string))
+}
+
+impl ConfigAccess {
+    pub async fn collection_versions(&self) -> Result<Vec<Value>> {
+        match self {
+            Self::Local(local) => {
+                let actor = local.identity().cloned();
+                local
+                    .run_owned(move |node| async move {
+                        let versions = match actor {
+                            Some(actor) => {
+                                let context = actor_context(Some(&actor));
+                                let selector = schema::CollectionSelector {
+                                    get_inactive: true,
+                                    ..Default::default()
+                                };
+                                node.get_collections_as(&context, &selector).await?
+                            }
+                            None => node.get_all_collection_versions().await?,
+                        };
+                        versions
+                            .into_iter()
+                            .map(|v| serde_json::to_value(v).map_err(Into::into))
+                            .collect::<Result<_>>()
+                    })
+                    .await
+            }
+            Self::Graphql(_) => serde_json::from_value(
+                self.schema_request(reqwest::Method::GET, "collections?get_inactive=true", None)
+                    .await?,
+            )
+            .map_err(Into::into),
+        }
+    }
+
+    /// Native DefraDB patch semantics; DefraDB owns version creation, activation, validation and node authorization.
+    pub async fn patch_collection_schema(&self, collection: &str, patch: &Value) -> Result<Value> {
+        match self {
+            Self::Local(local) => {
+                let collection = collection.to_owned();
+                let patch = serde_json::to_string(patch)?;
+                let actor = local.identity().cloned();
+                local
+                    .run_owned(move |node| async move {
+                        let context = actor_context(actor.as_ref());
+                        node.patch_collection_as(&context, &patch, None).await?;
+                        Ok::<_, ConfigClientError>(json!({
+                            "committed": true, "collection": collection, "VersionID": null,
+                            "note": "Schema publication returns no version ID; inspect collection versions for the resulting definition"
+                        }))
+                    })
+                    .await
+            }
+            Self::Graphql(_) => {
+                self.schema_request(
+                    reqwest::Method::PATCH,
+                    "collections",
+                    Some(json!({"Patch":patch})),
+                )
+                .await?;
+                // The HTTP endpoint returns no version receipt; reading the active
+                // version would misidentify a patch that created an inactive one.
+                Ok(
+                    json!({"committed":true,"collection":collection,"VersionID":null,
+                    "note":"HTTP publication returns no version ID; inspect collection versions for the resulting definition"}),
+                )
+            }
+        }
+    }
+
+    pub async fn activate_collection_version(&self, version_id: &str) -> Result<()> {
+        match self {
+            Self::Local(local) => {
+                let version_id = version_id.to_owned();
+                let actor = local.identity().cloned();
+                local
+                    .run_owned(move |node| async move {
+                        let context = actor_context(actor.as_ref());
+                        node.set_active_collection_version_as(&context, &version_id)
+                            .await
+                            .map_err(Into::into)
+                    })
+                    .await
+            }
+            Self::Graphql(endpoint) => {
+                let url = format!("{}/collections/default", graphql_api_base(endpoint.url())?);
+                let client = super::graphql::http_client().await?;
+                endpoint
+                    .authorize(client.post(&url))?
+                    .timeout(std::time::Duration::from_secs(120))
+                    .body(version_id.to_owned())
+                    .send()
+                    .await?
+                    .error_for_status()?;
+                Ok(())
+            }
+        }
+    }
+
+    /// A schema grant never grants host filesystem access.
+    pub async fn set_schema_migration(&self, config: defra_node::LensConfig) -> Result<Value> {
+        config.validate_for_http()?;
+        match self {
+            Self::Local(local) => {
+                let actor = local.identity().cloned();
+                let config = serde_json::to_value(config)?;
+                local
+                    .run_owned(move |node| async move {
+                        let context = actor_context(actor.as_ref());
+                        let id = node.set_migration_as(&context, &config).await?;
+                        Ok::<_, ConfigClientError>(json!({"lensId": id}))
+                    })
+                    .await
+            }
+            Self::Graphql(_) => Ok(self
+                .schema_request(
+                    reqwest::Method::POST,
+                    "collections/migrations",
+                    Some(serde_json::to_value(config)?),
+                )
+                .await?),
+        }
+    }
+
+    pub async fn add_schema_view(&self, query: &str, sdl: &str) -> Result<()> {
+        match self {
+            Self::Local(local) => {
+                let query = query.to_owned();
+                let sdl = sdl.to_owned();
+                let actor = local.identity().cloned();
+                local
+                    .run_owned(move |node| async move {
+                        let context = actor_context(actor.as_ref());
+                        node.add_view_as(&context, &query, &sdl)
+                            .await
+                            .map_err(Into::into)
+                    })
+                    .await
+            }
+            Self::Graphql(_) => {
+                self.schema_request(
+                    reqwest::Method::POST,
+                    "view",
+                    Some(json!({"Query":query,"SDL":sdl})),
+                )
+                .await?;
+                Ok(())
+            }
+        }
+    }
+
+    pub async fn materialize_schema_collection(&self, collection: &str) -> Result<usize> {
+        match self {
+            Self::Local(local) => {
+                let collection = collection.to_owned();
+                let actor = local.identity().cloned();
+                local
+                    .run_owned(move |node| async move {
+                        let context = actor_context(actor.as_ref());
+                        node.materialize_collection_as(&context, &collection)
+                            .await
+                            .map_err(Into::into)
+                    })
+                    .await
+            }
+            Self::Graphql(_) => Err(ConfigClientError::MaterializeUnsupported),
+        }
+    }
+
+    /// Permanently removes every document of `collection` from this node,
+    /// with its heads, block history and index entries, keeping the definition.
+    ///
+    /// External premise (pinned DefraDB `truncate_collection_as`): the caller
+    /// needs the `truncate-collection` node permission and no document policy
+    /// is consulted; the removal is local to this node, issues no CRDT delete
+    /// and replicates nothing, so peers keep their copies; and it commits in
+    /// chunks, not one transaction.
+    pub async fn truncate_collection(&self, collection: &str) -> Result<()> {
+        crate::graphql::validate_collection_identifier(collection)?;
+        match self {
+            Self::Local(local) => {
+                let collection = collection.to_owned();
+                let actor = local.identity().cloned();
+                local
+                    .run_owned(move |node| async move {
+                        let context = actor_context(actor.as_ref());
+                        node.truncate_collection_as(&context, &collection, None)
+                            .await
+                            .map_err(Into::into)
+                    })
+                    .await
+            }
+            Self::Graphql(_) => {
+                self.schema_request(
+                    reqwest::Method::DELETE,
+                    &format!("collections/{collection}/truncate"),
+                    None,
+                )
+                .await?;
+                Ok(())
+            }
+        }
+    }
+
+    /// Deletes every version of each of `collections`, its name and its
+    /// definition blocks from this node.
+    ///
+    /// External premise (pinned DefraDB `delete_collections_as`): the caller
+    /// needs the `patch-collection` node permission; DefraDB resolves every
+    /// name and refuses, before deleting anything, while one has documents or
+    /// a collection outside the set has a field relating to it. Versions are
+    /// then deleted in separate commits. The embedded node exposes the name
+    /// form only on its database, which does not substitute the node for an
+    /// absent caller as `Node::*_as` does, so node-authority access names the
+    /// node here.
+    pub async fn remove_collections(&self, collections: &[String]) -> Result<()> {
+        for collection in collections {
+            crate::graphql::validate_collection_identifier(collection)?;
+        }
+        match self {
+            Self::Local(local) => {
+                let collections = collections.to_vec();
+                let actor = local.identity().map(ToString::to_string);
+                local
+                    .run_owned(move |node| async move {
+                        let caller = actor.or_else(|| node.node_identity_did().map(str::to_owned));
+                        let context = defra_core::RequestContext::default().with_identity(caller);
+                        node.database()
+                            .delete_collections_as(&context, collections, false)
+                            .await
+                            .map_err(|error| defra_node::Error::from(error).into())
+                    })
+                    .await
+            }
+            Self::Graphql(_) => {
+                self.schema_request(
+                    reqwest::Method::DELETE,
+                    &format!("collections?name={}", collections.join(",")),
+                    None,
+                )
+                .await?;
+                Ok(())
+            }
+        }
+    }
+
+    async fn schema_request(
+        &self,
+        method: reqwest::Method,
+        route: &str,
+        body: Option<Value>,
+    ) -> Result<Value> {
+        let Self::Graphql(endpoint) = self else {
+            return Err(ConfigClientError::SchemaEndpointRequired);
+        };
+        let url = format!("{}/{}", graphql_api_base(endpoint.url())?, route);
+        let client = super::graphql::http_client().await?;
+        let mut request = endpoint
+            .authorize(client.request(method, &url))?
+            .timeout(std::time::Duration::from_secs(120));
+        if let Some(body) = body {
+            request = request.json(&body);
+        }
+        let response =
+            request
+                .send()
+                .await
+                .map_err(|source| ConfigClientError::SchemaOperation {
+                    url: url.clone(),
+                    source,
+                })?;
+        let status = response.status();
+        let bytes = response.bytes().await?;
+        if !status.is_success() {
+            return Err(ConfigClientError::SchemaOperationStatus {
+                status,
+                body: String::from_utf8_lossy(&bytes).into_owned(),
+            });
+        }
+        if bytes.is_empty() {
+            Ok(Value::Null)
+        } else {
+            Ok(serde_json::from_slice(&bytes)?)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn http_patch_does_not_substitute_the_active_version_for_an_inactive_publication() {
+        use axum::{routing::patch, Json, Router};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+        let app = Router::new().route(
+            "/api/v0/collections",
+            patch(|Json(body): Json<Value>| async move {
+                assert_eq!(body["Patch"][0]["value"], false);
+                axum::http::StatusCode::OK
+            }),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let access = ConfigAccess::Graphql(super::super::GraphqlEndpoint::anonymous(endpoint));
+        let result = access
+            .patch_collection_schema(
+                "Example",
+                &json!([{"op":"replace","path":"/Example/IsActive","value":false}]),
+            )
+            .await;
+        server.abort();
+        let receipt = result.unwrap();
+        assert_eq!(receipt["committed"], true);
+        assert!(receipt["VersionID"].is_null());
+    }
+}

@@ -355,13 +355,13 @@ pub(crate) struct PackDriftArgs {
 }
 
 impl PackDriftArgs {
-    pub(crate) fn policy(self) -> gents::pack::DriftPolicy {
+    pub(crate) fn policy(self) -> gents_pack::pack::DriftPolicy {
         if self.overwrite {
-            gents::pack::DriftPolicy::Overwrite
+            gents_pack::pack::DriftPolicy::Overwrite
         } else if self.keep {
-            gents::pack::DriftPolicy::Keep
+            gents_pack::pack::DriftPolicy::Keep
         } else {
-            gents::pack::DriftPolicy::Refuse
+            gents_pack::pack::DriftPolicy::Refuse
         }
     }
 }

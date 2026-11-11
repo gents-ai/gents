@@ -1,6 +1,6 @@
 pub use gents_loop::stream_processor::*;
 
-use crate::request::seam_error::RuntimeSeamError;
+use gents_session::request::seam_error::RuntimeSeamError;
 
 /// The processor's failure as the daemon classifies it: a seam's own error is
 /// recovered whole, with the processor's context where it adds one.
@@ -24,7 +24,7 @@ pub(crate) fn processor_failure(error: StreamProcessorError) -> anyhow::Error {
 #[cfg(test)]
 use crate::runtime::agent::loop_stream::LoopStreamItem;
 #[cfg(test)]
-use crate::tools::call::hook::DefraSessionHook;
+use gents_toolcalls::call::hook::DefraSessionHook;
 
 #[cfg(test)]
 #[path = "stream_processor_tests.rs"]
@@ -32,8 +32,9 @@ mod tests;
 
 #[cfg(test)]
 mod seam_error_tests {
-    use super::{processor_failure, RuntimeSeamError, StreamProcessorError};
-    use crate::request::lifecycle::ExecutionOwnershipLost;
+    use super::{processor_failure, StreamProcessorError};
+    use gents_session::request::lifecycle::ExecutionOwnershipLost;
+    use gents_session::request::seam_error::RuntimeSeamError;
 
     fn seam(error: anyhow::Error) -> Box<dyn std::error::Error + Send + Sync> {
         RuntimeSeamError::from(error).into()

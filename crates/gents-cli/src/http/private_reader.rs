@@ -4,7 +4,7 @@ use axum::{
     response::Response,
 };
 use defra_http::ExtractIdentity;
-use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
+use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
 
 use super::access::failure;
 use super::router::RuntimeHttpState;

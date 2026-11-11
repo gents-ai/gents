@@ -1,14 +1,14 @@
 use crate::cli::*;
 use anyhow::Result;
-use gents::pack::PackManifest;
+use gents_pack::pack::PackManifest;
 use std::collections::BTreeMap;
 
 /// An uninitialized home has no node, so no runtime to wake: the next start
 /// resolves the plugin store as it is.
 pub(crate) async fn plugin_notification_scope(
     home: &std::path::Path,
-) -> Result<Option<(gents::ConfigAccess, String)>> {
-    if !gents::store::local::home::init_config_path(home).is_file() {
+) -> Result<Option<(gents_store::config_client::ConfigAccess, String)>> {
+    if !gents_store::local::home::init_config_path(home).is_file() {
         return Ok(None);
     }
     resolve_scope_owner(&ScopeArgs {
@@ -26,7 +26,7 @@ pub(crate) async fn record_plugin_retirement(
     home: &std::path::Path,
     coordinate: &str,
 ) -> Result<()> {
-    if !gents::store::local::home::init_config_path(home).is_file() {
+    if !gents_store::local::home::init_config_path(home).is_file() {
         return Ok(());
     }
     let (access, owner) = resolve_scope_owner(&ScopeArgs {
@@ -35,13 +35,13 @@ pub(crate) async fn record_plugin_retirement(
         node_did: None,
     })
     .await?;
-    let result = gents::pack::record_plugin_retirement_as(
+    let result = gents_pack::pack::record_plugin_retirement_as(
         &access,
         &owner,
         None,
         home,
         coordinate,
-        &gents::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await;
     if let Some(node) = access.local_node() {
@@ -84,7 +84,8 @@ pub(super) async fn resolve_plugin_slot_owner(
     }
     let (access, owner) = resolve_scope_owner(scope).await?;
     let result =
-        gents::pack::preview_pack_inference_bindings(&access, manifest, &owner, requested).await;
+        gents_pack::pack::preview_pack_inference_bindings(&access, manifest, &owner, requested)
+            .await;
     if let Some(node) = access.local_node() {
         if let Err(error) = node.shutdown().await {
             tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
@@ -96,7 +97,7 @@ pub(super) async fn resolve_plugin_slot_owner(
 
 pub(crate) async fn resolve_scope_owner(
     scope: &ScopeArgs,
-) -> Result<(gents::store::config_client::ConfigAccess, String)> {
+) -> Result<(gents_store::config_client::ConfigAccess, String)> {
     let (access, _) =
         crate::resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref()).await?;
     scope_owner(scope, access).await
@@ -106,8 +107,8 @@ pub(crate) async fn resolve_scope_owner(
 /// caller holds.
 pub(crate) async fn resolve_home_owner_under_plugin_store(
     home: &std::path::Path,
-    guard: &gents::plugin::store::StoreGuard,
-) -> Result<(gents::store::config_client::ConfigAccess, String)> {
+    guard: &gents_pack::plugin::store::StoreGuard,
+) -> Result<(gents_store::config_client::ConfigAccess, String)> {
     let (access, _) = crate::resolve_config_access_under_plugin_store(home, guard).await?;
     let scope = ScopeArgs {
         home: Some(home.to_path_buf()),
@@ -119,8 +120,8 @@ pub(crate) async fn resolve_home_owner_under_plugin_store(
 
 async fn scope_owner(
     scope: &ScopeArgs,
-    access: gents::store::config_client::ConfigAccess,
-) -> Result<(gents::store::config_client::ConfigAccess, String)> {
+    access: gents_store::config_client::ConfigAccess,
+) -> Result<(gents_store::config_client::ConfigAccess, String)> {
     let owner = super::super::config::binding::resolve_target_node_did(
         scope.node_did.as_deref(),
         if scope.node_did.is_some() {

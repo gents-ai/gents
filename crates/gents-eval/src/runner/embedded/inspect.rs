@@ -7,8 +7,8 @@ use gents_protocol::row::AgentRequestRow;
 
 use super::EmbeddedHome;
 use crate::runner::TrialLocator;
-use gents::store::config_client::ConfigAccess;
-use gents::store::graphql::escape_graphql_string;
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
 
 const MAX_REQUESTS: usize = 1_000;
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -28,7 +28,7 @@ pub async fn inspect_retained_requests(
     runtime: &tokio::runtime::Handle,
     runs_dir: &Path,
     locator: &TrialLocator,
-    evaluator: &dyn gents::NodeIdentity,
+    evaluator: &dyn gents_store::identity::NodeIdentity,
 ) -> Result<Vec<RetainedRequest>> {
     let hint = locator
         .home_hint
@@ -43,7 +43,7 @@ pub async fn inspect_retained_requests(
         "held evaluator signing capability does not match its DID"
     );
     let evaluator_did = identity::Did::new(evaluator.did())?;
-    gents::store::local::storage_backend::drive_unsendable(runtime, move || async move {
+    gents_store::local::storage_backend::drive_unsendable(runtime, move || async move {
         let home = EmbeddedHome::open_for_inspection(&home_dir, &did)
             .await
             .with_context(|| {
@@ -158,7 +158,7 @@ fn decode_requests(response: serde_json::Value) -> Result<Vec<RetainedRequest>> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::{KeyIdentity, NodeIdentity};
+    use gents_store::identity::{KeyIdentity, NodeIdentity};
 
     fn locator(did: &str, hint: &str) -> TrialLocator {
         TrialLocator {
@@ -174,11 +174,11 @@ mod tests {
 
     #[tokio::test]
     async fn retained_requests_preserve_content_and_lineage_under_the_trial_identity() {
-        use gents::request::lifecycle::{
+        use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+        use gents_session::request::lifecycle::{
             build_signed_client_request, submit_client_request, ExecutionOrigin, RequestIdentity,
             RequestSigner, RequestSpec, RetryLink,
         };
-        use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
         let runs = tempfile::tempdir().unwrap();
         let path = runs.path().join("trial/home");
         let home = EmbeddedHome::create_retained(&path).await.unwrap();
@@ -234,8 +234,8 @@ mod tests {
         let denied = KeyIdentity::load_or_create(runs.path().join("denied.key"), None).unwrap();
         let admin = ConfigAccess::local_as(db.node.clone(), identity::Did::new(&did).unwrap());
         for permission in [
-            gents::store::config_client::NodePermission::DocumentRead,
-            gents::store::config_client::NodePermission::CollectionGet,
+            gents_store::config_client::NodePermission::DocumentRead,
+            gents_store::config_client::NodePermission::CollectionGet,
         ] {
             admin
                 .grant_node_permission(&identity::Did::new(denied.did()).unwrap(), permission)
@@ -316,8 +316,8 @@ mod tests {
         let admin =
             ConfigAccess::local_as(home.node.clone(), identity::Did::new(home.did()).unwrap());
         for permission in [
-            gents::store::config_client::NodePermission::CollectionGet,
-            gents::store::config_client::NodePermission::DocumentRead,
+            gents_store::config_client::NodePermission::CollectionGet,
+            gents_store::config_client::NodePermission::DocumentRead,
         ] {
             admin
                 .grant_node_permission(&identity::Did::new(evaluator.did()).unwrap(), permission)
@@ -414,7 +414,7 @@ mod tests {
         assert!(!path.join("MANIFEST").exists());
         let node = gents::defra_node::Node::builder()
             .data_path(&path)
-            .with_regolith_options(gents::store::local::storage_backend::regolith_options())
+            .with_regolith_options(gents_store::local::storage_backend::regolith_options())
             .with_node_identity_did(identity.did())
             .build()
             .await

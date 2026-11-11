@@ -7,7 +7,7 @@ pub(super) fn generated_backend_health_cases_pin_threshold_and_veto_shape() {
         "Lean must emit backend health transition cases"
     );
     assert_eq!(
-        gents::BackendProberOptions::default().failure_threshold_k,
+        gents_inference::backends::health::BackendProberOptions::default().failure_threshold_k,
         3,
         "backend prober default threshold drifted; update the required K coverage below"
     );
@@ -30,12 +30,12 @@ pub(super) fn generated_backend_health_cases_pin_threshold_and_veto_shape() {
     );
 
     let owner_states = [
-        gents::BackendHealthState::Unknown,
-        gents::BackendHealthState::Healthy,
-        gents::BackendHealthState::Degraded,
-        gents::BackendHealthState::Unhealthy,
-        gents::BackendHealthState::CredentialsRequired,
-        gents::BackendHealthState::SubscriptionNotEntitled,
+        gents_inference::backends::health::BackendHealthState::Unknown,
+        gents_inference::backends::health::BackendHealthState::Healthy,
+        gents_inference::backends::health::BackendHealthState::Degraded,
+        gents_inference::backends::health::BackendHealthState::Unhealthy,
+        gents_inference::backends::health::BackendHealthState::CredentialsRequired,
+        gents_inference::backends::health::BackendHealthState::SubscriptionNotEntitled,
     ];
 
     for case in cases {

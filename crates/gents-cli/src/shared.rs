@@ -1,4 +1,6 @@
-use gents::{BackendProviderKind, Collection, OpenAiWireApi};
+use gents_inference::backends::provider::BackendProviderKind;
+use gents_loop::openai_wire::OpenAiWireApi;
+use gents_store::collection::Collection;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -40,7 +42,7 @@ pub(crate) struct InitSummary {
 }
 
 pub(crate) type StoredInitConfig =
-    gents::store::local::home::StoredInitConfig<ToolPackageArg, ToolCeilingArg>;
+    gents_store::local::home::StoredInitConfig<ToolPackageArg, ToolCeilingArg>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct P2pAdmissionState {
@@ -135,7 +137,7 @@ pub(crate) struct ConfigExportBundle {
     pub(crate) exported_at: String,
     pub(crate) access_mode: String,
     #[serde(flatten)]
-    pub(crate) config: gents::documents::PackConfig,
+    pub(crate) config: gents_documents::PackConfig,
 }
 
 impl ConfigExportBundle {
@@ -171,7 +173,7 @@ impl Serialize for ConfigApplyCounts {
 }
 
 impl ConfigApplyCounts {
-    pub(crate) fn from_config(config: &gents::documents::PackConfig) -> anyhow::Result<Self> {
+    pub(crate) fn from_config(config: &gents_documents::PackConfig) -> anyhow::Result<Self> {
         let value = serde_json::to_value(config)?;
         let mut counts = Self::default();
         for collection in Collection::ALL {
@@ -233,21 +235,21 @@ pub(crate) struct ConfigApplyReport {
 }
 
 pub(crate) async fn load_backend_observation(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     backend_id: &str,
-) -> anyhow::Result<gents::documents::InferenceBackendObservation> {
+) -> anyhow::Result<gents_documents::InferenceBackendObservation> {
     let query = format!(
         "{{ InferenceBackendObservation(filter: {{node_did: {{_eq: \"{}\"}}, backend_id: {{_eq: \"{}\"}}}}, limit: 2) {{backend_id catalogs catalog_freshness probe_status last_probe}} }}",
-        gents::store::graphql::escape_graphql_string(node_did),
-        gents::store::graphql::escape_graphql_string(backend_id),
+        gents_store::graphql::escape_graphql_string(node_did),
+        gents_store::graphql::escape_graphql_string(backend_id),
     );
     let rows = crate::graphql_rows(access, "InferenceBackendObservation", &query).await?;
     anyhow::ensure!(
         rows.len() == 1,
         "backend observation is missing or ambiguous"
     );
-    gents::inference::backends::registry::decode_backend_observation(rows[0].clone())
+    gents_inference::backends::registry::decode_backend_observation(rows[0].clone())
 }
 
 #[cfg(test)]

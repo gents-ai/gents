@@ -85,7 +85,7 @@ pub(super) fn cold_backup(plan: &Plan, directory: &Path) -> Result<()> {
     for path in backup_inventory(&plan.home)? {
         // The claimed store may live on another volume via a data-directory
         // symlink. Back up its bytes, not only the pointer to the live store.
-        let source = if path == gents::store::local::home::default_data_dir(&plan.home) {
+        let source = if path == gents_store::local::home::default_data_dir(&plan.home) {
             fs::canonicalize(&path)?
         } else {
             path.clone()
@@ -97,7 +97,7 @@ pub(super) fn cold_backup(plan: &Plan, directory: &Path) -> Result<()> {
                 .join(path.file_name().context("owned filename")?),
             path == plan
                 .home
-                .join(gents::store::local::home::PLUGIN_SERVICES_DIR_NAME),
+                .join(gents_store::local::home::PLUGIN_SERVICES_DIR_NAME),
         )?;
     }
     fs::write(
@@ -183,8 +183,8 @@ pub(super) fn validate_native_executable(path: &Path) -> Result<()> {
 }
 
 pub(super) fn backup_inventory(home: &Path) -> Result<Vec<PathBuf>> {
-    let owned = gents::store::local::home::home_entries(home, &[])?.owned;
-    let data = gents::store::local::home::default_data_dir(home);
+    let owned = gents_store::local::home::home_entries(home, &[])?.owned;
+    let data = gents_store::local::home::default_data_dir(home);
     anyhow::ensure!(data.is_dir() && owned.contains(&data), "managed cold backup requires an exclusively owned default data directory; use external maintenance for shared or missing stores");
     Ok(owned)
 }
@@ -267,7 +267,7 @@ pub(super) fn check_backup_capacity(home: &Path, destination: &Path) -> Result<(
     }
     let mut bytes = 0u64;
     for path in backup_inventory(home)? {
-        let source = if path == gents::store::local::home::default_data_dir(home) {
+        let source = if path == gents_store::local::home::default_data_dir(home) {
             fs::canonicalize(path)?
         } else {
             path
@@ -275,7 +275,7 @@ pub(super) fn check_backup_capacity(home: &Path, destination: &Path) -> Result<(
         bytes = bytes
             .checked_add(size(
                 &source,
-                source == home.join(gents::store::local::home::PLUGIN_SERVICES_DIR_NAME),
+                source == home.join(gents_store::local::home::PLUGIN_SERVICES_DIR_NAME),
             )?)
             .context("backup size overflow")?;
     }

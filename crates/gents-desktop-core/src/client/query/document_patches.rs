@@ -216,7 +216,7 @@ pub async fn fetch_doc_patch(
                     .and_then(Value::as_array)
                     .map_or(0, Vec::len),
             );
-            let (metadata, sources): (Vec<gents::documents::InferenceBackendMetadata>, _) = parse_projected_query_rows_with_source(
+            let (metadata, sources): (Vec<gents_documents::InferenceBackendMetadata>, _) = parse_projected_query_rows_with_source(
                 &data,
                 INFERENCE_BACKEND_NAME,
                 INFERENCE_BACKEND_FIELDS,

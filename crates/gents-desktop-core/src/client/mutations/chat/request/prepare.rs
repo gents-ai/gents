@@ -1,11 +1,13 @@
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
-use gents::documents::skills::prompt_slash_skill_selection;
-use gents::request::lifecycle::{ExecutionOrigin, TriggerLineage, DEFAULT_REQUEST_MAX_RETRIES};
-use gents::store::config_client::ConfigAccess;
-use gents::{RequestIdentity, RequestSigner, RequestSpec, RetryLink};
+use gents_documents::skills::prompt_slash_skill_selection;
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_input::RequestInput;
+use gents_session::request::lifecycle::{
+    ExecutionOrigin, TriggerLineage, DEFAULT_REQUEST_MAX_RETRIES,
+};
+use gents_session::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec, RetryLink};
+use gents_store::config_client::ConfigAccess;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -35,7 +37,7 @@ pub(crate) async fn prepare_request_submission(
     session_id: &str,
     node_did: &str,
     requester_did: &str,
-    signer: &dyn gents::NodeIdentity,
+    signer: &dyn gents_store::identity::NodeIdentity,
     admission: AgentRequestAdmissionRecord,
     content: &str,
     agent_did: Option<&str>,
@@ -87,7 +89,7 @@ pub(crate) async fn prepare_request_submission(
         };
     let created_at = canonical_request_created_at_after(parent_created_at.as_deref())?;
 
-    let create = gents::request::lifecycle::build_signed_client_request(
+    let create = gents_session::request::lifecycle::build_signed_client_request(
         access,
         RequestSpec {
             retry: Some(RetryLink {
@@ -111,7 +113,7 @@ pub(crate) async fn prepare_request_submission(
             // The owner's idempotency key: a resend of this identity is the
             // same request (Lean `ClientOptimisticSend.create`).
             retry_key: Some(options.retry_key.unwrap_or_else(|| {
-                gents::request::lifecycle::client_request_key(signer.did(), &request_id)
+                gents_session::request::lifecycle::client_request_key(signer.did(), &request_id)
             })),
             ..RequestSpec::new(
                 gents_protocol::request_admission::RequestPurpose::Normal,

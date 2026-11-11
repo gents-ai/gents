@@ -1,12 +1,15 @@
 use std::time::{Duration, Instant};
 
-use gents::store::graphql::escape_graphql_string;
-use gents::{
-    build_run_timeline, Gents, RunTimeline, RunTimelineRows, TimelineInferenceCallRow,
-    TimelineRequestRow, ToolCeiling,
+use gents::Gents;
+use gents_observe::{
+    observe::run_timeline::build_run_timeline, observe::run_timeline::RunTimeline,
+    observe::run_timeline::RunTimelineRows, observe::run_timeline::TimelineInferenceCallRow,
+    observe::run_timeline::TimelineRequestRow,
 };
 use gents_protocol::output::TerminalOutput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_store::graphql::escape_graphql_string;
+use gents_tools::surface::ToolCeiling;
 use serde_json::Value;
 
 use crate::support::agent_requests::RequestActors;
@@ -201,7 +204,7 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     assert!(
         expired
             .pointer("/data/update_AgentRequest")
-            .is_some_and(gents::store::graphql::response_has_documents),
+            .is_some_and(gents_store::graphql::response_has_documents),
         "observed execution lease must be expired by the fixture"
     );
 
@@ -258,13 +261,14 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     assert_eq!(call_states(&calls), vec!["failed"]);
     let timeline = build_timeline(&actors, request_id).await;
     assert!(!timeline.request.retry_summary.recovered);
-    let repeated = gents::RequestLifecycle::recover_all_with_identities(
-        &db.node,
-        &agent.node_did,
-        &identities,
-    )
-    .await
-    .unwrap();
+    let repeated =
+        gents_session::request::lifecycle::RequestLifecycle::recover_all_with_identities(
+            &db.node,
+            &agent.node_did,
+            &identities,
+        )
+        .await
+        .unwrap();
     assert_eq!(repeated.requests_recovered, 0);
     assert_eq!(repeated.responses_recovered, 0);
     agent.shutdown().await;

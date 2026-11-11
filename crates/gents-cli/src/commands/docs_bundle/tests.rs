@@ -4,7 +4,7 @@ use std::io::Read;
 use std::path::Path;
 
 use clap::{CommandFactory, Parser};
-use gents::Collection;
+use gents_store::collection::Collection;
 use serde_json::{json, Value};
 
 use super::config_reference::document_id;

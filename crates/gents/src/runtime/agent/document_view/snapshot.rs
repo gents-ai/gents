@@ -6,10 +6,10 @@ use anyhow::{anyhow, Result};
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 
-use crate::documents::Agent as AgentDocument;
-use crate::inference::admission::BackendAvailability;
-use crate::inference::resolved::ResolvedAgent;
-use crate::triggers::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
+use gents_automation::triggers::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
+use gents_documents::Agent as AgentDocument;
+use gents_inference::admission::BackendAvailability;
+use gents_inference::resolved::ResolvedAgent;
 
 use super::DocumentRuntimeView;
 
@@ -17,7 +17,7 @@ use crate::runtime::agent::{
     agent_config_from_documents, assemble_node_and_agents, AgentBuildError, AgentDocumentInputs,
     AgentFactory, DocumentResolveContext,
 };
-use crate::store::identity::RuntimeNode;
+use gents_store::identity::RuntimeNode;
 
 macro_rules! owned_doc {
     ($map:expr, $id:expr, $owner:expr) => {{
@@ -164,11 +164,11 @@ fn resolve_agent_factories(
     view: &DocumentRuntimeView,
     backend_admission_configs: &RapidHashMap<
         String,
-        crate::inference::admission::BackendAdmissionConfig,
+        gents_inference::admission::BackendAdmissionConfig,
     >,
     measured_health: &RapidHashMap<
         String,
-        crate::inference::backends::health::BackendHealthSnapshot,
+        gents_inference::backends::health::BackendHealthSnapshot,
     >,
 ) -> Result<(RapidHashMap<String, UnavailableAgent>, Vec<AgentFactory>)> {
     let mut unavailable_agents = RapidHashMap::new();
@@ -241,7 +241,7 @@ fn resolve_agent_factories(
                     .map(|context| context.skill_ids.as_slice())
                     .unwrap_or(&[]);
                 let oauth_pool = view.oauth_pool_ids(&inference.backend);
-                let behavior_skills = crate::documents::skills::effective_skills(
+                let behavior_skills = gents_documents::skills::effective_skills(
                     &all_skills,
                     &agent_config.node_did,
                     skill_ids,
@@ -287,11 +287,11 @@ fn resolve_agent_factories(
 
 fn ensure_inference_available(
     view: &DocumentRuntimeView,
-    inference: &crate::inference::resolved::ResolvedInference,
-    admission_configs: &RapidHashMap<String, crate::inference::admission::BackendAdmissionConfig>,
+    inference: &gents_inference::resolved::ResolvedInference,
+    admission_configs: &RapidHashMap<String, gents_inference::admission::BackendAdmissionConfig>,
     measured_health: &RapidHashMap<
         String,
-        crate::inference::backends::health::BackendHealthSnapshot,
+        gents_inference::backends::health::BackendHealthSnapshot,
     >,
 ) -> std::result::Result<(), AgentResolutionError> {
     let scope = view.node.value.node_did.as_str();
@@ -315,14 +315,14 @@ fn ensure_inference_available(
     };
     if admission.availability() != BackendAvailability::Disabled && backend.auth.uses_node_oauth() {
         let provider = match backend.provider_kind {
-            crate::inference::backends::provider::BackendProviderKind::ChatGptCodex => {
-                crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER
+            gents_inference::backends::provider::BackendProviderKind::ChatGptCodex => {
+                gents_inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER
             }
-            crate::inference::backends::provider::BackendProviderKind::XaiGrokOAuth => {
-                crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER
+            gents_inference::backends::provider::BackendProviderKind::XaiGrokOAuth => {
+                gents_inference::clients::xai_grok::XAI_OAUTH_PROVIDER
             }
-            crate::inference::backends::provider::BackendProviderKind::ClaudeCliSubscription => {
-                crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER
+            gents_inference::backends::provider::BackendProviderKind::ClaudeCliSubscription => {
+                gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER
             }
             _ => {
                 return Err(AgentResolutionError::new(
@@ -331,8 +331,8 @@ fn ensure_inference_available(
                 ));
             }
         };
-        let pick = crate::inference::auth::credential::account_pick(&backend.auth).unwrap_or(
-            crate::inference::auth::credential::AccountPick::Reference(None),
+        let pick = gents_inference::auth::credential::account_pick(&backend.auth).unwrap_or(
+            gents_inference::auth::credential::AccountPick::Reference(None),
         );
         if !view.resolves_oauth_credential(provider, pick) {
             return Err(AgentResolutionError::new(
@@ -392,10 +392,10 @@ pub(super) fn collect_unresolved_behavior_references(
 
 fn append_inference_selection(
     view: &DocumentRuntimeView,
-    inference: &crate::inference::resolved::ResolvedInference,
-    documents: &mut Vec<crate::inference::resolved::SelectedConfigurationDocument>,
+    inference: &gents_inference::resolved::ResolvedInference,
+    documents: &mut Vec<gents_inference::resolved::SelectedConfigurationDocument>,
 ) -> Result<()> {
-    use crate::inference::resolved::SelectedConfigurationDocument;
+    use gents_inference::resolved::SelectedConfigurationDocument;
     macro_rules! append {
         ($map:expr, $id:expr, $collection:expr) => {{
             let record = $map
@@ -411,43 +411,43 @@ fn append_inference_selection(
     append!(
         view.inference_profiles,
         &inference.profile.profile_id,
-        crate::Collection::InferenceProfile
+        gents_store::collection::Collection::InferenceProfile
     );
     append!(
         view.backends,
         &inference.backend.backend_id,
-        crate::Collection::InferenceBackend
+        gents_store::collection::Collection::InferenceBackend
     );
     if let Some(sampling) = &inference.sampling {
         append!(
             view.inference_sampling,
             &sampling.sampling_id,
-            crate::Collection::InferenceSampling
+            gents_store::collection::Collection::InferenceSampling
         );
     }
     if let Some(execution) = &inference.execution {
         append!(
             view.inference_execution,
             &execution.execution_id,
-            crate::Collection::InferenceExecution
+            gents_store::collection::Collection::InferenceExecution
         );
     }
     if let Some(retry) = &inference.retry_policy {
         append!(
             view.inference_retry_policies,
             &retry.retry_policy_id,
-            crate::Collection::InferenceRetryPolicy
+            gents_store::collection::Collection::InferenceRetryPolicy
         );
     }
     Ok(())
 }
 
 struct SelectedInferenceDocuments<'a> {
-    profile: &'a crate::documents::InferenceProfile,
-    backend: &'a crate::documents::InferenceBackend,
-    sampling: Option<&'a crate::documents::InferenceSampling>,
-    execution: Option<&'a crate::documents::InferenceExecution>,
-    retry_policy: Option<&'a crate::documents::InferenceRetryPolicy>,
+    profile: &'a gents_documents::InferenceProfile,
+    backend: &'a gents_documents::InferenceBackend,
+    sampling: Option<&'a gents_documents::InferenceSampling>,
+    execution: Option<&'a gents_documents::InferenceExecution>,
+    retry_policy: Option<&'a gents_documents::InferenceRetryPolicy>,
 }
 
 /// Resolves the documents one inference selection names, without judging
@@ -495,7 +495,7 @@ fn select_inference_documents<'a>(
 fn resolve_inference(
     view: &DocumentRuntimeView,
     id: &str,
-) -> Result<crate::inference::resolved::ResolvedInference> {
+) -> Result<gents_inference::resolved::ResolvedInference> {
     let selected = select_inference_documents(view, id)?;
     let profile = selected.profile.clone();
     let backend = selected.backend.clone();
@@ -513,12 +513,12 @@ fn resolve_inference(
     let sampling = selected.sampling.cloned();
     let execution = selected.execution.cloned();
     let retry_policy = selected.retry_policy.cloned();
-    let advertised_model = crate::inference::resolved::advertised_model_for_profile(
+    let advertised_model = gents_inference::resolved::advertised_model_for_profile(
         &backend,
         &profile,
         view.backend_observations.get(&backend.backend_id),
     )?;
-    let resolved = crate::inference::resolved::ResolvedInference {
+    let resolved = gents_inference::resolved::ResolvedInference {
         backend,
         profile,
         sampling,
@@ -545,7 +545,7 @@ fn resolve_inference(
 
 // Skills are the one value vector embedded in ResolvedAgent's Debug value;
 // canonicalize before both prompt construction and fingerprinting.
-pub(super) fn sorted_skills(view: &DocumentRuntimeView) -> Vec<crate::documents::skills::Skill> {
+pub(super) fn sorted_skills(view: &DocumentRuntimeView) -> Vec<gents_documents::skills::Skill> {
     let mut skills = view
         .skills
         .values()
@@ -555,8 +555,8 @@ pub(super) fn sorted_skills(view: &DocumentRuntimeView) -> Vec<crate::documents:
     skills
 }
 
-fn skill_from_document(doc: &crate::documents::SkillDocument) -> crate::documents::skills::Skill {
-    crate::documents::skills::Skill {
+fn skill_from_document(doc: &gents_documents::SkillDocument) -> gents_documents::skills::Skill {
+    gents_documents::skills::Skill {
         skill_id: doc.skill_id.clone(),
         node_did: doc.node_did.clone(),
         name: doc.name.clone().unwrap_or_default(),
@@ -571,7 +571,7 @@ fn skill_from_document(doc: &crate::documents::SkillDocument) -> crate::document
 
 #[cfg(test)]
 mod advertised_context_override_tests {
-    use crate::inference::resolved::validate_advertised_context_override;
+    use gents_inference::resolved::validate_advertised_context_override;
 
     #[test]
     fn context_override_admission_matches_lean() {
@@ -592,7 +592,7 @@ mod advertised_context_override_tests {
         }
     }
 
-    fn profile(context_window: i64) -> crate::documents::InferenceProfile {
+    fn profile(context_window: i64) -> gents_documents::InferenceProfile {
         serde_json::from_value(serde_json::json!({
             "node_did": "did:test:owner",
             "profile_id": "profile",
@@ -603,8 +603,8 @@ mod advertised_context_override_tests {
         .unwrap()
     }
 
-    fn advertised(default: Option<i64>, maximum: Option<i64>) -> crate::documents::AdvertisedModel {
-        crate::documents::AdvertisedModel {
+    fn advertised(default: Option<i64>, maximum: Option<i64>) -> gents_documents::AdvertisedModel {
+        gents_documents::AdvertisedModel {
             model_name: "gpt-5.6-sol".into(),
             display_name: None,
             context_window: default,

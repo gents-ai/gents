@@ -5,8 +5,8 @@ use axum::{
     Json,
 };
 use defra_http::ExtractIdentity;
-use gents::inference::inference_observation::InferenceKey;
 use gents::runtime::agent::inference_read::InferenceObservationRead;
+use gents_inference::inference_observation::InferenceKey;
 
 use super::router::RuntimeHttpState;
 
@@ -38,7 +38,7 @@ pub(crate) async fn discover_backend(
             "The selected runtime is unavailable.",
         );
     };
-    match gents::inference::backends::registry::discover_backend_for_actor(
+    match gents_inference::backends::registry::discover_backend_for_actor(
         runtime.observation_node(),
         actor,
         &request.node_did,
@@ -54,7 +54,7 @@ pub(crate) async fn discover_backend(
             );
             response
         }
-        Err(gents::inference::backends::registry::ActorBackendDiscoveryError::Unavailable) => {
+        Err(gents_inference::backends::registry::ActorBackendDiscoveryError::Unavailable) => {
             failure(
                 StatusCode::NOT_FOUND,
                 "The selected backend is unavailable.",

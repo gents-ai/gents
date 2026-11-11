@@ -2,11 +2,11 @@ use std::io::{self, Write};
 
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
-use gents::runtime::agent::p2p_reconcile::registry::{
+use gents_p2p::p2p_reconcile::registry::{
     registry_upsert_mutation, validate_offered_templates, RegistryEntry, UpsertKind,
 };
-use gents::runtime::agent::p2p_reconcile::{heartbeat_is_fresh, REGISTRY_STALE_AFTER};
-use gents::store::graphql::escape_graphql_string;
+use gents_p2p::p2p_reconcile::{heartbeat_is_fresh, REGISTRY_STALE_AFTER};
+use gents_store::graphql::escape_graphql_string;
 use serde::Serialize;
 use serde_json::{json, Value};
 

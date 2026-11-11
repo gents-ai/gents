@@ -1,7 +1,7 @@
 use anyhow::Result;
-use gents::request::lifecycle::TriggerLineage;
 use gents_protocol::request_input::RequestInput;
 use gents_protocol::session::{SessionTitle, SessionTitleSource};
+use gents_session::request::lifecycle::TriggerLineage;
 
 use super::{agent_did_for_write, ensure_peer_chat_ready, observe_submitted_request, ClientCore};
 use crate::client::mutations::{self, SubmitRequestOptions, SubmittedRequest};

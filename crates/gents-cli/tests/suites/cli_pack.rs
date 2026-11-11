@@ -97,7 +97,7 @@ fn a_document_pack_with_a_plugin_installs_and_its_removal_retires_the_plugin() -
         &["config", "pack", "remove", "demo_tools", "--home", home_arg],
     )?;
     anyhow::ensure!(
-        gents::plugin::store::read_record(&home, "gents", "echo_tool").is_err(),
+        gents_pack::plugin::store::read_record(&home, "gents", "echo_tool").is_err(),
         "the retired plugin still has a store record"
     );
     let uncallable = run_cli_failure_stderr(
@@ -220,9 +220,9 @@ fn offline_pack_install_with_a_documents_dependency_holds_one_store_claim() -> R
         "the documents dependency was not installed: {denial}"
     );
 
-    let _held = gents::store::local::home::lock_store(
+    let _held = gents_store::local::home::lock_store(
         &setup.home,
-        &gents::store::local::home::default_data_dir(&setup.home),
+        &gents_store::local::home::default_data_dir(&setup.home),
     )?;
     let denial = run_cli_failure_stderr(setup.tempdir.path(), &install_args)?;
     anyhow::ensure!(
@@ -423,7 +423,7 @@ fn a_documents_dependency_plugin_is_retired_with_its_dependent() -> Result<()> {
 
     let setup = DependentHome::with_dependee("dep-plugin", &dependee)?;
     run_cli_json(setup.tempdir.path(), &setup.install_args())?;
-    let record = gents::plugin::store::read_record(&setup.home, "fixture", "echo_tool")?;
+    let record = gents_pack::plugin::store::read_record(&setup.home, "fixture", "echo_tool")?;
     anyhow::ensure!(
         record.owner_pack_coordinate.as_deref() == Some("fixture/dependee_fixture"),
         "the dependency's plugin is not owned by the dependency: {record:?}"
@@ -441,7 +441,7 @@ fn a_documents_dependency_plugin_is_retired_with_its_dependent() -> Result<()> {
         ],
     )?;
     anyhow::ensure!(
-        gents::plugin::store::read_record(&setup.home, "fixture", "echo_tool").is_err(),
+        gents_pack::plugin::store::read_record(&setup.home, "fixture", "echo_tool").is_err(),
         "the dependency's plugin outlived the removal that released it"
     );
     Ok(())
@@ -616,7 +616,7 @@ fn target_ids(tools: &serde_json::Value) -> std::collections::BTreeSet<String> {
 fn pack_wire_writes_tools_and_context_in_one_transaction() -> Result<()> {
     let fixture = wire_fixture(true)?;
     fixture.wire(&[])?;
-    let plugin = gents::plugin::store::read_record(&fixture.home, "fixture", "job_fixture")?;
+    let plugin = gents_pack::plugin::store::read_record(&fixture.home, "fixture", "job_fixture")?;
     let tools = fixture.agent_tools()?;
     let entry = wired_plugin(&tools).context("the agent's Tools does not list the plugin")?;
     anyhow::ensure!(
@@ -900,7 +900,7 @@ fn pack_install_expect_digest_match_installs() -> Result<()> {
     let digest = fixture.job_pack_digest()?;
     fixture.install_job_pack(&["--expect-digest", &digest])?;
     anyhow::ensure!(
-        gents::pack::read_home_install(&fixture.home, JOB_PACK)?.is_some(),
+        gents_pack::pack::read_home_install(&fixture.home, JOB_PACK)?.is_some(),
         "a matching --expect-digest did not install the pack"
     );
     Ok(())
@@ -916,8 +916,8 @@ fn pack_install_expect_digest_mismatch_writes_nothing() -> Result<()> {
         anyhow::ensure!(stderr.contains(needle), "{needle} missing from: {stderr}");
     }
     anyhow::ensure!(
-        gents::pack::read_home_install(&fixture.home, JOB_PACK)?.is_none()
-            && gents::plugin::store::list_records(&fixture.home)?.is_empty(),
+        gents_pack::pack::read_home_install(&fixture.home, JOB_PACK)?.is_none()
+            && gents_pack::plugin::store::list_records(&fixture.home)?.is_empty(),
         "a refused digest left an install behind"
     );
     Ok(())
@@ -973,7 +973,7 @@ fn pack_install_preview_reports_the_review_and_writes_nothing() -> Result<()> {
         "the preview does not list the pack's agent and what it holds: {preview}"
     );
     anyhow::ensure!(
-        gents::pack::read_home_install(&home, "fixture/documents_fixture")?.is_none(),
+        gents_pack::pack::read_home_install(&home, "fixture/documents_fixture")?.is_none(),
         "a preview installed the pack"
     );
     let shown = run_cli_json(temp.path(), &["config", "pack", "show", dir_arg(&pack)])?;
@@ -1050,7 +1050,9 @@ fn default_profile_from_init(initialized: &serde_json::Value) -> Result<String> 
         .as_str()
         .or_else(|| initialized["init"]["default_agent_did"].as_str())
         .with_context(|| format!("init reports no default agent: {initialized}"))?;
-    Ok(gents::default_inference_profile_id_for_agent(agent))
+    Ok(gents_documents::default_inference_profile_id_for_agent(
+        agent,
+    ))
 }
 
 fn slot<'a>(needs: &'a serde_json::Value, name: &str) -> Result<&'a serde_json::Value> {
@@ -1135,7 +1137,7 @@ fn pack_install_preview_reports_the_slots_still_to_bind() -> Result<()> {
         "the install did not refuse the unbound slots: {refusal}"
     );
     anyhow::ensure!(
-        gents::pack::read_home_install(&home, "fixture/dependee_fixture")?.is_none(),
+        gents_pack::pack::read_home_install(&home, "fixture/dependee_fixture")?.is_none(),
         "the refused install installed the pack"
     );
 
@@ -1316,7 +1318,7 @@ fn pack_install_wire_refuses_before_any_write_without_grant() -> Result<()> {
         "child_process": false,
     });
     write_json_file(&manifest_path, &manifest)?;
-    let records = serde_json::to_value(gents::plugin::store::list_records(&fixture.home)?)?;
+    let records = serde_json::to_value(gents_pack::plugin::store::list_records(&fixture.home)?)?;
     let tools = fixture.agent_tools()?;
 
     let stderr = fixture.install_job_pack_failure(&["--wire", &fixture.agent])?;
@@ -1325,7 +1327,7 @@ fn pack_install_wire_refuses_before_any_write_without_grant() -> Result<()> {
         "the refusal does not name --grant-authority: {stderr}"
     );
     anyhow::ensure!(
-        serde_json::to_value(gents::plugin::store::list_records(&fixture.home)?)? == records
+        serde_json::to_value(gents_pack::plugin::store::list_records(&fixture.home)?)? == records
             && fixture.agent_tools()? == tools,
         "a refused install changed the plugin store or the agent's Tools"
     );
@@ -1461,7 +1463,7 @@ fn admit_starter_fixture(
     }
     edit_pack_config(&dir, |existing| *existing = config)?;
     run_cli_text(scratch, &["config", "pack", "build", dir_arg(&dir)])?;
-    gents::pack::local::open(&gents::pack::local::LocalName::Path(&dir), home)
+    gents_pack::pack::local::open(&gents_pack::pack::local::LocalName::Path(&dir), home)
         .with_context(|| format!("admitting {name} to the home's pack store"))?;
     Ok(())
 }
@@ -1656,8 +1658,8 @@ async fn starter_packs_in_fixture_home() -> Result<()> {
                 "{refused:#}"
             );
             anyhow::ensure!(
-                gents::pack::read_home_install(&home, "gents/script")?.is_none()
-                    && gents::plugin::store::list_records(&home)?.is_empty(),
+                gents_pack::pack::read_home_install(&home, "gents/script")?.is_none()
+                    && gents_pack::plugin::store::list_records(&home)?.is_empty(),
                 "a refused approval installed something"
             );
         }

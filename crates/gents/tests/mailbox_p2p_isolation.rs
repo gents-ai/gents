@@ -1,12 +1,12 @@
 mod support;
 
-use gents::documents::mailbox_write_decl::{MailboxAction, MailboxKind};
-use gents::runtime::agent::p2p_reconcile::{
-    EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin,
+use gents_documents::mailbox_write_decl::{MailboxAction, MailboxKind};
+use gents_p2p::p2p_reconcile::{EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin};
+use gents_session::session::mailbox::{
+    FileMailboxItemArgs, MailboxSourceKind, MailboxStampContext,
 };
-use gents::session::mailbox::{FileMailboxItemArgs, MailboxSourceKind, MailboxStampContext};
-use gents::store::config_client::{ConfigAccess, NodePermission};
-use gents::{KeyIdentity, NodeIdentity};
+use gents_store::config_client::{ConfigAccess, NodePermission};
+use gents_store::identity::{KeyIdentity, NodeIdentity};
 use std::{sync::Arc, time::Duration};
 
 async fn node(
@@ -20,9 +20,9 @@ async fn node(
             .with_node_identity_did(identity.did())
             .with_node_acp_enabled()
             .with_document_projector(
-                gents::store::local::document_projector(
+                gents_store::local::document_projector(
                     identity.clone(),
-                    std::sync::Arc::new(gents::tools::surface::ToolCeiling::meta_only()),
+                    std::sync::Arc::new(gents_tools::surface::ToolCeiling::meta_only()),
                 )
                 .unwrap(),
             )
@@ -31,7 +31,9 @@ async fn node(
             .await
             .unwrap(),
     );
-    gents::ensure_runtime_schemas(&node).await.unwrap();
+    gents_store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     node
 }
 
@@ -47,9 +49,9 @@ async fn mailbox_recipient_access_and_unrelated_exact_peer_pull() {
     let receiver_dir = tempfile::tempdir().unwrap();
     let source = node(source_key.clone(), source_dir.path()).await;
     let receiver = node(outsider.clone(), receiver_dir.path()).await;
-    let binding = gents::store::identity::provision_agent_identity(source_key.as_ref()).unwrap();
+    let binding = gents_store::identity::provision_agent_identity(source_key.as_ref()).unwrap();
     let agent =
-        gents::store::identity::resolve_agent_identity(source_key.as_ref(), &binding).unwrap();
+        gents_store::identity::resolve_agent_identity(source_key.as_ref(), &binding).unwrap();
     let admin = ConfigAccess::local_as(source.clone(), source_key.did().parse().unwrap());
     for actor in [agent.did(), recipient.did(), outsider.did()] {
         for permission in [
@@ -91,11 +93,16 @@ async fn mailbox_recipient_access_and_unrelated_exact_peer_pull() {
         parent_item_id: None,
         deadline_at: None,
     };
-    let item =
-        gents::session::mailbox::stamp_create_with_access(&source, &access, &context, args, &[])
-            .await
-            .unwrap();
-    let doc = gents::store::graphql::escape_graphql_string(&item.doc_id);
+    let item = gents_session::session::mailbox::stamp_create_with_access(
+        &source,
+        &access,
+        &context,
+        args,
+        &[],
+    )
+    .await
+    .unwrap();
+    let doc = gents_store::graphql::escape_graphql_string(&item.doc_id);
     let query = format!(
         "{{ MailboxItem(filter: {{_docID: {{_eq: \"{doc}\"}}}}) {{ _docID _version {{ cid }} }} }}"
     );
@@ -119,7 +126,7 @@ async fn mailbox_recipient_access_and_unrelated_exact_peer_pull() {
     assert!(hidden["data"]["MailboxItem"].as_array().unwrap().is_empty());
 
     let public = admin.write("test.mailbox.public_probe", "mutation { create_PeerRegistry(input: {peer_id: \"mailbox-public-probe\", node_did: \"did:key:probe\", addresses: [\"probe\"]}) { _docID } }").await.unwrap();
-    let public_id = gents::store::graphql::created_doc_id(&public, "PeerRegistry").unwrap();
+    let public_id = gents_store::graphql::created_doc_id(&public, "PeerRegistry").unwrap();
     let source_admin = EmbeddedRemoteP2pAdmin::new(source.clone());
     let receiver_admin = EmbeddedRemoteP2pAdmin::new(receiver.clone());
     let (_, source_address) = support::enrollment::wait_for_peer_identity(&source).await;
@@ -134,7 +141,7 @@ async fn mailbox_recipient_access_and_unrelated_exact_peer_pull() {
         )
         .await
         .unwrap();
-    gents::store::identity::node_p2p(&receiver)
+    gents_store::identity::node_p2p(&receiver)
         .unwrap()
         .sync_documents(
             "PeerRegistry",
@@ -146,7 +153,7 @@ async fn mailbox_recipient_access_and_unrelated_exact_peer_pull() {
     let public_probe = ConfigAccess::local_as(receiver.clone(), outsider.did().parse().unwrap())
         .execute(&format!(
             "{{ PeerRegistry(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ peer_id }} }}",
-            gents::store::graphql::escape_graphql_string(&public_id)
+            gents_store::graphql::escape_graphql_string(&public_id)
         ))
         .await
         .unwrap();
@@ -154,7 +161,7 @@ async fn mailbox_recipient_access_and_unrelated_exact_peer_pull() {
         public_probe["data"]["PeerRegistry"][0]["peer_id"],
         "mailbox-public-probe"
     );
-    let pull = gents::store::identity::node_p2p(&receiver)
+    let pull = gents_store::identity::node_p2p(&receiver)
         .unwrap()
         .sync_documents(
             "MailboxItem",

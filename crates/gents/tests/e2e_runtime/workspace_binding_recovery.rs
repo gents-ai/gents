@@ -6,9 +6,9 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
-use gents::documents::{FileTools, HostTools, Tools};
-use gents::workspace::{provision_read_only_workspace, WorkspaceProvisioningSelection};
-use gents::FileToolMode;
+use gents_documents::FileToolMode;
+use gents_documents::{FileTools, HostTools, Tools};
+use gents_session::workspace::{provision_read_only_workspace, WorkspaceProvisioningSelection};
 
 use crate::support::agent_requests::{canonical_now, RequestSeed};
 use crate::support::builder_runtime::{
@@ -120,7 +120,7 @@ async fn startup_binds_an_agent_authored_workspace_request() {
             .stream_batch_ms(0)
             .deadline_duration_secs(60)
             .done()
-            .tool_ceiling(gents::ToolCeiling::readonly_at(&repo))
+            .tool_ceiling(gents_tools::surface::ToolCeiling::readonly_at(&repo))
             .build()
             .await
             .unwrap(),

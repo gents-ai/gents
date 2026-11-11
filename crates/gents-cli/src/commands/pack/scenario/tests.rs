@@ -1,4 +1,4 @@
-use gents::store::config_client::GraphqlEndpoint;
+use gents_store::config_client::GraphqlEndpoint;
 use std::collections::BTreeSet;
 
 use super::*;
@@ -130,15 +130,15 @@ fn scenario_allowed_folders_are_written_inside_the_tool_root() {
     let root = root.path().canonicalize().unwrap();
     assert!(root.join("out").is_dir(), "a missing folder is made");
     assert_eq!(
-        gents::plugin::allowed::list(home.path()).unwrap(),
+        gents_pack::plugin::allowed::list(home.path()).unwrap(),
         vec![
-            gents::plugin::allowed::AllowedDir {
+            gents_pack::plugin::allowed::AllowedDir {
                 path: root.join("data"),
-                access: gents::pack::BindAccess::Read,
+                access: gents_pack::pack::BindAccess::Read,
             },
-            gents::plugin::allowed::AllowedDir {
+            gents_pack::plugin::allowed::AllowedDir {
                 path: root.join("out"),
-                access: gents::pack::BindAccess::ReadWrite,
+                access: gents_pack::pack::BindAccess::ReadWrite,
             },
         ]
     );
@@ -279,7 +279,9 @@ async fn documents_fixture_staging_installs_its_declared_schemas() {
             .await
             .unwrap(),
     );
-    gents::ensure_runtime_schemas(&node).await.unwrap();
+    gents_store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     let access = ConfigAccess::local(node.clone());
     let phase = crate::commands::schema::apply_pack_schemas_if_present(&access, staged.path())
         .await
@@ -287,9 +289,9 @@ async fn documents_fixture_staging_installs_its_declared_schemas() {
         .expect("staged pack must have schemas");
     assert_eq!(phase.schema_files.len(), schema_assets.len());
 
-    let config = gents::pack::load_pack_authoring_config(
+    let config = gents_pack::pack::load_pack_authoring_config(
         &distribution,
-        &gents::pack::PackInstallOptions {
+        &gents_pack::pack::PackInstallOptions {
             node_did: "did:key:scenario-owner".to_owned(),
         },
         &|path| Ok(std::fs::read(staged.path().join(path))?),

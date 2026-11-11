@@ -6,13 +6,13 @@ use super::{
 use crate::cli::*;
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
-use gents::pack::{PackChangeError, PackKind, PackManifest};
+use gents_pack::pack::{PackChangeError, PackKind, PackManifest};
 use serde_json::json;
 
 struct LocalPackAccess {
-    writer: gents::store::config_client::ConfigAccess,
-    schema: gents::store::config_client::ConfigAccess,
-    runtime: std::sync::Arc<dyn gents::NodeIdentity>,
+    writer: gents_store::config_client::ConfigAccess,
+    schema: gents_store::config_client::ConfigAccess,
+    runtime: std::sync::Arc<dyn gents_store::identity::NodeIdentity>,
 }
 
 pub(super) fn has_plugin_references(config: &serde_json::Value) -> bool {
@@ -30,8 +30,8 @@ pub(super) fn has_plugin_references(config: &serde_json::Value) -> bool {
 
 pub(crate) fn parse_dependency_variables(
     values: &[String],
-) -> Result<gents::pack::DependencyVariableOverrides> {
-    let mut result = gents::pack::DependencyVariableOverrides::new();
+) -> Result<gents_pack::pack::DependencyVariableOverrides> {
+    let mut result = gents_pack::pack::DependencyVariableOverrides::new();
     for item in values {
         let (key, value) = item
             .split_once('=')
@@ -57,7 +57,7 @@ pub(crate) fn parse_dependency_variables(
 
 pub(super) fn reused_variable_preview(
     pack: &PackSource,
-    config: &gents::documents::PackConfig,
+    config: &gents_documents::PackConfig,
 ) -> Result<serde_json::Value> {
     let path = pack
         .manifest()
@@ -66,11 +66,10 @@ pub(super) fn reused_variable_preview(
         .context("pack has no configuration")?;
     let authored: serde_json::Value = serde_json::from_slice(pack.asset(path)?)?;
     let installed = serde_json::to_value(config)?;
-    let uses =
-        gents::pack::interpolate::inspect_install_variables(&authored, &|_| Some("preview".into()))
-            .map_err(|names| {
-                anyhow::anyhow!("cannot inspect install variables: {}", names.join(", "))
-            })?;
+    let uses = gents_pack::pack::interpolate::inspect_install_variables(&authored, &|_| {
+        Some("preview".into())
+    })
+    .map_err(|names| anyhow::anyhow!("cannot inspect install variables: {}", names.join(", ")))?;
     let uses = uses.into_iter().map(|entry| {
         let mut parts = entry.path.trim_start_matches('/').splitn(3, '/');
         let field = parts.next().unwrap_or_default();
@@ -81,7 +80,7 @@ pub(super) fn reused_variable_preview(
         let index = next.and_then(|value| value.parse::<usize>().ok());
         let suffix = parts.next().map(|part| format!("/{part}")).unwrap_or_default();
         let document = index.and_then(|index| {
-            let collection = gents::Collection::ALL.iter().copied().find(|collection| collection.dir_name() == Some(field))?;
+            let collection = gents_store::collection::Collection::ALL.iter().copied().find(|collection| collection.dir_name() == Some(field))?;
             let authored_id = authored.get(field)?.get(index)?.get(collection.unique_field())?.as_str()?;
             if authored_id.contains('$') { return None; }
             installed.get(field)?.as_array()?.iter().find(|row| row.get(collection.unique_field()).and_then(serde_json::Value::as_str) == Some(authored_id) && row.pointer(&suffix).is_some())?;
@@ -90,8 +89,8 @@ pub(super) fn reused_variable_preview(
         json!({"path": entry.path, "variables": installed_variables(&entry), "document": document})
     }).collect::<Vec<_>>();
     let runtime_environment = pack.manifest().metadata.plugins.iter().map(|plugin| {
-        let manifold = gents::plugin::authority::declared_manifold(plugin)?;
-        Ok(json!({"plugin": plugin.name, "declared": gents::plugin::authority::declared_environment(&manifold)}))
+        let manifold = gents_pack::plugin::authority::declared_manifold(plugin)?;
+        Ok(json!({"plugin": plugin.name, "declared": gents_pack::plugin::authority::declared_environment(&manifold)}))
     }).collect::<Result<Vec<_>>>()?;
     Ok(
         json!({"pack": format!("{}/{}", pack.manifest().metadata.namespace, pack.manifest().name), "kind": "existing_installation", "uses": uses, "runtime_environment": runtime_environment}),
@@ -115,7 +114,7 @@ fn named_variable(name: &str, value: Option<&str>, supplied: &str) -> serde_json
 
 /// The variables of a use the installed record already resolved.
 fn installed_variables(
-    entry: &gents::pack::interpolate::InstallVariableUse,
+    entry: &gents_pack::pack::interpolate::InstallVariableUse,
 ) -> Vec<serde_json::Value> {
     entry
         .variables
@@ -152,7 +151,7 @@ fn install_variable_preview_with(
             lookup(name).map(|(value, _)| value)
         }
     };
-    let uses = gents::pack::interpolate::inspect_install_variables(&authored, &environment)
+    let uses = gents_pack::pack::interpolate::inspect_install_variables(&authored, &environment)
         .map_err(|missing| {
             anyhow::anyhow!(
                 "pack config references unset environment variables: {}",
@@ -175,7 +174,7 @@ fn install_variable_preview_with(
             let collection_name = segments.next().unwrap_or_default();
             let document = if collection_name == "node" {
                 Some(json!({"collection": "Node", "id": owner}))
-            } else if let Some(collection) = gents::Collection::ALL
+            } else if let Some(collection) = gents_store::collection::Collection::ALL
                 .iter()
                 .copied()
                 .find(|collection| collection.dir_name() == Some(collection_name))
@@ -187,7 +186,7 @@ fn install_variable_preview_with(
                     .and_then(|row| row.get(collection.unique_field()))
                     .and_then(serde_json::Value::as_str)
                     .and_then(|id| {
-                        gents::pack::interpolate::interpolate_with(id, &environment).ok()
+                        gents_pack::pack::interpolate::interpolate_with(id, &environment).ok()
                     })
                     .map(|id| json!({"collection": collection.graphql_type(), "id": id}))
             } else {
@@ -205,9 +204,9 @@ fn install_variable_preview_with(
         .plugins
         .iter()
         .map(|plugin| {
-            let manifold = gents::plugin::authority::declared_manifold(plugin)?;
+            let manifold = gents_pack::plugin::authority::declared_manifold(plugin)?;
             Ok(json!({"plugin": plugin.name,
-            "declared": gents::plugin::authority::declared_environment(&manifold)}))
+            "declared": gents_pack::plugin::authority::declared_environment(&manifold)}))
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(
@@ -220,7 +219,7 @@ fn install_variable_preview_with(
 /// pack and its dependencies. `explicit` is false only when the pack is
 /// installed as another pack's dependency.
 pub(crate) async fn install_documents_pack(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     owner: &str,
     pack: &PackSource,
     args: &PackInstallArgs,
@@ -230,7 +229,7 @@ pub(crate) async fn install_documents_pack(
 }
 
 async fn install_documents_pack_inner(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     owner: &str,
     pack: &PackSource,
     args: &PackInstallArgs,
@@ -246,7 +245,7 @@ async fn install_documents_pack_inner(
             .await
             .into_iter()
             .collect::<Result<Vec<_>>>()?;
-    if let gents::store::config_client::ConfigAccess::Graphql(endpoint) = access {
+    if let gents_store::config_client::ConfigAccess::Graphql(endpoint) = access {
         let mut needs_runtime_store = false;
         for source in std::iter::once(pack).chain(dependencies.iter()) {
             if !source.manifest().metadata.plugins.is_empty()
@@ -301,7 +300,7 @@ async fn install_documents_pack_inner(
 }
 
 pub(crate) async fn install_documents_pack_resolved(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     owner: &str,
     pack: &PackSource,
     args: &PackInstallArgs,
@@ -313,7 +312,7 @@ pub(crate) async fn install_documents_pack_resolved(
 }
 
 async fn install_documents_pack_resolved_inner(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     owner: &str,
     pack: &PackSource,
     args: &PackInstallArgs,
@@ -324,8 +323,8 @@ async fn install_documents_pack_resolved_inner(
     let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
     let requested = parse_inference_slot_bindings(&args.inference_slots)?;
     let temp = tempfile::tempdir().map_err(anyhow::Error::from)?;
-    gents::pack::materialize::materialize(pack.archive(), temp.path())?;
-    let origin_tag = gents::pack::pack_origin_tag(&format!(
+    gents_pack::pack::materialize::materialize(pack.archive(), temp.path())?;
+    let origin_tag = gents_pack::pack::pack_origin_tag(&format!(
         "{}/{}",
         pack.manifest().metadata.namespace,
         pack.manifest().name
@@ -369,7 +368,7 @@ async fn install_documents_pack_resolved_inner(
         .map(PackSource::archive)
         .collect::<Vec<_>>();
     let prepared = if let Some(local) = local {
-        gents::pack::prepare_document_pack_archive_with_runtime(
+        gents_pack::pack::prepare_document_pack_archive_with_runtime(
             access,
             owner,
             pack.archive(),
@@ -382,13 +381,13 @@ async fn install_documents_pack_resolved_inner(
         )
         .await
     } else {
-        gents::pack::prepare_document_pack_archive(
+        gents_pack::pack::prepare_document_pack_archive(
             access,
             owner,
             pack.archive(),
             &requested,
             &dependency_archives,
-            gents::pack::InstalledVia::Operator,
+            gents_pack::pack::InstalledVia::Operator,
             args.scope.graphql.is_none().then_some(home.as_path()),
             &|name| std::env::var(name).ok(),
             &overrides,
@@ -412,9 +411,9 @@ async fn install_documents_pack_resolved_inner(
             if packs.iter().all(super::review::PackInference::is_bound) {
                 return Err(refusal);
             }
-            let authored = gents::pack::load_pack_authoring_config(
+            let authored = gents_pack::pack::load_pack_authoring_config(
                 pack.manifest(),
-                &gents::pack::PackInstallOptions {
+                &gents_pack::pack::PackInstallOptions {
                     node_did: owner.to_owned(),
                 },
                 &|path| Ok(pack.asset(path)?.to_vec()),
@@ -492,7 +491,7 @@ async fn install_documents_pack_resolved_inner(
     if record_home {
         for dependency in &dependencies {
             if let Some((assets, lease)) =
-                gents::pack::home_install::materialize_asset_pack(&home, dependency.archive())?
+                gents_pack::pack::home_install::materialize_asset_pack(&home, dependency.archive())?
             {
                 dependency_assets.push((
                     format!(
@@ -506,7 +505,7 @@ async fn install_documents_pack_resolved_inner(
             }
         }
         if let Some((assets, lease)) =
-            gents::pack::home_install::materialize_asset_pack(&home, pack.archive())?
+            gents_pack::pack::home_install::materialize_asset_pack(&home, pack.archive())?
         {
             materialized_assets = assets;
             cache_leases.push(lease);
@@ -525,12 +524,12 @@ async fn install_documents_pack_resolved_inner(
     let schema_access = local.map_or(access, |local| &local.schema);
     let writer = local.map_or(access, |local| &local.writer);
     let created_collections =
-        gents::pack::collections_install_creates(schema_access, pack.archive()).await?;
-    gents::pack::apply_prepared_dependency_schemas(schema_access, &prepared).await?;
+        gents_pack::pack::collections_install_creates(schema_access, pack.archive()).await?;
+    gents_pack::pack::apply_prepared_dependency_schemas(schema_access, &prepared).await?;
     let schemas = super::super::schema::apply_pack_schemas_if_present(schema_access, temp.path())
         .await
         .context("pack install schemas")?;
-    let (apply, plugins) = gents::pack::install_prepared_document_graph(
+    let (apply, plugins) = gents_pack::pack::install_prepared_document_graph(
         writer,
         owner,
         pack.archive(),
@@ -539,7 +538,7 @@ async fn install_documents_pack_resolved_inner(
         args.scope.graphql.is_none().then_some(home.as_path()),
         args.grant_authority,
         explicit,
-        &gents::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await?;
     let root_coordinate = format!(
@@ -547,7 +546,7 @@ async fn install_documents_pack_resolved_inner(
         pack.manifest().metadata.namespace,
         pack.manifest().name
     );
-    let mut identity = gents::pack::PackIdentity::new(
+    let mut identity = gents_pack::pack::PackIdentity::new(
         pack.manifest(),
         pack.digest(),
         plugins
@@ -555,7 +554,7 @@ async fn install_documents_pack_resolved_inner(
             .filter(|plugin| {
                 plugin.owner_pack_coordinate.as_deref() == Some(root_coordinate.as_str())
             })
-            .map(|plugin| gents::pack::InstalledPackPlugin {
+            .map(|plugin| gents_pack::pack::InstalledPackPlugin {
                 name: plugin.name.clone(),
                 digest: plugin.digest.clone(),
             })
@@ -564,9 +563,9 @@ async fn install_documents_pack_resolved_inner(
     identity.dependencies = dependency_coordinates;
     identity.explicit = explicit;
     if record_home {
-        gents::pack::record_after_install(
+        gents_pack::pack::record_after_install(
             &home,
-            gents::pack::HomePackInstall {
+            gents_pack::pack::HomePackInstall {
                 coordinate: identity.coordinate.clone(),
                 version: identity.version.clone(),
                 digest: identity.digest.clone(),
@@ -576,12 +575,12 @@ async fn install_documents_pack_resolved_inner(
                 plugins: identity.plugins.clone(),
                 ux: pack.manifest().metadata.ux.clone(),
                 installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                installed_via: Some(gents::pack::InstalledVia::Operator),
+                installed_via: Some(gents_pack::pack::InstalledVia::Operator),
                 source: Some(pack.provenance()),
                 source_history: Vec::new(),
                 created_collections,
             },
-            gents::pack::InstalledVia::Operator,
+            gents_pack::pack::InstalledVia::Operator,
             explicit,
         )
         .context("the pack documents were written, but the home install record was not")?;
@@ -607,7 +606,7 @@ async fn install_documents_pack_resolved_inner(
 async fn plugin_inference_needs(
     scope: &ScopeArgs,
     manifest: &PackManifest,
-    requested: &gents::pack::PackInferenceBindings,
+    requested: &gents_pack::pack::PackInferenceBindings,
 ) -> Option<serde_json::Value> {
     if manifest.metadata.inference_slots.is_empty() {
         return None;
@@ -671,7 +670,7 @@ pub(super) fn check_wire_target(manifest: &PackManifest, wire: &[String]) -> Res
 /// Wires each plugin `pack` shipped into each of `agents`, agent by agent,
 /// through the same writer as `gents config pack wire`.
 pub(crate) async fn wire_pack_plugins(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     owner: &str,
     home: &std::path::Path,
     pack: &PackSource,
@@ -684,7 +683,7 @@ pub(crate) async fn wire_pack_plugins(
 /// for this pack's job blocks when `dynamic_consent` is set, and to its
 /// plugins calling each agent's own tools when `tool_calls_consent` is.
 pub(crate) async fn wire_pack_plugins_consenting(
-    access: &gents::store::config_client::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     owner: &str,
     home: &std::path::Path,
     pack: &PackSource,
@@ -715,10 +714,10 @@ pub(crate) async fn wire_pack_plugins_consenting(
 /// tasks may retain the database after a handle drops, so shutdown must finish
 /// before this command releases its access. HTTP access has no owned node here.
 pub(super) async fn install_documents_command_with_local(
-    access: gents::store::config_client::ConfigAccess,
+    access: gents_store::config_client::ConfigAccess,
     pack: &PackSource,
     args: &PackInstallArgs,
-    local_endpoint: Option<gents::store::config_client::GraphqlEndpoint>,
+    local_endpoint: Option<gents_store::config_client::GraphqlEndpoint>,
 ) -> Result<(), PackChangeError> {
     let result = async {
         let (home, owner, local) = async {
@@ -753,8 +752,8 @@ pub(super) async fn install_documents_command_with_local(
                     .context("local pack install requires the owned Node")?
                     .clone();
                 Some(LocalPackAccess {
-                    writer: gents::store::config_client::ConfigAccess::Graphql(endpoint),
-                    schema: gents::store::config_client::ConfigAccess::local_as(
+                    writer: gents_store::config_client::ConfigAccess::Graphql(endpoint),
+                    schema: gents_store::config_client::ConfigAccess::local_as(
                         node,
                         identity::Did::new(&owner)?,
                     ),
@@ -870,7 +869,9 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                 .clone()
                 .context("asset and plugins packs require --home")?;
             let notification_scope = plugin_notification_scope(&home).await?;
-            if let Some((gents::ConfigAccess::Graphql(endpoint), owner)) = &notification_scope {
+            if let Some((gents_store::config_client::ConfigAccess::Graphql(endpoint), owner)) =
+                &notification_scope
+            {
                 let dependencies =
                     futures_util::stream::iter(pack.manifest().metadata.dependencies.iter())
                         .map(|coordinate| {
@@ -894,26 +895,26 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
             }
             let notify_scope = notification_scope.clone();
             let notify_home = home.clone();
-            let result = gents::pack::plugin_lifecycle::install(
+            let result = gents_pack::pack::plugin_lifecycle::install(
                 &home,
                 &pack.archive,
                 args.grant_authority,
                 slot_owner.as_deref(),
                 &requested,
-                gents::pack::InstalledVia::Operator,
+                gents_pack::pack::InstalledVia::Operator,
                 pack.provenance(),
                 move |identity, changes| {
                     let home = notify_home;
                     async move {
                         if let Some((access, owner)) = notify_scope {
-                            gents::pack::record_staged_plugin_store_change(
+                            gents_pack::pack::record_staged_plugin_store_change(
                                 &access,
                                 &owner,
                                 &home,
                                 &identity.coordinate,
                                 Some(&identity),
                                 &changes,
-                                &gents::inference::resolved::ProviderProfilePolicy,
+                                &gents_inference::resolved::ProviderProfilePolicy,
                             )
                             .await
                         } else {

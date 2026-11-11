@@ -1,0 +1,152 @@
+use super::*;
+
+pub(crate) async fn drain_automated_wakeups_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+    reason: &str,
+) -> Result<Vec<String>> {
+    drain_pending_session_requests_where_in_txn(
+        txn,
+        session_id,
+        node_did,
+        requester_did,
+        reason,
+        is_scheduled_automated_wakeup,
+    )
+    .await
+}
+
+pub async fn drain_all_pending_session_requests_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+    reason: &str,
+) -> Result<Vec<String>> {
+    drain_pending_session_requests_where_in_txn(
+        txn,
+        session_id,
+        node_did,
+        requester_did,
+        reason,
+        is_any_pending_request,
+    )
+    .await
+}
+
+fn is_any_pending_request(_: &AgentRequestRow) -> bool {
+    true
+}
+
+fn is_scheduled_automated_wakeup(row: &AgentRequestRow) -> bool {
+    row.execution_origin.as_deref() == Some("scheduled") && row_is_automated_wakeup(row)
+}
+
+// SAFETY (#664): `node_did` scopes both the pending-row scan and mutation.
+async fn drain_pending_session_requests_where_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+    reason: &str,
+    should_drain: fn(&AgentRequestRow) -> bool,
+) -> Result<Vec<String>> {
+    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
+    let response = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, session_scope, Filter, Query, Selection,
+        };
+        let rendered = Query::select(
+            Selection::doc_id()
+                .field(fields::REQUEST_ID)
+                .field(fields::EXECUTION_ORIGIN)
+                .field(fields::INPUT),
+        )
+        .filter(session_scope(node_did, session_id, requester_did))
+        .filter(Filter::eq(
+            fields::LIFECYCLE_STATE,
+            RequestLifecycleState::Pending.as_str(),
+        ))
+        .render();
+        txn.run(&rendered).await?
+    };
+    let pending = &response["data"]["AgentRequest"];
+    anyhow::ensure!(
+        pending.is_array(),
+        "pending AgentRequest query omitted rows"
+    );
+    let rows: Vec<AgentRequestRow> = serde_json::from_value(pending.clone())?;
+
+    let mut drained = Vec::new();
+    for row in rows.into_iter().filter(should_drain) {
+        let terminalized_at = chrono::Utc::now().to_rfc3339();
+        let doc_id = row
+            .doc_id
+            .as_deref()
+            .context("pending AgentRequest row is missing _docID")?;
+        let escaped_doc_id = escape_graphql_string(doc_id);
+        let mutation = format!(
+            r#"mutation($input: AgentRequestMutationInputArg!) {{
+                update_AgentRequest(
+                    filter: {{
+                        _docID: {{ _eq: "{escaped_doc_id}" }},
+                        {scope},
+                        lifecycle_state: {{ _eq: "{pending}" }}
+                    }},
+                    input: $input
+                ) {{ _docID }}
+            }}"#,
+            pending = RequestLifecycleState::Pending.as_str(),
+        );
+        let response = txn
+            .execute_client_signed_update(
+                &mutation,
+                &serde_json::json!({"input": {
+                    "lifecycle_state": RequestLifecycleState::Interrupted.as_str(),
+                    "failure_reason": reason,
+                    "terminalized_at": terminalized_at,
+                    "terminal_redrive_attempts": 0,
+                }}),
+                gents_protocol::schemas::AGENT_REQUEST,
+            )
+            .await?;
+        let updated = response["data"]
+            .get("update_AgentRequest")
+            .context("pending AgentRequest drain mutation omitted affected rows")?;
+        let affected = match updated {
+            Value::Null => None,
+            Value::Array(rows) if rows.is_empty() => None,
+            Value::Array(rows) if rows.len() == 1 => Some(
+                rows[0]["_docID"]
+                    .as_str()
+                    .context("pending AgentRequest drain receipt omitted _docID")?,
+            ),
+            Value::Object(_) => Some(
+                updated["_docID"]
+                    .as_str()
+                    .context("pending AgentRequest drain receipt omitted _docID")?,
+            ),
+            _ => anyhow::bail!("pending AgentRequest drain mutation returned unexpected rows"),
+        };
+        if let Some(affected) = affected {
+            anyhow::ensure!(
+                affected == doc_id,
+                "pending AgentRequest drain mutation updated another physical request"
+            );
+            crate::triggers::engine::durable::publish_request_outcome(
+                txn,
+                node_did,
+                &row.request_id,
+                RequestLifecycleState::Interrupted,
+                reason,
+                &terminalized_at,
+            )
+            .await?;
+            drained.push(row.request_id);
+        }
+    }
+
+    Ok(drained)
+}

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 #[cfg(test)]
-use gents::store::config_client::GraphqlEndpoint;
-use gents::tools::builtin::defra_query::{CollectionScope, DefraQueryParams};
+use gents_store::config_client::GraphqlEndpoint;
+use gents_tools::builtin::defra_query::{CollectionScope, DefraQueryParams};
 use serde_json::{json, Value};
 
 use crate::cli::args::QueryArgs;
@@ -13,8 +13,8 @@ pub(crate) async fn run_defra_query(
     params: &DefraQueryParams,
     scope: &CollectionScope,
 ) -> Result<Value> {
-    gents::tools::builtin::defra_query::execute_command(
-        &gents::store::config_client::ConfigAccess::Graphql(graphql.clone()),
+    gents_tools::builtin::defra_query::execute_command(
+        &gents_store::config_client::ConfigAccess::Graphql(graphql.clone()),
         &params.clone().into(),
         scope,
     )
@@ -50,7 +50,7 @@ pub(crate) async fn query(args: QueryArgs) -> Result<()> {
         crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let (command, scope) = command_from_args(args)?;
     let output =
-        gents::tools::builtin::defra_query::execute_command(&access, &command, &scope).await?;
+        gents_tools::builtin::defra_query::execute_command(&access, &command, &scope).await?;
     print_json(&output)?;
     Ok(())
 }
@@ -58,11 +58,11 @@ pub(crate) async fn query(args: QueryArgs) -> Result<()> {
 fn command_from_args(
     args: QueryArgs,
 ) -> Result<(
-    gents::tools::builtin::defra_query::QueryParams,
+    gents_tools::builtin::defra_query::QueryParams,
     CollectionScope,
 )> {
     let (params, scope) = params_from_args(&args)?;
-    let mut command: gents::tools::builtin::defra_query::QueryParams = params.into();
+    let mut command: gents_tools::builtin::defra_query::QueryParams = params.into();
     if let Some(verb) = args.verb {
         command.argv = vec![verb.clone()];
         if verb == "fields" || verb == "count" {
@@ -227,7 +227,7 @@ mod tests {
         assert!(scope.is_unrestricted(), "no --allow-collection means all");
 
         let error = run_defra_query(
-            &gents::store::config_client::GraphqlEndpoint::anonymous(
+            &gents_store::config_client::GraphqlEndpoint::anonymous(
                 "http://127.0.0.1:1/api/v0/graphql",
             ),
             &params,
@@ -247,7 +247,7 @@ mod tests {
         assert!(params.is_discovery(), "a lone `*` is the discovery request");
 
         let error = run_defra_query(
-            &gents::store::config_client::GraphqlEndpoint::anonymous(
+            &gents_store::config_client::GraphqlEndpoint::anonymous(
                 "http://127.0.0.1:1/api/v0/graphql",
             ),
             &params,

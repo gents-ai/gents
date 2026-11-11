@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use crate::inference::resolved::ResolvedConfiguration;
+use gents_inference::resolved::ResolvedConfiguration;
 #[cfg(test)]
-use crate::inference::resolved::{SelectedConfiguration, SelectedConfigurationDocument};
+use gents_inference::resolved::{SelectedConfiguration, SelectedConfigurationDocument};
 use gents_loop::loop_stream::{ProviderConfigurationGuard, ProviderConfigurationGuardError};
 
 pub(crate) fn configuration_guard(

@@ -1,9 +1,9 @@
 use anyhow::Context;
-use gents::documents::Node;
-use gents::store::config_client::ConfigAccess;
 use gents_desktop_core::client::{set_default_agent_on, upsert_node_on};
 use gents_desktop_core::inference::{load_inference_setup_state, AgentView};
+use gents_documents::Node;
 use gents_shell::source::{FieldKind, Form, FormError, FormRef};
+use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 
 use super::{

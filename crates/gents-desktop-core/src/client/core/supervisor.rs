@@ -59,12 +59,10 @@ pub(super) fn spawn_p2p_supervisor_task(
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut renewal_tasks = tokio::task::JoinSet::new();
-        renewal_tasks.spawn(
-            gents::runtime::agent::p2p_reconcile::run_client_member_renewals(
-                Arc::clone(&node),
-                Arc::clone(&remote_admin_actor) as Arc<dyn gents::store::identity::NodeIdentity>,
-            ),
-        );
+        renewal_tasks.spawn(gents_p2p::p2p_reconcile::run_client_member_renewals(
+            Arc::clone(&node),
+            Arc::clone(&remote_admin_actor) as Arc<dyn gents_store::identity::NodeIdentity>,
+        ));
         let mut ticker = tokio::time::interval(P2P_SUPERVISOR_INTERVAL);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut route_reconciled_at = BTreeMap::new();

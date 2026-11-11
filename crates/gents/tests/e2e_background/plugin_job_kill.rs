@@ -4,18 +4,22 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::documents::{AgentTools, IntegrationTools, PluginToolRef, Tools};
-use gents::inference::llm::message::{AssistantContent, Message, UserContent};
-use gents::store::graphql::escape_graphql_string;
-use gents::tools::background::job::control::control;
-use gents::tools::background::job::job::{
+use gents::{DocumentRuntimeOptions, Gents};
+use gents_documents::{AgentTools, IntegrationTools, PluginToolRef, Tools};
+use gents_inference::llm::message::{AssistantContent, Message, UserContent};
+use gents_store::graphql::escape_graphql_string;
+use gents_store::identity::NodeIdentity;
+use gents_toolcalls::background::job::control::control;
+use gents_toolcalls::background::job::job::{
     JobChildState, JobControlKind, JobControlOutcome, JobControlRequest, JobReadError, JobSpawn,
     JobState, PluginJobSettings,
 };
-use gents::tools::background::job::view::{load_job_view, JobKey};
-use gents::tools::background::status::ProcessControlScope;
-use gents::tools::call::control::{cancel_background_tool_call, CancelBackgroundToolCallOutcome};
-use gents::{BackgroundExecutionRegistry, DocumentRuntimeOptions, Gents, NodeIdentity};
+use gents_toolcalls::background::job::view::{load_job_view, JobKey};
+use gents_toolcalls::background::status::ProcessControlScope;
+use gents_toolcalls::call::control::{
+    cancel_background_tool_call, CancelBackgroundToolCallOutcome,
+};
+use gents_toolcalls::call::hook::BackgroundExecutionRegistry;
 use serde_json::{json, Value};
 
 use crate::plugin_job_support::{
@@ -40,7 +44,7 @@ use crate::support::{test_db, test_p2p_db, TestDb};
 const STOP_PROMPT: &str = "plugin-job-stop-prompt";
 const TOOL_CALL: &str = "job-k";
 
-fn entry(when: Value, output: gents::tools::background::job::job::JobStepOutput) -> PlanEntry {
+fn entry(when: Value, output: gents_toolcalls::background::job::job::JobStepOutput) -> PlanEntry {
     PlanEntry {
         when,
         output,
@@ -200,7 +204,7 @@ async fn children(h: &JobHarness, row_doc_id: &str) -> Vec<(String, Option<Strin
         h,
         format!(
             r#"{{ AgentRequest(filter: {{ caused_by_parent_tool_call_doc_id: {{ _eq: "{}" }} }}) {{ node_did interrupt_requested_at }} }}"#,
-            gents::store::graphql::escape_graphql_string(row_doc_id),
+            gents_store::graphql::escape_graphql_string(row_doc_id),
         ),
     )
     .await;
@@ -222,7 +226,7 @@ async fn row_state(h: &JobHarness, row_doc_id: &str) -> String {
         h,
         format!(
             r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state }} }}"#,
-            gents::store::graphql::escape_graphql_string(row_doc_id),
+            gents_store::graphql::escape_graphql_string(row_doc_id),
         ),
     )
     .await;
@@ -240,7 +244,7 @@ async fn completion_notifications(h: &JobHarness, tool_call_id: &str) -> usize {
         h,
         format!(
             r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID node_did requester_did }} }}"#,
-            gents::store::graphql::escape_graphql_string(&h.session_id),
+            gents_store::graphql::escape_graphql_string(&h.session_id),
         ),
     )
     .await;
@@ -249,7 +253,7 @@ async fn completion_notifications(h: &JobHarness, tool_call_id: &str) -> usize {
         .as_array()
         .expect("message headers")
     {
-        let (_, message) = gents::session::load_canonical_message(
+        let (_, message) = gents_session::session::load_canonical_message(
             &h.actors.fixture.access,
             header["_docID"].as_str().expect("message doc id"),
             header["node_did"].as_str().expect("message node"),
@@ -320,9 +324,9 @@ async fn assert_stopped(job: &LiveJob, route: &str) {
 
 /// The owning Agent's managed access; its tool calls are invisible to and
 /// unwritable by any other actor.
-fn agent_access(job: &LiveJob) -> gents::ConfigAccess {
+fn agent_access(job: &LiveJob) -> gents_store::config_client::ConfigAccess {
     let agent = job.h.actors.fixture.agent.as_ref();
-    gents::ConfigAccess::local_managed_agent(
+    gents_store::config_client::ConfigAccess::local_managed_agent(
         job.h.db.node.clone(),
         identity::Did::new(agent.did()).unwrap(),
         agent,
@@ -520,12 +524,12 @@ async fn paired_job(
         },
         vec![
             (
-                gents::Collection::AgentTarget,
+                gents_store::collection::Collection::AgentTarget,
                 serde_json::to_value(agent_target(&did_a, CHILD, &did_a, &actors.child_did))
                     .unwrap(),
             ),
             (
-                gents::Collection::AgentTarget,
+                gents_store::collection::Collection::AgentTarget,
                 serde_json::to_value(agent_target(
                     &did_a,
                     PEER_CHILD,

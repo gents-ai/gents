@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use gents::P2pSyncStatusSnapshot;
+use gents_p2p::p2p::observability::P2pSyncStatusSnapshot;
 
 use super::{format_metric_labels, rfc3339_timestamp};
 

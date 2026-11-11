@@ -3,8 +3,8 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use anyhow::{bail, ensure, Context, Result};
-use gents::store::config_client::{ConfigAccess, ConfigApplyTxn};
-use gents::store::graphql::{
+use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
+use gents_store::graphql::{
     escape_graphql_string, validate_collection_identifier, validate_graphql_name,
 };
 use serde_json::Value;
@@ -39,7 +39,7 @@ pub(crate) async fn export(args: ExportArgs) -> Result<()> {
     let filter = match args.filter {
         Some(raw) => {
             let value: Value = serde_json::from_str(&raw).context("parsing --filter as JSON")?;
-            let rendered = gents::tools::builtin::defra_query::render_filter(&value)?;
+            let rendered = gents_tools::builtin::defra_query::render_filter(&value)?;
             rendered[1..rendered.len() - 1].to_owned()
         }
         None => String::new(),

@@ -10,7 +10,7 @@ struct CountingWatcher {
     calls: Arc<std::sync::atomic::AtomicUsize>,
 }
 
-impl crate::request::watcher::Watcher for CountingWatcher {
+impl gents_session::request::watcher::Watcher for CountingWatcher {
     async fn next_request(&mut self) -> Option<anyhow::Result<AgentRequest>> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.rx.recv().await
@@ -38,25 +38,27 @@ fn routed_snapshot(
     generation: u64,
     agent_did: &str,
     dispatcher: mpsc::Sender<AgentRequest>,
-) -> Arc<crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot> {
-    Arc::new(crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
-        generation,
-        node: None,
-        local_did: String::new(),
-        default_agent_did: agent_did.to_owned(),
-        agents: RapidHashMap::new(),
-        tool_surfaces: RapidHashMap::new(),
-        backend_admission_configs: RapidHashMap::new(),
-        unavailable_agents: RapidHashMap::new(),
-        active_schedules: RapidHashMap::new(),
-        unavailable_schedules: rapidhash::RapidHashSet::default(),
-        active_event_triggers: RapidHashMap::new(),
-        unavailable_event_triggers: rapidhash::RapidHashSet::default(),
-        active_tasks: RapidHashMap::new(),
-        dispatchers: RapidHashMap::from_iter([(agent_did.to_owned(), dispatcher)]),
-        agent_executor_capacities: RapidHashMap::new(),
-        agent_executor_queue_capacities: RapidHashMap::new(),
-    })
+) -> Arc<gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot> {
+    Arc::new(
+        gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
+            generation,
+            node: None,
+            local_did: String::new(),
+            default_agent_did: agent_did.to_owned(),
+            agents: RapidHashMap::new(),
+            tool_surfaces: RapidHashMap::new(),
+            backend_admission_configs: RapidHashMap::new(),
+            unavailable_agents: RapidHashMap::new(),
+            active_schedules: RapidHashMap::new(),
+            unavailable_schedules: rapidhash::RapidHashSet::default(),
+            active_event_triggers: RapidHashMap::new(),
+            unavailable_event_triggers: rapidhash::RapidHashSet::default(),
+            active_tasks: RapidHashMap::new(),
+            dispatchers: RapidHashMap::from_iter([(agent_did.to_owned(), dispatcher)]),
+            agent_executor_capacities: RapidHashMap::new(),
+            agent_executor_queue_capacities: RapidHashMap::new(),
+        },
+    )
 }
 
 #[tokio::test]
@@ -65,7 +67,7 @@ async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_
         crate::test_support::root::signed_test_node("invalid-origin-route").await;
     let node = db.node.clone();
     let root = db.node_identity.clone();
-    let agent = crate::store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
+    let agent = gents_store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
     grant_held_agent_operations(&node, root.as_ref(), agent.as_ref()).await;
     let node_did = root.did();
     let agent_did = agent.did();
@@ -95,7 +97,7 @@ async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_
     .expect("invalid origin must be terminalized, not escape the router");
 
     // The Agent-owned request row is read through the owning Agent's managed access.
-    let access = crate::ConfigAccess::local_managed_agent(
+    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
         node.clone(),
         agent_did.parse().unwrap(),
         agent.as_ref(),
@@ -377,42 +379,46 @@ async fn router_holds_request_during_generation_handoff_and_dispatches_after_ali
     assert!(accept.legal);
 
     let node_did = "did:test:router-latest-snapshot";
-    let initial_snapshot = Arc::new(crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
-        generation: 1,
-        node: None,
-        local_did: String::new(),
-        default_agent_did: "general".to_string(),
-        agents: RapidHashMap::new(),
-        tool_surfaces: RapidHashMap::new(),
-        backend_admission_configs: RapidHashMap::new(),
-        unavailable_agents: RapidHashMap::new(),
-        active_schedules: RapidHashMap::new(),
-        unavailable_schedules: rapidhash::RapidHashSet::default(),
-        active_event_triggers: RapidHashMap::new(),
-        unavailable_event_triggers: rapidhash::RapidHashSet::default(),
-        active_tasks: RapidHashMap::new(),
-        dispatchers: RapidHashMap::new(),
-        agent_executor_capacities: RapidHashMap::new(),
-        agent_executor_queue_capacities: RapidHashMap::new(),
-    });
-    let updated_snapshot = Arc::new(crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
-        generation: 2,
-        node: None,
-        local_did: String::new(),
-        default_agent_did: "code".to_string(),
-        agents: RapidHashMap::new(),
-        tool_surfaces: RapidHashMap::new(),
-        backend_admission_configs: RapidHashMap::new(),
-        unavailable_agents: RapidHashMap::new(),
-        active_schedules: RapidHashMap::new(),
-        unavailable_schedules: rapidhash::RapidHashSet::default(),
-        active_event_triggers: RapidHashMap::new(),
-        unavailable_event_triggers: rapidhash::RapidHashSet::default(),
-        active_tasks: RapidHashMap::new(),
-        dispatchers: RapidHashMap::new(),
-        agent_executor_capacities: RapidHashMap::new(),
-        agent_executor_queue_capacities: RapidHashMap::new(),
-    });
+    let initial_snapshot = Arc::new(
+        gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
+            generation: 1,
+            node: None,
+            local_did: String::new(),
+            default_agent_did: "general".to_string(),
+            agents: RapidHashMap::new(),
+            tool_surfaces: RapidHashMap::new(),
+            backend_admission_configs: RapidHashMap::new(),
+            unavailable_agents: RapidHashMap::new(),
+            active_schedules: RapidHashMap::new(),
+            unavailable_schedules: rapidhash::RapidHashSet::default(),
+            active_event_triggers: RapidHashMap::new(),
+            unavailable_event_triggers: rapidhash::RapidHashSet::default(),
+            active_tasks: RapidHashMap::new(),
+            dispatchers: RapidHashMap::new(),
+            agent_executor_capacities: RapidHashMap::new(),
+            agent_executor_queue_capacities: RapidHashMap::new(),
+        },
+    );
+    let updated_snapshot = Arc::new(
+        gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
+            generation: 2,
+            node: None,
+            local_did: String::new(),
+            default_agent_did: "code".to_string(),
+            agents: RapidHashMap::new(),
+            tool_surfaces: RapidHashMap::new(),
+            backend_admission_configs: RapidHashMap::new(),
+            unavailable_agents: RapidHashMap::new(),
+            active_schedules: RapidHashMap::new(),
+            unavailable_schedules: rapidhash::RapidHashSet::default(),
+            active_event_triggers: RapidHashMap::new(),
+            unavailable_event_triggers: rapidhash::RapidHashSet::default(),
+            active_tasks: RapidHashMap::new(),
+            dispatchers: RapidHashMap::new(),
+            agent_executor_capacities: RapidHashMap::new(),
+            agent_executor_queue_capacities: RapidHashMap::new(),
+        },
+    );
     let (active_tx, mut active_rx) = watch::channel(initial_snapshot);
     let (_shutdown_tx, mut shutdown_rx) = watch::channel(false);
     let (watcher_tx, watcher_rx) = mpsc::channel(1);
@@ -483,7 +489,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
     let node = db.node.clone();
     let node_did = db.node_identity.did().to_owned();
     let agent_did = binding.agent_did;
-    let initial_snapshot = Arc::new(crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
+    let initial_snapshot = Arc::new(gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
         generation: 1,
         node: None,
         local_did: String::new(),
@@ -493,7 +499,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
         backend_admission_configs: RapidHashMap::new(),
         unavailable_agents: RapidHashMap::from_iter([(
             agent_did.clone(),
-            crate::triggers::runtime_snapshot::UnavailableAgent::new(
+            gents_automation::triggers::runtime_snapshot::UnavailableAgent::new(
                 gents_protocol::row::AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
                 "test fixture has no executor",
             ),
@@ -507,7 +513,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
         agent_executor_capacities: RapidHashMap::new(),
         agent_executor_queue_capacities: RapidHashMap::new(),
     });
-    let updated_snapshot = Arc::new(crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
+    let updated_snapshot = Arc::new(gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
         generation: 2,
         node: None,
         local_did: String::new(),
@@ -517,7 +523,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
         backend_admission_configs: RapidHashMap::new(),
         unavailable_agents: RapidHashMap::from_iter([(
             agent_did.clone(),
-            crate::triggers::runtime_snapshot::UnavailableAgent::new(
+            gents_automation::triggers::runtime_snapshot::UnavailableAgent::new(
                 gents_protocol::row::AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
                 "test fixture has no executor",
             ),

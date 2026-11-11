@@ -1,5 +1,5 @@
 use anyhow::Result;
-use gents::pack::PackChangeError;
+use gents_pack::pack::PackChangeError;
 use serde_json::{json, Value};
 
 use super::registry::{resolve_registry_url, RegistryClient};
@@ -11,13 +11,12 @@ pub(crate) async fn outdated_packs(
     registry: Option<&str>,
 ) -> Result<Vec<Value>> {
     let home = crate::home_state::resolve_home_dir(scope.home.as_deref());
-    let node = if scope.graphql.is_some()
-        || gents::store::local::home::init_config_path(&home).is_file()
-    {
-        Some(super::resolve_scope_owner(scope).await?)
-    } else {
-        None
-    };
+    let node =
+        if scope.graphql.is_some() || gents_store::local::home::init_config_path(&home).is_file() {
+            Some(super::resolve_scope_owner(scope).await?)
+        } else {
+            None
+        };
     outdated_packs_on(
         scope.graphql.is_none().then_some(home.as_path()),
         node.as_ref()
@@ -29,10 +28,10 @@ pub(crate) async fn outdated_packs(
 
 pub(crate) async fn outdated_packs_on(
     home: Option<&std::path::Path>,
-    node: Option<(&gents::ConfigAccess, &str)>,
+    node: Option<(&gents_store::config_client::ConfigAccess, &str)>,
     registry: Option<&str>,
 ) -> Result<Vec<Value>> {
-    let installed = gents::pack::installed_packs(home, node).await?;
+    let installed = gents_pack::pack::installed_packs(home, node).await?;
     let client = RegistryClient::new(resolve_registry_url(registry));
     let mut report = Vec::new();
     for pack in installed {
@@ -212,7 +211,7 @@ mod tests {
             serde_json::to_vec_pretty(&config).unwrap(),
         )
         .unwrap();
-        let (bytes, _) = gents::pack::archive::pack_dir(&root).unwrap();
+        let (bytes, _) = gents_pack::pack::archive::pack_dir(&root).unwrap();
         let digest = {
             use sha2::Digest;
             format!("{:x}", sha2::Sha256::digest(&bytes))
@@ -332,15 +331,15 @@ mod tests {
         // An identity-only init publishes no inference profile; the home's
         // client configures the one the worker slot names.
         {
-            use gents::documents::apply_desired_state_plan;
-            use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+            use gents_documents::apply_desired_state_plan;
+            use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
             let (access, _) = crate::resolve_config_access(Some(home.path()), None)
                 .await
                 .unwrap();
             let backend_id = format!("{node_did}:default-backend");
             let documents = [
                 (
-                    gents::Collection::InferenceBackend,
+                    gents_store::collection::Collection::InferenceBackend,
                     serde_json::json!({
                         "node_did": node_did, "backend_id": backend_id, "name": "Test inference",
                         "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:1/v1",
@@ -348,7 +347,7 @@ mod tests {
                     }),
                 ),
                 (
-                    gents::Collection::InferenceProfile,
+                    gents_store::collection::Collection::InferenceProfile,
                     serde_json::json!({
                         "node_did": node_did, "profile_id": profile_id,
                         "backend_id": backend_id, "model_name": "test-model",
@@ -373,7 +372,7 @@ mod tests {
                         apply_desired_state_plan(
                             txn,
                             plan,
-                            &gents::inference::resolved::ProviderProfilePolicy,
+                            &gents_inference::resolved::ProviderProfilePolicy,
                         )
                         .await
                         .map(|_| ())
@@ -512,7 +511,7 @@ mod tests {
         .await
         .expect("installing an assets pack needs no node");
         assert!(
-            !gents::store::local::home::init_config_path(home.path()).is_file(),
+            !gents_store::local::home::init_config_path(home.path()).is_file(),
             "an assets install never initializes the home"
         );
 

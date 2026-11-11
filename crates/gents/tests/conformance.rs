@@ -4,19 +4,22 @@ use std::time::Duration;
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 
 use gents::defra_node::Node as EmbeddedNode;
-use gents::inference::llm::message::{
+use gents_automation::triggers::event_delivery::runtime_event_delivery_source_contracts;
+use gents_inference::admission::InferenceCall;
+use gents_inference::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
 };
-use gents::request::event_delivery::EventDeliverySourceContract;
-use gents::request::lifecycle::{ClaimOutcome, ExecutionOrigin, TriggerLineage};
-use gents::store::graphql::escape_graphql_string;
-use gents::triggers::event_delivery::runtime_event_delivery_source_contracts;
-use gents::{write_manual_agent_request, InferenceCall, RequestLifecycle};
+use gents_session::request::event_delivery::EventDeliverySourceContract;
+use gents_session::request::lifecycle::{ClaimOutcome, ExecutionOrigin, TriggerLineage};
+use gents_session::{
+    request::lifecycle::write_manual_agent_request, request::lifecycle::RequestLifecycle,
+};
+use gents_store::graphql::escape_graphql_string;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-#[path = "../src/inference/admission/slot_accounting.rs"]
+#[path = "../../gents-inference/src/admission/slot_accounting.rs"]
 mod admission_slot_accounting;
 mod support;
 

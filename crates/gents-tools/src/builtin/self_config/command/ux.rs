@@ -1,0 +1,144 @@
+use super::*;
+use gents_pack::plugin::ux;
+use gents_session::session::output_render::ordered;
+
+mod page;
+
+/// The generated SDK reference behind `help page sdk`.
+pub(super) const SDK_REFERENCE: &str = ux::reference::SDK_REFERENCE;
+
+/// `help page sdk` is the index; `help page sdk NAME ...` is those exports'
+/// sections, so a page author reads only the blocks it uses.
+pub(super) fn sdk_help(names: &[&str]) -> Result<String> {
+    if names.is_empty() {
+        return Ok(ux::reference::sdk_index().to_owned());
+    }
+    let mut sections = Vec::with_capacity(names.len());
+    for name in names {
+        let (name, body) = ux::reference::sdk_sections()
+            .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+            .with_context(|| {
+                format!("no SDK export {name:?}; [\"help\",\"page\",\"sdk\"] lists them, and \"tokens\" is the token list")
+            })?;
+        sections.push(format!("### {name}\n\n{body}"));
+    }
+    Ok(sections.join("\n\n"))
+}
+
+/// How much module source one tool result carries; the digest and byte count
+/// describe the rest.
+const MODULE_SOURCE_LIMIT: usize = 64 * 1024;
+
+impl ConfigCommandTool {
+    pub(super) async fn ux(&self, argv: &[String]) -> Result<String> {
+        anyhow::ensure!(
+            self.core.held_grants().pack_install || self.categories.contains("tools"),
+            "ux inspection requires the pack or tools grant"
+        );
+        match argv.first().map(String::as_str) {
+            Some("list") => self.ux_list(&argv[1..]).await,
+            Some("module") => self.ux_module(&argv[1..]).await,
+            Some("lint") => self.ux_lint(&argv[1..]).await,
+            _ => bail!("ux supports list, module, lint and preview; see [\"help\",\"page\"]"),
+        }
+    }
+
+    async fn ux_list(&self, argv: &[String]) -> Result<String> {
+        let home = self
+            .plugins
+            .home()
+            .context("this runtime has no plugin home")?;
+        let parsed = ParsedArgs::parse(argv)?;
+        parsed.reject_mutation_flags()?;
+        let limit = parse_limit(&parsed)?;
+        let cursor = parsed.one("cursor")?;
+        let mut listed = ux::list(home)?;
+        if self.categories.contains("tools") {
+            listed.extend(self.page_listings().await?);
+        }
+        let mut items = listed
+            .into_iter()
+            .filter(|listing| cursor.is_none_or(|cursor| listing.id.as_str() > cursor))
+            .take(limit + 1)
+            .collect::<Vec<_>>();
+        let truncated = items.len() > limit;
+        items.truncate(limit);
+        let next_cursor = truncated
+            .then(|| items.last().map(|listing| listing.id.clone()))
+            .flatten();
+        ordered! {
+            "items": items,
+            "next_cursor": next_cursor,
+            "next_call": json!({"argv":["ux","module","<ID>"]}),
+        }
+        .pretty()
+    }
+
+    async fn ux_module(&self, argv: &[String]) -> Result<String> {
+        let home = self
+            .plugins
+            .home()
+            .context("this runtime has no plugin home")?;
+        let [id] = argv else {
+            bail!("ux module requires exactly one listed ID; see [\"ux\",\"list\"]");
+        };
+        let module = if ux::page::page_id(id).is_some() {
+            ux::page::module(
+                &self
+                    .page_document(ux::page::page_id(id).unwrap_or(id))
+                    .await?,
+            )
+        } else {
+            let listing = ux::find(home, id)?;
+            let plugins = self.plugins.clone();
+            ux::resolve_module(home, &listing, |namespace, plugin| async move {
+                let coordinate = format!("{namespace}/{plugin}");
+                let record = plugins.resolve(&coordinate, None)?;
+                plugins
+                    .call_outcome(&record, ux::producer_input())
+                    .await?
+                    .into_output(&coordinate)
+            })
+            .await?
+        };
+        let bytes = module.source.len();
+        let source: String = module
+            .source
+            .char_indices()
+            .take_while(|(index, _)| *index < MODULE_SOURCE_LIMIT)
+            .map(|(_, ch)| ch)
+            .collect();
+        ordered! {
+            "id": id,
+            "digest": module.digest,
+            "bytes": bytes,
+            "truncated": bytes > source.len(),
+            "source": source,
+            "css": module.css,
+            "next_call": json!({"argv":["help","page"]}),
+        }
+        .pretty()
+    }
+
+    async fn ux_lint(&self, argv: &[String]) -> Result<String> {
+        let [file] = argv else {
+            bail!("ux lint requires exactly one FILE inside the tool root, or page/ID for a page document");
+        };
+        if ux::page::page_id(file).is_some() {
+            return self.page_lint(file).await;
+        }
+        let context = self.authoring_paths("ux lint", false).await?;
+        let path = context.resolve_existing_file(file)?;
+        let display = context.display_path(&path);
+        let findings = tokio::task::spawn_blocking(move || ux::lint_file(&path))
+            .await
+            .context("ux lint task did not finish")??;
+        ordered! {
+            "file": display,
+            "admitted": findings.is_empty(),
+            "findings": findings,
+            "next_call": if findings.is_empty() { json!({"argv":["help","page"]}) } else { json!({"argv":["help","page","contributions"]}) },
+        }
+        .pretty()
+    }
+}

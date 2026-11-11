@@ -577,9 +577,11 @@ fn starter_receipt(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fleet_snapshot_verifies_indexed_starters_once_per_evidence() {
     use crate::tests::support::OPERATOR;
-    use gents::NodeIdentity;
+    use gents_store::identity::NodeIdentity;
     let (core, tmp) = crate::tests::support::boot_core().await;
-    let signer = gents::KeyIdentity::load_or_create(tmp.path().join("fleet.key"), None).unwrap();
+    let signer =
+        gents_store::identity::KeyIdentity::load_or_create(tmp.path().join("fleet.key"), None)
+            .unwrap();
     let node_did = signer.did().to_owned();
     let creator = crate::tests::support::fixture_signer(7);
     let source = |session_id: &str| gents_protocol::session::SessionReference {
@@ -603,11 +605,11 @@ async fn fleet_snapshot_verifies_indexed_starters_once_per_evidence() {
         )
         .await;
     }
-    let access = gents::store::config_client::ConfigAccess::local(core.node_arc());
+    let access = gents_store::config_client::ConfigAccess::local(core.node_arc());
     let load = |session_id: &'static str| {
         let access = access.clone();
         async move {
-            gents::session::origin::load_session(&access, session_id, Some(OPERATOR))
+            gents_session::session::origin::load_session(&access, session_id, Some(OPERATOR))
                 .await
                 .unwrap()
                 .unwrap_or_else(|| panic!("fixture session {session_id} must load"))
@@ -718,14 +720,14 @@ async fn fleet_snapshot_verifies_indexed_starters_once_per_evidence() {
 
 #[tokio::test]
 async fn recorded_summary_starters_follow_the_starter_verification_model() {
-    use gents::NodeIdentity;
+    use gents_store::identity::NodeIdentity;
     struct SessionRead(serde_json::Value, std::sync::atomic::AtomicUsize);
     #[async_trait::async_trait]
-    impl gents::store::config_client::ConfigRead for SessionRead {
+    impl gents_store::config_client::ConfigRead for SessionRead {
         async fn execute_read(
             &self,
             query: &str,
-        ) -> Result<serde_json::Value, gents::store::config_client::ConfigClientError> {
+        ) -> Result<serde_json::Value, gents_store::config_client::ConfigClientError> {
             assert!(
                 query.contains("AgentSession") && !query.contains("AgentRequest"),
                 "a starter is verified from its session row alone: {query}"
@@ -744,7 +746,9 @@ async fn recorded_summary_starters_follow_the_starter_verification_model() {
         .as_array()
         .unwrap();
     let dir = tempfile::tempdir().unwrap();
-    let signer = gents::KeyIdentity::load_or_create(dir.path().join("node.key"), None).unwrap();
+    let signer =
+        gents_store::identity::KeyIdentity::load_or_create(dir.path().join("node.key"), None)
+            .unwrap();
     for requester in [None, Some("did:test:source-requester")] {
         // An agent-started session's receipt is signed by its requester, the
         // Agent that created it.
@@ -809,7 +813,7 @@ async fn recorded_summary_starters_follow_the_starter_verification_model() {
             let expected = case["accepted"].as_bool().unwrap();
             let candidate = candidate(name);
             let read = SessionRead(candidate.clone(), Default::default());
-            let verified = gents::session::origin::verified_recorded_starter(&read, &scope)
+            let verified = gents_session::session::origin::verified_recorded_starter(&read, &scope)
                 .await
                 .unwrap();
             assert_eq!(verified.is_some(), expected, "{name}");

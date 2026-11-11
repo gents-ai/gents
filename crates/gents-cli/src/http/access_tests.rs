@@ -63,10 +63,10 @@ fn authority_matching_rejects_rebinding_ambiguous_hosts_and_wrong_ports() {
 fn principal_endpoint(
     url: impl Into<String>,
     identity: &PrincipalIdentity,
-) -> gents::store::config_client::GraphqlEndpoint {
-    gents::store::config_client::GraphqlEndpoint::as_principal(url, identity.did())
+) -> gents_store::config_client::GraphqlEndpoint {
+    gents_store::config_client::GraphqlEndpoint::as_principal(url, identity.did())
         .with_client_signing_capability(
-            gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+            gents_store::config_client::ClientSigningCapability::from_ed25519_key(
                 identity.private_key_bytes(),
             )
             .unwrap(),
@@ -91,12 +91,12 @@ fn runtime_routes(endpoint: &str, owner: &PrincipalIdentity) -> axum::Router {
     let (runtime, observation) = crate::http::router::empty_activation_state();
     crate::http::runtime_contract_router(
         format!("{endpoint}/api/v0/graphql"),
-        gents::store::config_client::GraphqlEndpoint::as_principal(
+        gents_store::config_client::GraphqlEndpoint::as_principal(
             format!("{endpoint}/api/v0/graphql"),
             owner.did(),
         )
         .with_client_signing_capability(
-            gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+            gents_store::config_client::ClientSigningCapability::from_ed25519_key(
                 owner.private_key_bytes(),
             )
             .unwrap(),
@@ -687,7 +687,7 @@ async fn managed_readiness_status_reads_as_the_user_never_the_node_key() {
         "an unsigned private status read is never sent"
     );
 
-    let user = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+    let user = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
         f.admin.private_key_bytes(),
     )
     .unwrap();
@@ -724,8 +724,8 @@ async fn managed_readiness_status_reads_as_the_user_never_the_node_key() {
 /// private body, and the choice never retries with another key.
 #[tokio::test]
 async fn hosted_status_reader_is_the_home_admin_before_and_after_desktop_enrollment() {
-    use gents::store::identity::NodeIdentity as _;
     use gents_desktop_core::local_runtime::{fetch_hosted_runtime_status, hosted_status_signer};
+    use gents_store::identity::NodeIdentity as _;
     let f = Fixture::start().await;
     let desktop = f.desktop();
     let node_did = f.owner.did().to_owned();

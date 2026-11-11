@@ -6,7 +6,7 @@ use crate::runner::{
     review, Capture, FixtureDocument, FixtureFile, FrozenCell, FrozenRun, PlannedTrial, ScriptKey,
     StageProgress, StageSpec, TrialFixtures, TrialSpec,
 };
-use gents::documents::{EvalCase, EvalFixtures};
+use gents_documents::{EvalCase, EvalFixtures};
 
 pub(super) fn trial_spec(
     frozen: &FrozenRun,

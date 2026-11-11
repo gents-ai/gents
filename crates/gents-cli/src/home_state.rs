@@ -4,11 +4,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::store::config_client::GraphqlEndpoint;
-use gents::store::identity::{
+use gents_store::config_client::GraphqlEndpoint;
+use gents_store::identity::{
     load_macos_keychain_identity, load_macos_secure_enclave_identity, KeyIdentity, NodeIdentity,
 };
-use gents::store::local::home::INIT_PENDING_FILE_NAME;
+use gents_store::local::home::INIT_PENDING_FILE_NAME;
 
 use crate::shared::{StoredInitConfig, StoredRuntimeState};
 use crate::{DEFAULT_HTTP_PORT, RUNTIME_STATE_FILE_NAME};
@@ -23,9 +23,9 @@ pub(crate) fn resolve_home_dir(explicit: Option<&Path>) -> PathBuf {
 /// callers hold no `Result`, and falling back would open the wrong data.
 #[cfg(not(test))]
 fn default_home_dir() -> PathBuf {
-    use gents::store::local::home::HomeError;
     use gents_protocol::error_chain::ErrorChain;
-    match gents::store::local::home::default_home_dir() {
+    use gents_store::local::home::HomeError;
+    match gents_store::local::home::default_home_dir() {
         Ok(home) => home,
         Err(HomeError::HomeDirUnresolved) => PathBuf::from(".gents"),
         Err(error) => {
@@ -56,22 +56,22 @@ fn unit_test_homes() -> &'static tempfile::TempDir {
 pub(crate) fn is_default_home(home_dir: &Path) -> bool {
     let canonical = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     #[cfg(test)]
-    let default = Ok::<_, gents::store::local::home::HomeError>(default_home_dir());
+    let default = Ok::<_, gents_store::local::home::HomeError>(default_home_dir());
     #[cfg(not(test))]
-    let default = gents::store::local::home::default_home_dir();
+    let default = gents_store::local::home::default_home_dir();
     default.is_ok_and(|default| canonical(home_dir) == canonical(&default))
 }
 
 pub(crate) fn default_data_dir(home_dir: &Path) -> PathBuf {
-    gents::store::local::home::default_data_dir(home_dir)
+    gents_store::local::home::default_data_dir(home_dir)
 }
 
 pub(crate) fn default_key_path(home_dir: &Path, node_name: &str) -> PathBuf {
-    gents::store::local::home::default_key_path(home_dir, node_name)
+    gents_store::local::home::default_key_path(home_dir, node_name)
 }
 
 pub(crate) fn init_config_path(home_dir: &Path) -> PathBuf {
-    gents::store::local::home::init_config_path(home_dir)
+    gents_store::local::home::init_config_path(home_dir)
 }
 
 pub(crate) fn runtime_state_path(home_dir: &Path) -> PathBuf {
@@ -79,13 +79,13 @@ pub(crate) fn runtime_state_path(home_dir: &Path) -> PathBuf {
 }
 
 pub(crate) fn write_init_config(home_dir: &Path, state: &StoredInitConfig) -> Result<()> {
-    Ok(gents::store::local::home::write_init_config(
+    Ok(gents_store::local::home::write_init_config(
         home_dir, state,
     )?)
 }
 
 pub(crate) fn read_init_config(home_dir: &Path) -> Result<Option<StoredInitConfig>> {
-    Ok(gents::store::local::home::read_init_config(home_dir)?)
+    Ok(gents_store::local::home::read_init_config(home_dir)?)
 }
 
 pub(crate) fn mark_init_pending(home_dir: &Path) -> Result<()> {
@@ -249,7 +249,7 @@ pub(crate) fn resolve_graphql_endpoint(
         let identity =
             gents_desktop_core::client::PrincipalIdentity::load_existing(&cli_identity_paths()?)
                 .context("CLI client identity is unavailable; initialize the CLI client first")?;
-        let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+        let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
             identity.private_key_bytes(),
         )?;
         return Ok(GraphqlEndpoint::as_principal(graphql, identity.did())
@@ -295,7 +295,7 @@ fn home_graphql_endpoint_with_paths(
     );
     let identity = gents_desktop_core::client::PrincipalIdentity::load_existing(paths)
         .context("CLI client identity is unavailable; initialize the CLI client first")?;
-    let capability = gents::store::config_client::ClientSigningCapability::from_ed25519_key(
+    let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
         identity.private_key_bytes(),
     )?;
     Ok(GraphqlEndpoint::as_principal(url, identity.did())
@@ -331,7 +331,7 @@ fn cli_identity_paths_under(
 /// lookup by DID cannot present the key to owners that need its capability.
 pub(crate) fn held_client_identity(
     actor_did: &str,
-) -> Result<std::sync::Arc<dyn gents::NodeIdentity>> {
+) -> Result<std::sync::Arc<dyn gents_store::identity::NodeIdentity>> {
     let identity =
         gents_desktop_core::client::PrincipalIdentity::load_existing(&cli_identity_paths()?)
             .context("CLI client identity is unavailable; initialize the CLI client first")?;
@@ -429,7 +429,7 @@ mod tests {
             .await
             .unwrap();
         let endpoint = super::home_graphql_endpoint_with_paths(home.path(), url, &paths).unwrap();
-        let access = gents::store::config_client::ConfigAccess::Graphql(endpoint);
+        let access = gents_store::config_client::ConfigAccess::Graphql(endpoint);
         assert_eq!(access.actor_did().as_deref(), Some(identity.did()));
         assert!(super::home_graphql_endpoint_with_paths(
             home.path(),

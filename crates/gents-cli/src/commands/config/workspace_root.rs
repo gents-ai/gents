@@ -1,7 +1,7 @@
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
-use gents::store::graphql::escape_graphql_string;
+use gents_store::graphql::escape_graphql_string;
 use serde_json::json;
 
 use crate::cli::output_format::OutputFormat;
@@ -97,7 +97,7 @@ pub(super) async fn workspace_root_set(args: WorkspaceRootUpsertArgs) -> Result<
         crate::resolve_graphql_endpoint(Some(&args.graphql), None)?
             .with_client_signed_agent_creates(),
     );
-    let doc_id = gents::tools::surface::set_workspace_root_with_readers(
+    let doc_id = gents_tools::surface::set_workspace_root_with_readers(
         &access,
         &args.node_did,
         &root_path,
@@ -124,7 +124,7 @@ pub(super) async fn workspace_root_grant_reader(args: WorkspaceRootReaderArgs) -
         crate::resolve_graphql_endpoint(Some(&args.graphql), None)?
             .with_client_signed_agent_creates(),
     );
-    gents::tools::surface::grant_workspace_root_reader(&access, root_path, &args.agent_did).await?;
+    gents_tools::surface::grant_workspace_root_reader(&access, root_path, &args.agent_did).await?;
     print_json(&json!({"root_path":root_path, "granted_agent":args.agent_did}))
 }
 
@@ -137,8 +137,7 @@ pub(super) async fn workspace_root_revoke_reader(args: WorkspaceRootReaderArgs) 
         crate::resolve_graphql_endpoint(Some(&args.graphql), None)?
             .with_client_signed_agent_creates(),
     );
-    gents::tools::surface::revoke_workspace_root_reader(&access, root_path, &args.agent_did)
-        .await?;
+    gents_tools::surface::revoke_workspace_root_reader(&access, root_path, &args.agent_did).await?;
     print_json(&json!({"root_path":root_path, "revoked_agent":args.agent_did}))
 }
 
@@ -152,7 +151,7 @@ pub(super) async fn workspace_root_rm(args: ConfigShowArgs) -> Result<()> {
     args.output
         .ensure_supported("config workspace-root rm", &[OutputFormat::Json])?;
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    gents::tools::surface::delete_workspace_root(&access, &root_path).await?;
+    gents_tools::surface::delete_workspace_root(&access, &root_path).await?;
     print_json(&json!({ "deleted": 1, "root_path": root_path }))?;
     Ok(())
 }

@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use gents::store::graphql::escape_graphql_string;
-use gents::Collection;
+use gents_store::collection::Collection;
+use gents_store::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
 use crate::cli::output_format::OutputFormat;
@@ -244,7 +244,7 @@ pub(crate) async fn query_collection(
             .transact_readonly("cli.config.backend.read", |txn| {
                 Box::pin(async move {
                     if let Some(id) = id {
-                        let record = gents::documents::read_desired_state_record_in_txn(
+                        let record = gents_documents::read_desired_state_record_in_txn(
                             txn,
                             Collection::InferenceBackend,
                             node_did,
@@ -261,7 +261,7 @@ pub(crate) async fn query_collection(
                             })
                             .collect::<Result<Vec<_>>>();
                     }
-                    gents::documents::list_inference_backends_in_txn(txn, node_did)
+                    gents_documents::list_inference_backends_in_txn(txn, node_did)
                         .await?
                         .into_iter()
                         .map(|backend| {
@@ -280,7 +280,7 @@ pub(crate) async fn query_collection(
             })
             .await?
     } else {
-        let fields = gents::documents::config_projection(spec.collection, None)?
+        let fields = gents_documents::config_projection(spec.collection, None)?
             .0
             .join(" ");
         let query = format!(
@@ -446,14 +446,14 @@ fn print_table_row(cells: &[&str; 3], widths: &[usize; 3]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::documents::apply_desired_state_plan;
-    use gents::documents::DesiredStateApplyPlan;
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::DesiredStateApplyPlan;
     use std::sync::Arc;
 
     #[tokio::test]
     async fn backend_reads_use_metadata_for_list_and_exact_show() -> Result<()> {
         let node = Arc::new(crate::shared::test_support::node_builder().build().await?);
-        gents::ensure_runtime_schemas(&node).await?;
+        gents_store::schema::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local(node.clone());
         for owner in ["owner-a", "owner-b"] {
             access.write("test.backend.metadata", &format!(
@@ -479,9 +479,12 @@ mod tests {
     async fn canonical_reads_keep_shared_labels_in_the_selected_owner() -> Result<()> {
         let client = crate::shared::test_support::ClientHome::new().await;
         let peer_dir = tempfile::tempdir()?;
-        let peer = gents::KeyIdentity::load_or_create(peer_dir.path().join("peer.key"), None)?;
+        let peer = gents_store::identity::KeyIdentity::load_or_create(
+            peer_dir.path().join("peer.key"),
+            None,
+        )?;
         let owner_a = client.node_did().to_owned();
-        let owner_b = gents::NodeIdentity::did(&peer).to_owned();
+        let owner_b = gents_store::identity::NodeIdentity::did(&peer).to_owned();
         let access = client.access.clone();
         for owner in [owner_a.as_str(), owner_b.as_str()] {
             let config = serde_json::from_value(json!({
@@ -497,7 +500,7 @@ mod tests {
                         apply_desired_state_plan(
                             txn,
                             plan,
-                            &gents::inference::resolved::ProviderProfilePolicy,
+                            &gents_inference::resolved::ProviderProfilePolicy,
                         )
                         .await
                     })

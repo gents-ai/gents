@@ -1,8 +1,8 @@
 use anyhow::Result;
-use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::store::collection::Collection;
-use gents::store::config_client::ConfigAccess;
-use gents::InferenceBackend;
+use gents_documents::InferenceBackend;
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents_store::collection::Collection;
+use gents_store::config_client::ConfigAccess;
 
 pub async fn upsert_inference_backend_on(
     access: &ConfigAccess,
@@ -36,18 +36,18 @@ pub async fn delete_inference_backend_on(
 mod tests {
     use super::*;
     use crate::test_fixtures::ServedRuntimeHome;
-    use gents::documents::{BackendAuth, BackendModelCatalog, InferenceProfile};
+    use gents_documents::{BackendAuth, BackendModelCatalog, InferenceProfile};
     use serde_json::json;
 
     async fn observation(
         access: &ConfigAccess,
         node_did: &str,
         backend_id: &str,
-    ) -> Result<Option<gents::documents::InferenceBackendObservation>> {
+    ) -> Result<Option<gents_documents::InferenceBackendObservation>> {
         access
             .transact_readonly("test.backend.observation", |txn| {
                 Box::pin(async move {
-                    gents::inference::backends::registry::lookup_backend_observation_in_txn(
+                    gents_inference::backends::registry::lookup_backend_observation_in_txn(
                         txn, node_did, backend_id,
                     )
                     .await
@@ -83,7 +83,7 @@ mod tests {
                 let backend = &backend;
                 let catalog = catalog.clone();
                 Box::pin(async move {
-                    gents::inference::backends::registry::record_model_catalog_in_txn(
+                    gents_inference::backends::registry::record_model_catalog_in_txn(
                         txn, backend, catalog,
                     )
                     .await
@@ -102,10 +102,10 @@ mod tests {
         let profile: InferenceProfile = serde_json::from_value(json!({
             "node_did":backend.node_did, "profile_id":"profile", "backend_id":"shared", "model_name":"model"
         }))?;
-        gents::documents::write_inference_profile_document(
+        gents_documents::write_inference_profile_document(
             &access,
             &profile,
-            &gents::inference::resolved::ProviderProfilePolicy,
+            &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await?;
         assert!(

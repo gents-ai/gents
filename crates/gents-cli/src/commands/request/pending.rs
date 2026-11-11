@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use gents::ConfigAccess;
+use gents_store::config_client::ConfigAccess;
 
 use crate::cli::args::{
     RequestEditPendingArgs, RequestPendingArgs, RequestPendingMutationArgs,
@@ -13,7 +13,7 @@ async fn pending_scope(
 ) -> Result<(
     ConfigAccess,
     String,
-    std::sync::Arc<dyn gents::NodeIdentity>,
+    std::sync::Arc<dyn gents_store::identity::NodeIdentity>,
 )> {
     anyhow::ensure!(
         !args.session_id.trim().is_empty(),
@@ -31,12 +31,20 @@ async fn pending_scope(
 
 pub(super) async fn request_pending(args: RequestPendingArgs) -> Result<()> {
     let (access, node, signer) = pending_scope(&args).await?;
-    let requester =
-        gents::session::client_requester_scope(&access, &node, &args.session_id, signer.did())
-            .await?;
-    let snapshot =
-        gents::request::lifecycle::pending_user_queue(&access, &node, &args.session_id, &requester)
-            .await?;
+    let requester = gents_session::session::client_requester_scope(
+        &access,
+        &node,
+        &args.session_id,
+        signer.did(),
+    )
+    .await?;
+    let snapshot = gents_session::request::lifecycle::pending_user_queue(
+        &access,
+        &node,
+        &args.session_id,
+        &requester,
+    )
+    .await?;
     match args.output.ensure_supported(
         "utils debug request pending",
         &[OutputFormat::Text, OutputFormat::Json],
@@ -76,20 +84,20 @@ fn selected_queue_ids(expected: &[String], requested: &[String]) -> Vec<String> 
 async fn apply_pending_edit(
     args: RequestPendingMutationArgs,
     selected: Vec<String>,
-    messages: Vec<gents::request::lifecycle::PendingMessageEdit>,
+    messages: Vec<gents_session::request::lifecycle::PendingMessageEdit>,
 ) -> Result<()> {
     let output = args.scope.output.ensure_supported(
         "pending message edit",
         &[OutputFormat::Text, OutputFormat::Json],
     )?;
     let (access, node, signer) = pending_scope(&args.scope).await?;
-    let receipt = gents::request::lifecycle::submit_pending_user_edit(
+    let receipt = gents_session::request::lifecycle::submit_pending_user_edit(
         &access,
         signer.as_ref(),
         gents_protocol::request_admission::AgentRequestAdmissionRecord::client(signer.did()),
         &node,
         &args.scope.session_id,
-        gents::request::lifecycle::PendingQueueEdit {
+        gents_session::request::lifecycle::PendingQueueEdit {
             expected_request_doc_ids: args.expected_request_doc_ids,
             selected_request_doc_ids: selected,
             messages,
@@ -116,7 +124,7 @@ async fn apply_pending_edit(
 pub(super) async fn request_edit_pending(args: RequestEditPendingArgs) -> Result<()> {
     let content = resolve_request_content(args.content.as_deref(), args.content_file.as_deref())?;
     let selected = vec![args.request_doc_id.clone()];
-    let message = gents::request::lifecycle::PendingMessageEdit {
+    let message = gents_session::request::lifecycle::PendingMessageEdit {
         authored_input: None,
         request_doc_id: args.request_doc_id,
         content,
@@ -132,14 +140,14 @@ pub(super) async fn request_remove_pending(args: RequestRemovePendingArgs) -> Re
 pub(super) async fn request_reorder_pending(args: RequestReorderPendingArgs) -> Result<()> {
     let selected = selected_queue_ids(&args.queue.expected_request_doc_ids, &args.request_doc_ids);
     let (access, node, signer) = pending_scope(&args.queue.scope).await?;
-    let requester = gents::session::client_requester_scope(
+    let requester = gents_session::session::client_requester_scope(
         &access,
         &node,
         &args.queue.scope.session_id,
         signer.did(),
     )
     .await?;
-    let snapshot = gents::request::lifecycle::pending_user_queue(
+    let snapshot = gents_session::request::lifecycle::pending_user_queue(
         &access,
         &node,
         &args.queue.scope.session_id,
@@ -155,7 +163,7 @@ pub(super) async fn request_reorder_pending(args: RequestReorderPendingArgs) -> 
                 .iter()
                 .find(|entry| entry.request_doc_id == id)
                 .context("Selected message is no longer pending")?;
-            Ok(gents::request::lifecycle::PendingMessageEdit {
+            Ok(gents_session::request::lifecycle::PendingMessageEdit {
                 authored_input: None,
                 request_doc_id: id,
                 content: entry.content.clone(),

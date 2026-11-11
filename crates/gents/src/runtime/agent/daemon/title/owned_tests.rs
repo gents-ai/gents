@@ -22,30 +22,30 @@ use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
 
 use super::{AgentDaemon, AuxiliaryTask};
-use crate::inference::backends::provider::BackendProviderKind;
-use crate::inference::resolved::{ResolvedAgent, SamplingConfig};
-use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
-use crate::request::watcher::DefraWatcher;
-use crate::runtime::agent::completion_retry::CompletionRetryProfileFields;
 use crate::runtime::agent::daemon::AgentDaemonInit;
 use crate::runtime::agent::runtime::{
     run_router_with_watcher, RouterInputs, RuntimeAdmissionGate, StartupBarrier,
 };
 use crate::runtime::status::RuntimeStatusHandle;
-use crate::store::config_client::ConfigAccess;
-use crate::store::identity::{NodeIdentity, RuntimeNode};
-use crate::tools::call::hook::{
-    BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
-};
-use crate::tools::surface::AgentToolSurfaceConfig;
-use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use crate::turn::prompt::LayeredPromptBuilder;
+use gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
+use gents_inference::backends::provider::BackendProviderKind;
+use gents_inference::resolved::{ResolvedAgent, SamplingConfig};
 use gents_lean_vocab::{
     LeanCanonicalExecutionCase, LeanCanonicalExecutionOperation, LeanCanonicalSource,
     LeanPayloadKind, LeanTerminalSelection,
 };
+use gents_loop::completion_retry::CompletionRetryProfileFields;
 use gents_protocol::output::rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
 use gents_protocol::row::AgentRequest;
+use gents_session::request::lifecycle::{ClaimOutcome, RequestLifecycle};
+use gents_session::request::watcher::DefraWatcher;
+use gents_store::config_client::ConfigAccess;
+use gents_store::identity::{NodeIdentity, RuntimeNode};
+use gents_toolcalls::call::hook::{
+    BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
+};
+use gents_tools::surface::AgentToolSurfaceConfig;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct ReviewUsage {
@@ -89,7 +89,7 @@ impl CompletionModel for ReviewProvider {
             entered.notify_one();
             release.notified().await;
         }
-        crate::test_support::inference::capture_scripted_provider_request(&request, "scripted")
+        gents_inference::test_support::capture_scripted_provider_request(&request, "scripted")
             .await?;
         let reply = self.reply.clone().unwrap_or_else(|| {
             let action_id = request.chat_history.iter().find_map(|message| {
@@ -223,7 +223,7 @@ async fn access_review_uses_the_caller_ledger_without_tools_or_chat_publication(
     }
     assert_eq!(fixture.session_message_count().await, 0);
     assert_eq!(
-        crate::goal::session_token_usage(
+        gents_automation::goal::session_token_usage(
             &fixture.node,
             &identity::Did::new(&fixture.parent.agent_did).unwrap(),
             &fixture.parent.node_did,
@@ -245,10 +245,10 @@ async fn access_review_uses_the_caller_ledger_without_tools_or_chat_publication(
     assert!(!output.is_empty());
     for row in output {
         assert!(
-            matches!(row.segment.source, OutputSource::ProviderTurn { scope, .. } if scope.kind == crate::inference::rendered_request::CaptureScopeKind::AccessReview)
+            matches!(row.segment.source, OutputSource::ProviderTurn { scope, .. } if scope.kind == gents_inference::rendered_request::CaptureScopeKind::AccessReview)
         );
     }
-    let session = crate::store::graphql::escape_graphql_string(&fixture.parent.session_id);
+    let session = gents_store::graphql::escape_graphql_string(&fixture.parent.session_id);
     let response = fixture.agent_access().execute(&format!("{{ AgentSession(filter: {{ session_id: {{ _eq: \"{session}\" }} }}) {{ title }} AgentToolCall {{ _docID }} }}")).await.unwrap();
     assert!(response["data"]["AgentSession"][0]["title"].is_null());
     assert!(response["data"]["AgentToolCall"]
@@ -265,11 +265,11 @@ async fn goal_usage_rejects_a_review_without_its_same_session_parent() {
         Some(10_000),
     )
     .await;
-    let doc = crate::store::graphql::escape_graphql_string(&fixture.parent.doc_id);
+    let doc = gents_store::graphql::escape_graphql_string(&fixture.parent.doc_id);
     fixture.agent_access().write("test.goal_review_parent", &format!(
         r#"mutation {{ delete_AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}) {{ _docID }} }}"#,
     )).await.unwrap();
-    let error = crate::goal::session_token_usage(
+    let error = gents_automation::goal::session_token_usage(
         &fixture.node,
         &identity::Did::new(&fixture.parent.agent_did).unwrap(),
         &fixture.parent.node_did,
@@ -283,19 +283,19 @@ async fn goal_usage_rejects_a_review_without_its_same_session_parent() {
 async fn install_review_policy(
     fixture: &TitleFixture,
     prompt: &str,
-) -> crate::plugin::approval::workspace::ReviewTaskSelection {
-    use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+) -> gents_tools::plugin::approval::workspace::ReviewTaskSelection {
+    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     let document = serde_json::json!({
         "node_did": fixture.parent.node_did,
         "task_id": "review",
         "agent_did": fixture.parent.agent_did,
         "prompt_template": prompt,
     });
-    let selection = crate::plugin::approval::workspace::ReviewTaskSelection::for_task(
+    let selection = gents_tools::plugin::approval::workspace::ReviewTaskSelection::for_task(
         &serde_json::from_value(document.clone()).unwrap(),
     );
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: crate::Collection::Task,
+        collection: gents_store::collection::Collection::Task,
         add: document.clone(),
         update: document,
     }])
@@ -305,10 +305,10 @@ async fn install_review_policy(
         .transact_write("test.review_policy", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::documents::apply_desired_state_plan(
+                gents_documents::apply_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
@@ -332,12 +332,12 @@ async fn grant_agent_self_configuration_on_review_task(fixture: &TitleFixture) {
             Box::pin(async move {
                 // The Task links resolve through the Agent's own revocable
                 // `config_writer` role, which only the User's explicit grant holds.
-                crate::documents::grant_selected_self_configuration(
+                gents_documents::grant_selected_self_configuration(
                     txn, node_did, agent_did,
                 )
                 .await?;
-                let escaped_node = crate::store::graphql::escape_graphql_string(node_did);
-                let escaped_agent = crate::store::graphql::escape_graphql_string(agent_did);
+                let escaped_node = gents_store::graphql::escape_graphql_string(node_did);
+                let escaped_agent = gents_store::graphql::escape_graphql_string(agent_did);
                 let rows = txn
                     .execute(&format!(
                         r#"{{ Task(filter: {{ node_did: {{ _eq: "{escaped_node}" }}, task_id: {{ _eq: "review" }} }}, limit: 2) {{ _docID }} Agent(filter: {{ node_did: {{ _eq: "{escaped_node}" }}, agent_did: {{ _eq: "{escaped_agent}" }} }}, limit: 2) {{ _docID }} }}"#
@@ -379,7 +379,7 @@ async fn workspace_command_admission_uses_the_configured_review_task_and_the_cal
 }
 
 async fn configured_review_task_and_callers_ledger(launch: bool) {
-    use crate::plugin::approval::workspace;
+    use gents_tools::plugin::approval::workspace;
 
     let fixture = TitleFixture::with_auxiliary(
         RequestPurpose::AccessReview,
@@ -438,7 +438,7 @@ async fn configured_review_task_and_callers_ledger(launch: bool) {
     .unwrap()
     .with_reviewer(reviewer.callback.clone());
     let tool_root = key.path.parent().unwrap().to_owned();
-    let tool_context = crate::tools::native::ToolContext::new(tool_root.clone(), false).unwrap();
+    let tool_context = gents_tools::native::ToolContext::new(tool_root.clone(), false).unwrap();
     let (program, arguments) = if cfg!(windows) {
         (
             "cmd.exe",
@@ -447,14 +447,14 @@ async fn configured_review_task_and_callers_ledger(launch: bool) {
     } else {
         ("/bin/echo", vec!["fixture".into()])
     };
-    let policy = crate::tools::native::CommandExecutionPolicy::write_capable()
-        .with_mode(crate::tools::native::CommandExecutionMode::Unrestricted);
+    let policy = gents_tools::native::CommandExecutionPolicy::write_capable()
+        .with_mode(gents_tools::native::CommandExecutionMode::Unrestricted);
     let argv: Vec<String> = std::iter::once(program.to_owned())
         .chain(arguments.iter().cloned())
         .collect();
     workspace::scope(Some(context), async {
         if launch {
-            let output = crate::tools::native::run_command_for_test(
+            let output = gents_tools::native::run_command_for_test(
                 &tool_context,
                 "bash_unrestricted",
                 program,
@@ -510,14 +510,14 @@ async fn configured_review_task_and_callers_ledger(launch: bool) {
         );
     }
     assert_eq!(fixture.session_message_count().await, 0);
-    assert!(crate::plugin::approval::pending_requests(home.path())
+    assert!(gents_tools::plugin::approval::pending_requests(home.path())
         .unwrap()
         .is_empty());
 }
 
 #[tokio::test]
 async fn changing_the_review_task_while_it_runs_discards_its_allowance() {
-    use crate::plugin::approval::workspace;
+    use gents_tools::plugin::approval::workspace;
 
     let fixture = TitleFixture::with_auxiliary(
         RequestPurpose::AccessReview,
@@ -580,7 +580,7 @@ async fn changing_the_review_task_while_it_runs_discards_its_allowance() {
             &project_path,
             &project_path,
             None,
-            &crate::tools::native::CommandExecutionPolicy::write_capable(),
+            &gents_tools::native::CommandExecutionPolicy::write_capable(),
         )
         .await
     }));
@@ -594,7 +594,7 @@ async fn changing_the_review_task_while_it_runs_discards_its_allowance() {
     drain_reviews(&tasks, true).await;
     assert!(reviewer.take_failure().is_none());
     assert_eq!(calls.lock().unwrap().len(), 1);
-    assert!(crate::plugin::approval::pending_requests(&home_path)
+    assert!(gents_tools::plugin::approval::pending_requests(&home_path)
         .unwrap()
         .is_empty());
 }
@@ -611,7 +611,7 @@ async fn command_admission_cannot_replace_the_selected_review_policy() {
 }
 
 async fn selected_review_policy_survives_configuration_edits(launch: bool) {
-    use crate::plugin::approval::workspace;
+    use gents_tools::plugin::approval::workspace;
 
     let fixture = TitleFixture::with_auxiliary(
         RequestPurpose::AccessReview,
@@ -669,26 +669,26 @@ async fn selected_review_policy_survives_configuration_edits(launch: bool) {
     .unwrap()
     .unwrap()
     .with_reviewer(reviewer.callback.clone());
-    let tools = crate::tools::builtin::self_config::build_self_config_tools(
+    let tools = gents_tools::builtin::self_config::build_self_config_tools(
         std::sync::Arc::default(),
         fixture.node.clone(),
         fixture.parent.node_did.clone(),
         Some(fixture.agent_config.agent_identity.clone()),
-        &crate::tools::surface::SelfConfigToolConfig {
+        &gents_tools::surface::SelfConfigToolConfig {
             enabled: true,
             agent_did: fixture.parent.agent_did.clone(),
             categories: std::collections::BTreeSet::from(["automation".into()]),
             ..Default::default()
         },
-        Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
-            home.path().to_owned(),
-        ))),
+        Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(
+            Some(home.path().to_owned()),
+        )),
     );
     let config = tools
         .iter()
         .find(|tool| tool.name() == gents_protocol::tool_names::CONFIG_TOOL_NAME)
         .unwrap();
-    let tool_context = crate::tools::native::ToolContext::new(key.path.clone(), false).unwrap();
+    let tool_context = gents_tools::native::ToolContext::new(key.path.clone(), false).unwrap();
     let marker = key.path.join("marker");
     let source = key.path.join("fixture.rs");
     std::fs::write(&source, "pub fn fixture() {}\n").unwrap();
@@ -700,14 +700,14 @@ async fn selected_review_policy_survives_configuration_edits(launch: bool) {
         marker.to_str().unwrap().to_owned(),
         source.to_str().unwrap().to_owned(),
     ];
-    let policy = crate::tools::native::CommandExecutionPolicy::write_capable()
-        .with_mode(crate::tools::native::CommandExecutionMode::Unrestricted);
+    let policy = gents_tools::native::CommandExecutionPolicy::write_capable()
+        .with_mode(gents_tools::native::CommandExecutionMode::Unrestricted);
     let argv: Vec<String> = std::iter::once(program.clone())
         .chain(arguments.iter().cloned())
         .collect();
     let run = || async {
         if launch {
-            crate::tools::native::run_command_for_test(
+            gents_tools::native::run_command_for_test(
                 &tool_context,
                 "bash_unrestricted",
                 &program,
@@ -744,11 +744,11 @@ async fn selected_review_policy_survives_configuration_edits(launch: bool) {
         assert!(error.to_string().contains("not approved"), "{error:#}");
         assert!(calls.lock().unwrap().is_empty());
         assert!(!marker.exists());
-        assert!(crate::plugin::approval::pending_requests(home.path())
+        assert!(gents_tools::plugin::approval::pending_requests(home.path())
             .unwrap()
             .is_empty());
-        let current = crate::session::message::load_configured_task(
-            &crate::ConfigAccess::local_as(
+        let current = gents_session::session::message::load_configured_task(
+            &gents_store::config_client::ConfigAccess::local_as(
                 fixture.node.clone(),
                 identity::Did::new(&fixture.parent.agent_did).unwrap(),
             ),
@@ -779,7 +779,7 @@ async fn selected_review_policy_survives_configuration_edits(launch: bool) {
 
 #[tokio::test]
 async fn a_lost_review_worker_cancels_the_caller_and_retains_the_fatal_error() {
-    use crate::plugin::approval::workspace;
+    use gents_tools::plugin::approval::workspace;
 
     let fixture = TitleFixture::with_auxiliary(
         RequestPurpose::AccessReview,
@@ -829,7 +829,7 @@ async fn a_lost_review_worker_cancels_the_caller_and_retains_the_fatal_error() {
     .with_reviewer(reviewer.callback.clone());
     let result = workspace::scope(
         Some(context),
-        crate::tools::runtime_context::scope_request_tool_execution(
+        gents_tools::runtime_context::scope_request_tool_execution(
             None,
             cancellation.clone(),
             workspace::authorize_command(
@@ -837,7 +837,7 @@ async fn a_lost_review_worker_cancels_the_caller_and_retains_the_fatal_error() {
                 &key.path,
                 &key.path,
                 None,
-                &crate::tools::native::CommandExecutionPolicy::write_capable(),
+                &gents_tools::native::CommandExecutionPolicy::write_capable(),
             ),
         ),
     )
@@ -854,7 +854,7 @@ async fn a_lost_review_worker_cancels_the_caller_and_retains_the_fatal_error() {
         .unwrap();
     assert!(joined.unwrap_err().is_panic());
     assert!(tasks.join_next().await.is_none());
-    assert!(crate::plugin::approval::pending_requests(home.path())
+    assert!(gents_tools::plugin::approval::pending_requests(home.path())
         .unwrap()
         .is_empty());
     assert_eq!(fixture.session_message_count().await, 0);
@@ -1186,14 +1186,14 @@ impl CompletionModel for TitleProvider {
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
         assert!(!self.panic_on_stream, "scripted review worker panic");
         self.calls.fetch_add(1, Ordering::SeqCst);
-        crate::test_support::inference::capture_scripted_provider_request(&request, "scripted")
+        gents_inference::test_support::capture_scripted_provider_request(&request, "scripted")
             .await?;
         if let Some(error) = &self.error {
             return Err(CompletionError::ProviderError(error.clone()));
         }
         if let Some((access, doc_id, node_did)) = &self.fence_generation {
-            let doc = crate::store::graphql::escape_graphql_string(doc_id);
-            let owner = crate::store::graphql::escape_graphql_string(node_did);
+            let doc = gents_store::graphql::escape_graphql_string(doc_id);
+            let owner = gents_store::graphql::escape_graphql_string(node_did);
             access
                 .write(
                     "test.title_fence_generation",
@@ -1249,14 +1249,14 @@ struct TitleFixture {
 }
 
 impl TitleFixture {
-    fn admitted<M>(&self, model: M) -> crate::inference::admission::AdmittedCompletionModel<M> {
-        let registry = crate::inference::admission::AdmissionRegistry::new(self.node.clone());
+    fn admitted<M>(&self, model: M) -> gents_inference::admission::AdmittedCompletionModel<M> {
+        let registry = gents_inference::admission::AdmissionRegistry::new(self.node.clone());
         let backend = self.agent_config.backend_id.as_ref().unwrap();
         registry.reconcile(
             1,
             &rapidhash::RapidHashMap::from_iter([(
                 backend.clone(),
-                crate::inference::admission::BackendAdmissionConfig {
+                gents_inference::admission::BackendAdmissionConfig {
                     backend_id: backend.clone(),
                     max_concurrent: 1,
                     max_queue_depth: 0,
@@ -1268,7 +1268,7 @@ impl TitleFixture {
             )]),
         );
         let mut model =
-            crate::inference::admission::AdmittedCompletionModel::new(model, registry, "scripted");
+            gents_inference::admission::AdmittedCompletionModel::new(model, registry, "scripted");
         model.agent_signer = self.agent_config.agent_identity.managed_agent_signer();
         model
     }
@@ -1303,17 +1303,17 @@ impl TitleFixture {
         let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
         let agent_did = binding.agent_did.clone();
         let agent_identity =
-            crate::store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
+            gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
         let admin =
             ConfigAccess::local_as(node.clone(), identity::Did::new(identity.did()).unwrap());
         let agent_did_id = identity::Did::new(&agent_did).unwrap();
         for permission in [
-            crate::store::config_client::NodePermission::CollectionGet,
-            crate::store::config_client::NodePermission::DocumentRead,
-            crate::store::config_client::NodePermission::DocumentUpdate,
-            crate::store::config_client::NodePermission::DocumentDelete,
-            crate::store::config_client::NodePermission::DacRelationAdd,
-            crate::store::config_client::NodePermission::DacRelationDelete,
+            gents_store::config_client::NodePermission::CollectionGet,
+            gents_store::config_client::NodePermission::DocumentRead,
+            gents_store::config_client::NodePermission::DocumentUpdate,
+            gents_store::config_client::NodePermission::DocumentDelete,
+            gents_store::config_client::NodePermission::DacRelationAdd,
+            gents_store::config_client::NodePermission::DacRelationDelete,
         ] {
             admin
                 .grant_node_permission(&agent_did_id, permission)
@@ -1329,24 +1329,24 @@ impl TitleFixture {
         });
         let backend_id = format!("{agent_did}:backend");
         let agent_config = Arc::new(ResolvedAgent {
-            configuration: crate::inference::resolved::ResolvedConfiguration::Static,
+            configuration: gents_inference::resolved::ResolvedConfiguration::Static,
             profile_id: None,
             agent_did,
             agent_identity,
             node: principal,
             backend_id: Some(backend_id),
             backend_provider_kind: BackendProviderKind::OpenAiCompatible,
-            openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
+            openai_wire_api: gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
             backend_endpoint: "http://127.0.0.1:1/v1".into(),
             claude_platform: None,
-            backend_auth: crate::documents::BackendAuth::Unauthenticated,
+            backend_auth: gents_documents::BackendAuth::Unauthenticated,
             model_name: "scripted".into(),
             service_tier: None,
             resolved_reasoning_efforts: None,
             context_window: 8192,
             max_output_tokens: 1024,
             max_turns: 2,
-            max_turns_provenance: crate::inference::resolved::MaxTurnsProvenance::Default,
+            max_turns_provenance: gents_inference::resolved::MaxTurnsProvenance::Default,
             system_prompt: "system".into(),
             tools: AgentToolSurfaceConfig::meta_only(),
             compaction: None,
@@ -1356,7 +1356,7 @@ impl TitleFixture {
             stream_liveness_timeout: Duration::from_secs(60),
             deadline_duration: Duration::from_secs(120),
             provider_idle_timeout: Duration::from_secs(
-                crate::inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
+                gents_inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
             ),
             completion_retry: CompletionRetryProfileFields::default(),
             sampling: SamplingConfig::default(),
@@ -1384,16 +1384,19 @@ impl TitleFixture {
             created_at,
             AgentRequestAdmissionRecord::local_self(&agent_config.agent_did),
         );
-        crate::sign_agent_request_create(agent_config.agent_identity.as_ref(), &mut create)
-            .await
-            .unwrap();
+        gents_session::request::admission::sign_agent_request_create(
+            agent_config.agent_identity.as_ref(),
+            &mut create,
+        )
+        .await
+        .unwrap();
         let response = agent_access
             .write("test.title_parent", &create.graphql_mutation().unwrap())
             .await
             .unwrap();
         let parent_doc_id =
-            crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
-        let mut parent = crate::request::admission::load_request_for_admission_test_as(
+            gents_store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+        let mut parent = gents_session::request::admission::load_request_for_admission_test_as(
             &node,
             &parent_doc_id,
             &agent_config.agent_did,
@@ -1430,7 +1433,7 @@ impl TitleFixture {
                 node.clone(),
                 parent.clone(),
                 agent_config.deadline_duration.as_secs(),
-                crate::request::lifecycle::ExecutionOrigin::Interactive,
+                gents_session::request::lifecycle::ExecutionOrigin::Interactive,
                 agent_config.backend_id.clone().unwrap_or_default(),
             );
             lifecycle
@@ -1441,7 +1444,7 @@ impl TitleFixture {
                 lifecycle.claim_with_identity().await.unwrap(),
                 ClaimOutcome::Claimed
             );
-            let writer = crate::request::streaming::DefraStreamWriter::new_managed(
+            let writer = gents_session::request::streaming::DefraStreamWriter::new_managed(
                 node.clone(),
                 agent_config.agent_identity.as_ref(),
                 Duration::ZERO,
@@ -1450,19 +1453,20 @@ impl TitleFixture {
             lifecycle.begin_owned_execution(&writer).await.unwrap();
             parent = lifecycle.request().clone();
         }
-        let title = crate::request::lifecycle::materialize::write_pending_auxiliary_request(
-            &node,
-            &parent,
-            purpose,
-            content.unwrap_or_else(|| parent.content.clone()),
-            (purpose == RequestPurpose::AccessReview).then(|| {
-                (chrono::Utc::now() + chrono::Duration::seconds(60))
-                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
-            }),
-            &agent_config.agent_identity.managed_agent_signer().unwrap(),
-        )
-        .await
-        .unwrap();
+        let title =
+            gents_session::request::lifecycle::materialize::write_pending_auxiliary_request(
+                &node,
+                &parent,
+                purpose,
+                content.unwrap_or_else(|| parent.content.clone()),
+                (purpose == RequestPurpose::AccessReview).then(|| {
+                    (chrono::Utc::now() + chrono::Duration::seconds(60))
+                        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+                }),
+                &agent_config.agent_identity.managed_agent_signer().unwrap(),
+            )
+            .await
+            .unwrap();
         Self {
             _db: db,
             user_access,
@@ -1476,7 +1480,7 @@ impl TitleFixture {
 
     fn task<M>(&self, model: M, capture: bool) -> AuxiliaryTask<M>
     where
-        M: crate::inference::llm::rig_compat::ProviderModel,
+        M: gents_inference::llm::rig_compat::ProviderModel,
     {
         AuxiliaryTask {
             node: self.node.clone(),
@@ -1484,21 +1488,23 @@ impl TitleFixture {
             provider_family: None,
             model: Arc::new(model),
             service_admission: Default::default(),
-            verifier: crate::request::admission::AgentRequestAdmissionVerifier::new(
+            verifier: gents_session::request::admission::AgentRequestAdmissionVerifier::new(
                 self.node.clone(),
                 self.identity.clone(),
-                crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+                gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
             ),
             capture_factory: capture.then(|| {
-                crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
-                    self.node.clone(), self.agent_config.agent_identity.as_ref(),
-                ).unwrap()
+                gents_inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+                    self.node.clone(),
+                    self.agent_config.agent_identity.as_ref(),
+                )
+                .unwrap()
             }),
         }
     }
 
     async fn terminalize_parent(&self) {
-        crate::request::admission::terminalize_pending_request_rejection(
+        gents_session::request::admission::terminalize_pending_request_rejection(
             &self.node,
             &self.parent.doc_id,
             &self.parent.node_did,
@@ -1509,7 +1515,7 @@ impl TitleFixture {
         )
         .await
         .unwrap();
-        let doc = crate::store::graphql::escape_graphql_string(&self.parent.doc_id);
+        let doc = gents_store::graphql::escape_graphql_string(&self.parent.doc_id);
         let response = self.agent_access()
             .execute(&format!("{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{doc}\" }} }}, limit: 1) {{ lifecycle_state }} }}"))
             .await
@@ -1521,21 +1527,22 @@ impl TitleFixture {
     }
 
     async fn interrupt_parent(&self) {
-        let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
-            self.node.clone(),
-            self.parent.clone(),
-            self.agent_config.deadline_duration.as_secs(),
-            crate::request::lifecycle::ExecutionOrigin::Interactive,
-            self.agent_config.backend_id.clone().unwrap_or_default(),
-        );
+        let mut lifecycle =
+            gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
+                self.node.clone(),
+                self.parent.clone(),
+                self.agent_config.deadline_duration.as_secs(),
+                gents_session::request::lifecycle::ExecutionOrigin::Interactive,
+                self.agent_config.backend_id.clone().unwrap_or_default(),
+            );
         lifecycle
             .bind_managed_agent(self.agent_config.agent_identity.as_ref())
             .unwrap();
         assert_eq!(
             lifecycle.claim_with_identity().await.unwrap(),
-            crate::request::lifecycle::ClaimOutcome::Claimed
+            gents_session::request::lifecycle::ClaimOutcome::Claimed
         );
-        crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+        gents_session::request::interrupt::interrupt_request_by_doc_id_with_access(
             &self.agent_access(),
             &self.parent.doc_id,
             &self.parent.node_did,
@@ -1546,15 +1553,15 @@ impl TitleFixture {
         assert_eq!(
             lifecycle
                 .terminalize_owned(
-                    crate::request::lifecycle::RequestTerminalOutcome::Interrupted,
+                    gents_session::request::lifecycle::RequestTerminalOutcome::Interrupted,
                     gents_protocol::output::TerminalOutput::NoMessage,
                     None,
                 )
                 .await
                 .unwrap(),
-            crate::request::lifecycle::TerminalizeResult::Won
+            gents_session::request::lifecycle::TerminalizeResult::Won
         );
-        let doc = crate::store::graphql::escape_graphql_string(&self.parent.doc_id);
+        let doc = gents_store::graphql::escape_graphql_string(&self.parent.doc_id);
         let response = self.agent_access()
             .execute(&format!("{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{doc}\" }} }}, limit: 1) {{ lifecycle_state interrupt_requested_at terminal_output }} }}"))
             .await
@@ -1572,7 +1579,7 @@ impl TitleFixture {
     }
 
     async fn session_message_count(&self) -> usize {
-        let session = crate::store::graphql::escape_graphql_string(&self.parent.session_id);
+        let session = gents_store::graphql::escape_graphql_string(&self.parent.session_id);
         let response = self.agent_access()
             .execute(&format!("{{ AgentMessage(filter: {{ session_id: {{ _eq: \"{session}\" }} }}) {{ _docID }} }}"))
             .await
@@ -1581,7 +1588,7 @@ impl TitleFixture {
     }
 
     async fn output_rows(&self) -> (Vec<gents_protocol::output::rows::OutputSegmentRow>, usize) {
-        let doc = crate::store::graphql::escape_graphql_string(&self.title.doc_id);
+        let doc = gents_store::graphql::escape_graphql_string(&self.title.doc_id);
         let query = format!("{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: \"{doc}\" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} AgentMessage(filter: {{ request_doc_id: {{ _eq: \"{doc}\" }} }}) {{ _docID }} }}");
         let response = self.agent_access().execute(&query).await.unwrap();
         let data = &response["data"];
@@ -1601,7 +1608,7 @@ impl TitleFixture {
         RequestLifecycleState,
         Option<gents_protocol::output::TerminalOutput>,
     ) {
-        let doc = crate::store::graphql::escape_graphql_string(&self.title.doc_id);
+        let doc = gents_store::graphql::escape_graphql_string(&self.title.doc_id);
         let query = format!("{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{doc}\" }} }}, limit: 1) {{ lifecycle_state terminal_output }} }}");
         let response = self.agent_access().execute(&query).await.unwrap();
         let row = &response["data"]["AgentRequest"][0];
@@ -1720,7 +1727,7 @@ fn provider_events(
         };
         events.push(RawStreamingChoice::Reasoning {
             id: None,
-            content: crate::inference::llm::rig_compat::to_rig_reasoning_part(&content),
+            content: gents_inference::llm::rig_compat::to_rig_reasoning_part(&content),
         });
     }
     if complete {
@@ -1762,7 +1769,7 @@ async fn assert_title_audit(
         };
         assert_eq!(
             scope.kind,
-            crate::inference::rendered_request::CaptureScopeKind::Title
+            gents_inference::rendered_request::CaptureScopeKind::Title
         );
         assert_eq!(*turn_index, 0);
         assert_eq!(row.segment.request_doc_id, fixture.title.doc_id);
@@ -1874,8 +1881,7 @@ async fn wait_for_title_streams(fixture: &TitleFixture, minimum: usize, fields: 
             .iter()
             .filter_map(|row| match &row.segment.source {
                 OutputSource::ProviderTurn { scope, attempt, .. }
-                    if scope.kind
-                        == crate::inference::rendered_request::CaptureScopeKind::Title =>
+                    if scope.kind == gents_inference::rendered_request::CaptureScopeKind::Title =>
                 {
                     Some((scope.seq, *attempt))
                 }
@@ -1885,8 +1891,8 @@ async fn wait_for_title_streams(fixture: &TitleFixture, minimum: usize, fields: 
         let all_received = sources.len() >= minimum
             && sources.iter().all(|(sequence, attempt)| {
                 let source = OutputSource::ProviderTurn {
-                    scope: crate::inference::rendered_request::CaptureScope {
-                        kind: crate::inference::rendered_request::CaptureScopeKind::Title,
+                    scope: gents_inference::rendered_request::CaptureScope {
+                        kind: gents_inference::rendered_request::CaptureScopeKind::Title,
                         seq: *sequence,
                     },
                     turn_index: 0,
@@ -2055,8 +2061,8 @@ async fn crashed_title_recovers_committed_reasoning_without_publication() {
     assert_eq!(aborted_messages, 0);
     assert_eq!(aborted.len(), before.len());
     assert!(aborted.iter().all(|row| row.segment.close.is_none()));
-    let physical = crate::store::graphql::escape_graphql_string(&fixture.title.doc_id);
-    let owner = crate::store::graphql::escape_graphql_string(fixture.identity.did());
+    let physical = gents_store::graphql::escape_graphql_string(&fixture.title.doc_id);
+    let owner = gents_store::graphql::escape_graphql_string(fixture.identity.did());
     let response = fixture.agent_access()
         .execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{physical}" }}, node_did: {{ _eq: "{owner}" }} }}, limit: 2) {{ execution_generation lifecycle_state }} }}"#))
         .await
@@ -2066,12 +2072,12 @@ async fn crashed_title_recovers_committed_reasoning_without_publication() {
         .expect("title lease rows");
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["lifecycle_state"], "processing");
-    let generation = crate::store::graphql::escape_graphql_string(
+    let generation = gents_store::graphql::escape_graphql_string(
         rows[0]["execution_generation"]
             .as_str()
             .expect("title execution generation"),
     );
-    let past = crate::store::graphql::escape_graphql_string(
+    let past = gents_store::graphql::escape_graphql_string(
         &(chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339(),
     );
     let expired = fixture.agent_access()
@@ -2083,7 +2089,7 @@ async fn crashed_title_recovers_committed_reasoning_without_publication() {
         fixture.title.doc_id
     );
 
-    let first = crate::RequestLifecycle::recover_all_with_identities(
+    let first = gents_session::request::lifecycle::RequestLifecycle::recover_all_with_identities(
         &fixture.node,
         fixture.identity.did(),
         std::slice::from_ref(&fixture.agent_config.agent_identity),
@@ -2110,7 +2116,7 @@ async fn crashed_title_recovers_committed_reasoning_without_publication() {
         .iter()
         .all(|id| after.iter().any(|row| &row.doc_id == id)));
 
-    let replay = crate::RequestLifecycle::recover_all_with_identities(
+    let replay = gents_session::request::lifecycle::RequestLifecycle::recover_all_with_identities(
         &fixture.node,
         fixture.identity.did(),
         std::slice::from_ref(&fixture.agent_config.agent_identity),
@@ -2156,7 +2162,7 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
         let mut fixture = TitleFixture::new().await;
         fixture.terminalize_parent().await;
         if !preexisting {
-            crate::request::admission::terminalize_pending_request_rejection(
+            gents_session::request::admission::terminalize_pending_request_rejection(
                 &fixture.node,
                 &fixture.title.doc_id,
                 &fixture.title.node_did,
@@ -2238,7 +2244,7 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
             prompt_builder,
             hook_failure_policy: FailurePolicy::default(),
             rendered_request_capture_factory: Some(
-                crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+                gents_inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                     fixture.node.clone(), fixture.agent_config.agent_identity.as_ref(),
                 ).unwrap(),
             ),
@@ -2247,10 +2253,10 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
             startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
             runtime_status: status.clone(),
             slot_generation: 1,
-            request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
+            request_admission: gents_session::request::admission::AgentRequestAdmissionVerifier::new(
                 fixture.node.clone(),
                 fixture.identity.clone(),
-                crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+                gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
             ),
         })
         .unwrap();
@@ -2280,9 +2286,9 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
         if !preexisting {
             daemon.spawn_conversation_title_generation(&fixture.parent);
             let old_doc_id = fixture.title.doc_id.clone();
-            let session = crate::store::graphql::escape_graphql_string(&fixture.parent.session_id);
+            let session = gents_store::graphql::escape_graphql_string(&fixture.parent.session_id);
             let purpose =
-                crate::store::graphql::escape_graphql_string(RequestPurpose::TitleAudit.as_str());
+                gents_store::graphql::escape_graphql_string(RequestPurpose::TitleAudit.as_str());
             let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
             loop {
                 let response = fixture.agent_access()
@@ -2296,13 +2302,14 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
                     .filter_map(|row| row["_docID"].as_str())
                     .find(|doc_id| *doc_id != old_doc_id);
                 if let Some(doc_id) = next {
-                    fixture.title = crate::request::admission::load_request_for_admission_test_as(
-                        &fixture.node,
-                        doc_id,
-                        &fixture.agent_config.agent_did,
-                    )
-                    .await
-                    .unwrap();
+                    fixture.title =
+                        gents_session::request::admission::load_request_for_admission_test_as(
+                            &fixture.node,
+                            doc_id,
+                            &fixture.agent_config.agent_did,
+                        )
+                        .await
+                        .unwrap();
                     break;
                 }
                 assert!(
@@ -2441,7 +2448,7 @@ async fn start_owned_title_daemon(
         prompt_builder,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+            gents_inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
                 fixture.node.clone(),
                 fixture.agent_config.agent_identity.as_ref(),
             )
@@ -2452,10 +2459,10 @@ async fn start_owned_title_daemon(
         startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
         runtime_status: status,
         slot_generation: 1,
-        request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
+        request_admission: gents_session::request::admission::AgentRequestAdmissionVerifier::new(
             fixture.node.clone(),
             fixture.identity.clone(),
-            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+            gents_p2p::p2p_reconcile::enrollment_authority_channel().1,
         ),
     })
     .unwrap();
@@ -2480,7 +2487,7 @@ fn buffered_reasoning_title_provider() -> (
         .into_iter()
         .map(|text| RawStreamingChoice::Reasoning {
             id: None,
-            content: crate::inference::llm::rig_compat::to_rig_reasoning_part(
+            content: gents_inference::llm::rig_compat::to_rig_reasoning_part(
                 &ReasoningContent::Text {
                     text: text.into(),
                     signature: None,
@@ -2624,7 +2631,7 @@ async fn owned_title_interrupt_drains_buffered_reasoning_before_terminal() {
         fixture.terminal_row().await.0,
         RequestLifecycleState::Processing
     );
-    crate::request::interrupt::interrupt_request_by_doc_id_with_access(
+    gents_session::request::interrupt::interrupt_request_by_doc_id_with_access(
         &fixture.agent_access(),
         &fixture.title.doc_id,
         &fixture.title.node_did,
@@ -2679,8 +2686,8 @@ async fn owned_title_shutdown_reports_fenced_partial_without_terminalizing() {
     let (before, before_messages) = fixture.output_rows().await;
     assert_eq!(before_messages, 0);
     assert!(before.iter().all(|row| row.segment.close.is_none()));
-    let doc = crate::store::graphql::escape_graphql_string(&fixture.title.doc_id);
-    let owner = crate::store::graphql::escape_graphql_string(&fixture.title.node_did);
+    let doc = gents_store::graphql::escape_graphql_string(&fixture.title.doc_id);
+    let owner = gents_store::graphql::escape_graphql_string(&fixture.title.node_did);
     fixture.agent_access()
         .write(
             "test.title_shutdown_fence_generation",
@@ -2742,7 +2749,7 @@ async fn reasoning_only_title_retains_each_attempt_and_uses_bounded_fallback() {
     );
     assert_title_audit(&fixture, &fields, outcome, 2, false).await;
 
-    let doc = crate::store::graphql::escape_graphql_string(&fixture.title.doc_id);
+    let doc = gents_store::graphql::escape_graphql_string(&fixture.title.doc_id);
     let response = fixture.agent_access()
         .execute(&format!("{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{doc}\" }} }}, limit: 1) {{ execution_generation }} }}"))
         .await
@@ -2764,7 +2771,7 @@ async fn reasoning_only_title_retains_each_attempt_and_uses_bounded_fallback() {
             Some(gents_protocol::output::TerminalOutput::NoMessage)
         )
     );
-    let session = crate::store::graphql::escape_graphql_string(&fixture.parent.session_id);
+    let session = gents_store::graphql::escape_graphql_string(&fixture.parent.session_id);
     let response = fixture
         .agent_access()
         .execute(&format!(
@@ -2789,12 +2796,12 @@ async fn reasoning_only_title_retains_each_attempt_and_uses_bounded_fallback() {
 async fn a_usage_limited_title_falls_back_without_failing_the_turn() {
     let fixture = TitleFixture::new().await;
     let backend = fixture.agent_config.backend_id.clone().unwrap();
-    let registry = crate::inference::admission::AdmissionRegistry::new(fixture.node.clone());
+    let registry = gents_inference::admission::AdmissionRegistry::new(fixture.node.clone());
     registry.reconcile(
         1,
         &rapidhash::RapidHashMap::from_iter([(
             backend.clone(),
-            crate::inference::admission::BackendAdmissionConfig {
+            gents_inference::admission::BackendAdmissionConfig {
                 backend_id: backend.clone(),
                 max_concurrent: 1,
                 max_queue_depth: 1,
@@ -2812,14 +2819,14 @@ async fn a_usage_limited_title_falls_back_without_failing_the_turn() {
         resets_at.timestamp()
     ));
     let calls = provider.calls.clone();
-    let mut model = crate::inference::admission::AdmittedCompletionModel::new(
+    let mut model = gents_inference::admission::AdmittedCompletionModel::new(
         provider,
         registry,
         format!("{backend}:connection"),
     );
     model.agent_signer = fixture.agent_config.agent_identity.managed_agent_signer();
     let parent_state = |access: ConfigAccess, doc: String| async move {
-        let doc = crate::store::graphql::escape_graphql_string(&doc);
+        let doc = gents_store::graphql::escape_graphql_string(&doc);
         access
             .execute(&format!("{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{doc}\" }} }}, limit: 1) {{ lifecycle_state }} }}"))
             .await
@@ -2839,7 +2846,7 @@ async fn a_usage_limited_title_falls_back_without_failing_the_turn() {
         calls.load(Ordering::SeqCst),
         usize::try_from(super::TITLE_GENERATION_MAX_ATTEMPTS).unwrap()
     );
-    let request_id = crate::store::graphql::escape_graphql_string(&fixture.title.request_id);
+    let request_id = gents_store::graphql::escape_graphql_string(&fixture.title.request_id);
     let response = fixture.agent_access()
         .execute(&format!("{{ InferenceCall(filter: {{ request_id: {{ _eq: \"{request_id}\" }} }}) {{ call_kind call_state failure_reason }} }}"))
         .await
@@ -2872,7 +2879,7 @@ async fn a_usage_limited_title_falls_back_without_failing_the_turn() {
             Some(gents_protocol::output::TerminalOutput::NoMessage)
         )
     );
-    let session = crate::store::graphql::escape_graphql_string(&fixture.parent.session_id);
+    let session = gents_store::graphql::escape_graphql_string(&fixture.parent.session_id);
     let response = fixture
         .agent_access()
         .execute(&format!(
@@ -2912,7 +2919,7 @@ async fn fenced_title_output_fails_closed_without_retry() {
         format!("{error:#}").contains("lost its live processing lease"),
         "{error:#}"
     );
-    let session = crate::store::graphql::escape_graphql_string(&fixture.parent.session_id);
+    let session = gents_store::graphql::escape_graphql_string(&fixture.parent.session_id);
     let response = fixture
         .agent_access()
         .execute(&format!(
@@ -2925,8 +2932,8 @@ async fn fenced_title_output_fails_closed_without_retry() {
 
 #[tokio::test]
 async fn title_output_cap_applies_only_when_reasoning_is_disabled_on_the_wire() {
-    use crate::documents::inference_defaults::ReasoningEffort;
-    use crate::OpenAiWireApi;
+    use gents_documents::inference_defaults::ReasoningEffort;
+    use gents_loop::openai_wire::OpenAiWireApi;
     let fixture = TitleFixture::new().await;
     let configured = Some(1024);
     let capped = Some(super::TITLE_VISIBLE_MAX_TOKENS);
@@ -3008,7 +3015,7 @@ async fn title_output_cap_applies_only_when_reasoning_is_disabled_on_the_wire() 
             &agent_config,
             super::title_generation_preamble(),
             0,
-            crate::inference::rendered_request::CaptureScopeKind::Title,
+            gents_inference::rendered_request::CaptureScopeKind::Title,
         );
         assert_eq!(
             super::title_max_tokens(config.additional_params.as_ref(), configured),
@@ -3024,7 +3031,7 @@ async fn title_output_cap_applies_only_when_reasoning_is_disabled_on_the_wire() 
         &agent_config,
         super::title_generation_preamble(),
         0,
-        crate::inference::rendered_request::CaptureScopeKind::Title,
+        gents_inference::rendered_request::CaptureScopeKind::Title,
     );
     let overridden = crate::turn::completion_factory::merge_optional_params(
         config.additional_params,

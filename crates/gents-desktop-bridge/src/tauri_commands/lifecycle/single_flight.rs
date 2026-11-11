@@ -206,7 +206,7 @@ async fn reserve_client_listener(
     policy: &crate::config::ResolvedBridgePolicy,
 ) -> Result<
     (
-        Option<gents::store::local::file_lock::FileLock>,
+        Option<gents_store::local::file_lock::FileLock>,
         Option<crate::host::local::LocalListener>,
     ),
     BridgeError,

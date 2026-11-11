@@ -1,12 +1,13 @@
 use anyhow::Result;
 
 use super::super::terminal::{finalize_request_failure, terminalize_request};
-use super::{
-    request_failure_reason, AgentDaemon, AgentRequest, DefraStreamWriter, ProviderModel,
-    RequestInterruptionSource, RequestLifecycle,
+use super::{request_failure_reason, AgentDaemon, AgentRequest, RequestInterruptionSource};
+use gents_inference::llm::rig_compat::ProviderModel;
+use gents_observe::observe::runtime_trace::{
+    record_current_failure_class, record_current_request_outcome,
 };
-use crate::observe::runtime_trace::{record_current_failure_class, record_current_request_outcome};
-use crate::tools::call::task_hooks::TaskHookRun;
+use gents_session::{request::lifecycle::RequestLifecycle, request::streaming::DefraStreamWriter};
+use gents_toolcalls::call::task_hooks::TaskHookRun;
 
 pub(super) struct OwnedWorkEnd {
     pub(super) reason: Option<String>,
@@ -35,8 +36,8 @@ where
         } = work;
         let final_outcome = run.final_outcome();
         let mut reason = match &final_outcome {
-            crate::tools::call::task_hooks::TaskHookOutcome::Failure(
-                crate::tools::call::task_hooks::HookPrimaryError::Hook(hook_id),
+            gents_toolcalls::call::task_hooks::TaskHookOutcome::Failure(
+                gents_toolcalls::call::task_hooks::HookPrimaryError::Hook(hook_id),
             ) => Some(run.hook_failure_reason(hook_id)),
             _ => work_reason,
         };
@@ -56,10 +57,10 @@ where
             .terminal_outcome()
             .expect("parked work returned before finish");
         match final_outcome {
-            crate::tools::call::task_hooks::TaskHookOutcome::Parked => {
+            gents_toolcalls::call::task_hooks::TaskHookOutcome::Parked => {
                 unreachable!("parked work returned before finish")
             }
-            crate::tools::call::task_hooks::TaskHookOutcome::Success => {
+            gents_toolcalls::call::task_hooks::TaskHookOutcome::Success => {
                 if skipped_before_work {
                     if let Err(error) = lifecycle.begin_owned_execution(stream_writer).await {
                         self.finalize_failure_before_work(
@@ -75,14 +76,14 @@ where
                 match terminalize_request(lifecycle, stream_writer, terminal, None).await {
                     Ok(true) if skipped_before_work => {
                         record_current_request_outcome("completed");
-                        if let Err(error) = crate::workspace::release_writer_binding(
+                        if let Err(error) = gents_session::workspace::release_writer_binding(
                             &self.node,
                             self.agent_config.agent_identity.as_ref(),
                             request,
                         )
                         .await
                         {
-                            tracing::warn!(request_id = %request.request_id, error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
+                            tracing::warn!(request_id = %request.request_id, error = %gents_protocol::failure_text::BoundedErrorChain(error.as_ref()),
                                 "failed to release writer workspace binding after skipped task gate");
                         }
                     }
@@ -90,12 +91,12 @@ where
                     Err(error) => {
                         record_current_request_outcome("terminalization_failed");
                         record_current_failure_class(&error);
-                        tracing::error!(request_id = %request.request_id, error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
+                        tracing::error!(request_id = %request.request_id, error = %gents_protocol::failure_text::BoundedErrorChain(error.as_ref()),
                             "failed to atomically terminalize completed request and response");
                     }
                 }
             }
-            crate::tools::call::task_hooks::TaskHookOutcome::Failure(_) => {
+            gents_toolcalls::call::task_hooks::TaskHookOutcome::Failure(_) => {
                 let reason = reason.unwrap_or_else(|| "request failed".to_string());
                 if finalize_request_failure(lifecycle, stream_writer, &reason, &request.request_id)
                     .await
@@ -104,7 +105,7 @@ where
                     self.release_failed_writer_binding(request).await;
                 }
             }
-            crate::tools::call::task_hooks::TaskHookOutcome::Interrupted => {
+            gents_toolcalls::call::task_hooks::TaskHookOutcome::Interrupted => {
                 record_current_request_outcome("interrupted");
                 let reason = reason.unwrap_or_else(|| "interrupted".to_string());
                 match terminalize_request(lifecycle, stream_writer, terminal, Some(&reason)).await {
@@ -113,13 +114,13 @@ where
                     Err(error) => {
                         record_current_request_outcome("terminalization_failed");
                         record_current_failure_class(&error);
-                        tracing::error!(request_id = %request.request_id, error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
+                        tracing::error!(request_id = %request.request_id, error = %gents_protocol::failure_text::BoundedErrorChain(error.as_ref()),
                             "failed to atomically terminalize interrupted request and response");
                         return Ok(());
                     }
                 }
                 self.record_request_interruption(request, interruption_source);
-                if let Err(error) = crate::workspace::release_writer_binding(
+                if let Err(error) = gents_session::workspace::release_writer_binding(
                     &self.node,
                     self.agent_config.agent_identity.as_ref(),
                     request,
@@ -128,7 +129,7 @@ where
                 {
                     tracing::warn!(
                         request_id = %request.request_id,
-                        error = %crate::request::failure_text::BoundedErrorChain(error.as_ref()),
+                        error = %gents_protocol::failure_text::BoundedErrorChain(error.as_ref()),
                         "failed to release writer workspace binding after interrupt"
                     );
                 }

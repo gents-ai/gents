@@ -38,17 +38,17 @@ pub struct UsageWindowView {
 }
 
 pub(crate) async fn account_usage_views(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     reads: Option<&gents_server::accounts::UsageReads>,
 ) -> anyhow::Result<Vec<AccountUsageView>> {
-    use gents::inference::usage_observation::{account_usage::UsageSource, UsageRead};
+    use gents_inference::usage_observation::{account_usage::UsageSource, UsageRead};
 
     let backends = access
         .transact_readonly("desktop.usage_views", |txn| {
-            Box::pin(async move {
-                gents::documents::list_inference_backends_in_txn(txn, node_did).await
-            })
+            Box::pin(
+                async move { gents_documents::list_inference_backends_in_txn(txn, node_did).await },
+            )
         })
         .await?;
     let reads = reads
@@ -111,9 +111,9 @@ pub async fn read(
         .operator_access(node_did)
         .map_err(BridgeError::classify_transport_error)?;
     let trigger = if request.refresh {
-        gents::inference::usage_observation::UsageTrigger::Refresh
+        gents_inference::usage_observation::UsageTrigger::Refresh
     } else {
-        gents::inference::usage_observation::UsageTrigger::Open
+        gents_inference::usage_observation::UsageTrigger::Open
     };
     let reads = async {
         let signer = core.operator_signer(node_did)?;

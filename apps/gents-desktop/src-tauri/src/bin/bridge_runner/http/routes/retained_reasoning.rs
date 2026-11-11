@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use gents::store::config_client::ConfigAccess;
+use gents_store::config_client::ConfigAccess;
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -21,9 +21,9 @@ pub(super) async fn retained_provider_reasoning(
         OutputSource, PayloadRef, SourceClose, StreamPayload,
     };
 
-    let node = gents::store::graphql::escape_graphql_string(node_did);
-    let session = gents::store::graphql::escape_graphql_string(session_id);
-    let logical = gents::store::graphql::escape_graphql_string(request_id);
+    let node = gents_store::graphql::escape_graphql_string(node_did);
+    let session = gents_store::graphql::escape_graphql_string(session_id);
+    let logical = gents_store::graphql::escape_graphql_string(request_id);
     let request_query = format!(
         r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }}, request_id: {{ _eq: "{logical}" }} }}, limit: 2) {{ _docID }} }}"#
     );
@@ -37,7 +37,7 @@ pub(super) async fn retained_provider_reasoning(
         .and_then(serde_json::Value::as_str)
         .context("request omitted physical _docID")?
         .to_owned();
-    let physical = gents::store::graphql::escape_graphql_string(&request_doc_id);
+    let physical = gents_store::graphql::escape_graphql_string(&request_doc_id);
     let segment_query = format!(
         r#"{{ AgentOutputSegment(filter: {{ node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }}, request_doc_id: {{ _eq: "{physical}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
     );

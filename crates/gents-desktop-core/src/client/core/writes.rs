@@ -2,9 +2,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::store::config_client::ConfigAccess;
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::row::AgentRequestRow;
+use gents_store::config_client::ConfigAccess;
 
 use super::super::mutations::SubmittedRequest;
 use super::super::observe::ObservedStore;
@@ -153,7 +153,7 @@ pub enum LocalHomeAccessError {
     #[error("the local node that installed this app has no operator connection")]
     NoOperatorConnection,
     #[error("the desktop's client key cannot sign requests to its runtime")]
-    Signing(#[source] gents::store::config_client::ConfigClientError),
+    Signing(#[source] gents_store::config_client::ConfigClientError),
 }
 
 fn ux_local_runtime_record<'a>(
@@ -208,7 +208,7 @@ impl ClientCore {
         node_did: &str,
         record: Option<&PeerRecord>,
     ) -> Result<(
-        Arc<dyn gents::store::identity::NodeIdentity>,
+        Arc<dyn gents_store::identity::NodeIdentity>,
         AgentRequestAdmissionRecord,
         String,
     )> {
@@ -217,7 +217,7 @@ impl ClientCore {
             record.node_did == node_did,
             "request route belongs to another node"
         );
-        let signer: Arc<dyn gents::store::identity::NodeIdentity> =
+        let signer: Arc<dyn gents_store::identity::NodeIdentity> =
             Arc::new(self.node_identity.clone());
         Ok((
             signer,

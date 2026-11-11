@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::session::mailbox::{list_mailbox_items_on, MailboxStatus};
-use gents::NodeIdentity;
+use gents_session::session::mailbox::{list_mailbox_items_on, MailboxStatus};
+use gents_store::identity::NodeIdentity;
 
 use crate::support::accepted_turn::boot_prepared_accepted_turn;
 use crate::support::live_inference::live_target;
@@ -61,7 +61,7 @@ async fn real_model_files_a_stamped_mailbox_item_through_granted_surface() {
     assert_eq!(item.source_kind, "agent");
     assert_eq!(
         item.source_id,
-        gents::documents::mailbox_write_decl::NotificationIdentity::Event
+        gents_documents::mailbox_write_decl::NotificationIdentity::Event
             .source_id(
                 &turn.node_did,
                 turn.user.did(),
@@ -74,7 +74,7 @@ async fn real_model_files_a_stamped_mailbox_item_through_granted_surface() {
     assert!(item.cause_doc_id.is_none());
     let query = format!(
         r#"{{AgentToolCall(filter: {{request_id: {{_eq: "{}"}}, tool_name: {{_eq: "file_mailbox_item"}}}}) {{lifecycle_state}}}}"#,
-        gents::store::graphql::escape_graphql_string(request_id)
+        gents_store::graphql::escape_graphql_string(request_id)
     );
     let tool_calls = turn.agent_access.execute(&query).await.unwrap();
     assert_eq!(

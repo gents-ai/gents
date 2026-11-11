@@ -2,10 +2,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use chrono::{SecondsFormat, Utc};
-use gents::store::graphql::escape_graphql_string;
-use gents::{
-    run_health_check_cycle_for_actor, tools::mcp::health::HealthCheckerOptions, HealthStatus,
-    McpHealthCheckService, McpPool, ServiceHealthMap,
+use gents_store::graphql::escape_graphql_string;
+use gents_tools::{
+    mcp::health::run_health_check_cycle_for_actor, mcp::health::HealthCheckerOptions,
+    mcp::health::HealthStatus, mcp::health::McpHealthCheckService, mcp::health::ServiceHealthMap,
+    mcp::pool::McpPool,
 };
 use serde::Serialize;
 
@@ -29,7 +30,7 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
     if service_id.is_empty() {
         anyhow::bail!("SERVICE must be a non-empty service id");
     }
-    let endpoint = gents::documents::ToolServiceRegistry::parse_endpoint_url(&args.endpoint)
+    let endpoint = gents_documents::ToolServiceRegistry::parse_endpoint_url(&args.endpoint)
         .map_err(|error| anyhow::anyhow!("--endpoint: {error}"))?;
     let host = endpoint
         .host_str()
@@ -74,12 +75,12 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
             let node_did = &node_did;
             let endpoint_url = &endpoint_url;
             Box::pin(async move {
-                use gents::documents::apply_desired_state_plan;
-                use gents::documents::{
+                use gents_documents::apply_desired_state_plan;
+                use gents_documents::{
                     read_desired_state_record_in_txn, DesiredStateApplyDocument,
                     DesiredStateApplyPlan,
                 };
-                let collection = gents::Collection::ToolServiceRegistry;
+                let collection = gents_store::collection::Collection::ToolServiceRegistry;
                 let current =
                     read_desired_state_record_in_txn(txn, collection, node_did, service_id)
                         .await?
@@ -110,7 +111,7 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
                 apply_desired_state_plan(
                     txn,
                     &plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await?;
                 Ok::<_, anyhow::Error>(())
@@ -454,14 +455,20 @@ mod tests {
 
     #[tokio::test]
     async fn exact_service_read_uses_the_requested_node_scope() {
-        use gents::documents::apply_desired_state_plan;
-        use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-        use gents::NodeIdentity;
+        use gents_documents::apply_desired_state_plan;
+        use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use gents_store::identity::NodeIdentity;
         let directory = tempfile::tempdir().unwrap();
-        let root =
-            gents::KeyIdentity::load_or_create(directory.path().join("runtime"), None).unwrap();
-        let other =
-            gents::KeyIdentity::load_or_create(directory.path().join("other"), None).unwrap();
+        let root = gents_store::identity::KeyIdentity::load_or_create(
+            directory.path().join("runtime"),
+            None,
+        )
+        .unwrap();
+        let other = gents_store::identity::KeyIdentity::load_or_create(
+            directory.path().join("other"),
+            None,
+        )
+        .unwrap();
         let node = Arc::new(
             defra_node::Node::builder()
                 .with_node_identity_did(root.did())
@@ -470,7 +477,9 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        gents::ensure_runtime_schemas(&node).await.unwrap();
+        gents_store::schema::ensure_runtime_schemas(&node)
+            .await
+            .unwrap();
         let access = ConfigAccess::local_as(node.clone(), identity::Did::new(root.did()).unwrap());
         let did = escape_graphql_string(root.did());
         access
@@ -482,7 +491,7 @@ mod tests {
             .unwrap();
         let value = serde_json::json!({"node_did":root.did(),"service_id":"svc-1","hostname":"real-host","mcp_port":1,"enabled":true});
         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-            collection: gents::Collection::ToolServiceRegistry,
+            collection: gents_store::collection::Collection::ToolServiceRegistry,
             add: value.clone(),
             update: value,
         }])
@@ -494,7 +503,7 @@ mod tests {
                     apply_desired_state_plan(
                         txn,
                         plan,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await
                 })

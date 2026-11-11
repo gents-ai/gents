@@ -1,14 +1,14 @@
 use anyhow::{Context, Result};
-use gents::documents::Agent;
-use gents::store::graphql::escape_graphql_string;
-use gents::tools::builtin::self_config::{configure_agent, ConfigureAgentParams};
-use gents::tools::surface::presets;
-use gents::Collection;
+use gents_documents::Agent;
 use gents_protocol::agent_identity::AgentIdentityBinding;
 use gents_protocol::operations::agent::{
     AgentCreateInput, AgentCreateOperation, AgentOperationError, NextCall,
 };
 use gents_protocol::operations::StringUpdate;
+use gents_store::collection::Collection;
+use gents_store::graphql::escape_graphql_string;
+use gents_tools::builtin::self_config::{configure_agent, ConfigureAgentParams};
+use gents_tools::surface::presets;
 use serde_json::{json, Value};
 
 use crate::cli::output_format::OutputFormat;
@@ -26,7 +26,7 @@ pub(super) async fn agent_set(args: AgentUpsertArgs) -> Result<()> {
             let row = access
                 .transact_readonly("cli.agent.identity", |txn| {
                     Box::pin(async move {
-                        gents::documents::read_desired_state_record_in_txn(
+                        gents_documents::read_desired_state_record_in_txn(
                             txn,
                             Collection::Agent,
                             owner,
@@ -57,7 +57,7 @@ pub(super) async fn agent_set(args: AgentUpsertArgs) -> Result<()> {
     let doc_id = write_agent_document(
         &access,
         &agent,
-        &gents::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await?;
     let output = json!({
@@ -138,7 +138,7 @@ pub(super) async fn agent_self_config_permission(
     args: AgentSelfConfigPermissionArgs,
     grant: bool,
 ) -> Result<()> {
-    use gents::store::config_client::AgentSelfConfigPermission;
+    use gents_store::config_client::AgentSelfConfigPermission;
 
     let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
     let permission = if grant {
@@ -283,7 +283,7 @@ async fn load_document(
 }
 
 async fn classify_preset(access: &ConfigAccess, value: &Value) -> Result<Option<&'static str>> {
-    use gents::documents::{merge_datastore_tool_surfaces, DatastoreToolSurfaceDocument, Tools};
+    use gents_documents::{merge_datastore_tool_surfaces, DatastoreToolSurfaceDocument, Tools};
     let tools: Tools = serde_json::from_value(value.clone())?;
     tools.validate()?;
     let mut surfaces = Vec::<DatastoreToolSurfaceDocument>::new();
@@ -426,10 +426,10 @@ pub(super) async fn agent_show(args: ConfigShowArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use gents::NodeIdentity as _;
+    use gents_store::identity::NodeIdentity as _;
 
     use defra_node::Node as EmbeddedNode;
-    use gents::documents::Tools;
+    use gents_documents::Tools;
     use serde_json::Value;
 
     use super::*;
@@ -468,13 +468,16 @@ mod tests {
     /// candidate rows instead of counting them.
     #[tokio::test]
     async fn bare_id_prefers_the_local_row_and_ambiguity_names_candidates() -> Result<()> {
-        use gents::documents::apply_desired_state_plan;
-        use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use gents_documents::apply_desired_state_plan;
+        use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         // Agent DIDs are derived per runtime, so the shared logical ID is a
         // profile label the local Node and a replicated peer both use.
         let client = crate::shared::test_support::ClientHome::new().await;
         let peer_dir = tempfile::tempdir()?;
-        let peer = gents::KeyIdentity::load_or_create(peer_dir.path().join("peer.key"), None)?;
+        let peer = gents_store::identity::KeyIdentity::load_or_create(
+            peer_dir.path().join("peer.key"),
+            None,
+        )?;
         let local = client.node_did().to_owned();
         let peer = peer.did().to_owned();
         let (local, peer) = (local.as_str(), peer.as_str());
@@ -502,7 +505,7 @@ mod tests {
                     apply_desired_state_plan(
                         txn,
                         plan,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await
                 })
@@ -569,8 +572,8 @@ mod tests {
         let client = crate::shared::test_support::ClientHome::new().await;
         let node = client.node().clone();
         let owner = client.node_did();
-        use gents::documents::apply_desired_state_plan;
-        use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use gents_documents::apply_desired_state_plan;
+        use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         let documents = [
             (Collection::InferenceBackend,json!({"node_did":owner,"backend_id":"backend","name":"Test","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}})),
             (Collection::InferenceProfile,json!({"node_did":owner,"profile_id":"profile-1","backend_id":"backend","model_name":"test"})),
@@ -584,7 +587,7 @@ mod tests {
                     apply_desired_state_plan(
                         txn,
                         plan,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await
                 })
@@ -595,7 +598,7 @@ mod tests {
         let root = std::fs::canonicalize(workspace.path())?
             .to_string_lossy()
             .into_owned();
-        gents::tools::surface::set_workspace_root_with_readers(
+        gents_tools::surface::set_workspace_root_with_readers(
             &access,
             owner,
             &root,
@@ -606,7 +609,7 @@ mod tests {
         .await?;
         let user = identity::Did::new(client.user.did())?;
         let provision = || {
-            gents::store::identity::provision_agent_identity_authorized(
+            gents_store::identity::provision_agent_identity_authorized(
                 &node,
                 client.home.identity.as_ref(),
                 &user,
@@ -634,7 +637,7 @@ mod tests {
         assert_eq!(outcome["committed"], true);
         let agent_did = outcome["agent_did"].as_str().context("created agent ID")?;
 
-        let agent = gents::load_agent(&node, agent_did)
+        let agent = gents_documents::load_agent(&node, agent_did)
             .await?
             .expect("created agent exists");
         assert_eq!(agent.inference_profile_id, "profile-1");
@@ -664,7 +667,7 @@ mod tests {
                 .as_ref()
                 .and_then(|host| host.bash.as_ref())
                 .map(|bash| bash.mode),
-            Some(gents::BashMode::Unrestricted),
+            Some(gents_documents::BashMode::Unrestricted),
         );
 
         let clone_doc = AgentCreateInput {
@@ -678,7 +681,7 @@ mod tests {
             .as_str()
             .context("cloned agent ID")?;
         assert_ne!(cloned_id, agent_did);
-        let cloned = gents::load_agent(&node, cloned_id)
+        let cloned = gents_documents::load_agent(&node, cloned_id)
             .await?
             .expect("cloned agent exists");
         let cloned_context_id = cloned
@@ -859,11 +862,11 @@ Next: gents config agent --help
 
     #[tokio::test]
     async fn raw_set_rejects_dangling_profile_reference() -> Result<()> {
-        use gents::documents::apply_desired_state_plan;
-        use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+        use gents_documents::apply_desired_state_plan;
+        use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         let client = crate::shared::test_support::ClientHome::new().await;
         let binding =
-            gents::store::identity::provision_agent_identity(client.home.identity.as_ref())?;
+            gents_store::identity::provision_agent_identity(client.home.identity.as_ref())?;
         let agent = json!({
             "creation_nonce": binding.creation_nonce,
             "agent_did": binding.agent_did,
@@ -884,7 +887,7 @@ Next: gents config agent --help
                     apply_desired_state_plan(
                         txn,
                         plan,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await
                 })

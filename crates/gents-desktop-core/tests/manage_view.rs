@@ -1,8 +1,8 @@
 use anyhow::Result;
-use gents::documents::{
+use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+use gents_documents::{
     Agent, InferenceBackend, InferenceProfile, Node, Schedule, SkillDocument, Task, Tools, Trigger,
 };
-use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use serde_json::json;
 use std::sync::Arc;
 

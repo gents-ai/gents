@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::ValueEnum;
-use gents::documents::inference_defaults::DEFAULT_MAX_QUEUE_DEPTH;
+use gents_documents::inference_defaults::DEFAULT_MAX_QUEUE_DEPTH;
 
 use super::{BackendPresetArg, OpenAiWireApiArg, ToolPackageArg};
 
@@ -73,15 +73,15 @@ pub(crate) enum StoreKeyCustodyArg {
 
 pub(crate) fn store_key_custody(
     arg: Option<StoreKeyCustodyArg>,
-) -> gents::store::local::store_key::StoreKeyCustodyChoice {
+) -> gents_store::local::store_key::StoreKeyCustodyChoice {
     match arg {
         Some(StoreKeyCustodyArg::File) => {
-            gents::store::local::store_key::StoreKeyCustodyChoice::File
+            gents_store::local::store_key::StoreKeyCustodyChoice::File
         }
         Some(StoreKeyCustodyArg::Keychain) => {
-            gents::store::local::store_key::StoreKeyCustodyChoice::Keychain
+            gents_store::local::store_key::StoreKeyCustodyChoice::Keychain
         }
-        None => gents::store::local::store_key::StoreKeyCustodyChoice::default(),
+        None => gents_store::local::store_key::StoreKeyCustodyChoice::default(),
     }
 }
 

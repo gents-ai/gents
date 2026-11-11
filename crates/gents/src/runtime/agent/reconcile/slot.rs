@@ -7,14 +7,14 @@ use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinSet;
 use tokio_util::task::AbortOnDropHandle;
 
-use crate::inference::admission::BackendAdmissionConfig;
-use crate::inference::resolved::ResolvedAgent;
 use crate::runtime::agent::retry::RetryPolicy;
 use crate::runtime::agent::worker_capacity::WorkerCapacity;
 use crate::runtime::startup_readiness::{BuildOutcome, BuildStanding};
-use crate::tools::surface::ToolSurface;
-use crate::triggers::runtime_snapshot::ResolvedRuntimeSnapshot;
+use gents_automation::triggers::runtime_snapshot::ResolvedRuntimeSnapshot;
+use gents_inference::admission::BackendAdmissionConfig;
+use gents_inference::resolved::ResolvedAgent;
 use gents_protocol::row::AgentRequest;
+use gents_tools::surface::ToolSurface;
 
 use rapidhash::{HashMapExt, RapidHashMap};
 
@@ -54,7 +54,7 @@ impl AgentSlot {
         executor_capacity: usize,
     ) -> bool {
         self.agent_fingerprint
-            == crate::inference::connection_fingerprint::agent_slot_fingerprint(agent_config)
+            == gents_inference::connection_fingerprint::agent_slot_fingerprint(agent_config)
             && self.tool_surface_fingerprint == format!("{tool_surface:?}")
             && self.executor_capacity == executor_capacity
     }
@@ -309,7 +309,7 @@ where
     let request_rx = Arc::new(Mutex::new(request_rx));
     let (state_tx, state_rx) = watch::channel(AgentSlotState::Active);
     let agent_fingerprint =
-        crate::inference::connection_fingerprint::agent_slot_fingerprint(&agent_config);
+        gents_inference::connection_fingerprint::agent_slot_fingerprint(&agent_config);
     let tool_surface_fingerprint = format!("{tool_surface:?}");
 
     let standing = Arc::new(std::sync::Mutex::new(BuildStanding::seeded()));

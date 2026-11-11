@@ -1,10 +1,10 @@
 use super::*;
 use axum::body::Bytes;
-use gents::NodeIdentity;
 use gents_protocol::goal_control::{
     GoalRevision, ObservedGoal, SessionGoalObservation, SESSION_GOAL_CONTROL_VERSION,
 };
 use gents_protocol::request_input::GoalAssignmentInput;
+use gents_store::identity::NodeIdentity;
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 
@@ -23,7 +23,7 @@ pub(crate) struct Source {
 }
 
 impl Source {
-    pub(crate) fn user(&self) -> &gents::KeyIdentity {
+    pub(crate) fn user(&self) -> &gents_store::identity::KeyIdentity {
         &self.home.user
     }
 
@@ -45,24 +45,29 @@ impl Source {
     pub(crate) async fn admit(&self, input: RequestInput) -> Result<()> {
         let access = self.home.access.clone();
         let user = self.user();
-        let requester =
-            gents::session::client_requester_scope(&access, &self.node_did, "chat", user.did())
-                .await?;
-        let create = gents::request::lifecycle::build_signed_client_request(
+        let requester = gents_session::session::client_requester_scope(
             &access,
-            gents::RequestSpec {
+            &self.node_did,
+            "chat",
+            user.did(),
+        )
+        .await?;
+        let create = gents_session::request::lifecycle::build_signed_client_request(
+            &access,
+            gents_session::request::lifecycle::RequestSpec {
                 input,
                 retry_key: Some("manual-fire".into()),
                 ..gents::RequestSpec::new(
                     gents_protocol::request_admission::RequestPurpose::Normal,
-                    gents::RequestIdentity {
+                    gents_session::request::lifecycle::RequestIdentity {
                         request_id: "manual-task".into(),
                         node_did: self.node_did.clone(),
                         requester_did: Some(requester),
                         agent_did: self.agent_did.clone(),
                         session_id: "chat".into(),
                         content: "Continue the Task".into(),
-                        execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
+                        execution_origin:
+                            gents_session::request::lifecycle::ExecutionOrigin::Interactive,
                         created_at: "2026-10-21T00:00:00Z".into(),
                     },
                     gents_protocol::request_admission::AgentRequestAdmissionRecord::client(
@@ -70,10 +75,10 @@ impl Source {
                     ),
                 )
             },
-            gents::RequestSigner::Identity(user),
+            gents_session::request::lifecycle::RequestSigner::Identity(user),
         )
         .await?;
-        gents::request::lifecycle::submit_client_request(&access, &create).await?;
+        gents_session::request::lifecycle::submit_client_request(&access, &create).await?;
         Ok(())
     }
 }
@@ -91,8 +96,8 @@ async fn publish_default_agent(
     home: &crate::shared::test_support::ClientHome,
     agent_did: &str,
 ) -> Result<()> {
-    use gents::documents::apply_desired_state_plan;
-    use gents::documents::{
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{
         read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
     let node_did = home.node_did().to_owned();
@@ -102,7 +107,7 @@ async fn publish_default_agent(
             Box::pin(async move {
                 let (_, mut node) = read_desired_state_record_in_txn(
                     txn,
-                    gents::Collection::Node,
+                    gents_store::collection::Collection::Node,
                     node_did,
                     node_did,
                 )
@@ -111,14 +116,14 @@ async fn publish_default_agent(
                 node["default_agent_did"] = agent_did.into();
                 node["enabled"] = true.into();
                 let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                    collection: gents::Collection::Node,
+                    collection: gents_store::collection::Collection::Node,
                     add: node.clone(),
                     update: node,
                 }])?;
                 apply_desired_state_plan(
                     txn,
                     &plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
                 .map(|_| ())
@@ -138,7 +143,7 @@ async fn publish_observation(
 ) -> Result<()> {
     let node_did = home.node_did().to_owned();
     let agent =
-        gents::store::identity::resolve_agent_identity(home.home.identity.as_ref(), binding)?;
+        gents_store::identity::resolve_agent_identity(home.home.identity.as_ref(), binding)?;
     let mut observation = SessionGoalObservation {
         version: SESSION_GOAL_CONTROL_VERSION,
         node_did: node_did.clone(),
@@ -148,7 +153,7 @@ async fn publish_observation(
         requester_did: Some(binding.agent_did.clone()),
         observed_at: "2026-10-21T00:00:00Z".into(),
         goal: observed.map(|reference| {
-            let goal: gents::goal::GoalDocument = serde_json::from_value(json!({
+            let goal: gents_automation::goal::GoalDocument = serde_json::from_value(json!({
                 "_docID":"goal-document", "node_did":node_did, "session_id":"chat",
                 "goal_id":reference.goal_id, "objective":"Keep this assignment", "status":"active"
             }))
@@ -159,7 +164,7 @@ async fn publish_observation(
                     composite: "source-composite".into(),
                 },
                 assignment_root_request_doc_id: reference.root_request_doc_id,
-                snapshot: gents::goal::snapshot(&goal, Utc::now()),
+                snapshot: gents_automation::goal::snapshot(&goal, Utc::now()),
             }
         }),
         signature: vec![],
@@ -191,7 +196,7 @@ async fn publish_observation(
                         &json!({"input": input}),
                     )
                     .await?;
-                let doc = gents::store::graphql::created_doc_id(&response, "GoalObservation")?;
+                let doc = gents_store::graphql::created_doc_id(&response, "GoalObservation")?;
                 txn.add_resource_relationship("GoalObservation", &doc, "parent", "sessions", session_doc)
                     .await?;
                 Ok::<_, anyhow::Error>(())
@@ -299,7 +304,7 @@ async fn generated_cli_preparation_captures_goal_before_signing() -> Result<()> 
         if case["expected"]["kind"] == "pending" {
             let error = actual.unwrap_err();
             assert!(
-                gents_protocol::error_chain::find_source::<gents::goal::GoalInputRefused>(
+                gents_protocol::error_chain::find_source::<gents_automation::goal::GoalInputRefused>(
                     error.as_ref()
                 )
                 .is_some(),
@@ -346,11 +351,11 @@ async fn cli_preparation_rejects_tampered_and_foreign_goal_observations() -> Res
         .await;
         let error = actual.unwrap_err();
         assert_eq!(
-            gents_protocol::error_chain::find_source::<gents::goal::GoalInputRefused>(
+            gents_protocol::error_chain::find_source::<gents_automation::goal::GoalInputRefused>(
                 error.as_ref()
             )
             .copied(),
-            Some(gents::goal::GoalInputRefused::ProjectionUnverified),
+            Some(gents_automation::goal::GoalInputRefused::ProjectionUnverified),
             "{fault}: {error:#}"
         );
     }

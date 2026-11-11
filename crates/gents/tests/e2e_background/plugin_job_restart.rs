@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use gents::tools::background::job::job::{JobChildState, JobState};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_toolcalls::background::job::job::{JobChildState, JobState};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -32,7 +32,7 @@ struct JobCrashReady {
     child_states: Vec<(String, String)>,
 }
 
-fn entry(when: Value, output: gents::tools::background::job::job::JobStepOutput) -> PlanEntry {
+fn entry(when: Value, output: gents_toolcalls::background::job::job::JobStepOutput) -> PlanEntry {
     PlanEntry {
         when,
         output,
@@ -63,7 +63,7 @@ async fn child_states(h: &JobHarness, row_doc_id: &str) -> Vec<(String, String)>
     let response = h.actors.fixture.access.clone()
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ caused_by_parent_tool_call_doc_id: {{ _eq: "{}" }} }}) {{ _docID lifecycle_state }} }}"#,
-            gents::store::graphql::escape_graphql_string(row_doc_id),
+            gents_store::graphql::escape_graphql_string(row_doc_id),
         ))
         .await
         .expect("read the job children");
@@ -89,7 +89,7 @@ async fn job_row_fields(h: &JobHarness, row_doc_id: &str) -> Value {
     let response = h.actors.fixture.access.clone()
         .execute(&format!(
             r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state cancel_cause plugin_execution_receipt }} }}"#,
-            gents::store::graphql::escape_graphql_string(row_doc_id),
+            gents_store::graphql::escape_graphql_string(row_doc_id),
         ))
         .await
         .expect("read the job row");

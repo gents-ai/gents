@@ -2,10 +2,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::documents::{FileTools, HostTools, IntegrationTools, LspTools, Tools};
-use gents::{DocumentRuntimeOptions, FileToolMode, Gents, ToolCeiling};
+use gents::{DocumentRuntimeOptions, Gents};
+use gents_documents::FileToolMode;
+use gents_documents::{FileTools, HostTools, IntegrationTools, LspTools, Tools};
+use gents_tools::surface::ToolCeiling;
 
-use gents::NodeIdentity;
+use gents_store::identity::NodeIdentity;
 
 use crate::support::builder_runtime::submit_request;
 use crate::support::fixtures::configure_agent_tools;
@@ -96,7 +98,7 @@ fn pack_lsp_config() -> String {
 
 fn load_pack_system_prompt(root: &std::path::Path) -> anyhow::Result<String> {
     use anyhow::Context;
-    use gents::pack::{load_pack_config, PackInstallOptions, PackManifest};
+    use gents_pack::pack::{load_pack_config, PackInstallOptions, PackManifest};
 
     let manifest: PackManifest =
         serde_json::from_slice(&std::fs::read(root.join("manifest.json"))?)?;
@@ -197,7 +199,10 @@ struct ToolCallRow {
     result: Option<String>,
 }
 
-async fn fetch_tool_calls(reader: &gents::ConfigAccess, request_id: &str) -> Vec<ToolCallRow> {
+async fn fetch_tool_calls(
+    reader: &gents_store::config_client::ConfigAccess,
+    request_id: &str,
+) -> Vec<ToolCallRow> {
     fetch_tool_call_payloads_for_request_as(reader, request_id)
         .await
         .into_iter()
@@ -389,7 +394,7 @@ fn matching_hover<'a>(
         call_completed(call)
             && action_of(call).as_deref() == Some("hover")
             && file_of(call)
-                .is_some_and(|path| gents::tools::native::result_path_matches(file, &path))
+                .is_some_and(|path| gents_tools::native::result_path_matches(file, &path))
             && symbol_of(call).as_deref() == Some(symbol)
             && !result_is_error(call)
             && call
@@ -435,7 +440,7 @@ fn symbol_of(call: &ToolCallRow) -> Option<String> {
 }
 
 fn result_is_error(call: &ToolCallRow) -> bool {
-    gents::tools::native::result_looks_failed(call.result.as_deref().unwrap_or(""))
+    gents_tools::native::result_looks_failed(call.result.as_deref().unwrap_or(""))
 }
 
 type CallSummary = (

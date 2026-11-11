@@ -7,10 +7,10 @@ mod task;
 mod tools;
 
 use anyhow::Result;
-use gents::documents::apply_desired_state_plan;
-use gents::documents::{read_desired_state_record_in_txn, DesiredStateApplyPlan};
-use gents::store::collection::Collection;
-use gents::store::config_client::ConfigAccess;
+use gents_documents::apply_desired_state_plan;
+use gents_documents::{read_desired_state_record_in_txn, DesiredStateApplyPlan};
+use gents_store::collection::Collection;
+use gents_store::config_client::ConfigAccess;
 
 pub async fn apply_plan(
     access: &ConfigAccess,
@@ -24,7 +24,7 @@ pub async fn apply_plan(
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await?;
                 Ok(())
@@ -55,7 +55,7 @@ pub async fn delete_scoped_document(
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await?;
                 Ok(usize::from(existed))

@@ -1,5 +1,5 @@
 use super::*;
-use gents::request::lifecycle::RequestTerminalOutcome;
+use gents_session::request::lifecycle::RequestTerminalOutcome;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
@@ -369,7 +369,7 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
                     .agent_access
                     .transact_write("test.supersede_before_workspace_binding", |txn| {
                         Box::pin(async move {
-                            gents::__test_internals::supersede_trigger_requests_in_txn(
+                            gents_automation::triggers::engine::durable::supersede_trigger_requests_in_txn(
                                 txn,
                                 node_did,
                                 "conformance-trigger",
@@ -399,12 +399,12 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
                         .state("pending")
                     })
                     .await;
-                gents::__test_internals::reconcile_coalesced_pending_request_for_with_access(
+                gents_session::request::lifecycle::queue::reconcile_coalesced_pending_request_for_with_access(
                     (&db.node, &actors.agent_access),
                     actors.agent_did(),
                     &session_id,
                     actors.node_did(),
-                    gents::__test_internals::QueueSource::User,
+                    gents_session::request::lifecycle::queue::QueueSource::User,
                     &key,
                     None,
                 )
@@ -473,7 +473,7 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
                     )
                     .await
                     .unwrap(),
-                    gents::request::lifecycle::TerminalizeResult::Won
+                    gents_session::request::lifecycle::TerminalizeResult::Won
                 );
             } else if action != "parkBackendClosed" {
                 drop(lifecycle);
@@ -515,7 +515,7 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
                             )
                             .await
                             .unwrap(),
-                        gents::request::lifecycle::TerminalizeResult::Won
+                        gents_session::request::lifecycle::TerminalizeResult::Won
                     );
                 }
             }
@@ -733,7 +733,7 @@ async fn scoped_matrix_request(
 
 fn scoped_matrix_lifecycle(
     db: &support::TestDb,
-    agent: &dyn gents::NodeIdentity,
+    agent: &dyn gents_store::identity::NodeIdentity,
     doc_id: String,
     request_id: String,
     session_id: String,
@@ -831,7 +831,7 @@ async fn production_request_writers_only_reach_contracted_edges() {
             }
 
             if start == "processing" && matches!(writer, "complete" | "fail" | "interrupt") {
-                let writer = gents::DefraStreamWriter::new_managed(
+                let writer = gents_session::request::streaming::DefraStreamWriter::new_managed(
                     db.node.clone(),
                     agent.as_ref(),
                     Duration::ZERO,
@@ -891,7 +891,7 @@ async fn production_request_writers_only_reach_contracted_edges() {
                     let _ = lifecycle.claim().await;
                 }
                 "begin_execution" => {
-                    let writer = gents::DefraStreamWriter::new_managed(
+                    let writer = gents_session::request::streaming::DefraStreamWriter::new_managed(
                         db.node.clone(),
                         agent.as_ref(),
                         Duration::ZERO,
@@ -935,15 +935,15 @@ async fn production_request_writers_only_reach_contracted_edges() {
                     .await;
                 }
                 "coalesce_pending" => {
-                    let _ = gents::__test_internals::reconcile_coalesced_pending_request_for_with_access(
+                    let _ = gents_session::request::lifecycle::queue::reconcile_coalesced_pending_request_for_with_access(
                         (&db.node, &access), agent.did(), &session_id, db.node_identity.did(),
-                        gents::__test_internals::QueueSource::User, "conformance-key", None,
+                        gents_session::request::lifecycle::queue::QueueSource::User, "conformance-key", None,
                     )
                     .await;
                 }
                 "bind_workspace" => {
                     let _ =
-                        gents::__test_internals::activate_workspace_bound_request_with_identity(
+                        gents_session::request::lifecycle::materialize::activate_workspace_bound_request_with_identity(
                             &db.node,
                             &doc_id,
                             ::identity::Did::new(agent.did()).unwrap(),
@@ -1042,7 +1042,7 @@ async fn interactive_claim_snapshot_matches_claimed_waiting() {
             retry_root_request: request_id.clone(),
             superseded_by_request: "".into(),
             retry_count: 0,
-            max_retries: gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
+            max_retries: gents_session::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
             failure_reason: "".into(),
@@ -1133,7 +1133,7 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
             retry_root_request: request_id.clone(),
             superseded_by_request: "".into(),
             retry_count: 0,
-            max_retries: gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
+            max_retries: gents_session::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
             failure_reason: "".into(),
@@ -1198,7 +1198,7 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
             retry_root_request: request_id.clone(),
             superseded_by_request: "".into(),
             retry_count: 0,
-            max_retries: gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
+            max_retries: gents_session::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
             failure_reason: "".into(),
@@ -1218,7 +1218,7 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
     let db = support::test_db("scheduled-materialize").await;
     let fixture = support::managed_agent_fixture(&db).await;
     let agent = &fixture.agent;
-    let access = gents::ConfigAccess::local_managed_agent(
+    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
         db.node.clone(),
         agent.did().parse().unwrap(),
         agent.as_ref(),
@@ -1249,7 +1249,7 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
             retry_root_request: lifecycle.request().request_id.clone(),
             superseded_by_request: "".into(),
             retry_count: 0,
-            max_retries: gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
+            max_retries: gents_session::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
             failure_reason: "".into(),
@@ -1273,7 +1273,7 @@ async fn scheduled_materialization_persists_trigger_lineage() {
     let db = support::test_db("scheduled-materialize-lineage").await;
     let fixture = support::managed_agent_fixture(&db).await;
     let agent = &fixture.agent;
-    let access = gents::ConfigAccess::local_managed_agent(
+    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
         db.node.clone(),
         agent.did().parse().unwrap(),
         agent.as_ref(),
@@ -1783,9 +1783,13 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
     .await;
     assert_pre_queue_snapshot(case, &pre);
 
-    gents::interrupt_request(&db.node, actors.agent().as_ref(), parent_request_id)
-        .await
-        .unwrap();
+    gents_session::request::interrupt::interrupt_request(
+        &db.node,
+        actors.agent().as_ref(),
+        parent_request_id,
+    )
+    .await
+    .unwrap();
 
     let post = fetch_queue_runtime_snapshot(
         &actors,
@@ -1978,7 +1982,7 @@ async fn terminal_repair_sweep_ignores_foreign_did_claims() {
     let value = json!({
         "request_id": foreign_request_id,
         "purpose": "normal",
-        "node_did": gents::NodeIdentity::did(&foreign),
+        "node_did": gents_store::identity::NodeIdentity::did(&foreign),
         "agent_did": actors.agent_did(),
         "session_id": uuid::Uuid::new_v4().to_string(),
         "retry_root_request": foreign_request_id,
@@ -1990,7 +1994,7 @@ async fn terminal_repair_sweep_ignores_foreign_did_claims() {
         "max_retries": 3,
     });
     let agent = ::identity::Did::new(actors.agent_did()).unwrap();
-    let foreign_doc = gents::ConfigAccess::local_as(
+    let foreign_doc = gents_store::config_client::ConfigAccess::local_as(
         db.node.clone(),
         ::identity::Did::new(db.node_identity.did()).unwrap(),
     )
@@ -2003,7 +2007,7 @@ async fn terminal_repair_sweep_ignores_foreign_did_claims() {
                     &json!({"input": value}),
                 )
                 .await?;
-            let doc = gents::store::graphql::created_doc_id(&response, "AgentRequest")?;
+            let doc = gents_store::graphql::created_doc_id(&response, "AgentRequest")?;
             txn.add_actor_relationship("AgentRequest", &doc, "working_agent", agent)
                 .await?;
             Ok::<_, anyhow::Error>(doc)
@@ -2042,7 +2046,7 @@ async fn terminal_repair_sweep_ignores_foreign_did_claims() {
 }
 
 async fn fetch_request_snapshot_with_access(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     doc_id: &str,
 ) -> RequestSnapshot {
     let response = access
@@ -2062,7 +2066,7 @@ async fn fetch_request_snapshot_with_access(
 }
 
 async fn fetch_request_lineage_with_access(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     filter: &str,
 ) -> RequestLineageSnapshot {
     let response = access.execute(&format!(
@@ -2072,7 +2076,7 @@ async fn fetch_request_lineage_with_access(
 }
 
 async fn assert_session_observes_request_with_access(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     session_id: &str,
     request_id: &str,
     expected_observation: RequestLifecycleState,
@@ -2170,7 +2174,7 @@ async fn activate_workspace_fixture(
     actors: &support::agent_requests::RequestActors,
     doc_id: &str,
 ) -> anyhow::Result<()> {
-    gents::__test_internals::activate_workspace_bound_request_with_identity(
+    gents_session::request::lifecycle::materialize::activate_workspace_bound_request_with_identity(
         &actors.node,
         doc_id,
         actors.agent_did().parse()?,

@@ -1,12 +1,12 @@
 use anyhow::{ensure, Context, Result};
-use gents::documents::{
+use gents_documents::{
     patch::{SelfConfigPatch, SelfConfigTarget},
     read_desired_state_record_in_txn,
 };
-use gents::inference::backends::rotation::{
+use gents_inference::backends::rotation::{
     backend_pool_members, set_backend_rotation_in_txn, BackendRotation, RotationOutcome,
 };
-use gents::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use ts_rs::TS;
@@ -65,7 +65,7 @@ async fn read_in_txn(
         read_desired_state_record_in_txn(txn, target.collection(), node_did, id)
             .await?
             .context("This configuration no longer exists. Reopen Runtime Settings.")?;
-    let composite = gents::store::graphql::newest_document_composite_commit_in_txn(
+    let composite = gents_store::graphql::newest_document_composite_commit_in_txn(
         txn,
         &document_id,
         "client.settings.read",
@@ -110,7 +110,7 @@ const ACCOUNTS_POOL_CHANGED: &str = "Configuration changed since Accounts opened
 /// is never replayed after a conflict, so over the User's HTTP endpoint the
 /// loser sees the native conflict rather than a retried revision check.
 fn stale_on_conflict<T>(result: Result<T>, message: &'static str) -> Result<T> {
-    use gents::store::config_client::{ConfigClientError, TransactionFailure as _};
+    use gents_store::config_client::{ConfigClientError, TransactionFailure as _};
     result.map_err(|error| {
         if matches!(
             error.config_client_error(),
@@ -135,7 +135,7 @@ pub async fn read_backend_authentication_on(
     access: &ConfigAccess,
     node_did: &str,
     id: &str,
-) -> Result<(ConfigEditorRevision, gents::InferenceBackend)> {
+) -> Result<(ConfigEditorRevision, gents_documents::InferenceBackend)> {
     access
         .transact_readonly("client.backend.authentication.read", |txn| {
             Box::pin(async move {
@@ -154,7 +154,7 @@ pub async fn save_backend_authentication_on(
     node_did: &str,
     id: &str,
     expected: &ConfigEditorRevision,
-    auth: &gents::documents::BackendAuth,
+    auth: &gents_documents::BackendAuth,
 ) -> Result<()> {
     let patch = vec![("auth".to_owned(), Some(serde_json::to_value(auth)?))];
     stale_on_conflict(
@@ -299,8 +299,8 @@ pub async fn save_config_editor_on(
 mod tests {
     use super::*;
     use crate::test_fixtures::ServedRuntimeHome;
-    use gents::documents::apply_desired_state_plan;
-    use gents::documents::DesiredStateApplyPlan;
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::DesiredStateApplyPlan;
     use serde_json::json;
 
     /// The runtime and the User's access to it, with one API-key backend.
@@ -322,7 +322,7 @@ mod tests {
                     apply_desired_state_plan(
                         txn,
                         plan,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await?;
                     Ok::<_, anyhow::Error>(())
@@ -455,14 +455,14 @@ mod tests {
         let editor = runtime.node_did();
         let (revision, original) =
             read_backend_authentication_on(&access, editor, "backend").await?;
-        let replacement = gents::documents::BackendAuth::ApiKey {
+        let replacement = gents_documents::BackendAuth::ApiKey {
             key: "replacement-private-key".into(),
         };
         save_backend_authentication_on(&access, editor, "backend", &revision, &replacement).await?;
         let (current, saved) = read_backend_authentication_on(&access, editor, "backend").await?;
         assert!(matches!(
             saved.auth,
-            gents::documents::BackendAuth::Credential { .. }
+            gents_documents::BackendAuth::Credential { .. }
         ));
         let stored = saved.auth.clone();
         assert_ne!(
@@ -476,7 +476,7 @@ mod tests {
             editor,
             "backend",
             &revision,
-            &gents::documents::BackendAuth::Unauthenticated
+            &gents_documents::BackendAuth::Unauthenticated
         )
         .await
         .is_err());
@@ -496,15 +496,15 @@ mod tests {
     }
 
     async fn claude_backend(access: &ConfigAccess, editor: &str) -> Result<()> {
-        let backend: gents::InferenceBackend = serde_json::from_value(json!({
+        let backend: gents_documents::InferenceBackend = serde_json::from_value(json!({
             "node_did":editor,"backend_id":"claude","name":"Claude",
             "provider_kind":"ClaudeCliSubscription","endpoint":"claude-cli://subscription",
             "auth":{"kind":"node_oauth"}
         }))?;
-        gents::documents::write_inference_backend_document(
+        gents_documents::write_inference_backend_document(
             access,
             &backend,
-            &gents::inference::resolved::ProviderProfilePolicy,
+            &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await?;
         Ok(())
@@ -529,7 +529,7 @@ mod tests {
         .await?;
         assert_eq!(
             pool.backend.auth,
-            gents::documents::BackendAuth::NodeOAuthPool {
+            gents_documents::BackendAuth::NodeOAuthPool {
                 allow_overage: true
             }
         );
@@ -559,7 +559,7 @@ mod tests {
         .await?;
         assert_eq!(
             single.backend.auth,
-            gents::documents::BackendAuth::NodeOAuth { account_ref: None }
+            gents_documents::BackendAuth::NodeOAuth { account_ref: None }
         );
         assert!(single.members.is_empty());
         Ok(())
@@ -622,7 +622,7 @@ mod tests {
         assert_eq!(after, revision);
         assert!(matches!(
             stored.auth,
-            gents::documents::BackendAuth::Credential { .. }
+            gents_documents::BackendAuth::Credential { .. }
         ));
         let missing =
             set_backend_rotation_on(&access, did, "absent", None, BackendRotation::Single)

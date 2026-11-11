@@ -57,7 +57,7 @@ impl Stream for ObservedChanges {
 async fn notifications_without_a_held_agent_do_not_enter_the_command_retry_queue() {
     let temp = tempfile::tempdir().unwrap();
     let identity: Arc<dyn NodeIdentity> = Arc::new(
-        crate::store::identity::KeyIdentity::load_or_create(temp.path().join("node.key"), None)
+        gents_store::identity::KeyIdentity::load_or_create(temp.path().join("node.key"), None)
             .unwrap(),
     );
     let node = Arc::new(
@@ -67,7 +67,9 @@ async fn notifications_without_a_held_agent_do_not_enter_the_command_retry_queue
             .await
             .unwrap(),
     );
-    crate::ensure_runtime_schemas(&node).await.unwrap();
+    gents_store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     let changes = CommandKind::ALL
         .into_iter()
         .flat_map(|kind| {

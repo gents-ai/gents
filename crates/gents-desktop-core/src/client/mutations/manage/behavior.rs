@@ -1,12 +1,12 @@
 use anyhow::Result;
 #[cfg(test)]
-use gents::documents::apply_desired_state_plan;
+use gents_documents::apply_desired_state_plan;
 #[cfg(test)]
-use gents::documents::read_desired_state_record_in_txn;
-use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::store::collection::Collection;
-use gents::store::config_client::ConfigAccess;
-use gents::AgentDocument;
+use gents_documents::read_desired_state_record_in_txn;
+use gents_documents::Agent as AgentDocument;
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents_store::collection::Collection;
+use gents_store::config_client::ConfigAccess;
 
 #[cfg(test)]
 #[path = "behavior/client_signed_tests.rs"]
@@ -26,7 +26,7 @@ pub async fn upsert_agent_on(access: &ConfigAccess, document: &AgentDocument) ->
 pub(crate) async fn upsert_agent_with_publication_on(
     access: &ConfigAccess,
     document: &AgentDocument,
-    observer: std::sync::Arc<dyn gents::store::config_client::AgentPublicationObserver>,
+    observer: std::sync::Arc<dyn gents_store::config_client::AgentPublicationObserver>,
 ) -> Result<()> {
     let value = serde_json::to_value(document)?;
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
@@ -38,10 +38,10 @@ pub(crate) async fn upsert_agent_with_publication_on(
         .transact_write_with_agent_publication("desktop.agent.save", observer, |txn| {
             let plan = &plan;
             Box::pin(async move {
-                gents::documents::apply_desired_state_plan(
+                gents_documents::apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await?;
                 Ok(())
@@ -104,7 +104,7 @@ mod tests {
                     apply_desired_state_plan(
                         txn,
                         plan,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await?;
                     Ok::<_, anyhow::Error>(())
@@ -140,10 +140,10 @@ mod tests {
                 "node_did":owner, "backend_id":"backend", "name":"Backend",
                 "provider_kind":"OpenAiCompatible", "endpoint":"http://localhost:8000/v1", "auth":{"kind":"unauthenticated"}
             }))?;
-            gents::documents::write_inference_backend_document(
+            gents_documents::write_inference_backend_document(
                 &access,
                 &backend,
-                &gents::inference::resolved::ProviderProfilePolicy,
+                &gents_inference::resolved::ProviderProfilePolicy,
             )
             .await?;
             let profile = serde_json::from_value(json!({
@@ -182,7 +182,7 @@ mod tests {
                     apply_desired_state_plan(
                         txn,
                         plan,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await?;
                     Ok::<_, anyhow::Error>(())
@@ -211,7 +211,7 @@ mod tests {
                     apply_desired_state_plan(
                         txn,
                         plan,
-                        &gents::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await?;
                     Ok::<_, anyhow::Error>(())
@@ -246,7 +246,7 @@ mod tests {
                         apply_desired_state_plan(
                             txn,
                             &plan,
-                            &gents::inference::resolved::ProviderProfilePolicy,
+                            &gents_inference::resolved::ProviderProfilePolicy,
                         )
                         .await?;
                         Ok::<_, anyhow::Error>(())
@@ -259,7 +259,7 @@ mod tests {
                     &access,
                     alpha,
                     &[(
-                        gents::documents::patch::SelfConfigTarget::Agent,
+                        gents_documents::patch::SelfConfigTarget::Agent,
                         review.into(),
                         vec![("enabled".into(), Some(json!(false)))],
                     )],

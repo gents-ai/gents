@@ -1,0 +1,50 @@
+[package]
+name = "gents-documents"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Configuration documents and desired-state apply for Gents"
+
+[features]
+default = ["defra-node/http", "defra-node/p2p", "defra-node/wasmtime-runtime"]
+typescript = ["dep:ts-rs", "gents-loop/typescript", "gents-protocol/typescript", "gents-store/typescript"]
+live-e2e = ["gents-store/live-e2e"]
+test-home-guard = ["gents-store/test-home-guard"]
+test-fixtures = ["test-home-guard", "gents-store/test-fixtures"]
+
+[dependencies]
+gents-store.workspace = true
+acp.workspace = true
+schema.workspace = true
+db.workspace = true
+rapidhash = { workspace = true }
+ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat", "no-serde-warnings"] }
+anyhow.workspace = true
+async-trait = "0.1"
+chrono.workspace = true
+chrono-tz.workspace = true
+defra-core.workspace = true
+gents-loop = { workspace = true, features = ["native"] }
+gents-protocol.workspace = true
+defra-node.workspace = true
+identity.workspace = true
+minijinja.workspace = true
+query.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_path_to_error = "0.1"
+serde_yaml.workspace = true
+schemars = "1"
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
+tempfile = "3"
+
+[dev-dependencies]
+gents-store = { workspace = true, features = ["test-fixtures"] }
+gents-lean-vocab.workspace = true

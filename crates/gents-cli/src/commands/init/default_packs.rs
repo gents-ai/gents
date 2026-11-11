@@ -125,7 +125,7 @@ fn scope(home: &Path) -> ScopeArgs {
     }
 }
 
-async fn release(access: gents::ConfigAccess) {
+async fn release(access: gents_store::config_client::ConfigAccess) {
     if let Some(node) = access.local_node() {
         if let Err(error) = node.shutdown().await {
             tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
@@ -235,7 +235,10 @@ pub(crate) enum PackState {
 /// The Engineer of `home`'s node: its default agent, when that agent is the
 /// Engineer. `None` on a home with another default agent, which has no
 /// default packs.
-async fn engineer_of(access: &gents::ConfigAccess, owner: &str) -> Result<Option<String>> {
+async fn engineer_of(
+    access: &gents_store::config_client::ConfigAccess,
+    owner: &str,
+) -> Result<Option<String>> {
     let Ok(agent) = crate::commands::start::default_agent(access, owner).await else {
         return Ok(None);
     };
@@ -244,14 +247,14 @@ async fn engineer_of(access: &gents::ConfigAccess, owner: &str) -> Result<Option
         "Agent",
         &format!(
             r#"{{ Agent(filter: {{agent_did: {{_eq: "{}"}}}}, limit: 1) {{ tags }} }}"#,
-            gents::store::graphql::escape_graphql_string(&agent)
+            gents_store::graphql::escape_graphql_string(&agent)
         ),
     )
     .await?;
     let engineer = rows.first().is_some_and(|row| {
         row["tags"].as_array().is_some_and(|tags| {
             tags.iter().any(|tag| {
-                tag.as_str() == Some(gents::tools::builtin::self_config::ENGINEER_AGENT_TAG)
+                tag.as_str() == Some(gents_tools::builtin::self_config::ENGINEER_AGENT_TAG)
             })
         })
     });
@@ -262,14 +265,14 @@ async fn engineer_of(access: &gents::ConfigAccess, owner: &str) -> Result<Option
 /// way an approval leaves it: every plugin selected, with the consents its
 /// pack's approval carries, and every skill attached.
 async fn installed_as_approved(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     owner: &str,
     pack: &str,
-    record: &gents::pack::HomePackInstall,
-    context: &gents::documents::AgentContext,
-    tools: &gents::documents::Tools,
+    record: &gents_pack::pack::HomePackInstall,
+    context: &gents_documents::AgentContext,
+    tools: &gents_documents::Tools,
 ) -> Result<bool> {
-    let (namespace, _) = gents::pack::registry::split_pack_coordinate(pack);
+    let (namespace, _) = gents_pack::pack::registry::split_pack_coordinate(pack);
     let selected: Vec<_> = tools
         .integrations
         .iter()
@@ -292,11 +295,13 @@ async fn installed_as_approved(
             return Ok(false);
         }
     }
-    Ok(gents::pack::installed_pack_documents(access, owner, pack)
-        .await?
-        .into_iter()
-        .filter(|(collection, _)| *collection == gents::store::collection::Collection::Skill)
-        .all(|(_, skill)| context.skill_ids.contains(&skill)))
+    Ok(
+        gents_pack::pack::installed_pack_documents(access, owner, pack)
+            .await?
+            .into_iter()
+            .filter(|(collection, _)| *collection == gents_store::collection::Collection::Skill)
+            .all(|(_, skill)| context.skill_ids.contains(&skill)),
+    )
 }
 
 /// Each of `packs` as `home` has it, read through whatever serves the home:
@@ -316,8 +321,7 @@ pub(crate) async fn status(
             .transact_readonly("cli.default_packs.status", |txn| {
                 let (owner, engineer) = (&owner, &engineer);
                 Box::pin(async move {
-                    gents::documents::load_agent_context_and_tools_in_txn(txn, owner, engineer)
-                        .await
+                    gents_documents::load_agent_context_and_tools_in_txn(txn, owner, engineer).await
                 })
             })
             .await?;
@@ -325,7 +329,7 @@ pub(crate) async fn status(
         let tools = tools.context("the Engineer has no Tools document")?;
         let mut installed = Vec::new();
         for pack in packs {
-            installed.push(match gents::pack::read_home_install(home, pack)? {
+            installed.push(match gents_pack::pack::read_home_install(home, pack)? {
                 Some(record) => {
                     installed_as_approved(&access, &owner, pack, &record, &context, &tools)
                         .await?
@@ -558,7 +562,7 @@ async fn install_one(
     // One held access installs the pack, wires its plugins and attaches its
     // skills, and its node is drained before the next pack opens the home.
     let (access, owner) = command::resolve_scope_owner(&scope(home)).await?;
-    let already = gents::pack::read_home_install(home, &coordinate)?
+    let already = gents_pack::pack::read_home_install(home, &coordinate)?
         .is_some_and(|record| record.digest == source.digest());
     let installed = if already {
         Ok(())
@@ -668,7 +672,7 @@ pub(crate) async fn starter(args: crate::cli::PackStarterArgs) -> Result<()> {
 /// caller's; the Engineer's pack authority is what grants it (Lean
 /// `installerProvenance`), so the install records `operator`.
 async fn install_as_engineer(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     owner: &str,
     home: &Path,
     engineer: &str,
@@ -685,22 +689,22 @@ async fn install_as_engineer(
 
 /// The Agent document's identity binding, read as the node that owns it.
 async fn agent_identity_binding(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     owner: &str,
     agent_did: &str,
 ) -> Result<gents_protocol::agent_identity::AgentIdentityBinding> {
     access
         .transact_readonly("cli.init.agent_binding", |txn| {
             Box::pin(async move {
-                let (_, value) = gents::documents::read_desired_state_record_in_txn(
+                let (_, value) = gents_documents::read_desired_state_record_in_txn(
                     txn,
-                    gents::Collection::Agent,
+                    gents_store::collection::Collection::Agent,
                     owner,
                     agent_did,
                 )
                 .await?
                 .with_context(|| format!("agent {agent_did:?} missing for {owner:?}"))?;
-                let agent: gents::documents::Agent = serde_json::from_value(value)?;
+                let agent: gents_documents::Agent = serde_json::from_value(value)?;
                 Ok(agent.identity_binding())
             })
         })
@@ -710,12 +714,12 @@ async fn agent_identity_binding(
 /// The config tool as the runtime gives it to the Engineer `engineer`, with
 /// the grants its own Tools hold. `access` holds the home's node.
 async fn engineer_config(
-    access: &gents::ConfigAccess,
+    access: &gents_store::config_client::ConfigAccess,
     owner: &str,
     home: &Path,
     engineer: &str,
-) -> Result<Box<dyn gents::inference::llm::tool::ToolDyn>> {
-    use gents::tools::builtin::self_config;
+) -> Result<Box<dyn gents_loop::tool::ToolDyn>> {
+    use gents_tools::builtin::self_config;
     let node = access
         .local_node()
         .context("a runtime is serving this home; ask its Engineer to install the pack")?
@@ -723,11 +727,11 @@ async fn engineer_config(
     let stored = crate::home_state::read_init_config(home)?.context("home is not initialized")?;
     let runtime = crate::home_state::load_initialized_home_identity(home, &stored)?;
     let binding = agent_identity_binding(access, owner, engineer).await?;
-    let agent = gents::store::identity::resolve_agent_identity(runtime.as_ref(), &binding)?;
+    let agent = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding)?;
     let held = access
         .transact_readonly("cli.init.engineer_grants", |txn| {
             Box::pin(async move {
-                gents::documents::load_agent_context_and_tools_in_txn(txn, owner, engineer).await
+                gents_documents::load_agent_context_and_tools_in_txn(txn, owner, engineer).await
             })
         })
         .await?
@@ -739,7 +743,7 @@ async fn engineer_config(
         node,
         agent,
         runtime,
-        &gents::tools::surface::SelfConfigToolConfig {
+        &gents_tools::surface::SelfConfigToolConfig {
             enabled: held.enable_self_config.unwrap_or(false),
             agent_did: engineer.to_owned(),
             categories: held
@@ -753,9 +757,9 @@ async fn engineer_config(
             enable_pack_authority: held.enable_pack_authority.unwrap_or(false),
             ..Default::default()
         },
-        std::sync::Arc::new(gents::plugin::executor::PluginExecutor::new(Some(
-            home.to_owned(),
-        ))),
+        std::sync::Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(
+            Some(home.to_owned()),
+        )),
     )
     .await?
     .into_iter()
@@ -890,8 +894,11 @@ mod tests {
             &[("plugins/fetch.afb", afb)],
         );
         for dir in [&skills, &tools] {
-            gents::pack::local::open(&gents::pack::local::LocalName::Path(dir), home.path())
-                .unwrap();
+            gents_pack::pack::local::open(
+                &gents_pack::pack::local::LocalName::Path(dir),
+                home.path(),
+            )
+            .unwrap();
         }
         let names = [
             "fixture/engineer_skills",
@@ -933,7 +940,7 @@ mod tests {
             "{report}"
         );
         assert!(
-            gents::plugin::store::read_record(home.path(), "fixture", "fetch").is_err(),
+            gents_pack::plugin::store::read_record(home.path(), "fixture", "fetch").is_err(),
             "nothing is granted without approval"
         );
         let documents = engineer_documents(home.path()).await;
@@ -993,7 +1000,7 @@ mod tests {
                 .contains("not the expected sha256:other"),
             "{other}"
         );
-        assert!(gents::plugin::store::read_record(home.path(), "fixture", "fetch").is_err());
+        assert!(gents_pack::plugin::store::read_record(home.path(), "fixture", "fetch").is_err());
 
         // An install whose wiring fails leaves the pack waiting, and
         // approving it again finishes it.
@@ -1009,7 +1016,7 @@ mod tests {
             "{half}"
         );
         assert!(
-            gents::pack::read_home_install(home.path(), "fixture/engineer_tools")
+            gents_pack::pack::read_home_install(home.path(), "fixture/engineer_tools")
                 .unwrap()
                 .is_some()
         );
@@ -1031,7 +1038,8 @@ mod tests {
                 "{report}"
             );
         }
-        let record = gents::plugin::store::read_record(home.path(), "fixture", "fetch").unwrap();
+        let record =
+            gents_pack::plugin::store::read_record(home.path(), "fixture", "fetch").unwrap();
         assert!(
             record.granted.is_some(),
             "the approval is the recorded grant"
@@ -1066,7 +1074,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let packs = tempfile::tempdir().unwrap();
         for pack in ENGINEER_DEFAULT_PACKS {
-            let (namespace, name) = gents::pack::registry::split_pack_coordinate(pack);
+            let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(pack);
             let dir = packs.path().join(name);
             write_pack(
                 &dir,
@@ -1088,8 +1096,11 @@ mod tests {
                     .unwrap(),
                 )],
             );
-            gents::pack::local::open(&gents::pack::local::LocalName::Path(&dir), home.path())
-                .unwrap();
+            gents_pack::pack::local::open(
+                &gents_pack::pack::local::LocalName::Path(&dir),
+                home.path(),
+            )
+            .unwrap();
         }
         let cli = crate::cli::Cli::try_parse_from([
             "gents",
@@ -1212,7 +1223,11 @@ mod tests {
                 ),
             ],
         );
-        gents::pack::local::open(&gents::pack::local::LocalName::Path(&crew), home.path()).unwrap();
+        gents_pack::pack::local::open(
+            &gents_pack::pack::local::LocalName::Path(&crew),
+            home.path(),
+        )
+        .unwrap();
 
         let report = install(
             home.path(),
@@ -1228,11 +1243,11 @@ mod tests {
             "{report}"
         );
         assert_eq!(
-            gents::pack::read_home_install(home.path(), "fixture/crew")
+            gents_pack::pack::read_home_install(home.path(), "fixture/crew")
                 .unwrap()
                 .unwrap()
                 .installed_via,
-            Some(gents::pack::InstalledVia::Operator),
+            Some(gents_pack::pack::InstalledVia::Operator),
             "an install under the Engineer's pack authority records operator"
         );
 
@@ -1265,17 +1280,17 @@ mod tests {
             .await
             .unwrap();
         let worker_identity =
-            gents::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
-        let as_worker = gents::ConfigAccess::local_managed_agent(
+            gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
+        let as_worker = gents_store::config_client::ConfigAccess::local_managed_agent(
             node,
             identity::Did::new(&worker).unwrap(),
             worker_identity.as_ref(),
         )
         .unwrap();
-        let reader = gents::tools::surface::agent_tool_root_reader(&as_worker, &owner, &worker)
+        let reader = gents_tools::surface::agent_tool_root_reader(&as_worker, &owner, &worker)
             .await
             .unwrap();
-        let gents::tools::surface::ToolRootReader::Published(published) = reader else {
+        let gents_tools::surface::ToolRootReader::Published(published) = reader else {
             panic!("the pack's agent reads no published root covering its tool root: {reader:?}")
         };
         assert_eq!(granted[0]["reader_on"], published.as_str(), "{report}");
@@ -1401,11 +1416,11 @@ mod tests {
             "only the Engineer's own target is left: {targets}"
         );
         assert!(
-            gents::plugin::store::read_record(home.path(), "fixture", "probe").is_err(),
+            gents_pack::plugin::store::read_record(home.path(), "fixture", "probe").is_err(),
             "the retired plugin has no record: {removed}"
         );
         assert_eq!(
-            gents::pack::read_home_install(home.path(), "fixture/crew").unwrap(),
+            gents_pack::pack::read_home_install(home.path(), "fixture/crew").unwrap(),
             None,
             "{removed}"
         );
@@ -1475,8 +1490,11 @@ mod tests {
                 }),
                 &[("plugins/script.afb", afb.clone())],
             );
-            gents::pack::local::open(&gents::pack::local::LocalName::Path(&script), home.path())
-                .unwrap();
+            gents_pack::pack::local::open(
+                &gents_pack::pack::local::LocalName::Path(&script),
+                home.path(),
+            )
+            .unwrap();
             let report = install(
                 home.path(),
                 &engineer,

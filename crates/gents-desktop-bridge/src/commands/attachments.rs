@@ -122,15 +122,18 @@ mod tests {
         );
         create.input.attachments = vec![image.clone()];
         create.session_doc_id = Some(
-            gents::request::lifecycle::reserve_goal_session(&access, &create)
+            gents_session::request::lifecycle::reserve_goal_session(&access, &create)
                 .await
                 .unwrap(),
         );
         create.agent_doc_id = Some(runtime.agent_doc_id(&agent).await);
-        gents::sign_agent_request_create(core.node_identity(), &mut create)
-            .await
-            .unwrap();
-        gents::request::lifecycle::submit_client_request(&access, &create)
+        gents_session::request::admission::sign_agent_request_create(
+            core.node_identity(),
+            &mut create,
+        )
+        .await
+        .unwrap();
+        gents_session::request::lifecycle::submit_client_request(&access, &create)
             .await
             .unwrap();
         core.refresh_store().await.unwrap();

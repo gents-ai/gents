@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::runtime::agent::reconcile::SlotFailurePolicy as _;
 use crate::runtime::node_readiness_publisher::{FatalNodeReadinessWrite, NodeReadinessWriter};
-use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
+use gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 
 use super::*;
 
@@ -30,17 +30,19 @@ impl NodeReadinessWriter for FailDemotionWriter {
 #[tokio::test]
 async fn aborted_staged_generation_does_not_release_active_startup_obligation() {
     let node = Arc::new(
-        crate::store::test_support::node_builder()
+        gents_store::test_support::node_builder()
             .build()
             .await
             .unwrap(),
     );
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    gents_store::schema::ensure_runtime_schemas(node.as_ref())
+        .await
+        .unwrap();
     let node_did = node
         .node_identity_did()
         .expect("fixture node has an identity")
         .to_owned();
-    crate::test_support::documents::ensure_test_node(&node, &node_did).await;
+    gents_documents::test_support::ensure_test_node(&node, &node_did).await;
     let (status_owner, runtime_status) = RuntimeStatusHandle::start(node.clone(), node_did);
     runtime_status.initialize_startup("general").await.unwrap();
     let barrier = Arc::new(StartupBarrier::ready_for_test());
@@ -81,12 +83,14 @@ async fn aborted_staged_generation_does_not_release_active_startup_obligation() 
 #[tokio::test]
 async fn demotion_persistence_failure_closes_admission_and_cancels_runtime() {
     let node = Arc::new(
-        crate::store::test_support::node_builder()
+        gents_store::test_support::node_builder()
             .build()
             .await
             .unwrap(),
     );
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    gents_store::schema::ensure_runtime_schemas(node.as_ref())
+        .await
+        .unwrap();
     let (status_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
         node.clone(),
         "did:test:demotion-fail-closed",

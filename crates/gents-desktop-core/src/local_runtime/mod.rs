@@ -29,7 +29,7 @@ use self::http::{http_get_json, p2p_api_base, read_json};
 use self::identity::{normalize_optional_string, resolve_p2p_peer_id};
 
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
-const RUNTIME_STATE_FILE_NAME: &str = gents::store::local::home::RUNTIME_STATE_FILE_NAME;
+const RUNTIME_STATE_FILE_NAME: &str = gents_store::local::home::RUNTIME_STATE_FILE_NAME;
 const LOCAL_STANDARD_SOURCE: &str = "local-standard";
 /// The recorded runtime endpoint may be stale or unresponsive.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -49,7 +49,7 @@ impl OperatorIdentityInteraction {
     pub(crate) fn runtime_endpoint(
         self,
         record: &crate::client::PeerRecord,
-    ) -> Option<gents::store::config_client::GraphqlEndpoint> {
+    ) -> Option<gents_store::config_client::GraphqlEndpoint> {
         match self {
             Self::Allow => runtime_operator_endpoint(record),
             Self::Prevent => cached_runtime_operator_endpoint(record),
@@ -126,10 +126,10 @@ struct StoredInitConfig {
 /// endpoint never opens the co-hosted runtime key or substitutes its authority.
 pub fn operator_endpoint(
     record: &crate::client::PeerRecord,
-    capability: &gents::store::config_client::ClientSigningCapability,
-) -> Option<gents::store::config_client::GraphqlEndpoint> {
+    capability: &gents_store::config_client::ClientSigningCapability,
+) -> Option<gents_store::config_client::GraphqlEndpoint> {
     let url = record.operator_graphql()?;
-    gents::store::config_client::GraphqlEndpoint::as_principal(url, capability.did())
+    gents_store::config_client::GraphqlEndpoint::as_principal(url, capability.did())
         .with_client_signing_capability(capability.clone())
         .ok()
 }
@@ -144,11 +144,11 @@ pub fn operator_endpoint(
 /// calls fail with the node's authorization error.
 pub fn runtime_operator_endpoint(
     record: &crate::client::PeerRecord,
-) -> Option<gents::store::config_client::GraphqlEndpoint> {
+) -> Option<gents_store::config_client::GraphqlEndpoint> {
     let url = record.operator_graphql()?;
     Some(match load_operator_node_identity(record) {
         Ok(capability) => {
-            gents::store::config_client::GraphqlEndpoint::as_principal(url, &record.node_did)
+            gents_store::config_client::GraphqlEndpoint::as_principal(url, &record.node_did)
                 .with_client_signing_capability(capability)
                 .ok()?
         }
@@ -158,7 +158,7 @@ pub fn runtime_operator_endpoint(
                 error = %format!("{error:#}"),
                 "runtime node identity key unavailable; using anonymous operator access"
             );
-            gents::store::config_client::GraphqlEndpoint::anonymous(url)
+            gents_store::config_client::GraphqlEndpoint::anonymous(url)
         }
     })
 }
@@ -166,14 +166,14 @@ pub fn runtime_operator_endpoint(
 /// Background observation does not unlock or reconstruct a runtime identity.
 pub fn cached_runtime_operator_endpoint(
     record: &crate::client::PeerRecord,
-) -> Option<gents::store::config_client::GraphqlEndpoint> {
+) -> Option<gents_store::config_client::GraphqlEndpoint> {
     let url = record.operator_graphql()?;
-    Some(gents::store::config_client::GraphqlEndpoint::anonymous(url))
+    Some(gents_store::config_client::GraphqlEndpoint::anonymous(url))
 }
 
 fn load_operator_node_identity(
     record: &crate::client::PeerRecord,
-) -> Result<gents::store::config_client::ClientSigningCapability> {
+) -> Result<gents_store::config_client::ClientSigningCapability> {
     let identity = runtime_operator_signer(record)?;
     Ok(identity.client_signing_capability()?)
 }
@@ -215,7 +215,7 @@ pub fn hosted_runtime_home(record: &crate::client::PeerRecord) -> Result<&Path> 
 /// Signs the operator commands the co-hosted runtime's HTTP routes take.
 pub fn runtime_operator_signer(
     record: &crate::client::PeerRecord,
-) -> Result<Arc<dyn gents::store::identity::NodeIdentity>> {
+) -> Result<Arc<dyn gents_store::identity::NodeIdentity>> {
     let identity = load_standard_runtime_identity(hosted_runtime_home(record)?)?;
     anyhow::ensure!(
         identity.did() == record.node_did,
@@ -226,12 +226,12 @@ pub fn runtime_operator_signer(
 
 pub(crate) fn load_standard_runtime_identity(
     node_home: &Path,
-) -> Result<Arc<dyn gents::store::identity::NodeIdentity>> {
-    use gents::store::identity::{
+) -> Result<Arc<dyn gents_store::identity::NodeIdentity>> {
+    use gents_store::identity::{
         load_macos_keychain_identity, load_macos_secure_enclave_identity, KeyIdentity,
     };
     let config = read_json::<StoredInitConfig>(&node_home.join(INIT_CONFIG_FILE_NAME))?;
-    let identity: Arc<dyn gents::store::identity::NodeIdentity> = if let Some(path) = config
+    let identity: Arc<dyn gents_store::identity::NodeIdentity> = if let Some(path) = config
         .key_path
         .as_deref()
         .map(str::trim)
@@ -303,7 +303,7 @@ struct GraphqlResponse {
 }
 
 pub fn default_node_home() -> Result<PathBuf> {
-    Ok(gents::store::local::home::default_home_dir()?)
+    Ok(gents_store::local::home::default_home_dir()?)
 }
 
 fn has_http_scheme(endpoint: &str) -> bool {
@@ -424,7 +424,7 @@ pub enum HostedRuntimeStatusError {
 /// as its caller). The co-hosted runtime's node key is never loaded.
 pub async fn fetch_hosted_runtime_status(
     record: &crate::client::PeerRecord,
-    user: Option<&gents::store::config_client::ClientSigningCapability>,
+    user: Option<&gents_store::config_client::ClientSigningCapability>,
 ) -> Result<Option<Value>, HostedRuntimeStatusError> {
     if record.operator_graphql().is_none() {
         return Ok(None);
@@ -452,9 +452,9 @@ pub async fn hosted_status_signer(
     desktop: &DesktopPaths,
     node_did: Option<&str>,
     peers: &[crate::client::PeerRecord],
-    running: Option<gents::store::config_client::ClientSigningCapability>,
-) -> Option<gents::store::config_client::ClientSigningCapability> {
-    use gents::store::identity::NodeIdentity as _;
+    running: Option<gents_store::config_client::ClientSigningCapability>,
+) -> Option<gents_store::config_client::ClientSigningCapability> {
+    use gents_store::identity::NodeIdentity as _;
     let desktop_enrolled = node_did.is_some_and(|node_did| {
         peers
             .iter()
@@ -489,7 +489,7 @@ pub async fn hosted_status_signer(
 /// Observe the selected runtime using the caller's existing HTTP identity.
 /// A response from another node cannot establish liveness for this target.
 pub async fn fetch_runtime_status_for_node(
-    endpoint: &gents::store::config_client::GraphqlEndpoint,
+    endpoint: &gents_store::config_client::GraphqlEndpoint,
     node_did: &str,
 ) -> Result<Value> {
     match read_runtime_status(endpoint, node_did).await? {
@@ -510,7 +510,7 @@ enum RuntimeStatusRead {
 }
 
 async fn read_runtime_status(
-    endpoint: &gents::store::config_client::GraphqlEndpoint,
+    endpoint: &gents_store::config_client::GraphqlEndpoint,
     node_did: &str,
 ) -> Result<RuntimeStatusRead> {
     anyhow::ensure!(
@@ -606,12 +606,12 @@ pub fn dangerously_overwrite_desktop_home(desktop_root: &Path) -> Result<()> {
 
 pub fn reset_desktop_runtime_state(paths: &DesktopPaths) -> Result<bool> {
     let node_data_dir = [paths.node_data_dir().to_path_buf()];
-    let cleared = gents::store::local::home::retire_entries(
-        &[gents::store::local::home::RetireGroup {
+    let cleared = gents_store::local::home::retire_entries(
+        &[gents_store::local::home::RetireGroup {
             name: "desktop",
             entries: &node_data_dir,
         }],
-        gents::store::local::home::RetireDisposition::Delete,
+        gents_store::local::home::RetireDisposition::Delete,
     )
     .with_context(|| {
         format!(

@@ -1,11 +1,11 @@
-use gents::store::config_client::GraphqlEndpoint;
+use gents_store::config_client::GraphqlEndpoint;
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use gents::store::graphql::escape_graphql_string;
 use gents_protocol::row::{ToolServiceHealthStateRow, ToolServiceRegistryRow};
 use gents_protocol::tool_service_health::{ToolServiceHealthProjection, ToolServiceHealthState};
+use gents_store::graphql::escape_graphql_string;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

@@ -1,9 +1,9 @@
 use std::time::Duration;
 
-use gents::goal::{load_canonical_goal_in_txn, set_goal};
-use gents::store::graphql::escape_graphql_string;
+use gents_automation::goal::{load_canonical_goal_in_txn, set_goal};
 use gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME;
 use gents_protocol::goal_status::GoalStatus;
+use gents_store::graphql::escape_graphql_string;
 use serde::Deserialize;
 
 use crate::support::agent_requests::canonical_now;

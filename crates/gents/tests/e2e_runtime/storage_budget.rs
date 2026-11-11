@@ -15,8 +15,10 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use gents::inference::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
-use gents::{CompactionStrategy, ConfigAccess, NodeIdentity, ToolCeiling};
+use gents_inference::compaction::CompactionStrategy;
+use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
+use gents_store::{config_client::ConfigAccess, identity::NodeIdentity};
+use gents_tools::surface::ToolCeiling;
 use serde_json::Value;
 
 use crate::support::agent_requests::RequestActors;
@@ -393,7 +395,7 @@ fn assert_transcripts_reconstruct_streams(transcripts: &[String]) {
 async fn load_transcripts(actors: &RequestActors, node_did: &str) -> Vec<String> {
     let mut transcripts = Vec::new();
     for session in 0..SESSIONS {
-        let messages = gents::observe::trace_export::load_trace_transcript(
+        let messages = gents_observe::observe::trace_export::load_trace_transcript(
             &actors.agent_access,
             &session_id(session),
             node_did,

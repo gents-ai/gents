@@ -2,15 +2,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use gents::inference::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
-use gents::inference::rendered_request::{decode_capture_json, CapturePayloadKind};
-use gents::request::lifecycle::{
-    pending_user_queue, submit_pending_user_edit, PendingMessageEdit, PendingQueueEdit,
-};
-use gents::store::graphql::escape_graphql_string;
-use gents::{Gents, NodeIdentity, ReasoningEffort, SamplingConfig, ToolCeiling};
+use gents::Gents;
+use gents_documents::inference_defaults::ReasoningEffort;
+use gents_inference::rendered_request::{decode_capture_json, CapturePayloadKind};
+use gents_inference::resolved::SamplingConfig;
+use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_input::QueueDelivery;
+use gents_session::request::lifecycle::{
+    pending_user_queue, submit_pending_user_edit, PendingMessageEdit, PendingQueueEdit,
+};
+use gents_store::graphql::escape_graphql_string;
+use gents_store::identity::NodeIdentity;
+use gents_tools::surface::ToolCeiling;
 use tokio::sync::Notify;
 
 use crate::support::agent_requests::{submit_user_request, RequestActors};
@@ -88,7 +92,7 @@ async fn live_steering_edits_reorders_and_removes_before_same_request_continues(
     // The builder runtime admits only a probed backend; the live target was
     // just checked reachable, so its User records the probe result.
     target.assert_reachable().await;
-    gents::inference::backends::registry::set_backend_probe_status_as(
+    gents_inference::backends::registry::set_backend_probe_status_as(
         &access,
         did,
         target.backend_id(),
@@ -112,7 +116,7 @@ async fn live_steering_edits_reorders_and_removes_before_same_request_continues(
     access
         .transact_write("test.live_steering.title", |txn| {
             Box::pin(async move {
-                gents::session::apply_title_in_txn(
+                gents_session::session::apply_title_in_txn(
                     txn,
                     did,
                     Some(user_did),

@@ -46,7 +46,7 @@ pub(crate) async fn provision(
             )
         }
     };
-    match gents::store::identity::provision_agent_identity_authorized(
+    match gents_store::identity::provision_agent_identity_authorized(
         runtime.observation_node(),
         runtime.runtime_node().identity.as_ref(),
         &caller,
@@ -61,7 +61,7 @@ pub(crate) async fn provision(
             );
             response
         }
-        Err(gents::store::identity::AgentProvisionError::Unauthorized) => failure(
+        Err(gents_store::identity::AgentProvisionError::Unauthorized) => failure(
             StatusCode::FORBIDDEN,
             "This client cannot create an agent on this node.",
         ),

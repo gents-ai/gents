@@ -1,9 +1,9 @@
 use crate::test_support::{completion, draft, identity, origin};
 use anyhow::Context;
 use gents::defra_node::Node as EmbeddedNode;
-use gents::documents::EvalSplit;
 use gents::eval::documents::*;
-use gents::ConfigAccess;
+use gents_documents::EvalSplit;
+use gents_store::config_client::ConfigAccess;
 use serde_json::json;
 use std::sync::Arc;
 #[tokio::test]
@@ -13,18 +13,24 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
     use crate::optimization::policy::PolicyV2;
     use crate::optimization::target::{Target, TargetField};
     use acp::nac::NodePermission;
-    use gents::documents::apply_desired_state_plan;
-    use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-    use gents::store::config_client::GraphqlEndpoint;
-    use gents::store::identity::NodeIdentity;
+    use gents_documents::apply_desired_state_plan;
+    use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents_store::config_client::GraphqlEndpoint;
+    use gents_store::identity::NodeIdentity;
     let modeled = &gents_lean_vocab::lean_contract_snapshot().identity_eval_record_cases;
     let directory = tempfile::tempdir()?;
-    let user = gents::KeyIdentity::load_or_create(directory.path().join("user"), None)?;
-    let runtime = gents::KeyIdentity::load_or_create(directory.path().join("runtime"), None)?;
-    let outsider = gents::KeyIdentity::load_or_create(directory.path().join("outsider"), None)?;
-    let binding = gents::store::identity::provision_agent_identity(&runtime)?;
-    let managed = gents::store::identity::resolve_agent_identity(&runtime, &binding)?;
-    let writer = gents::KeyIdentity::load_or_create(directory.path().join("writer"), None)?;
+    let user =
+        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("user"), None)?;
+    let runtime =
+        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("runtime"), None)?;
+    let outsider = gents_store::identity::KeyIdentity::load_or_create(
+        directory.path().join("outsider"),
+        None,
+    )?;
+    let binding = gents_store::identity::provision_agent_identity(&runtime)?;
+    let managed = gents_store::identity::resolve_agent_identity(&runtime, &binding)?;
+    let writer =
+        gents_store::identity::KeyIdentity::load_or_create(directory.path().join("writer"), None)?;
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let address = listener.local_addr()?;
     let node = Arc::new(
@@ -65,7 +71,7 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
                 .await?;
         }
     }
-    let mut required: Vec<_> = gents::Collection::ALL
+    let mut required: Vec<_> = gents_store::collection::Collection::ALL
         .iter()
         .map(|collection| collection.graphql_type())
         .collect();
@@ -85,7 +91,7 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
     ConfigAccess::local_as(node.clone(), identity::Did::new(user.did())?)
         .add_collection(&schemas.join("\n"))
         .await?;
-    let endpoint = |actor: &gents::KeyIdentity| -> anyhow::Result<ConfigAccess> {
+    let endpoint = |actor: &gents_store::identity::KeyIdentity| -> anyhow::Result<ConfigAccess> {
         Ok(ConfigAccess::Graphql(
             GraphqlEndpoint::as_principal(format!("http://{address}/api/v0/graphql"), actor.did())
                 .with_client_signing_capability(actor.client_signing_capability()?)?
@@ -220,7 +226,7 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
         }]}],
     });
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: gents::Collection::EvalDefinition,
+        collection: gents_store::collection::Collection::EvalDefinition,
         add: definition.clone(),
         update: definition,
     }])?;
@@ -231,7 +237,7 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &gents::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
                 .map(|_| ())

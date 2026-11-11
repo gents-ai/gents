@@ -1,7 +1,7 @@
 #[tokio::test]
 async fn unmet_output_obligation_blocks_terminal_and_continues_with_runtime_reminder() {
-    let node = Arc::new(crate::store::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let node = Arc::new(gents_store::test_support::node_builder().build().await.unwrap());
+    gents_store::schema::ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let actor =
         identity::Did::new("did:key:z6MkeXBLjYiSvqnhFb6D7sHm8yKm4jV45wwBFRaatf1cfZ76").unwrap();
     let model = ScriptedModel::new_turns(vec![
@@ -23,8 +23,8 @@ async fn unmet_output_obligation_blocks_terminal_and_continues_with_runtime_remi
             vec![
                 crate::runtime::agent::output_obligation::ActiveOutputObligation {
                     tool_name: "write_result".to_string(),
-                    contract: crate::documents::WriteToolOutputObligation {
-                        scope: crate::documents::WriteToolOutputObligationScope::Request,
+                    contract: gents_documents::WriteToolOutputObligation {
+                        scope: gents_documents::WriteToolOutputObligationScope::Request,
                         minimum_writes: 1,
                         expected_count_field: None,
                     },
@@ -35,7 +35,7 @@ async fn unmet_output_obligation_blocks_terminal_and_continues_with_runtime_remi
         as Arc<dyn gents_loop::output_obligation::OutputObligationCheck>);
     let stream = run_loop_stream(
         model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
+        None::<gents_toolcalls::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("do the work")),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -90,7 +90,7 @@ async fn exceeding_max_turns_terminates_with_error() {
     let error = last.as_ref().err().unwrap();
     assert_eq!(
         error.cause(),
-        &crate::error::LoopFailureCause::MaxTurns,
+        &gents_loop::error::LoopFailureCause::MaxTurns,
         "expected a max-turns Prompt error; got {last:?}"
     );
     assert!(
@@ -123,7 +123,7 @@ async fn managed_terminal_tool_result_terminates_loop() {
         owned_config(4),
     );
 
-    let collected = crate::tools::runtime_context::scope_request_tool_execution(
+    let collected = gents_tools::runtime_context::scope_request_tool_execution(
         Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
         tokio_util::sync::CancellationToken::new(),
         Box::pin(collect_owned_scripted_stream(
@@ -251,7 +251,7 @@ async fn retry_entry_does_not_publish_recorded_prompt_again() {
         ]);
         let mut loop_config = config(1);
         loop_config.resume_from_history = case["resume"].as_bool().unwrap();
-        let context = crate::inference::rendered_request::RenderedRequestContext {
+        let context = gents_inference::rendered_request::RenderedRequestContext {
             request_doc_id: "retry-input-doc".into(),
             request_commit_cid: "bafy-retry".into(),
             request_id: "retry-input".into(),
@@ -262,16 +262,16 @@ async fn retry_entry_does_not_publish_recorded_prompt_again() {
             model_name: "test-model".into(),
             provider_family: None,
         };
-        let scope = crate::inference::rendered_request::scope::test_scope(
+        let scope = gents_inference::rendered_request::scope::test_scope(
             context,
             Arc::new(|_| Box::pin(async { Ok(()) })),
         );
         loop_config.on_rendered_request = Some(
-            crate::inference::rendered_request::scope::ambient_arming_sink(
-                crate::inference::rendered_request::scope::CaptureScopeKind::Inference,
+            gents_inference::rendered_request::scope::ambient_arming_sink(
+                gents_inference::rendered_request::scope::CaptureScopeKind::Inference,
             ),
         );
-        let authored = crate::inference::rendered_request::scope::scope_request(scope, async {
+        let authored = gents_inference::rendered_request::scope::scope_request(scope, async {
             let stream = run_loop_stream(
                 model,
                 Some(gents_loop::session_hook::NoopSessionHook),

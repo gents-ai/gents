@@ -273,7 +273,7 @@ fn resolve_session_node(
 }
 
 struct TranscriptReadScope {
-    operator_access: gents::store::config_client::ConfigAccess,
+    operator_access: gents_store::config_client::ConfigAccess,
     requester_scope: Option<String>,
 }
 
@@ -284,7 +284,7 @@ fn transcript_read_scope(
 ) -> Result<TranscriptReadScope, BridgeError> {
     let operator_access = core
         .operator_observation_graphql(node_did)
-        .map(gents::store::config_client::ConfigAccess::Graphql)
+        .map(gents_store::config_client::ConfigAccess::Graphql)
         .ok_or_else(|| BridgeError::untyped("Connect to the runtime to read this session."))?;
     let store = core.store().snapshot();
     let requester_scope = store
@@ -309,7 +309,7 @@ pub async fn message_attachments(
     }
     let scope = transcript_read_scope(core, session_id, node_did)?;
     let access = scope.operator_access;
-    let escape = gents::store::graphql::escape_graphql_string;
+    let escape = gents_store::graphql::escape_graphql_string;
     let requester = scope
         .requester_scope
         .as_deref()
@@ -331,7 +331,7 @@ pub async fn message_attachments(
     let doc_id = rows[0]["_docID"]
         .as_str()
         .ok_or_else(|| BridgeError::untyped("The attachment message has no identity"))?;
-    let (header, message) = gents::session::load_canonical_message(
+    let (header, message) = gents_session::session::load_canonical_message(
         &access,
         doc_id,
         node_did,
@@ -509,7 +509,7 @@ pub async fn session_rows(
 pub async fn session_context_details(
     core: &std::sync::Arc<gents_desktop_core::client::ClientCore>,
     request: crate::types::SessionContextDetailsRequest,
-) -> Result<Option<gents::tools::native::SessionContextDetails>, BridgeError> {
+) -> Result<Option<gents_tools::native::SessionContextDetails>, BridgeError> {
     if core.session_unreadable_reason(&request.node_did).is_some() {
         return Ok(None);
     }
@@ -575,7 +575,7 @@ mod snapshot_goal_tests {
     #[test]
     fn a_completed_goal_read_is_carried() {
         let state = crate::types::SessionGoalState::NoReadableSession {
-            next: gents::goal::SessionGoalNextAction::Send,
+            next: gents_automation::goal::SessionGoalNextAction::Send,
         };
         assert!(matches!(
             snapshot_goal("chat", Ok(state)),

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::NodeIdentity;
+use gents_store::identity::NodeIdentity;
 
 use crate::support::accepted_turn::boot_prepared_accepted_turn;
 use crate::support::signed_mailbox::{
@@ -50,7 +50,7 @@ async fn messages_queued_behind_a_busy_turn_run_as_separate_turns_in_order() {
         prompt,
         vec![StreamChunk::tool_call(
             "queued-user-messages-call",
-            gents::documents::mailbox_write_decl::FILE_MAILBOX_ITEM_TOOL_NAME,
+            gents_documents::mailbox_write_decl::FILE_MAILBOX_ITEM_TOOL_NAME,
             serde_json::json!({"title":"Status", "summary":"working"}).to_string(),
         )],
         Vec::new(),
@@ -111,7 +111,7 @@ async fn messages_queued_behind_a_busy_turn_run_as_separate_turns_in_order() {
     assert_eq!(active_final, "completed");
     assert_eq!(first_final, "completed");
     assert_eq!(second_final, "completed");
-    let escaped = gents::store::graphql::escape_graphql_string(second);
+    let escaped = gents_store::graphql::escape_graphql_string(second);
     let queued = turn.client.execute(&format!(r#"{{AgentRequest(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{superseded_by_request admission_signature}}}}"#)).await.unwrap();
     let queued = &queued["data"]["AgentRequest"][0];
     assert!(queued["superseded_by_request"].is_null());

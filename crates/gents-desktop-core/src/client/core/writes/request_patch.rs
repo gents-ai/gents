@@ -227,7 +227,7 @@ impl ClientCore {
         node_did: &str,
         session_id: &str,
         request_id: &str,
-    ) -> Result<Option<gents::session::CanonicalRequestOutput>> {
+    ) -> Result<Option<gents_session::session::CanonicalRequestOutput>> {
         let node_did = normalize_required("node_did", node_did)?;
         let session_id = normalize_required("session_id", session_id)?;
         let request_id = normalize_required("request_id", request_id)?;
@@ -253,11 +253,12 @@ impl ClientCore {
                 && answer.requester_did == row.requester_did,
             "request answer crossed its admitted scope"
         );
-        if !answer.is_terminal() || gents::request::lifecycle::folded_into(answer).is_some() {
+        if !answer.is_terminal() || gents_session::request::lifecycle::folded_into(answer).is_some()
+        {
             return Ok(None);
         }
         let access = self.session_queue_access(node_did)?;
-        gents::session::observe_request_output(&access, answer)
+        gents_session::session::observe_request_output(&access, answer)
             .await
             .map(Some)
     }
@@ -266,13 +267,13 @@ impl ClientCore {
         &self,
         node_did: &str,
         request_id: &str,
-    ) -> Result<gents::observe::run_timeline::RunTimeline> {
+    ) -> Result<gents_observe::observe::run_timeline::RunTimeline> {
         normalize_required("node_did", node_did)?;
         let request_id = normalize_required("request_id", request_id)?;
         let access = self.session_queue_access(node_did)?;
         let timeline = tokio::time::timeout(
             std::time::Duration::from_secs(15),
-            gents::observe::run_timeline_fetch::load_run_timeline(&access, request_id),
+            gents_observe::observe::run_timeline_fetch::load_run_timeline(&access, request_id),
         )
         .await
         .map_err(|_| anyhow::anyhow!("timed out loading timeline for {request_id}"))?
