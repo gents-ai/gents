@@ -545,7 +545,7 @@ fn the_value_holds_no_secret() {
 }
 
 async fn embedded() -> (
-    crate::support::TestDb,
+    gents_inference::test_support::TestDb,
     gents_store::identity::KeyIdentity,
     ConfigAccess,
     Vec<String>,
@@ -556,7 +556,7 @@ async fn embedded() -> (
     };
 
     let (db, user, access, primary) =
-        crate::test_support::root::signed_test_node("blocked-turn").await;
+        gents_inference::test_support::signed_test_node("blocked-turn").await;
     let node_did = db.node_identity.did();
     ConfigAccess::local_as(db.node.clone(), identity::Did::new(node_did).unwrap())
         .grant_node_permission(

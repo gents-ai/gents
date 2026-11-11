@@ -542,7 +542,7 @@ fn snapshot_with_event_triggers(
 ) -> Arc<ActiveRuntimeSnapshot> {
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         event_test_behavior().agent_did.clone(),
-        vec![event_test_behavior()],
+        vec![with_default_tools(event_test_behavior())],
         RapidHashMap::new(),
         RapidHashMap::new(),
         RapidHashMap::new(),
@@ -589,7 +589,7 @@ async fn configured_event_node() -> Arc<defra_node::Node> {
     ensure_runtime_schemas(&node).await.unwrap();
     crate::triggers::callback::seed_test_agent(
         &node,
-        gents_session::request::lifecycle::test_support::PIN_FIXED_DID,
+        gents_store::test_support::PIN_FIXED_DID,
     )
     .await;
     node
@@ -627,7 +627,7 @@ async fn configured_event_snapshot(
             });
         crate::triggers::callback::seed_test_configuration(
             node,
-            gents_session::request::lifecycle::test_support::PIN_FIXED_DID,
+            gents_store::test_support::PIN_FIXED_DID,
             vec![
                 (
                     gents_store::collection::Collection::Task,
@@ -661,13 +661,13 @@ async fn configured_event_snapshot(
     }
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         agent.agent_did.clone(),
-        vec![agent.clone()],
+        vec![with_default_tools(agent.clone())],
         RapidHashMap::new(),
         RapidHashMap::new(),
         RapidHashMap::new(),
     )
     .with_node(agent.node.clone())
-    .with_local_did(gents_session::request::lifecycle::test_support::PIN_FIXED_DID.into())
+    .with_local_did(gents_store::test_support::PIN_FIXED_DID.into())
     .with_automation(gents_documents::automation::ResolvedAutomation {
         event_triggers: configured,
         ..Default::default()
@@ -1014,7 +1014,7 @@ async fn a_callback_result_fires_its_bindings_event_source_once() {
     let principal = behavior.node.clone();
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         behavior.agent_did.clone(),
-        vec![Arc::new(behavior)],
+        vec![with_default_tools(Arc::new(behavior))],
         RapidHashMap::new(),
         RapidHashMap::new(),
         RapidHashMap::new(),

@@ -85,19 +85,19 @@ struct ReconstructedScopedMessage {
     segments: Vec<gents_protocol::output::rows::OutputSegmentRow>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 tokio::task_local! {
     static REQUEST_OUTPUT_SCANS: std::sync::Arc<std::sync::atomic::AtomicUsize>;
     static SOURCE_OUTPUT_QUERIES: std::sync::Arc<std::sync::atomic::AtomicUsize>;
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub(crate) fn record_request_output_scan() {
     let _ = REQUEST_OUTPUT_SCANS
         .try_with(|scans| scans.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn count_request_output_scans<F>(future: F) -> (F::Output, usize)
 where
     F: std::future::Future,

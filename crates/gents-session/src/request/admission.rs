@@ -612,7 +612,7 @@ impl AgentRequestAdmissionVerifier {
         }
     }
 
-    pub(crate) async fn verify_fresh(
+    pub async fn verify_fresh(
         &self,
         request: &AgentRequest,
         target_agent_did: &str,

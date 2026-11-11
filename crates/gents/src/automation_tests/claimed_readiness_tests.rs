@@ -1,5 +1,18 @@
-use super::*;
-use crate::goal::{
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::{bail, Context, Result};
+use chrono::{SecondsFormat, Utc};
+use defra_node::Node as EmbeddedNode;
+use gents_automation::triggers::engine::goal_source::*;
+use gents_automation::triggers::engine::{FireIntent, FireResult, TriggerSource};
+use gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
+use gents_automation::goal::readiness_gate::GoalReconcileSettled;
+use gents_protocol::goal_status::GoalStatus;
+use gents_protocol::row::{AgentRequest, AgentRequestRow};
+use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
+use gents_automation::goal::{
     claim_continuation_from_access, claim_retry_continuation_from_access,
     gate_claimed_goal_continuation, set_goal_from_access,
     stop_claimed_continuation_for_unavailable_agent_from_access,
@@ -38,7 +51,7 @@ async fn source(
 ) {
     let agent_identity = selected_identity(db).await;
     let agent_did = agent_identity.did().to_owned();
-    let unavailable = crate::triggers::runtime_snapshot::UnavailableAgent::new(
+    let unavailable = gents_automation::triggers::runtime_snapshot::UnavailableAgent::new(
         AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
         "test fixture identity",
     )
@@ -50,6 +63,7 @@ async fn source(
         default_agent_did: agent_did.clone(),
         agents: Default::default(),
         tool_surfaces: Default::default(),
+        tool_configs: Default::default(),
         backend_admission_configs: Default::default(),
         unavailable_agents: [(agent_did, unavailable)].into_iter().collect(),
         active_schedules: Default::default(),
@@ -116,7 +130,7 @@ async fn agent_access(db: &TestDb) -> ConfigAccess {
 }
 
 async fn load_goal(db: &TestDb) -> GoalDocument {
-    crate::goal::load_canonical_goal(&db.node, db.node_identity.did(), SESSION)
+    gents_automation::goal::load_canonical_goal(&db.node, db.node_identity.did(), SESSION)
         .await
         .unwrap()
         .unwrap()
@@ -678,7 +692,7 @@ async fn unclaimed_goal_follows_live_reconcile_status_and_modeled_readiness() {
     .await
     .unwrap();
 
-    let unavailable = crate::triggers::runtime_snapshot::UnavailableAgent::new(
+    let unavailable = gents_automation::triggers::runtime_snapshot::UnavailableAgent::new(
         AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
         "test fixture identity",
     )
@@ -690,6 +704,7 @@ async fn unclaimed_goal_follows_live_reconcile_status_and_modeled_readiness() {
         default_agent_did: agent.did().to_owned(),
         agents: Default::default(),
         tool_surfaces: Default::default(),
+        tool_configs: Default::default(),
         backend_admission_configs: Default::default(),
         unavailable_agents: [(agent.did().to_owned(), unavailable)]
             .into_iter()
@@ -772,7 +787,7 @@ async fn unclaimed_goal_follows_live_reconcile_status_and_modeled_readiness() {
         .unwrap();
         let current = agent_access
             .transact_readonly("test.goal_readiness.current", |txn| {
-                Box::pin(crate::goal::load_canonical_goal_in_txn(
+                Box::pin(gents_automation::goal::load_canonical_goal_in_txn(
                     txn,
                     db.node_identity.did(),
                     SESSION,
@@ -791,7 +806,7 @@ async fn unclaimed_goal_follows_live_reconcile_status_and_modeled_readiness() {
         );
         let current = agent_access
             .transact_readonly("test.goal_readiness.after", |txn| {
-                Box::pin(crate::goal::load_canonical_goal_in_txn(
+                Box::pin(gents_automation::goal::load_canonical_goal_in_txn(
                     txn,
                     db.node_identity.did(),
                     SESSION,
@@ -812,7 +827,7 @@ async fn unclaimed_goal_follows_live_reconcile_status_and_modeled_readiness() {
                     current
                         .last_failure
                         .as_deref()
-                        .is_some_and(|v| v.starts_with(crate::goal::GOAL_READINESS_WAIT_PREFIX)),
+                        .is_some_and(|v| v.starts_with(gents_automation::goal::GOAL_READINESS_WAIT_PREFIX)),
                     "{name}"
                 );
                 assert_eq!(
@@ -827,7 +842,7 @@ async fn unclaimed_goal_follows_live_reconcile_status_and_modeled_readiness() {
                     .is_none());
                 let repeated = agent_access
                     .transact_readonly("test.goal_readiness.repeated", |txn| {
-                        Box::pin(crate::goal::load_canonical_goal_in_txn(
+                        Box::pin(gents_automation::goal::load_canonical_goal_in_txn(
                             txn,
                             db.node_identity.did(),
                             SESSION,

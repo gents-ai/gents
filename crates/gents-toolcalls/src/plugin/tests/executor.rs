@@ -46,9 +46,9 @@ async fn installed_filesystem_grants_cannot_expose_operator_aliases() {
 
     for write in [false, true] {
         let wat = if write {
-            gents_pack::plugin::tests::call_bound::create_file_wat("out.json")
+            gents_pack::plugin::test_fixtures::create_file_wat("out.json")
         } else {
-            gents_pack::plugin::tests::call_bound::open_and_copy_wat("in.json", 0)
+            gents_pack::plugin::test_fixtures::open_and_copy_wat("in.json", 0)
         };
         let (home, mut record) = installed_plugin(&wat, None);
         let folder = tempfile::tempdir().unwrap();
@@ -179,7 +179,7 @@ mod bound {
     use crate::plugin::executor::BindContext;
     use gents_pack::pack::BindAccess;
     use gents_pack::plugin::allowed;
-    use gents_pack::plugin::tests::call_bound::{create_file_wat, open_and_copy_wat};
+    use gents_pack::plugin::test_fixtures::{create_file_wat, open_and_copy_wat};
     use gents_tools::plugin::approval;
     use gents_tools::runtime_context::{
         scope_request_tool_execution_with_workspace_overlay, ToolWorkspaceScope,

@@ -42,6 +42,7 @@ fn readiness_source_validation_rejects_noncanonical_or_unassigned_defaults() {
         default_agent_did: "missing".to_string(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
+        tool_configs: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
         unavailable_agents: RapidHashMap::from_iter([(
             "general".to_string(),
@@ -73,6 +74,7 @@ fn configuration_fingerprint_reflects_schedule_set() {
         default_agent_did: "general".to_string(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
+        tool_configs: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),
         unavailable_agents: RapidHashMap::new(),
         active_schedules: RapidHashMap::new(),
@@ -129,6 +131,7 @@ fn configuration_fingerprint_reflects_lsp_configuration() {
         local_did: String::new(),
         default_agent_did: "general".to_string(),
         agents: RapidHashMap::new(),
+        tool_configs: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::from_iter([(
             "general".to_string(),
             fingerprint_tool_surface(Some("{}".to_string())),

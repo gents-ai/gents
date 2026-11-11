@@ -241,7 +241,7 @@ impl DefraStreamWriter {
         );
     }
 
-    pub(crate) async fn flush_native_partial(
+    pub async fn flush_native_partial(
         &self,
         lifecycle: &crate::request::lifecycle::RequestLifecycle,
         message: &gents_protocol::message::Message,
