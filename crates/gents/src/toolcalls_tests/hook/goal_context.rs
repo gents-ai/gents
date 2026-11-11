@@ -12,7 +12,7 @@ fn goal_id(owner: &str, session: &str, id: u64) -> String {
     if id == 1 {
         gents_protocol::goal::deterministic_goal_id(owner, session)
     } else {
-        crate::goal::replacement_goal_identity(owner, session, &format!("assignment-{id}")).goal_id
+        gents_automation::goal::replacement_goal_identity(owner, session, &format!("assignment-{id}")).goal_id
     }
 }
 
@@ -90,10 +90,10 @@ pub(super) async fn bind_signed_request(
         .transact_write("test.goal_tool_bind_existing_goal", |txn| {
             Box::pin(async {
                 if let Some(goal) =
-                    crate::goal::load_canonical_goal_in_txn(txn, identity.did(), session).await?
+                    gents_automation::goal::load_canonical_goal_in_txn(txn, identity.did(), session).await?
                 {
                     if goal.assignment_root_request_doc_id.is_none() {
-                        crate::goal::bind_goal_first_request_in_txn(
+                        gents_automation::goal::bind_goal_first_request_in_txn(
                             txn,
                             &goal,
                             &doc,
@@ -297,7 +297,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 let creation_key = if goal_identity == 1 {
                     gents_protocol::goal::deterministic_goal_creation_key(identity.did(), &session)
                 } else {
-                    crate::goal::replacement_goal_identity(
+                    gents_automation::goal::replacement_goal_identity(
                         identity.did(),
                         &session,
                         &format!("assignment-{goal_identity}"),
@@ -334,7 +334,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 let creation_key = if id == 1 {
                     gents_protocol::goal::deterministic_goal_creation_key(identity.did(), &session)
                 } else {
-                    crate::goal::replacement_goal_identity(
+                    gents_automation::goal::replacement_goal_identity(
                         identity.did(),
                         &session,
                         &format!("assignment-{id}"),
@@ -381,7 +381,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
             accept_hook_tool_call(&hook, "goal-context-call", tool, args, None).await;
             let before = versions(&access).await;
             if tool == gents_protocol::goal_names::GET_GOAL_TOOL_NAME && case["read_only"] == true {
-                let context = crate::goal::load_goal_tool_context(
+                let context = gents_automation::goal::load_goal_tool_context(
                     &access,
                     identity.did(),
                     &session,
@@ -390,16 +390,16 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 )
                 .await
                 .unwrap();
-                let crate::goal::RequestAssignmentObservation::Assigned(observed) =
+                let gents_automation::goal::RequestAssignmentObservation::Assigned(observed) =
                     context.assignment
                 else {
                     panic!("{name}: retained assignment unavailable");
                 };
                 assert!(
-                    crate::goal::edit_active_goal(
+                    gents_automation::goal::edit_active_goal(
                         &node,
                         &observed,
-                        &crate::goal::GoalEdit {
+                        &gents_automation::goal::GoalEdit {
                             objective: Some("Stale edit".into()),
                             budget: None
                         }
@@ -410,7 +410,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     "{name}: edit crossed physical root"
                 );
                 assert!(
-                    !crate::goal::update_goal_fields_if_status_from_access(
+                    !gents_automation::goal::update_goal_fields_if_status_from_access(
                         &gents_store::config_client::ConfigAccess::local_as(
                             node.clone(),
                             identity::Did::new(identity.did()).unwrap()
@@ -423,7 +423,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     .unwrap(),
                     "{name}: controller crossed physical root"
                 );
-                crate::goal::refresh_goal_usage_from_access(
+                gents_automation::goal::refresh_goal_usage_from_access(
                     &gents_store::config_client::ConfigAccess::local_as(
                         node.clone(),
                         identity::Did::new(identity.did()).unwrap(),
@@ -526,7 +526,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     );
                 }
                 if allowed && tool == gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME {
-                    let goal = crate::goal::load_canonical_goal(&node, identity.did(), &session)
+                    let goal = gents_automation::goal::load_canonical_goal(&node, identity.did(), &session)
                         .await
                         .unwrap()
                         .unwrap();

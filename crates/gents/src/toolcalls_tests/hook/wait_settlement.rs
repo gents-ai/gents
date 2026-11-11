@@ -1,5 +1,5 @@
 use super::*;
-use crate::call::lifecycle::ToolCallLifecycle;
+use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
 use gents_store::config_client::ConfigApplyTxn;
 use std::time::Duration;
 
@@ -193,7 +193,7 @@ async fn wait_process_refuses_a_job_row_with_the_completion_message_text() {
         )
         .await
         .unwrap();
-    crate::call::lifecycle::admission_fixture::write_fixture_job_pin_as(&access, job_doc)
+    gents_toolcalls::call::lifecycle::admission_fixture::write_fixture_job_pin_as(&access, job_doc)
         .await
         .unwrap();
 

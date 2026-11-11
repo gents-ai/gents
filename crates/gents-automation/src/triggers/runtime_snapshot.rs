@@ -62,7 +62,7 @@ impl UnavailableAgent {
         }
     }
 
-    pub(crate) fn with_watcher_identity(
+    pub fn with_watcher_identity(
         mut self,
         identity: Arc<dyn gents_store::identity::NodeIdentity>,
     ) -> Self {

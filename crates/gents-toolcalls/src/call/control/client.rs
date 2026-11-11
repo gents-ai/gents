@@ -647,7 +647,7 @@ pub(crate) async fn recover_claim(
 }
 
 /// The physical invocation and action of a claimed, signature-verified control.
-pub(crate) struct ClaimedTarget<'a> {
+pub struct ClaimedTarget<'a> {
     pub(crate) node_did: &'a str,
     pub(crate) session_id: &'a str,
     pub(crate) requester_did: Option<&'a str>,
@@ -659,7 +659,7 @@ pub(crate) struct ClaimedTarget<'a> {
 /// Applies a claimed control as its selected Agent through the existing process
 /// or job owner. The invocation is reloaded as that Agent, so native ACP decides
 /// visibility, and the terminal write races the call's own completion there.
-pub(crate) async fn apply_claimed(
+pub async fn apply_claimed(
     node: &Arc<EmbeddedNode>,
     access: &ConfigAccess,
     executions: &crate::call::hook::BackgroundExecutionRegistry,

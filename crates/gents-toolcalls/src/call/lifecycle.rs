@@ -52,11 +52,7 @@ pub mod admission_fixture;
 #[cfg(test)]
 mod background_conformance;
 #[cfg(test)]
-mod background_hook_conformance;
-#[cfg(test)]
 mod client_control_race_tests;
-#[cfg(test)]
-pub mod completion_owner_conformance;
 #[cfg(test)]
 mod composed_conformance;
 #[cfg(test)]
@@ -130,12 +126,12 @@ impl ToolRowKind {
 
 #[derive(Clone)]
 pub struct ToolCallLifecycle {
-    actor: identity::Did,
+    pub actor: identity::Did,
     agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
     node: Arc<EmbeddedNode>,
     request_id: String,
     request_doc_id: Option<String>,
-    session_id: String,
+    pub session_id: String,
     /// Immutable scope key used by filtered replication.
     node_did: String,
     requester_did: Option<String>,
@@ -182,7 +178,7 @@ pub struct SpawnedBackgroundToolAdmission {
 }
 
 impl ToolCallLifecycle {
-    pub(crate) fn access(&self) -> anyhow::Result<gents_store::config_client::ConfigAccess> {
+    pub fn access(&self) -> anyhow::Result<gents_store::config_client::ConfigAccess> {
         Ok(
             gents_store::config_client::ConfigAccess::local_with_optional_agent_signer(
                 self.node.clone(),
@@ -201,7 +197,7 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
-    pub(crate) fn bind_agent_signer(
+    pub fn bind_agent_signer(
         &mut self,
         signer: Option<gents_store::identity::ManagedAgentSigner>,
     ) -> anyhow::Result<()> {
@@ -459,7 +455,7 @@ impl ToolCallLifecycle {
         }
     }
 
-    pub(crate) fn actor(&self) -> &identity::Did {
+    pub fn actor(&self) -> &identity::Did {
         &self.actor
     }
 
@@ -479,7 +475,7 @@ impl ToolCallLifecycle {
         self.state
     }
 
-    pub(crate) fn request_doc_id(&self) -> Option<&str> {
+    pub fn request_doc_id(&self) -> Option<&str> {
         self.request_doc_id.as_deref()
     }
 
@@ -487,7 +483,7 @@ impl ToolCallLifecycle {
         &self.request_id
     }
 
-    pub(crate) async fn calling_request_id(&self) -> anyhow::Result<String> {
+    pub async fn calling_request_id(&self) -> anyhow::Result<String> {
         if !self.request_id.trim().is_empty() {
             return Ok(self.request_id.clone());
         }
@@ -511,15 +507,15 @@ impl ToolCallLifecycle {
         Ok(request.request_id)
     }
 
-    pub(crate) fn session_id(&self) -> &str {
+    pub fn session_id(&self) -> &str {
         &self.session_id
     }
 
-    pub(crate) fn node_did(&self) -> &str {
+    pub fn node_did(&self) -> &str {
         &self.node_did
     }
 
-    pub(crate) fn requester_did(&self) -> Option<&str> {
+    pub fn requester_did(&self) -> Option<&str> {
         self.requester_did.as_deref()
     }
 
@@ -574,7 +570,7 @@ impl ToolCallLifecycle {
             .map(|selected| selected.service_id.as_str())
     }
 
-    pub(crate) fn tool_call_id(&self) -> &str {
+    pub fn tool_call_id(&self) -> &str {
         &self.tool_call_id
     }
 
@@ -583,8 +579,8 @@ impl ToolCallLifecycle {
         self.execution_generation.as_deref()
     }
 
-    #[cfg(test)]
-    pub(crate) fn accepted_header_doc_id(&self) -> Option<&str> {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn accepted_header_doc_id(&self) -> Option<&str> {
         self.accepted_header_doc_id.as_deref()
     }
 
@@ -622,7 +618,7 @@ mod tests {
         let kind_of = |tool_name: &str| {
             ToolCallLifecycle::new(
                 node.clone(),
-                crate::background::job::input::tests::agent_actor(),
+                identity::Did::new("did:test:agent").unwrap(),
                 "request".into(),
                 "session".into(),
                 "did:test:owner".into(),

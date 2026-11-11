@@ -28,7 +28,7 @@ mod foreground_handoff;
 pub mod goal_tools;
 pub mod helpers;
 mod prompt_hook;
-mod session_message;
+pub mod session_message;
 
 pub(crate) use helpers::count_live_backgrounded_rows_in;
 pub(crate) use helpers::BackgroundSlotRefusal;

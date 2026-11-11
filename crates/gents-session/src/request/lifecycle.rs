@@ -1,5 +1,5 @@
 mod client;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use client::stage_request_relationships_in_txn;
 pub use client::{
     bind_client_targets_in_txn, complete_client_request_relationships,
@@ -58,7 +58,7 @@ pub use execution_lease::{
 };
 pub use execution_lease::{RequestTerminalOutcome, TerminalizeResult};
 pub(crate) use gents_loop::execution_policy;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use terminal_tools::ToolAccountingRejection;
 pub mod manual;
 pub mod materialize;
@@ -595,7 +595,7 @@ pub struct RequestLifecycle {
 
 impl RequestLifecycle {
     #[cfg(any(test, feature = "test-fixtures"))]
-    pub(crate) fn managed_agent_signer(&self) -> Option<gents_store::identity::ManagedAgentSigner> {
+    pub fn managed_agent_signer(&self) -> Option<gents_store::identity::ManagedAgentSigner> {
         self.agent_signer.clone()
     }
     pub fn bind_managed_agent(

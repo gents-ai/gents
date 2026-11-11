@@ -73,7 +73,7 @@ pub(super) struct ReadOnlyBashTool {
 }
 
 impl ReadOnlyBashTool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub(super) fn new(
         context: ToolContext,
         default_timeout: Duration,
@@ -123,7 +123,7 @@ pub(super) struct UnrestrictedBashTool {
 }
 
 impl UnrestrictedBashTool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub(super) fn new(context: ToolContext, default_timeout: Duration) -> Self {
         Self {
             context,

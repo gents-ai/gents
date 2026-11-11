@@ -142,7 +142,7 @@ impl ToolCallLifecycle {
         Ok(updated)
     }
 
-    pub(crate) async fn complete_owned(
+    pub async fn complete_owned(
         &mut self,
         result: &str,
         presentation: Option<gents_protocol::output::PayloadPresentation>,

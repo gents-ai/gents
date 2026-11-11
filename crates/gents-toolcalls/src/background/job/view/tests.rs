@@ -21,7 +21,7 @@ use gents_protocol::tool_call::AwaitMode;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 
-async fn new() -> Job {
+pub async fn new() -> Job {
     new_job(Some(&live_settings(JobPolicy::default())), None).await
 }
 

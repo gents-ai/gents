@@ -1,5 +1,6 @@
+use anyhow::Result;
 use super::*;
-use crate::goal::operator_resume_test_support::Fixture;
+use gents_automation::goal::operator_resume_test_support::Fixture;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -22,7 +23,7 @@ fn reference(value: &Value, name: &str, roots: &[String; 2]) -> Option<GoalAssig
 async fn observe_goal(f: &Fixture, session: &str, assignment: Option<&GoalAssignmentInput>) {
     let Some(assignment) = assignment else { return };
     let access = f.agent_access();
-    let goal = crate::goal::set_goal_from_access(
+    let goal = gents_automation::goal::set_goal_from_access(
         &access,
         f.identity.did(),
         session,
@@ -160,7 +161,7 @@ async fn deliver(
         gents_session::request::lifecycle::RequestSigner::Identity(f.agent.as_ref()),
     )
     .await?;
-    let prepared = crate::triggers::engine::durable::PreparedFire {
+    let prepared = gents_automation::triggers::engine::durable::PreparedFire {
         receipt: fire,
         target_existing: case["existing"] == true,
         create_session: false,
@@ -168,7 +169,7 @@ async fn deliver(
         event_source_generation: None,
         max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
     };
-    let admitted = crate::triggers::engine::durable::write_trigger_delivery_with_identity(
+    let admitted = gents_automation::triggers::engine::durable::write_trigger_delivery_with_identity(
         &f.node,
         identity::Did::new(f.agent.did()).unwrap(),
         &prepared,
@@ -204,7 +205,7 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
             identity.session_id()
         };
         if case["expected"].is_null() {
-            assert!(crate::triggers::engine::durable::resolve_session_id(
+            assert!(gents_automation::triggers::engine::durable::resolve_session_id(
                 &identity,
                 Some(&session),
                 false,
@@ -322,9 +323,9 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
         // A delivery's source is the caller's pinned job row in its own
         // session; the delivered request's provenance and job keys name it.
         let tool_call_doc_id = {
-            let mut pin = crate::call::lifecycle::admission_fixture::fixture_job_pin();
+            let mut pin = gents_toolcalls::call::lifecycle::admission_fixture::fixture_job_pin();
             pin.chain_root_doc_id = name.to_owned();
-            crate::background::job::input::tests::insert_as(
+            gents_toolcalls::test_support::insert_as(
                 &access,
                 "AgentToolCall",
                 json!({

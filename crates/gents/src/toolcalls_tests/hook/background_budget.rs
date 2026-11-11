@@ -48,7 +48,7 @@ pub(super) async fn budget_hook_fixture(
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         AgentRequestAdmissionRecord::client(user.did()),
     );
-    let mut lifecycle = crate::call::lifecycle::admission_fixture::pending_client_fixture_request(
+    let mut lifecycle = gents_toolcalls::call::lifecycle::admission_fixture::pending_client_fixture_request(
         &node,
         &owner,
         db.node_identity.clone(),
@@ -389,7 +389,7 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
         let deadline = chrono::DateTime::parse_from_rfc3339(row["deadline_at"].as_str().unwrap())
             .unwrap()
             .with_timezone(&Utc);
-        let granted = (deadline - admitted_at).num_seconds();
+        let granted = deadline.signed_duration_since(admitted_at).num_seconds();
         assert!(
             (lifetime - 5..=lifetime).contains(&granted),
             "{tool}: {granted}s"
@@ -585,7 +585,7 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
             .unwrap();
     }
     let tool_doc_id = row["_docID"].as_str().unwrap();
-    crate::background::completion::append_background_tool_completion(
+    gents_toolcalls::background::completion::append_background_tool_completion(
         &node,
         &access,
         &session,

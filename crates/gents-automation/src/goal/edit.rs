@@ -15,7 +15,7 @@ impl GoalEditOrigin {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
-pub(crate) struct GoalEdit {
+pub struct GoalEdit {
     pub objective: Option<String>,
     pub budget: Option<i64>,
 }
@@ -60,7 +60,7 @@ pub(crate) async fn edit_active_goal(
     .await
 }
 
-pub(crate) async fn edit_active_goal_from_access(
+pub async fn edit_active_goal_from_access(
     access: &gents_store::config_client::ConfigAccess,
     observed: &GoalDocument,
     fields: &GoalEdit,

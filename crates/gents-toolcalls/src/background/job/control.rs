@@ -770,7 +770,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(admission.path);
     }
 
-    fn access(admission: &PublishedAdmission) -> ConfigAccess {
+    pub fn access(admission: &PublishedAdmission) -> ConfigAccess {
         admission
             .tool
             .access()

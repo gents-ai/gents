@@ -18,7 +18,7 @@ impl CausedRequestTerminal {
         }
     }
 
-    pub(crate) fn notification_status(&self) -> &'static str {
+    pub fn notification_status(&self) -> &'static str {
         match self.tool_state() {
             ToolCallState::Completed => "completed",
             ToolCallState::Cancelled => "cancelled",
@@ -26,7 +26,7 @@ impl CausedRequestTerminal {
         }
     }
 
-    pub(crate) fn completion_reason(&self) -> Option<&'static str> {
+    pub fn completion_reason(&self) -> Option<&'static str> {
         match self {
             Self::Completed { .. } => None,
             Self::Failed { .. } => Some("request_failed"),
@@ -48,7 +48,7 @@ impl CausedRequestTerminal {
 }
 
 impl ToolCallLifecycle {
-    pub(crate) async fn settle_session_message(
+    pub async fn settle_session_message(
         &mut self,
         terminal: &CausedRequestTerminal,
         handoff_reason: Option<&'static str>,

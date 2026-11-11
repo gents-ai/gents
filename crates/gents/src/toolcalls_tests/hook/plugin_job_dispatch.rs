@@ -1,11 +1,11 @@
 use super::*;
-use crate::background::job::driver::{settle_plugin_job, JobDriver, JobRuntime, Settlement};
-use crate::background::job::input::tests::live_settings;
-use crate::background::job::records::{read_pin, read_progress, read_step_state, write_pin_in_txn};
-use crate::background::job::JobBinding;
-use crate::call::lifecycle::admission_fixture::fixture_job_pin;
-use crate::plugin::executor::PluginExecutor;
-use crate::plugin::tests::executor::installed_plugin;
+use gents_toolcalls::background::job::driver::{settle_plugin_job, JobDriver, JobRuntime, Settlement};
+use gents_toolcalls::test_support::live_settings;
+use gents_toolcalls::background::job::records::{read_pin, read_progress, read_step_state, write_pin_in_txn};
+use gents_toolcalls::background::job::JobBinding;
+use gents_toolcalls::call::lifecycle::admission_fixture::fixture_job_pin;
+use gents_toolcalls::plugin::executor::PluginExecutor;
+use gents_toolcalls::test_support::installed_plugin;
 use gents_pack::pack::{write_home_install, HomePackInstall, InstalledVia, PackKind};
 use gents_pack::plugin::store;
 use gents_protocol::job::keys::{job_session_id, job_spawn_key};
@@ -342,11 +342,8 @@ async fn step0(output: Value, options: Options) -> Step0 {
             cwd.as_ref().map(|cwd| cwd.path().to_owned()),
         );
         runtime
-            .bind_snapshot(Box::new(
-                crate::background::job::input::tests::WatchedAgentSigners(vec![
-                    caller.clone(),
-                    worker.clone(),
-                ]),
+            .bind_snapshot(gents_toolcalls::test_support::FixedAgentIdentities::boxed(
+                vec![caller.clone(), worker.clone()],
             ))
             .unwrap();
         let admission = gents_store::service::RuntimeServiceAdmission::default();
@@ -393,7 +390,7 @@ async fn job_chain(
     gents_session::request::lifecycle::RequestLifecycle,
     Option<(gents_session::request::lifecycle::RequestLifecycle, String)>,
 ) {
-    use crate::call::lifecycle::admission_fixture::{
+    use gents_toolcalls::call::lifecycle::admission_fixture::{
         materialize_session_message, pending_client_fixture_request,
         publish_accepted_on_claimed_request,
     };
@@ -502,7 +499,7 @@ async fn job_chain(
     (current, parent)
 }
 
-async fn write_pin_for_tool(tool: &crate::call::lifecycle::ToolCallLifecycle, pin: &JobPin) {
+async fn write_pin_for_tool(tool: &gents_toolcalls::call::lifecycle::ToolCallLifecycle, pin: &JobPin) {
     let access = tool.access().unwrap();
     let doc = tool.doc_id().unwrap();
     access
@@ -861,7 +858,7 @@ fn adopting() -> Value {
 }
 
 async fn finish_job(step: &Step0, row: &str) {
-    let mut lifecycle = crate::call::lifecycle::ToolCallLifecycle::load_by_doc_id_as(
+    let mut lifecycle = gents_toolcalls::call::lifecycle::ToolCallLifecycle::load_by_doc_id_as(
         step.node.clone(),
         step.caller.did().parse().unwrap(),
         row,
@@ -926,7 +923,7 @@ async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
     let root_id = root["_docID"].as_str().unwrap().to_owned();
     let root_pin = step.pin_of(&root).await;
     let child = step.child_request(&root_id, "s").await;
-    crate::call::lifecycle::admission_fixture::complete_child_managed_verified(
+    gents_toolcalls::call::lifecycle::admission_fixture::complete_child_managed_verified(
         &step.node,
         child["request_id"].as_str().unwrap(),
         "done",
@@ -947,7 +944,7 @@ async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
         .transact_write("test.guest", |txn| {
             let (root_id, evidence, guest) = (root_id.clone(), evidence.clone(), guest.clone());
             Box::pin(async move {
-                crate::background::job::records::write_step_state_in_txn(
+                gents_toolcalls::background::job::records::write_step_state_in_txn(
                     txn,
                     &root_id,
                     &evidence,
@@ -1178,11 +1175,11 @@ async fn an_unconfigured_job_target_names_the_caller_scope_and_next_help() {
     let args = r#"{"args":{},"agent_budget":2}"#;
     accept_hook_tool_call(&step.hook, "call-1", TOOL, args, None).await;
     let row = step.row_of("call-1").await;
-    let (input, _) = crate::background::job::input::build_step_input(
+    let (input, _) = gents_toolcalls::background::job::input::build_step_input(
         &step.hook.actor_access().unwrap(),
         step.hook.job_driver.as_ref().unwrap().runtime(),
         row["_docID"].as_str().unwrap(),
-        crate::background::job::input::StepKind::Step0 {
+        gents_toolcalls::background::job::input::StepKind::Step0 {
             binding: step.hook.job_tools.get(TOOL).unwrap(),
         },
     )
@@ -1510,13 +1507,13 @@ async fn pinned_step0_terminal_adopts_and_settles_in_one_transaction() {
     accept_hook_tool_call(&step.hook, "call-1", TOOL, ARGS, None).await;
     let row = step.row().await;
     let doc = row["_docID"].as_str().unwrap().to_owned();
-    crate::call::lifecycle::delivery::fail_next_terminal_for_test(&doc);
+    gents_toolcalls::call::lifecycle::delivery::fail_next_terminal_for_test(&doc);
     let action = step.hook.on_tool_call(TOOL, None, "call-1", ARGS).await;
     let ToolCallHookAction::Skip { reason } = action else {
         panic!("a job tool call is answered by its hook: {action:?}");
     };
     assert_eq!(reason, "done");
-    assert!(!crate::call::lifecycle::delivery::terminal_failure_pending_for_test(&doc));
+    assert!(!gents_toolcalls::call::lifecycle::delivery::terminal_failure_pending_for_test(&doc));
     let row = step.row().await;
     assert_eq!(row["lifecycle_state"], "completed", "{row}");
     assert_eq!(row["await_mode"], "background", "{row}");
@@ -1759,9 +1756,9 @@ impl Step0 {
         }
     }
 
-    async fn run_later_step(&self, row: &str) -> crate::background::job::driver::StepOutcome {
+    async fn run_later_step(&self, row: &str) -> gents_toolcalls::background::job::driver::StepOutcome {
         let driver = self.hook.job_driver.as_ref().unwrap();
-        crate::background::job::driver::run_step(
+        gents_toolcalls::background::job::driver::run_step(
             driver.runtime(),
             row,
             &self.caller.did().parse().unwrap(),
@@ -1771,7 +1768,7 @@ impl Step0 {
     }
 
     async fn closed_output(&self, row: &str) -> Value {
-        let tool = crate::call::lifecycle::ToolCallLifecycle::load_by_doc_id_as(
+        let tool = gents_toolcalls::call::lifecycle::ToolCallLifecycle::load_by_doc_id_as(
             self.node.clone(),
             self.caller.did().parse().unwrap(),
             row,
@@ -1810,8 +1807,8 @@ impl Step0 {
 /// bounds every spawn at hop 0.
 #[tokio::test]
 async fn later_step_hop_cap_ignores_agent_node_visibility_and_fails_closed() {
-    use crate::background::job::admit::Refusal;
-    use crate::background::job::driver::StepOutcome;
+    use gents_toolcalls::background::job::admit::Refusal;
+    use gents_toolcalls::background::job::driver::StepOutcome;
 
     for (cap, later, refused) in [
         (NodeHopCap::Hidden(None), Later::Spawn, false),

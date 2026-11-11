@@ -457,7 +457,7 @@ mod tests {
     struct RoundClock(Arc<Mutex<std::time::Instant>>);
 
     impl RoundClock {
-        fn new() -> Self {
+        pub fn new() -> Self {
             Self(Arc::new(Mutex::new(std::time::Instant::now())))
         }
 
