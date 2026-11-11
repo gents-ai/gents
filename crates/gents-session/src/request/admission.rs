@@ -612,7 +612,7 @@ impl AgentRequestAdmissionVerifier {
         }
     }
 
-    pub(crate) async fn verify_fresh(
+    pub async fn verify_fresh(
         &self,
         request: &AgentRequest,
         target_agent_did: &str,
@@ -1621,7 +1621,7 @@ pub(crate) async fn load_request_for_admission_test(
     row_into_agent_request(row, doc_id)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn load_request_for_admission_test_as(
     node: &Arc<EmbeddedNode>,
     doc_id: &str,

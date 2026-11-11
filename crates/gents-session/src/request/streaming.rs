@@ -223,7 +223,7 @@ impl DefraStreamWriter {
         Ok(published.message_doc_id)
     }
 
-    pub(crate) async fn start_provider_attempt(
+    pub async fn start_provider_attempt(
         &self,
         request_doc_id: &str,
         turn: usize,
@@ -241,7 +241,7 @@ impl DefraStreamWriter {
         );
     }
 
-    pub(crate) async fn flush_native_partial(
+    pub async fn flush_native_partial(
         &self,
         lifecycle: &crate::request::lifecycle::RequestLifecycle,
         message: &gents_protocol::message::Message,
@@ -423,7 +423,7 @@ impl DefraStreamWriter {
         Ok(())
     }
 
-    pub(crate) async fn publish_native_turn(
+    pub async fn publish_native_turn(
         &self,
         lifecycle: &crate::request::lifecycle::RequestLifecycle,
         turn: usize,

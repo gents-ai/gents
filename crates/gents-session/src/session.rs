@@ -103,7 +103,7 @@ pub use output::{
     reader::load_canonical_message_in_txn, reader::load_request_headers_in_txn,
     reader::TxnCanonicalReader,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use query::load_session_agent_did;
 pub use query::require_session;
 pub use query::session_is_stopped;

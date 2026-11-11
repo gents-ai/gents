@@ -215,7 +215,7 @@ pub async fn load_session_agent_selection(
     )
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn load_session_agent_did(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,

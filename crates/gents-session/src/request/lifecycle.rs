@@ -32,7 +32,7 @@ mod background_wake_recovery;
 pub use background_wake_recovery::{background_wake_next_retry_at, background_wake_retry_delay};
 pub mod arrival_order;
 mod claim;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use claim::{claim_gate_in_txn, ClaimGate};
 mod execution_lease;
 mod execution_renewal;

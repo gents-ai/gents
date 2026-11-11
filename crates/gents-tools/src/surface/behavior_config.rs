@@ -523,7 +523,7 @@ impl AgentToolSurfaceConfig {
         )
     }
 
-    pub(crate) fn resolve_with_agent_tools_for_runtime_availability(
+    pub fn resolve_with_agent_tools_for_runtime_availability(
         &self,
         availability: RuntimeToolAvailability,
         agent_tools: AgentToolConfig,

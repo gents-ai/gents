@@ -98,7 +98,7 @@ pub async fn load_trigger_next_run_at_batch(
             continue;
         }
         let query = format!("{{ {} }}", selections.join("\n"));
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         record_trigger_cursor_batch_query();
         let response = match gents_store::graphql::graphql_response_with_transaction_retry(
             node,
@@ -184,18 +184,18 @@ pub async fn load_trigger_next_run_at_batch(
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 tokio::task_local! {
     static TRIGGER_CURSOR_BATCH_QUERIES: std::sync::Arc<std::sync::atomic::AtomicUsize>;
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 fn record_trigger_cursor_batch_query() {
     let _ = TRIGGER_CURSOR_BATCH_QUERIES
         .try_with(|queries| queries.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn count_trigger_cursor_batch_queries<F>(future: F) -> (F::Output, usize)
 where
     F: std::future::Future,

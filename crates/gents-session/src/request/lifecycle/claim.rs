@@ -18,8 +18,8 @@ pub(crate) enum DurableClaimOutcome {
 }
 
 impl DurableClaimOutcome {
-    #[cfg(test)]
-    pub(crate) fn was_claimed(&self) -> bool {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn was_claimed(&self) -> bool {
         matches!(self, Self::Claimed(_))
     }
 }
@@ -439,7 +439,7 @@ impl RequestLifecycle {
         self.claim_inner(true).await
     }
 
-    pub(crate) async fn claim_pending_durable_with_inputs<T, F>(
+    pub async fn claim_pending_durable_with_inputs<T, F>(
         &mut self,
         ttl_now: T,
         claim_inputs: F,
