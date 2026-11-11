@@ -4,32 +4,12 @@ use std::collections::VecDeque;
 use std::time::Duration;
 
 use anyhow::{bail, ensure, Result};
-use serde::Deserialize;
 
 use crate::backends::registry::backend_fields;
 use tokio::task::JoinHandle;
 
-#[derive(Deserialize)]
-struct Snapshot {
-    inference_registry_cases: Vec<Case>,
-}
+use gents_lean_vocab::families::inference_registry_admission as family;
 
-#[derive(Deserialize)]
-struct Case {
-    name: String,
-    actions: Vec<Action>,
-    expected: Vec<Observation>,
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum Action {
-    Reconcile { desired: Option<Desired> },
-    Acquire { slot: u64 },
-    Release,
-}
-
-#[derive(Deserialize)]
 struct Desired {
     connection: u64,
     generation: u64,
@@ -40,15 +20,11 @@ struct Desired {
     catalog: String,
 }
 
-#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
-struct Observation {
-    admitting_generation: Option<u64>,
-    capacity: usize,
-    held: usize,
-    queued: usize,
-    admitted: usize,
-    queue_full: usize,
-    gone: usize,
+#[derive(Default)]
+struct Counters {
+    admitted: u64,
+    queue_full: u64,
+    gone: u64,
     attributed: Vec<u64>,
 }
 
@@ -120,7 +96,7 @@ struct Harness {
     backend_id: String,
     calls: Vec<JoinHandle<Result<AdmissionPermit, AdmissionError>>>,
     held: VecDeque<AdmissionPermit>,
-    outcomes: Observation,
+    outcomes: Counters,
     started: usize,
     slots: rapidhash::RapidHashMap<String, u64>,
 }
@@ -201,34 +177,33 @@ impl Harness {
         }
     }
 
-    fn observe(&self) -> Observation {
+    fn observe(&self) -> Result<family::Observation> {
         let admitting = self.registry.active_for_test(&self.backend_id);
         let pool = self.registry.pool_for_test(&self.backend_id);
-        Observation {
+        Ok(family::Observation {
             admitting_generation: admitting.as_ref().map(|c| c.generation),
-            capacity: admitting.as_ref().map_or(0, |c| c.config.max_concurrent),
-            held: pool.as_ref().map_or(0, |pool| pool.held_for_test()),
-            queued: pool
-                .as_ref()
-                .map_or(0, |pool| pool.queue_waiters_for_test()),
-            admitted: self.outcomes.admitted,
-            queue_full: self.outcomes.queue_full,
-            gone: self.outcomes.gone,
+            capacity: u64::try_from(admitting.as_ref().map_or(0, |c| c.config.max_concurrent))?,
+            held: u64::try_from(pool.as_ref().map_or(0, |pool| pool.held_for_test()))?,
+            queued: u64::try_from(
+                pool.as_ref()
+                    .map_or(0, |pool| pool.queue_waiters_for_test()),
+            )?,
+            tally: family::Tally {
+                admitted: self.outcomes.admitted,
+                queue_full: self.outcomes.queue_full,
+                gone: self.outcomes.gone,
+            },
             attributed: self.outcomes.attributed.clone(),
-        }
+        })
     }
 }
 
 async fn run_case(
     node: Arc<EmbeddedNode>,
     signer: gents_store::identity::ManagedAgentSigner,
-    case: &Case,
-) -> Result<()> {
-    ensure!(
-        case.actions.len() == case.expected.len(),
-        "missing step expectations"
-    );
-    let backend_id = format!("registry-{}", case.name);
+    trace: &family::Trace<String>,
+) -> Result<family::Outcome> {
+    let backend_id = format!("registry-{}", trace.name);
     let mut harness = Harness {
         registry: AdmissionRegistry::new(node.clone()),
         node,
@@ -236,45 +211,57 @@ async fn run_case(
         backend_id: backend_id.clone(),
         calls: Vec::new(),
         held: VecDeque::new(),
-        outcomes: Observation::default(),
+        outcomes: Counters::default(),
         started: 0,
         slots: rapidhash::RapidHashMap::default(),
     };
-    for (index, (action, expected)) in case.actions.iter().zip(&case.expected).enumerate() {
-        match action {
-            Action::Reconcile { desired } => {
-                let configs = desired
+    let mut observations = Vec::new();
+    for step in &trace.steps {
+        match step.kind.as_str() {
+            "reconcile" => {
+                let configs = step
+                    .desired
                     .as_ref()
                     .map(|d| {
+                        let desired = Desired {
+                            connection: d.config.connection,
+                            generation: d.config.generation,
+                            capacity: usize::try_from(d.config.capacity)?,
+                            queue_depth: usize::try_from(d.config.queue_depth)?,
+                            available: d.config.available,
+                            name: d.name.clone(),
+                            catalog: d.catalog.clone(),
+                        };
                         Ok::<_, anyhow::Error>((
                             backend_id.clone(),
-                            config_from_case(&backend_id, d)?,
+                            config_from_case(&backend_id, &desired)?,
                         ))
                     })
                     .transpose()?
                     .into_iter()
                     .collect();
-                harness
-                    .registry
-                    .reconcile(desired.as_ref().map_or(0, |d| d.generation), &configs);
+                harness.registry.reconcile(
+                    step.desired.as_ref().map_or(0, |d| d.config.generation),
+                    &configs,
+                );
             }
-            Action::Acquire { slot } => {
-                harness.acquire(*slot, slot_connection(&backend_id, *slot)?);
+            "acquire" => {
+                let Some(slot) = step.slot else {
+                    bail!("acquire without a slot");
+                };
+                harness.acquire(slot, slot_connection(&backend_id, slot)?);
             }
-            Action::Release => {
+            "release" => {
                 let Some(mut permit) = harness.held.pop_front() else {
                     bail!("trace released without an admitted call");
                 };
                 permit.finish_success(None).await?;
                 drop(permit);
             }
+            other => bail!("unknown step kind {other}"),
         }
         harness.settle().await?;
-        let actual = harness.observe();
-        ensure!(
-            actual == *expected,
-            "step {index}: expected {expected:?}, got {actual:?}"
-        );
+        observations.push(harness.observe()?);
     }
     for mut permit in harness.held.drain(..) {
         permit.finish_success(None).await?;
@@ -282,19 +269,18 @@ async fn run_case(
     for call in harness.calls.drain(..) {
         call.abort();
     }
-    Ok(())
+    Ok(family::Outcome { observations })
 }
 
 #[tokio::test]
 async fn generated_inference_registry_cases_drive_real_permits() {
-    let snapshot: Snapshot = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(snapshot.inference_registry_cases.len(), 11);
     let (db, signer) = super::super::tests::test_node().await;
     let node = db.node.clone();
     let mut failures = Vec::new();
-    for case in &snapshot.inference_registry_cases {
-        if let Err(error) = run_case(node.clone(), signer.clone(), case).await {
-            failures.push(format!("{}: {error:#}", case.name));
+    for case in family::cases::<String>() {
+        match run_case(node.clone(), signer.clone(), &case.input).await {
+            Ok(outcome) => case.check(outcome),
+            Err(error) => failures.push(format!("{}: {error:#}", case.input.name)),
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
