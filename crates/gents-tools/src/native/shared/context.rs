@@ -14,7 +14,7 @@ pub struct ToolContext {
 }
 
 #[derive(Debug)]
-pub(crate) enum ToolError {
+pub enum ToolError {
     Other(anyhow::Error),
     PolicyDenial(CommandPolicyDenial),
     ReportedFailure { class: FailureClass, text: String },
@@ -88,7 +88,7 @@ impl ToolContext {
         Self::new(root, false)
     }
 
-    pub(crate) fn new(root: PathBuf, create_missing: bool) -> Result<Self> {
+    pub fn new(root: PathBuf, create_missing: bool) -> Result<Self> {
         Self::new_with_base(root, None, create_missing)
     }
 

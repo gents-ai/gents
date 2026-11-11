@@ -18,7 +18,7 @@ pub(crate) fn validate_read_only_command(
     validate_command_policy(command, args, &policy)
 }
 
-pub(crate) fn validate_command_policy(
+pub fn validate_command_policy(
     command: &str,
     args: &[String],
     policy: &CommandExecutionPolicy,

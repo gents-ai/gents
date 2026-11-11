@@ -26,7 +26,7 @@ pub use grants::{guard_tools_keep_grants, reselection_keeps_grants, OperatorGran
 pub use guards::{
     guard_agent_keeps_reach, guard_backend_auth, guard_backend_choice, guard_tools_keep_control,
 };
-pub(crate) use guards::{
+pub use guards::{
     guard_backend_choice_in_txn, guard_compaction_choice_in_txn, profile_backend_id,
 };
 pub(crate) use request::ApplyRequest;

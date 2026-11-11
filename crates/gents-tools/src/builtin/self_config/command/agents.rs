@@ -405,7 +405,7 @@ pub fn default_agent_params(action: &str, agent_did: &str) -> ConfigureAgentPara
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn agent_params(
     action: &str,
     operation: Option<String>,

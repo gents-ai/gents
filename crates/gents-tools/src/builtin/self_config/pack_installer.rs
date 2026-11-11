@@ -3,7 +3,7 @@ use super::*;
 /// The config tool's pack commands: it admits what the calling agent names,
 /// asks the node's pack owner ([`NodePacks`]) for each decision and renders
 /// the answer with the call to make next.
-pub(super) struct PackInstaller {
+pub struct PackInstaller {
     pub core: SelfConfigCore,
     pub node: Arc<EmbeddedNode>,
     pub actor: Option<Arc<dyn NodeIdentity>>,

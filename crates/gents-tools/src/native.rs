@@ -10,13 +10,22 @@ use gents_documents::tool_limits::DEFAULT_COMMAND_TIMEOUT_SECS;
 use gents_loop::tool::ToolDyn;
 use rapidhash::RapidHashMap;
 
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod args;
+#[cfg(not(any(test, feature = "test-fixtures")))]
 mod args;
 pub mod background_args;
 mod bash_tools;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod cli_tool;
+#[cfg(not(any(test, feature = "test-fixtures")))]
 mod cli_tool;
 pub mod command_observability;
 mod context_budget;
 pub mod edit_match;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod file_tools;
+#[cfg(not(any(test, feature = "test-fixtures")))]
 mod file_tools;
 mod goal;
 pub mod lsp;
@@ -30,6 +39,9 @@ pub use title_audit_usage::load_parent_inclusive_budget_usage;
 pub use title_audit_usage::load_session_goal_usage;
 pub use title_audit_usage::{ParentAuditUsage, ParentAuditUsageObservation};
 mod session_message;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod shared;
+#[cfg(not(any(test, feature = "test-fixtures")))]
 mod shared;
 pub mod skills;
 #[cfg(test)]

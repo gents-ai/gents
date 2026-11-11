@@ -143,7 +143,7 @@ pub fn guard_backend_choice(
     }
     Ok(())
 }
-pub(crate) async fn guard_backend_choice_in_txn(
+pub async fn guard_backend_choice_in_txn(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
     current_backend_id: Option<&str>,
@@ -171,7 +171,7 @@ pub(crate) async fn guard_backend_choice_in_txn(
     };
     guard_backend_choice(current.as_ref(), &next, default_account.as_deref())
 }
-pub(crate) async fn guard_compaction_choice_in_txn(
+pub async fn guard_compaction_choice_in_txn(
     txn: &ConfigApplyTxn<'_>,
     target: SelfConfigTarget,
     anchor: &AgentAnchor,
@@ -239,7 +239,7 @@ pub(crate) async fn guard_compaction_choice_in_txn(
     let (current, next) = (backend(current).await?, backend(next).await?);
     guard_backend_choice_in_txn(txn, &owner, Some(&current), &next).await
 }
-pub(crate) async fn profile_backend_id(
+pub async fn profile_backend_id(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
     profile_id: &str,

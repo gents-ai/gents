@@ -2,7 +2,7 @@ use super::*;
 use gents_session::session::output_render::ordered;
 
 impl PackInstaller {
-    pub(super) async fn plugins_pack(
+    pub async fn plugins_pack(
         &self,
         operation: &str,
         args: &PackChange,
