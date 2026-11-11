@@ -5123,3 +5123,47 @@ async fn pack_install_applies_exactly_the_declared_placement_readers() {
     }
     db.node.shutdown().await.unwrap();
 }
+
+/// A plugin pack's bytes go only after the node recorded the retirement: a
+/// retirement the node did not record keeps the bytes it still lists.
+#[tokio::test]
+async fn a_retirement_the_node_did_not_record_keeps_the_plugin_bytes() {
+    let access = access().await;
+    let home = tempfile::tempdir().unwrap();
+    let (_dir, _, archive) = crate::pack::plugin_lifecycle::tests::fixture("1.0.0", false);
+    let (record, plugins) = crate::pack::plugin_lifecycle::install(
+        home.path(),
+        &archive,
+        false,
+        None,
+        &BTreeMap::new(),
+        InstalledVia::Operator,
+        crate::pack::PackSource::Local { file_name: None },
+        |_, _| async { Ok(()) },
+    )
+    .await
+    .unwrap();
+    let digests: std::collections::BTreeSet<String> =
+        plugins.iter().map(|plugin| plugin.digest.clone()).collect();
+    let packs = crate::pack::node_packs::NodePacks {
+        access: &access,
+        node_did: OWNER,
+        home: Some(home.path()),
+        grants_authority: false,
+    };
+    // An actor that is not the node's cannot write its record.
+    let stranger =
+        identity::Did::new("did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK").unwrap();
+    let coordinate = record.coordinate.clone();
+    let failed = packs
+        .remove_home_pack(&coordinate, record, Some(stranger))
+        .await;
+    assert!(failed.is_err(), "the retirement was recorded");
+    assert_eq!(
+        crate::plugin::store::release_unreferenced_bytes(home.path(), &digests)
+            .unwrap()
+            .len(),
+        digests.len(),
+        "the bytes were still in the store after the failed retirement"
+    );
+}

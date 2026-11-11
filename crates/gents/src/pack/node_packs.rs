@@ -896,19 +896,26 @@ impl NodePacks<'_> {
                 },
                 |()| Ok(()),
             )
-            .and_then(|removal| {
-                let bytes = plugin_lifecycle::release_plugin_bytes(&local_home, &removal.plugins)?;
-                Ok((removal, bytes))
-            })
         })
         .await
         .context("pack removal task did not finish")??;
-        if !removal.0.plugins.is_empty() {
-            super::record_plugin_retirement_as(self.access, self.node_did, actor, home, coordinate)
-                .await
-                .map_err(anyhow::Error::from)?;
+        if removal.plugins.is_empty() {
+            return Ok((removal, Vec::new()));
         }
-        Ok(removal)
+        // The node drops the plugins from its record before their bytes go:
+        // a retirement that is not recorded leaves the bytes the node still
+        // lists, and a repeated removal releases them.
+        super::record_plugin_retirement_as(self.access, self.node_did, actor, home, coordinate)
+            .await
+            .map_err(anyhow::Error::from)?;
+        let bytes_home = home.to_owned();
+        let retired = removal.plugins.clone();
+        let bytes = tokio::task::spawn_blocking(move || {
+            plugin_lifecycle::release_plugin_bytes(&bytes_home, &retired)
+        })
+        .await
+        .context("plugin byte release task did not finish")??;
+        Ok((removal, bytes))
     }
 
     /// Removes an installed documents pack's `PackInstallation` record and
