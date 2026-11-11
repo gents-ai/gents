@@ -244,17 +244,10 @@ impl ToolSurface {
         self.remote_tools.as_ref()
     }
 
-    pub(crate) fn job_tools(
-        &self,
-    ) -> rapidhash::RapidHashMap<String, crate::tools::background::job::JobBinding> {
-        crate::tools::background::job::JobBinding::bind_all(&self.plugin_resolutions)
-    }
-
     pub fn allowed_mcp_service_ids(&self) -> &[String] {
         &self.allowed_mcp_service_ids
     }
 
-    #[cfg(test)]
     pub(crate) fn plugin_resolutions(
         &self,
     ) -> &[(

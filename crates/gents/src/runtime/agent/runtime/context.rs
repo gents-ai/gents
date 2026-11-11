@@ -199,7 +199,9 @@ impl RuntimeContext {
                 loop_tools.clone(),
                 background_tool_registry,
                 tool_surface.remote_tools().cloned(),
-                tool_surface.job_tools(),
+                crate::tools::background::job::JobBinding::bind_all(
+                    tool_surface.plugin_resolutions(),
+                ),
                 tool_surface.output_obligations(),
                 tool_surface.root_execution_guard().cloned(),
                 client,
