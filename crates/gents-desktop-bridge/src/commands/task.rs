@@ -2,7 +2,7 @@ use anyhow::{anyhow, bail, Result};
 use gents_desktop_core::client::ClientCore;
 use gents_documents::{Schedule, Task};
 use gents_protocol::row::AgentRequestRow;
-use gents_store::graphql::escape_graphql_string;
+use gents_protocol::operations::request::RequestRef;
 
 use super::super::types::{
     EventSourceDeleteRequest, EventSourceSaveRequest, ScheduleRunRequest, ScheduleSaveRequest,
@@ -45,26 +45,16 @@ async fn load_agent_request_by_request_id(
     node_did: &str,
     request_id: &str,
 ) -> Result<AgentRequestRow> {
-    let escaped_request_id = escape_graphql_string(request_id);
-    let escaped_node_did = escape_graphql_string(node_did);
-    let query = format!(
-        r#"{{
-            AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }}, node_did: {{ _eq: "{escaped_node_did}" }} }}, limit: 1) {{
-                _docID
-                request_id
-                node_did
-                agent_did
-                session_id
-                lifecycle_state
-            }}
-        }}"#
-    );
-    let response = core.operator_access(node_did)?.execute(&query).await?;
-    let row = response
-        .pointer("/data/AgentRequest/0")
-        .cloned()
-        .ok_or_else(|| anyhow!("manual task run request {request_id} was not found"))?;
-    serde_json::from_value(row).map_err(Into::into)
+    gents_session::operations::request::get(
+        &core.operator_access(node_did)?,
+        &RequestRef {
+            node_did: node_did.to_owned(),
+            requester_did: None,
+            request_id: request_id.to_owned(),
+        },
+    )
+    .await
+    .map_err(gents_desktop_core::error::request_operation_failure)
 }
 
 pub async fn save_task_config(core: &ClientCore, request: TaskSaveRequest) -> Result<()> {

@@ -1,4 +1,5 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
+use gents_protocol::operations::request::RequestRef;
 use gents_store::config_client::ConfigAccess;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -92,23 +93,24 @@ pub enum ProviderRecoveryResult {
 }
 
 async fn validate_scope(access: &ConfigAccess, request: &ProviderRecoveryRequest) -> Result<()> {
-    use gents_store::graphql::escape_graphql_string;
     anyhow::ensure!(
         !request.node_did.trim().is_empty()
             && !request.session_id.trim().is_empty()
             && !request.request_id.trim().is_empty(),
         "node, session and stopped request are required"
     );
-    let response = access.execute(&format!(
-        "{{ AgentRequest(filter: {{ node_did: {{ _eq: \"{}\" }}, request_id: {{ _eq: \"{}\" }} }}, limit: 2) {{ session_id }} }}",
-        escape_graphql_string(&request.node_did), escape_graphql_string(&request.request_id),
-    )).await?;
-    let rows = response
-        .pointer("/data/AgentRequest")
-        .and_then(serde_json::Value::as_array)
-        .context("stopped request observation is unavailable")?;
+    let stopped = gents_session::operations::request::get(
+        access,
+        &RequestRef {
+            node_did: request.node_did.clone(),
+            requester_did: None,
+            request_id: request.request_id.clone(),
+        },
+    )
+    .await
+    .map_err(gents_desktop_core::error::request_operation_failure)?;
     anyhow::ensure!(
-        rows.len() == 1 && rows[0]["session_id"].as_str() == Some(&request.session_id),
+        stopped.session_id.as_deref() == Some(request.session_id.as_str()),
         "stopped request no longer belongs to the selected session"
     );
     Ok(())
