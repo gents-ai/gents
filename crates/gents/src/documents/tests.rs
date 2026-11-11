@@ -395,8 +395,8 @@ fn reserved_names_cover_native_and_meta_tools() {
     ];
     for tool in &native {
         assert!(
-            NativeTool::ALL_NAMES.contains(&tool.tool_name().as_str()),
-            "native tool {:?} missing from NativeTool::ALL_NAMES",
+            gents_protocol::tool_names::NATIVE_TOOL_NAMES.contains(&tool.tool_name().as_str()),
+            "native tool {:?} missing from NATIVE_TOOL_NAMES",
             tool.tool_name()
         );
         assert!(
@@ -405,7 +405,7 @@ fn reserved_names_cover_native_and_meta_tools() {
             tool.tool_name()
         );
     }
-    for name in NativeTool::ALL_NAMES {
+    for name in gents_protocol::tool_names::NATIVE_TOOL_NAMES {
         assert!(
             is_reserved_builtin_tool_name(name),
             "registry name {name:?} must be reserved"

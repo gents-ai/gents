@@ -423,17 +423,6 @@ impl NativeTool {
     const BASH_UNRESTRICTED_NAME: &'static str =
         <UnrestrictedBashTool as crate::inference::llm::tool::Tool>::NAME;
 
-    pub(crate) const ALL_NAMES: [&'static str; 8] = [
-        Self::LIST_FILES_NAME,
-        Self::READ_FILE_NAME,
-        Self::GLOB_NAME,
-        Self::GREP_NAME,
-        Self::WRITE_FILE_NAME,
-        Self::EDIT_FILE_NAME,
-        Self::BASH_NAME,
-        Self::BASH_UNRESTRICTED_NAME,
-    ];
-
     pub fn tool_name(&self) -> String {
         match self {
             Self::ListFiles { .. } => Self::LIST_FILES_NAME.to_string(),

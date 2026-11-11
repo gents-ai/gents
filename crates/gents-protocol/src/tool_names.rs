@@ -33,3 +33,22 @@ pub const WAIT_PROCESS_TOOL_NAME: &str = "wait_process";
 pub const LIST_PROCESSES_TOOL_NAME: &str = "list_processes";
 pub const READ_PROCESS_TOOL_NAME: &str = "read_process";
 pub const CANCEL_PROCESS_TOOL_NAME: &str = "cancel_process";
+
+pub const LIST_FILES_TOOL_NAME: &str = "list_files";
+pub const READ_FILE_TOOL_NAME: &str = "read_file";
+pub const GLOB_TOOL_NAME: &str = "glob";
+pub const GREP_TOOL_NAME: &str = "grep";
+pub const WRITE_FILE_TOOL_NAME: &str = "write_file";
+pub const EDIT_FILE_TOOL_NAME: &str = "edit_file";
+pub const BASH_TOOL_NAME: &str = "bash";
+pub const BASH_UNRESTRICTED_TOOL_NAME: &str = "bash_unrestricted";
+pub const NATIVE_TOOL_NAMES: [&str; 8] = [
+    LIST_FILES_TOOL_NAME,
+    READ_FILE_TOOL_NAME,
+    GLOB_TOOL_NAME,
+    GREP_TOOL_NAME,
+    WRITE_FILE_TOOL_NAME,
+    EDIT_FILE_TOOL_NAME,
+    BASH_TOOL_NAME,
+    BASH_UNRESTRICTED_TOOL_NAME,
+];

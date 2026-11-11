@@ -448,7 +448,7 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
         gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
     ];
 
-    crate::tools::native::NativeTool::ALL_NAMES.contains(&name)
+    gents_protocol::tool_names::NATIVE_TOOL_NAMES.contains(&name)
         || name == gents_protocol::tool_names::LSP_TOOL_NAME
         || META_TOOL_NAMES.contains(&name)
         || AGENT_TOOL_NAMES.contains(&name)

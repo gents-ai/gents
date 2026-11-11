@@ -81,7 +81,7 @@ impl WriteFileTool {
 }
 
 impl Tool for WriteFileTool {
-    const NAME: &'static str = "write_file";
+    const NAME: &'static str = gents_protocol::tool_names::WRITE_FILE_TOOL_NAME;
 
     type Error = ToolError;
     type Args = WriteFileArgs;
