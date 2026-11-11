@@ -878,6 +878,9 @@ pub(crate) fn server_start_failure_hint(home_dir: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    use gents_service::args::ToolCeilingArg;
+    use gents_service::home_state::default_key_path;
+    use gents_service::home_state::write_init_config;
     use super::*;
     use gents_service::state::StoredInitConfig;
     use gents_store::identity::NodeIdentity as _;

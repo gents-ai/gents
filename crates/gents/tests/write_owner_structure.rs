@@ -2141,8 +2141,6 @@ fn downcast_fence_counts_type_classification_outside_tests() {
 const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     // regolith store-lock messages through the node builder
     ("crates/gents-cli/src/commands/eval/watch.rs", 1),
-    // launchctl print output
-    ("crates/gents-cli/src/native_service.rs", 1),
     // provider text through Rig's ProviderError(String) (ProviderReport)
     ("crates/gents-loop/src/error.rs", 21),
     // serde_json schema-mismatch message prefixes
@@ -2155,6 +2153,8 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-protocol/src/graphql/response.rs", 4),
     // replicated AgentRequest failure_reason
     ("crates/gents-protocol/src/node_readiness.rs", 1),
+    // launchctl print output
+    ("crates/gents-service/src/native_service.rs", 1),
     // DefraDB HTTP 409 commit body
     ("crates/gents/src/store/config_client/retry.rs", 3),
     // JSON-RPC node pruned-history wording
