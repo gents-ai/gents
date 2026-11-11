@@ -30,6 +30,7 @@ mod node_document_publication;
 mod pack_config;
 mod page;
 pub mod patch;
+pub mod plugin_coordinate;
 mod plugin_source;
 mod principal;
 mod references;

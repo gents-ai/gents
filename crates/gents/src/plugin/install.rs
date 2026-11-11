@@ -289,7 +289,7 @@ fn set_model_binding_locked(
     binding: Option<ModelBinding>,
 ) -> Result<InstalledPlugin> {
     lock.for_home(home)?;
-    let (namespace, name) = store::parse_coordinate(coordinate)?;
+    let (namespace, name) = crate::documents::plugin_coordinate::parse_coordinate(coordinate)?;
     let mut record = store::read_record(home, namespace, name)
         .with_context(|| format!("plugin {coordinate} is not installed"))?;
     anyhow::ensure!(

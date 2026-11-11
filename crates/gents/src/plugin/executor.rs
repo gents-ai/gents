@@ -575,7 +575,7 @@ impl PluginExecutor {
 
     /// The record of `coordinate` as the plugin home holds it, staged or not.
     pub fn installed_record(&self, coordinate: &str) -> Result<InstalledPlugin> {
-        let (namespace, name) = store::parse_coordinate(coordinate)?;
+        let (namespace, name) = crate::documents::plugin_coordinate::parse_coordinate(coordinate)?;
         store::read_record(
             self.home
                 .as_deref()
@@ -586,7 +586,7 @@ impl PluginExecutor {
     }
 
     pub fn resolve(&self, coordinate: &str, pinned: Option<&str>) -> Result<InstalledPlugin> {
-        let (namespace, name) = store::parse_coordinate(coordinate)?;
+        let (namespace, name) = crate::documents::plugin_coordinate::parse_coordinate(coordinate)?;
         let home = self.home.as_deref().with_context(|| {
             format!("plugin {coordinate} is not installed: this runtime has no plugin directory")
         })?;

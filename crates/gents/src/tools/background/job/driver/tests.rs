@@ -1208,7 +1208,7 @@ async fn plugin_publication_after_step_precheck_is_transient() {
     let step = stepper(json!({"result": "done"})).await;
     let (input, revision) = step.input(&step.row).await;
     let (namespace, name) =
-        crate::plugin::store::parse_coordinate(&input.pin.as_ref().unwrap().plugin_ref).unwrap();
+        crate::documents::plugin_coordinate::parse_coordinate(&input.pin.as_ref().unwrap().plugin_ref).unwrap();
     let (installed, guard) =
         crate::plugin::store::read_published_record(&step.job.runtime.home, namespace, name)
             .unwrap();

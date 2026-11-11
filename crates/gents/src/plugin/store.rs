@@ -5,6 +5,8 @@ use anyhow::{Context, Result};
 use gents_protocol::job::PluginDataDeclaration;
 use serde::{Deserialize, Serialize};
 
+use crate::documents::plugin_coordinate::checked_component;
+
 fn plugins_root(home: &Path) -> PathBuf {
     home.join(crate::store::local::home::PLUGINS_DIR_NAME)
 }
@@ -30,26 +32,6 @@ fn store_path(home: &Path, digest_hex: &str) -> Result<PathBuf> {
 /// reading it here.
 pub fn artifact_path(home: &Path, digest_hex: &str) -> Result<PathBuf> {
     store_path(home, digest_hex)
-}
-
-fn checked_component(kind: &str, value: &str) -> Result<()> {
-    anyhow::ensure!(
-        !value.is_empty()
-            && value
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
-        "invalid plugin {kind} {value:?}: use letters, digits, underscore or hyphen"
-    );
-    Ok(())
-}
-
-pub fn parse_coordinate(coordinate: &str) -> Result<(&str, &str)> {
-    let (namespace, name) = coordinate
-        .split_once('/')
-        .with_context(|| format!("{coordinate:?} is not a plugin; name it as namespace/name"))?;
-    checked_component("namespace", namespace)?;
-    checked_component("name", name)?;
-    Ok((namespace, name))
 }
 
 fn record_path(home: &Path, namespace: &str, name: &str) -> Result<PathBuf> {

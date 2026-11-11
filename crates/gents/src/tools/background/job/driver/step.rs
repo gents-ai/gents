@@ -25,9 +25,8 @@ use super::settle::settle_plugin_job_in_txn;
 use super::{step_failure, JobRuntime, StepFailure};
 use crate::plugin::data::{DataCaller, StampContext};
 use crate::plugin::job_calls::JobCaller;
-use crate::plugin::store::{
-    parse_coordinate, read_published_record, InstalledPlugin, PublishedPluginReadError,
-};
+use crate::documents::plugin_coordinate::parse_coordinate;
+use crate::plugin::store::{read_published_record, InstalledPlugin, PublishedPluginReadError};
 use crate::plugin::GuestTrap;
 use crate::session::tool_call_state::ToolCallState;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
