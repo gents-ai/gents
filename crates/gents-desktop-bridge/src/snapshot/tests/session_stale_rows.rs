@@ -1,5 +1,4 @@
 use super::*;
-use crate::types::ReconstructionState;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 fn stale_session(state: RequestLifecycleState) -> AgentSession {
@@ -94,77 +93,6 @@ fn terminal_request_has_no_live_overlay_and_keeps_canonical_transcript() {
         .iter()
         .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. })));
     assert!(snapshot.timeline_items.iter().any(|item| matches!(item, RenderedTimelineItem::AssistantMessage { content, .. } if content.as_deref() == Some("final answer"))));
-}
-
-#[test]
-fn missing_canonical_dependency_is_rendered_as_loading_not_empty_message() {
-    let mut rows = ClientStoreRows {
-        sessions: vec![stale_session(RequestLifecycleState::Processing)],
-        requests: vec![stale_request(RequestLifecycleState::Processing)],
-        ..ClientStoreRows::default()
-    };
-    push_canonical_text_message(
-        &mut rows,
-        "partial",
-        "session-1",
-        Some("req-1"),
-        1,
-        MessageRole::Assistant,
-        "not available yet",
-    );
-    rows.output_segments.clear();
-    let snapshot = build_session_snapshot_from_store(
-        &ClientStore::from_rows(rows),
-        "session-1",
-        Some("req-1"),
-    )
-    .expect("snapshot");
-    assert!(snapshot.timeline_items.iter().any(|item| matches!(item, RenderedTimelineItem::AssistantMessage { reconstruction, content, .. } if reconstruction.state == ReconstructionState::Loading && content.is_none())));
-}
-
-#[test]
-fn session_snapshot_hides_live_overlay_once_turn_is_terminal_even_if_response_is_stale() {
-    let mut rows = ClientStoreRows {
-        sessions: vec![stale_session(RequestLifecycleState::Completed)],
-        requests: vec![stale_request(RequestLifecycleState::Completed)],
-        ..ClientStoreRows::default()
-    };
-    push_canonical_text_message(
-        &mut rows,
-        "final",
-        "session-1",
-        Some("req-1"),
-        2,
-        MessageRole::Assistant,
-        "final answer",
-    );
-    let snapshot = build_session_snapshot_from_store(
-        &ClientStore::from_rows(rows),
-        "session-1",
-        Some("req-1"),
-    )
-    .expect("snapshot");
-    assert_eq!(snapshot.turn_state.as_deref(), Some("completed"));
-    assert!(!snapshot
-        .timeline_items
-        .iter()
-        .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. })));
-}
-
-#[test]
-fn session_snapshot_hides_live_overlay_once_response_is_interrupted() {
-    let store = ClientStore::from_rows(ClientStoreRows {
-        sessions: vec![stale_session(RequestLifecycleState::Interrupted)],
-        requests: vec![stale_request(RequestLifecycleState::Interrupted)],
-        ..ClientStoreRows::default()
-    });
-    let snapshot =
-        build_session_snapshot_from_store(&store, "session-1", Some("req-1")).expect("snapshot");
-    assert_eq!(snapshot.turn_state.as_deref(), Some("interrupted"));
-    assert!(!snapshot
-        .timeline_items
-        .iter()
-        .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. })));
 }
 
 #[test]

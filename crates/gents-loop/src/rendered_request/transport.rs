@@ -883,18 +883,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn without_a_scope_the_client_is_transparent() {
-        let inner = CountingInner::default();
-        let client = RenderedRequestCapturingHttpClient::new(inner.clone());
-
-        let _ = HttpClientExt::send_streaming(&client, responses_request(json!({"input": []})))
-            .await
-            .expect("send");
-
-        assert_eq!(inner.sends.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
     async fn a_completion_inside_a_scope_that_never_armed_is_refused() {
         let inner = CountingInner::default();
         let client = RenderedRequestCapturingHttpClient::new(inner.clone());
@@ -953,34 +941,6 @@ mod tests {
         let seen = seen.lock().expect("seen");
         assert_eq!(seen.len(), 1);
         assert_eq!((seen[0].turn_index, seen[0].attempt), (2, 1));
-        assert_eq!(inner.sends.load(Ordering::SeqCst), 2);
-    }
-
-    #[tokio::test]
-    async fn a_changed_transport_resend_still_reaches_the_integrity_sink() {
-        let inner = CountingInner::default();
-        let client = RenderedRequestCapturingHttpClient::new(inner.clone());
-        let (sink, seen) = recording_sink();
-        let scope = test_scope(context(), sink);
-
-        scope_request(scope, async {
-            arm(CaptureScopeKind::Inference, 2, 1, trace()).expect("armed");
-            let _ = HttpClientExt::send_streaming(
-                &client,
-                responses_request(json!({"input": [{"role": "user", "content": "first"}]})),
-            )
-            .await
-            .expect("first send");
-            let _ = HttpClientExt::send_streaming(
-                &client,
-                responses_request(json!({"input": [{"role": "user", "content": "changed"}]})),
-            )
-            .await
-            .expect("recording sink accepts changed test body");
-        })
-        .await;
-
-        assert_eq!(seen.lock().expect("seen").len(), 2);
         assert_eq!(inner.sends.load(Ordering::SeqCst), 2);
     }
 

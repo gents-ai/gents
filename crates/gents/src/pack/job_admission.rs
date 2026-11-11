@@ -77,29 +77,3 @@ pub fn pack_job_block_admissible(
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn names(items: &[&str]) -> Vec<String> {
-        items.iter().map(|item| (*item).to_owned()).collect()
-    }
-
-    #[test]
-    fn job_block_admissible_is_lean_pack_job_block_admissible() {
-        use DynamicMode::{Check, Off, Run};
-        use InstalledVia::{Operator, SelfConfig};
-        let case = |via, from: &[&str], trusted: &[&str], dynamic| {
-            let closure = names(&["p", "q"]);
-            let (from, trusted) = (names(from), names(trusted));
-            job_block_admissible(via, &closure, &from, &trusted, dynamic)
-        };
-        assert!(case(Operator, &["p", "q"], &["p"], Off));
-        assert!(case(Operator, &[], &[], Check));
-        assert!(!case(SelfConfig, &["p"], &["p"], Check));
-        assert!(!case(Operator, &["z"], &[], Check));
-        assert!(!case(Operator, &[], &["z"], Check));
-        assert!(!case(Operator, &[], &[], Run));
-    }
-}

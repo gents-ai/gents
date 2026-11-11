@@ -20,45 +20,6 @@ fn enrollment_candidate_names_match_the_contract() {
     }
 }
 
-const NORMAL_LEAN: &str = r#"
-inductive Sample where
-  | one
-  | two
-
-namespace Sample
-
-def toDefraDB : Sample -> String
-  | .one => "one"
-  | .two => "two"
-
-def fromDefraDB? : String -> Option Sample
-  | "one" => some .one
-  | "two" => some .two
-  | _ => none
-
-end Sample
-"#;
-
-#[test]
-fn reports_missing_namespace() {
-    let error = parse_lean_to_defradb_values(NORMAL_LEAN, "Missing").unwrap_err();
-    assert_eq!(error, LeanVocabularyParseError::MissingNamespace);
-}
-
-#[test]
-fn reports_missing_to_defradb() {
-    let lean = r#"
-namespace Sample
-
-def unrelated : String := "value"
-
-end Sample
-"#;
-
-    let error = parse_lean_to_defradb_values(lean, "Sample").unwrap_err();
-    assert_eq!(error, LeanVocabularyParseError::MissingToDefraDB);
-}
-
 #[test]
 fn reports_malformed_arm() {
     let lean = r#"

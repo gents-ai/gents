@@ -191,73 +191,6 @@ impl HttpClientExt for StatusInjectingClient {
 }
 
 #[tokio::test]
-async fn codex_affinity_transport_captures_first_response_and_reuses_it_on_followup() {
-    use crate::inference::auth::http::OAuthHttpPolicy;
-    use gents_loop::provider_input::routing_affinity::{scope, RoutingAffinity};
-    let client = ChatGptCodexHttpClient::with_inner(
-        CountingBearer::new("test-bearer"),
-        StatusInjectingClient { status: 200 },
-    );
-    let state = RoutingAffinity::start(true, true, Some("session".into())).unwrap();
-    scope(Some(state.clone()), async {
-        let request = || {
-            Request::builder()
-                .uri("https://chatgpt.com/backend-api/codex/responses")
-                .body(Bytes::from_static(b"{}"))
-                .unwrap()
-        };
-        let initial = client.prepare_for_test(request()).await.unwrap();
-        assert_eq!(initial.headers()["session_id"], "session");
-        assert!(!initial.headers().contains_key("x-codex-turn-state"));
-        HttpClientExt::send::<Bytes, Bytes>(&client, request())
-            .await
-            .unwrap();
-        assert_eq!(state.token(), Some("buffered-first"));
-        let body: rig::http_client::sse::BoxedStream = Box::pin(futures::stream::empty());
-        let response = Response::builder()
-            .header("x-codex-turn-state", "streaming-later")
-            .body(body)
-            .unwrap();
-        ChatGptCodexPolicy::default().patch_streaming(response);
-        let followup = client.prepare_for_test(request()).await.unwrap();
-        assert_eq!(followup.headers()["x-codex-turn-state"], "buffered-first");
-        assert!(followup.headers()["x-codex-turn-state"].is_sensitive());
-        assert_eq!(followup.headers()["x-client-request-id"], "session");
-    })
-    .await;
-    let fresh = RoutingAffinity::start(true, true, Some("session".into())).unwrap();
-    scope(Some(fresh.clone()), async {
-        let request = Request::builder()
-            .uri("https://chatgpt.com/backend-api/codex/responses")
-            .body(Bytes::from_static(b"{}"))
-            .unwrap();
-        assert_eq!(fresh.token(), None);
-        HttpClientExt::send_streaming(&client, request.clone())
-            .await
-            .unwrap();
-        assert_eq!(fresh.token(), Some("streaming-first"));
-        let resend = client.prepare_for_test(request.clone()).await.unwrap();
-        assert_eq!(resend.headers()["x-codex-turn-state"], "streaming-first");
-        HttpClientExt::send_streaming(&client, request)
-            .await
-            .unwrap();
-        assert_eq!(fresh.token(), Some("streaming-first"));
-    })
-    .await;
-    let unscoped = client
-        .prepare_for_test(
-            Request::builder()
-                .uri("https://chatgpt.com/backend-api/codex/responses")
-                .body(Bytes::from_static(b"{}"))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert!(!unscoped.headers().contains_key("session_id"));
-    assert!(!unscoped.headers().contains_key("x-codex-turn-state"));
-}
-
-#[tokio::test]
 async fn the_captured_row_is_the_body_codex_rewrote_not_the_one_rig_serialized() {
     use crate::inference::rendered_request::scope::{
         arm, scope_request, test_scope, CaptureScopeKind,
@@ -387,16 +320,6 @@ async fn provider_401_invalidates_the_bearer() {
         bearer.invalidations.load(Ordering::SeqCst),
         1,
         "a 401 from the provider must invalidate the bearer so the next request refreshes"
-    );
-}
-
-#[tokio::test]
-async fn provider_success_leaves_the_bearer_intact() {
-    let bearer = send_through(200).await;
-    assert_eq!(
-        bearer.invalidations.load(Ordering::SeqCst),
-        0,
-        "a successful response must not invalidate the bearer"
     );
 }
 

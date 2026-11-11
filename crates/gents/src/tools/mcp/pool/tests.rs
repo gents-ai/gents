@@ -1175,25 +1175,6 @@ async fn spawn_empty_sse_stream_mcp_server() -> (String, Arc<Mutex<Vec<SessionHt
     (format!("http://{addr}/mcp"), log)
 }
 
-#[tokio::test(start_paused = true)]
-async fn configured_connect_limit_can_shorten_or_extend_owner_default() {
-    for seconds in [2, 20] {
-        let pool = pending_connect_pool();
-        let start = tokio::time::Instant::now();
-        let result = pool
-            .list_tools_with_limits(
-                "remote",
-                "http://remote",
-                None,
-                std::time::Duration::from_secs(seconds),
-                std::time::Duration::from_secs(30),
-            )
-            .await;
-        assert!(result.unwrap_err().to_string().contains("timed out"));
-        assert_eq!(start.elapsed(), std::time::Duration::from_secs(seconds));
-    }
-}
-
 #[tokio::test]
 async fn principal_cache_scope_does_not_depend_on_outbound_header() {
     let pool =

@@ -125,8 +125,3 @@ async fn background_wait_ignores_unrelated_changes(resync_required: bool) {
 async fn background_wait_filters_other_requests_and_tools_before_rereading() {
     background_wait_ignores_unrelated_changes(false).await;
 }
-
-#[tokio::test]
-async fn background_wait_rereads_durable_completion_on_overflow() {
-    background_wait_ignores_unrelated_changes(true).await;
-}

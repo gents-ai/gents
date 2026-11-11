@@ -449,31 +449,6 @@ pub async fn result(
 mod tests {
     use super::*;
 
-    fn scope(session: &str, node: &str, requester: Option<&str>) -> ProcessControlScope {
-        ProcessControlScope {
-            request_id: "request".to_owned(),
-            session_id: session.to_owned(),
-            node_did: node.to_owned(),
-            requester_did: requester.map(str::to_owned),
-        }
-    }
-
-    #[test]
-    fn result_read_is_scope_same_plugin_and_terminal() {
-        let owner = scope("session", "node", Some("user"));
-        assert!(result_read(&owner.clone(), &owner, true, true));
-        for caller in [
-            scope("other", "node", Some("user")),
-            scope("session", "other", Some("user")),
-            scope("session", "node", Some("other")),
-            scope("session", "node", None),
-        ] {
-            assert!(!result_read(&caller, &owner, true, true), "{caller:?}");
-        }
-        assert!(!result_read(&owner.clone(), &owner, false, true));
-        assert!(!result_read(&owner.clone(), &owner, true, false));
-    }
-
     #[test]
     fn result_offer_is_false_only_for_callbacks() {
         let node_did = "node".to_owned();

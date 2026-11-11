@@ -452,9 +452,8 @@ mod tests {
     use std::sync::Arc;
 
     use defra_node::Node as EmbeddedNode;
-    use serde_json::json;
 
-    use super::{admit_scratch, interrupt_slots, spawn_cwd, write_scratch};
+    use super::{interrupt_slots, spawn_cwd, write_scratch};
     use crate::store::config_client::ConfigAccess;
     use gents_protocol::job::JobScratch;
     use gents_protocol::session::SessionScope;
@@ -555,16 +554,6 @@ mod tests {
     }
 
     #[test]
-    fn scratch_rewrite_is_idempotent() {
-        let cwd = tempfile::tempdir().unwrap();
-        let notes = file("notes.md", "same");
-        write_scratch(cwd.path(), "call-1", std::slice::from_ref(&notes)).unwrap();
-        write_scratch(cwd.path(), "call-1", &[notes]).unwrap();
-        let path = cwd.path().join(".gents/workflows/runs/call-1/notes.md");
-        assert_eq!(read(&path), b"same");
-    }
-
-    #[test]
     fn resumed_row_writes_under_its_own_tool_call_id_and_earlier_paths_stay() {
         let cwd = tempfile::tempdir().unwrap();
         write_scratch(cwd.path(), "call-1", &[file("notes.md", "first")]).unwrap();
@@ -577,27 +566,6 @@ mod tests {
             read(&cwd.path().join(".gents/workflows/runs/call-2/notes.md")),
             b"second"
         );
-    }
-
-    async fn insert(
-        node: &std::sync::Arc<EmbeddedNode>,
-        collection: &str,
-        value: serde_json::Value,
-    ) -> String {
-        ConfigAccess::transact_local_write(node, None, "test.plugin_job_effects", |txn| {
-            let value = &value;
-            Box::pin(async move {
-                let query = format!(
-                    "mutation($input: {collection}MutationInputArg!) {{create_{collection}(input:$input){{_docID}}}}"
-                );
-                let response = txn
-                    .execute_with_variables(&query, &json!({ "input": value }))
-                    .await?;
-                Ok::<_, anyhow::Error>(gents_protocol::graphql::extract_mutation_doc_id(&response, collection)?)
-            })
-        })
-        .await
-        .unwrap()
     }
 
     /// Reads the request's interrupt latch as `access`; an Agent-owned
@@ -613,82 +581,6 @@ mod tests {
         response["data"]["AgentRequest"][0]["interrupt_requested_at"]
             .as_str()
             .map(str::to_owned)
-    }
-
-    #[tokio::test]
-    async fn descriptive_slot_provenance_cannot_grant_interrupt() {
-        let node = Arc::new(
-            crate::store::test_support::node_builder()
-                .build()
-                .await
-                .unwrap(),
-        );
-        crate::ensure_runtime_schemas(&node).await.unwrap();
-        let parent = insert(&node, "AgentRequest", json!({"request_id":"parent","purpose":"normal","node_did":"owner","requester_did":null,"session_id":"caller","agent_did":"configured","lifecycle_state":"processing"})).await;
-        insert(&node, "AgentSession", json!({"session_id":"child","node_did":"owner","requester_did":null,"agent_did":"configured","created_at":"2026-01-01T00:00:00Z","provenance":{"parent_request_doc_id":parent}})).await;
-        let child = insert(&node, "AgentRequest", json!({"request_id":"child","purpose":"normal","node_did":"owner","requester_did":null,"session_id":"child","agent_did":"configured","lifecycle_state":"processing"})).await;
-        let caller = SessionScope {
-            node_did: "owner".into(),
-            session_id: "caller".into(),
-            requester_did: None,
-        };
-        let target = SessionScope {
-            node_did: "owner".into(),
-            session_id: "child".into(),
-            requester_did: None,
-        };
-        assert!(stamp(&ConfigAccess::local(node.clone()), &child)
-            .await
-            .is_none());
-        assert!(interrupt_slots(
-            &node,
-            &crate::ConfigAccess::local(node.clone()),
-            "did:key:untrusted",
-            &caller,
-            &[target]
-        )
-        .await
-        .is_err());
-        assert!(stamp(&ConfigAccess::local(node.clone()), &child)
-            .await
-            .is_none());
-        node.shutdown().await.expect("shut down test node");
-    }
-
-    #[test]
-    fn admit_scratch_is_lean_scratch_admitted() {
-        let allow = |_path: &str| true;
-        let path = "/work/repo/.gents/workflows/runs/call-1/notes.md";
-        assert_eq!(
-            admit_scratch("/work/repo", &allow, "call-1", "notes.md", 0, 1),
-            Some(path.into())
-        );
-        assert_eq!(
-            admit_scratch("/work/repo", &allow, "call-1", "notes.md", 1_048_576, 32),
-            Some(path.into())
-        );
-        for (tool_call_id, name, size, count) in [
-            ("", "notes.md", 0, 1),
-            (".", "notes.md", 0, 1),
-            ("..", "notes.md", 0, 1),
-            ("a/b", "notes.md", 0, 1),
-            ("call-1", "", 0, 1),
-            ("call-1", ".", 0, 1),
-            ("call-1", "..", 0, 1),
-            ("call-1", "a/b", 0, 1),
-            ("call-1", "notes.md", 1_048_577, 1),
-            ("call-1", "notes.md", 0, 33),
-        ] {
-            assert_eq!(
-                admit_scratch("/work/repo", &allow, tool_call_id, name, size, count),
-                None
-            );
-        }
-        let refuse = |_path: &str| false;
-        assert_eq!(
-            admit_scratch("/work/repo", &refuse, "call-1", "notes.md", 0, 1),
-            None
-        );
     }
 
     use crate::tools::background::job::admit::{

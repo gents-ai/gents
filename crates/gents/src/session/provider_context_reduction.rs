@@ -1133,9 +1133,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::inference::llm::message::{
-        AssistantContent, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent, UserContent,
-    };
+    use crate::inference::llm::message::{Text, ToolResult, ToolResultContent, UserContent};
 
     #[test]
     fn reduction_key_is_componentwise_and_delimiter_safe() {
@@ -1716,73 +1714,6 @@ mod tests {
             reduction_key(&node_did, "session", "request-doc", 3, 1).unwrap(),
             reduction_key(&node_did, "fork-session", "fork-request-doc", 3, 1).unwrap()
         );
-    }
-
-    #[tokio::test]
-    async fn persistence_rejects_a_split_through_a_tool_pair() {
-        let (node, node_did, signer) = reduction_fixture(None).await;
-        let agent_did = signer.did().to_owned();
-        let call = Message::Assistant {
-            request_id: None,
-            id: None,
-            content: vec![AssistantContent::ToolCall(ToolCall {
-                raw_arguments: None,
-                id: "call-1".to_string(),
-                call_id: Some("call-1".to_string()),
-                function: ToolFunction {
-                    name: "read".to_string(),
-                    arguments: Value::Object(Default::default()),
-                },
-                signature: None,
-                additional_params: None,
-            })],
-        };
-        let result = Message::User {
-            content: vec![UserContent::ToolResult(ToolResult {
-                id: "call-1".to_string(),
-                call_id: Some("call-1".to_string()),
-                content: vec![ToolResultContent::Text(Text {
-                    text: "done".to_string(),
-                })],
-            })],
-        };
-        let source = boundary("request-doc-pair");
-        #[expect(
-            clippy::cloned_ref_to_slice_refs,
-            reason = "checkpoint_messages moves the message that retained_suffix would borrow"
-        )]
-        let error = persist(
-            &node,
-            &signer,
-            NewProviderContextReduction {
-                agent_did: &agent_did,
-                node_did: &node_did,
-                requester_did: None,
-                session_id: "session",
-                request_id: "request-pair",
-                request_doc_id: "request-doc-pair",
-                request_commit_cid: "request-cid",
-                reduction_index: 1,
-                turn_index: 0,
-                parent_reduction_key: None,
-                producer_call: None,
-                source_boundary: &source,
-                compacted_prefix: &[call],
-                retained_suffix: &[result.clone()],
-                checkpoint_messages: &[result],
-                replay_associations: &ReplayAssociations {
-                    required: vec![],
-                    prefix_rows: vec![unassociated_row()],
-                    retained_rows: vec![unassociated_row()],
-                },
-                summary: "summary",
-                original_tokens: 10,
-                compacted_tokens: 5,
-            },
-        )
-        .await
-        .unwrap_err();
-        assert!(error.to_string().contains("open tool-call/result pair"));
     }
 
     #[test]

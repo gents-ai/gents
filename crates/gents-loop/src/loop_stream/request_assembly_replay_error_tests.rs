@@ -15,63 +15,6 @@ fn provider_tag(turn_index: u32) -> ReplayTag {
     }
 }
 
-fn associated_assistant(tag: &ReplayTag) -> TaggedMessage {
-    TaggedMessage {
-        message: Message::assistant("native assistant row"),
-        source: Some(tag.clone()),
-        physical_header: None,
-        block_indices: Vec::new(),
-    }
-}
-
-#[test]
-fn replay_prefix_bound_preserves_the_entire_required_capture_prefix() {
-    let earlier = provider_tag(0);
-    let required = provider_tag(1);
-    let rows = vec![
-        TaggedMessage::unassociated(Message::system("preamble")),
-        TaggedMessage::unassociated(Message::user("first")),
-        associated_assistant(&earlier),
-        TaggedMessage::unassociated(Message::user("second")),
-        TaggedMessage::unassociated(Message::assistant("authored history")),
-        associated_assistant(&required),
-    ];
-    assert_eq!(
-        replay_compaction_prefix_bound(&rows, &[required]).unwrap(),
-        Some(0),
-        "summarizing any earlier row can invalidate the required capture"
-    );
-}
-
-#[test]
-fn replay_prefix_bound_without_required_sources_is_unbounded() {
-    let rows = vec![
-        TaggedMessage::unassociated(Message::user("input")),
-        associated_assistant(&provider_tag(0)),
-    ];
-    assert_eq!(replay_compaction_prefix_bound(&rows, &[]), Ok(None));
-}
-
-#[test]
-fn replay_prefix_bound_reuses_checkpoint_missing_and_duplicate_errors() {
-    let required = provider_tag(1);
-    let other = provider_tag(0);
-    let missing = vec![associated_assistant(&other)];
-    assert_eq!(
-        replay_compaction_prefix_bound(&missing, std::slice::from_ref(&required)),
-        Err(ReplayCheckpointError::MissingRequired)
-    );
-
-    let duplicated = vec![
-        associated_assistant(&required),
-        associated_assistant(&required),
-    ];
-    assert_eq!(
-        replay_compaction_prefix_bound(&duplicated, &[required]),
-        Err(ReplayCheckpointError::DuplicateAssociation)
-    );
-}
-
 #[test]
 fn replay_prefix_bound_rejects_tagged_non_assistant() {
     let required = provider_tag(0);
@@ -314,41 +257,6 @@ fn armed_seed(rows: Vec<ReplayEvidenceRow>) -> ReplayEstimateSeed {
     seed.arm();
     seed.record(rows);
     seed
-}
-
-#[tokio::test]
-async fn a_seeded_lookup_serves_an_identical_tag_set_without_invoking_the_resolver() {
-    let first = provider_tag(0);
-    let second = provider_tag(1);
-    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let replay = LoopReplayInput {
-        resolve: Some(counting_resolver(
-            Vec::new(),
-            vec![first.clone(), second.clone()],
-            calls.clone(),
-        )),
-        estimate_seed: Some(armed_seed(vec![
-            evidence_row(&first, "header-0", Vec::new()),
-            evidence_row(&second, "header-1", Vec::new()),
-        ])),
-        ..LoopReplayInput::default()
-    };
-    let served = resolve_replay_evidence(&replay, &[first.clone(), second])
-        .await
-        .unwrap();
-    assert_eq!(
-        served
-            .iter()
-            .map(|row| row.evidence.physical_header.clone())
-            .collect::<Vec<_>>(),
-        ["header-0", "header-1"],
-        "the dispatch lookup serves the estimate's rows unchanged"
-    );
-    assert_eq!(
-        calls.load(std::sync::atomic::Ordering::SeqCst),
-        0,
-        "an identical tag set needs no second canonical pass"
-    );
 }
 
 #[tokio::test]

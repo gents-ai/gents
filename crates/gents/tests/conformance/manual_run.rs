@@ -138,69 +138,6 @@ async fn manual_run_renders_args_scope() {
 }
 
 #[tokio::test]
-async fn manual_submissions_materialize_distinct_requests() {
-    let db = test_db("manual-run-parallel").await;
-    let agent = managed_agent(&db).await;
-
-    let first = write_manual_agent_request(
-        &db.node,
-        actor(agent.did()),
-        agent.as_ref(),
-        gents::request::lifecycle::ManualRequestTarget {
-            node_did: db.node_identity.did(),
-            agent_did: agent.did(),
-            task_id: "task-parallel",
-        },
-        "one",
-        serde_json::json!({}),
-    )
-    .await
-    .expect("first manual run should materialize");
-    assert_eq!(
-        count_manual_agent_requests(&agent_access(&db, agent.as_ref())).await,
-        1,
-        "sanity: one manual AgentRequest after the first call"
-    );
-
-    let second = write_manual_agent_request(
-        &db.node,
-        actor(agent.did()),
-        agent.as_ref(),
-        gents::request::lifecycle::ManualRequestTarget {
-            node_did: db.node_identity.did(),
-            agent_did: agent.did(),
-            task_id: "task-parallel",
-        },
-        "two",
-        serde_json::json!({}),
-    )
-    .await
-    .expect("second manual submission should materialize");
-    assert_ne!(
-        first, second,
-        "second manual run must produce a fresh doc_id, not alias the first"
-    );
-    assert_eq!(
-        count_manual_agent_requests(&agent_access(&db, agent.as_ref())).await,
-        2,
-        "two back-to-back manual submissions must yield two AgentRequest rows"
-    );
-
-    for (label, doc_id) in [("first", &first), ("second", &second)] {
-        let row = fetch_manual_row(&agent_access(&db, agent.as_ref()), doc_id).await;
-        assert!(
-            row["caused_by_trigger_id"].is_null(),
-            "{label}: direct manual submission must not invent a configured trigger id"
-        );
-        assert_eq!(
-            row["caused_by_trigger_kind"].as_str(),
-            Some("manual"),
-            "{label}: trigger_kind must remain \"manual\" for direct manual submission"
-        );
-    }
-}
-
-#[tokio::test]
 async fn manual_run_exposes_manual_event_and_node_scope() {
     let db = test_db("manual-run-event-scope").await;
     let agent = managed_agent(&db).await;

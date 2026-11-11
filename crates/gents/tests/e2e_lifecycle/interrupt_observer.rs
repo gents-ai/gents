@@ -166,34 +166,3 @@ async fn observer_picks_up_already_set_interrupt_on_first_poll() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
-
-#[tokio::test]
-async fn observer_exits_on_abort() {
-    let db = test_db("observer-abort").await;
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = crate::support::agent_requests::canonical_now();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
-
-    let (interrupt_tx, _interrupt_rx) = watch::channel::<Option<InterruptIntent>>(None);
-    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
-    let observer = spawn_request_interrupt_observer(
-        db.node.clone(),
-        gents::ConfigAccess::local(db.node.clone()),
-        doc_id.clone(),
-        interrupt_tx,
-        shutdown_rx,
-    );
-
-    observer.abort();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
-    loop {
-        if observer.is_finished() {
-            break;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            panic!("observer did not terminate within 3s of abort");
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-}

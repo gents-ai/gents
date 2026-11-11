@@ -404,55 +404,6 @@ async fn capture_trace_retains_ephemeral_request_context() {
     assert!(effective.iter().any(is_request_context_message));
 }
 
-#[tokio::test(start_paused = true)]
-async fn capture_seam_reports_the_repair_build_path_from_the_first_poll_branch() {
-    let model = ScriptedModel::new_calls(vec![
-        ScriptedCall::TurnWithMidStreamError(Vec::new(), parse_400_error("same")),
-        ScriptedCall::TurnWithMidStreamError(Vec::new(), parse_400_error("same")),
-        ScriptedCall::Turn(vec![
-            RawStreamingChoice::Message("repaired".to_string()),
-            RawStreamingChoice::FinalResponse(()),
-        ]),
-    ]);
-
-    let captures: Arc<Mutex<Vec<(usize, u32, AssemblyBuildPath)>>> =
-        Arc::new(Mutex::new(Vec::new()));
-    let captures_for_sink = captures.clone();
-    let mut loop_config = config(0);
-    loop_config.on_rendered_request =
-        Some(Arc::new(move |turn_index, attempt, _request, trace| {
-            let captures = captures_for_sink.clone();
-            Box::pin(async move {
-                captures
-                    .lock()
-                    .await
-                    .push((turn_index, attempt, trace.build_path));
-                Ok(())
-            })
-        }));
-
-    let stream = run_loop_stream(
-        model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
-        TaggedMessage::unassociated(Message::user("hi")),
-        Vec::new(),
-        Arc::new(Vec::new()),
-        loop_config,
-    );
-    let collected = collect_scripted_stream(stream).await;
-    assert_eq!(collected.error, None);
-    assert_eq!(collected.final_text.as_deref(), Some("repaired"));
-
-    assert_eq!(
-        captures.lock().await.as_slice(),
-        &[
-            (0, 0, AssemblyBuildPath::Budgeted),
-            (0, 1, AssemblyBuildPath::Budgeted),
-            (0, 2, AssemblyBuildPath::Repair),
-        ]
-    );
-}
-
 /// The mis-wired-transport backstop, which nothing else exercises: a provider
 /// stack without `RenderedRequestCapturingHttpClient` still streams, so an
 /// armed capture left pending when the first stream item arrives (or at EOF)

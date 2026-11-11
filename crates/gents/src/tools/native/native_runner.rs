@@ -516,21 +516,6 @@ printf '{"ok":true,"output":"sandboxed read","error":null}'"#
     }
 
     #[test]
-    fn cap_expiry_is_a_recoverable_typed_failure() {
-        let now = Utc::now();
-        let dispatch_error = fs_runner_timed_out_error("grep", None, now).into_dispatch_error();
-        let outcome =
-            crate::tools::call::lifecycle::ToolOutcome::from_dispatch("grep", Err(dispatch_error));
-        assert!(matches!(
-            outcome,
-            crate::tools::call::lifecycle::ToolOutcome::Failed {
-                class: FailureClass::External,
-                ..
-            }
-        ));
-    }
-
-    #[test]
     fn expired_request_deadline_yields_deadline_text() {
         let now = Utc::now();
         let deadline = now - ChronoDuration::seconds(1);

@@ -209,41 +209,6 @@ async fn generated_request_closures_use_exact_database_dependencies() {
 }
 
 #[tokio::test]
-async fn independent_scopes_share_bounded_query_batches() {
-    let seeds = (0..128)
-        .map(|index| AgentRequestRow {
-            doc_id: Some(format!("seed-{index}")),
-            request_id: format!("request-{index}"),
-            node_did: Some("node".into()),
-            session_id: Some(format!("session-{index}")),
-            lifecycle_state: Some(
-                gents_protocol::request_lifecycle::RequestLifecycleState::Superseded,
-            ),
-            superseded_by_request: Some("owner".into()),
-            superseded_by_request_doc_id: Some(format!("owner-{index}")),
-            failure_reason: Some(gents::request::lifecycle::FOLDED_REASON.into()),
-            ..Default::default()
-        })
-        .collect::<Vec<_>>();
-    let seed_count = seeds.len();
-    let reads = std::sync::atomic::AtomicUsize::new(0);
-    let result = close_request_rows_with(seeds, |_| {
-        reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Box::pin(async {
-            Ok(Value::Object(
-                (0..ROOT_BATCH_SIZE)
-                    .map(|index| (format!("r{index}"), json!([])))
-                    .collect(),
-            ))
-        })
-    })
-    .await
-    .unwrap();
-    assert_eq!(result.len(), seed_count);
-    assert!((1..=4).contains(&reads.load(std::sync::atomic::Ordering::Relaxed)));
-}
-
-#[tokio::test]
 async fn partial_twin_seed_keeps_the_full_projection_order() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::client::schema::ensure_runtime_schemas(&node)

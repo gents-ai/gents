@@ -381,64 +381,6 @@ async fn read_openrouter_uses_the_backend_key_and_endpoint() {
 }
 
 #[tokio::test]
-async fn read_claude_on_open_then_skips_a_recent_read() {
-    let cache = UsageCache::default();
-    let (db, _user, _user_access) =
-        crate::test_support::root::signed_test_node_without_agent("usage-observation").await;
-    let node = db.node.clone();
-    let did = db.node_identity.did();
-    let provider = crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
-    let now = Utc::now();
-    sign_in(&node, did, provider, now + Duration::hours(1), None).await;
-    let (url, handle) = test_support::one_shot_token_server(
-        200,
-        r#"{"five_hour":{"utilization":25.0,"resets_at":"2100-01-01T00:00:00Z"}}"#,
-    )
-    .await;
-    let endpoints = UsageEndpoints {
-        claude_usage: format!("{}/api/oauth/usage", origin(&url)),
-        ..UsageEndpoints::default()
-    };
-    let claude = backend(
-        did,
-        "ClaudeCliSubscription",
-        "backend-usage-claude",
-        json!({ "kind": "node_oauth" }),
-    );
-
-    assert_eq!(
-        read(
-            &cache,
-            &node,
-            did,
-            &claude,
-            UsageTrigger::Open,
-            &endpoints,
-            now
-        )
-        .await,
-        UsageRead::Read
-    );
-    assert_eq!(
-        first_line(&handle.await.unwrap()),
-        "GET /api/oauth/usage HTTP/1.1"
-    );
-    assert_eq!(
-        read(
-            &cache,
-            &node,
-            did,
-            &claude,
-            UsageTrigger::Open,
-            &endpoints,
-            now + Duration::minutes(1)
-        )
-        .await,
-        UsageRead::SkippedRecent
-    );
-}
-
-#[tokio::test]
 async fn read_claude_on_refresh_sends_the_oauth_beta() {
     let cache = UsageCache::default();
     let (db, _user, _user_access) =

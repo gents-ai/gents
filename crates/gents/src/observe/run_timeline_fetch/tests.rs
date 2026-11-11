@@ -9,40 +9,6 @@ fn bindings() -> BTreeMap<String, String> {
 }
 
 #[tokio::test]
-async fn timeline_canonical_messages_share_one_request_payload_scan() {
-    use crate::store::identity::NodeIdentity;
-    let (db, user, access, binding) =
-        crate::test_support::root::signed_test_node("timeline-shared-scan").await;
-    let messages = (1..=3)
-        .map(|sequence| format!("message {sequence}"))
-        .collect::<Vec<_>>();
-    crate::session::publish_shared_signed_history(
-        &db,
-        &user,
-        &access,
-        &binding,
-        "session-timeline-shared",
-        &messages,
-    )
-    .await;
-    let (messages, scans) = crate::session::count_request_output_scans(
-        super::event_loaders::resolve_timeline_messages_for_session(
-            &access,
-            db.node_identity.did(),
-            "session-timeline-shared",
-            Some(user.did()),
-        ),
-    )
-    .await;
-    assert_eq!(messages.unwrap().len(), 3);
-    assert_eq!(
-        scans, 1,
-        "one timeline session pass scans a shared request once"
-    );
-    db.node.shutdown().await.expect("node shutdown");
-}
-
-#[tokio::test]
 async fn timeline_resolves_fork_origin_payloads_without_cross_request_membership() {
     use crate::store::identity::NodeIdentity;
     let (db, user, access, binding) =

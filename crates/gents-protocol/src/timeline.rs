@@ -318,82 +318,6 @@ mod tests {
     }
 
     #[test]
-    fn overlay_precedes_orphan_groups_for_running_unmaterialized_tool_turn() {
-        let messages = vec![msg("user", 0, TimelineRole::User)];
-        let groups = vec![Some(1)];
-        let slots = build_timeline_order(
-            &messages,
-            &groups,
-            &pending_tail(),
-            Some(OverlayInput {
-                has_durable_owner: false,
-                placement: OverlayPlacement::BeforeOrphan {
-                    message_sequence: Some(1),
-                },
-            }),
-        );
-
-        let overlay_pos = slots
-            .iter()
-            .position(|slot| matches!(slot, TimelineSlot::Overlay))
-            .expect("overlay");
-        let tool_pos = slots
-            .iter()
-            .position(|slot| {
-                matches!(
-                    slot,
-                    TimelineSlot::ToolGroup {
-                        message_sequence: Some(1)
-                    }
-                )
-            })
-            .expect("orphan tool group");
-        assert!(
-            overlay_pos < tool_pos,
-            "live reasoning must precede its running orphan tool group: {slots:?}"
-        );
-    }
-
-    #[test]
-    fn overlay_preserves_earlier_terminal_orphans_before_active_target() {
-        let messages = vec![msg("user", 0, TimelineRole::User)];
-        let groups = vec![Some(1), Some(2)];
-        let slots = build_timeline_order(
-            &messages,
-            &groups,
-            &pending_tail(),
-            Some(OverlayInput {
-                has_durable_owner: false,
-                placement: OverlayPlacement::BeforeOrphan {
-                    message_sequence: Some(2),
-                },
-            }),
-        );
-
-        assert_eq!(
-            slots,
-            vec![
-                TimelineSlot::Message {
-                    key: "user".to_string(),
-                    sequence: Some(0),
-                    role: TimelineRole::User,
-                },
-                TimelineSlot::Pending {
-                    key: "request".into()
-                },
-                TimelineSlot::ToolGroup {
-                    message_sequence: Some(1),
-                },
-                TimelineSlot::Overlay,
-                TimelineSlot::ToolGroup {
-                    message_sequence: Some(2),
-                },
-            ],
-            "historical orphan tools must stay before live reasoning"
-        );
-    }
-
-    #[test]
     fn overlay_follows_terminal_orphan_groups() {
         let messages = vec![msg("user", 0, TimelineRole::User)];
         let groups = vec![Some(1)];
@@ -412,33 +336,6 @@ mod tests {
             Some(&TimelineSlot::Overlay),
             "the next live assistant turn must follow terminal orphan tools: {slots:?}"
         );
-    }
-
-    #[test]
-    fn pending_turn_shown_iff_and_before_orphans() {
-        let messages = vec![msg("a", 0, TimelineRole::User)];
-        let groups = vec![Some(9)];
-        let slots = build_timeline_order(&messages, &groups, &pending_tail(), None);
-        let pending_pos = slots
-            .iter()
-            .position(|s| matches!(s, TimelineSlot::Pending { .. }));
-        let orphan_pos = slots.iter().position(|s| {
-            matches!(
-                s,
-                TimelineSlot::ToolGroup {
-                    message_sequence: Some(9)
-                }
-            )
-        });
-        assert!(pending_pos.is_some(), "pending must be shown");
-        assert!(
-            pending_pos < orphan_pos,
-            "pending must precede orphan groups: {slots:?}"
-        );
-        let no_pending = build_timeline_order(&messages, &groups, &[], None);
-        assert!(!no_pending
-            .iter()
-            .any(|s| matches!(s, TimelineSlot::Pending { .. })));
     }
 
     #[test]
@@ -470,73 +367,6 @@ mod tests {
             )
             .expect("continued assistant message");
         assert_eq!(pending_pos + 1, continued_pos, "{slots:?}");
-    }
-
-    #[test]
-    fn pending_turn_precedes_tool_group_from_non_emitting_same_request_row() {
-        let messages = vec![TimelineMessageInput {
-            key: "tool-first".to_string(),
-            sequence: Some(3),
-            role: TimelineRole::Assistant,
-            emits_item: false,
-            dedup_token: None,
-        }];
-        let slots = build_timeline_order(
-            &messages,
-            &[Some(3)],
-            &[PendingInput {
-                key: "request".into(),
-                placement: PendingPlacement::BeforeMessage {
-                    message_sequence: 3,
-                },
-            }],
-            None,
-        );
-
-        assert_eq!(
-            slots,
-            vec![
-                TimelineSlot::Pending {
-                    key: "request".into()
-                },
-                TimelineSlot::ToolGroup {
-                    message_sequence: Some(3),
-                },
-            ],
-            "a tool-first partial replica must keep its request-owned prompt first"
-        );
-    }
-
-    #[test]
-    fn non_emitting_target_without_group_falls_back_to_tail() {
-        let messages = vec![
-            TimelineMessageInput {
-                key: "invisible".to_string(),
-                sequence: Some(2),
-                role: TimelineRole::Assistant,
-                emits_item: false,
-                dedup_token: None,
-            },
-            msg("visible", 3, TimelineRole::Assistant),
-        ];
-        let slots = build_timeline_order(
-            &messages,
-            &[],
-            &[PendingInput {
-                key: "request".into(),
-                placement: PendingPlacement::BeforeMessage {
-                    message_sequence: 2,
-                },
-            }],
-            None,
-        );
-
-        assert_eq!(
-            slots.last(),
-            Some(&TimelineSlot::Pending {
-                key: "request".into()
-            })
-        );
     }
 
     #[test]

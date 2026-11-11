@@ -2429,11 +2429,11 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "rust_request_lifecycle_state_vocabulary_matches_lean_model",
         },
         ConformanceConsumer::RustTest {
-            id: "gents_desktop_bridge::snapshot::tests::session_timeline::session_snapshot_consumes_generated_live_overlay_cases",
+            id: "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_live_overlay_consumes_generated_contract_cases",
             package: "gents-desktop-bridge",
-            source_path: "crates/gents-desktop-bridge/src/snapshot/tests/session_timeline.rs",
-            module_path: "gents_desktop_bridge::snapshot::tests::session_timeline",
-            function: "session_snapshot_consumes_generated_live_overlay_cases",
+            source_path: "crates/gents-desktop-bridge/src/snapshot/tests/session_state.rs",
+            module_path: "gents_desktop_bridge::snapshot::tests::session_state",
+            function: "session_snapshot_live_overlay_consumes_generated_contract_cases",
         },
         ConformanceConsumer::RustTest {
             id: "tools::mcp::pool::tests::list_tools_transport_failure_retries_generated_safe_read_case",

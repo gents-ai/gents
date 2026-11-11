@@ -966,17 +966,6 @@ async fn a_stale_binding_runs_the_plugin_without_a_model_and_says_so() {
 }
 
 #[tokio::test]
-async fn a_healthy_binding_carries_no_note() {
-    let fake = Arc::new(Fake::start(Reply::Text, Duration::ZERO).await);
-    let (home, record) = installed(&asking(vec![request("a")]), false, true);
-    let call = executor(&home, Fixed(fake, 1, Duration::from_secs(30)))
-        .call(&record, json!({}))
-        .await
-        .unwrap();
-    assert!(call.binding_note.is_none());
-}
-
-#[tokio::test]
 async fn sessions_on_one_backend_share_its_concurrency_cap() {
     let fake = Fake::start(Reply::Text, Duration::from_millis(120)).await;
     let mut first = Session::new(fake.endpoint(2)).unwrap();

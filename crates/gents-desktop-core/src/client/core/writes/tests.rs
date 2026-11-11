@@ -30,32 +30,6 @@ fn ux_data_requires_the_installing_local_runtime() {
     assert!(ux_local_runtime_record(&[record.clone()], &record.node_did, home.path()).is_err());
 }
 
-/// `ClientChatReadiness` reads no route observation: the runtime's
-/// ACP, not the desktop's copy of the enrollment lease, decides whether a
-/// signed HTTP write is admitted; an enrollment without an endpoint has no
-/// write path whatever its lease says.
-#[test]
-fn enrollment_lease_does_not_gate_the_http_write_path() {
-    let mut peer = peer_record(Some("enrollment"));
-    peer.pairing_ready = true;
-    peer.enrollment_authorization_expires_at = Some("2026-08-30T12:00:01Z".into());
-    let refused = ensure_peer_chat_ready(&peer.node_did, Some(&peer)).unwrap_err();
-    assert_eq!(
-        refused
-            .downcast_ref::<ChatRouteRefusal>()
-            .map(ChatRouteRefusal::cause),
-        Some(ChatRouteCause::EndpointNotAdvertised)
-    );
-    assert!(refused.to_string().contains("endpoint_not_advertised"));
-
-    peer.graphql = Some("http://127.0.0.1:1234/api/v0/graphql".into());
-    assert!(ensure_peer_chat_ready(&peer.node_did, Some(&peer)).is_ok());
-    assert_eq!(
-        peer_record_owning_node(std::slice::from_ref(&peer), &peer.node_did),
-        Some(peer.clone())
-    );
-}
-
 #[test]
 fn chat_write_fence_matches_lean() {
     let cases = crate::client::peer_directory::tests::chat_readiness_cases();

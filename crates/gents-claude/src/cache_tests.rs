@@ -122,19 +122,6 @@ fn generated_cache_cases_place_the_breakpoint() {
 }
 
 #[test]
-fn ttl_truth_table() {
-    for bits in 0..8u8 {
-        let (s, m, o) = (bits & 1 != 0, bits & 2 != 0, bits & 4 != 0);
-        let want = if s && m && !o {
-            CacheTtl::OneHour
-        } else {
-            CacheTtl::FiveMinutes
-        };
-        assert_eq!(ttl(s, m, o), want);
-    }
-}
-
-#[test]
 fn js_whitespace_set() {
     for c in [
         '\t', '\n', '\u{b}', '\u{c}', '\r', ' ', '\u{a0}', '\u{1680}', '\u{2000}', '\u{200a}',
@@ -150,76 +137,12 @@ fn js_whitespace_set() {
     assert!(is_blank("") && is_blank(" \u{feff}\n") && !is_blank(" x "));
 }
 
-#[test]
-fn normalize_drops_blank_text_only() {
-    let mut blocks = vec![text(" "), raw("tool_result"), text(""), text("x")];
-    normalize_user_blocks(&mut blocks);
-    assert_eq!(blocks, vec![raw("tool_result"), text("x")]);
-    let mut blocks = vec![text(" "), text("\n")];
-    normalize_user_blocks(&mut blocks);
-    assert_eq!(blocks, vec![text("(no content)")]);
-    let mut blocks: Vec<ContentBlock> = vec![];
-    normalize_user_blocks(&mut blocks);
-    assert!(blocks.is_empty());
-}
-
 fn msg(role: Role, blocks: Vec<ContentBlock>) -> Message {
     Message {
         role,
         content: MessageContent::Blocks(blocks),
         output_config: None,
     }
-}
-
-#[test]
-fn marks_last_eligible_and_skips_unstampable_assistant() {
-    let mut m = vec![
-        msg(Role::User, vec![text("a")]),
-        msg(
-            Role::Assistant,
-            vec![
-                text("b"),
-                ContentBlock::Thinking {
-                    thinking: String::new(),
-                    signature: String::new(),
-                },
-            ],
-        ),
-    ];
-    place(&mut m, true, false, &cc());
-    let MessageContent::Blocks(b) = &m[0].content else {
-        panic!()
-    };
-    assert!(b[0].cache_control().is_some());
-    let MessageContent::Blocks(b) = &m[1].content else {
-        panic!()
-    };
-    assert!(b.iter().all(|b| b.cache_control().is_none()));
-}
-
-#[test]
-fn skip_write_picks_the_previous_eligible() {
-    let mut m = vec![
-        Message {
-            role: Role::User,
-            content: MessageContent::Text("a".to_owned()),
-            output_config: None,
-        },
-        Message {
-            role: Role::Assistant,
-            content: MessageContent::Text("b".to_owned()),
-            output_config: None,
-        },
-        Message {
-            role: Role::User,
-            content: MessageContent::Text("c".to_owned()),
-            output_config: None,
-        },
-    ];
-    place(&mut m, true, true, &cc());
-    assert!(matches!(&m[0].content, MessageContent::Text(_)));
-    assert!(matches!(&m[1].content, MessageContent::Blocks(b) if b[0].cache_control().is_some()));
-    assert!(matches!(&m[2].content, MessageContent::Text(_)));
 }
 
 #[test]

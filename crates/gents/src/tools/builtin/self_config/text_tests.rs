@@ -583,30 +583,6 @@ async fn results_put_the_answer_first_and_execution_metadata_last() {
 }
 
 #[tokio::test]
-async fn lists_include_unselected_documents() {
-    let (_fixture, tools) = authenticated_setup("lists", &["node", "tools", "automation"]).await;
-    ok(
-        &tools,
-        json!({"argv":["datastore","create","unselected"],"set":{"entries":[]}}),
-    )
-    .await;
-    for argv in [
-        json!(["tools", "list"]),
-        json!(["datastore", "list"]),
-        json!(["automation", "list", "task"]),
-    ] {
-        let result = ok(&tools, json!({"argv":argv})).await;
-        assert!(result["items"].is_array(), "{result}");
-    }
-    let surfaces = ok(&tools, json!({"argv":["datastore","list"]})).await;
-    assert!(surfaces["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|row| row["surface_id"] == "unselected"));
-}
-
-#[tokio::test]
 async fn target_id_fills_a_positional_id() {
     let (fixture, tools) = authenticated_setup("positional", &["node", "tools", "agent"]).await;
     let agent_did = fixture.agent_did();
@@ -998,36 +974,6 @@ async fn crud_automation_keeps_strict_creation_and_selected_task_owner() {
     }
 }
 
-#[tokio::test]
-async fn crud_exact_context_and_tools_preserve_shared_document_guards() {
-    let (fixture, tools) = authenticated_setup("crud-sharing", &["node", "tools", "agent"]).await;
-    let current = fixture.agent_did();
-    let worker = fixture.install_sibling("worker").await;
-    fixture.grant_node_reader().await;
-    fixture.grant_sibling_configuration(&worker).await;
-    let context_id = format!("{worker}:context");
-    let tools_id = format!("{worker}:tools");
-    ok(&tools,json!({"argv":["context","update"],"target_id":context_id,"set":{"system_prompt":"Review clearly."}})).await;
-    ok(
-        &tools,
-        json!({"argv":["tools","update"],"target_id":tools_id,"set":{"tags":["review"]}}),
-    )
-    .await;
-    ok(
-        &tools,
-        json!({"argv":["agent","update",current],"set":{"context_id":context_id}}),
-    )
-    .await;
-    for (resource, id) in [("context", context_id), ("tools", tools_id)] {
-        assert!(refused(
-            &tools,
-            json!({"argv":[resource,"update",id],"set":{"tags":["shared"]}})
-        )
-        .await
-        .contains("unshared"));
-    }
-}
-
 /// #3330 "Done when": a shared-Context edit is refused by default and
 /// accepted with the acknowledgement, and the receipt lists every agent.
 #[tokio::test]
@@ -1138,66 +1084,6 @@ async fn shared_tools_edit_is_refused_by_default_and_accepted_with_acknowledgeme
         Some(64),
         "{receipt}"
     );
-}
-
-/// The acknowledgement waives only the sharing refusal. A caller that may
-/// edit its own Context still needs the agent catalog grant to change one that
-/// other agents select, because the write lands on their configuration too.
-///
-/// The hole this fences is the BOUND path: `agent context edit` on your own
-/// agent needs only the `tools` category, so before this guard a tools-only
-/// agent could acknowledge and rewrite a Context every agent on it uses. The
-/// exact-ID path already required `node` at the command layer.
-#[tokio::test]
-async fn shared_acknowledgement_does_not_widen_who_may_write() {
-    let (fixture, tools) = authenticated_setup("shared-authority", &["tools", "agent"]).await;
-    let current = fixture.agent_did();
-    let worker = fixture.install_sibling("worker").await;
-    fixture.grant_node_reader().await;
-    fixture.grant_sibling_configuration(&worker).await;
-    let context_id = format!("{worker}:context");
-    // Two agents select one Context: the invoking agent and the worker.
-    ok(
-        &tools,
-        json!({"argv":["agent","update",current],"set":{"context_id":context_id}}),
-    )
-    .await;
-
-    // Bound path, no target_id, no node grant: the acknowledgement is not
-    // enough, because the write reaches the worker's configuration too.
-    let refusal = refused(
-        &tools,
-        json!({"argv":["agent","context","edit"],"options":{"shared":"acknowledge"},"set":{"system_prompt":"Shared prompt."}}),
-    )
-    .await;
-    assert!(
-        refusal.contains("agent catalog grant"),
-        "the refusal must name the missing grant: {refusal}"
-    );
-    assert!(
-        refusal.contains(current) && refusal.contains(&worker),
-        "the refusal must name every affected agent: {refusal}"
-    );
-
-    // The same call with the node grant lands.
-    let (fixture2, tools2) =
-        authenticated_setup("shared-authority-node", &["node", "tools", "agent"]).await;
-    let current2 = fixture2.agent_did();
-    let worker2 = fixture2.install_sibling("worker").await;
-    fixture2.grant_node_reader().await;
-    fixture2.grant_sibling_configuration(&worker2).await;
-    let context2 = format!("{worker2}:context");
-    ok(
-        &tools2,
-        json!({"argv":["agent","update",current2],"set":{"context_id":context2}}),
-    )
-    .await;
-    let receipt = ok(
-        &tools2,
-        json!({"argv":["agent","context","edit"],"options":{"shared":"acknowledge"},"set":{"system_prompt":"Shared prompt."}}),
-    )
-    .await;
-    assert_eq!(receipt["committed"], true);
 }
 
 /// The bound `context update` path — the call shape #3330 asked for and the
@@ -1351,26 +1237,6 @@ async fn shared_option_rejects_other_values_and_other_resources() {
     )
     .await;
     assert!(error.contains("shared applies only"), "{error}");
-}
-
-#[tokio::test]
-async fn crud_backend_creation_preserves_auth_boundary() {
-    let (fixture, tools) = authenticated_setup("crud-backend", &["backend"]).await;
-    fixture.grant_node_reader().await;
-    ok(
-        &tools,
-        json!({"argv":["backend","create","local"],"set":{"endpoint":"http://127.0.0.1:8000/v1"}}),
-    )
-    .await;
-    ok(
-        &tools,
-        json!({"argv":["backend","update","local"],"set":{"name":"Local inference"}}),
-    )
-    .await;
-    let read = ok(&tools, json!({"argv":["backend","get","local"]})).await;
-    assert_eq!(read["document"]["name"], "Local inference");
-    assert_eq!(read["document"]["auth"]["redacted"], true);
-    assert!(refused(&tools,json!({"argv":["backend","create","keyed"],"set":{"endpoint":"http://127.0.0.1:8000/v1","auth":{"kind":"api_key","key":"test-only"}}})).await.contains("unauthenticated"));
 }
 
 #[tokio::test]

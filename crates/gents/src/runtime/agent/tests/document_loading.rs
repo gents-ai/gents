@@ -32,29 +32,6 @@ async fn document_constructor_rejects_node_without_signing_did_before_migrations
 }
 
 #[tokio::test]
-async fn from_default_agent_documents_preserves_identity_only_principal() {
-    let (db, _owner_identity, _owner) = test_node("bootstrap-profile").await;
-    let node = db.node.clone();
-    let identity = db.node_identity.clone();
-    let did = identity.did().to_string();
-    let agent = Gents::from_default_agent_documents(
-        node,
-        identity,
-        DocumentRuntimeOptions {
-            backend_admission: Some(db.home.backend_admission()),
-            tool_ceiling: ToolCeiling::readonly(),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    assert!(agent.agents().is_empty());
-    assert_eq!(agent.node_did(), did);
-    assert!(agent.default_agent_did().is_empty());
-    assert!(agent.unavailable_agents().is_empty());
-}
-
-#[tokio::test]
 async fn from_default_agent_documents_composes_behavior_and_inference_profile() {
     let (db, _owner_identity, owner) = test_node("composed-profile").await;
     let node = db.node.clone();

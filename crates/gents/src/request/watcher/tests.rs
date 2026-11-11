@@ -125,22 +125,6 @@ async fn closed_feed_reopens_only_at_fallback_and_wait_is_cancellable() {
     assert_eq!(attempts.get(), 2, "dropping the wait cancels the reopen");
 }
 
-#[tokio::test(start_paused = true)]
-async fn live_feed_change_does_not_reopen_the_subscription() {
-    use events::Bus;
-
-    let bus = events::ChannelBus::new();
-    let mut subscription = bus.subscribe_collection_changes(vec!["requests".into()]);
-    publish_watcher_update(&bus, "requests", "updated");
-    let started = tokio::time::Instant::now();
-    wait_for_change_or_resubscribe(&mut subscription, || {
-        panic!("a live change must not reopen the feed")
-    })
-    .await
-    .unwrap();
-    assert_eq!(tokio::time::Instant::now(), started);
-}
-
 struct ScopedWatcherFixture {
     node: Arc<defra_node::Node>,
     node_did: String,

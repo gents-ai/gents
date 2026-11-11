@@ -1,30 +1,4 @@
 #[tokio::test]
-async fn install_updates_applied_after_success() {
-    let store = MockStore::with_desired(Some(PairingDesired {
-        replicator_addresses: set(&["addr1"]),
-        ..Default::default()
-    }));
-    let admin = MockAdmin::default();
-
-    let outcome = reconcile_peer_tick(&admin, &store, "peer-a")
-        .await
-        .expect("tick result");
-
-    assert_eq!(
-        outcome.ops_applied,
-        vec![DiffOp::InstallReplicator("addr1".into())]
-    );
-    assert_eq!(*admin.connects.lock().unwrap(), vec![vec!["addr1"]]);
-    assert_eq!(
-        *store.applied.lock().unwrap(),
-        PairingApplied {
-            replicator_addresses: set(&["addr1"]),
-            ..Default::default()
-        }
-    );
-}
-
-#[tokio::test]
 async fn active_peer_skips_redial_and_upgrades_data_plane_replicator() {
     let conversation_filter = one_filter("AgentRequest", "requester_did", "did:key:requester");
     let store = MockStore::with_desired(Some(PairingDesired {

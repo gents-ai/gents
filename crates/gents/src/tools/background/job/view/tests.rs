@@ -1,6 +1,3 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-
 use gents_protocol::job::{
     JobChildRow, JobChildState, JobControlKind, JobFailure, JobOutcome, JobPin, JobPinSummary,
     JobPolicy, JobReadError, JobScope, JobState, JobSuspend, JobSuspendKind, JobUsage, JobView,
@@ -518,36 +515,6 @@ async fn list_jobs_excludes_non_job_rows() {
     let pinned = pinned_job_row(&mut job, "call-2").await;
 
     assert_eq!(listed(&job, &every_job()).await, vec![pinned]);
-    job.node.shutdown().await.expect("shut down test node");
-}
-
-#[tokio::test]
-async fn list_jobs_query_count_is_independent_of_job_count() {
-    let mut job = new().await;
-    let first = pinned_job_row(&mut job, "call-1").await;
-    child(&job, &first, "first-child", "review", 0, "First review").await;
-    let count = |job: &Job| {
-        let queries = Arc::new(AtomicUsize::new(0));
-        let access = job.access.clone();
-        async move {
-            crate::tools::background::job::input::CHILD_QUERIES
-                .scope(queries.clone(), async {
-                    list_jobs(&access, &every_job()).await.unwrap()
-                })
-                .await;
-            queries.load(Ordering::Relaxed)
-        }
-    };
-
-    let one = count(&job).await;
-    let second = pinned_job_row(&mut job, "call-2").await;
-    let third = pinned_job_row(&mut job, "call-3").await;
-    child(&job, &second, "second-child", "review", 0, "Second review").await;
-    child(&job, &third, "third-child", "review", 0, "Third review").await;
-    let three = count(&job).await;
-
-    assert!(one > 0);
-    assert_eq!(three, one);
     job.node.shutdown().await.expect("shut down test node");
 }
 

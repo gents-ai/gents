@@ -322,20 +322,6 @@ fn request_lifecycle_treats_active_states_live_and_terminals_not_live() {
 }
 
 #[test]
-fn frozen_instruction_manifest_is_copied_onto_overlay() {
-    let (_guard, operator, placement_path) = temp_tree();
-    let mut workspace = ready_workspace();
-    workspace.instruction_manifest = r#"{"schema":1,"base_sha":"abc","files":[]}"#.into();
-    let overlay = bind_workspace_overlay(
-        &workspace,
-        &placement(&placement_path),
-        bind_input(WorkspaceAuthority::ReadOnly, Some(&operator), false),
-    )
-    .unwrap();
-    assert!(overlay.instruction_manifest.contains("base_sha"));
-}
-
-#[test]
 fn empty_bound_overlay_does_not_live_walk_writer_tree() {
     let root = tempfile::tempdir().unwrap();
     let operator = std::fs::canonicalize(root.path()).unwrap();

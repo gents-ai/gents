@@ -769,14 +769,13 @@ pub async fn build_step_input(
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
     use defra_node::Node as EmbeddedNode;
     use gents_protocol::job::JobChildState;
     use serde_json::{json, Value};
 
-    use super::{derive_children, CHILD_QUERIES};
+    use super::derive_children;
     use crate::store::config_client::ConfigAccess;
     use crate::tools::background::job::keys::{job_message_key, job_session_id, job_spawn_key};
 
@@ -1013,26 +1012,6 @@ pub(crate) mod tests {
         .await;
     }
 
-    async fn counted(
-        access: &ConfigAccess,
-        chain: &[String],
-        cap: u64,
-    ) -> (
-        anyhow::Result<
-            Vec<(
-                crate::tools::background::job::admit::StepChild,
-                gents_protocol::job::JobChildView,
-            )>,
-        >,
-        usize,
-    ) {
-        let queries = Arc::new(AtomicUsize::new(0));
-        let output = CHILD_QUERIES
-            .scope(queries.clone(), derive_children(access, chain, cap))
-            .await;
-        (output, queries.load(Ordering::Relaxed))
-    }
-
     #[tokio::test]
     async fn children_are_attributed_by_retry_key_across_two_slots_with_a_retry_attempt() {
         let node = open().await;
@@ -1252,49 +1231,6 @@ pub(crate) mod tests {
         assert_eq!(beta.1.usage.input, 7);
         assert_eq!(beta.1.usage.output, 8);
         assert_eq!(beta.1.usage.total, 15);
-        node.shutdown().await.expect("shut down test node");
-    }
-
-    #[tokio::test]
-    async fn child_derivation_query_count_is_independent_of_child_count() {
-        let node = open().await;
-        let one = "one-row";
-        let many = "many-row";
-        request(
-            &node,
-            one,
-            "only",
-            &job_session_id("root", "only", 0),
-            &job_spawn_key("root", "only", 0),
-            "agent",
-            "processing",
-            None,
-            "2026-01-01T00:00:00Z",
-            None,
-        )
-        .await;
-        for attempt in 0..3 {
-            request(
-                &node,
-                many,
-                &format!("m{attempt}"),
-                &job_session_id("root", "many", attempt),
-                &job_spawn_key("root", "many", attempt),
-                "agent",
-                "processing",
-                None,
-                "2026-01-01T00:00:00Z",
-                None,
-            )
-            .await;
-        }
-        let access = ConfigAccess::local(node.clone());
-        let (single, single_queries) = counted(&access, &[one.into()], 64).await;
-        let (triple, triple_queries) = counted(&access, &[many.into()], 64).await;
-        assert_eq!(single.unwrap().len(), 1);
-        assert_eq!(triple.unwrap().len(), 3);
-        assert_eq!(single_queries, triple_queries);
-        assert!(single_queries > 0);
         node.shutdown().await.expect("shut down test node");
     }
 

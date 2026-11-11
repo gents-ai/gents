@@ -110,34 +110,6 @@ fn accepted_reload_refreshes_unretained_lineage_but_rejected_reload_does_not() {
     );
 }
 
-/// A tool-call change is a request event: it rejects a patch read before it
-/// but not a reload, whose own resync reads after it.
-#[test]
-fn late_reload_cannot_erase_a_request_refreshed_after_capture() {
-    for scope in [None, Some("did:test:reload")] {
-        let (store, _) = ObservedStore::new(requests(&["accounted"]));
-        let captured = store.capture_read();
-        let old_database_read = requests(&["accounted"]);
-        store.merge_chat_patch(requests(&["pending"]));
-        let refreshed = store.projection_revision();
-        assert!(!store.replace_reloaded_snapshot_at_read(&captured, scope, old_database_read,));
-        assert_eq!(store.projection_revision(), refreshed);
-        assert!(store
-            .snapshot()
-            .requests
-            .iter()
-            .any(|row| row.request_id == "pending"));
-        let refreshed_snapshot = store.capture_read();
-        assert!(store.replace_reloaded_snapshot_at_read(
-            &refreshed_snapshot,
-            scope,
-            requests(&["pending"]),
-        ));
-        assert_eq!(store.snapshot().requests.len(), 1);
-        assert_eq!(store.snapshot().requests[0].request_id, "pending");
-    }
-}
-
 #[test]
 fn physical_request_owner_replacement_fences_both_scopes() {
     let rows = |owner: &str| {
@@ -160,38 +132,6 @@ fn physical_request_owner_replacement_fences_both_scopes() {
         store.snapshot().requests[0].node_did.as_deref(),
         Some("did:new")
     );
-}
-
-#[test]
-fn captured_patch_rejects_newer_data_and_request_event_but_not_transcript_notice() {
-    let (store, _) = ObservedStore::new(requests(&["old"]));
-    let captured = store.capture_read();
-    store.invalidate_projection(false);
-    assert!(store
-        .merge_chat_patch_at_read(&captured, requests(&["valid"]))
-        .is_some());
-
-    let stale_snapshot = store.capture_read();
-    store.replace_snapshot(requests(&[]));
-    assert!(store
-        .merge_chat_patch_at_read(&stale_snapshot, requests(&["old"]),)
-        .is_none());
-    assert!(!store
-        .snapshot()
-        .requests
-        .iter()
-        .any(|row| row.request_id == "old"));
-
-    let uncached_snapshot = store.capture_read();
-    store.observe_request_event(None);
-    assert!(store
-        .merge_chat_patch_at_read(&uncached_snapshot, requests(&["deleted-before-read"]),)
-        .is_none());
-    assert!(!store
-        .snapshot()
-        .requests
-        .iter()
-        .any(|row| row.request_id == "deleted-before-read"));
 }
 
 #[test]

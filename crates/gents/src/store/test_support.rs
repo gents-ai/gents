@@ -1,5 +1,4 @@
 pub mod acp_policies;
-pub mod read_observation;
 
 pub fn test_identity(name: &str) -> crate::store::identity::KeyIdentity {
     let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));

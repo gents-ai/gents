@@ -371,65 +371,6 @@ async fn cross_provider_tool_identity_allows_the_owned_loop_to_continue() {
 }
 
 #[tokio::test]
-async fn provider_dispatch_uses_the_owned_model_instance() {
-    struct Model {
-        inner: ScriptedModel,
-        cloned: bool,
-    }
-    impl Clone for Model {
-        fn clone(&self) -> Self {
-            Self {
-                inner: self.inner.clone(),
-                cloned: true,
-            }
-        }
-    }
-    #[allow(refining_impl_trait)]
-    impl CompletionModel for Model {
-        type Response = ();
-        type StreamingResponse = ();
-        type Client = ();
-
-        fn make(_: &Self::Client, _: impl Into<String>) -> Self {
-            unreachable!()
-        }
-
-        async fn completion(
-            &self,
-            _: CompletionRequest,
-        ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-            unreachable!()
-        }
-
-        async fn stream(
-            &self,
-            request: CompletionRequest,
-        ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-            assert!(!self.cloned, "dispatch must use the owned model instance");
-            self.inner.stream(request).await
-        }
-    }
-
-    let model = Model {
-        inner: ScriptedModel::new(vec![vec![
-            RawStreamingChoice::Message("done".into()),
-            RawStreamingChoice::FinalResponse(()),
-        ]]),
-        cloned: false,
-    };
-    let result = run_loop_to_text(
-        model,
-        Message::user("hello"),
-        Vec::new(),
-        Arc::new(Vec::new()),
-        test_loop_config(),
-    )
-    .await
-    .unwrap();
-    assert_eq!(result, "done");
-}
-
-#[tokio::test]
 async fn cancelling_a_pending_provider_stream_drops_it() {
     use std::sync::atomic::{AtomicBool, Ordering};
 

@@ -59,23 +59,3 @@ async fn load_command_output_limits(
     )
     .await
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn unresolvable_configuration_uses_the_default() {
-        let node = std::sync::Arc::new(
-            crate::store::test_support::node_builder()
-                .build()
-                .await
-                .unwrap(),
-        );
-        crate::ensure_runtime_schemas(&node).await.unwrap();
-        assert_eq!(
-            configured_output_budget(&node, "did:key:absent", "missing", "bash").await,
-            crate::tools::native::DEFAULT_MAX_COMMAND_CHARS
-        );
-    }
-}

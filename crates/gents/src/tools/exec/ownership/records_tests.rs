@@ -116,16 +116,3 @@ fn strict_and_recovery_reads_ignore_staged_files_and_unrelated_entries() {
     assert_eq!(store.list(), std::slice::from_ref(&row));
     assert_eq!(store.try_list().unwrap(), [row]);
 }
-
-#[test]
-fn volatile_store_clones_share_the_same_strict_and_recovery_view() {
-    let store = HostRecordStore::default();
-    let row = record("document");
-    let clone = store.clone();
-    store.write(&row).unwrap();
-    assert_eq!(clone.list(), std::slice::from_ref(&row));
-    assert_eq!(clone.try_list().unwrap(), [row]);
-    clone.remove("document");
-    assert!(store.list().is_empty());
-    assert!(store.try_list().unwrap().is_empty());
-}

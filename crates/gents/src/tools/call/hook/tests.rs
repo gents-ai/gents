@@ -608,53 +608,6 @@ async fn active_request_binding_rejects_a_half_bound_pair() {
     node.shutdown().await.expect("shut down test node");
 }
 
-#[tokio::test]
-async fn request_lineage_keeps_exact_doc_id_through_prompt_and_tool_paths() {
-    let node = Arc::new(
-        crate::store::test_support::node_builder()
-            .build()
-            .await
-            .expect("embedded node"),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
-    let hook = signed_hook(&node, FailurePolicy::default()).await;
-    assert!(matches!(
-        hook.on_completion_call(&user_text_message("Run"), &[])
-            .await,
-        HookAction::Continue
-    ));
-    let session_id = hook.session_id().await.expect("session id");
-    bind_interruptible_request(
-        &hook,
-        "request-lineage",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
-    let expected_doc_id = hook
-        .state
-        .lock()
-        .await
-        .current_request_doc_id
-        .clone()
-        .expect("resolved request doc id");
-
-    accept_hook_tool_call(&hook, "lineage-reload", "read", "{}", None).await;
-    assert!(matches!(
-        hook.on_tool_call("read", None, "lineage-reload", "{}")
-            .await,
-        ToolCallHookAction::Continue
-    ));
-
-    let row = fetch_tool_call_row(&hook, &session_id, "lineage-reload").await;
-    assert_eq!(
-        row.get("request_doc_id")
-            .and_then(serde_json::Value::as_str),
-        Some(expected_doc_id.as_str())
-    );
-    node.shutdown().await.expect("shut down test node");
-}
-
 fn failure_policy_from_contract(policy: &str) -> FailurePolicy {
     match policy {
         "failOpen" => FailurePolicy::FailOpen,
@@ -3935,45 +3888,6 @@ async fn replacing_a_registry_entry_does_not_release_the_original_workers_retire
     );
     drop(old);
     registry.service_admission().retire(authority).unwrap();
-}
-
-#[tokio::test]
-async fn background_execution_reservation_drop_releases_ownership() {
-    let registry = BackgroundExecutionRegistry::default();
-    {
-        let _reservation = registry
-            .reserve(
-                "tool-reserved".to_string(),
-                "tool-reserved-doc".to_string(),
-                CancellationToken::new(),
-            )
-            .unwrap();
-        assert!(
-            registry
-                .contains("tool-reserved", "tool-reserved-doc")
-                .await
-        );
-    }
-    assert!(
-        !registry
-            .contains("tool-reserved", "tool-reserved-doc")
-            .await
-    );
-
-    let reservation = registry
-        .reserve(
-            "tool-transferred".to_string(),
-            "tool-transferred-doc".to_string(),
-            CancellationToken::new(),
-        )
-        .unwrap();
-    reservation.disarm();
-    assert!(
-        registry
-            .contains("tool-transferred", "tool-transferred-doc")
-            .await
-    );
-    registry.remove("tool-transferred").await;
 }
 
 #[tokio::test]

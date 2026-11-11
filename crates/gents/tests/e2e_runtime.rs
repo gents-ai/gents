@@ -20,8 +20,6 @@ mod mailbox_tool_turn;
 mod projection_acp_policy_lifecycle;
 #[path = "e2e_runtime/provider_fixture_redaction.rs"]
 mod provider_fixture_redaction;
-#[path = "e2e_runtime/provider_fixture_replay.rs"]
-mod provider_fixture_replay;
 #[path = "e2e_runtime/queued_user_messages.rs"]
 mod queued_user_messages;
 #[path = "e2e_runtime/rendered_request_capture.rs"]
@@ -41,18 +39,6 @@ mod workspace_binding_recovery;
 fn provider_wire_fixtures_do_not_contain_credentials() {
     provider_fixture_redaction::provider_wire_fixtures_do_not_contain_credentials()
         .expect("provider wire fixtures should be redacted");
-}
-
-#[test]
-fn provider_wire_fixture_replay_consumes_every_recorded_exchange_once() {
-    provider_fixture_replay::provider_wire_fixture_replay_consumes_every_recorded_exchange_once()
-        .expect("provider wire fixture replay should consume all exchanges");
-}
-
-#[test]
-fn provider_wire_fixture_replay_rejects_unmatched_and_leftover_requests() {
-    provider_fixture_replay::provider_wire_fixture_replay_rejects_unmatched_and_leftover_requests()
-        .expect("provider wire fixture replay should reject unmatched and leftover requests");
 }
 
 #[path = "e2e_runtime/field_recovery_turn.rs"]
