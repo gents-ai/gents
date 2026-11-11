@@ -308,7 +308,8 @@ const COLOURED: &str = "\u{1b}[32m INFO\u{1b}[0m \u{1b}[2mgents::triggers::engin
 
 #[test]
 fn matches_the_observe_line_through_ansi_colouring() {
-    assert!(observes_collection(&strip_ansi(COLOURED), "ExperimentJob"));
+    let line = gents_desktop_core::ansi::strip_ansi(COLOURED);
+    assert!(observes_collection(&line, "ExperimentJob"));
 }
 
 #[test]

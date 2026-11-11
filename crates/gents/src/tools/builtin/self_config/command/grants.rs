@@ -187,9 +187,9 @@ impl ConfigCommandTool {
         Ok(())
     }
 
-    pub(super) fn ensure_default_selection(&self, params: &ConfigureAgentParams) -> Result<()> {
+    pub(super) fn ensure_default_selection(&self, make_default: bool) -> Result<()> {
         anyhow::ensure!(
-            !params.make_default || may_create_agent(&self.categories),
+            !make_default || may_create_agent(&self.categories),
             "--default changes the node's agent selection and requires the agent catalog grant (category node)"
         );
         Ok(())

@@ -258,7 +258,7 @@ async fn check_turn_chronology(retry: bool) {
     node.shutdown().await.expect("node shutdown");
     drop(node);
     drop(fixture.home);
-    let reopened = crate::eval::runner::embedded::EmbeddedHome::open_retained(&fixture.path)
+    let reopened = crate::runtime::embedded::EmbeddedHome::open_retained(&fixture.path)
         .await
         .unwrap();
     assert_eq!(

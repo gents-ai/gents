@@ -610,10 +610,13 @@ async fn maybe_inline_grok_login(
             provider,
             label: None,
         },
+        crate::commands::grok_login::print_grok_sign_in_url,
+        &tokio_util::sync::CancellationToken::new(),
     )
     .await
     {
         Ok(outcome) => {
+            crate::commands::login_wait::print_sign_in_notes(&outcome.sign_in);
             if let Some(note) = added_account_note(&outcome.sign_in) {
                 eprintln!("{note}");
             }
@@ -687,10 +690,13 @@ async fn maybe_inline_claude_login(
             client_id: None,
             token_url: None,
         },
+        |url| eprintln!("Open this URL to sign in with Claude:\n{url}"),
+        &tokio_util::sync::CancellationToken::new(),
     )
     .await
     {
         Ok(outcome) => {
+            crate::commands::login_wait::print_sign_in_notes(&outcome.sign_in);
             if let Some(note) = added_account_note(&outcome.sign_in) {
                 eprintln!("{note}");
             }
@@ -742,10 +748,13 @@ async fn maybe_inline_codex_login(
             issuer: None,
             device_auth: false,
         },
+        |url| eprintln!("Open this URL to sign in with ChatGPT:\n{url}"),
+        &tokio_util::sync::CancellationToken::new(),
     )
     .await
     {
         Ok(outcome) => {
+            crate::commands::login_wait::print_sign_in_notes(&outcome.sign_in);
             if let Some(note) = added_account_note(&outcome.sign_in) {
                 eprintln!("{note}");
             }
@@ -1724,7 +1733,7 @@ fn init_next_steps(
         steps.push(format!("llama-server -hf {}", summary.model_name));
     }
     steps.push("gents runtime server".to_string());
-    steps.push("gents codex".to_string());
+    steps.push("gents".to_string());
     let home = crate::shell_word(home);
     steps.push(format!(
         "To change the model's address, save the output of `gents config backend show {} --home {home}` without its `_docID`, edit `endpoint`, and load it with `gents config backend set --file <backend.json> --home {home}`.",
@@ -1799,7 +1808,7 @@ mod inference_seed_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::eval::runner::embedded::EmbeddedHome;
+    use gents::runtime::embedded::EmbeddedHome;
 
     #[tokio::test]
     async fn an_identity_only_home_protects_its_fresh_store_for_later_openers() {

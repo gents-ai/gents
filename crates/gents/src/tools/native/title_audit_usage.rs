@@ -233,11 +233,19 @@ pub(crate) async fn load_session_goal_usage(
     node_did: &str,
     session_id: &str,
 ) -> Result<crate::goal::SessionTokenUsage> {
-    let response = txn.execute(&format!(
-        r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, purpose: {{ _in: ["normal", "access-review"] }} }}) {{ {} }} }}"#,
-        escape_graphql_string(node_did), escape_graphql_string(session_id),
-        gents_protocol::request_admission::SIGNED_REQUEST_RECEIPT_FIELDS,
-    )).await?;
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::owned(
+            gents_protocol::request_admission::SIGNED_REQUEST_RECEIPT_FIELDS,
+        ))
+        .filter(Filter::eq(fields::NODE_DID, node_did))
+        .filter(Filter::eq(fields::SESSION_ID, session_id))
+        .filter(Filter::any_of(fields::PURPOSE, ["normal", "access-review"]))
+        .render()
+    };
+    let response = txn.run(&rendered).await?;
     let requests: Vec<AgentRequestRow> = serde_json::from_value(
         response
             .pointer("/data/AgentRequest")

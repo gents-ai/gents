@@ -533,16 +533,6 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) r4c_background_work_cases: Vec<LeanR4cBackgroundWorkCase>,
     pub(crate) tool_output_paging_cases: Vec<LeanToolOutputPagingCase>,
     pub(crate) interrupt_disposition_cases: Vec<LeanInterruptDispositionCase>,
-    pub(crate) codex_shim_projection_cases: Vec<LeanCodexShimProjectionCase>,
-    pub(crate) codex_shim_reasoning_projection_cases: Vec<LeanCodexShimReasoningProjectionCase>,
-    pub(crate) codex_shim_thread_status_cases: Vec<LeanCodexShimThreadStatusCase>,
-    pub(crate) codex_shim_agent_selection_cases: Vec<LeanCodexShimAgentSelectionCase>,
-    pub(crate) codex_shim_tool_metadata_cases: Vec<LeanCodexShimToolMetadataCase>,
-    pub(crate) codex_shim_context_usage_cases: Vec<LeanCodexShimContextUsageCase>,
-    pub(crate) codex_shim_compaction_projection_cases: Vec<LeanCodexShimCompactionProjectionCase>,
-    pub(crate) codex_shim_turn_lifecycle_cases: Vec<LeanCodexShimTurnLifecycleCase>,
-    pub(crate) codex_shim_binding_cases: Vec<LeanCodexShimBindingCase>,
-    pub(crate) codex_shim_connection_admission_cases: Vec<LeanCodexShimConnectionAdmissionCase>,
     pub(crate) r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
     pub(crate) composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
     pub(crate) r6_background_theorem_witnesses: Vec<LeanBackgroundTheoremWitness>,
@@ -2765,8 +2755,6 @@ mod canonical_output;
 pub(crate) mod canonical_presentation;
 #[path = "client_session.rs"]
 mod client_session;
-#[path = "codex_shim.rs"]
-mod codex_shim;
 #[path = "command_identity_queue.rs"]
 mod command_identity_queue;
 #[path = "compaction_canonical_projection.rs"]
@@ -2816,7 +2804,6 @@ pub(crate) use canonical_execution::*;
 pub(crate) use canonical_output::*;
 pub(crate) use canonical_presentation::*;
 pub(crate) use client_session::*;
-pub(crate) use codex_shim::*;
 pub(crate) use command_identity_queue::*;
 pub(crate) use compaction_canonical_projection::*;
 pub(crate) use compaction_projection_join::*;
@@ -3265,60 +3252,6 @@ pub(crate) fn lean_r4c_background_work_case(witness: &str) -> &'static LeanR4cBa
         .iter()
         .find(|case| case.witness() == witness)
         .unwrap_or_else(|| panic!("Lean R4c background-work witness {witness:?} was not emitted"))
-}
-
-pub(crate) fn lean_codex_shim_projection_cases() -> &'static [LeanCodexShimProjectionCase] {
-    &lean_contract_snapshot().codex_shim_projection_cases
-}
-
-pub(crate) fn lean_codex_shim_projection_case(
-    witness: &str,
-) -> &'static LeanCodexShimProjectionCase {
-    lean_contract_snapshot()
-        .codex_shim_projection_cases
-        .iter()
-        .find(|case| case.witness == witness)
-        .unwrap_or_else(|| panic!("Lean Codex shim projection witness {witness:?} was not emitted"))
-}
-
-pub(crate) fn lean_codex_shim_reasoning_projection_cases(
-) -> &'static [LeanCodexShimReasoningProjectionCase] {
-    &lean_contract_snapshot().codex_shim_reasoning_projection_cases
-}
-
-pub(crate) fn lean_codex_shim_thread_status_cases() -> &'static [LeanCodexShimThreadStatusCase] {
-    &lean_contract_snapshot().codex_shim_thread_status_cases
-}
-
-pub(crate) fn lean_codex_shim_agent_selection_cases() -> &'static [LeanCodexShimAgentSelectionCase]
-{
-    &lean_contract_snapshot().codex_shim_agent_selection_cases
-}
-
-pub(crate) fn lean_codex_shim_tool_metadata_cases() -> &'static [LeanCodexShimToolMetadataCase] {
-    &lean_contract_snapshot().codex_shim_tool_metadata_cases
-}
-
-pub(crate) fn lean_codex_shim_context_usage_cases() -> &'static [LeanCodexShimContextUsageCase] {
-    &lean_contract_snapshot().codex_shim_context_usage_cases
-}
-
-pub(crate) fn lean_codex_shim_compaction_projection_cases(
-) -> &'static [LeanCodexShimCompactionProjectionCase] {
-    &lean_contract_snapshot().codex_shim_compaction_projection_cases
-}
-
-pub(crate) fn lean_codex_shim_turn_lifecycle_cases() -> &'static [LeanCodexShimTurnLifecycleCase] {
-    &lean_contract_snapshot().codex_shim_turn_lifecycle_cases
-}
-
-pub(crate) fn lean_codex_shim_binding_cases() -> &'static [LeanCodexShimBindingCase] {
-    &lean_contract_snapshot().codex_shim_binding_cases
-}
-
-pub(crate) fn lean_codex_shim_connection_admission_cases(
-) -> &'static [LeanCodexShimConnectionAdmissionCase] {
-    &lean_contract_snapshot().codex_shim_connection_admission_cases
 }
 
 pub(crate) fn lean_r6_backgrounding_cases() -> &'static [LeanR6BackgroundingCase] {

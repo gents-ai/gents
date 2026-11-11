@@ -32,20 +32,23 @@ pub async fn load_session_context_details(
     {
         return Ok(None);
     }
-    let requester = requester
-        .map(|did| format!("\"{}\"", escape_graphql_string(did)))
-        .unwrap_or_else(|| "null".into());
-    let response = access
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{
-        node_did: {{_eq: "{}"}}, requester_did: {{_eq: {requester}}},
-        session_id: {{_eq: "{}"}}, request_id: {{_eq: "{}"}}
-    }}, limit: 2) {{_docID}} }}"#,
-            escape_graphql_string(agent),
-            escape_graphql_string(session),
-            escape_graphql_string(&context.request_id)
-        ))
-        .await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::agent_request as request, Filter, Query, Selection,
+        };
+        let requester_filter = match requester {
+            Some(did) => Filter::eq(request::REQUESTER_DID, did),
+            None => Filter::is_null(request::REQUESTER_DID),
+        };
+        let rendered = Query::select(Selection::doc_id())
+            .filter(Filter::eq(request::NODE_DID, agent))
+            .filter(requester_filter)
+            .filter(Filter::eq(request::SESSION_ID, session))
+            .filter(Filter::eq(request::REQUEST_ID, &context.request_id))
+            .limit(2)
+            .render();
+        access.read(&rendered).await?
+    };
     let owners = response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
@@ -56,20 +59,30 @@ pub async fn load_session_context_details(
     let doc = owner["_docID"]
         .as_str()
         .context("context detail owner lacks physical identity")?;
-    let response = access
-        .execute(&format!(
-            r#"{{ RenderedRequest(filter: {{
-        request_doc_id: {{_eq: "{}"}}, node_did: {{_eq: "{}"}},
-        session_id: {{_eq: "{}"}}, capture_scope: {{_like: "inference.%"}},
-        turn_index: {{_eq: {}}}, attempt: {{_eq: {}}}
-    }}, limit: 2) {{capture_version source request_json provenance_json}} }}"#,
-            escape_graphql_string(doc),
-            escape_graphql_string(agent),
-            escape_graphql_string(session),
+    let response = {
+        use gents_protocol::document_query::{
+            fields::rendered_request as request, Filter, Query, Selection,
+        };
+        let rendered = Query::select(
+            Selection::new()
+                .field(request::CAPTURE_VERSION)
+                .field(request::SOURCE)
+                .field(request::REQUEST_JSON)
+                .field(request::PROVENANCE_JSON),
+        )
+        .filter(Filter::eq(request::REQUEST_DOC_ID, doc))
+        .filter(Filter::eq(request::NODE_DID, agent))
+        .filter(Filter::eq(request::SESSION_ID, session))
+        .filter(Filter::like(request::CAPTURE_SCOPE, "inference.%"))
+        .filter(Filter::eq(
+            request::TURN_INDEX,
             context.accounting.turn_index,
-            context.accounting.attempt
         ))
-        .await?;
+        .filter(Filter::eq(request::ATTEMPT, context.accounting.attempt))
+        .limit(2)
+        .render();
+        access.read(&rendered).await?
+    };
     let captures = response
         .pointer("/data/RenderedRequest")
         .and_then(Value::as_array)

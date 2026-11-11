@@ -42,62 +42,6 @@ pub(crate) struct InitSummary {
 pub(crate) type StoredInitConfig =
     gents::store::local::home::StoredInitConfig<ToolPackageArg, ToolCeilingArg>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CodexShimHealth {
-    Off,
-    Listening {
-        websocket: String,
-        auth_required: bool,
-        bound_node_did: String,
-        bound_agent_did: String,
-    },
-    Pending {
-        bound_agent_did: String,
-        reason: String,
-    },
-    Disabled {
-        reason: String,
-    },
-}
-
-impl CodexShimHealth {
-    pub(crate) fn is_degraded(&self) -> bool {
-        matches!(self, Self::Pending { .. } | Self::Disabled { .. })
-    }
-
-    pub(crate) fn to_json(&self) -> serde_json::Value {
-        match self {
-            Self::Off => serde_json::json!({ "status": "off" }),
-            Self::Listening {
-                websocket,
-                auth_required,
-                bound_node_did,
-                bound_agent_did,
-            } => serde_json::json!({
-                "status": "ok",
-                "websocket": websocket,
-                "auth_required": auth_required,
-                "bound_node_did": bound_node_did,
-                "bound_agent_did": bound_agent_did,
-            }),
-            Self::Pending {
-                bound_agent_did,
-                reason,
-            } => serde_json::json!({
-                "status": "pending",
-                "bound_agent_did": bound_agent_did,
-                "reason": reason,
-            }),
-            Self::Disabled { reason } => serde_json::json!({
-                "status": "disabled",
-                "reason": reason,
-            }),
-        }
-    }
-}
-
-pub(crate) type CodexShimHealthHandle = std::sync::Arc<std::sync::RwLock<CodexShimHealth>>;
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct P2pAdmissionState {
     pub(crate) max_pending_dags: usize,

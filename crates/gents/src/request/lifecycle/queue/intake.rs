@@ -7,19 +7,25 @@ pub(crate) async fn pending_rows_in_txn(
     node_did: &str,
     session_id: &str,
 ) -> Result<Vec<AgentRequestRow>> {
-    let response = txn
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }},
-            session_id: {{ _eq: "{}" }}, purpose: {{ _eq: "normal" }},
-            lifecycle_state: {{ _eq: "{pending}" }} }}) {{
-            {} execution_lease_secs interrupt_requested_at
-        }} }}"#,
-            escape_graphql_string(node_did),
-            escape_graphql_string(session_id),
-            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
-            pending = RequestLifecycleState::Pending.as_str()
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(
+            Selection::owned(gents_protocol::request_admission::SIGNED_REQUEST_FIELDS)
+                .field(fields::EXECUTION_LEASE_SECS)
+                .field(fields::INTERRUPT_REQUESTED_AT),
+        )
+        .filter(Filter::eq(fields::NODE_DID, node_did))
+        .filter(Filter::eq(fields::SESSION_ID, session_id))
+        .filter(Filter::eq(fields::PURPOSE, "normal"))
+        .filter(Filter::eq(
+            fields::LIFECYCLE_STATE,
+            RequestLifecycleState::Pending.as_str(),
         ))
-        .await?;
+        .render()
+    };
+    let response = txn.run(&rendered).await?;
     serde_json::from_value(response["data"]["AgentRequest"].clone())
         .context("decode pending session requests")
 }

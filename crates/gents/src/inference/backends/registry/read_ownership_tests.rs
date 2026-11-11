@@ -59,12 +59,14 @@ async fn runtime_observation_reads_do_not_wait_for_the_mutation_gate() {
         collection: Some("AgentRequest".into()),
         options: Default::default(),
     };
+    let access = ConfigAccess::local(Arc::clone(&node));
+    let missing_docs = [missing_doc];
     let observations = tokio::time::timeout(OBSERVATION_TIMEOUT, async {
         tokio::join!(
             lookup_backend_observation(&node, &owner, "missing"),
             crate::session::max_sequence(&node, "missing", &owner, None),
             crate::session::load_session_current_hop(&node, &actor, &owner, "missing"),
-            crate::tools::background::status::load_caused_request_terminal(&node, &missing_doc),
+            crate::tools::background::status::load_caused_request_terminals(&access, &missing_docs),
             crate::load_inference_profile(&node, &owner, "missing"),
             Tool::call(&query, query_args),
         )
@@ -77,7 +79,7 @@ async fn runtime_observation_reads_do_not_wait_for_the_mutation_gate() {
     assert!(backend.unwrap().is_none());
     assert_eq!(sequence.unwrap(), 0);
     assert_eq!(hop.unwrap(), 0);
-    assert!(terminal.unwrap().is_none());
+    assert!(terminal.unwrap().is_empty());
     assert!(profile.unwrap().is_none());
     let schema: serde_json::Value = serde_json::from_str(&query_result.unwrap()).unwrap();
     assert!(schema.is_object());

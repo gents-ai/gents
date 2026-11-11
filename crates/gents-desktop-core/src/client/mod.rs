@@ -15,13 +15,22 @@ pub(crate) use query::load_inference_configuration;
 
 pub use collection_resolver::CollectionResolver;
 pub use core::{
-    ChatRouteRefusal, ClientCore, ClientCoreOptions, ClientObservationAttachment, ClientPeerStatus,
-    ClientRouteStatus, ClientStoreKeyProvider, ClientSyncStateSnapshot, EnrollmentActivationError,
-    EnrollmentRequestResult, GoalSubmissionReference, InferenceActivity, InferenceObservation,
-    InferenceTarget, LocalHomeAccessError, P2PHealth, P2PHealthStatus, PairingCollectionStatus,
+    tool_file_changes_on, ChatRouteRefusal, ClientCore, ClientCoreOptions,
+    ClientObservationAttachment, ClientPeerStatus, ClientRouteStatus, ClientStoreKeyProvider,
+    ClientSyncStateSnapshot, EnrollmentActivationError, EnrollmentRequestResult,
+    GoalSubmissionReference, InferenceActivity, InferenceObservation, InferenceTarget,
+    LocalHomeAccessError, P2PHealth, P2PHealthStatus, PairingCollectionStatus,
     RefreshedRequestProjection, RetainedGoalSubmission, StoreRefresh, STUCK_THRESHOLD_ATTEMPTS,
 };
 
+pub use mutations::{apply_config_components_on, patch_config_components_on, set_default_agent_on};
+pub use mutations::{
+    delete_event_source_on, delete_schedule_on, delete_skill_on, delete_tool_service_registry_on,
+    delete_trigger_on, resolve_schedule_now_on, upsert_event_source_on, upsert_node_on,
+    upsert_schedule_on, upsert_skill_on, upsert_tool_service_registry_on, upsert_trigger_on,
+    ManualTaskInvocation,
+};
+pub use mutations::{interrupt_request_on, RequestInterrupt};
 pub use mutations::{ConfigEditorDocument, ConfigEditorRevision};
 pub use mutations::{PeerMutationResult, SendMessage, SubmitRequestOptions, SubmittedRequest};
 pub use observe::{
@@ -41,8 +50,9 @@ pub use query::{
     load_request_prompt_ownership_on, load_session_compaction_entries,
     load_session_compaction_entries_on, load_session_context_store, load_session_context_store_on,
     load_session_diagnostics_store, load_session_diagnostics_store_on, load_session_live_store,
-    load_session_live_store_on, load_session_tip_store, load_session_tip_store_on,
-    load_session_transcript_page, load_session_transcript_page_on, load_session_transcript_window,
+    load_session_live_store_on, load_session_live_text_on, load_session_request_live_store_on,
+    load_session_tip_store, load_session_tip_store_on, load_session_transcript_page,
+    load_session_transcript_page_on, load_session_transcript_window,
     load_session_transcript_window_on, CanonicalTranscriptDependencies, RequestPromptFact,
     RequestPromptOwnership, SessionTranscriptQueryPage, SnapshotReadError, TranscriptSpan,
     TranscriptWindow, DEFAULT_SESSION_TRANSCRIPT_PAGE_SIZE, MAX_SESSION_TRANSCRIPT_PAGE_SIZE,
@@ -50,7 +60,8 @@ pub use query::{
 pub use schema::subscribed_collection_names;
 pub use store::{
     folded_requests, queued_behind_turn, request_answer_owner, session_display_request,
-    session_turn_request, source_matches_node, ClientStore, ClientStoreRows, TaskRecentRuns,
+    session_order_key, session_summary_entries, session_turn_request, source_matches_node,
+    ClientStore, ClientStoreRows, SessionOrderKey, SessionSummaryEntry, TaskRecentRuns,
     TranscriptView,
 };
 pub use sync_projection::{

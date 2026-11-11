@@ -8,6 +8,12 @@ use gents_protocol::output::reconstruction::{
 use gents_protocol::output::rows::{OutputSegmentRow, TranscriptMessageRow};
 use gents_protocol::output::{OutputSource, OutputWriter, ReconstructionError, TerminalOutput};
 
+mod live_text;
+mod terminal_tool_output;
+
+pub use live_text::{canonical_live_text, CanonicalLiveText};
+pub use terminal_tool_output::terminal_tool_output;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum CanonicalMessageProjection {
     Ready(Message),

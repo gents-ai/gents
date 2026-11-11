@@ -32,7 +32,6 @@ pub(super) fn spawn_server_with_args_and_env(
         &path_arg(home),
         "--http-port",
         &port.to_string(),
-        "--no-codex-shim",
         "--p2p-bind-addr",
         "127.0.0.1",
         "--p2p-port",

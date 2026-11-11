@@ -266,28 +266,26 @@ impl DirectoryStore for GraphqlDirectoryStore {
         &self,
         source_did: &str,
     ) -> Result<BTreeMap<String, DirectoryEntry>> {
-        let source_did = escape_graphql_string(source_did);
-        let query = format!(
-            r#"{{
-            NodeDirectoryEntry(filter: {{ source_did: {{ _eq: "{source_did}" }} }}) {{
-                directory_key
-                node_did
-                source_did
-                display_name
-                agents
-                agent_dids
-                default_agent_did
-                runtime_state
-                last_seen
-            }}
-        }}"#
-        );
-        let response = crate::store::graphql::graphql_with_transaction_retry(
-            &self.node,
-            &query,
-            "query NodeDirectoryEntry",
+        use gents_protocol::document_query::{
+            fields::node_directory_entry as fields, Filter, Query, Selection,
+        };
+        let query = Query::select(
+            Selection::new()
+                .field(fields::DIRECTORY_KEY)
+                .field(fields::NODE_DID)
+                .field(fields::SOURCE_DID)
+                .field(fields::DISPLAY_NAME)
+                .field(fields::AGENTS)
+                .field(fields::AGENT_DIDS)
+                .field(fields::DEFAULT_AGENT_DID)
+                .field(fields::RUNTIME_STATE)
+                .field(fields::LAST_SEEN),
         )
-        .await?;
+        .filter(Filter::eq(fields::SOURCE_DID, source_did))
+        .render();
+        let response =
+            crate::store::graphql::read_rendered(&self.node, &query, "query NodeDirectoryEntry")
+                .await?;
         Ok(rows::<DirectoryRow>(&response, "NodeDirectoryEntry")?
             .into_iter()
             .filter_map(|row| {

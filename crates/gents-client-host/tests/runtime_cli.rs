@@ -125,7 +125,6 @@ async fn packaged_service_pairs_with_the_editor_client_and_retains_provider_setu
                 "0",
                 "--p2p-bind-addr",
                 "127.0.0.1",
-                "--no-codex-shim",
                 "--no-keychain-prompts",
             ])
             .stdin(Stdio::null())

@@ -125,19 +125,25 @@ pub(crate) async fn start_running_in_txn(
         "accepted header does not bind this exact dispatch"
     );
     let request_id = escape_graphql_string(&start.request);
-    let request_row = txn
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{
-            _docID: {{ _eq: "{request_id}" }}, node_did: {{ _eq: "{}" }},
-            session_id: {{ _eq: "{}" }}
-        }}, limit: 2) {{
-            _docID requester_did lifecycle_state execution_generation
-            execution_lease_expires_at interrupt_requested_at
-        }} }}"#,
-            escape_graphql_string(&start.agent),
-            escape_graphql_string(&start.session)
-        ))
-        .await?;
+    let request_row = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        let rendered = Query::select(
+            Selection::doc_id()
+                .field(fields::REQUESTER_DID)
+                .field(fields::LIFECYCLE_STATE)
+                .field(fields::EXECUTION_GENERATION)
+                .field(fields::EXECUTION_LEASE_EXPIRES_AT)
+                .field(fields::INTERRUPT_REQUESTED_AT),
+        )
+        .filter(Filter::eq(fields::DOC_ID, &start.request))
+        .filter(Filter::eq(fields::NODE_DID, &start.agent))
+        .filter(Filter::eq(fields::SESSION_ID, &start.session))
+        .limit(2)
+        .render();
+        txn.run(&rendered).await?
+    };
     let rows = request_row["data"]["AgentRequest"]
         .as_array()
         .context("dispatch request lookup omitted rows")?;
@@ -167,17 +173,24 @@ pub(crate) async fn start_running_in_txn(
             )
         })
         .unwrap_or_else(|| ", requester_did: { _eq: null }".to_owned());
-    let physical = txn
-        .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{
-            _docID: {{ _eq: "{}" }}, request_doc_id: {{ _eq: "{request_id}" }},
-            session_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}{requester_filter}
-        }}, limit: 2) {{ _docID }} }}"#,
-            escape_graphql_string(&start.doc_id),
-            escape_graphql_string(&start.session),
-            escape_graphql_string(&start.agent)
-        ))
-        .await?;
+    let physical = {
+        use gents_protocol::document_query::{
+            fields::agent_tool_call as fields, Filter, Query, Selection,
+        };
+        let requester_scope = match start.requester.as_ref() {
+            Some(requester) => Filter::eq(fields::REQUESTER_DID, requester),
+            None => Filter::is_null(fields::REQUESTER_DID),
+        };
+        let rendered = Query::select(Selection::doc_id())
+            .filter(Filter::eq(fields::DOC_ID, &start.doc_id))
+            .filter(Filter::eq(fields::REQUEST_DOC_ID, &start.request))
+            .filter(Filter::eq(fields::SESSION_ID, &start.session))
+            .filter(Filter::eq(fields::NODE_DID, &start.agent))
+            .filter(requester_scope)
+            .limit(2)
+            .render();
+        txn.run(&rendered).await?
+    };
     let physical_rows = physical["data"]["AgentToolCall"]
         .as_array()
         .context("dispatch physical tool lookup omitted rows")?;

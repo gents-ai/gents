@@ -21,7 +21,8 @@ pub use build::resolve_effective_tool_root;
 pub use explain::{ToolSurfaceExplanation, ToolSurfaceWarning};
 pub use modes::{BashMode, FileToolMode, ToolCeiling};
 pub(crate) use output_budget::configured_output_budget;
-pub(crate) use policy::{configured_self_config_category_set, ToolNodeOperationSource};
+pub use policy::configured_self_config_category_set;
+pub(crate) use policy::ToolNodeOperationSource;
 pub use policy::{
     EndpointScope, RuntimeToolAvailability, ToolPolicyBash, ToolPolicySurface, ToolPolicyVersion,
     TOOL_POLICY_V1,

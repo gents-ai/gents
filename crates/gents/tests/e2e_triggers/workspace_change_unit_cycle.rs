@@ -172,7 +172,7 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let mut handle = tokio::spawn(agent.run(shutdown_rx));
     tokio::select! {
-        result = gents::eval::runner::embedded::wait_for_runtime_ready(&db.node, &owner) => {
+        result = gents::runtime::embedded::wait_for_runtime_ready(&db.node, &owner) => {
             result.expect("runtime ready");
         }
         result = &mut handle => {
@@ -423,7 +423,7 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
     assert!(agent.unavailable_agents().is_empty());
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
-    gents::eval::runner::embedded::wait_for_runtime_ready(&db.node, &owner)
+    gents::runtime::embedded::wait_for_runtime_ready(&db.node, &owner)
         .await
         .expect("runtime ready");
     let runtime = BootedAgent::new(shutdown_tx, handle, owner.clone());
@@ -592,7 +592,7 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let mut handle = tokio::spawn(agent.run(shutdown_rx));
     tokio::select! {
-        result = gents::eval::runner::embedded::wait_for_runtime_ready(&db.node, &owner) => {
+        result = gents::runtime::embedded::wait_for_runtime_ready(&db.node, &owner) => {
             result.expect("runtime ready");
         }
         result = &mut handle => panic!("runtime exited before readiness: {result:?}"),

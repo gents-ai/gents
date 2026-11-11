@@ -442,7 +442,8 @@ async fn install_owned(
         args.explicit,
         dependencies,
     )
-    .await?;
+    .await
+    .map_err(gents::pack::PackChangeError::into_anyhow)?;
     if !args.wire.is_empty() && !args.preview {
         result["wired"] = crate::commands::pack::wire_pack_plugins(
             &access,

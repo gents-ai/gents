@@ -11,8 +11,8 @@ use serde_json::{json, Value};
 use crate::documents::{WriteToolDecl, WriteToolField};
 use crate::inference::llm::tool::ToolDefinition;
 use crate::store::graphql::{
-    escape_graphql_string, graphql_with_transaction_retry, rows, single_mutation_document,
-    validate_collection_identifier, validate_graphql_name,
+    escape_graphql_string, rows, single_mutation_document, validate_collection_identifier,
+    validate_graphql_name,
 };
 use gents_protocol::row::MAILBOX_COLLECTION;
 
@@ -334,13 +334,6 @@ fn nonempty(value: Option<String>) -> Option<String> {
     })
 }
 
-fn optional_string_field(name: &str, value: Option<&str>) -> String {
-    match value.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(value) => format!(r#"{name}: "{}","#, escape_graphql_string(value)),
-        None => format!("{name}: null,"),
-    }
-}
-
 fn item_key_occurrence(item_key: &str) -> Option<u64> {
     item_key.rsplit_once(':')?.1.parse().ok()
 }
@@ -352,30 +345,30 @@ async fn load_prefix_items(
     source_id: &str,
     kind: MailboxKind,
 ) -> Result<Vec<MailboxItem>> {
-    let query = format!(
-        r#"{{
-            MailboxItem(filter: {{
-                requester_did: {{ _eq: "{}" }},
-                source_kind: {{ _eq: "{}" }},
-                source_id: {{ _eq: "{}" }},
-                kind: {{ _eq: "{}" }}
-            }}) {{ {MAILBOX_FIELDS} }}
-        }}"#,
-        escape_graphql_string(requester_did),
-        source_kind.as_str(),
-        escape_graphql_string(source_id),
-        kind.as_str(),
-    );
-    let response = access.execute(&query).await?;
+    let query = {
+        use gents_protocol::document_query::{
+            fields::mailbox_item as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::owned(MAILBOX_FIELDS))
+            .filter(Filter::eq(fields::REQUESTER_DID, requester_did))
+            .filter(Filter::eq(fields::SOURCE_KIND, source_kind.as_str()))
+            .filter(Filter::eq(fields::SOURCE_ID, source_id))
+            .filter(Filter::eq(fields::KIND, kind.as_str()))
+            .render()
+    };
+    let response = access.read(&query).await?;
     Ok(serde_json::from_value(
         response["data"][MAILBOX_COLLECTION].clone(),
     )?)
 }
 
 pub async fn load_mailbox_item(node: &EmbeddedNode, doc_id: &str) -> Result<Option<MailboxItem>> {
-    let response =
-        graphql_with_transaction_retry(node, &mailbox_item_query(doc_id), "load mailbox item")
-            .await?;
+    let response = crate::store::graphql::read_rendered(
+        node,
+        &mailbox_item_query(doc_id),
+        "load mailbox item",
+    )
+    .await?;
     single_mailbox_item(rows::<MailboxItem>(&response, MAILBOX_COLLECTION)?)
 }
 
@@ -383,18 +376,21 @@ pub async fn load_mailbox_item_with_access(
     access: &crate::store::config_client::ConfigAccess,
     doc_id: &str,
 ) -> Result<Option<MailboxItem>> {
-    let response = access.execute(&mailbox_item_query(doc_id)).await?;
+    let response = access.read(&mailbox_item_query(doc_id)).await?;
     let rows = response
         .pointer("/data/MailboxItem")
         .context("mailbox lookup omitted rows")?;
     single_mailbox_item(serde_json::from_value(rows.clone())?)
 }
 
-fn mailbox_item_query(doc_id: &str) -> String {
-    format!(
-        r#"{{ MailboxItem(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ {MAILBOX_FIELDS} }} }}"#,
-        escape_graphql_string(doc_id)
-    )
+fn mailbox_item_query(doc_id: &str) -> gents_protocol::document_query::Rendered {
+    use gents_protocol::document_query::{
+        fields::mailbox_item as fields, Filter, Query, Selection,
+    };
+    Query::select(Selection::owned(MAILBOX_FIELDS))
+        .filter(Filter::eq(fields::DOC_ID, doc_id))
+        .limit(2)
+        .render()
 }
 
 fn single_mailbox_item(mut found: Vec<MailboxItem>) -> Result<Option<MailboxItem>> {
@@ -408,11 +404,16 @@ async fn load_mailbox_item_by_key(
     access: &crate::ConfigAccess,
     item_key: &str,
 ) -> Result<Option<MailboxItem>> {
-    let query = format!(
-        r#"{{ MailboxItem(filter: {{ item_key: {{ _eq: "{}" }} }}, limit: 2) {{ {MAILBOX_FIELDS} }} }}"#,
-        escape_graphql_string(item_key)
-    );
-    let response = access.execute(&query).await?;
+    let query = {
+        use gents_protocol::document_query::{
+            fields::mailbox_item as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::owned(MAILBOX_FIELDS))
+            .filter(Filter::eq(fields::ITEM_KEY, item_key))
+            .limit(2)
+            .render()
+    };
+    let response = access.read(&query).await?;
     let mut found: Vec<MailboxItem> =
         serde_json::from_value(response["data"][MAILBOX_COLLECTION].clone())?;
     if found.len() > 1 {
@@ -579,55 +580,87 @@ async fn stamp_notification_with_source(
         args.kind.as_str()
     );
     let now = Utc::now().to_rfc3339();
-    let mutation = format!(
-        r#"mutation {{
-            create_MailboxItem(input: {{
-                item_key: "{item_key}",
-                requester_did: "{requester_did}",
-                node_did: "{node_did}",
-                status: "open",
-                kind: "{kind}",
-                action: "{action}",
-                title: "{title}",
-                {summary}
-                {payload}
-                source_kind: "{source_kind}",
-                source_id: "{source_id}",
-                {session_id}
-                {request_id}
-                {cause_doc_id}
-                target_node_did: "{target_node_did}",
-                target_agent_did: "{target_agent_did}",
-                {expected_collection}
-                {parent_item_id}
-                {deadline_at}
-                created_at: "{now}",
-                updated_at: "{now}",
-                resolved_at: null,
-                resolved_doc_id: null
-            }}) {{ {MAILBOX_FIELDS} }}
-        }}"#,
-        item_key = escape_graphql_string(&item_key),
-        requester_did = escape_graphql_string(&context.requester_did),
-        node_did = escape_graphql_string(&context.node_did),
-        kind = args.kind.as_str(),
-        action = args.action.as_str(),
-        title = escape_graphql_string(&args.title),
-        summary = optional_string_field("summary", args.summary.as_deref()),
-        payload = optional_string_field("payload", args.payload.as_deref()),
-        source_kind = args.source_kind.as_str(),
-        source_id = escape_graphql_string(&args.source_id),
-        session_id = optional_string_field("session_id", args.session_id.as_deref()),
-        request_id = optional_string_field("request_id", args.request_id.as_deref()),
-        cause_doc_id = optional_string_field("cause_doc_id", args.cause_doc_id.as_deref()),
-        target_node_did = escape_graphql_string(&context.node_did),
-        target_agent_did = escape_graphql_string(&context.agent_did),
-        expected_collection =
-            optional_string_field("expected_collection", args.expected_collection.as_deref()),
-        parent_item_id = optional_string_field("parent_item_id", args.parent_item_id.as_deref()),
-        deadline_at = optional_string_field("deadline_at", args.deadline_at.as_deref()),
-        now = escape_graphql_string(&now),
-    );
+    let mutation = {
+        use gents_protocol::document_query::{
+            fields::mailbox_item as fields, Create, Input, Selection,
+        };
+        Create::new(
+            Input::new()
+                .set(fields::ITEM_KEY, &item_key)
+                .set(fields::REQUESTER_DID, &context.requester_did)
+                .set(fields::NODE_DID, &context.node_did)
+                .set(fields::STATUS, "open")
+                .set(fields::KIND, args.kind.as_str())
+                .set(fields::ACTION, args.action.as_str())
+                .set(fields::TITLE, &args.title)
+                .set_optional(
+                    fields::SUMMARY,
+                    args.summary
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty()),
+                )
+                .set_optional(
+                    fields::PAYLOAD,
+                    args.payload
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty()),
+                )
+                .set(fields::SOURCE_KIND, args.source_kind.as_str())
+                .set(fields::SOURCE_ID, &args.source_id)
+                .set_optional(
+                    fields::SESSION_ID,
+                    args.session_id
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty()),
+                )
+                .set_optional(
+                    fields::REQUEST_ID,
+                    args.request_id
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty()),
+                )
+                .set_optional(
+                    fields::CAUSE_DOC_ID,
+                    args.cause_doc_id
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty()),
+                )
+                .set(fields::TARGET_NODE_DID, &context.node_did)
+                .set(fields::TARGET_AGENT_DID, &context.agent_did)
+                .set_optional(
+                    fields::EXPECTED_COLLECTION,
+                    args.expected_collection
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty()),
+                )
+                .set_optional(
+                    fields::PARENT_ITEM_ID,
+                    args.parent_item_id
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty()),
+                )
+                .set_optional(
+                    fields::DEADLINE_AT,
+                    args.deadline_at
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty()),
+                )
+                .set(fields::CREATED_AT, &now)
+                .set(fields::UPDATED_AT, &now)
+                .set_null(fields::RESOLVED_AT)
+                .set_null(fields::RESOLVED_DOC_ID),
+        )
+        .returning(Selection::owned(MAILBOX_FIELDS))
+        .render()
+    };
     let recipient = identity::Did::new(&context.requester_did)?;
     let response = access
         .transact_write("mailbox.create_stamped_item", |txn| {
@@ -637,7 +670,7 @@ async fn stamp_notification_with_source(
                 if let Some(source) = source {
                     source.revalidate(txn).await?;
                 }
-                let value = txn.execute(mutation).await?;
+                let value = txn.run(mutation).await?;
                 let doc = crate::store::graphql::created_doc_id(&value, MAILBOX_COLLECTION)?;
                 txn.add_actor_relationship(MAILBOX_COLLECTION, &doc, "recipient", recipient)
                     .await?;
@@ -931,7 +964,7 @@ pub async fn list_mailbox_items(
     status: Option<MailboxStatus>,
 ) -> Result<Vec<MailboxItem>> {
     let query = mailbox_list_query(requester_did, status)?;
-    let response = graphql_with_transaction_retry(node, &query, "list mailbox items").await?;
+    let response = crate::store::graphql::read_rendered(node, &query, "list mailbox items").await?;
     Ok(rows(&response, MAILBOX_COLLECTION)?)
 }
 
@@ -941,7 +974,7 @@ pub async fn list_mailbox_items_on(
     status: Option<MailboxStatus>,
 ) -> Result<Vec<MailboxItem>> {
     let response = access
-        .execute(&mailbox_list_query(requester_did, status)?)
+        .read(&mailbox_list_query(requester_did, status)?)
         .await?;
     let values = response
         .pointer("/data/MailboxItem")
@@ -949,22 +982,23 @@ pub async fn list_mailbox_items_on(
     Ok(serde_json::from_value(values.clone())?)
 }
 
-fn mailbox_list_query(requester_did: &str, status: Option<MailboxStatus>) -> Result<String> {
+fn mailbox_list_query(
+    requester_did: &str,
+    status: Option<MailboxStatus>,
+) -> Result<gents_protocol::document_query::Rendered> {
+    use gents_protocol::document_query::{
+        fields::mailbox_item as fields, Direction, Filter, Query, Selection,
+    };
     if requester_did.trim().is_empty() {
         bail!("mailbox list requires requester DID");
     }
-    let status_filter = status
-        .map(|status| format!(r#", status: {{ _eq: "{}" }}"#, status.as_str()))
-        .unwrap_or_default();
-    Ok(format!(
-        r#"{{
-            MailboxItem(
-                filter: {{ requester_did: {{ _eq: "{}" }}{status_filter} }},
-                order: {{ created_at: DESC }}
-            ) {{ {MAILBOX_FIELDS} }}
-        }}"#,
-        escape_graphql_string(requester_did)
-    ))
+    let mut query = Query::select(Selection::owned(MAILBOX_FIELDS))
+        .filter(Filter::eq(fields::REQUESTER_DID, requester_did))
+        .order_by(fields::CREATED_AT, Direction::Desc);
+    if let Some(status) = status {
+        query = query.filter(Filter::eq(fields::STATUS, status.as_str()));
+    }
+    Ok(query.render())
 }
 
 async fn transition_open_item(
@@ -977,29 +1011,32 @@ async fn transition_open_item(
         bail!("mailbox transition target must be terminal");
     }
     let now = Utc::now().to_rfc3339();
-    let resolved_doc_id = optional_string_field("resolved_doc_id", resolved_doc_id);
-    let mutation = format!(
-        r#"mutation {{
-            update_MailboxItem(
-                filter: {{ _docID: {{ _eq: "{}" }}, status: {{ _eq: "open" }} }},
-                input: {{
-                    status: "{}",
-                    updated_at: "{}",
-                    resolved_at: "{}",
-                    {resolved_doc_id}
-                }}
-            ) {{ _docID }}
-        }}"#,
-        escape_graphql_string(&item.doc_id),
-        target.as_str(),
-        escape_graphql_string(&now),
-        escape_graphql_string(&now),
-    );
+    let mutation = {
+        use gents_protocol::document_query::{
+            fields::mailbox_item as fields, Filter, Input, Update,
+        };
+        Update::matching(
+            Filter::eq(fields::DOC_ID, &item.doc_id).and(Filter::eq(fields::STATUS, "open")),
+            Input::new()
+                .set(fields::STATUS, target.as_str())
+                .set(fields::UPDATED_AT, &now)
+                .set(fields::RESOLVED_AT, &now)
+                .set_optional(
+                    fields::RESOLVED_DOC_ID,
+                    resolved_doc_id
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty()),
+                ),
+        )
+        .render()
+    };
     anyhow::ensure!(
         access.actor_did().as_deref() == Some(item.target_agent_did.as_str()),
         "mailbox close actor mismatch"
     );
-    let response = access.write("mailbox.close_item", &mutation).await?;
+    let response = access
+        .write_rendered("mailbox.close_item", &mutation)
+        .await?;
     let response: defra_node::QueryResponse = serde_json::from_value(response)?;
     Ok(single_mutation_document(&response, "update_MailboxItem")?.is_some())
 }
