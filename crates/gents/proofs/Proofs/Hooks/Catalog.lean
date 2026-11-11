@@ -70,6 +70,17 @@ order and the session stop latch are guards of core's own claim, not
 listeners. -/
 def requestClaimGate : Point := ⟨"request.claim.gate", [.returned], .mayRefuse⟩
 
+/-- The queue partition of the requests core is about to compare: wake
+coalescing, the background-completion claim snapshot and wake enqueue
+(`Hooks.QueueScope.scopes`). A returned value of the same shape as the
+creation stamp's partition key, answered from declared reads; no plugin
+answering is the unscoped default. Decision 2026-11-11, pending maintainer
+review: added to the catalog so core stops calling the Goal assignment loader
+from the queue; untagged rows are answered from the rows the plugin reads at
+claim and queue time, as today. A refusal keeps the claim or enqueue from
+committing, as a failed Goal read does today. -/
+def requestQueueScope : Point := ⟨"request.queue.scope", [.returned], .mayRefuse⟩
+
 /-- Staging after the claim affected the row. Session projection and queue
 folding at this point are core. -/
 def requestClaimApplied : Point := ⟨"request.claim.applied", [.staging], .mayRefuse⟩
@@ -160,22 +171,22 @@ def requestOutputRecorded : Point := ⟨"request.output.recorded", [.delivery], 
 
 def points : List Point :=
   [requestAdmitVerify, requestCreateStage, requestCreateCommitted, requestClaimGate,
-   requestClaimApplied, requestPrepareInput, requestWorkComplete, requestTerminalStage,
+   requestQueueScope, requestClaimApplied, requestPrepareInput, requestWorkComplete, requestTerminalStage,
    requestTerminalCommitted, controlSessionHalt, controlSessionResume, toolCallDispatchDecide,
    toolCallTerminalStage, toolCallTerminalCommitted, sessionForkStage, inferenceTurn,
    runtimeRecoverSweep, runtimeLifecycleObserve, requestOutputRecorded]
 
 /-- The seventeen catalogued points, with `control.session` split in two and
-`request.output.recorded` added. -/
+`request.output.recorded` and `request.queue.scope` added. -/
 theorem every_catalog_point_is_classified :
-    points.length = 19 ∧ (points.map (·.name)).Nodup ∧
+    points.length = 20 ∧ (points.map (·.name)).Nodup ∧
       points.all (fun point => !point.shapes.isEmpty) = true := by
   decide
 
-/-- Fifteen points are carried by the contract; four are not hooks. A point
+/-- Sixteen points are carried by the contract; four are not hooks. A point
 has a refusal policy exactly when the contract carries it. -/
 theorem policy_matches_shape :
-    (points.filter fun point => point.shapes.any Shape.isHook).length = 15 ∧
+    (points.filter fun point => point.shapes.any Shape.isHook).length = 16 ∧
       points.all (fun point =>
         point.shapes.any Shape.isHook == (point.policy != .notHook)) = true := by
   decide

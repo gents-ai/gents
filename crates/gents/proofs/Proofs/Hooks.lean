@@ -9,4 +9,5 @@ import Proofs.Hooks.Safety
 import Proofs.Hooks.Mailbox
 import Proofs.Hooks.GoalFence
 import Proofs.Hooks.GoalTask
+import Proofs.Hooks.QueueScope
 import Proofs.Hooks.Catalog
