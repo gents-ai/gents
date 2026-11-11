@@ -125,3 +125,5 @@ import Proofs.Optimization
 import Proofs.PluginJob
 
 import Proofs.ToolExecution.Parallel
+
+import Proofs.Hooks
