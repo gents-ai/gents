@@ -414,17 +414,20 @@ where
     })
 }
 
-/// What an approval did to the packs before its node restart failed.
+/// What an approval did to the packs before its node restart failed. A
+/// failed pack that is on the node with its permissions granted is told
+/// apart from one that was not installed: approving it again finishes it.
 fn installed_before_restart(report: &serde_json::Value) -> String {
-    let packs = |key: &str| {
-        report[key]
-            .as_array()
+    let names = |packs: Vec<&serde_json::Value>| {
+        packs
             .into_iter()
-            .flatten()
             .filter_map(|pack| pack["pack"].as_str())
             .collect::<Vec<_>>()
             .join(", ")
     };
+    let listed = |key: &str| report[key].as_array().into_iter().flatten();
+    let (unfinished, absent): (Vec<_>, Vec<_>) =
+        listed("failed").partition(|pack| pack["installed"] == true);
     let part = |packs: String, some: &str, none: &str| {
         if packs.is_empty() {
             none.to_owned()
@@ -432,17 +435,26 @@ fn installed_before_restart(report: &serde_json::Value) -> String {
             format!("{some}: {packs}.")
         }
     };
-    format!(
-        "Before the local node failed to start again, {} {}",
-        part(
-            packs("installed"),
-            "these starter packs were installed",
-            "no starter pack was installed."
+    [
+        format!(
+            "Before the local node failed to start again, {}",
+            part(
+                names(listed("installed").collect()),
+                "these starter packs were installed",
+                "no starter pack was installed."
+            )
         ),
-        part(packs("failed"), "These were not", "")
-    )
-    .trim_end()
-    .to_owned()
+        part(
+            names(unfinished),
+            "These are installed with their permissions granted, but setting them up for the Engineer didn't finish",
+            "",
+        ),
+        part(names(absent), "These were not installed", ""),
+    ]
+    .into_iter()
+    .filter(|sentence| !sentence.is_empty())
+    .collect::<Vec<_>>()
+    .join(" ")
 }
 
 async fn restart_managed_server<R, P, WhileStopped>(

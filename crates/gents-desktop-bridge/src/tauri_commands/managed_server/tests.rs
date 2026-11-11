@@ -205,11 +205,15 @@ impl FakeLaunch {
 fn a_failed_restart_reports_the_packs_installed_before_it() {
     let report = serde_json::json!({
         "installed": [{"pack": "gents/web"}, {"pack": "gents/charts"}],
-        "failed": [{"pack": "gents/script", "error": "simulated", "installed": true}],
+        "failed": [
+            {"pack": "gents/script", "error": "simulated", "installed": true},
+            {"pack": "gents/data_tables", "error": "simulated", "installed": false},
+            {"pack": "gents/pack_builder", "error": "simulated"},
+        ],
     });
     assert_eq!(
         installed_before_restart(&report),
-        "Before the local node failed to start again, these starter packs were installed: gents/web, gents/charts. These were not: gents/script."
+        "Before the local node failed to start again, these starter packs were installed: gents/web, gents/charts. These are installed with their permissions granted, but setting them up for the Engineer didn't finish: gents/script. These were not installed: gents/data_tables, gents/pack_builder."
     );
     assert_eq!(
         installed_before_restart(&serde_json::json!({"installed": [], "failed": []})),
