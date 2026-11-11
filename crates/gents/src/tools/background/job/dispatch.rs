@@ -43,7 +43,6 @@ use crate::plugin::job_calls::JobCaller;
 use crate::plugin::store::InstalledPlugin;
 use crate::plugin::PluginVerdict;
 use crate::store::config_client::ConfigAccess;
-use crate::store::graphql::graphql_string_list_literal;
 use crate::tools::background::status::ProcessControlScope;
 use crate::tools::call::hook::persistence::count_live_backgrounded_rows_in;
 use crate::tools::call::hook::DefraSessionHook;
@@ -313,12 +312,24 @@ async fn control_targets(
     if control.is_empty() {
         return Ok(Vec::new());
     }
-    let list = graphql_string_list_literal(control.iter().map(|r| r.row_doc_id.as_str()));
-    let response = access
-        .execute(&format!(
-            "{{ AgentToolCall(filter: {{ _docID: {{ _in: {list} }} }}) {{ _docID session_id node_did requester_did job_pin }} }}"
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::agent_tool_call as fields, Filter, Query, Selection,
+        };
+        Query::select(
+            Selection::doc_id()
+                .field(fields::SESSION_ID)
+                .field(fields::NODE_DID)
+                .field(fields::REQUESTER_DID)
+                .field(fields::JOB_PIN),
+        )
+        .filter(Filter::any_of(
+            fields::DOC_ID,
+            control.iter().map(|r| r.row_doc_id.as_str()),
         ))
-        .await?;
+        .render()
+    };
+    let response = access.read(&rendered).await?;
     let rows: Vec<Target> = serde_json::from_value(
         response
             .pointer("/data/AgentToolCall")
@@ -466,13 +477,16 @@ async fn taken_handles(
     tool_name: &str,
     row_doc_id: &str,
 ) -> Result<Vec<String>> {
-    let response = txn
-        .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "{}" }} }}) {{ _docID job_pin }} }}"#,
-            crate::store::graphql::escape_graphql_string(session_id),
-            crate::store::graphql::escape_graphql_string(tool_name)
-        ))
-        .await?;
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::agent_tool_call as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::doc_id().field(fields::JOB_PIN))
+            .filter(Filter::eq(fields::SESSION_ID, session_id))
+            .filter(Filter::eq(fields::TOOL_NAME, tool_name))
+            .render()
+    };
+    let response = txn.run(&rendered).await?;
     let rows: Vec<SessionPin> = serde_json::from_value(
         response
             .pointer("/data/AgentToolCall")

@@ -5,20 +5,21 @@ use anyhow::Result;
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::row::AgentRequestRow;
 
-use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
+use crate::store::graphql::{read_rendered, rows};
 use gents_protocol::row::AgentRequest;
 
 pub(crate) async fn load_agent_request_by_doc_id_with_access(
     access: &crate::ConfigAccess,
     request_doc_id: &str,
 ) -> Result<Option<AgentRequest>> {
-    let response = access
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ {} }} }}"#,
-            escape_graphql_string(request_doc_id),
-            gents_protocol::row::AGENT_REQUEST_FIELDS,
-        ))
-        .await?;
+    use gents_protocol::document_query::{
+        fields::agent_request as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(Selection::owned(gents_protocol::row::AGENT_REQUEST_FIELDS))
+        .filter(Filter::eq(fields::DOC_ID, request_doc_id))
+        .limit(2)
+        .render();
+    let response = access.read(&query).await?;
     let mut matches: Vec<AgentRequestRow> =
         serde_json::from_value(response["data"]["AgentRequest"].clone())?;
     anyhow::ensure!(
@@ -39,13 +40,14 @@ pub(crate) async fn load_agent_request_with_access(
     access: &crate::ConfigAccess,
     request_id: &str,
 ) -> Result<Option<AgentRequest>> {
-    let response = access
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 2) {{ {} }} }}"#,
-            escape_graphql_string(request_id),
-            gents_protocol::row::AGENT_REQUEST_FIELDS,
-        ))
-        .await?;
+    use gents_protocol::document_query::{
+        fields::agent_request as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(Selection::owned(gents_protocol::row::AGENT_REQUEST_FIELDS))
+        .filter(Filter::eq(fields::REQUEST_ID, request_id))
+        .limit(2)
+        .render();
+    let response = access.read(&query).await?;
     let mut matches: Vec<AgentRequestRow> =
         serde_json::from_value(response["data"]["AgentRequest"].clone())?;
     anyhow::ensure!(
@@ -67,18 +69,14 @@ pub(crate) async fn resolve_request_doc_id(
     node: &EmbeddedNode,
     request_id: &str,
 ) -> Result<Option<String>> {
-    let escaped_request_id = escape_graphql_string(request_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
-                limit: 2
-            ) {{ _docID request_id }}
-        }}"#
-    );
-    let response =
-        graphql_with_transaction_retry(node, &query, "resolve_agent_request_document_binding")
-            .await?;
+    use gents_protocol::document_query::{
+        fields::agent_request as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(Selection::doc_id().field(fields::REQUEST_ID))
+        .filter(Filter::eq(fields::REQUEST_ID, request_id))
+        .limit(2)
+        .render();
+    let response = read_rendered(node, &query, "resolve_agent_request_document_binding").await?;
     let mut matches = rows::<AgentRequestRow>(&response, "AgentRequest")?;
     match matches.len() {
         0 => Ok(None),
@@ -127,42 +125,16 @@ pub(crate) async fn load_agent_request_by_doc_id(
     node: &EmbeddedNode,
     request_doc_id: &str,
 ) -> Result<Option<AgentRequest>> {
-    let query = format!(
-        r#"{{
-            AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{
-                _docID
-                request_id
-                purpose
-                node_did
-                requester_did
-                agent_did
-                session_id
-                content
-                max_total_tokens
-                input
-                execution_origin
-                created_at
-                deadline
-                request_hop
-                caused_by_parent_request_id
-                caused_by_parent_request_doc_id
-                caused_by_parent_tool_call_id
-                caused_by_parent_tool_call_doc_id
-                caused_by_trigger_id
-                caused_by_trigger_kind
-                caused_by_source_doc_id
-                caused_by_correlation
-                caused_by_trigger_context
-                workspace_id
-                workspace_authority
-                workspace_owner_node_did
-                workspace_seal_hash
-            }}
-        }}"#,
-        escape_graphql_string(request_doc_id)
-    );
-    let response =
-        graphql_with_transaction_retry(node, &query, "load_agent_request_by_document").await?;
+    use gents_protocol::document_query::{
+        fields::agent_request as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(Selection::owned(
+        "_docID request_id purpose node_did requester_did agent_did session_id content max_total_tokens input execution_origin created_at deadline request_hop caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id caused_by_trigger_id caused_by_trigger_kind caused_by_source_doc_id caused_by_correlation caused_by_trigger_context workspace_id workspace_authority workspace_owner_node_did workspace_seal_hash",
+    ))
+    .filter(Filter::eq(fields::DOC_ID, request_doc_id))
+    .limit(1)
+    .render();
+    let response = read_rendered(node, &query, "load_agent_request_by_document").await?;
     let mut matches = rows::<AgentRequestRow>(&response, "AgentRequest")?;
     let Some(row) = matches.pop() else {
         return Ok(None);

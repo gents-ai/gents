@@ -177,30 +177,81 @@ pub(super) async fn reuse_or_update_with_source(
         access.actor_did().as_deref() == Some(context.agent_did.as_str()),
         "mailbox actor mismatch"
     );
-    access.transact_write("mailbox.update_condition", |txn| {
-        Box::pin(async move {
-            if let Some(source) = source { source.revalidate(txn).await?; }
-            let response = txn.execute(&format!("{{ MailboxItem(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ {MAILBOX_FIELDS} }} }}", escape_graphql_string(&existing.doc_id))).await?;
-            let values = gents_protocol::graphql::graphql_rows_from_response(&response, MAILBOX_COLLECTION);
-            anyhow::ensure!(values.len() == 1, "condition notification disappeared");
-            let item: MailboxItem = serde_json::from_value(values[0].clone())?;
-            validate_existing_notification(&item, context, args)?;
-            anyhow::ensure!(item.parsed_status() == Some(MailboxStatus::Open), "condition notification became terminal; retry to create a fresh occurrence");
-            let same = item.title == args.title && item.summary == args.summary && item.payload == args.payload;
-            let outcome = identity.write_outcome(true, same);
-            if outcome == MailboxWriteOutcome::Reused {
-                return Ok(MailboxWriteReceipt { outcome, item });
-            }
-            let response = txn.execute(&format!(
-                "mutation {{ update_MailboxItem(filter: {{_docID: {{_eq: \"{}\"}}, status: {{_eq: \"open\"}}}}, input: {{title: \"{}\", {} {} updated_at: \"{}\"}}) {{ {MAILBOX_FIELDS} }} }}",
-                escape_graphql_string(&item.doc_id), escape_graphql_string(&args.title),
-                optional_string_field("summary", args.summary.as_deref()),
-                optional_string_field("payload", args.payload.as_deref()),
-                escape_graphql_string(&Utc::now().to_rfc3339()),
-            )).await?;
-            let values = gents_protocol::graphql::graphql_rows_from_response(&response, "update_MailboxItem");
-            anyhow::ensure!(values.len() == 1, "condition notification update did not commit exactly one open row");
-            Ok(MailboxWriteReceipt { outcome, item: serde_json::from_value(values[0].clone())? })
+    access
+        .transact_write("mailbox.update_condition", |txn| {
+            Box::pin(async move {
+                if let Some(source) = source {
+                    source.revalidate(txn).await?;
+                }
+                let response = {
+                    use gents_protocol::document_query::{
+                        fields::mailbox_item as fields, Filter, Query, Selection,
+                    };
+                    txn.run(
+                        &Query::select(Selection::owned(MAILBOX_FIELDS))
+                            .filter(Filter::eq(fields::DOC_ID, &existing.doc_id))
+                            .render(),
+                    )
+                    .await?
+                };
+                let values = gents_protocol::graphql::graphql_rows_from_response(
+                    &response,
+                    MAILBOX_COLLECTION,
+                );
+                anyhow::ensure!(values.len() == 1, "condition notification disappeared");
+                let item: MailboxItem = serde_json::from_value(values[0].clone())?;
+                validate_existing_notification(&item, context, args)?;
+                anyhow::ensure!(
+                    item.parsed_status() == Some(MailboxStatus::Open),
+                    "condition notification became terminal; retry to create a fresh occurrence"
+                );
+                let same = item.title == args.title
+                    && item.summary == args.summary
+                    && item.payload == args.payload;
+                let outcome = identity.write_outcome(true, same);
+                if outcome == MailboxWriteOutcome::Reused {
+                    return Ok(MailboxWriteReceipt { outcome, item });
+                }
+                let response = {
+                    use gents_protocol::document_query::{
+                        fields::mailbox_item as fields, Filter, Input, Selection, Update,
+                    };
+                    let summary = args
+                        .summary
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty());
+                    let payload = args
+                        .payload
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty());
+                    let rendered = Update::matching(
+                        Filter::eq(fields::DOC_ID, &item.doc_id)
+                            .and(Filter::eq(fields::STATUS, "open")),
+                        Input::new()
+                            .set(fields::TITLE, &args.title)
+                            .set_optional(fields::SUMMARY, summary)
+                            .set_optional(fields::PAYLOAD, payload)
+                            .set(fields::UPDATED_AT, Utc::now().to_rfc3339()),
+                    )
+                    .returning(Selection::owned(MAILBOX_FIELDS))
+                    .render();
+                    txn.run(&rendered).await?
+                };
+                let values = gents_protocol::graphql::graphql_rows_from_response(
+                    &response,
+                    "update_MailboxItem",
+                );
+                anyhow::ensure!(
+                    values.len() == 1,
+                    "condition notification update did not commit exactly one open row"
+                );
+                Ok(MailboxWriteReceipt {
+                    outcome,
+                    item: serde_json::from_value(values[0].clone())?,
+                })
+            })
         })
-    }).await
+        .await
 }

@@ -198,12 +198,16 @@ async fn answered(
     doc_id: &str,
     command: &SessionInputEdit,
 ) -> Result<SessionInputEditReceipt> {
-    let query = format!(
-        r#"{{ AgentSessionInputEdit(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ receipt_json }} }}"#,
-        escape_graphql_string(doc_id)
-    );
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_session_input_edit as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::new().field(fields::RECEIPT_JSON))
+            .filter(Filter::eq(fields::DOC_ID, doc_id))
+            .render()
+    };
     loop {
-        let response = access.execute(&query).await?;
+        let response = access.read(&query).await?;
         let receipt = response["data"]["AgentSessionInputEdit"][0]["receipt_json"]
             .as_str()
             .and_then(|raw| serde_json::from_str::<SessionInputEditReceipt>(raw).ok())

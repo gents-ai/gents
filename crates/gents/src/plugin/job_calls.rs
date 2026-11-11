@@ -17,7 +17,7 @@ use serde_json::{Map, Value};
 use super::data::{Invocation, Stamp, StampContext};
 use crate::defra_node::Node as EmbeddedNode;
 use crate::store::config_client::ConfigAccess;
-use crate::store::graphql::{escape_graphql_string, graphql_string_list_literal};
+use crate::store::graphql::graphql_string_list_literal;
 use crate::tools::background::job::input::derive_children;
 use crate::tools::background::status::{
     load_caused_request_terminals, read_tool_output_slice_with_access, LiveToolOutputRegistry,
@@ -371,12 +371,22 @@ pub async fn result(
         )
     };
     let access = caller.caller_access().map_err(|_| outside())?;
-    let response = access
-        .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ tool_call_id session_id node_did requester_did lifecycle_state job_pin job_progress }} }}"#,
-            escape_graphql_string(row_doc_id)
-        ))
-        .await?;
+    use gents_protocol::document_query::{
+        fields::agent_tool_call as tool_call, Filter, Query, Selection,
+    };
+    let rendered = Query::select(
+        Selection::new()
+            .field(tool_call::TOOL_CALL_ID)
+            .field(tool_call::SESSION_ID)
+            .field(tool_call::NODE_DID)
+            .field(tool_call::REQUESTER_DID)
+            .field(tool_call::LIFECYCLE_STATE)
+            .field(tool_call::JOB_PIN)
+            .field(tool_call::JOB_PROGRESS),
+    )
+    .filter(Filter::eq(tool_call::DOC_ID, row_doc_id))
+    .render();
+    let response = access.read(&rendered).await?;
     let row = response
         .pointer("/data/AgentToolCall/0")
         .ok_or_else(outside)?

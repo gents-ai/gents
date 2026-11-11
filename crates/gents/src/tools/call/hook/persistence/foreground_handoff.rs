@@ -16,11 +16,16 @@ impl DefraSessionHook {
         &self,
         doc: &str,
     ) -> anyhow::Result<Option<String>> {
-        let query = format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ background_requested_at }} }}"#,
-            crate::store::graphql::escape_graphql_string(doc),
-        );
-        let response = self.actor_access()?.execute(&query).await?;
+        let query = {
+            use gents_protocol::document_query::{
+                fields::agent_tool_call as fields, Filter, Query, Selection,
+            };
+            Query::select(Selection::new().field(fields::BACKGROUND_REQUESTED_AT))
+                .filter(Filter::eq(fields::DOC_ID, doc))
+                .limit(2)
+                .render()
+        };
+        let response = self.actor_access()?.read(&query).await?;
         let rows = response["data"]["AgentToolCall"]
             .as_array()
             .context("foreground background request query omitted rows")?;

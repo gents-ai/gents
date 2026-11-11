@@ -303,12 +303,18 @@ async fn load_origin_headers(
         let Some(doc_id) = next else {
             return Ok(());
         };
-        let id = escape_graphql_string(&doc_id);
-        let agent = escape_graphql_string(node_did);
-        let requester = escape_graphql_string(requester_did);
-        let response = txn.execute_local_response(&format!(
-            r#"{{ AgentMessage(filter: {{ _docID: {{ _eq: "{id}" }}, node_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }} }}, limit: 2) {{ {AGENT_MESSAGE_FIELDS} }} }}"#
-        )).await?;
+        let rendered = {
+            use gents_protocol::document_query::{
+                fields::agent_message as message, Filter, Query, Selection,
+            };
+            Query::select(Selection::owned(AGENT_MESSAGE_FIELDS))
+                .filter(Filter::eq(message::DOC_ID, &doc_id))
+                .filter(Filter::eq(message::NODE_DID, node_did))
+                .filter(Filter::eq(message::REQUESTER_DID, requester_did))
+                .limit(2)
+                .render()
+        };
+        let response = txn.run_local_response(&rendered).await?;
         let decoded = required_rows::<serde_json::Value>(&response, "AgentMessage")?
             .iter()
             .map(|row| decode_transcript_message_row(row).map_err(anyhow::Error::from))

@@ -850,6 +850,10 @@ pub(crate) async fn upsert_node_readiness(
     snapshot: &NodeReadinessSnapshot,
     updated_at: &str,
 ) -> Result<()> {
+    use gents_protocol::document_query::{
+        fields::{node as node_fields, node_readiness as readiness_fields},
+        Filter, Input, Query, QuerySet, Selection, Update,
+    };
     anyhow::ensure!(
         node.node_identity_did() == Some(node_did),
         "readiness publisher DID does not match the configured node identity"
@@ -866,11 +870,25 @@ pub(crate) async fn upsert_node_readiness(
             let escaped_did = &escaped_did;
             let escaped_snapshot = &escaped_snapshot;
             let escaped_updated_at = &escaped_updated_at;
+            let snapshot_json = &snapshot_json;
             Box::pin(async move {
-                let response = txn.execute(&format!(
-                    r#"{{ Node(filter: {{node_did: {{_eq: "{escaped_did}"}}}}, limit: 2) {{_docID}}
-                        NodeReadiness(filter: {{node_did: {{_eq: "{escaped_did}"}}}}, limit: 2) {{_docID node_doc_id parent_linked}} }}"#
-                )).await?;
+                let rendered = QuerySet::new()
+                    .plain(
+                        &Query::select(Selection::doc_id())
+                            .filter(Filter::eq(node_fields::NODE_DID, node_did))
+                            .limit(2),
+                    )
+                    .plain(
+                        &Query::select(
+                            Selection::doc_id()
+                                .field(readiness_fields::NODE_DOC_ID)
+                                .field(readiness_fields::PARENT_LINKED),
+                        )
+                        .filter(Filter::eq(readiness_fields::NODE_DID, node_did))
+                        .limit(2),
+                    )
+                    .render();
+                let response = txn.run(&rendered).await?;
                 let parents = gents_protocol::graphql::graphql_rows_from_response(&response, "Node");
                 let [parent] = parents.as_slice() else {
                     anyhow::bail!("readiness requires one visible Node parent");
@@ -892,10 +910,14 @@ pub(crate) async fn upsert_node_readiness(
                         "readiness Node parent changed or is missing");
                     let linked = row["parent_linked"].as_bool()
                         .context("readiness parent publication marker is missing")?;
-                    let response = txn.execute(&format!(
-                        r#"mutation {{ update_NodeReadiness(docID: "{}", input: {{snapshot_json: "{escaped_snapshot}", updated_at: "{escaped_updated_at}"}}) {{_docID}} }}"#,
-                        escape_graphql_string(&doc_id)
-                    )).await?;
+                    let update = Update::doc(
+                        doc_id.as_str(),
+                        Input::new()
+                            .set(readiness_fields::SNAPSHOT_JSON, snapshot_json)
+                            .set(readiness_fields::UPDATED_AT, updated_at),
+                    )
+                    .render();
+                    let response = txn.run(&update).await?;
                     anyhow::ensure!(gents_protocol::graphql::extract_mutation_doc_id(&response, "NodeReadiness")? == doc_id,
                         "readiness document disappeared while publishing");
                     Ok::<_, anyhow::Error>((doc_id, parent_id, !linked))
@@ -914,10 +936,14 @@ pub(crate) async fn upsert_node_readiness(
         access
             .add_resource_relationship("NodeReadiness", &doc_id, "parent", "nodes", &parent_id)
             .await?;
-        let response = access.write("readiness.mark_parent_linked", &format!(
-            r#"mutation {{ update_NodeReadiness(docID: "{}", input: {{parent_linked: true}}) {{_docID}} }}"#,
-            escape_graphql_string(&doc_id)
-        )).await?;
+        let marked = Update::doc(
+            doc_id.as_str(),
+            Input::new().set(readiness_fields::PARENT_LINKED, true),
+        )
+        .render();
+        let response = access
+            .write_rendered("readiness.mark_parent_linked", &marked)
+            .await?;
         anyhow::ensure!(
             gents_protocol::graphql::extract_mutation_doc_id(&response, "NodeReadiness")? == doc_id,
             "readiness document disappeared before its parent link was recorded"

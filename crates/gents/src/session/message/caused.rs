@@ -1,8 +1,6 @@
 use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;
 
-use crate::store::graphql::escape_graphql_string;
-
 use super::commit::load_receipt;
 
 pub(crate) enum CausedObservation {
@@ -32,15 +30,28 @@ pub(crate) async fn observe_caused_request(
             "the row has no receipt naming the request it caused",
         ));
     };
-    let query = format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{
-            _docID request_id node_did requester_did session_id lifecycle_state input
-            request_hop caused_by_parent_request_doc_id caused_by_parent_tool_call_id
-            caused_by_parent_tool_call_doc_id
-        }} }}"#,
-        escape_graphql_string(&receipt.request_doc_id),
-    );
-    let response = access.execute(&query).await?;
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(
+            Selection::doc_id()
+                .field(fields::REQUEST_ID)
+                .field(fields::NODE_DID)
+                .field(fields::REQUESTER_DID)
+                .field(fields::SESSION_ID)
+                .field(fields::LIFECYCLE_STATE)
+                .field(fields::INPUT)
+                .field(fields::REQUEST_HOP)
+                .field(fields::CAUSED_BY_PARENT_REQUEST_DOC_ID)
+                .field(fields::CAUSED_BY_PARENT_TOOL_CALL_ID)
+                .field(fields::CAUSED_BY_PARENT_TOOL_CALL_DOC_ID),
+        )
+        .filter(Filter::eq(fields::DOC_ID, &receipt.request_doc_id))
+        .limit(1)
+        .render()
+    };
+    let response = access.read(&query).await?;
     let Some(row) = response.pointer("/data/AgentRequest/0") else {
         return Ok(CausedObservation::NotVisible);
     };

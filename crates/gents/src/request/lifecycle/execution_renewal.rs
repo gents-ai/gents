@@ -7,7 +7,7 @@ use defra_node::Node as EmbeddedNode;
 use gents_protocol::row::AgentRequestRow;
 
 use super::execution_policy::{authorize_renewal, is_live, renewable_lifecycle, LeaseObservation};
-use crate::store::graphql::{escape_graphql_string, response_has_documents};
+use crate::store::graphql::response_has_documents;
 
 pub(super) struct RenewalTask {
     task: tokio::task::JoinHandle<()>,
@@ -240,11 +240,22 @@ pub(crate) async fn renew_in_transaction(
     expected_deadline: Option<DateTime<Utc>>,
     fixture_now: Option<DateTime<Utc>>,
 ) -> Result<RenewalAttemptOutcome> {
+    use gents_protocol::document_query::{
+        fields::agent_request as fields, Filter, Input, Query, Selection, Update,
+    };
     let started = std::time::Instant::now();
-    let doc_id = escape_graphql_string(request_doc_id);
-    let result = txn.execute_local_response(&format!(r#"{{ AgentRequest(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1
-            ) {{ request_id lifecycle_state execution_generation execution_lease_expires_at execution_lease_secs }} }}"#)).await?;
+    let rendered = Query::select(
+        Selection::new()
+            .field(fields::REQUEST_ID)
+            .field(fields::LIFECYCLE_STATE)
+            .field(fields::EXECUTION_GENERATION)
+            .field(fields::EXECUTION_LEASE_EXPIRES_AT)
+            .field(fields::EXECUTION_LEASE_SECS),
+    )
+    .filter(Filter::eq(fields::DOC_ID, request_doc_id))
+    .limit(1)
+    .render();
+    let result = txn.run_local_response(&rendered).await?;
     let snapshot_read_ms = started.elapsed().as_millis() as u64;
     let Some(row) = crate::store::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")?
     else {
@@ -294,15 +305,19 @@ pub(crate) async fn renew_in_transaction(
         return Ok(RenewalAttemptOutcome::Skipped);
     };
     let next = DateTime::<Utc>::from_timestamp_millis(next).context("renewal date overflow")?;
-    let owner = escape_graphql_string(owner);
-    let state = escape_graphql_string(state.as_str());
-    let expiry = escape_graphql_string(expiry);
-    let next = escape_graphql_string(&next.to_rfc3339());
-    let result = txn.execute_local_response(&format!(r#"mutation {{ update_AgentRequest(
-                docID: "{doc_id}", filter: {{ _docID: {{ _eq: "{doc_id}" }}, lifecycle_state: {{ _eq: "{state}" }},
-                    execution_generation: {{ _eq: "{owner}" }}, execution_lease_expires_at: {{ _eq: "{expiry}" }} }},
-                input: {{ execution_lease_expires_at: "{next}" }}
-            ) {{ _docID }} }}"#)).await?;
+    let next = next.to_rfc3339();
+    let rendered = Update::doc(
+        request_doc_id,
+        Input::new().set(fields::EXECUTION_LEASE_EXPIRES_AT, next.as_str()),
+    )
+    .filter(
+        Filter::eq(fields::DOC_ID, request_doc_id)
+            .and(Filter::eq(fields::LIFECYCLE_STATE, state.as_str()))
+            .and(Filter::eq(fields::EXECUTION_GENERATION, owner))
+            .and(Filter::eq(fields::EXECUTION_LEASE_EXPIRES_AT, expiry)),
+    )
+    .render();
+    let result = txn.run_local_response(&rendered).await?;
     anyhow::ensure!(
         result
             .data

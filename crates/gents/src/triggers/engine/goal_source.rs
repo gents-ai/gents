@@ -292,13 +292,41 @@ impl GoalSource {
     ) -> Result<Option<FireIntent>> {
         let goal_ref = &goal;
         let canonical = ConfigAccess::transact_local_readonly(
-            &self.node, Some(actor.clone()), "goal.reconcile_candidate", |txn| Box::pin(async move {
-                let selected = txn.execute(&format!(r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}, limit: 2) {{ agent_did }} }}"#, escape_graphql_string(&goal_ref.node_did), escape_graphql_string(&goal_ref.session_id))).await?;
-                let sessions = selected.pointer("/data/AgentSession").and_then(serde_json::Value::as_array).context("goal session query omitted rows")?;
-                if sessions.len() != 1 || sessions[0]["agent_did"].as_str() != Some(actor.as_str()) { return Ok::<_, anyhow::Error>(None); }
-                crate::goal::load_canonical_goal_in_txn(txn, &goal_ref.node_did, &goal_ref.session_id).await
-            }),
-        ).await?;
+            &self.node,
+            Some(actor.clone()),
+            "goal.reconcile_candidate",
+            |txn| {
+                Box::pin(async move {
+                    let selected = {
+                        use gents_protocol::document_query::{
+                            fields::agent_session as session, Filter, Query, Selection,
+                        };
+                        let rendered = Query::select(Selection::new().field(session::AGENT_DID))
+                            .filter(Filter::eq(session::NODE_DID, &goal_ref.node_did))
+                            .filter(Filter::eq(session::SESSION_ID, &goal_ref.session_id))
+                            .limit(2)
+                            .render();
+                        txn.run(&rendered).await?
+                    };
+                    let sessions = selected
+                        .pointer("/data/AgentSession")
+                        .and_then(serde_json::Value::as_array)
+                        .context("goal session query omitted rows")?;
+                    if sessions.len() != 1
+                        || sessions[0]["agent_did"].as_str() != Some(actor.as_str())
+                    {
+                        return Ok::<_, anyhow::Error>(None);
+                    }
+                    crate::goal::load_canonical_goal_in_txn(
+                        txn,
+                        &goal_ref.node_did,
+                        &goal_ref.session_id,
+                    )
+                    .await
+                })
+            },
+        )
+        .await?;
         let Some(canonical) = canonical else {
             return Ok(None);
         };
@@ -764,27 +792,25 @@ impl GoalSource {
         goal: &GoalDocument,
         parent_request_id: &str,
     ) -> Result<bool> {
-        let node_did = escape_graphql_string(&goal.node_did);
-        let session_id = escape_graphql_string(&goal.session_id);
-        let goal_id = escape_graphql_string(&goal.goal_id);
-        let parent_request_id = escape_graphql_string(parent_request_id);
-        let query = format!(
-            r#"{{
-                AgentRequest(
-                    filter: {{
-                        node_did: {{ _eq: "{node_did}" }},
-                        session_id: {{ _eq: "{session_id}" }},
-                        purpose: {{ _eq: "normal" }},
-                        caused_by_trigger_id: {{ _eq: "{goal_id}" }},
-                        caused_by_trigger_kind: {{ _eq: "goal" }},
-                        caused_by_parent_request_id: {{ _eq: "{parent_request_id}" }}
-                    }},
-                    limit: 1
-                ) {{ _docID }}
-            }}"#
-        );
+        let rendered = {
+            use gents_protocol::document_query::{
+                fields::agent_request as fields, Filter, Query, Selection,
+            };
+            Query::select(Selection::doc_id())
+                .filter(Filter::eq(fields::NODE_DID, &goal.node_did))
+                .filter(Filter::eq(fields::SESSION_ID, &goal.session_id))
+                .filter(Filter::eq(fields::PURPOSE, "normal"))
+                .filter(Filter::eq(fields::CAUSED_BY_TRIGGER_ID, &goal.goal_id))
+                .filter(Filter::eq(fields::CAUSED_BY_TRIGGER_KIND, "goal"))
+                .filter(Filter::eq(
+                    fields::CAUSED_BY_PARENT_REQUEST_ID,
+                    parent_request_id,
+                ))
+                .limit(1)
+                .render()
+        };
         let response = ConfigAccess::local_as(self.node.clone(), actor.clone())
-            .execute(&query)
+            .read(&rendered)
             .await?;
         Ok(response
             .pointer("/data/AgentRequest")

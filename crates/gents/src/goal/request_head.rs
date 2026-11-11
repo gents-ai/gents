@@ -524,12 +524,18 @@ pub(super) async fn retire_stale_assignment_continuations_in_txn(
     let Some(root) = goal.assignment_root_request_doc_id.as_deref() else {
         return Ok(true);
     };
-    let owner = escape_graphql_string(&goal.node_did);
-    let session = escape_graphql_string(&goal.session_id);
-    let response = txn.execute_local_response(&format!(
-        r#"{{AgentRequest(filter: {{node_did: {{_eq: "{owner}"}}, session_id: {{_eq: "{session}"}}}}) {{{}}}}}"#,
-        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
-    )).await?;
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::owned(
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
+        ))
+        .filter(Filter::eq(fields::NODE_DID, &goal.node_did))
+        .filter(Filter::eq(fields::SESSION_ID, &goal.session_id))
+        .render()
+    };
+    let response = txn.run_local_response(&rendered).await?;
     let requests: Vec<AgentRequestRow> = crate::store::graphql::rows(&response, "AgentRequest")?;
     let pending = requests
         .iter()
@@ -616,10 +622,17 @@ pub(crate) async fn assignment_request_id_in_txn(
     let Some(root) = goal.assignment_root_request_doc_id.as_deref() else {
         return Ok(None);
     };
-    let response = txn.execute_local_response(&format!(
-        r#"{{AgentRequest(filter: {{_docID: {{_eq: "{}"}}, node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}) {{request_id}}}}"#,
-        escape_graphql_string(root), escape_graphql_string(&goal.node_did), escape_graphql_string(&goal.session_id)
-    )).await?;
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::new().field(fields::REQUEST_ID))
+            .filter(Filter::eq(fields::DOC_ID, root))
+            .filter(Filter::eq(fields::NODE_DID, &goal.node_did))
+            .filter(Filter::eq(fields::SESSION_ID, &goal.session_id))
+            .render()
+    };
+    let response = txn.run_local_response(&rendered).await?;
     let requests: Vec<AgentRequestRow> = crate::store::graphql::rows(&response, "AgentRequest")?;
     anyhow::ensure!(
         requests.len() == 1,
