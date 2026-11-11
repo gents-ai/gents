@@ -607,166 +607,128 @@ mod tests {
         assert!(message.contains("acme/gadget"), "{message}");
     }
 
-    #[test]
-    fn ownership_allows_the_same_coordinate_and_an_unowned_or_absent_record() {
-        let home = tempfile::tempdir().unwrap();
-        check_plugin_ownership(home.path(), "acme", "echo", "acme/widget").unwrap();
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum Record {
+        Absent,
+        Unreadable,
+        OwnedByClaimant,
+        OwnedByAnother,
+        UnownedSameArtifact,
+        UnownedOtherArtifact,
+    }
 
-        write_record(
-            home.path(),
-            &sample_record("acme", "echo", Some("acme/widget")),
-        )
-        .unwrap();
-        check_plugin_ownership(home.path(), "acme", "echo", "acme/widget").unwrap();
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum Admission {
+        Allowed,
+        Refused,
+        Unreadable,
+    }
 
-        write_record(home.path(), &sample_record("acme", "unowned", None)).unwrap();
-        check_plugin_ownership(home.path(), "acme", "unowned", "acme/anything").unwrap();
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum Removal {
+        Removed,
+        Kept,
+        Unreadable,
     }
 
     #[test]
-    fn owns_plugin_record_is_true_only_for_the_owning_coordinate() {
-        let home = tempfile::tempdir().unwrap();
-        write_record(
-            home.path(),
-            &sample_record("acme", "widget-echo", Some("acme/widget")),
-        )
-        .unwrap();
-        write_record(
-            home.path(),
-            &sample_record("acme", "gadget-echo", Some("acme/gadget")),
-        )
-        .unwrap();
-        write_record(home.path(), &sample_record("acme", "legacy-echo", None)).unwrap();
-        let legacy_digest = format!("sha256:{}", "a".repeat(64));
+    fn plugin_ownership_conforms_to_the_model() {
+        use gents_lean_vocab::families::pack_plugin_ownership_verdict as family;
 
-        assert!(owns_plugin_record(
-            home.path(),
-            "acme",
-            "widget-echo",
-            "acme/widget",
-            &legacy_digest
-        ));
-        assert!(!owns_plugin_record(
-            home.path(),
-            "acme",
-            "gadget-echo",
-            "acme/widget",
-            &legacy_digest
-        ));
-        assert!(owns_plugin_record(
-            home.path(),
-            "acme",
-            "legacy-echo",
-            "acme/widget",
-            &legacy_digest
-        ));
-        assert!(!owns_plugin_record(
-            home.path(),
-            "acme",
-            "legacy-echo",
-            "acme/widget",
-            "sha256:another-artifact"
-        ));
-        assert!(!owns_plugin_record(
-            home.path(),
-            "acme",
-            "not-installed",
-            "acme/widget",
-            &legacy_digest
-        ));
+        let claimant = "acme/widget";
+        let artifact = format!("sha256:{}", "a".repeat(64));
+        let unreadable =
+            |error: &anyhow::Error| any_error::<serde_json::Error>(error.as_ref(), |_| true);
+        family::replay::<Admission, Record, Removal>(|input| {
+            let home = tempfile::tempdir().unwrap();
+            let path = record_path(home.path(), "acme", "echo").unwrap();
+            let record = match input.record {
+                Record::Absent | Record::Unreadable => None,
+                Record::OwnedByClaimant => Some(sample_record("acme", "echo", Some(claimant))),
+                Record::OwnedByAnother => Some(sample_record("acme", "echo", Some("acme/gadget"))),
+                Record::UnownedSameArtifact => Some(sample_record("acme", "echo", None)),
+                Record::UnownedOtherArtifact => Some(InstalledPlugin {
+                    digest: format!("sha256:{}", "b".repeat(64)),
+                    ..sample_record("acme", "echo", None)
+                }),
+            };
+            if let Some(record) = &record {
+                write_record(home.path(), record).unwrap();
+            }
+            if input.record == Record::Unreadable {
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(&path, b"{not-json").unwrap();
+            }
+            let before = std::fs::read(&path).ok();
+
+            let admission = match check_plugin_ownership(home.path(), "acme", "echo", claimant) {
+                Ok(()) => Admission::Allowed,
+                Err(error) if unreadable(&error) => Admission::Unreadable,
+                Err(_) => Admission::Refused,
+            };
+            let owns = owns_plugin_record(home.path(), "acme", "echo", claimant, &artifact);
+            assert_eq!(std::fs::read(&path).ok(), before, "asking changes nothing");
+
+            let removal =
+                match remove_record_if_owned(home.path(), "acme", "echo", claimant, &artifact) {
+                    Ok(true) => Removal::Removed,
+                    Ok(false) => Removal::Kept,
+                    Err(error) if unreadable(&error) => Removal::Unreadable,
+                    Err(error) => panic!("{error:#}"),
+                };
+            let after = std::fs::read(&path).ok();
+            if removal != Removal::Removed {
+                assert_eq!(after, before, "a record that is not removed is untouched");
+            }
+            family::Verdict {
+                admission,
+                owns,
+                removal,
+                remains: after.is_some(),
+            }
+        });
     }
 
     #[test]
-    fn guarded_removal_rechecks_owner_under_the_store_lock() {
-        let home = tempfile::tempdir().unwrap();
-        write_record(
-            home.path(),
-            &sample_record("acme", "echo", Some("acme/widget")),
-        )
-        .unwrap();
+    fn releasing_plugin_bytes_conforms_to_the_model() {
+        use gents_lean_vocab::families::pack_plugin_bytes_release as family;
 
-        assert!(!remove_record_if_owned(
-            home.path(),
-            "acme",
-            "echo",
-            "acme/gadget",
-            "sha256:unused",
-        )
-        .unwrap());
-        assert!(read_record(home.path(), "acme", "echo").is_ok());
-
-        assert!(remove_record_if_owned(
-            home.path(),
-            "acme",
-            "echo",
-            "acme/widget",
-            "sha256:unused",
-        )
-        .unwrap());
-        assert!(is_not_found(
-            &read_record(home.path(), "acme", "echo").unwrap_err()
-        ));
-    }
-
-    #[test]
-    fn malformed_plugin_record_is_not_treated_as_missing_ownership() {
-        let home = tempfile::tempdir().unwrap();
-        let path = record_path(home.path(), "acme", "echo").unwrap();
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let malformed = b"{not-json";
-        std::fs::write(&path, malformed).unwrap();
-
-        assert!(check_plugin_ownership(home.path(), "acme", "echo", "acme/widget").is_err());
-        assert!(remove_record_if_owned(
-            home.path(),
-            "acme",
-            "echo",
-            "acme/widget",
-            "sha256:unused",
-        )
-        .is_err());
-        assert_eq!(std::fs::read(path).unwrap(), malformed);
-    }
-
-    #[test]
-    fn release_keeps_bytes_another_record_references_and_frees_the_rest() {
-        let home = tempfile::tempdir().unwrap();
-        let shared_digest = format!("sha256:{}", "a".repeat(64));
-        let orphaned_digest = format!("sha256:{}", "b".repeat(64));
-        store_bytes(home.path(), &"a".repeat(64), b"shared bytes").unwrap();
-        store_bytes(home.path(), &"b".repeat(64), b"orphaned bytes").unwrap();
-
-        write_record(
-            home.path(),
-            &InstalledPlugin {
-                digest: shared_digest.clone(),
-                ..sample_record("acme", "kept-one", Some("acme/widget"))
-            },
-        )
-        .unwrap();
-        write_record(
-            home.path(),
-            &InstalledPlugin {
-                digest: shared_digest.clone(),
-                ..sample_record("zeta", "kept-two", Some("zeta/widget"))
-            },
-        )
-        .unwrap();
-
-        let mut candidates = BTreeSet::new();
-        candidates.insert(shared_digest.clone());
-        candidates.insert(orphaned_digest.clone());
-        let released = release_unreferenced_bytes(home.path(), &candidates).unwrap();
-
-        assert_eq!(released, vec![orphaned_digest]);
-        assert!(
-            read_bytes(home.path(), &"a".repeat(64)).is_ok(),
-            "shared bytes stay"
-        );
-        assert!(
-            read_bytes(home.path(), &"b".repeat(64)).is_err(),
-            "orphaned bytes are released"
-        );
+        let digest = |letter: &String| format!("sha256:{}", letter.repeat(64));
+        family::replay(|input| {
+            let home = tempfile::tempdir().unwrap();
+            for letter in &input.stored {
+                store_bytes(home.path(), &letter.repeat(64), letter.as_bytes()).unwrap();
+            }
+            for (index, letter) in input.referenced.iter().enumerate() {
+                write_record(
+                    home.path(),
+                    &InstalledPlugin {
+                        digest: digest(letter),
+                        ..sample_record("acme", &format!("plugin_{index}"), Some("acme/widget"))
+                    },
+                )
+                .unwrap();
+            }
+            let candidates: BTreeSet<String> = input.candidates.iter().map(digest).collect();
+            let released = release_unreferenced_bytes(home.path(), &candidates).unwrap();
+            let mut remaining: Vec<String> = input
+                .stored
+                .iter()
+                .filter(|letter| read_bytes(home.path(), &letter.repeat(64)).is_ok())
+                .cloned()
+                .collect();
+            remaining.sort();
+            family::BytesResult {
+                released: released
+                    .iter()
+                    .map(|digest| digest["sha256:".len().."sha256:".len() + 1].to_owned())
+                    .collect(),
+                remaining,
+            }
+        });
     }
 }
 
