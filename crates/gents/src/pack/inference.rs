@@ -25,6 +25,33 @@ pub struct PackInferenceProfileOption {
     pub unavailable_reason: Option<String>,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum SlotBindingError {
+    /// More than one profile could serve these required slots, so the person installing picks:
+    /// `profiles` are the usable ones.
+    #[error(
+        "pack {pack} requires explicit inference slot bindings for: {}; inspect the preview and bind each slot to an existing profile",
+        .slots.join(", ")
+    )]
+    Unbound {
+        pack: String,
+        slots: Vec<String>,
+        profiles: Vec<PackInferenceProfileOption>,
+    },
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+impl SlotBindingError {
+    /// `Other` erases to its own error, as `PackChangeError::into_anyhow` says why.
+    pub fn into_anyhow(self) -> anyhow::Error {
+        match self {
+            Self::Other(error) => error,
+            unbound => unbound.into(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PackInferenceBindingPreview {
     pub slots: Vec<PackInferenceSlot>,
@@ -184,7 +211,7 @@ pub async fn preview_pack_inference_bindings(
     manifest: &PackManifest,
     node_did: &str,
     requested: &PackInferenceBindings,
-) -> Result<PackInferenceBindingPreview> {
+) -> Result<PackInferenceBindingPreview, SlotBindingError> {
     preview_pack_inference_bindings_with_node_binding(access, manifest, node_did, requested, None)
         .await
 }
@@ -195,7 +222,7 @@ pub(crate) async fn preview_pack_inference_bindings_with_node_binding(
     node_did: &str,
     requested: &PackInferenceBindings,
     node_binding: Option<&crate::documents::ConfigurationNodeBinding>,
-) -> Result<PackInferenceBindingPreview> {
+) -> Result<PackInferenceBindingPreview, SlotBindingError> {
     let mut preview = inspect_pack_inference_bindings_with_node_binding(
         access,
         manifest,
@@ -240,11 +267,13 @@ pub(crate) async fn preview_pack_inference_bindings_with_node_binding(
         .iter()
         .filter(|profile| profile.usable)
         .collect::<Vec<_>>();
-    anyhow::ensure!(
-        !usable.is_empty(),
-        "pack {} requires configured inference, but node {node_did} has no usable profile; finish Setup or use the existing inference configuration tools first",
-        manifest.name
-    );
+    if usable.is_empty() {
+        return Err(anyhow::anyhow!(
+            "pack {} requires configured inference, but node {node_did} has no usable profile; finish Setup or use the existing inference configuration tools first",
+            manifest.name
+        )
+        .into());
+    }
     if requested.is_empty() && required.len() == 1 && usable.len() == 1 {
         let slot = required[0].name.clone();
         preview.bindings.insert(slot, usable[0].profile_id.clone());
@@ -256,12 +285,13 @@ pub(crate) async fn preview_pack_inference_bindings_with_node_binding(
         .filter(|slot| !requested.contains_key(&slot.name))
         .map(|slot| slot.name.clone())
         .collect::<Vec<_>>();
-    anyhow::ensure!(
-        missing.is_empty(),
-        "pack {} requires explicit inference slot bindings for: {}; inspect the preview and bind each slot to an existing profile",
-        manifest.name,
-        missing.join(", ")
-    );
+    if !missing.is_empty() {
+        return Err(SlotBindingError::Unbound {
+            pack: manifest.name.clone(),
+            slots: missing,
+            profiles: usable.into_iter().cloned().collect(),
+        });
+    }
     Ok(preview)
 }
 
@@ -413,6 +443,18 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("coordinator, worker"));
+        let SlotBindingError::Unbound {
+            pack,
+            slots,
+            profiles,
+        } = error
+        else {
+            panic!("an ambiguous pick is its own refusal: {error:#}");
+        };
+        assert_eq!(pack, "test_pack");
+        assert_eq!(slots, ["coordinator", "worker"]);
+        let profiles = profiles.iter().map(|profile| profile.profile_id.as_str());
+        assert_eq!(profiles.collect::<Vec<_>>(), ["profile"]);
         node.shutdown().await.expect("node shutdown");
     }
 

@@ -119,11 +119,16 @@ pub(crate) async fn capture(
                 );
             }
             Collection::Callback => {
-                let response = txn.execute(&format!(
-                    "{{ CallbackBinding(filter: {{node_did: {{_eq: \"{}\"}}, callback_id: {{_eq: \"{}\"}}}}) {{binding_id}} }}",
-                    crate::store::graphql::escape_graphql_string(owner),
-                    crate::store::graphql::escape_graphql_string(id),
-                )).await?;
+                let rendered = {
+                    use gents_protocol::document_query::{
+                        fields::callback_binding as fields, Filter, Query, Selection,
+                    };
+                    Query::select(Selection::new().field(fields::BINDING_ID))
+                        .filter(Filter::eq(fields::NODE_DID, owner))
+                        .filter(Filter::eq(fields::CALLBACK_ID, id))
+                        .render()
+                };
+                let response = txn.run(&rendered).await?;
                 for row in response["data"]["CallbackBinding"]
                     .as_array()
                     .context("Callback consumers omitted bindings")?
@@ -143,11 +148,16 @@ pub(crate) async fn capture(
                     .as_ref()
                     .is_none_or(|(_, value)| value["agent_did"] != document.update["agent_did"]);
                 if changed {
-                    let response = txn.execute(&format!(
-                        "{{ Trigger(filter: {{node_did: {{_eq: \"{}\"}}, task_id: {{_eq: \"{}\"}}}}) {{trigger_id}} }}",
-                        crate::store::graphql::escape_graphql_string(owner),
-                        crate::store::graphql::escape_graphql_string(id),
-                    )).await?;
+                    let rendered = {
+                        use gents_protocol::document_query::{
+                            fields::trigger as fields, Filter, Query, Selection,
+                        };
+                        Query::select(Selection::new().field(fields::TRIGGER_ID))
+                            .filter(Filter::eq(fields::NODE_DID, owner))
+                            .filter(Filter::eq(fields::TASK_ID, id))
+                            .render()
+                    };
+                    let response = txn.run(&rendered).await?;
                     for row in response["data"]["Trigger"]
                         .as_array()
                         .context("Task consumers omitted Trigger rows")?
@@ -165,11 +175,30 @@ pub(crate) async fn capture(
                     value["source_collection"] != document.update["source_collection"]
                 });
                 if changed {
-                    let response = txn.execute(&format!(
-                        "{{ Trigger(filter: {{node_did: {{_eq: \"{owner}\"}}}}) {{trigger_id source}} CallbackBinding(filter: {{node_did: {{_eq: \"{owner}\"}}, event_source_id: {{_eq: \"{id}\"}}}}) {{binding_id}} }}",
-                        owner = crate::store::graphql::escape_graphql_string(owner),
-                        id = crate::store::graphql::escape_graphql_string(id),
-                    )).await?;
+                    let rendered = {
+                        use gents_protocol::document_query::{
+                            fields::{callback_binding, trigger},
+                            Filter, Query, QuerySet, Selection,
+                        };
+                        QuerySet::new()
+                            .plain(
+                                &Query::select(
+                                    Selection::new()
+                                        .field(trigger::TRIGGER_ID)
+                                        .field(trigger::SOURCE),
+                                )
+                                .filter(Filter::eq(trigger::NODE_DID, owner)),
+                            )
+                            .plain(
+                                &Query::select(
+                                    Selection::new().field(callback_binding::BINDING_ID),
+                                )
+                                .filter(Filter::eq(callback_binding::NODE_DID, owner))
+                                .filter(Filter::eq(callback_binding::EVENT_SOURCE_ID, id)),
+                            )
+                            .render()
+                    };
+                    let response = txn.run(&rendered).await?;
                     for row in response["data"]["Trigger"]
                         .as_array()
                         .context("EventSource Trigger consumers omitted rows")?

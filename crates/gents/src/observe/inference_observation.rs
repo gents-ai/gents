@@ -215,16 +215,24 @@ async fn observation_visible(
     actor: &identity::Did,
     key: &InferenceKey,
 ) -> anyhow::Result<Option<bool>> {
-    let scope = format!(
-        r#"node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}"#,
-        crate::store::graphql::escape_graphql_string(&key.node),
-        crate::store::graphql::escape_graphql_string(&key.session)
-    );
-    let request = crate::store::graphql::escape_graphql_string(&key.request);
-    let generation = crate::store::graphql::escape_graphql_string(&key.generation);
-    let query = format!(
-        r#"{{ AgentSession(filter: {{{scope}}}, limit: 2) {{ _docID }} AgentRequest(filter: {{{scope}, request_id: {{_eq: "{request}"}}, execution_generation: {{_eq: "{generation}"}}}}, limit: 2) {{ _docID lifecycle_state }} }}"#
-    );
+    use gents_protocol::document_query::{
+        fields::{agent_request, agent_session},
+        Filter, Query, QuerySet, Selection,
+    };
+    let sessions = Query::select(Selection::doc_id())
+        .filter(Filter::eq(agent_session::NODE_DID, &key.node))
+        .filter(Filter::eq(agent_session::SESSION_ID, &key.session))
+        .limit(2);
+    let requests = Query::select(Selection::doc_id().field(agent_request::LIFECYCLE_STATE))
+        .filter(Filter::eq(agent_request::NODE_DID, &key.node))
+        .filter(Filter::eq(agent_request::SESSION_ID, &key.session))
+        .filter(Filter::eq(agent_request::REQUEST_ID, &key.request))
+        .filter(Filter::eq(
+            agent_request::EXECUTION_GENERATION,
+            &key.generation,
+        ))
+        .limit(2);
+    let query = QuerySet::new().plain(&sessions).plain(&requests).render();
     crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
         Some(actor.clone()),
@@ -239,7 +247,7 @@ async fn observation_visible(
                 {
                     return Ok::<_, anyhow::Error>(None);
                 }
-                let response = txn.execute(&query).await?;
+                let response = txn.run(&query).await?;
                 Ok::<_, anyhow::Error>(Some(activity_visible(&response)))
             })
         },

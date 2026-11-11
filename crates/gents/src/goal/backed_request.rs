@@ -96,16 +96,15 @@ async fn stage_goal_backed_request(
         .as_deref()
         .context("goal-backed request requires a stable retry_key")?;
 
-    let existing = txn
-        .execute(&format!(
-            r#"{{
-                    AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}) {{
-                        {SIGNED_REQUEST_FIELDS}
-                    }}
-                }}"#,
-            escape_graphql_string(retry_key),
-        ))
-        .await?;
+    let existing = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        let rendered = Query::select(Selection::owned(SIGNED_REQUEST_FIELDS))
+            .filter(Filter::eq(fields::RETRY_KEY, retry_key))
+            .render();
+        txn.run(&rendered).await?
+    };
     let requests = existing
         .pointer("/data/AgentRequest")
         .and_then(serde_json::Value::as_array)
@@ -314,12 +313,20 @@ pub(crate) async fn stage_goal_backed_request_with_identity_in_txn(
         .retry_key
         .as_deref()
         .context("goal-backed request requires a stable retry_key")?;
-    let staged = txn
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_id session_id }} }}"#,
-            escape_graphql_string(retry_key),
-        ))
-        .await?;
+    let staged = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        let rendered = Query::select(
+            Selection::doc_id()
+                .field(fields::REQUEST_ID)
+                .field(fields::SESSION_ID),
+        )
+        .filter(Filter::eq(fields::RETRY_KEY, retry_key))
+        .limit(2)
+        .render();
+        txn.run(&rendered).await?
+    };
     let rows = staged
         .pointer("/data/AgentRequest")
         .and_then(serde_json::Value::as_array)

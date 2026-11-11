@@ -174,7 +174,7 @@ pub(super) async fn handle_request(
             let request = decode::<PackInstallRequest>(&request.body, "decoding pack install")?;
             let home = fixture.node_home().to_path_buf();
             json(
-                run_pack(runtime, move || {
+                run_pack(runtime, move || async move {
                     packs::install(
                         home,
                         request.package,
@@ -185,6 +185,8 @@ pub(super) async fn handle_request(
                         request.preview,
                         request.expect_digest,
                     )
+                    .await
+                    .map_err(gents::pack::PackChangeError::into_anyhow)
                 })
                 .await?,
             )

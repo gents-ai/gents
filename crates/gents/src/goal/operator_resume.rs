@@ -123,13 +123,14 @@ async fn existing_resume_receipt_in_txn(
     parent_row: &AgentRequestRow,
     from_request_id: &str,
 ) -> Result<Option<GoalResumeReceipt>> {
+    use gents_protocol::document_query::{
+        fields::agent_request as request, Filter, Query, Selection,
+    };
     let key = goal_continuation_identity(&goal.goal_id, from_request_id, 1)?.retry_key;
-    let escaped_key = escape_graphql_string(&key);
-    let response = txn
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{escaped_key}" }} }}) {{ {SIGNED_REQUEST_FIELDS} }} }}"#
-        ))
-        .await?;
+    let rendered = Query::select(Selection::owned(SIGNED_REQUEST_FIELDS))
+        .filter(Filter::eq(request::RETRY_KEY, &key))
+        .render();
+    let response = txn.run(&rendered).await?;
     let children: Vec<AgentRequestRow> = serde_json::from_value(
         response
             .pointer("/data/AgentRequest")

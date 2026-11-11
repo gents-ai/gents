@@ -45,12 +45,19 @@ pub(crate) async fn publish(
     identities: &[Arc<dyn crate::store::identity::NodeIdentity>],
     notice: RuntimeNotice,
 ) -> std::result::Result<MailboxItem, RuntimeNoticeError> {
-    let query = format!(
-        r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, request_id: {{ _eq: "{}" }} }}, limit: 2) {{ {} claimed_at }} }}"#,
-        escape_graphql_string(node_did),
-        escape_graphql_string(&notice.request_id),
-        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
-    );
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(
+            Selection::owned(gents_protocol::request_admission::SIGNED_REQUEST_FIELDS)
+                .field(fields::CLAIMED_AT),
+        )
+        .filter(Filter::eq(fields::NODE_DID, node_did))
+        .filter(Filter::eq(fields::REQUEST_ID, &notice.request_id))
+        .limit(2)
+        .render()
+    };
     let mut claimed = None;
     for identity in identities {
         let access = crate::ConfigAccess::local_managed_agent(
@@ -59,7 +66,7 @@ pub(crate) async fn publish(
             identity.as_ref(),
         )
         .map_err(anyhow::Error::new)?;
-        let response = access.execute(&query).await.map_err(anyhow::Error::new)?;
+        let response = access.read(&query).await.map_err(anyhow::Error::new)?;
         let rows = response["data"]["AgentRequest"]
             .as_array()
             .context("runtime notice request lookup")?;

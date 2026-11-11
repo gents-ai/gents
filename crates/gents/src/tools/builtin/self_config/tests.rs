@@ -2151,6 +2151,24 @@ async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
     .await
     .unwrap_err();
     assert!(denied.contains("file read permission"), "{denied}");
+    let unsupported = call_config_tool(
+        &denied_tools,
+        command(&[
+            "discovery",
+            "scan",
+            "--source",
+            "s",
+            "grok",
+            "user",
+            source.to_str().unwrap(),
+        ]),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        unsupported.contains("expected claude or codex"),
+        "{unsupported}"
+    );
 
     grants.process_ceiling = crate::tools::surface::SelfConfigProcessCeiling {
         file_mode: crate::tools::surface::FileToolMode::ReadOnly,

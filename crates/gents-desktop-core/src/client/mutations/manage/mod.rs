@@ -61,9 +61,10 @@ pub use behavior::{delete_agent_context_on, delete_agent_on};
 pub use inference::{delete_inference_backend_on, upsert_inference_backend_on};
 pub(crate) use principal::apply_config_components_with_publication_on;
 pub use principal::{
-    patch_config_components_on, read_backend_authentication_on, read_config_editor_on,
-    save_backend_authentication_on, save_config_editor_on, set_backend_rotation_on,
-    set_default_agent_on, upsert_node_on, ConfigEditorDocument, ConfigEditorRevision,
+    apply_config_components_on, patch_config_components_on, read_backend_authentication_on,
+    read_config_editor_on, save_backend_authentication_on, save_config_editor_on,
+    set_backend_rotation_on, set_default_agent_on, upsert_node_on, ConfigEditorDocument,
+    ConfigEditorRevision,
 };
 pub use profile::{
     delete_inference_profile_on, select_agent_model_on, upsert_inference_profile_on,

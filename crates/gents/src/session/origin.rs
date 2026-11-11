@@ -758,13 +758,18 @@ pub(crate) async fn verified_starter_in_txn(
     ) else {
         return Ok(None);
     };
-    let response = txn
-        .execute(&format!(
-            "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
-            escape_graphql_string(opening),
+    let response = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        let rendered = Query::select(Selection::owned(
             gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ))
-        .await?;
+        .filter(Filter::eq(fields::DOC_ID, opening))
+        .limit(2)
+        .render();
+        txn.run(&rendered).await?
+    };
     let Some([row]) = response["data"]["AgentRequest"]
         .as_array()
         .map(Vec::as_slice)
@@ -817,13 +822,18 @@ pub(crate) async fn issue_creation_receipt_in_txn(
     let Some(opening) = opening else {
         return Ok(None);
     };
-    let response = txn
-        .execute(&format!(
-            "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
-            escape_graphql_string(opening),
+    let response = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        let rendered = Query::select(Selection::owned(
             gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ))
-        .await?;
+        .filter(Filter::eq(fields::DOC_ID, opening))
+        .limit(2)
+        .render();
+        txn.run(&rendered).await?
+    };
     let Some(rows) = response["data"]["AgentRequest"].as_array() else {
         return Ok(None);
     };

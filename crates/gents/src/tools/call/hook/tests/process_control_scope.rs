@@ -254,11 +254,9 @@ async fn generated_wait_observer_interrupt_preserves_background_process() {
         crate::tools::call::lifecycle::query::render_tool_result(&persisted).unwrap(),
         reason
     );
-    crate::tools::call::control::cancel_session_background_process(
+    crate::tools::call::control::cancel_background_tool_call(
         &hook.actor_access().unwrap(),
         &executions,
-        identity.did(),
-        hook.active_requester_did().await.as_deref(),
         &session_id,
         tool_call_id,
     )
@@ -392,20 +390,6 @@ async fn accepted_cross_agent_process_controls_preserve_the_owners_running_job()
             "{name}: {denial}"
         );
     }
-    let denied = crate::tools::call::control::cancel_session_background_process(
-        &foreign.actor_access().unwrap(),
-        &BackgroundExecutionRegistry::default(),
-        &foreign_did,
-        Some(foreign_agent.as_str()),
-        &session_id,
-        &tool_call_id,
-    )
-    .await
-    .unwrap();
-    assert!(matches!(
-        denied,
-        crate::tools::call::control::CancelBackgroundToolCallOutcome::NotFound
-    ));
     let still_running = fetch_tool_call_row(&owner, &session_id, &tool_call_id).await;
     assert_eq!(still_running["lifecycle_state"], "running");
     assert!(still_running["cancel_cause"].is_null());
@@ -459,8 +443,7 @@ mod job_control {
     };
     use crate::tools::background::status::ProcessControlScope;
     use crate::tools::call::control::{
-        cancel_background_tool_call, cancel_session_background_process,
-        CancelBackgroundToolCallOutcome,
+        cancel_background_tool_call, CancelBackgroundToolCallOutcome,
     };
     use crate::tools::call::lifecycle::admission_fixture::{
         fixture_job_pin, publish_accepted_on_claimed_request,
@@ -986,52 +969,6 @@ mod job_control {
             "cancelled"
         );
         assert_eq!(hook.receipt("job-operator").await, cancelled(evidence));
-        assert!(hook.interrupted(&child).await);
-        hook.finish().await;
-    }
-
-    #[tokio::test]
-    async fn client_cancel_on_a_job_row_ends_it_cancelled() {
-        let hook = JobHook::new().await;
-        let row = hook.job_row("job-client").await;
-        let evidence = hook.persist_evidence(&row).await;
-        let child = hook.live_child(&row).await;
-        let denied = cancel_session_background_process(
-            &hook.access(),
-            &hook.executions,
-            &hook.owner.node_did,
-            Some("did:key:another-requester"),
-            &hook.session_id,
-            "job-client",
-        )
-        .await
-        .unwrap();
-        assert_eq!(denied, CancelBackgroundToolCallOutcome::NotFound);
-        assert_eq!(
-            hook.stored("job-client").await["lifecycle_state"],
-            "running"
-        );
-        let outcome = cancel_session_background_process(
-            &hook.access(),
-            &hook.executions,
-            &hook.owner.node_did,
-            Some(hook.agent()),
-            &hook.session_id,
-            "job-client",
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            outcome,
-            CancelBackgroundToolCallOutcome::Cancelled {
-                live_execution_cancelled: false
-            }
-        );
-        assert_eq!(
-            hook.stored("job-client").await["lifecycle_state"],
-            "cancelled"
-        );
-        assert_eq!(hook.receipt("job-client").await, cancelled(evidence));
         assert!(hook.interrupted(&child).await);
         hook.finish().await;
     }

@@ -196,15 +196,28 @@ async fn load_copied_facts(
     if named.is_empty() {
         return Ok(Vec::new());
     }
-    let response = txn
-        .execute_local_response(&format!(
-            r#"{{ ToolFileInventory(filter: {{ session_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }} }}) {{
-                _docID tool_call_doc_id observation_doc_id request_doc_id node_did session_id requester_did changes verified_unchanged
-            }} }}"#,
-            escape_graphql_string(session_id),
-            escape_graphql_string(&input.scope.node_did),
-        ))
-        .await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::tool_file_inventory as fields, Filter, Query, Selection,
+        };
+        txn.run_local_response(
+            &Query::select(
+                Selection::doc_id()
+                    .field(fields::TOOL_CALL_DOC_ID)
+                    .field(fields::OBSERVATION_DOC_ID)
+                    .field(fields::REQUEST_DOC_ID)
+                    .field(fields::NODE_DID)
+                    .field(fields::SESSION_ID)
+                    .field(fields::REQUESTER_DID)
+                    .field(fields::CHANGES)
+                    .field(fields::VERIFIED_UNCHANGED),
+            )
+            .filter(Filter::eq(fields::SESSION_ID, session_id))
+            .filter(Filter::eq(fields::NODE_DID, &input.scope.node_did))
+            .render(),
+        )
+        .await?
+    };
     let candidates = required_rows::<Projection>(&response, "ToolFileInventory")?
         .into_iter()
         .filter(|projection| named.contains(&projection.tool_call_doc_id))
@@ -518,14 +531,29 @@ impl FileInventorySnapshot {
                 requester_did: document.requester_did.clone(),
             };
             let inherited = document.session_id != request.session_id;
-            let query = format!(
-                r#"{{ ToolFileInventory(filter: {{ tool_call_doc_id: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}, limit: 2) {{
-                    _docID tool_call_doc_id observation_doc_id request_doc_id node_did session_id requester_did changes verified_unchanged
-                }} }}"#,
-                escape_graphql_string(&document.doc_id),
-                escape_graphql_string(&request.session_id),
-            );
-            let response = txn.execute_local_response(&query).await?;
+            let response = {
+                use gents_protocol::document_query::{
+                    fields::tool_file_inventory as fields, Filter, Query, Selection,
+                };
+                txn.run_local_response(
+                    &Query::select(
+                        Selection::doc_id()
+                            .field(fields::TOOL_CALL_DOC_ID)
+                            .field(fields::OBSERVATION_DOC_ID)
+                            .field(fields::REQUEST_DOC_ID)
+                            .field(fields::NODE_DID)
+                            .field(fields::SESSION_ID)
+                            .field(fields::REQUESTER_DID)
+                            .field(fields::CHANGES)
+                            .field(fields::VERIFIED_UNCHANGED),
+                    )
+                    .filter(Filter::eq(fields::TOOL_CALL_DOC_ID, &document.doc_id))
+                    .filter(Filter::eq(fields::SESSION_ID, &request.session_id))
+                    .limit(2)
+                    .render(),
+                )
+                .await?
+            };
             let mut projections = required_rows::<Projection>(&response, "ToolFileInventory")?;
             anyhow::ensure!(
                 projections.len() <= 1,

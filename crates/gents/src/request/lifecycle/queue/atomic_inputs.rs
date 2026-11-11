@@ -213,16 +213,29 @@ pub(crate) async fn persist_background_completion_with_message_waking_with_acces
             |txn| {
                 let tool_key = tool_key.clone();
                 Box::pin(async move {
+                    use gents_protocol::document_query::{
+                        fields::{agent_output_segment, agent_tool_call},
+                        Filter, Query, QuerySet, Selection,
+                    };
                     let existing = txn
-                        .execute(&format!(
-                            r#"{{
-                AgentToolCall(filter: {{ tool_call_key: {{ _eq: "{}" }} }}, limit: 2) {{ _docID }}
-                AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {} }}
-            }}"#,
-                            escape_graphql_string(&tool_key),
-                            escape_graphql_string(&parent.doc_id),
-                            gents_protocol::output::rows::AGENT_OUTPUT_SEGMENT_FIELDS
-                        ))
+                        .run(
+                            &QuerySet::new()
+                                .plain(
+                                    &Query::select(Selection::doc_id())
+                                        .filter(Filter::eq(agent_tool_call::TOOL_CALL_KEY, &tool_key))
+                                        .limit(2),
+                                )
+                                .plain(
+                                    &Query::select(Selection::owned(
+                                        gents_protocol::output::rows::AGENT_OUTPUT_SEGMENT_FIELDS,
+                                    ))
+                                    .filter(Filter::eq(
+                                        agent_output_segment::REQUEST_DOC_ID,
+                                        &parent.doc_id,
+                                    )),
+                                )
+                                .render(),
+                        )
                         .await?;
                     let tools = existing["data"]["AgentToolCall"]
                         .as_array()
@@ -256,29 +269,33 @@ pub(crate) async fn persist_background_completion_with_message_waking_with_acces
                             parent.requester_did.as_deref(),
                         )
                         .await?;
-                    let agent_did = escape_graphql_string(&agent_did);
+                    use gents_protocol::document_query::{Create, Input};
                     let created = txn
-                        .execute(&format!(
-                            r#"mutation {{ create_AgentToolCall(input: {{
-                session_doc_id: "{}", agent_did: "{agent_did}", creator_did: "{agent_did}", parent_linked: false,
-                tool_call_key: "{}", tool_call_id: "{}", request_id: "{}",
-                request_doc_id: "{}", node_did: "{}", requester_did: {}, session_id: "{}",
-                tool_name: "fixture", message_sequence: 1, await_mode: "background",
-                status: "completed", lifecycle_state: "completed"
-            }}) {{ _docID }} }}"#,
-                            escape_graphql_string(&session_doc_id),
-                            escape_graphql_string(&tool_key),
-                            escape_graphql_string(&tool_key),
-                            escape_graphql_string(&parent.request_id),
-                            escape_graphql_string(&parent.doc_id),
-                            escape_graphql_string(&parent.node_did),
-                            parent
-                                .requester_did
-                                .as_deref()
-                                .map(|v| format!("\"{}\"", escape_graphql_string(v)))
-                                .unwrap_or_else(|| "null".into()),
-                            escape_graphql_string(&parent.session_id)
-                        ))
+                        .run(
+                            &Create::new(
+                                Input::new()
+                                    .set(agent_tool_call::SESSION_DOC_ID, &session_doc_id)
+                                    .set(agent_tool_call::AGENT_DID, &agent_did)
+                                    .set(agent_tool_call::CREATOR_DID, &agent_did)
+                                    .set(agent_tool_call::PARENT_LINKED, false)
+                                    .set(agent_tool_call::TOOL_CALL_KEY, &tool_key)
+                                    .set(agent_tool_call::TOOL_CALL_ID, &tool_key)
+                                    .set(agent_tool_call::REQUEST_ID, &parent.request_id)
+                                    .set(agent_tool_call::REQUEST_DOC_ID, &parent.doc_id)
+                                    .set(agent_tool_call::NODE_DID, &parent.node_did)
+                                    .set_optional(
+                                        agent_tool_call::REQUESTER_DID,
+                                        parent.requester_did.as_deref(),
+                                    )
+                                    .set(agent_tool_call::SESSION_ID, &parent.session_id)
+                                    .set(agent_tool_call::TOOL_NAME, "fixture")
+                                    .set(agent_tool_call::MESSAGE_SEQUENCE, 1)
+                                    .set(agent_tool_call::AWAIT_MODE, "background")
+                                    .set(agent_tool_call::STATUS, "completed")
+                                    .set(agent_tool_call::LIFECYCLE_STATE, "completed"),
+                            )
+                            .render(),
+                        )
                         .await?;
                     let tool_doc =
                         crate::store::graphql::created_doc_id(&created, "AgentToolCall")?;
@@ -472,8 +489,23 @@ async fn background_completion_transaction_attempt(
             .request_doc_id
             .as_deref()
             .context("canonical notification replay has no request binding")?;
-        let binding = txn.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_id session_id node_did input }} }}"#,
-            escape_graphql_string(doc_id))).await?;
+        use gents_protocol::document_query::{
+            fields::agent_request as request, Filter, Query, Selection,
+        };
+        let binding = txn
+            .run(
+                &Query::select(
+                    Selection::doc_id()
+                        .field(request::REQUEST_ID)
+                        .field(request::SESSION_ID)
+                        .field(request::NODE_DID)
+                        .field(request::INPUT),
+                )
+                .filter(Filter::eq(request::DOC_ID, doc_id))
+                .limit(2)
+                .render(),
+            )
+            .await?;
         let rows: Vec<AgentRequestRow> =
             serde_json::from_value(binding["data"]["AgentRequest"].clone())?;
         anyhow::ensure!(
@@ -714,11 +746,20 @@ async fn publish_native_tool_notification(
         PayloadPresentation, PayloadRef, PresentedPayload, SourceClose, TranscriptMessage,
     };
 
-    let tool = escape_graphql_string(&native.tool_call_doc_id);
-    let request = escape_graphql_string(&parent.doc_id);
-    let facts = txn.execute(&format!(r#"{{
-        AgentToolCall(filter: {{ _docID: {{ _eq: "{tool}" }}, request_doc_id: {{ _eq: "{request}" }}, await_mode: {{ _eq: "background" }} }}, limit: 2) {{ _docID lifecycle_state }}
-    }}"#)).await?;
+    use gents_protocol::document_query::{fields::agent_tool_call, Filter, Query, Selection};
+    let facts = txn
+        .run(
+            &Query::select(Selection::doc_id().field(agent_tool_call::LIFECYCLE_STATE))
+                .filter(Filter::eq(
+                    agent_tool_call::DOC_ID,
+                    &native.tool_call_doc_id,
+                ))
+                .filter(Filter::eq(agent_tool_call::REQUEST_DOC_ID, &parent.doc_id))
+                .filter(Filter::eq(agent_tool_call::AWAIT_MODE, "background"))
+                .limit(2)
+                .render(),
+        )
+        .await?;
     let tools = facts["data"]["AgentToolCall"]
         .as_array()
         .context("tool authority query omitted rows")?;

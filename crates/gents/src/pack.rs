@@ -40,6 +40,7 @@ pub use inference::{
     bind_pack_install_config, inference_profile_options, inspect_pack_inference_bindings,
     install_pack_documents, install_pack_documents_with_expectations,
     preview_pack_inference_bindings, PackInferenceBindingPreview, PackInferenceProfileOption,
+    SlotBindingError,
 };
 pub(crate) use inference::{
     inspect_pack_inference_bindings_with_node_binding,
@@ -50,17 +51,17 @@ pub(crate) use installation::record_plugin_store_change_as_with_node_binding;
 pub use installation::{
     apply_hosted_document_graph, apply_prepared_dependency_schemas, assemble_document_graph_report,
     declared_readers, document_pack_schema_paths, ensure_plugins_unreferenced,
-    hosted_document_graph, install_documents_with_plugins, install_prepared_document_graph,
-    install_prepared_document_pack, installed_catalog, installed_pack_documents, installed_packs,
-    list_installed_packs, plugin_data_unique_keys, prepare_document_pack_archive,
+    hosted_document_graph, install_prepared_document_graph, install_prepared_document_pack,
+    installed_catalog, installed_pack_documents, installed_packs, list_installed_packs,
+    plugin_data_unique_keys, prepare_document_pack_archive,
     prepare_document_pack_archive_with_runtime, prepare_document_pack_install,
     prepare_hosted_document_pack_archive, read_installed_pack, record_plugin_store_change,
     record_plugin_store_change_as, record_staged_plugin_store_change, referenced_pack_digests,
     remove_pack, DependencyVariableOverrides, DriftPolicy, HostedDocumentGraph,
     HostedPackPreparation, InstallReport, InstalledCatalogEntry, InstalledPack,
-    InstalledPackPlugin, PackIdentity, PackRemovalError, PackSource, PackSourceHistory,
-    PluginStoreChangeError, PreparedDependency, PreparedDocumentPackInstall, RemoveReport,
-    Retained,
+    InstalledPackPlugin, PackChangeError, PackIdentity, PackRemovalError, PackSource,
+    PackSourceHistory, PluginStoreChangeError, PreparedDependency, PreparedDocumentPackInstall,
+    RemoveReport, Retained,
 };
 pub(crate) use installation::{
     prepare_document_pack_archive_with_provisioner,

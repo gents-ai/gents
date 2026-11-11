@@ -388,7 +388,8 @@ pub(crate) async fn install_pack_slot(
         &|_| None,
         &Default::default(),
     )
-    .await?;
+    .await
+    .map_err(gents::pack::PackChangeError::into_anyhow)?;
     gents::pack::install_prepared_document_graph(
         access,
         owner,

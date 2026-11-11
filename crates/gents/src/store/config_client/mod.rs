@@ -534,12 +534,47 @@ impl ConfigAccess {
                 Self::Graphql(graphql) => post_graphql(graphql, query).await,
                 Self::Local(local) => {
                     let response =
-                        Self::read_local_response_owned(local, query, "config GraphQL").await?;
+                        Self::read_local_response_owned(local, query, None, "config GraphQL")
+                            .await?;
                     crate::store::graphql::ensure_no_errors(&response, "config GraphQL")?;
                     Ok(crate::store::graphql::into_data_envelope(response.data))
                 }
             }
         })
+    }
+
+    /// [`Self::execute`] with GraphQL variables for the document.
+    pub fn execute_with_variables<'a>(
+        &'a self,
+        query: &'a str,
+        variables: &'a Value,
+    ) -> BoxFuture<'a, Result<Value>> {
+        Box::pin(async move {
+            match self {
+                Self::Graphql(graphql) => {
+                    post_graphql_with_variables(graphql, query, variables).await
+                }
+                Self::Local(local) => {
+                    let response = Self::read_local_response_owned(
+                        local,
+                        query,
+                        Some(variables),
+                        "config GraphQL",
+                    )
+                    .await?;
+                    crate::store::graphql::ensure_no_errors(&response, "config GraphQL")?;
+                    Ok(crate::store::graphql::into_data_envelope(response.data))
+                }
+            }
+        })
+    }
+
+    /// Execute a rendered read and return its envelope.
+    pub fn read<'a>(
+        &'a self,
+        operation: &'a gents_protocol::document_query::Rendered,
+    ) -> BoxFuture<'a, Result<Value>> {
+        self.execute_with_variables(&operation.document, &operation.variables)
     }
 
     /// Apply schema SDL; callers must perform their own structural compatibility check first.
@@ -757,6 +792,29 @@ pub fn graphql_diagnostic_hint(graphql: &str) -> String {
     }
 }
 
+/// [`post_graphql`] with GraphQL variables for the document.
+pub async fn post_graphql_with_variables(
+    graphql: &GraphqlEndpoint,
+    query: &str,
+    variables: &Value,
+) -> Result<Value> {
+    graphql::query_with_options(
+        graphql,
+        query,
+        Some(variables),
+        GraphqlRequestOptions {
+            timeout: std::time::Duration::from_secs(30),
+            max_attempts: 5,
+            retry_backoff: std::time::Duration::from_millis(100),
+        },
+    )
+    .await
+    .map_err(|error| ConfigClientError::HttpQuery {
+        endpoint: graphql.url().to_owned(),
+        source: Box::new(error),
+    })
+}
+
 pub async fn post_graphql(graphql: &GraphqlEndpoint, query: &str) -> Result<Value> {
     query_graphql_with_options(
         graphql,
@@ -776,7 +834,7 @@ pub async fn query_graphql_with_options(
     query: &str,
     options: GraphqlRequestOptions,
 ) -> Result<Value> {
-    graphql::query_with_options(graphql, query, options)
+    graphql::query_with_options(graphql, query, None, options)
         .await
         .map_err(|error| ConfigClientError::HttpQuery {
             endpoint: graphql.url().to_owned(),

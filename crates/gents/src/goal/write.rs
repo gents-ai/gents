@@ -280,19 +280,34 @@ pub async fn delete_goal_from_access(
     access: &crate::ConfigAccess,
     goal: &GoalDocument,
 ) -> Result<bool> {
-    access.transact_write("goal.delete", |txn| {
-        Box::pin(async move {
-            let doc = escape_graphql_string(&goal.doc_id);
-            let owner = escape_graphql_string(&goal.node_did);
-            let session = escape_graphql_string(&goal.session_id);
-            let response = txn.execute(&format!(r#"{{ Goal(filter: {{_docID: {{_eq: "{doc}"}}, node_did: {{_eq: "{owner}"}}, session_id: {{_eq: "{session}"}}}}, limit: 2) {{_docID}} }}"#)).await?;
-            let rows = response["data"]["Goal"].as_array().context("Goal delete read omitted rows")?;
-            anyhow::ensure!(rows.len() <= 1, "Goal delete target is ambiguous");
-            if rows.is_empty() { return Ok::<_, anyhow::Error>(false); }
-            txn.delete_configuration_document("Goal", &goal.doc_id).await?;
-            Ok(true)
+    access
+        .transact_write("goal.delete", |txn| {
+            Box::pin(async move {
+                use gents_protocol::document_query::{
+                    fields::goal as fields, Filter, Query, Selection,
+                };
+                let rendered = Query::select(Selection::doc_id())
+                    .filter(
+                        Filter::eq(fields::DOC_ID, &goal.doc_id)
+                            .and(Filter::eq(fields::NODE_DID, &goal.node_did))
+                            .and(Filter::eq(fields::SESSION_ID, &goal.session_id)),
+                    )
+                    .limit(2)
+                    .render();
+                let response = txn.run(&rendered).await?;
+                let rows = response["data"]["Goal"]
+                    .as_array()
+                    .context("Goal delete read omitted rows")?;
+                anyhow::ensure!(rows.len() <= 1, "Goal delete target is ambiguous");
+                if rows.is_empty() {
+                    return Ok::<_, anyhow::Error>(false);
+                }
+                txn.delete_configuration_document("Goal", &goal.doc_id)
+                    .await?;
+                Ok(true)
+            })
         })
-    }).await
+        .await
 }
 
 /// Delete only visible Goal and claim documents through the caller's held authority.
@@ -301,24 +316,42 @@ pub async fn delete_goals_for_session_from_access(
     node_did: &str,
     session_id: &str,
 ) -> Result<usize> {
-    access.transact_signed_conflict_rebuild("goal.delete_for_session", |txn| {
-        Box::pin(async move {
-            let owner = escape_graphql_string(node_did);
-            let session = escape_graphql_string(session_id);
-            let response = txn.execute(&format!(r#"{{
-                Goal(filter: {{node_did: {{_eq: "{owner}"}}, session_id: {{_eq: "{session}"}}}}) {{_docID}}
-                GoalCreationClaim(filter: {{node_did: {{_eq: "{owner}"}}, session_id: {{_eq: "{session}"}}}}) {{_docID}}
-            }}"#)).await?;
-            let mut goals = 0;
-            for collection in ["Goal", "GoalCreationClaim"] {
-                let rows = response["data"][collection].as_array().context("Goal delete read omitted rows")?;
-                for row in rows {
-                    let doc = row["_docID"].as_str().context("Goal delete target has no physical ID")?;
-                    txn.delete_configuration_document(collection, doc).await?;
-                    if collection == "Goal" { goals += 1; }
+    access
+        .transact_signed_conflict_rebuild("goal.delete_for_session", |txn| {
+            Box::pin(async move {
+                use gents_protocol::document_query::{fields, Filter, Query, QuerySet, Selection};
+                let goal_query = Query::select(Selection::doc_id()).filter(
+                    Filter::eq(fields::goal::NODE_DID, node_did)
+                        .and(Filter::eq(fields::goal::SESSION_ID, session_id)),
+                );
+                let claim_query = Query::select(Selection::doc_id()).filter(
+                    Filter::eq(fields::goal_creation_claim::NODE_DID, node_did).and(Filter::eq(
+                        fields::goal_creation_claim::SESSION_ID,
+                        session_id,
+                    )),
+                );
+                let rendered = QuerySet::new()
+                    .plain(&goal_query)
+                    .plain(&claim_query)
+                    .render();
+                let response = txn.run(&rendered).await?;
+                let mut goals = 0;
+                for collection in ["Goal", "GoalCreationClaim"] {
+                    let rows = response["data"][collection]
+                        .as_array()
+                        .context("Goal delete read omitted rows")?;
+                    for row in rows {
+                        let doc = row["_docID"]
+                            .as_str()
+                            .context("Goal delete target has no physical ID")?;
+                        txn.delete_configuration_document(collection, doc).await?;
+                        if collection == "Goal" {
+                            goals += 1;
+                        }
+                    }
                 }
-            }
-            Ok::<_, anyhow::Error>(goals)
+                Ok::<_, anyhow::Error>(goals)
+            })
         })
-    }).await
+        .await
 }

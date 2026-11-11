@@ -16,7 +16,7 @@ use gents_protocol::row::{AgentRequest, AgentRequestRow};
 use serde::Deserialize;
 
 use crate::runtime::agent::p2p_reconcile::EnrollmentAuthorityHandle;
-use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::request_receipt::{
     row_admission, row_signing_fields, verify_auxiliary_request_shape,
 };
@@ -440,11 +440,21 @@ impl ClientClaimAdmission {
         txn: &crate::store::config_client::ConfigApplyTxn<'_>,
         request: &AgentRequest,
     ) -> Result<ClientClaimAuthorization> {
+        use gents_protocol::document_query::{
+            fields::{
+                agent as agent_fields, agent_request as request_fields,
+                agent_session as session_fields,
+            },
+            Filter, Query, Selection,
+        };
         use ClientClaimAuthorization::{Allowed, Denied, Unavailable};
-        let doc = escape_graphql_string(&request.doc_id);
-        let response = txn.execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}, limit: 2) {{ {SIGNED_REQUEST_FIELDS} relationships_pending }} }}"#,
-        )).await?;
+        let rendered = Query::select(
+            Selection::owned(SIGNED_REQUEST_FIELDS).field(request_fields::RELATIONSHIPS_PENDING),
+        )
+        .filter(Filter::eq(request_fields::DOC_ID, &request.doc_id))
+        .limit(2)
+        .render();
+        let response = txn.run(&rendered).await?;
         let rows = response["data"]["AgentRequest"]
             .as_array()
             .context("claim admission query omitted rows")?;
@@ -462,10 +472,12 @@ impl ClientClaimAdmission {
         let Some(agent_doc) = self.row.agent_doc_id.as_deref() else {
             return Ok(Unavailable);
         };
-        let session = escape_graphql_string(session_doc);
-        let response = txn.execute(&format!(
-            r#"{{ AgentSession(filter: {{ _docID: {{ _eq: "{session}" }} }}, limit: 2) {{ _docID relationships_pending }} }}"#,
-        )).await?;
+        let rendered =
+            Query::select(Selection::doc_id().field(session_fields::RELATIONSHIPS_PENDING))
+                .filter(Filter::eq(session_fields::DOC_ID, session_doc))
+                .limit(2)
+                .render();
+        let response = txn.run(&rendered).await?;
         let Some(sessions) = response["data"]["AgentSession"].as_array() else {
             return Ok(Unavailable);
         };
@@ -516,8 +528,16 @@ impl ClientClaimAdmission {
         }
         let session_matches = session.session.agent_did == request.agent_did
             && session.session.requester_did == request.requester_did;
-        let agent = escape_graphql_string(agent_doc);
-        let target = txn.execute(&format!(r#"{{ Agent(filter: {{ _docID: {{ _eq: "{agent}" }} }}, limit: 2) {{ _docID node_did agent_did enabled }} }}"#)).await?;
+        let rendered = Query::select(
+            Selection::doc_id()
+                .field(agent_fields::NODE_DID)
+                .field(agent_fields::AGENT_DID)
+                .field(agent_fields::ENABLED),
+        )
+        .filter(Filter::eq(agent_fields::DOC_ID, agent_doc))
+        .limit(2)
+        .render();
+        let target = txn.run(&rendered).await?;
         let agents = target["data"]["Agent"]
             .as_array()
             .context("claim agent query omitted rows")?;
@@ -1333,11 +1353,26 @@ async fn verify_automated_trigger_source(
         agent_did: String,
         enabled: bool,
     }
+    use gents_protocol::document_query::{
+        fields::{task as task_fields, trigger as trigger_fields},
+        Filter, Query, Selection,
+    };
     let doc = required_row_string(trigger_doc_id, "trigger document ID")?;
-    let response = graphql_with_transaction_retry(node, &format!(
-        r#"{{ Trigger(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ trigger_id node_did task_id source enabled }} }}"#,
-        escape_graphql_string(doc),
-    ), "reload runtime trigger").await.map_err(AgentRequestAdmissionError::unavailable)?;
+    let trigger_query = Query::select(
+        Selection::new()
+            .field(trigger_fields::TRIGGER_ID)
+            .field(trigger_fields::NODE_DID)
+            .field(trigger_fields::TASK_ID)
+            .field(trigger_fields::SOURCE)
+            .field(trigger_fields::ENABLED),
+    )
+    .filter(Filter::eq(trigger_fields::DOC_ID, doc))
+    .limit(1)
+    .render();
+    let response =
+        crate::store::graphql::read_rendered(node, &trigger_query, "reload runtime trigger")
+            .await
+            .map_err(AgentRequestAdmissionError::unavailable)?;
     let triggers: Vec<TriggerRow> = crate::store::graphql::rows(&response, "Trigger")
         .map_err(AgentRequestAdmissionError::denied)?;
     deny_if(
@@ -1356,10 +1391,19 @@ async fn verify_automated_trigger_source(
             ),
         "runtime trigger physical source, node, kind, or availability changed",
     )?;
-    let response = graphql_with_transaction_retry(node, &format!(
-        r#"{{ Task(filter: {{ task_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }} }}, limit: 2) {{ agent_did enabled }} }}"#,
-        escape_graphql_string(&trigger.task_id), escape_graphql_string(node_did),
-    ), "reload runtime trigger task").await.map_err(AgentRequestAdmissionError::unavailable)?;
+    let task_query = Query::select(
+        Selection::new()
+            .field(task_fields::AGENT_DID)
+            .field(task_fields::ENABLED),
+    )
+    .filter(Filter::eq(task_fields::TASK_ID, &trigger.task_id))
+    .filter(Filter::eq(task_fields::NODE_DID, node_did))
+    .limit(2)
+    .render();
+    let response =
+        crate::store::graphql::read_rendered(node, &task_query, "reload runtime trigger task")
+            .await
+            .map_err(AgentRequestAdmissionError::unavailable)?;
     let tasks: Vec<TaskRow> = crate::store::graphql::rows(&response, "Task")
         .map_err(AgentRequestAdmissionError::denied)?;
     deny_if(
@@ -1390,18 +1434,21 @@ async fn load_signed_request_as(
     doc_id: &str,
     actor: &str,
 ) -> AdmissionResult<AgentRequestRow> {
+    use gents_protocol::document_query::{
+        fields::agent_request as request_fields, Filter, Query, Selection,
+    };
     let actor = identity::Did::new(actor).map_err(AgentRequestAdmissionError::denied)?;
-    let query = format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {SIGNED_REQUEST_FIELDS} }} }}"#,
-        escape_graphql_string(doc_id),
-    );
+    let query = Query::select(Selection::owned(SIGNED_REQUEST_FIELDS))
+        .filter(Filter::eq(request_fields::DOC_ID, doc_id))
+        .limit(1)
+        .render();
     let response = crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
         Some(actor),
         "request.admission.read_as_agent",
         |txn| {
             let query = &query;
-            Box::pin(async move { txn.execute(query).await })
+            Box::pin(async move { txn.run(query).await })
         },
     )
     .await
@@ -1422,18 +1469,17 @@ async fn load_signed_request(
     node: &EmbeddedNode,
     doc_id: &str,
 ) -> AdmissionResult<AgentRequestRow> {
-    let doc_id = escape_graphql_string(doc_id);
-    let response = graphql_with_transaction_retry(
-        node,
-        &format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
-                {SIGNED_REQUEST_FIELDS}
-            }} }}"#,
-        ),
-        "reload AgentRequest admission row",
-    )
-    .await
-    .map_err(AgentRequestAdmissionError::unavailable)?;
+    use gents_protocol::document_query::{
+        fields::agent_request as request_fields, Filter, Query, Selection,
+    };
+    let query = Query::select(Selection::owned(SIGNED_REQUEST_FIELDS))
+        .filter(Filter::eq(request_fields::DOC_ID, doc_id))
+        .limit(1)
+        .render();
+    let response =
+        crate::store::graphql::read_rendered(node, &query, "reload AgentRequest admission row")
+            .await
+            .map_err(AgentRequestAdmissionError::unavailable)?;
     crate::store::graphql::first_row(&response, "AgentRequest")
         .map_err(AgentRequestAdmissionError::denied)?
         .ok_or_else(|| {

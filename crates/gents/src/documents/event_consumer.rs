@@ -11,7 +11,6 @@ use crate::documents::{
     TriggerSource,
 };
 use crate::store::config_client::ConfigApplyTxn;
-use crate::store::graphql::escape_graphql_string;
 use crate::Collection;
 
 async fn trigger_binding(
@@ -238,13 +237,28 @@ pub(crate) async fn seed_referencing_consumers(
     event_source_id: &str,
     node_binding: Option<&ConfigurationNodeBinding>,
 ) -> Result<()> {
+    use gents_protocol::document_query::{
+        fields::{callback_binding as callback_fields, trigger as trigger_fields},
+        Filter, Query, QuerySet, Selection,
+    };
+    let triggers = Query::select(
+        Selection::new()
+            .field(trigger_fields::TRIGGER_ID)
+            .field(trigger_fields::SOURCE),
+    )
+    .filter(Filter::eq(trigger_fields::NODE_DID, owner));
+    let callback_bindings = Query::select(Selection::new().field(callback_fields::BINDING_ID))
+        .filter(Filter::eq(callback_fields::NODE_DID, owner).and(Filter::eq(
+            callback_fields::EVENT_SOURCE_ID,
+            event_source_id,
+        )));
     let response = txn
-        .execute(&format!(
-            "{{ Trigger(filter: {{node_did: {{_eq: \"{owner}\"}}}}) {{trigger_id source}} \
-               CallbackBinding(filter: {{node_did: {{_eq: \"{owner}\"}}, event_source_id: {{_eq: \"{}\"}}}}) {{binding_id}} }}",
-            escape_graphql_string(event_source_id),
-            owner = escape_graphql_string(owner),
-        ))
+        .run(
+            &QuerySet::new()
+                .plain(&triggers)
+                .plain(&callback_bindings)
+                .render(),
+        )
         .await?;
     for row in response["data"]["Trigger"]
         .as_array()

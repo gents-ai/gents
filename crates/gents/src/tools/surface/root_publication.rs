@@ -32,10 +32,17 @@ fn value_rows(response: &Value, field: &str) -> Result<Vec<Value>> {
 }
 
 async fn root_row(txn: &ConfigApplyTxn<'_>, root_path: &str) -> Result<Option<Value>> {
-    let response = txn.execute(&format!(
-        "{{ WorkspaceRoot(filter: {{root_path: {{_eq: \"{}\"}}}}) {{ _docID node_did node_doc_id }} }}",
-        escape_graphql_string(root_path)
-    )).await?;
+    use gents_protocol::document_query::{
+        fields::workspace_root as fields, Filter, Query, Selection,
+    };
+    let rendered = Query::select(
+        Selection::doc_id()
+            .field(fields::NODE_DID)
+            .field(fields::NODE_DOC_ID),
+    )
+    .filter(Filter::eq(fields::ROOT_PATH, root_path))
+    .render();
+    let response = txn.run(&rendered).await?;
     let mut rows: Vec<Value> = value_rows(&response, "WorkspaceRoot")?;
     anyhow::ensure!(
         rows.len() <= 1,

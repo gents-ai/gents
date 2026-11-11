@@ -353,16 +353,22 @@ pub async fn invalidate_run(
     let variables = json!({
         "input": { "invalidated": { "at": now(), "by": by, "reason": reason } },
     });
+    let current_query = {
+        use gents_protocol::document_query::{
+            fields::eval_run as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::doc_id().field(fields::INVALIDATED))
+            .filter(Filter::eq(fields::OWNER_NODE_DID, owner))
+            .filter(Filter::eq(fields::RUN_ID, run_id))
+            .render()
+    };
     let run_id_owned = run_id.to_owned();
     access
         .transact_write("eval.invalidate_run", |txn| {
-            let (filter, variables, run_id) = (&filter, &variables, &run_id_owned);
+            let (filter, variables, run_id, current_query) =
+                (&filter, &variables, &run_id_owned, &current_query);
             Box::pin(async move {
-                let current = txn
-                    .execute(&format!(
-                        "{{ EvalRun(filter: {{ {filter} }}) {{ _docID invalidated }} }}"
-                    ))
-                    .await?;
+                let current = txn.run(current_query).await?;
                 let row = current["data"]["EvalRun"]
                     .as_array()
                     .and_then(|rows| rows.first())
@@ -429,16 +435,22 @@ pub async fn complete_trial(
         trial_id = escape_graphql_string(trial_id),
     );
     let variables = json!({ "input": { "completion": serde_json::to_value(completion)? } });
+    let current_query = {
+        use gents_protocol::document_query::{
+            fields::eval_trial as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::doc_id().field(fields::COMPLETION))
+            .filter(Filter::eq(fields::OWNER_NODE_DID, owner))
+            .filter(Filter::eq(fields::TRIAL_ID, trial_id))
+            .render()
+    };
     let trial_id = trial_id.to_owned();
     access
         .transact_write("eval.complete_trial", |txn| {
-            let (filter, variables, trial_id) = (&filter, &variables, &trial_id);
+            let (filter, variables, trial_id, current_query) =
+                (&filter, &variables, &trial_id, &current_query);
             Box::pin(async move {
-                let current = txn
-                    .execute(&format!(
-                        "{{ EvalTrial(filter: {{ {filter} }}) {{ _docID completion }} }}"
-                    ))
-                    .await?;
+                let current = txn.run(current_query).await?;
                 let row = current["data"]["EvalTrial"]
                     .as_array()
                     .and_then(|rows| rows.first())

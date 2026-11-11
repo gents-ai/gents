@@ -3,7 +3,6 @@ use serde_json::{json, Value};
 use crate::store::config_client::{
     ConfigAccess, ConfigApplyTxn, ConfigClientError, NodePermission,
 };
-use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::GrantSet;
 
 const RECEIPT_COLLECTION: &str = gents_protocol::schemas::NETWORK_ENROLLMENT_GRANT_NAME;
@@ -102,13 +101,6 @@ pub fn plan_withdrawal(
         .collect()
 }
 
-fn receipts_query(member: &str) -> String {
-    format!(
-        r#"{{ {RECEIPT_COLLECTION}(filter: {{ member_did: {{ _eq: "{}" }} }}) {{ _docID request_id member_did tuples withdrawn_at }} }}"#,
-        escape_graphql_string(member)
-    )
-}
-
 fn decode_receipts(response: &Value) -> Result<Vec<EnrollmentGrantReceipt>, EnrollmentGrantError> {
     let malformed = |reason: String| EnrollmentGrantError::MalformedReceipt(reason);
     gents_protocol::graphql::graphql_rows_from_response(response, RECEIPT_COLLECTION)
@@ -149,8 +141,20 @@ pub async fn load_enrollment_grant_receipts(
     access: &ConfigAccess,
     member: &str,
 ) -> Result<Vec<EnrollmentGrantReceipt>, EnrollmentGrantError> {
+    use gents_protocol::document_query::{
+        fields::network_enrollment_grant as fields, Filter, Query, Selection,
+    };
+    let rendered = Query::select(
+        Selection::doc_id()
+            .field(fields::REQUEST_ID)
+            .field(fields::MEMBER_DID)
+            .field(fields::TUPLES)
+            .field(fields::WITHDRAWN_AT),
+    )
+    .filter(Filter::eq(fields::MEMBER_DID, member))
+    .render();
     let response = access
-        .execute(&receipts_query(member))
+        .read(&rendered)
         .await
         .map_err(EnrollmentGrantError::Read)?;
     decode_receipts(&response)
@@ -400,13 +404,18 @@ impl EnrollmentGrantWithdrawal {
         node_doc_id: &str,
     ) -> Result<(), EnrollmentGrantError> {
         let withdrawn_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let mutation = format!(
-            r#"mutation {{ update_{RECEIPT_COLLECTION}(docID: "{}", input: {{ withdrawn_at: "{}" }}) {{ _docID }} }}"#,
-            escape_graphql_string(&self.receipt_doc_id),
-            escape_graphql_string(&withdrawn_at),
-        );
+        let rendered = {
+            use gents_protocol::document_query::{
+                fields::network_enrollment_grant as fields, Input, Update,
+            };
+            Update::doc(
+                self.receipt_doc_id.as_str(),
+                Input::new().set(fields::WITHDRAWN_AT, withdrawn_at.as_str()),
+            )
+            .render()
+        };
         let response = txn
-            .execute(&mutation)
+            .run(&rendered)
             .await
             .map_err(EnrollmentGrantError::Retire)?;
         let updated = response

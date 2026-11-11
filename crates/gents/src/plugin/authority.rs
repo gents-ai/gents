@@ -102,11 +102,19 @@ fn paths_list(paths: &[std::path::PathBuf]) -> String {
         .join(", ")
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum GrantError {
+    #[error("plugin {plugin} asks for {asks}; install it with --grant-authority to allow that")]
+    Ungranted { plugin: String, asks: String },
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
 pub fn grant_for(
     plugin: &PackPlugin,
     previous: Option<&Manifold>,
     consent: bool,
-) -> Result<Manifold> {
+) -> Result<Manifold, GrantError> {
     let declared = declared_manifold(plugin)?;
     let Some(asks) = describe_manifold(&declared) else {
         return Ok(Manifold::sealed());
@@ -114,10 +122,10 @@ pub fn grant_for(
     if previous.is_some_and(|previous| manifold_within(&declared, previous)) || consent {
         return Ok(declared);
     }
-    anyhow::bail!(
-        "plugin {} asks for {asks}; install it with --grant-authority to allow that",
-        plugin.name
-    )
+    Err(GrantError::Ungranted {
+        plugin: plugin.name.clone(),
+        asks,
+    })
 }
 
 pub(super) fn limits_consented(
@@ -194,6 +202,25 @@ mod tests {
         );
         let more = serde_json::json!({"fs": "None", "net": {"OutboundHttp": null}, "env": "None", "crypto": false, "child_process": false});
         assert!(grant_for(&plugin(Some(more)), Some(&granted), false).is_err());
+    }
+
+    #[test]
+    fn an_ungranted_plugin_is_a_typed_refusal() {
+        let net = serde_json::json!({"fs": "None", "net": {"OutboundHttp": ["api.example.com"]}, "env": "None", "crypto": false, "child_process": false});
+        let plugin = plugin(Some(net));
+        let error = grant_for(&plugin, None, false).unwrap_err();
+        let GrantError::Ungranted { plugin: name, asks } = &error else {
+            panic!("{error:#}")
+        };
+        assert_eq!(name, &plugin.name);
+        assert!(asks.contains("HTTP to api.example.com"), "{asks}");
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "plugin {} asks for {asks}; install it with --grant-authority to allow that",
+                plugin.name
+            )
+        );
     }
 
     #[test]

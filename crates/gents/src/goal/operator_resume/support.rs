@@ -237,7 +237,19 @@ impl Fixture {
             .await
             .unwrap();
         if terminal_parent {
-            agent_access.write("test.goal_fixture.terminal", &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{PARENT}" }} }}, input: {{ lifecycle_state: "completed" }}) {{ _docID }} }}"#)).await.unwrap();
+            use gents_protocol::document_query::{
+                fields::agent_request as fields, Filter, Input, Selection, Update,
+            };
+            let update = Update::matching(
+                Filter::eq(fields::REQUEST_ID, PARENT),
+                Input::new().set(fields::LIFECYCLE_STATE, "completed"),
+            )
+            .returning(Selection::doc_id())
+            .render();
+            agent_access
+                .write_rendered("test.goal_fixture.terminal", &update)
+                .await
+                .unwrap();
         }
         let rows = request_rows(&user_access).await;
         let parent = gents_protocol::row::AgentRequest::try_from(
@@ -321,6 +333,9 @@ impl Fixture {
         session_doc: Option<String>,
         agent_doc: Option<String>,
     ) {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Input, Selection, Update,
+        };
         let mut create = prepare_goal_continuation(
             &self.parent,
             self.parent.agent_did.clone(),
@@ -382,7 +397,16 @@ impl Fixture {
             )
             .await
             .unwrap();
-        agent_access.write("test.goal.seed_child_grants", &format!(r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ relationships_pending: false }}) {{ _docID }} }}"#, escape_graphql_string(child_doc))).await.unwrap();
+        let grants = Update::doc(
+            child_doc,
+            Input::new().set(fields::RELATIONSHIPS_PENDING, false),
+        )
+        .returning(Selection::doc_id())
+        .render();
+        agent_access
+            .write_rendered("test.goal.seed_child_grants", &grants)
+            .await
+            .unwrap();
         agent_access
             .transact_write("test.goal.seed_child_binding", |txn| {
                 let create = &create;
@@ -399,9 +423,23 @@ impl Fixture {
             })
             .await
             .unwrap();
-        agent_access.write("test.goal.seed_child_terminal", &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "completed", deadline: "2021-01-01T00:00:01Z" }}) {{ _docID }} }}"#, escape_graphql_string(&create.request_id))).await.unwrap();
+        let terminal = Update::matching(
+            Filter::eq(fields::REQUEST_ID, &create.request_id),
+            Input::new()
+                .set(fields::LIFECYCLE_STATE, "completed")
+                .set(fields::DEADLINE, "2021-01-01T00:00:01Z"),
+        )
+        .returning(Selection::doc_id())
+        .render();
+        agent_access
+            .write_rendered("test.goal.seed_child_terminal", &terminal)
+            .await
+            .unwrap();
     }
     pub async fn other_request(&self, id: &str, date: &str, state: &str) {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Input, Selection, Update,
+        };
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             id,
@@ -423,8 +461,16 @@ impl Fixture {
         crate::request::lifecycle::submit_client_request(&access, &create)
             .await
             .unwrap();
+        let update = Update::matching(
+            Filter::eq(fields::REQUEST_ID, id),
+            Input::new().set(fields::LIFECYCLE_STATE, state),
+        )
+        .returning(Selection::doc_id())
+        .render();
         self.agent_access()
-            .write("test.goal.other_request_state", &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "{}" }}) {{ _docID }} }}"#, escape_graphql_string(id), escape_graphql_string(state))).await.unwrap();
+            .write_rendered("test.goal.other_request_state", &update)
+            .await
+            .unwrap();
     }
     pub async fn claude_accounts(&self) -> ClaudeAccounts {
         let did = self.identity.did().to_owned();
@@ -583,6 +629,9 @@ impl Fixture {
         failure: &str,
         at: &str,
     ) {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Input, Selection, Update,
+        };
         let access = self.agent_access();
         let rows = request_rows(&access).await;
         let matches = rows
@@ -593,11 +642,14 @@ impl Fixture {
             panic!("failed call must have exactly one physical request");
         };
         let request_doc = request.doc_id.as_deref().expect("failed request document");
-        let update = format!(
-            r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "failed", failure_reason: "{}" }}) {{ _docID }} }}"#,
-            escape_graphql_string(request_doc),
-            escape_graphql_string(failure),
-        );
+        let update = Update::doc(
+            request_doc,
+            Input::new()
+                .set(fields::LIFECYCLE_STATE, "failed")
+                .set(fields::FAILURE_REASON, failure),
+        )
+        .returning(Selection::doc_id())
+        .render();
         let input = json!({
             "call_id": format!("call-{request_id}"), "request_id": request_id,
             "request_doc_id": request_doc, "session_id": SESSION,
@@ -611,7 +663,7 @@ impl Fixture {
             let input = &input;
             let session_doc = &self.session_doc_id;
             Box::pin(async move {
-                let changed = txn.execute(update).await?;
+                let changed = txn.run(update).await?;
                 let updates = crate::store::graphql::mutation_documents(&changed, "update_AgentRequest")?
                     .context("failed request update omitted result")?;
                 anyhow::ensure!(updates.len() == 1, "failed request update lost its physical identity");
