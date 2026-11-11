@@ -778,7 +778,7 @@ async fn admit_selected_event(
         replace_prior: false,
         event_source_generation: intent.event_source_generation.clone(),
     };
-    let result = crate::request::lifecycle::materialize::write_trigger_delivery_with_identity(
+    let result = crate::triggers::engine::durable::write_trigger_delivery_with_identity(
         node,
         identity::Did::new(agent.did()).unwrap(),
         &prepared,

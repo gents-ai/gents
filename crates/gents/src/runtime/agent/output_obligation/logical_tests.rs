@@ -370,7 +370,7 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             .unwrap();
         let root_row = persist_request(&node, agent.as_ref(), &root).await;
         let root_request = gents_protocol::row::AgentRequest::try_from(root_row.clone()).unwrap();
-        let mut child = crate::request::lifecycle::queue::prepare_goal_continuation(
+        let mut child = crate::goal::continuation::prepare_goal_continuation(
             &root_request,
             agent.did().into(),
             "output-goal",

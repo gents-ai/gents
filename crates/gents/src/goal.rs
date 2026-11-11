@@ -12,6 +12,7 @@ pub mod blocked_turn;
 mod claimed_publication;
 mod client_control;
 mod client_submission;
+pub(crate) mod continuation;
 mod controller;
 mod creation;
 mod document;

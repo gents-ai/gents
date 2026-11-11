@@ -386,7 +386,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 });
                 let create = crate::request::lifecycle::materialize::build_request(spec)?;
                 let admission =
-                    crate::request::lifecycle::materialize::write_trigger_delivery_with_identity(
+                    crate::triggers::engine::durable::write_trigger_delivery_with_identity(
                         &node,
                         agent_actor,
                         &prepared,
@@ -573,7 +573,7 @@ impl MaterializerHandle for ProductionMaterializer {
                     let trigger_id = &trigger_id;
                     let excluded = excluded.as_deref();
                     Box::pin(async move {
-                        crate::request::lifecycle::materialize::supersede_trigger_requests_in_txn(
+                        crate::triggers::engine::durable::supersede_trigger_requests_in_txn(
                             txn, owner, trigger_id, excluded,
                         )
                         .await

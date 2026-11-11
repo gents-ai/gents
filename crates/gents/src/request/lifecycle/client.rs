@@ -3038,7 +3038,7 @@ mod tests {
         };
         let task_request_id = identity.request_id();
         let fire = gents_protocol::trigger_delivery::TriggerFire {
-            fire_key: super::super::task_fire_key(&identity),
+            fire_key: crate::triggers::task_fire_key(&identity),
             identity,
             task_id: "task".into(),
             request_id: task_request_id,
@@ -3062,7 +3062,7 @@ mod tests {
         crate::sign_agent_request_create(&user, &mut manual)
             .await
             .unwrap();
-        let first = super::super::write_task_delivery(&access, &fire, true, &manual)
+        let first = crate::triggers::write_task_delivery(&access, &fire, true, &manual)
             .await
             .unwrap();
         assert!(!first.duplicate);
@@ -3088,7 +3088,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(removed, request_model("created")["grants"]);
-        let duplicate = super::super::write_task_delivery(&access, &fire, true, &manual)
+        let duplicate = crate::triggers::write_task_delivery(&access, &fire, true, &manual)
             .await
             .unwrap();
         assert!(duplicate.duplicate);

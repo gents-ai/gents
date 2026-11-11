@@ -446,7 +446,7 @@ async fn event_configuration_publication_rebinding_and_revocation_use_native_gra
         replace_prior: false,
         event_source_generation: Some(generation.clone()),
     };
-    let admitted = crate::request::lifecycle::materialize::write_trigger_delivery_with_identity(
+    let admitted = crate::triggers::engine::durable::write_trigger_delivery_with_identity(
         &node,
         identity::Did::new(first.did())?,
         &prepared,

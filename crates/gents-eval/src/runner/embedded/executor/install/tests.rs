@@ -17,9 +17,10 @@ fn bind_test_evaluator(spec: &mut TrialSpec, home: &mut EmbeddedHome) {
 #[tokio::test]
 async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_arrivals() {
     use gents::request::lifecycle::{
-        build_signed_request, task_fire_key, ExecutionOrigin, RequestSigner, TriggerLineage,
+        build_signed_request, ExecutionOrigin, RequestSigner, TriggerLineage,
     };
     use gents::test_support::checkpoint_prefix;
+    use gents::triggers::task_fire_key;
     use gents_protocol::event_delivery::EventConsumer;
     use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
 

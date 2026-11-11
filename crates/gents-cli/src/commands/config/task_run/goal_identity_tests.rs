@@ -261,8 +261,7 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
         let input = crate::request_helpers::goal_input_tests::authored_input();
         let request = signed_request(&home, &binding.agent_did, &fire, input.clone()).await?;
         assert_eq!(request.input, input);
-        let admitted =
-            gents::request::lifecycle::write_task_delivery(access, &fire, true, &request).await;
+        let admitted = gents::triggers::write_task_delivery(access, &fire, true, &request).await;
         assert_eq!(
             admitted.is_ok(),
             case["task_binding_valid"] == true,
@@ -311,8 +310,7 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
                 let retry = signed_request(&home, &binding.agent_did, &fire, retained).await?;
                 assert_eq!(retry.admission.signature, request.admission.signature);
                 let replay =
-                    gents::request::lifecycle::write_task_delivery(access, &fire, true, &retry)
-                        .await?;
+                    gents::triggers::write_task_delivery(access, &fire, true, &retry).await?;
                 assert!(replay.duplicate);
                 assert_eq!(Some(replay.request.doc_id), row.doc_id);
                 let persisted = access

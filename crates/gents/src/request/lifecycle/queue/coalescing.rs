@@ -277,7 +277,7 @@ pub(super) fn queue_row_to_enqueued_request(row: &AgentRequestRow) -> Option<Enq
     })
 }
 
-pub(super) fn parent_agent_did(parent: &AgentRequest) -> Result<String> {
+pub(crate) fn parent_agent_did(parent: &AgentRequest) -> Result<String> {
     anyhow::ensure!(
         !parent.agent_did.trim().is_empty(),
         "cannot enqueue same-session request: parent {} has no agent_did",

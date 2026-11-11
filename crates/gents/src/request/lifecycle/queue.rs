@@ -19,7 +19,6 @@ mod draining;
 mod edit_submission;
 mod enqueue;
 mod folding;
-mod goal_continuation;
 mod input;
 mod intake;
 mod management;
@@ -35,10 +34,9 @@ use atomic_inputs::steering_transaction_attempt;
 #[cfg(test)]
 use atomic_inputs::transaction_created_doc_id;
 pub(crate) use atomic_inputs::ToolNotificationPublication;
+pub(crate) use coalescing::parent_agent_did;
 pub(crate) use coalescing::supersede_pending_mutation;
-use coalescing::{
-    parent_agent_did, queue_row_to_enqueued_request, row_matches_coalesced_source_and_key,
-};
+use coalescing::{queue_row_to_enqueued_request, row_matches_coalesced_source_and_key};
 pub use coalescing::{
     reconcile_coalesced_pending_request, reconcile_coalesced_pending_request_for_with_access,
 };
@@ -59,9 +57,6 @@ pub(crate) use folding::{
 };
 pub use gents_protocol::request_input::{
     GoalContinuationInput, QueuePolicy, QueueSource, RequestInput, RequestQueue,
-};
-pub(crate) use goal_continuation::{
-    goal_continuation_agent, goal_continuation_identity, prepare_goal_continuation,
 };
 #[cfg(test)]
 use input::queue_is_automated_wakeup;

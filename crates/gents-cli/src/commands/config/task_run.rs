@@ -139,7 +139,7 @@ pub(crate) async fn enqueue_task_run_on(
         source_collection: "Task".into(),
         source_doc_id: task_doc_id,
     };
-    let fire_key = gents::request::lifecycle::task_fire_key(&identity);
+    let fire_key = gents::triggers::task_fire_key(&identity);
     let request_id = format!("trigger-request:{fire_key}");
     anyhow::ensure!(goal_objective_template.is_some() || session_id.is_none() || continue_session.is_none(),
         "ordinary Tasks accept either --session-id for a session label or --continue-session for an existing session, not both");
@@ -271,13 +271,9 @@ pub(crate) async fn enqueue_task_run_on(
         attempt: None,
         created_at: now,
     };
-    let admitted = gents::request::lifecycle::write_task_delivery(
-        access,
-        &fire,
-        continue_session.is_some(),
-        &create,
-    )
-    .await?;
+    let admitted =
+        gents::triggers::write_task_delivery(access, &fire, continue_session.is_some(), &create)
+            .await?;
 
     let (agent_did, input) = if admitted.duplicate {
         let persisted = lookup_request_by_retry_key(access, &node_did, &fire.fire_key)

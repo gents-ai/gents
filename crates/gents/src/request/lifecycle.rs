@@ -42,7 +42,9 @@ mod terminal_tools;
 pub(crate) use execution_lease::revoke_execution_preserving_output_at_with_access;
 #[cfg(test)]
 pub(crate) use execution_lease::terminalize_owned_at_with_access;
-pub(crate) use execution_lease::{ExecutionOwnershipLost, RequestExecutionLease};
+pub(crate) use execution_lease::{
+    stage_revoke_execution_preserving_output, ExecutionOwnershipLost, RequestExecutionLease,
+};
 pub use execution_lease::{RequestTerminalOutcome, TerminalizeResult};
 pub(crate) use gents_loop::execution_policy;
 #[cfg(test)]
@@ -75,8 +77,7 @@ pub(crate) use materialize::{
 };
 pub use materialize::{
     build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
-    build_signed_request, task_fire_key, write_task_delivery, write_task_delivery_local,
-    ParentLink, RequestIdentity, RequestSigner, RequestSpec, RetryLink, TaskDeliveryAdmission,
+    build_signed_request, ParentLink, RequestIdentity, RequestSigner, RequestSpec, RetryLink,
 };
 pub use queue::enqueue_local_steering_request;
 pub use queue::validate_position as validate_queue_position;

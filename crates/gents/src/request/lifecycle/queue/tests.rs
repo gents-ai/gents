@@ -1,4 +1,5 @@
 use super::*;
+use crate::goal::continuation::prepare_goal_continuation;
 use crate::request::lifecycle::{
     extract_single_doc_id, ClaimOutcome, RequestLifecycle, DEFAULT_REQUEST_MAX_RETRIES,
 };

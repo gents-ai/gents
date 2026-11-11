@@ -866,11 +866,11 @@ pub use turn::prompt::{LayeredPromptBuilder, PromptBuilder};
 #[doc(hidden)]
 pub mod __test_internals {
     pub use crate::request::lifecycle::materialize::activate_workspace_bound_request_with_identity;
-    pub use crate::request::lifecycle::materialize::supersede_trigger_requests_in_txn;
     pub use crate::request::lifecycle::queue::{
         reconcile_coalesced_pending_request, reconcile_coalesced_pending_request_for_with_access,
         QueueSource,
     };
     pub use crate::runtime::agent::principal_assembly::AgentBuildError;
+    pub use crate::triggers::engine::durable::supersede_trigger_requests_in_txn;
     pub use gents_protocol::request_lifecycle::EnqueuedAgentRequest;
 }

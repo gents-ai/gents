@@ -228,7 +228,7 @@ impl Harness {
                 source_doc_id: uuid::Uuid::new_v4().to_string(),
             };
             gents_protocol::trigger_delivery::TriggerFire {
-                fire_key: crate::request::lifecycle::task_fire_key(&identity),
+                fire_key: crate::triggers::task_fire_key(&identity),
                 request_id: identity.request_id(),
                 session_id: identity.session_id(),
                 identity,
@@ -295,16 +295,11 @@ impl Harness {
             .unwrap();
         let doc_id = match &fire {
             Some(fire) => {
-                crate::request::lifecycle::write_task_delivery(
-                    &self.agent_access,
-                    fire,
-                    false,
-                    &create,
-                )
-                .await
-                .expect("admit the manual Task fire and its request")
-                .request
-                .doc_id
+                crate::triggers::write_task_delivery(&self.agent_access, fire, false, &create)
+                    .await
+                    .expect("admit the manual Task fire and its request")
+                    .request
+                    .doc_id
             }
             None => {
                 let response = self

@@ -1,7 +1,7 @@
 use super::contract_tests::{at, connect_accounts_at, disable_backend, usage_limit};
 use super::support::*;
 use super::*;
-use crate::request::lifecycle::queue::goal_continuation_identity;
+use crate::goal::continuation::goal_continuation_identity;
 use gents_loop::provider_limit::{classify_provider_limit, ProviderLimit};
 use serde_json::json;
 

@@ -1,5 +1,5 @@
 use super::*;
-use crate::request::lifecycle::queue::goal_continuation_identity;
+use crate::goal::continuation::goal_continuation_identity;
 use crate::store::identity::NodeIdentity;
 use gents_protocol::request_admission::SIGNED_REQUEST_FIELDS;
 use gents_protocol::row::AgentRequestRow;

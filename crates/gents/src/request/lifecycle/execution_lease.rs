@@ -485,7 +485,7 @@ async fn terminalize_execution_with_access(
         .await
 }
 
-pub(super) async fn stage_revoke_execution_preserving_output(
+pub(crate) async fn stage_revoke_execution_preserving_output(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     row: &AgentRequestRow,
     outcome: RequestTerminalOutcome,

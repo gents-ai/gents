@@ -155,7 +155,7 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
     let writers = [
         include_str!("../../src/request/lifecycle/materialize.rs"),
         include_str!("../../src/request/lifecycle/queue/mutation.rs"),
-        include_str!("../../src/request/lifecycle/queue/goal_continuation.rs"),
+        include_str!("../../src/goal/continuation.rs"),
         include_str!("../../../gents-cli/src/request_helpers.rs"),
         include_str!("../../../gents-cli/src/commands/config/task_run.rs"),
         include_str!("../../../gents-desktop-core/src/client/mutations/chat/request/prepare.rs"),
@@ -250,8 +250,8 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
             include_str!("../../src/request/lifecycle/queue/mutation.rs"),
         ),
         (
-            "lifecycle/queue/goal_continuation.rs",
-            include_str!("../../src/request/lifecycle/queue/goal_continuation.rs"),
+            "goal/continuation.rs",
+            include_str!("../../src/goal/continuation.rs"),
         ),
     ] {
         assert!(

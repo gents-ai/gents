@@ -1,9 +1,22 @@
 mod recovery;
 #[cfg(test)]
 mod retained_tests;
+#[cfg(test)]
+mod task_delivery_tests;
+use crate::request::lifecycle::materialize::{
+    created_session_provenance_in_txn, refuse_retired_reserved_cause, sign_request, RequestSigner,
+};
+use crate::request::lifecycle::{
+    bind_client_targets_in_txn, stage_client_request_in_txn,
+    stage_revoke_execution_preserving_output, RequestTerminalOutcome, TerminalizeResult,
+};
+use crate::session;
 use crate::store::config_client::ConfigApplyTxn;
 use anyhow::{ensure, Context, Result};
+use defra_node::Node as EmbeddedNode;
+use gents_protocol::request_lifecycle::EnqueuedAgentRequest;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequest;
 use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
 #[cfg(test)]
 pub(crate) use recovery::recover_outcomes;
@@ -510,4 +523,494 @@ pub(crate) async fn publish_goal_outcomes(
         .await?;
     }
     Ok(())
+}
+
+pub fn task_fire_key(identity: &gents_protocol::trigger_delivery::FireIdentity) -> String {
+    fire_key(identity)
+}
+
+pub struct TaskDeliveryAdmission {
+    pub request: EnqueuedAgentRequest,
+    pub duplicate: bool,
+}
+
+pub async fn write_task_delivery(
+    access: &crate::store::config_client::ConfigAccess,
+    fire: &gents_protocol::trigger_delivery::TriggerFire,
+    continue_existing: bool,
+    create: &gents_protocol::request_admission::AgentRequestCreate,
+) -> Result<TaskDeliveryAdmission> {
+    access
+        .transact_write("lifecycle.admit_task_delivery", |txn| {
+            Box::pin(async move { stage_task_delivery(txn, fire, continue_existing, create).await })
+        })
+        .await
+}
+
+pub async fn write_task_delivery_local(
+    node: &std::sync::Arc<EmbeddedNode>,
+    actor: ::identity::Did,
+    fire: &gents_protocol::trigger_delivery::TriggerFire,
+    continue_existing: bool,
+    create: &gents_protocol::request_admission::AgentRequestCreate,
+) -> Result<TaskDeliveryAdmission> {
+    let access = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor);
+    write_task_delivery(&access, fire, continue_existing, create).await
+}
+
+pub(crate) async fn write_trigger_delivery_with_identity(
+    node: &std::sync::Arc<EmbeddedNode>,
+    actor: ::identity::Did,
+    prepared: &PreparedFire,
+    create: &gents_protocol::request_admission::AgentRequestCreate,
+    identity: Option<&dyn crate::store::identity::NodeIdentity>,
+) -> Result<TaskDeliveryAdmission> {
+    let identity = identity.context("trigger delivery requires a managed Agent identity")?;
+    let access = crate::ConfigAccess::local_managed_agent(node.clone(), actor, identity)?;
+    access
+        .transact_write("lifecycle.admit_trigger_delivery", |txn| {
+            Box::pin(async move {
+                let fresh = stage_fire_receipt(txn, &prepared.receipt).await?;
+                let mut create = create.clone();
+                if fresh {
+                    if prepared.target_existing && prepared.receipt.goal_id.is_none() {
+                        create.input = crate::goal::prepare_goal_input_in_txn(
+                            txn,
+                            &create.node_did,
+                            &create.session_id,
+                            &create.agent_did,
+                            Some(&create.requester_did),
+                            create.input,
+                        )
+                        .await?;
+                    }
+                    sign_request(&mut create, RequestSigner::Identity(identity)).await?;
+                }
+                let admitted = stage_task_delivery_with_receipt(
+                    txn,
+                    &prepared.receipt,
+                    prepared.target_existing,
+                    &create,
+                    fresh,
+                    prepared.event_source_generation.as_ref(),
+                )
+                .await?;
+                if prepared.replace_prior && !admitted.duplicate {
+                    supersede_trigger_requests_in_txn(
+                        txn,
+                        &prepared.receipt.identity.owner_did,
+                        &prepared.receipt.identity.trigger_id,
+                        Some(&prepared.receipt.request_id),
+                    )
+                    .await?;
+                }
+                Ok::<_, anyhow::Error>(admitted)
+            })
+        })
+        .await
+}
+
+#[doc(hidden)]
+pub async fn supersede_trigger_requests_in_txn(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    owner: &str,
+    trigger_id: &str,
+    excluded_request_id: Option<&str>,
+) -> Result<usize> {
+    use gents_protocol::document_query::{
+        fields::agent_request as fields, Filter, Input, Query, Selection, Update,
+    };
+    let now = chrono::Utc::now().to_rfc3339();
+    let scope = Filter::eq(fields::NODE_DID, owner)
+        .and(Filter::eq(fields::CAUSED_BY_TRIGGER_ID, trigger_id));
+    let scope = match excluded_request_id {
+        Some(id) => scope.and(Filter::ne(fields::REQUEST_ID, id)),
+        None => scope,
+    };
+    let mutation = Update::matching(
+        scope.clone().and(Filter::any_of(
+            fields::LIFECYCLE_STATE,
+            [
+                gents_protocol::request_lifecycle::RequestLifecycleState::Pending,
+                gents_protocol::request_lifecycle::RequestLifecycleState::WorkspaceBindingPending,
+            ]
+            .into_iter()
+            .map(gents_protocol::request_lifecycle::RequestLifecycleState::as_str),
+        )),
+        Input::new()
+            .set(
+                fields::LIFECYCLE_STATE,
+                RequestLifecycleState::Superseded.as_str(),
+            )
+            .set(fields::TERMINALIZED_AT, now.as_str())
+            .set(fields::TERMINAL_REDRIVE_ATTEMPTS, 0_i32),
+    )
+    .returning(Selection::doc_id().field(fields::REQUEST_ID))
+    .render();
+    let response = txn.run(&mutation).await?;
+    let pending = response["data"]["update_AgentRequest"]
+        .as_array()
+        .context("supersession omitted pending requests")?;
+    for row in pending {
+        publish_request_outcome(
+            txn,
+            owner,
+            row["request_id"]
+                .as_str()
+                .context("superseded request lacks ID")?,
+            RequestLifecycleState::Superseded,
+            "newer trigger fire",
+            &now,
+        )
+        .await?;
+    }
+    let query = Query::select(
+        Selection::doc_id()
+            .field(fields::REQUEST_ID)
+            .field(fields::NODE_DID)
+            .field(fields::REQUESTER_DID)
+            .field(fields::AGENT_DID)
+            .field(fields::SESSION_ID)
+            .field(fields::LIFECYCLE_STATE)
+            .field(fields::EXECUTION_GENERATION)
+            .field(fields::EXECUTION_LEASE_EXPIRES_AT),
+    )
+    .filter(
+        scope.and(Filter::any_of(
+            fields::LIFECYCLE_STATE,
+            [
+                gents_protocol::request_lifecycle::RequestLifecycleState::Claimed,
+                gents_protocol::request_lifecycle::RequestLifecycleState::Processing,
+            ]
+            .into_iter()
+            .map(gents_protocol::request_lifecycle::RequestLifecycleState::as_str),
+        )),
+    )
+    .render();
+    let response = txn.run(&query).await?;
+    let active: Vec<gents_protocol::row::AgentRequestRow> =
+        serde_json::from_value(response["data"]["AgentRequest"].clone())?;
+    for row in &active {
+        anyhow::ensure!(
+            stage_revoke_execution_preserving_output(
+                txn,
+                row,
+                RequestTerminalOutcome::Superseded,
+                "superseded by a newer trigger fire",
+            )
+            .await?
+                == TerminalizeResult::Won,
+            "execution changed during atomic trigger supersession",
+        );
+    }
+    Ok(pending.len() + active.len())
+}
+
+async fn stage_task_delivery(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    fire: &gents_protocol::trigger_delivery::TriggerFire,
+    continue_existing: bool,
+    create: &gents_protocol::request_admission::AgentRequestCreate,
+) -> Result<TaskDeliveryAdmission> {
+    let fresh = stage_fire_receipt(txn, fire).await?;
+    stage_task_delivery_with_receipt(txn, fire, continue_existing, create, fresh, None).await
+}
+
+async fn stage_task_delivery_with_receipt(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    fire: &gents_protocol::trigger_delivery::TriggerFire,
+    continue_existing: bool,
+    create: &gents_protocol::request_admission::AgentRequestCreate,
+    fresh: bool,
+    expected_event_source: Option<&serde_json::Value>,
+) -> Result<TaskDeliveryAdmission> {
+    if fresh {
+        if create.caused_by_trigger_kind.as_deref() == Some("event") {
+            anyhow::ensure!(
+                create.caused_by_trigger_id.as_deref() == Some(fire.identity.trigger_id.as_str()),
+                "event request and receipt trigger identity disagree"
+            );
+            let generation = expected_event_source
+                .context("event source generation is required for admission")?;
+            crate::documents::event_consumer::validate_event_admission(txn, fire, generation)
+                .await?;
+        }
+        anyhow::ensure!(
+            create.node_did == fire.identity.owner_did
+                && create.request_id == fire.request_id
+                && create.session_id == fire.session_id,
+            "Task receipt and signed request identity disagree"
+        );
+        anyhow::ensure!(
+            !fire.goal_assignment_applied,
+            "a Task admission cannot apply its Goal assignment"
+        );
+        anyhow::ensure!(
+            !fire.emit_outcome
+                || fire
+                    .source_handoff_id
+                    .as_deref()
+                    .is_some_and(|id| !id.trim().is_empty()),
+            "outcome-enabled Task requires its source handoff identity"
+        );
+        match &fire.goal_id {
+            Some(goal_id) => {
+                crate::goal::validate_task_goal_identity_in_txn(
+                    txn,
+                    &create.node_did,
+                    &create.session_id,
+                    goal_id,
+                    create.input.goal_assignment.as_ref(),
+                )
+                .await?;
+                anyhow::ensure!(
+                    fire.goal_objective
+                        .as_deref()
+                        .is_some_and(|objective| !objective.trim().is_empty()),
+                    "Goal-backed Task requires an objective"
+                );
+                anyhow::ensure!(
+                    fire.goal_token_budget.is_none_or(|budget| budget > 0),
+                    "Task Goal budget must be positive"
+                );
+            }
+            None => anyhow::ensure!(
+                fire.goal_objective.is_none() && fire.goal_token_budget.is_none(),
+                "ordinary Task receipt cannot declare a Goal assignment"
+            ),
+        }
+        let manual_label = create.caused_by_trigger_kind.as_deref() == Some("manual")
+            && create.caused_by_trigger_id.is_none()
+            && fire.identity.source_collection == "Task"
+            && fire
+                .identity
+                .trigger_id
+                .starts_with(&format!("manual:{}:", fire.task_id));
+        let session = crate::store::config_client::agent_session::load_agent_session_row_in_txn(
+            txn,
+            &create.node_did,
+            &create.session_id,
+            Some(create.requester_did.as_str()),
+        )
+        .await?;
+        if continue_existing {
+            anyhow::ensure!(
+                resolve_session_id(&fire.identity, Some(&create.session_id), session.is_some())
+                    .is_some(),
+                "Task target session is missing or belongs to another owner"
+            );
+        } else {
+            anyhow::ensure!(
+                manual_label
+                    || resolve_session_id(&fire.identity, None, false).as_deref()
+                        == Some(fire.session_id.as_str()),
+                "new Task session must derive from its fire identity"
+            );
+        }
+        if let Some(session) = session {
+            anyhow::ensure!(
+                session.session.agent_did == create.agent_did,
+                "Task target session has a different agent"
+            );
+            anyhow::ensure!(
+                session.session.closed_at.is_none(),
+                "Task target session is closed"
+            );
+        }
+        if create.admission.kind
+            == gents_protocol::request_admission::AgentRequestAdmissionKind::Client
+        {
+            let mut resolved = create.clone();
+            bind_client_targets_in_txn(txn, &mut resolved).await?;
+            anyhow::ensure!(
+                create.session_doc_id == resolved.session_doc_id
+                    && create.agent_doc_id == resolved.agent_doc_id,
+                "Task request physical targets changed before publication"
+            );
+            refuse_retired_reserved_cause(create)?;
+            stage_client_request_in_txn(
+                txn,
+                create,
+                create
+                    .session_doc_id
+                    .as_deref()
+                    .context("client Task session is unavailable")?,
+                create
+                    .agent_doc_id
+                    .as_deref()
+                    .context("client Task agent is unavailable")?,
+            )
+            .await?;
+        } else {
+            refuse_retired_reserved_cause(create)?;
+            txn.execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
+                .await?;
+        }
+    }
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::owned(gents_protocol::row::AGENT_REQUEST_FIELDS))
+            .filter(Filter::eq(fields::NODE_DID, &fire.identity.owner_did))
+            .filter(Filter::eq(fields::REQUEST_ID, &fire.request_id))
+            .render()
+    };
+    let response = txn.run(&query).await?;
+    let rows = response
+        .pointer("/data/AgentRequest")
+        .and_then(serde_json::Value::as_array)
+        .context("admitted request query omitted rows")?;
+    anyhow::ensure!(
+        rows.len() == 1,
+        "fire receipt requires exactly one admitted request"
+    );
+    let session_id = rows[0]["session_id"]
+        .as_str()
+        .context("admitted request lacks session ID")?;
+    anyhow::ensure!(
+        !fresh || session_id == fire.session_id,
+        "admitted request changed its fire's session"
+    );
+    if fresh {
+        let request = AgentRequest::try_from(serde_json::from_value::<
+            gents_protocol::row::AgentRequestRow,
+        >(rows[0].clone())?)?;
+        let provenance = created_session_provenance_in_txn(txn, &request).await?;
+        let created = session::ensure_session_in_txn(
+            txn,
+            &request.session_id,
+            &request.node_did,
+            &request.agent_did,
+            request.requester_did.as_deref(),
+            request.input.initial_title.clone(),
+            provenance,
+            &request.created_at,
+        )
+        .await?;
+        let agent_owned = matches!(
+            create.admission.kind,
+            gents_protocol::request_admission::AgentRequestAdmissionKind::LocalSelf
+                | gents_protocol::request_admission::AgentRequestAdmissionKind::RuntimeInternal
+        );
+        if created || agent_owned {
+            let session =
+                crate::store::config_client::agent_session::load_agent_session_row_in_txn(
+                    txn,
+                    &request.node_did,
+                    &request.session_id,
+                    request.requester_did.as_deref(),
+                )
+                .await?
+                .context("Task session disappeared")?;
+            let (agent, _) = crate::documents::read_desired_state_record_in_txn(
+                txn,
+                crate::Collection::Agent,
+                &request.node_did,
+                &request.agent_did,
+            )
+            .await?
+            .context("selected Task agent is unavailable")?;
+            if agent_owned {
+                anyhow::ensure!(
+                    txn.actor_did() == Some(request.agent_did.as_str())
+                        && create.admission.signer_did == request.agent_did
+                        && request.doc_id == rows[0]["_docID"].as_str().unwrap_or_default()
+                        && request.node_did == create.node_did
+                        && request.agent_did == create.agent_did
+                        && request.session_id == create.session_id
+                        && request.request_id == create.request_id
+                        && request.requester_did.as_deref() == Some(create.requester_did.as_str())
+                        && session.session.agent_did == request.agent_did,
+                    "Task request publication differs from its authenticated Agent or session"
+                );
+                anyhow::ensure!(
+                    crate::store::identity::verify_did_signature(
+                        &create.admission.signer_did,
+                        &create.signing_payload(),
+                        &create.admission.signature,
+                    )?,
+                    "Task request publication requires its valid signed receipt"
+                );
+                txn.add_resource_relationship(
+                    "AgentRequest",
+                    &request.doc_id,
+                    "parent",
+                    "agents",
+                    &agent,
+                )
+                .await?;
+                txn.add_resource_relationship(
+                    "AgentRequest",
+                    &request.doc_id,
+                    "session",
+                    "sessions",
+                    &session.doc_id,
+                )
+                .await?;
+                txn.add_actor_relationship(
+                    "AgentRequest",
+                    &request.doc_id,
+                    "working_agent",
+                    &identity::Did::new(&request.agent_did)?,
+                )
+                .await?;
+            }
+            if created {
+                session::stage_created_session_relationships_in_txn(
+                    txn,
+                    &session.doc_id,
+                    &agent,
+                    &identity::Did::new(&request.agent_did)?,
+                )
+                .await?;
+            }
+        }
+        let session = crate::store::config_client::agent_session::load_agent_session_row_in_txn(
+            txn,
+            &request.node_did,
+            &request.session_id,
+            request.requester_did.as_deref(),
+        )
+        .await?
+        .context("Task receipt session is unavailable")?;
+        let query = {
+            use gents_protocol::document_query::{
+                fields::trigger_fire as fields, Filter, Query, Selection,
+            };
+            Query::select(Selection::doc_id())
+                .filter(Filter::eq(fields::FIRE_KEY, &fire.fire_key))
+                .limit(2)
+                .render()
+        };
+        let receipt = txn.run(&query).await?;
+        let rows = receipt["data"]["TriggerFire"]
+            .as_array()
+            .context("Task receipt query omitted rows")?;
+        let [receipt] = rows.as_slice() else {
+            anyhow::bail!("Task receipt is missing or ambiguous")
+        };
+        let doc_id = receipt["_docID"]
+            .as_str()
+            .context("Task receipt lacks physical ID")?;
+        stage_session_child_relationships(
+            txn,
+            "TriggerFire",
+            doc_id,
+            &session.doc_id,
+            &request.agent_did,
+        )
+        .await?;
+    }
+    Ok(TaskDeliveryAdmission {
+        duplicate: !fresh,
+        request: EnqueuedAgentRequest {
+            doc_id: rows[0]["_docID"]
+                .as_str()
+                .context("admitted request lacks document ID")?
+                .into(),
+            request_id: fire.request_id.clone(),
+            session_id: session_id.into(),
+        },
+    })
 }

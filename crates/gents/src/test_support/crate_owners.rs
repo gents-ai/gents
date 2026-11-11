@@ -9,12 +9,13 @@ use serde_json::Value;
 
 use crate::documents::{automation, event_consumer, event_trigger, EventSource, Task, Trigger};
 use crate::request::lifecycle::{
-    materialize, ExecutionOrigin, ExecutionOwnershipLost, RequestSpec, TaskDeliveryAdmission,
-    TriggerLineage, WorkspaceLineage,
+    materialize, ExecutionOrigin, ExecutionOwnershipLost, RequestSpec, TriggerLineage,
+    WorkspaceLineage,
 };
 use crate::store::config_client::ConfigApplyTxn;
 use crate::store::identity::NodeIdentity;
 use crate::triggers::engine::durable;
+use crate::triggers::TaskDeliveryAdmission;
 
 #[derive(Debug, Default, Clone)]
 pub struct TriggerRuntimeUpdate {
@@ -155,7 +156,7 @@ pub async fn write_trigger_delivery_with_identity(
         replace_prior,
         event_source_generation,
     } = prepared.clone();
-    materialize::write_trigger_delivery_with_identity(
+    durable::write_trigger_delivery_with_identity(
         node,
         actor,
         &durable::PreparedFire {

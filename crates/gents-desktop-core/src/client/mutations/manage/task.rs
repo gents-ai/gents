@@ -308,7 +308,7 @@ fn render_task_invocation(
         source_collection: "Task".into(),
         source_doc_id: task_doc_id.into(),
     };
-    let fire_key = gents::request::lifecycle::task_fire_key(&identity);
+    let fire_key = gents::triggers::task_fire_key(&identity);
     let session_id = format!("trigger-session:{fire_key}");
     let request_id = format!("trigger-request:{fire_key}");
     let scope = gents::TemplateScope {

@@ -224,7 +224,7 @@ async fn persisted_disable_blocks_stale_admission_and_exclusion_but_not_committe
         source_collection: "WorkA".into(),
         source_doc_id: doc_id.clone(),
     };
-    let key = crate::request::lifecycle::task_fire_key(&identity);
+    let key = crate::triggers::task_fire_key(&identity);
     let fire = gents_protocol::trigger_delivery::TriggerFire {
         fire_key: key.clone(),
         identity,
@@ -302,7 +302,7 @@ async fn persisted_disable_blocks_stale_admission_and_exclusion_but_not_committe
     };
     publish(access, vec![trigger(false)]).await?;
     assert!(
-        crate::request::lifecycle::materialize::write_trigger_delivery_with_identity(
+        crate::triggers::engine::durable::write_trigger_delivery_with_identity(
             node,
             identity::Did::new(agent_did)?,
             &prepared,
@@ -328,7 +328,7 @@ async fn persisted_disable_blocks_stale_admission_and_exclusion_but_not_committe
         .unwrap()
         .is_empty());
     publish(access, vec![trigger(true)]).await?;
-    let admitted = crate::request::lifecycle::materialize::write_trigger_delivery_with_identity(
+    let admitted = crate::triggers::engine::durable::write_trigger_delivery_with_identity(
         node,
         identity::Did::new(agent_did)?,
         &prepared,
@@ -338,7 +338,7 @@ async fn persisted_disable_blocks_stale_admission_and_exclusion_but_not_committe
     .await?;
     assert!(!admitted.duplicate);
     publish(access, vec![trigger(false)]).await?;
-    let duplicate = crate::request::lifecycle::materialize::write_trigger_delivery_with_identity(
+    let duplicate = crate::triggers::engine::durable::write_trigger_delivery_with_identity(
         node,
         identity::Did::new(agent_did)?,
         &prepared,

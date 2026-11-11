@@ -166,7 +166,7 @@ async fn deliver(
         replace_prior: false,
         event_source_generation: None,
     };
-    let admitted = crate::request::lifecycle::materialize::write_trigger_delivery_with_identity(
+    let admitted = crate::triggers::engine::durable::write_trigger_delivery_with_identity(
         &f.node,
         identity::Did::new(f.agent.did()).unwrap(),
         &prepared,

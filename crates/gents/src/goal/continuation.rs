@@ -1,8 +1,13 @@
-use super::*;
+use anyhow::Result;
+use gents_protocol::request_input::{
+    GoalContinuationInput, QueuePolicy, QueueSource, RequestQueue,
+};
+use gents_protocol::row::AgentRequest;
 
 use crate::request::lifecycle::materialize::{
     build_request, ParentLink, RequestIdentity, RequestSpec,
 };
+use crate::request::lifecycle::queue::parent_agent_did;
 use crate::request::lifecycle::{ExecutionOrigin, TriggerLineage, WorkspaceLineage};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

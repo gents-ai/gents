@@ -1,4 +1,5 @@
 use super::*;
+use crate::goal::continuation::{goal_continuation_identity, prepare_goal_continuation};
 use crate::request::lifecycle::RequestTerminalOutcome;
 use crate::session;
 

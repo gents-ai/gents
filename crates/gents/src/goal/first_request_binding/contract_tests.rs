@@ -364,8 +364,7 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
             .await
             .unwrap();
         let admitted =
-            crate::request::lifecycle::write_task_delivery(&agent_access, &fire, true, &request)
-                .await;
+            crate::triggers::write_task_delivery(&agent_access, &fire, true, &request).await;
         assert_eq!(
             admitted.is_ok(),
             case["task_binding_valid"] == true,

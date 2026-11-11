@@ -1,6 +1,6 @@
 use super::*;
+use crate::goal::continuation::{goal_continuation_identity, prepare_goal_continuation};
 use crate::request::lifecycle::materialize::{sign_request, RequestSigner};
-use crate::request::lifecycle::queue::{goal_continuation_identity, prepare_goal_continuation};
 use crate::store::config_client::ConfigApplyTxn;
 use crate::store::identity::request_receipt::verify_request_receipt_signature;
 use crate::store::identity::NodeIdentity;

@@ -1,5 +1,5 @@
 use super::*;
-use crate::request::lifecycle::queue::prepare_goal_continuation;
+use crate::goal::continuation::prepare_goal_continuation;
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 use rapidhash::{HashMapExt, RapidHashMap};

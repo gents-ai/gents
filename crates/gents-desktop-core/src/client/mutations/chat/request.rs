@@ -179,8 +179,7 @@ pub async fn submit_task_request(
         Some(&fire.request_id),
     )
     .await?;
-    let admitted =
-        gents::request::lifecycle::write_task_delivery(access, fire, false, &create).await?;
+    let admitted = gents::triggers::write_task_delivery(access, fire, false, &create).await?;
     Ok(SubmittedRequest {
         request_id: admitted.request.request_id,
         session_id: admitted.request.session_id,
