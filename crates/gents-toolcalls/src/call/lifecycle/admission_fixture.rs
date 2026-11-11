@@ -193,7 +193,7 @@ impl PublishedAdmission {
     /// Lets the fixture Agent read collection versions. The Agent baseline
     /// omits `CollectionGet`; production reads retained file images as the
     /// operator User, so tests that read them as the Agent grant it here.
-    pub(crate) async fn grant_agent_collection_get(&self) -> anyhow::Result<()> {
+    pub async fn grant_agent_collection_get(&self) -> anyhow::Result<()> {
         let admin = gents_store::config_client::ConfigAccess::local_as(
             self.node.clone(),
             identity::Did::new(&self.node_did)?,
@@ -209,7 +209,7 @@ impl PublishedAdmission {
 
     /// Grants the runtime Node the session `reader` relation the source-local
     /// file inventory loader reads through. The session's signer grants it.
-    pub(crate) async fn grant_runtime_session_reader(&self) -> anyhow::Result<()> {
+    pub async fn grant_runtime_session_reader(&self) -> anyhow::Result<()> {
         let node_did = gents_store::graphql::escape_graphql_string(&self.node_did);
         let session_id = gents_store::graphql::escape_graphql_string(self.tool.session_id());
         let response = self

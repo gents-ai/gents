@@ -15,8 +15,8 @@ use gents_pack::{
     plugin::PluginVerdict,
 };
 
-#[cfg(test)]
-pub(crate) mod live {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod live {
     //! Which guests still occupy a worker thread, by artifact digest.
     static GUESTS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
@@ -38,7 +38,7 @@ pub(crate) mod live {
         }
     }
 
-    pub(crate) fn count(digest: &str) -> usize {
+    pub fn count(digest: &str) -> usize {
         let guests = GUESTS.lock().unwrap();
         guests
             .iter()

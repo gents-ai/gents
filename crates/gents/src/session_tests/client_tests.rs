@@ -1,5 +1,7 @@
 use gents_session::request::lifecycle::client::*;
-use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose};
+use gents_session::test_support::{assert_block_signer, seed_owned_agent};
+use gents_store::config_client::ConfigAccess;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use std::sync::Arc;
 

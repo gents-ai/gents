@@ -50,7 +50,7 @@ pub struct P2pParams {
     pub options: Map<String, Value>,
 }
 
-const ACTIONS: &[&str] = &[
+pub const ACTIONS: &[&str] = &[
     "help",
     "status",
     "network_list",

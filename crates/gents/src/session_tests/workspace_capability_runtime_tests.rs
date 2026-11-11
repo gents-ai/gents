@@ -1,4 +1,11 @@
 use gents_session::workspace::{bind_integrate, git, git_worktree_caps, integrate_writer, seal_writer, Fixture};
+use gents_session::workspace::{
+    isolated_workspace_upsert_mutation, materialize_workspace_binding,
+    workspace_binding_upsert_mutation, workspace_host_path, CreateWorkspaceAction, CreationPolicy,
+    IsolatedWorkspaceDoc, MemoryWorkspaceDocuments, RepositoryPlacementRef, WorkspaceAdapterKind,
+    WorkspaceBindingDoc, WorkspaceDocuments, WorkspacePathCapability, WorkspacePlacementDoc,
+    WorkspaceReaderBinding,
+};
 use gents_session::request::lifecycle::{RequestLifecycle, RequestTerminalOutcome, WorkspaceLineage};
 use anyhow::Context;
 use gents_store::identity::NodeIdentity;

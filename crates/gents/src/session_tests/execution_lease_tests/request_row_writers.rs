@@ -1,8 +1,16 @@
 use super::*;
+use chrono::{DateTime, Utc};
+use defra_node::Node as EmbeddedNode;
+use gents_protocol::row::AgentRequestRow;
+use gents_session::request::lifecycle::test_support::{
+    agent_access, agent_signer, observed_case_request, request_row, test_node,
+};
+use gents_session::request::lifecycle::RequestLifecycle;
+use gents_store::graphql::escape_graphql_string;
 
 async fn renewal_fixture() -> (
     Arc<EmbeddedNode>,
-    crate::support::TestDb,
+    gents_inference::test_support::TestDb,
     Arc<dyn gents_store::identity::NodeIdentity>,
     gents_protocol::agent_identity::AgentIdentityBinding,
     gents_store::config_client::ConfigAccess,

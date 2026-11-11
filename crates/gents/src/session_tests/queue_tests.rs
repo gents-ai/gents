@@ -1,6 +1,14 @@
 use anyhow::Context;
+use defra_node::Node as EmbeddedNode;
 use serde::Deserialize;
 use gents_automation::goal::continuation::prepare_goal_continuation;
+use gents_protocol::row::AgentRequest;
+use gents_session::request::lifecycle::ExecutionOrigin;
+use gents_session::request::lifecycle::queue::mutation::{
+    session_request_create_mutation, SessionRequestFields,
+};
+use gents_session::request::lifecycle::test_support::{test_db, TestDb};
+use gents_store::graphql::escape_graphql_string;
 use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
 use gents_session::request::lifecycle::test_support::{hints, parent_request, wake_queue_input};
 use gents_session::request::lifecycle::queue::*;

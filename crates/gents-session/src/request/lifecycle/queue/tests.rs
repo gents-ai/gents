@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
 use super::*;
-use crate::request::lifecycle::test_support::{hints, parent_request, wake_queue_input};
+use crate::request::lifecycle::test_support::{hints, parent_request, test_db, wake_queue_input, TestDb};
 
 use crate::request::lifecycle::{
     extract_single_doc_id, ClaimOutcome, RequestLifecycle, DEFAULT_REQUEST_MAX_RETRIES,
@@ -14,10 +14,7 @@ use gents_protocol::{
     message::{AssistantContent, Message, ToolCall, ToolFunction},
     output::PresentationPart,
 };
-use gents_store::identity::NodeIdentity;
-use std::sync::Arc;
 use std::time::Duration;
-use tempfile::TempDir;
 
 mod folding;
 mod goal_assignment_wakes;
@@ -145,52 +142,6 @@ mod pin_tests {
                 assert!(mutation.contains(field), "{field}: {mutation}");
             }
         }
-    }
-}
-
-struct TestDb {
-    node: Arc<EmbeddedNode>,
-    identity: Arc<dyn NodeIdentity>,
-    agent_identity: Arc<dyn NodeIdentity>,
-    user: gents_store::identity::KeyIdentity,
-    user_access: gents_store::config_client::ConfigAccess,
-    agent_access: gents_store::config_client::ConfigAccess,
-    _db: gents_inference::test_support::TestDb,
-    _tempdir: TempDir,
-}
-
-impl TestDb {
-    fn node_did(&self) -> &str {
-        self.identity.did()
-    }
-
-    fn agent_did(&self) -> &str {
-        self.agent_identity.did()
-    }
-}
-
-async fn test_db(name: &str) -> TestDb {
-    let (db, user, user_access, binding) =
-        gents_inference::test_support::signed_test_node(name).await;
-    let node = db.node.clone();
-    let identity = db.node_identity.clone();
-    let agent_identity = gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding)
-        .expect("derived test agent identity");
-    let agent_access = gents_store::config_client::ConfigAccess::local_managed_agent(
-        node.clone(),
-        identity::Did::new(agent_identity.did()).unwrap(),
-        agent_identity.as_ref(),
-    )
-    .unwrap();
-    TestDb {
-        node,
-        identity,
-        agent_identity,
-        user,
-        user_access,
-        agent_access,
-        _db: db,
-        _tempdir: tempfile::tempdir().expect("queue fixture directory"),
     }
 }
 

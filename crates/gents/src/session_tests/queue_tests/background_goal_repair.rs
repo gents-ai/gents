@@ -1,4 +1,7 @@
 use super::*;
+use crate::support::{test_db, TestDb};
+use gents_protocol::row::AgentRequest;
+use gents_store::graphql::escape_graphql_string;
 
 async fn fixture(name: &str) -> (TestDb, CanonicalBackgroundFixture) {
     let db = test_db(name).await;
@@ -42,7 +45,7 @@ async fn canonical_publication_wakes_whatever_goal_owns_the_session() {
             .await
             .unwrap();
         let queue = hints(&parent);
-        let gate = super::super::atomic_inputs::background_completion_gate(
+        let gate = gents_session::request::lifecycle::queue::background_completion_gate(
             &db.node,
             &parent.session_id,
             &parent.node_did,

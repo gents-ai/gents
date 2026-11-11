@@ -342,7 +342,7 @@ fn admission_targets(args: &ConfigureAgentParams) -> Vec<String> {
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn agent_mutate(
     node: &Arc<EmbeddedNode>,
     owner: &str,
@@ -469,7 +469,7 @@ pub async fn apply_agent_in_txn(
     .await?)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 async fn agent_apply(
     node: &Arc<EmbeddedNode>,
     owner: &str,

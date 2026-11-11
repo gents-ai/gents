@@ -1,6 +1,7 @@
 use super::*;
 use gents_lean_vocab::LeanQueueManagementOperation;
 use gents_store::config_client::ConfigAccess;
+use gents_store::identity::NodeIdentity as _;
 use rapidhash::{HashMapExt, RapidHashMap};
 
 /// Seeds an Agent-owned row through the Agent's own signed access.

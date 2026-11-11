@@ -125,7 +125,7 @@ async fn a_shell_less_agent_takes_a_data_pack_from_scaffold_to_installed() {
     )
     .await;
     assert_eq!(installed["artifact_digest"], digest.as_str(), "{installed}");
-    gents_tools::builtin::self_config::text_tests::assert_sizes(&sizes);
+    crate::tools_tests::self_config::text_tests::assert_sizes(&sizes);
     let response = fixture
         .user_access()
         .execute("query { Note { run_id } }")
@@ -626,7 +626,7 @@ async fn page_help_discloses_detail_per_command_and_topic() {
     ] {
         assert!(pack.contains(fact), "{fact}: {pack}");
     }
-    gents_tools::builtin::self_config::text_tests::assert_sizes(&[
+    crate::tools_tests::self_config::text_tests::assert_sizes(&[
         ("help page sdk".into(), sdk.len(), 4_800),
         ("help page sdk Table".into(), table.len(), 600),
         ("help page sdk tokens".into(), tokens.len(), 2_800),

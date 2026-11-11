@@ -8,6 +8,8 @@ use gents_toolcalls::call::lifecycle::admission_fixture::{
 };
 use gents_loop::live_output::LiveToolOutputRegistry;
 use gents_loop::tool::Tool;
+use gents_protocol::file_changes::FileImage;
+use gents_session::file_contents::content_hash;
 use gents_store::config_client::ConfigAccess;
 
 

@@ -37,8 +37,8 @@ pub(crate) use claim::supersede_pending_in_txn;
 pub use claim::{claim_gate_in_txn, ClaimGate};
 pub mod execution_lease;
 mod execution_renewal;
-#[cfg(test)]
-pub(crate) use execution_renewal::renew_in_transaction;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use execution_renewal::renew_in_transaction;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use execution_renewal::renew_once_at_with_access as renew_execution_lease_once_at_with_access;
 #[cfg(test)]
@@ -341,7 +341,7 @@ pub fn extract_single_doc_id(response: &defra_node::QueryResponse, key: &str) ->
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LocalLifecycleState {
+pub enum LocalLifecycleState {
     Pending,
     Claimed,
     Streaming,
@@ -575,7 +575,7 @@ pub struct RequestLifecycle {
     configured_max_total_tokens: Option<u64>,
     claimed_deadline_at: Option<chrono::DateTime<chrono::Utc>>,
     background_completion_input_through_sequence: Option<u32>,
-    state: LocalLifecycleState,
+    pub state: LocalLifecycleState,
     valid_until_at_claim: Option<chrono::DateTime<chrono::Utc>>,
     execution_lease: Option<RequestExecutionLease>,
     execution_lease_duration_secs: u64,

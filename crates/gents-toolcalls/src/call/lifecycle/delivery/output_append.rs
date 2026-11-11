@@ -104,7 +104,7 @@ pub struct ToolOutputAppendReceipt {
     pub segment_doc_id: String,
 }
 
-pub(crate) async fn append_tool_output(
+pub async fn append_tool_output(
     binding: &ToolOutputBinding,
     bytes: &str,
 ) -> Result<std::ops::Range<u64>> {

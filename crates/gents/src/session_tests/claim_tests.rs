@@ -1,5 +1,13 @@
 use std::sync::Arc;
+use defra_node::Node as EmbeddedNode;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequest;
 use gents_session::request::lifecycle::claim::*;
+use gents_session::request::lifecycle::{
+    ClaimOutcome, ExecutionOrigin, LocalLifecycleState, RequestLifecycle, DEFAULT_REQUEST_MAX_RETRIES,
+};
+use gents_session::session;
+use gents_store::graphql::escape_graphql_string;
 
     fn test_node_did() -> String {
         use gents_store::identity::NodeIdentity as _;

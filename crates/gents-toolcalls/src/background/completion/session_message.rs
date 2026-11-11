@@ -138,7 +138,7 @@ async fn settle_row(
 /// Whether the caused session carries an assignment, grounded in the
 /// canonical Goal document rather than the tool turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum AssignmentObservation {
+pub enum AssignmentObservation {
     /// Native history contains no assignment bound to the caused request.
     None,
     /// The Goal's durable status is the authoritative assignment state.
@@ -186,7 +186,7 @@ impl TurnAssignmentHandoff {
     }
 }
 
-fn assignment_status_reason(status: gents_protocol::goal_status::GoalStatus) -> &'static str {
+pub fn assignment_status_reason(status: gents_protocol::goal_status::GoalStatus) -> &'static str {
     match status {
         gents_protocol::goal_status::GoalStatus::Active => "assignment_active",
         gents_protocol::goal_status::GoalStatus::Paused => "assignment_paused",

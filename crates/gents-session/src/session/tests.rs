@@ -1,49 +1,10 @@
+use crate::test_support::{
+    fork_reader_node, history_on, sequenced_history_on, session_rewrite_rows,
+};
 use super::history_fixture::signed_claimed_authored_request;
 use super::*;
 use gents_inference::llm::message::{Text, ToolResult, ToolResultContent, UserContent};
 use gents_store::test_support::first_content;
-
-async fn sequenced_history_on(
-    access: &gents_store::config_client::ConfigAccess,
-    session_id: &str,
-    node_did: &str,
-    requester: Option<&str>,
-    after: Option<u32>,
-    excluded_request: Option<&str>,
-) -> anyhow::Result<Vec<SequencedMessage>> {
-    output::sequenced::load_sequenced_messages_using(
-        output::access::ReadAccess::Config(access),
-        session_id,
-        node_did,
-        requester,
-        None,
-        after,
-        excluded_request,
-        None,
-    )
-    .await
-}
-
-async fn history_on(
-    access: &gents_store::config_client::ConfigAccess,
-    session_id: &str,
-    node_did: &str,
-    requester: Option<&str>,
-    excluded_request: Option<&str>,
-) -> anyhow::Result<Vec<Message>> {
-    Ok(sequenced_history_on(
-        access,
-        session_id,
-        node_did,
-        requester,
-        None,
-        excluded_request,
-    )
-    .await?
-    .into_iter()
-    .map(|row| row.message)
-    .collect())
-}
 
 #[tokio::test]
 async fn history_reconstruction_scans_a_shared_request_once() {
@@ -704,33 +665,6 @@ async fn create_session_with_agent_did_rejects_mismatched_existing_binding() {
     assert!(error.to_string().contains("agent mismatch"));
 }
 
-async fn session_rewrite_rows(
-    access: &gents_store::config_client::ConfigAccess,
-) -> Vec<Vec<String>> {
-    let response = access
-        .execute(
-            "{ AgentSession { _docID session_id agent_did } \
-           AgentMessage { _docID session_id sequence message_key } \
-           CompactionEntry { _docID session_id sequence compaction_key summary } }",
-        )
-        .await
-        .unwrap();
-    let data = &response["data"];
-    ["AgentSession", "AgentMessage", "CompactionEntry"]
-        .into_iter()
-        .map(|collection| {
-            let mut rows = data[collection]
-                .as_array()
-                .expect("collection rows")
-                .iter()
-                .map(|row| row.to_string())
-                .collect::<Vec<_>>();
-            rows.sort();
-            rows
-        })
-        .collect()
-}
-
 #[tokio::test]
 async fn editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_source() {
     use gents_store::identity::NodeIdentity;
@@ -793,50 +727,6 @@ async fn editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_sou
         before
     );
     node.shutdown().await.expect("shut down test node");
-}
-
-/// The shared fixture installs its Agent as the non-admin user, which the
-/// native source projection refuses; this fixture installs it as the node.
-async fn fork_reader_node(
-    name: &str,
-) -> (
-    gents_inference::test_support::TestDb,
-    gents_store::identity::KeyIdentity,
-    gents_store::config_client::ConfigAccess,
-    gents_protocol::agent_identity::AgentIdentityBinding,
-) {
-    use gents_store::config_client::NodePermission;
-    use gents_store::identity::NodeIdentity;
-    let (db, user, client) =
-        gents_inference::test_support::signed_test_node_without_agent(name).await;
-    let runtime = db.node_identity.as_ref();
-    let admin = gents_store::config_client::ConfigAccess::local_as(
-        db.node.clone(),
-        identity::Did::new(runtime.did()).unwrap(),
-    );
-    let user_did = identity::Did::new(user.did()).unwrap();
-    admin
-        .grant_node_permission(&user_did, NodePermission::DacRelationDelete)
-        .await
-        .unwrap();
-    let binding =
-        gents_store::identity::provision_agent_identity_authorized(&db.node, runtime, &user_did)
-            .await
-            .unwrap();
-    gents_inference::test_support::install_test_agent_binding_with_access(
-        runtime.did(),
-        "Default fixture agent",
-        &binding,
-        &admin,
-    )
-    .await;
-    gents_documents::test_support::set_test_default_agent_as(
-        &client,
-        runtime.did(),
-        &binding.agent_did,
-    )
-    .await;
-    (db, user, client, binding)
 }
 
 async fn session_doc_id(

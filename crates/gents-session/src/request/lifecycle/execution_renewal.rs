@@ -233,7 +233,7 @@ async fn renew_once_with_time(
 #[error("execution lease expired before renewal commit admission")]
 struct RenewalAdmissionExpired;
 
-pub(crate) async fn renew_in_transaction(
+pub async fn renew_in_transaction(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     request_doc_id: &str,
     generation: &str,

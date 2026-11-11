@@ -3,7 +3,7 @@ use gents_protocol::row::AgentRequestRow;
 
 pub(crate) const BACKGROUND_COMPLETION_WAKE_VERSION: u32 = 1;
 
-pub(crate) fn queue_is_automated_wakeup(queue: &RequestQueue) -> bool {
+pub fn queue_is_automated_wakeup(queue: &RequestQueue) -> bool {
     matches!(queue.source, QueueSource::BackgroundCompletion)
         && queue.policy == QueuePolicy::Coalesce
         && queue

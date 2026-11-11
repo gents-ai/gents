@@ -1,6 +1,10 @@
 use anyhow::Result;
 use super::*;
 use gents_automation::goal::operator_resume_test_support::Fixture;
+use gents_automation::goal::session_message::SessionGoals;
+use gents_protocol::job::keys::{job_message_key, job_session_id, job_spawn_key};
+use gents_protocol::request_lifecycle::SessionMessageCause;
+use gents_toolcalls::background::job::effects::stage_request;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -80,6 +84,7 @@ async fn deliver(
                 Box::pin(async move {
                     stage_request(
                         txn,
+                        &SessionGoals,
                         cause,
                         f.identity.did(),
                         f.agent.did(),
@@ -421,6 +426,7 @@ async fn staging_into_another_runtime_is_refused_before_any_write() {
                 Box::pin(async move {
                     stage_request(
                         txn,
+                        &SessionGoals,
                         cause,
                         "did:key:z6MkpeerRuntimeThatIsNotThisOne",
                         agent,

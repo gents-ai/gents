@@ -1,6 +1,8 @@
-use gents_inference::llm::message::{Text, ToolResult, ToolResultContent, UserContent};
-use gents_store::test_support::first_content;
+use gents_inference::llm::message::{Message, Text, ToolResult, ToolResultContent, UserContent};
 use gents_session::session::*;
+use gents_session::test_support::{fork_reader_node, history_on, session_rewrite_rows};
+use gents_store::graphql::escape_graphql_string;
+use gents_store::test_support::first_content;
 
 #[tokio::test]
 async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
@@ -8,7 +10,7 @@ async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
     use gents_protocol::tool_call::AwaitMode;
     use gents_store::identity::NodeIdentity;
     let (db, user, client, binding) =
-        crate::test_support::root::signed_test_node("provider-history").await;
+        gents_inference::test_support::signed_test_node("provider-history").await;
     let session_id = "session-steering-provider-history";
     publish_signed_history(
         &db,
@@ -222,7 +224,7 @@ async fn retry_frontier_matches_lean_admission() {
     use gents_protocol::tool_call::AwaitMode;
     use gents_store::identity::NodeIdentity;
     let (db, user, client, binding) =
-        crate::test_support::root::signed_test_node("retry-frontier").await;
+        gents_inference::test_support::signed_test_node("retry-frontier").await;
     let node = &db.node;
     let node_did = db.node_identity.did();
     let other = tokio::task::spawn_blocking(|| {
@@ -334,7 +336,7 @@ async fn retry_frontier_matches_lean_admission() {
                 .await
                 .unwrap_or_else(|error| panic!("{case}: {error:#}"));
         }
-        let actual = history::retry_has_published_input(node, &request).await;
+        let actual = gents_session::session::retry_has_published_input(node, &request).await;
         assert_eq!(actual.ok(), case["expected"].as_bool(), "{case}");
         if case["name"] == "ready" {
             let retry = gents_session::request::lifecycle::RetryLink {
@@ -371,7 +373,7 @@ async fn retry_frontier_matches_lean_admission() {
                 .unwrap();
             request.retry_parent_request_doc_id = Some(second.request().doc_id.clone());
             assert_eq!(
-                history::retry_has_published_input(node, &request)
+                gents_session::session::retry_has_published_input(node, &request)
                     .await
                     .ok(),
                 case["expected"].as_bool(),

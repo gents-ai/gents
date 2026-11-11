@@ -1,4 +1,8 @@
+use gents_protocol::output::{MessagePublication, MessageRole, PresentedPayload};
+use gents_session::session::tool_call_state::ToolCallState;
 use gents_session::tool_call::query::result::*;
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
 
     #[tokio::test]
     async fn generated_plugin_child_terminal_presentation_matches_execution_owner() {

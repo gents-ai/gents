@@ -1,3 +1,13 @@
+use gents_protocol::tool_call::AwaitMode;
+use gents_store::identity::NodeIdentity;
+use gents_toolcalls::call::lifecycle::admission_fixture::{
+    complete_child_managed_verified, completion_obligations, published_admission,
+    published_session_message, published_session_message_with_owner, settle, update_request,
+    PublishedAdmissionOptions,
+};
+use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
+use std::sync::Arc;
+
 #[tokio::test]
 async fn generated_session_message_recovery_cases_use_accepted_call() {
     let cases = gents_lean_vocab::lean_recovery_sweep_cases()
@@ -520,6 +530,7 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
         gents_toolcalls::background::completion::settle_running_session_message_rows_with_access(
             &node,
             &message.admission.tool.access().unwrap(),
+            &gents_session::session::message::NoSessionMessageGoals,
             &did
         )
         .await
@@ -630,6 +641,7 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
         gents_toolcalls::background::completion::settle_running_session_message_rows_with_access(
             &node,
             &message.admission.tool.access().unwrap(),
+            &gents_session::session::message::NoSessionMessageGoals,
             &did
         )
         .await

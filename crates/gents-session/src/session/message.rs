@@ -144,7 +144,7 @@ impl AgentMessageArgs {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Delivery {
+pub enum Delivery {
     Request,
     Queued,
     Steering,

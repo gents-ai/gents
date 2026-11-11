@@ -5,18 +5,18 @@ use crate::request::lifecycle::materialize::{
 };
 use crate::request::lifecycle::{TriggerLineage, WorkspaceLineage};
 
-pub(super) struct SessionRequestFields<'a> {
-    pub(super) agent_did: &'a str,
-    pub(super) content: &'a str,
-    pub(super) execution_origin: ExecutionOrigin,
-    pub(super) input: RequestInput,
-    pub(super) request_id: &'a str,
-    pub(super) created_at: &'a str,
-    pub(super) retry_key: Option<&'a str>,
+pub struct SessionRequestFields<'a> {
+    pub agent_did: &'a str,
+    pub content: &'a str,
+    pub execution_origin: ExecutionOrigin,
+    pub input: RequestInput,
+    pub request_id: &'a str,
+    pub created_at: &'a str,
+    pub retry_key: Option<&'a str>,
 }
 
-#[cfg(test)]
-pub(super) async fn session_request_create_mutation(
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn session_request_create_mutation(
     parent: &AgentRequest,
     fields: SessionRequestFields<'_>,
     signer: &gents_store::identity::ManagedAgentSigner,

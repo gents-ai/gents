@@ -4,10 +4,13 @@ use gents_toolcalls::call::lifecycle::admission_fixture::{
 use gents_session::session::message::plan::PlannedWrite;
 use gents_session::session::message::*;
 use gents_protocol::tool_call::AwaitMode;
+use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};
+use gents_session::session::message::Delivery;
+use gents_store::graphql::escape_graphql_string;
 
 /// The accepted tool row does not carry its calling request's id; the id is
 /// read from the calling request document, as the owning lifecycle does.
-pub(super) async fn cause(
+pub(crate) async fn cause(
     message: &gents_toolcalls::call::lifecycle::admission_fixture::PublishedSessionMessage,
     caller_hop: u32,
 ) -> SessionMessageCause {
@@ -26,7 +29,7 @@ pub(super) async fn cause(
     }
 }
 
-pub(super) fn signer(
+pub(crate) fn signer(
     message: &gents_toolcalls::call::lifecycle::admission_fixture::PublishedSessionMessage,
 ) -> gents_store::identity::ManagedAgentSigner {
     message

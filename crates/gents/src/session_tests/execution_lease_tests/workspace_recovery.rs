@@ -1,4 +1,13 @@
+use defra_node::Node as EmbeddedNode;
+use gents_automation::triggers::engine::goal_source::GoalSource;
+use gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use gents_documents::TriggerSource;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::{AgentRequest, AgentRequestRow};
+use gents_session::request::lifecycle::test_support::{
+    expire_observed_execution, output_segment_snapshot, request_row,
+};
+use gents_session::request::lifecycle::RequestLifecycle;
 use super::*;
 use gents_store::identity::NodeIdentity;
 
@@ -341,7 +350,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         oauth_pool: Vec::new(),
     });
     let (dispatcher, _executor) = tokio::sync::mpsc::channel(1);
-    let snapshot = Arc::new(crate::ActiveRuntimeSnapshot {
+    let snapshot = Arc::new(ActiveRuntimeSnapshot {
         generation: 1,
         node: Some(runtime_node),
         local_did: did.into(),
@@ -386,7 +395,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
     .await
     .unwrap();
     let (_tx, rx) = tokio::sync::watch::channel(snapshot);
-    let mut source = crate::GoalSource::new(
+    let mut source = GoalSource::new(
         rx.clone(),
         node.clone(),
         tokio_util::sync::CancellationToken::new(),
@@ -445,7 +454,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
                 .requests_recovered,
             0
         );
-        let mut restarted = crate::GoalSource::new(
+        let mut restarted = GoalSource::new(
             rx.clone(),
             node.clone(),
             tokio_util::sync::CancellationToken::new(),

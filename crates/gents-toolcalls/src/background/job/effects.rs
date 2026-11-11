@@ -323,7 +323,7 @@ async fn message_hop(
     clippy::too_many_arguments,
     reason = "fields of the staged AgentRequest"
 )]
-async fn stage_request(
+pub async fn stage_request(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     goals: &dyn gents_session::session::message::SessionMessageGoals,
     cause: &SessionMessageCause,

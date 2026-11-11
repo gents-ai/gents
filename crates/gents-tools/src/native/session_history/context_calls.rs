@@ -1,8 +1,8 @@
 use super::observation::{load_session_request_bindings, RequestBindings};
 use super::*;
 
-pub(super) const PAGE_SIZE: usize = 128;
-const CONTEXT_CALL_LIMIT: usize = 10;
+pub const PAGE_SIZE: usize = 128;
+pub const CONTEXT_CALL_LIMIT: usize = 10;
 const ORDER_FIELDS: [&str; 4] = ["queued_at", "call_seq", "call_id", "_docID"];
 
 /// Session hints select candidates, never authorize them. Retained calls without

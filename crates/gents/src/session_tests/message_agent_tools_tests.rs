@@ -1,3 +1,8 @@
+use gents_documents::AgentToolConfig;
+use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};
+use gents_protocol::session::SessionScope;
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::escape_graphql_string;
 use gents_toolcalls::call::lifecycle::admission_fixture::{
     published_session_message, PublishedAdmissionOptions, PublishedSessionMessage,
 };
@@ -504,7 +509,7 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
         },
         None,
         false,
-        &gents_session::session::message::hop_tests::signer(&message),
+        &crate::session_tests::message_hop_tests::signer(&message),
     )
     .await
     .unwrap()
@@ -716,7 +721,7 @@ async fn steer_reaches_a_head_parked_for_its_backend() {
     let (message, caller, caused) = started("agent-steer-parked-head").await;
     let node = message.admission.node.clone();
     set_state(&owner(&message), &caused.doc_id, "waitingForBackend").await;
-    let cause = gents_session::session::message::hop_tests::cause(&message, caller.request_hop).await;
+    let cause = crate::session_tests::message_hop_tests::cause(&message, caller.request_hop).await;
     let target = SessionMessageTarget {
         node_did: caused.node_did.clone(),
         agent_did: caused.agent_did.clone(),
@@ -733,7 +738,7 @@ async fn steer_reaches_a_head_parked_for_its_backend() {
         },
         None,
         AgentMessageDelivery::Steer,
-        &gents_session::session::message::hop_tests::signer(&message),
+        &crate::session_tests::message_hop_tests::signer(&message),
     )
     .await
     .unwrap()
@@ -772,7 +777,7 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
     let node = message.admission.node.clone();
     set_state(&owner(&message), &caused.doc_id, "processing").await;
     // Staging verifies the source edge, so the cause must name the accepted tool row.
-    let cause = gents_session::session::message::hop_tests::cause(&message, caller.request_hop).await;
+    let cause = crate::session_tests::message_hop_tests::cause(&message, caller.request_hop).await;
     let target = SessionMessageTarget {
         node_did: caused.node_did.clone(),
         agent_did: caused.agent_did.clone(),
@@ -790,7 +795,7 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
             },
             None,
             AgentMessageDelivery::Steer,
-            &gents_session::session::message::hop_tests::signer(&message),
+            &crate::session_tests::message_hop_tests::signer(&message),
         )
         .await
         .unwrap()
@@ -826,7 +831,7 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
         },
         None,
         AgentMessageDelivery::Queue,
-        &gents_session::session::message::hop_tests::signer(&message),
+        &crate::session_tests::message_hop_tests::signer(&message),
     )
     .await
     .unwrap()
@@ -1219,7 +1224,7 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
         body(),
         None,
         false,
-        &gents_session::session::message::hop_tests::signer(&message),
+        &crate::session_tests::message_hop_tests::signer(&message),
     )
     .await
     .unwrap()
@@ -1233,7 +1238,7 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
         body(),
         None,
         true,
-        &gents_session::session::message::hop_tests::signer(&message),
+        &crate::session_tests::message_hop_tests::signer(&message),
     )
     .await
     .unwrap()
@@ -1311,7 +1316,7 @@ async fn explicit_stop_drains_pending_work_and_rejects_late_admission() {
         },
         None,
         false,
-        &gents_session::session::message::hop_tests::signer(&message),
+        &crate::session_tests::message_hop_tests::signer(&message),
     )
     .await
     .unwrap();

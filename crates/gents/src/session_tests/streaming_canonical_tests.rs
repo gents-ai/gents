@@ -1,6 +1,7 @@
 use gents_session::request::streaming::*;
 use gents_session::request::lifecycle::{ClaimOutcome, RequestLifecycle};
 use std::{sync::Arc, time::Duration};
+use gents_session::test_support::{fixture, fixture_access, fixture_query};
 
 #[tokio::test]
 async fn owned_input_handoff_publishes_context_and_prompt_once_before_provider_output() {

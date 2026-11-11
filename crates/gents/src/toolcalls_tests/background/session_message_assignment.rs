@@ -1,4 +1,8 @@
 use gents_toolcalls::background::completion::session_message::*;
+use gents_automation::goal::session_message::SessionGoals;
+use gents_session::session::message::NoSessionMessageGoals;
+use gents_store::graphql::escape_graphql_string;
+use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
 use std::sync::Arc;
 use gents_toolcalls::call::lifecycle::admission_fixture::PublishedSessionMessage;
 use gents_protocol::background_completion::background_completion_notification_message_key;
@@ -255,6 +259,7 @@ async fn folded_session_message_waits_for_exact_head_and_replays_once() {
         settle_running_session_message_rows_with_access(
             node,
             &admission.tool.access().unwrap(),
+            &NoSessionMessageGoals,
             did
         )
         .await
@@ -315,6 +320,7 @@ async fn folded_session_message_waits_for_exact_head_and_replays_once() {
         settle_running_session_message_rows_with_access(
             node,
             &admission.tool.access().unwrap(),
+            &NoSessionMessageGoals,
             did
         )
         .await
@@ -377,6 +383,7 @@ async fn folded_session_message_waits_for_exact_head_and_replays_once() {
         settle_running_session_message_rows_with_access(
             node,
             &admission.tool.access().unwrap(),
+            &NoSessionMessageGoals,
             did
         )
         .await
@@ -407,6 +414,7 @@ async fn folded_session_message_waits_for_exact_head_and_replays_once() {
         settle_running_session_message_rows_with_access(
             node,
             &admission.tool.access().unwrap(),
+            &NoSessionMessageGoals,
             did
         )
         .await
@@ -425,6 +433,7 @@ async fn folded_session_message_waits_for_exact_head_and_replays_once() {
     settle_running_session_message_rows_with_access(
         node,
         &admission.tool.access().unwrap(),
+        &NoSessionMessageGoals,
         did,
     )
     .await
@@ -498,7 +507,7 @@ async fn managed_parent_receives_child_completion_when_node_cannot_read_request(
     )
     .await;
     assert_eq!(
-        settle_running_session_message_rows_with_access(node, &access, &admission.node_did)
+        settle_running_session_message_rows_with_access(node, &access, &NoSessionMessageGoals, &admission.node_did)
             .await
             .unwrap(),
         1
@@ -526,7 +535,7 @@ async fn managed_parent_receives_child_completion_when_node_cannot_read_request(
     assert!(tool["completion_notification_delivered_at"]
         .as_str()
         .is_some());
-    settle_running_session_message_rows_with_access(node, &access, &admission.node_did)
+    settle_running_session_message_rows_with_access(node, &access, &NoSessionMessageGoals, &admission.node_did)
         .await
         .unwrap();
     let replay = access.execute(&query).await.unwrap();
@@ -593,6 +602,7 @@ async fn completed_turn_with_live_goal_hands_off_a_non_complete_reason() {
     let settled = settle_running_session_message_rows_with_access(
         node,
         &admission.tool.access().unwrap(),
+        &SessionGoals,
         did,
     )
     .await
@@ -678,6 +688,7 @@ async fn completed_turn_without_a_goal_hands_off_assignment_absent() {
     let settled = settle_running_session_message_rows_with_access(
         node,
         &admission.tool.access().unwrap(),
+        &SessionGoals,
         did,
     )
     .await
@@ -763,6 +774,7 @@ async fn completed_turn_with_complete_goal_is_the_reasonless_success_form() {
     let settled = settle_running_session_message_rows_with_access(
         node,
         &admission.tool.access().unwrap(),
+        &SessionGoals,
         did,
     )
     .await
@@ -912,6 +924,7 @@ async fn crash_before_notice_redrive_renders_the_persisted_assignment_reason() {
         panic!("the completed child is a terminal observation");
     };
     let handoff = turn_assignment_handoff(
+        &SessionGoals,
         &gents_store::config_client::ConfigAccess::local_as(
             node.clone(),
             lifecycle.actor().clone(),

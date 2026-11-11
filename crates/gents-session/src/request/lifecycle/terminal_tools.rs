@@ -69,7 +69,7 @@ fn directly_bound<'a>(
     Ok(found)
 }
 
-pub(super) async fn account_tools_in_txn(
+pub async fn account_tools_in_txn(
     txn: &ConfigApplyTxn<'_>,
     reader: &mut crate::session::TxnCanonicalReader<'_, '_>,
     request: &AgentRequestRow,

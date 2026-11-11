@@ -395,7 +395,7 @@ pub(crate) async fn revoke_execution_generation(
     .await
 }
 
-pub(crate) async fn revoke_execution_preserving_output_with_access(
+pub async fn revoke_execution_preserving_output_with_access(
     access: &gents_store::config_client::ConfigAccess,
     row: &AgentRequestRow,
     outcome: RequestTerminalOutcome,

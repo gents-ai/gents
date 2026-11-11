@@ -16,14 +16,17 @@ use gents_automation::goal::{
     claim_continuation_from_access, claim_retry_continuation_from_access,
     gate_claimed_goal_continuation, set_goal_from_access,
     stop_claimed_continuation_for_unavailable_agent_from_access,
-    update_goal_fields_if_status_from_access, GoalAgentObservation,
+    update_goal_fields_if_status_from_access, GoalAgentObservation, GoalDocument,
+    MAX_INFRASTRUCTURE_RETRIES,
 };
+use gents_automation::goal::readiness_gate::GoalClaimedDecision;
 use crate::support::{test_db, TestDb};
 use gents_protocol::node_readiness::{
     AgentReadinessEntry, AgentReadinessState, AgentReadinessUnavailableReason,
     NodeReadinessProcessState, NodeReadinessSnapshot, NODE_READINESS_FORMAT_VERSION,
 };
-use gents_store::graphql::graphql_with_transaction_retry;
+use gents_store::config_client::ConfigAccess;
+use gents_store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use serde_json::{json, Value};
 
 const SESSION: &str = "claimed-readiness-session";
