@@ -57,9 +57,7 @@ describe("a node's Connection group", () => {
       status.getByText("The authenticated runtime connection is ready."),
     ).toBeVisible();
     expect(within(rowOf(group, "Address")).getByText("iroh://local")).toBeVisible();
-    expect(
-      within(rowOf(group, "Node")).getByText("This computer's node"),
-    ).toBeVisible();
+    expect(within(rowOf(group, "Node")).getByText("Local node")).toBeVisible();
     expect(within(rowOf(group, "Operator access")).getByText("Yes")).toBeVisible();
     expect(group.queryByText("Access")).toBeNull();
     expect(group.queryByText("Last error")).toBeNull();
@@ -85,7 +83,7 @@ describe("a node's Connection group", () => {
     expect(
       within(rowOf(group, "Address")).getByText("/ip4/10.0.0.7/tcp/9191"),
     ).toBeVisible();
-    expect(within(rowOf(group, "Node")).getByText("Joined node")).toBeVisible();
+    expect(within(rowOf(group, "Node")).getByText("Remote node")).toBeVisible();
     const peer = within(rowOf(group, "Peer ID"));
     expect(peer.getByText(PEER)).toBeVisible();
     expect(peer.getByRole("button", { name: "Copy peer ID" })).toBeVisible();

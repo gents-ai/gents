@@ -45,7 +45,7 @@ export function StateDot({
 }
 
 /** How a node's connection stands, and its dot's tone; `stopped` for this
-    computer's own node while it isn't running. */
+    local node while it isn't running. */
 export function nodeConnection(
   deployment: Pick<NodeView, "runtimeConnection">,
   stopped: boolean,

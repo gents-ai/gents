@@ -32,13 +32,7 @@ export function ConnectionGroup({ deployment }: { deployment: NodeView }) {
         <Fact mono>{deployment.addr || null}</Fact>
       </Row>
       <Row label="Node">
-        <Fact>
-          {local
-            ? "This computer's node"
-            : deployment.source === "enrollment"
-              ? "Joined node"
-              : "Remote node"}
-        </Fact>
+        <Fact>{local ? "Local node" : "Remote node"}</Fact>
       </Row>
       {peerId && (
         <Row label="Peer ID" description="The node's peer ID on the network.">

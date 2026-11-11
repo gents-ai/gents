@@ -40,7 +40,7 @@ export function nodeConnectionState(
     return {
       status,
       label: "Stopped",
-      detail: "This computer’s node isn’t running.",
+      detail: "The local node isn’t running.",
       link: "idle",
     };
   const link: ConnectionLink =
