@@ -75,7 +75,7 @@ where
 
 /// How an admission's own row stands in the live count it checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BackgroundSlot {
+pub enum BackgroundSlot {
     /// The caller's row is not live yet.
     Requested,
     /// The caller's row already counts as live.
@@ -96,7 +96,7 @@ pub(crate) enum BackgroundSlot {
 /// and a renewal committing first aborts this admission
 /// (`tla/BackgroundAdmissionContention`). The renewal owner re-drives a poll
 /// the bumps exhaust; the admission's sibling budget absorbs the renewal.
-pub(crate) async fn reserve_background_slot_in_txn(
+pub async fn reserve_background_slot_in_txn(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     request_doc_id: &str,
     slot: BackgroundSlot,

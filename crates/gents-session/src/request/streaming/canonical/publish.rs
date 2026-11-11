@@ -78,7 +78,7 @@ fn created_tool_call_doc_ids(
         .collect()
 }
 
-pub(in crate::request::streaming) async fn publish_provider_turn_with_signer(
+pub async fn publish_provider_turn_with_signer(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: identity::Did,
     signer: Option<gents_store::identity::ManagedAgentSigner>,

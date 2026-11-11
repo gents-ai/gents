@@ -415,7 +415,7 @@ pub(crate) async fn ensure_managed_fixture_session(
     agent
 }
 
-pub(crate) async fn claimed_signed_request(
+pub async fn claimed_signed_request(
     node: &Arc<EmbeddedNode>,
     request_id: &str,
     session_id: &str,
@@ -492,7 +492,7 @@ pub(crate) async fn claimed_signed_request_create(
 /// already owns. A session created by its Agent is invisible to the unsigned
 /// lookup [`ensure_managed_fixture_session`] performs, so a caller that holds
 /// the owning Agent selects it directly.
-pub(crate) async fn claimed_signed_request_create_as_agent(
+pub async fn claimed_signed_request_create_as_agent(
     node: &Arc<EmbeddedNode>,
     identity: &dyn NodeIdentity,
     agent_identity: &dyn NodeIdentity,

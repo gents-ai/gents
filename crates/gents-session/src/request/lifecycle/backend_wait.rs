@@ -82,7 +82,7 @@ where
         && observed_expiry_ms <= now_ms
 }
 
-pub(crate) async fn repark_expired_resume(
+pub async fn repark_expired_resume(
     access: &gents_store::config_client::ConfigAccess,
     request_doc_id: &str,
     generation: &str,
@@ -125,7 +125,7 @@ pub(crate) async fn repark_expired_resume(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ParkResult {
+pub enum ParkResult {
     Parked,
     AlreadyParked,
     Lost,
@@ -303,7 +303,7 @@ impl BackendWake {
 
 /// The request CAS is permitted only after every provider source owned by this
 /// generation is closed and no foreground tool remains in flight.
-pub(super) async fn park_owned_execution(
+pub async fn park_owned_execution(
     access: &gents_store::config_client::ConfigAccess,
     request_doc_id: &str,
     generation: &str,
@@ -707,7 +707,7 @@ mod tests {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum WakeResult {
+pub enum WakeResult {
     Resumed {
         generation: String,
         claim_cid: String,
@@ -728,7 +728,7 @@ pub(super) enum WakeResult {
 /// A wake is bound to the parked backend and installs a new generation; the
 /// caller supplies measured health for that backend or relies on the stored
 /// fallback deadline.
-pub(super) async fn wake_parked_execution(
+pub async fn wake_parked_execution(
     access: &gents_store::config_client::ConfigAccess,
     request_doc_id: &str,
     backend_id: &str,

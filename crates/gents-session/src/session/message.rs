@@ -22,10 +22,10 @@ mod body;
 pub mod commit;
 mod discovery;
 mod goals;
-mod inspection;
+pub mod inspection;
 mod interrupt;
 pub mod plan;
-mod target;
+pub mod target;
 
 pub use body::{load_configured_task, render_body, render_task_body};
 pub use commit::{
@@ -151,7 +151,7 @@ pub(crate) enum Delivery {
 }
 
 impl Delivery {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Request => "request",
             Self::Queued => "queue",

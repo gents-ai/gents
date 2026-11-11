@@ -351,8 +351,8 @@ async fn client_authority(
     Ok(None)
 }
 
-#[cfg(test)]
-pub(crate) async fn claim(
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn claim(
     node: &Arc<EmbeddedNode>,
     access: &ConfigAccess,
     agent: &identity::Did,
@@ -364,21 +364,21 @@ pub(crate) async fn claim(
         agent,
         doc_id,
         true,
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         None,
     )
     .await
 }
 
-#[cfg(test)]
-pub(crate) struct ClaimPause {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub struct ClaimPause {
     pub observed: tokio::sync::Notify,
     pub resume: tokio::sync::Notify,
     pub armed: std::sync::atomic::AtomicBool,
 }
 
-#[cfg(test)]
-pub(crate) async fn claim_paused(
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn claim_paused(
     node: &Arc<EmbeddedNode>,
     access: &ConfigAccess,
     agent: &identity::Did,
@@ -388,8 +388,8 @@ pub(crate) async fn claim_paused(
     claim_inner(node, access, agent, doc_id, true, Some(pause)).await
 }
 
-#[cfg(test)]
-pub(crate) async fn claim_unavailable(
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn claim_unavailable(
     node: &Arc<EmbeddedNode>,
     access: &ConfigAccess,
     agent: &identity::Did,
@@ -404,7 +404,7 @@ async fn claim_inner(
     agent: &identity::Did,
     doc_id: &str,
     allow_new: bool,
-    #[cfg(test)] pause: Option<&ClaimPause>,
+    #[cfg(any(test, feature = "test-fixtures"))] pause: Option<&ClaimPause>,
 ) -> Result<Option<Intent>> {
     anyhow::ensure!(
         access.actor_did().as_deref() == Some(agent.as_str()),
@@ -527,7 +527,7 @@ async fn claim_inner(
                     return Ok(None);
                 }
                 if authority != Some(true) { return Ok(None); }
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-fixtures"))]
                 if let Some(pause) = pause {
                     if pause.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
                         pause.observed.notify_one();
@@ -558,7 +558,7 @@ async fn claim_inner(
     }).await
 }
 
-pub(crate) async fn recover_claim(
+pub async fn recover_claim(
     access: &ConfigAccess,
     agent: &identity::Did,
     node_did: &str,
@@ -731,7 +731,7 @@ pub async fn apply_claimed(
     })
 }
 
-pub(crate) async fn execute_claimed(
+pub async fn execute_claimed(
     node: &Arc<EmbeddedNode>,
     access: &ConfigAccess,
     executions: &crate::call::hook::BackgroundExecutionRegistry,
@@ -923,7 +923,7 @@ pub async fn run(
                     &agent,
                     id,
                     active.contains(agent.as_str()),
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "test-fixtures"))]
                     None,
                 )
                 .await

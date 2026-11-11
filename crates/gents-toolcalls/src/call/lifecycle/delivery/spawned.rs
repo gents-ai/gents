@@ -90,7 +90,7 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
-    pub(crate) async fn admit_spawned_background(
+    pub async fn admit_spawned_background(
         &mut self,
         admission: crate::call::lifecycle::SpawnedBackgroundToolAdmission,
         receipt: &str,

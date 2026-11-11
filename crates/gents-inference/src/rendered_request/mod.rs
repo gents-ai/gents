@@ -1239,7 +1239,7 @@ where
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn manifest_leaf_entries<R>(
     reader: &R,
     record: encoding::DecodedRecord,

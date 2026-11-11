@@ -528,7 +528,7 @@ async fn background_completion_transaction_attempt(
         );
         return Ok(EnqueuedBackgroundCompletionInput {
             request,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-fixtures"))]
             message_sequence: row.message.sequence,
             created_request: false,
         });
@@ -730,7 +730,7 @@ async fn background_completion_transaction_attempt(
 
     Ok(EnqueuedBackgroundCompletionInput {
         request: Some(request),
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         message_sequence,
         created_request,
     })

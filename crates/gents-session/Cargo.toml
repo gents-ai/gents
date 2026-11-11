@@ -19,6 +19,7 @@ gents-store.workspace = true
 gents-documents.workspace = true
 gents-inference.workspace = true
 gents-p2p.workspace = true
+gents-lean-vocab = { workspace = true, optional = true }
 acp.workspace = true
 schema.workspace = true
 storage.workspace = true

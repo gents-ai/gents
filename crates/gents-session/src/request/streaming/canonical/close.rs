@@ -27,7 +27,7 @@ use super::{
     PartialHeaderFactory, ProviderAttemptClose, ProviderCloseRejection, ProviderPartialCandidate,
 };
 
-pub(in crate::request::streaming) async fn close_provider_attempt_with_signer(
+pub async fn close_provider_attempt_with_signer(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: identity::Did,
     signer: Option<gents_store::identity::ManagedAgentSigner>,

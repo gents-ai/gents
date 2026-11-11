@@ -10,14 +10,14 @@ mod source;
 
 #[cfg(test)]
 pub use append::append_provider_segment_at_with_access;
-pub(super) use append::append_provider_segment_with_signer;
+pub use append::append_provider_segment_with_signer;
 #[cfg(test)]
 pub use close::close_provider_attempt_at_with_access;
-pub(super) use close::close_provider_attempt_with_signer;
+pub use close::close_provider_attempt_with_signer;
 pub(crate) use close::request_headers_in_txn;
 #[cfg(test)]
 pub use publish::publish_provider_turn_at_with_access;
-pub(super) use publish::publish_provider_turn_with_signer;
+pub use publish::publish_provider_turn_with_signer;
 pub(super) use publish::publish_provider_turn_with_time;
 pub(crate) use source::{
     retained_partial_blocks, validate_closed_source_extent, validate_source_physical_identities,

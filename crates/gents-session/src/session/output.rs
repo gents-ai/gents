@@ -44,7 +44,7 @@ pub struct CanonicalReplayScope<'a> {
 
 /// One canonical assistant, retaining physical identity even
 /// when another row happens to reconstruct to equal native bytes.
-pub(crate) struct CanonicalAssistantCandidate {
+pub struct CanonicalAssistantCandidate {
     pub(crate) header_doc_id: String,
     pub(crate) request_doc_id: String,
     #[cfg(test)]
@@ -132,15 +132,15 @@ where
     (output, queries.load(std::sync::atomic::Ordering::Relaxed))
 }
 
-pub(in crate::session) mod access;
+pub mod access;
 mod headers;
-pub(super) mod reader;
+pub mod reader;
 mod reconstruct;
-pub(super) mod replay_candidates;
+pub mod replay_candidates;
 mod replay_capture;
-pub(super) mod replay_request;
-pub(super) mod replay_tags;
-pub(super) mod sequenced;
+pub mod replay_request;
+pub mod replay_tags;
+pub mod sequenced;
 
 #[cfg(test)]
 mod tests;

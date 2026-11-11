@@ -360,7 +360,7 @@ pub async fn cleanup_workspace(
     flush_cleanup_outcome(access, &docs, &outcome).await
 }
 
-pub(super) async fn claim_workspace_cleanup(
+pub async fn claim_workspace_cleanup(
     access: &gents_store::config_client::ConfigAccess,
     workspace_id: &str,
     owner: &str,

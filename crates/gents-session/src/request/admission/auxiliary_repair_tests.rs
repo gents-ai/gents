@@ -6,6 +6,7 @@ use gents_protocol::request_admission::{
 };
 use gents_store::config_client::session_children::ownership::*;
 use gents_store::config_client::{ConfigAccess, NodePermission};
+use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use serde::Deserialize;
 use serde_json::{json, Value};

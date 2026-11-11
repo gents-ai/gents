@@ -6,19 +6,6 @@ async fn fixture(name: &str) -> (TestDb, CanonicalBackgroundFixture) {
     (db, fixture)
 }
 
-fn hints(parent: &AgentRequest) -> RequestQueue {
-    RequestQueue {
-        delivery: Default::default(),
-        position: None,
-        source: QueueSource::BackgroundCompletion,
-        policy: QueuePolicy::Coalesce,
-        key: Some(format!("background_completion:{}", parent.session_id)),
-        queued_after_request_id: Some(parent.request_id.clone()),
-        interrupted_request_id: None,
-        background_completion_wake_version: None,
-    }
-}
-
 async fn message_ids(db: &TestDb, key: &str) -> Vec<String> {
     let key = escape_graphql_string(key);
     let response = db
@@ -86,7 +73,7 @@ async fn canonical_publication_wakes_whatever_goal_owns_the_session() {
             db.agent_identity.as_ref(),
         )
         .unwrap();
-        let goal = crate::goal::set_goal_from_access(
+        let goal = gents_automation::goal::set_goal_from_access(
             &access,
             db.node_did(),
             &parent.session_id,
@@ -114,7 +101,7 @@ async fn canonical_publication_wakes_whatever_goal_owns_the_session() {
         assert_eq!(queue_rows(&db, &parent.session_id).await.len(), 2);
         let after = access
             .transact_readonly("test.goal_wake_after", |txn| {
-                Box::pin(crate::goal::load_canonical_goal_in_txn(
+                Box::pin(gents_automation::goal::load_canonical_goal_in_txn(
                     txn,
                     db.node_did(),
                     &parent.session_id,
@@ -170,5 +157,18 @@ async fn canonical_publication_replay_preserves_one_input_and_one_wake() {
         }
         assert_eq!(messages.first(), first_message.as_ref());
         assert_eq!(queue_rows(&db, &parent.session_id).await.len(), 2);
+    }
+}
+
+fn hints(parent: &AgentRequest) -> RequestQueue {
+    RequestQueue {
+        delivery: Default::default(),
+        position: None,
+        source: QueueSource::BackgroundCompletion,
+        policy: QueuePolicy::Coalesce,
+        key: Some(format!("background_completion:{}", parent.session_id)),
+        queued_after_request_id: Some(parent.request_id.clone()),
+        interrupted_request_id: None,
+        background_completion_wake_version: None,
     }
 }

@@ -141,12 +141,12 @@ pub struct ToolCallLifecycle {
     tool_call_id: String,
     /// Immutable accepted-header provenance used to pair the native result.
     call_id: Option<String>,
-    message_sequence: u32,
+    pub message_sequence: u32,
     tool_name: String,
     kind: ToolRowKind,
     /// Exact accepted assistant header that introduced this physical call.
     accepted_header_doc_id: Option<String>,
-    arguments: Option<gents_protocol::output::PayloadRef>,
+    pub arguments: Option<gents_protocol::output::PayloadRef>,
     execution_generation: Option<String>,
     plugin_receipt: Option<gents_protocol::plugin::PluginExecutionReceipt>,
     /// Data writes a plugin tool returned beside its output; committed with a
@@ -157,7 +157,7 @@ pub struct ToolCallLifecycle {
     spawned_by_tool_call_doc_id: Option<String>,
     plugin_effect: Option<PluginEffectBinding>,
     doc_id: Option<String>,
-    deadline_at: chrono::DateTime<chrono::Utc>,
+    pub deadline_at: chrono::DateTime<chrono::Utc>,
     state: ToolCallState,
     started_at: Option<chrono::DateTime<chrono::Utc>>,
     failure_class: Option<FailureClass>,
@@ -191,7 +191,7 @@ impl ToolCallLifecycle {
         )
     }
 
-    pub(crate) fn inherit_signer(&mut self, source: &Self) -> anyhow::Result<()> {
+    pub fn inherit_signer(&mut self, source: &Self) -> anyhow::Result<()> {
         anyhow::ensure!(
             self.actor == source.actor && self.node_did == source.node_did,
             "reloaded tool actor differs from its original binding"
@@ -215,7 +215,7 @@ impl ToolCallLifecycle {
         Ok(())
     }
     /// Adopt a pending row atomically published with an accepted provider header.
-    pub(crate) fn from_accepted(
+    pub fn from_accepted(
         node: Arc<EmbeddedNode>,
         node_did: String,
         requester_did: Option<String>,
@@ -474,7 +474,7 @@ impl ToolCallLifecycle {
         self.started_at
     }
 
-    pub(crate) fn state(&self) -> ToolCallState {
+    pub fn state(&self) -> ToolCallState {
         self.state
     }
 
@@ -577,8 +577,8 @@ impl ToolCallLifecycle {
         &self.tool_call_id
     }
 
-    #[cfg(test)]
-    pub(crate) fn execution_generation(&self) -> Option<&str> {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn execution_generation(&self) -> Option<&str> {
         self.execution_generation.as_deref()
     }
 
@@ -599,8 +599,8 @@ impl ToolCallLifecycle {
         self.state == ToolCallState::Cancelled
     }
 
-    #[cfg(test)]
-    pub(crate) fn set_state(&mut self, state: ToolCallState) {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn set_state(&mut self, state: ToolCallState) {
         self.state = state;
     }
 

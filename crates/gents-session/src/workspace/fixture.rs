@@ -67,9 +67,9 @@ pub fn git(cwd: &Path, args: &[&str]) -> String {
 }
 
 pub struct Fixture {
-    _root: TempDir,
+    pub _root: TempDir,
     pub repo: PathBuf,
-    base_sha: String,
+    pub base_sha: String,
 }
 
 impl Fixture {

@@ -48,7 +48,7 @@ pub use gents_loop::stream_writer::StreamWriter;
 
 pub struct DefraStreamWriter {
     actor_did: String,
-    agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
+    pub agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
     node: Arc<EmbeddedNode>,
     batch_interval: Duration,
     buffers: Mutex<RapidHashMap<String, StreamBuffer>>,

@@ -63,7 +63,7 @@ where
             ));
         }
         query.push_str(" }");
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         let _ = FIELD_COMMIT_STATEMENTS
             .try_with(|statements| statements.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
         let response = execute(query).await?;
@@ -72,12 +72,12 @@ where
     Ok(commits)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 tokio::task_local! {
     static FIELD_COMMIT_STATEMENTS: std::sync::Arc<std::sync::atomic::AtomicUsize>;
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn count_field_commit_statements<F>(future: F) -> (F::Output, usize)
 where
     F: std::future::Future,

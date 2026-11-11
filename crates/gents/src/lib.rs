@@ -108,3 +108,6 @@ mod tools_tests;
 
 #[cfg(test)]
 mod pack_installation_root_tests;
+
+#[cfg(test)]
+mod session_tests;
