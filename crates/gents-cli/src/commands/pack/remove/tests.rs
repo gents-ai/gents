@@ -26,6 +26,7 @@ async fn install(home: &Path, package: String) -> anyhow::Result<Value> {
         package,
         inference_slots: Vec::new(),
         dependency_variables: Vec::new(),
+        bind_agents: Vec::new(),
         preview: false,
         scope: scope(home),
         output: OutputFormat::Json,
@@ -71,7 +72,7 @@ async fn unconfigured_home_does_not_prove_a_plugin_is_unreferenced() {
     .unwrap_err();
     assert!(matches!(
         error.downcast_ref::<gents::pack::PackRemovalError>(),
-        Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)
+        Some(gents::pack::PackRemovalError::NodeUnobserved)
     ));
 }
 
@@ -414,7 +415,7 @@ fn plugin_pack_dir(
 }
 
 #[tokio::test]
-async fn a_plugins_pack_keeps_records_and_bytes_without_complete_inventory() {
+async fn a_plugins_pack_keeps_records_and_bytes_on_a_home_with_no_node() {
     let home = tempfile::tempdir().unwrap();
     let afb = crate::commands::plugin::testing::build_plugin_afb(
         "shared",
@@ -439,7 +440,7 @@ async fn a_plugins_pack_keeps_records_and_bytes_without_complete_inventory() {
         let error = remove_pkg(home.path(), coordinate).await.unwrap_err();
         assert!(matches!(
             error.downcast_ref::<gents::pack::PackRemovalError>(),
-            Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)
+            Some(gents::pack::PackRemovalError::NodeUnobserved)
         ));
         assert!(gents::pack::read_home_install(home.path(), coordinate)
             .unwrap()
@@ -614,6 +615,8 @@ async fn referenced_plugin_removal_refuses_before_changing_pack_or_store_records
             targets_from: Vec::new(),
             remove: false,
             preview: false,
+            dynamic_consent: false,
+            tool_calls_consent: false,
         };
         crate::commands::pack::wire::wire_in(&access, &owner, home.path(), &request)
             .await
@@ -666,12 +669,9 @@ async fn referenced_plugin_removal_refuses_before_changing_pack_or_store_records
             .await
             .expect("node shutdown");
         drop(access);
-        let error = remove_pkg(home.path(), "acme/tools").await.unwrap_err();
-        assert!(matches!(
-            error.downcast_ref::<gents::pack::PackRemovalError>(),
-            Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)
-        ));
-        assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_ok());
+        // Once nothing selects the plugin, the removal retires it.
+        remove_pkg(home.path(), "acme/tools").await.unwrap();
+        assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_err());
     }
 }
 
@@ -716,6 +716,8 @@ async fn wiring_holds_store_lock_through_pin_commit() {
                 targets_from: Vec::new(),
                 remove: false,
                 preview: false,
+                dynamic_consent: false,
+                tool_calls_consent: false,
             };
             super::super::wire::wire_in(&access, &owner, &path, &request).await
         }
@@ -732,6 +734,7 @@ async fn wiring_holds_store_lock_through_pin_commit() {
         false,
         Some(&owner),
         &std::collections::BTreeMap::new(),
+        gents::pack::InstalledVia::Operator,
         gents::pack::PackSource::Local { file_name: None },
         move |identity, _| async move {
             gents::pack::record_plugin_store_change(
@@ -889,6 +892,8 @@ async fn remote_wire_refuses_new_pin_before_http_access_but_allows_preview_and_r
             targets_from: vec![],
             remove,
             preview,
+            dynamic_consent: false,
+            tool_calls_consent: false,
         };
         let error = super::super::wire::wire_in(&access, "did:key:remote", home.path(), &request)
             .await
@@ -960,6 +965,8 @@ async fn wire_refuses_even_the_initialized_homes_served_endpoint() {
         targets_from: vec![],
         remove: false,
         preview: false,
+        dynamic_consent: false,
+        tool_calls_consent: false,
     };
     let error = super::super::wire::wire_in(&access, &init.node_did, home.path(), &request)
         .await
@@ -996,6 +1003,8 @@ async fn removal_holds_plugin_lock_after_reference_check_until_deletion() {
             targets_from: vec![],
             remove: false,
             preview: false,
+            dynamic_consent: false,
+            tool_calls_consent: false,
         };
         let wired = super::super::wire::wire_in(&access, &owner, home.path(), &request).await;
         access
@@ -1022,13 +1031,9 @@ async fn removal_holds_plugin_lock_after_reference_check_until_deletion() {
     assert_eq!(result.is_ok(), allowed, "{result:?}");
     assert!(format!("{:#}", result.unwrap_err()).contains("plugin store is busy"));
     pause.release.notify_one();
-    let error = remover.await.unwrap().unwrap_err();
-    assert!(matches!(
-        error.downcast_ref::<gents::pack::PackRemovalError>(),
-        Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)
-    ));
+    remover.await.unwrap().unwrap();
     *super::REMOVAL_TEST_PAUSE.lock().unwrap() = None;
-    assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_ok());
+    assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_err());
 }
 
 #[tokio::test]
@@ -1040,12 +1045,8 @@ async fn delegated_home_removal_uses_the_existing_store_guard() {
         .await
         .unwrap();
     let guard = gents::plugin::store::try_lock_store(home.path()).unwrap();
-    let error = super::remove_home_install_with_guard(home.path(), "acme/tools", guard)
+    super::remove_home_install_with_guard(home.path(), "acme/tools", guard)
         .await
-        .unwrap_err();
-    assert!(matches!(
-        error.downcast_ref::<gents::pack::PackRemovalError>(),
-        Some(gents::pack::PackRemovalError::ReferenceInventoryUnavailable)
-    ));
-    assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_ok());
+        .unwrap();
+    assert!(gents::plugin::store::read_record(home.path(), "acme", "shared").is_err());
 }

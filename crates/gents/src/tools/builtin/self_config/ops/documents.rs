@@ -225,6 +225,11 @@ pub(super) async fn candidate_doc(
 /// already holds the value it sent, and a prompt echoed in full costs its
 /// size again in the model's context.
 const RECEIPT_TEXT_LIMIT: usize = 2048;
+/// A structured `to` value longer than this is summarized the same way: it is
+/// what the caller just sent, and `RESOURCE get` reads the saved document.
+/// `from` stays whole, because the receipt is the only place the replaced
+/// value is still readable.
+const RECEIPT_ECHO_LIMIT: usize = 256;
 
 pub(super) fn safe_diff(
     target: SelfConfigTarget,
@@ -240,6 +245,15 @@ pub(super) fn safe_diff(
             {
                 use sha2::{Digest, Sha256};
                 *value = json!({"chars": text.chars().count(), "sha256": format!("{:x}", Sha256::digest(text))});
+            }
+        }
+    }
+    for delta in &mut deltas {
+        if delta.to.is_object() || delta.to.is_array() {
+            let echoed = delta.to.to_string();
+            if echoed.len() > RECEIPT_ECHO_LIMIT {
+                use sha2::{Digest, Sha256};
+                delta.to = json!({"chars": echoed.chars().count(), "sha256": format!("{:x}", Sha256::digest(&echoed))});
             }
         }
     }

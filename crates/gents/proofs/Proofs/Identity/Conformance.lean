@@ -1842,7 +1842,7 @@ def json : Json := Json.mkObj
    ("policy_registrations", toJson ([] : List Json)),
    ("self_config_actions", toJson ([] : List Json)),
    ("self_config_lookup_cases", toJson ([] : List Json)),
-   ("configuration_signed_create_collections", toJson (["Node", "Agent", "AgentContext", "CompactionConfig", "Skill", "DatastoreToolSurface", "Tools", "AgentTarget", "InferenceBackend", "InferenceBackendMetadata", "InferenceProfile", "InferenceSampling", "InferenceExecution", "InferenceRetryPolicy", "ToolServiceRegistry", "ProjectionAcpBinding", "Task", "Schedule", "EventSource", "Trigger", "Callback", "CallbackBinding", "CallbackModule", "RepositoryPlacement", "EvalDefinition", "NotBundled"].map fun collection =>
+   ("configuration_signed_create_collections", toJson (["Node", "Agent", "AgentContext", "CompactionConfig", "Skill", "DatastoreToolSurface", "Tools", "AgentTarget", "InferenceBackend", "InferenceBackendMetadata", "InferenceProfile", "InferenceSampling", "InferenceExecution", "InferenceRetryPolicy", "ToolServiceRegistry", "ProjectionAcpBinding", "Task", "Schedule", "EventSource", "Trigger", "Callback", "CallbackBinding", "CallbackModule", "RepositoryPlacement", "EvalDefinition", "Page", "PluginSource", "NotBundled"].map fun collection =>
       Json.mkObj [("collection", toJson collection),
         ("supported", toJson (Configuration.clientSignedCreateCollection collection)),
         ("update_supported", toJson (Configuration.clientSignedUpdateSupported collection))])),

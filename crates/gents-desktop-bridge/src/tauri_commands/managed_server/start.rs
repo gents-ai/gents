@@ -173,6 +173,7 @@ where
                 tool_ceiling: runtime_tool_ceiling(authority.tool_ceiling),
                 tool_root: authority.tool_root.clone(),
                 store_key_custody: state.policy.store_key_custody,
+                default_packs: true,
             },
         )
         .await?;

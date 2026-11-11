@@ -528,10 +528,13 @@ impl DefraSessionHook {
             }
             Err(error) => {
                 if let crate::session::message::CommitError::Other(ref error) = error {
-                    if let Some(capacity) = error.downcast_ref::<BackgroundCapacityExceeded>() {
+                    if let Some(capacity) = error
+                        .downcast_ref::<BackgroundSlotRefusal>()
+                        .and_then(BackgroundSlotRefusal::capacity)
+                    {
                         refuse!(
                             FailureClass::ServiceUnavailable,
-                            background_budget_exceeded_payload(tool_name, capacity.0)
+                            background_budget_exceeded_payload(tool_name, capacity)
                         );
                     }
                 }

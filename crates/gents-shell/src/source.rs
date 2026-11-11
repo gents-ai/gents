@@ -507,6 +507,9 @@ pub enum Connection {
     Sample,
     Connecting,
     Ready,
+    /// The runtime answers and none of its agents can run: why, in one line. The menus work,
+    /// and a message has no agent to go to until `Agents` and `Ready` follow.
+    NoAgent(String),
     Lost(String),
 }
 

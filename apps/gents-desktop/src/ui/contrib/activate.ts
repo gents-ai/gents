@@ -8,6 +8,7 @@ import { createUxContext, type GentsUxPlugin } from "./plugin";
 import {
   patchUxPlugin,
   publishUxPlugin,
+  uxDecisionKey,
   uxPluginActive,
   type UxDeclaredContributions,
   type UxPluginDoor,
@@ -24,14 +25,24 @@ export interface ActivateOptions {
   declared?: UxDeclaredContributions;
   /** a root-level cap: false ships the plugin opt-in whatever it says */
   defaultEnabled?: boolean;
+  /** what its choice and storage are kept under, for a page document */
+  scope?: string;
 }
 
 /** What a plugin's notification switches are kept under: a pack plugin's
     listing (`<ns>/<pack>/<id>`), so a plugin of the same id from another
     pack or folder never inherits the person's choice; otherwise its door
-    and id. */
-export function notifierKey(record: { id: string; door: UxPluginDoor; pack?: string }) {
-  return record.pack ? `${record.pack}/${record.id}` : `${record.door}:${record.id}`;
+    and id, or for a page document its door and scope, since its id names
+    it only within its node. */
+export function notifierKey(record: {
+  id: string;
+  door: UxPluginDoor;
+  pack?: string;
+  scope?: string;
+}) {
+  return record.pack
+    ? `${record.pack}/${record.id}`
+    : `${record.door}:${record.scope ?? record.id}`;
 }
 
 /** live plugins: id -> the disposers of the current incarnation */
@@ -71,6 +82,7 @@ export function activateUxPlugin(
     pack: options.pack,
     declared: options.declared,
     notifications: plugin.notifications,
+    scope: options.scope,
   };
 
   const fail = (error: unknown) => {
@@ -104,6 +116,7 @@ export function activateUxPlugin(
           notifier: notifierKey(record),
           notifications: plugin.notifications,
           pack: record.pack,
+          storage: options.scope,
         }),
       );
     } catch (error) {
@@ -132,7 +145,7 @@ export function activateUxPlugin(
   publishUxPlugin({ ...record, status: "disabled" }, { activate, deactivate });
   if (
     uxPluginActive(
-      plugin.id,
+      uxDecisionKey(record),
       (plugin.defaultEnabled ?? true) && (options.defaultEnabled ?? true),
     )
   ) {

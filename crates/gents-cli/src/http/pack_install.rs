@@ -73,6 +73,10 @@ struct InstallRequest {
     dependency_sources: Vec<gents::pack::PackSource>,
     inference_slots: Vec<String>,
     dependency_variables: Vec<String>,
+    /// `SLOT=AGENT_DID`: the agent slots this install binds to existing
+    /// agents. The serving runtime's environment never binds one.
+    #[serde(default)]
+    bind_agents: Vec<String>,
     overwrite: bool,
     keep: bool,
     preview: bool,
@@ -189,6 +193,7 @@ pub(crate) async fn encode_install_request(
     let node_did = owner.to_owned();
     let inference_slots = args.inference_slots.clone();
     let dependency_variables = args.dependency_variables.clone();
+    let bind_agents = args.bind_agents.clone();
     let wire = args.wire.clone();
     let (overwrite, keep, preview, force_rebind, grant_authority) = (
         args.drift.overwrite,
@@ -206,6 +211,7 @@ pub(crate) async fn encode_install_request(
             dependency_sources,
             inference_slots,
             dependency_variables,
+            bind_agents,
             overwrite,
             keep,
             preview,
@@ -416,6 +422,7 @@ async fn install_owned(
         package: root.manifest().name.clone(),
         inference_slots: request.inference_slots,
         dependency_variables: request.dependency_variables,
+        bind_agents: request.bind_agents,
         preview: request.preview,
         scope: ScopeArgs {
             home: Some(home.clone()),

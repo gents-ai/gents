@@ -12,6 +12,8 @@ pub(crate) struct ScaffoldReport {
     pub(crate) template: PackTemplate,
     pub(crate) dir: PathBuf,
     pub(crate) files: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) renamed_from: Option<String>,
 }
 
 fn shared_template(template: PackTemplate) -> gents::pack::authoring::Template {
@@ -35,7 +37,7 @@ fn shared_kind(kind: Option<PackKindArg>) -> Option<gents::pack::authoring::Kind
 }
 
 pub(crate) fn new(args: PackNewArgs) -> Result<()> {
-    let dir = PathBuf::from(&args.name);
+    let dir = PathBuf::from(gents::pack::authoring::pack_name(&args.name));
     if dir.exists() {
         anyhow::ensure!(
             std::fs::read_dir(&dir)?.next().is_none(),
@@ -85,19 +87,8 @@ pub(crate) fn scaffold(dir: &Path, name: &str, args: &PackScaffoldArgs) -> Resul
         template,
         dir: report.dir,
         files: report.files,
+        renamed_from: report.renamed_from,
     })
-}
-
-pub(crate) fn tool_markdown(name: &str) -> (String, String) {
-    gents::pack::authoring::tool_markdown(name)
-}
-
-pub(crate) fn write_plugin_source(
-    source: &Path,
-    name: &str,
-    language: Option<&str>,
-) -> Result<String> {
-    gents::pack::authoring::write_plugin_source(source, name, language)
 }
 
 #[cfg(test)]

@@ -136,6 +136,8 @@ inductive RequestProgressIndicator where
   | queued
   | claimed
   | working
+  | waitingForBackend
+  | resumingBackend
   | completed
   | failed
   | superseded
@@ -148,6 +150,8 @@ def projectRequestProgress : RequestState → RequestProgressIndicator
   | .pending       => .queued
   | .claimed       => .claimed
   | .processing    => .working
+  | .waitingForBackend => .waitingForBackend
+  | .resumingBackend => .resumingBackend
   | .completed     => .completed
   | .failed        => .failed
   | .superseded    => .superseded
@@ -158,6 +162,8 @@ def RequestProgressIndicator.label : RequestProgressIndicator → String
   | .queued          => "Queued"
   | .claimed         => "Claimed"
   | .working         => "Working"
+  | .waitingForBackend => "Waiting for provider"
+  | .resumingBackend => "Reconnecting to provider"
   | .completed       => "Completed"
   | .failed          => "Failed"
   | .superseded      => "Superseded"
@@ -165,7 +171,7 @@ def RequestProgressIndicator.label : RequestProgressIndicator → String
   | .interrupted     => "Stopped"
 
 def RequestProgressIndicator.animated : RequestProgressIndicator → Bool
-  | .queued | .claimed | .working => true
+  | .queued | .claimed | .working | .waitingForBackend | .resumingBackend => true
   | _ => false
 
 theorem projectRequestProgress_active_animated (state : RequestState)

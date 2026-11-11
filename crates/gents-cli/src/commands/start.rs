@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use clap::CommandFactory as _;
 use gents::store::config_client::GraphqlEndpoint;
+use gents::store::local::storage_backend::{IncompatibleStore, IncompatibleStoreKind};
 use tokio::runtime::Handle;
 
 use crate::cli::args::{ShellArgs, StoreKeyCustodyArg};
@@ -12,13 +13,18 @@ use crate::cli::Cli;
 use crate::config_writes::ConfigAccess;
 use crate::graphql_access::graphql_endpoint_available;
 use crate::home_state::{read_finished_init_config, read_runtime_state, resolve_home_dir};
-use crate::native_service::{NativeServiceConfig, NativeServiceManager, NativeServicePlatform};
+use crate::native_service::{
+    NativeServiceConfig, NativeServiceManager, NativeServicePlatform, ServiceExit,
+};
 use crate::shared::StoredInitConfig;
-use gents_protocol::node_readiness::{AgentReadinessState, NodeReadinessSnapshot};
+use gents_protocol::node_readiness::{
+    AgentReadinessState, AgentReadinessUnavailableReason, NodeReadinessSnapshot,
+};
 
 mod setup;
 mod yolo;
 
+pub(crate) use yolo::default_agent;
 pub(crate) use yolo::node_readiness;
 
 const ENDPOINT_WAIT: Duration = Duration::from_secs(60);
@@ -56,14 +62,7 @@ pub(crate) async fn run(mut args: StartArgs, runtime: Handle) -> Result<()> {
         );
         let graphql = ensure_graphql(&home).await?;
         let agent = chosen_agent(&home, &config, &args).await?;
-        ensure_an_agent_can_run(
-            &graphql,
-            &home,
-            &config.node_did,
-            agent.is_some(),
-            PUBLISH_WAIT,
-        )
-        .await?;
+        wait_for_its_agent(&graphql, &config.node_did, agent.as_deref(), PUBLISH_WAIT).await;
         let shown =
             crate::commands::shell::open(&home, agent, args.prompt, args.continue_session, runtime)
                 .await?;
@@ -167,7 +166,7 @@ async fn session_agent(graphql: &GraphqlEndpoint, node_did: &str, session: &str)
 pub(crate) async fn shell(args: ShellArgs, runtime: Handle) -> Result<()> {
     let (home, config) = ready_home(args.home, args.store_key_custody, true).await?;
     let graphql = ensure_graphql(&home).await?;
-    ensure_an_agent_can_run(&graphql, &home, &config.node_did, false, PUBLISH_WAIT).await?;
+    wait_for_its_agent(&graphql, &config.node_did, None, PUBLISH_WAIT).await;
     let shown = crate::commands::shell::open(&home, None, None, None, runtime).await?;
     if let Some(hint) = continue_hint(shown.as_deref(), None) {
         eprintln!("{hint}");
@@ -204,7 +203,41 @@ async fn ensure_graphql(home: &Path) -> Result<GraphqlEndpoint> {
         return Ok(graphql);
     }
     start_service(home).await?;
-    wait_for_graphql(home).await
+    or_store_refusal(home, wait_for_graphql(home).await).await
+}
+
+/// A service that refuses to open its home's store says why only in its own log and exits
+/// with the refusal's status. A wait that ran out on such a home reports that refusal, typed,
+/// so this process prints it and exits as the service did.
+async fn or_store_refusal<T>(home: &Path, waited: Result<T>) -> Result<T> {
+    match waited {
+        Ok(value) => Ok(value),
+        Err(error) => Err(match service_store_refusal(home).await {
+            Some(store) => anyhow::Error::new(store),
+            None => error,
+        }),
+    }
+}
+
+async fn service_store_refusal(home: &Path) -> Option<IncompatibleStore> {
+    let service_home = home.to_path_buf();
+    let exit = tokio::task::spawn_blocking(move || -> Result<Option<ServiceExit>> {
+        let executable = std::env::current_exe().context("resolving the gents executable")?;
+        NativeServiceManager::new(NativeServiceConfig::new(service_home, executable)?)?.last_exit()
+    })
+    .await
+    .ok()?
+    .ok()??;
+    store_refusal(home, &exit)
+}
+
+fn store_refusal(home: &Path, exit: &ServiceExit) -> Option<IncompatibleStore> {
+    let kind = exit.refused_store()?;
+    let data_path = match kind {
+        IncompatibleStoreKind::InsecureKey => home.join("keys"),
+        _ => gents::store::local::home::default_data_dir(home),
+    };
+    Some(IncompatibleStore { kind, data_path })
 }
 
 /// A runtime records where its GraphQL answers once it serves, and nothing tells another
@@ -263,55 +296,51 @@ async fn start_service(home: &Path) -> Result<()> {
 
 /// Only the NodeReadiness document a runtime publishes tells another process which agents it
 /// can run, and it lands a little after GraphQL answers, so this bounded wait reads it again.
-/// A read that fails is left for the shell to report.
-async fn ensure_an_agent_can_run(
+/// The shell opens either way: with no agent that can run it opens on Setup, which connects a
+/// model, and it reports a read that fails.
+async fn wait_for_its_agent(
     graphql: &GraphqlEndpoint,
-    home: &Path,
     node_did: &str,
-    agent_given: bool,
+    agent: Option<&str>,
     wait: Duration,
-) -> Result<()> {
+) {
     let access = ConfigAccess::Graphql(graphql.clone());
     let deadline = Instant::now() + wait;
     loop {
         let Ok(snapshot) = yolo::node_readiness(&access, node_did).await else {
-            return Ok(());
+            return;
         };
-        match cannot_open(snapshot.as_ref(), agent_given, home) {
-            None => return Ok(()),
-            Some(refusal) if Instant::now() >= deadline => bail!("{refusal}"),
-            Some(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+        if can_run(snapshot.as_ref(), agent) || Instant::now() >= deadline {
+            return;
         }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
-/// Plain `gents` opens the default agent, so that one has to be ready. The shell checks an
-/// agent named with `--agent` itself, so here only an empty set stops it.
-fn cannot_open(
-    snapshot: Option<&NodeReadinessSnapshot>,
-    agent_given: bool,
-    home: &Path,
-) -> Option<String> {
-    let ready = |agent: Option<&str>| {
-        snapshot.is_some_and(|snapshot| {
-            snapshot.agents.iter().any(|entry| {
-                entry.state == AgentReadinessState::Ready
-                    && agent.is_none_or(|agent| entry.agent_did == agent)
-            })
-        })
-    };
-    let what = match snapshot {
-        _ if !ready(None) => "no agent can run yet on this home's runtime".to_string(),
-        Some(snapshot) if !agent_given && !ready(Some(&snapshot.default_agent_did)) => format!(
-            "this home's default agent {:?} cannot run yet, though `gents --agent <id>` can open another (see `gents config agent list`)",
-            snapshot.default_agent_did
-        ),
-        _ => return None,
-    };
-    let home = crate::shell_word(home);
-    Some(format!(
-        "{what}. Check `gents status --home {home}`. If its model cannot be reached, start the model, or change its address with `gents config backend set --file <backend.json> --home {home}` (`gents config backend list --home {home}` names the backend to `show`)."
-    ))
+/// Whether the agent a tab opens on is ready: the one `--agent` names, else the default.
+fn can_run(snapshot: Option<&NodeReadinessSnapshot>, agent: Option<&str>) -> bool {
+    snapshot.is_some_and(|snapshot| {
+        let agent = agent.unwrap_or(&snapshot.default_agent_did);
+        snapshot
+            .agents
+            .iter()
+            .any(|entry| entry.state == AgentReadinessState::Ready && entry.agent_did == agent)
+    })
+}
+
+/// The reasons an agent cannot run that connecting a model clears, which the shell's Setup
+/// and Accounts menu do.
+pub(crate) fn wants_a_model(reason: AgentReadinessUnavailableReason) -> bool {
+    use AgentReadinessUnavailableReason as Reason;
+    matches!(
+        reason,
+        Reason::BackendNotConfigured
+            | Reason::BackendDisabled
+            | Reason::BackendTemporarilyUnavailable
+            | Reason::CredentialsRequired
+            | Reason::SubscriptionNotEntitled
+            | Reason::InferenceProfileInvalid
+    )
 }
 
 fn no_service_manager_message(home: &Path) -> String {
@@ -345,6 +374,40 @@ mod tests {
     }
 
     #[test]
+    fn a_service_that_exited_refusing_the_store_is_reported_as_that_refusal() {
+        let home = Path::new("/srv/home");
+        let exit = |code| ServiceExit {
+            reason: format!("exited with code {code}"),
+            restarts: 0,
+            clean: false,
+            code: Some(code),
+        };
+
+        let older = store_refusal(
+            home,
+            &exit(crate::native_service::INCOMPATIBLE_STORE_EXIT_CODE),
+        )
+        .expect("an older home");
+        assert_eq!(older.kind, IncompatibleStoreKind::UnknownLineage);
+        assert_eq!(
+            older.data_path,
+            gents::store::local::home::default_data_dir(home)
+        );
+        let error = anyhow::Error::new(older.clone());
+        assert_eq!(
+            gents::store::local::storage_backend::incompatible_store(error.as_ref(), Path::new("")),
+            Some(older)
+        );
+
+        let key = store_refusal(home, &exit(crate::native_service::INSECURE_KEY_EXIT_CODE))
+            .expect("an unsafe key");
+        assert_eq!(key.kind, IncompatibleStoreKind::InsecureKey);
+        assert_eq!(key.data_path, home.join("keys"));
+
+        assert_eq!(store_refusal(home, &exit(1)), None);
+    }
+
+    #[test]
     fn printed_commands_quote_a_home_with_spaces() {
         let home = Path::new("/srv/my home");
         for (message, command) in [
@@ -353,8 +416,8 @@ mod tests {
                 "gents runtime server --home '/srv/my home'",
             ),
             (
-                cannot_open(None, false, home).unwrap(),
-                "gents status --home '/srv/my home'",
+                ignored_client_setting_notice(&home.join("client.json")),
+                "'/srv/my home/client.json'",
             ),
         ] {
             assert!(message.contains(command), "{message}");
@@ -362,36 +425,33 @@ mod tests {
     }
 
     #[test]
-    fn no_ready_agent_names_gents_status_then_the_backend() {
-        let home = Path::new("/srv/home");
-        for snapshot in [None, Some(readiness("a", &[]))] {
-            for agent_given in [false, true] {
-                let error =
-                    cannot_open(snapshot.as_ref(), agent_given, home).expect("nothing is ready");
-                assert!(error.contains("no agent can run"), "{error}");
-                let status = error.find("gents status --home /srv/home").expect(&error);
-                let backend = error
-                    .find("gents config backend set --file <backend.json> --home /srv/home")
-                    .expect(&error);
-                assert!(status < backend, "{error}");
-            }
+    fn the_wait_ends_once_the_agent_a_tab_opens_on_is_ready() {
+        for agent in [None, Some("a")] {
+            assert!(!can_run(None, agent));
+            assert!(!can_run(Some(&readiness("a", &[])), agent));
+            assert!(!can_run(Some(&readiness("a", &["other"])), agent));
+            assert!(can_run(Some(&readiness("a", &["a"])), agent));
         }
+        assert!(can_run(Some(&readiness("a", &["other"])), Some("other")));
     }
 
     #[test]
-    fn the_default_agent_has_to_be_ready_when_no_agent_is_named() {
-        let home = Path::new("/srv/home");
-        let other = readiness("a", &["other"]);
-
-        let error = cannot_open(Some(&other), false, home).expect("only another agent is ready");
-
-        assert!(error.contains(r#"default agent "a""#), "{error}");
-        assert!(error.contains("gents --agent"), "{error}");
-        assert!(error.contains("gents status --home /srv/home"), "{error}");
-        assert_eq!(cannot_open(Some(&other), true, home), None);
+    fn the_reasons_a_model_clears_are_the_inference_ones() {
+        use AgentReadinessUnavailableReason as Reason;
+        let wanted: Vec<_> = Reason::ALL
+            .into_iter()
+            .filter(|r| wants_a_model(*r))
+            .collect();
         assert_eq!(
-            cannot_open(Some(&readiness("a", &["a"])), false, home),
-            None
+            wanted,
+            [
+                Reason::BackendNotConfigured,
+                Reason::BackendDisabled,
+                Reason::BackendTemporarilyUnavailable,
+                Reason::CredentialsRequired,
+                Reason::SubscriptionNotEntitled,
+                Reason::InferenceProfileInvalid,
+            ]
         );
     }
 

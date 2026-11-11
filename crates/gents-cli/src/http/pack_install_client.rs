@@ -439,6 +439,7 @@ pub(crate) async fn install_remote(
     let access = gents::store::config_client::ConfigAccess::Graphql(endpoint.clone());
     let requested = crate::commands::pack::parse_inference_slot_bindings(&args.inference_slots)?;
     let overrides = crate::commands::pack::parse_dependency_variables(&args.dependency_variables)?;
+    let provided = crate::commands::pack::parse_agent_bindings(&args.bind_agents)?;
     let mut prepared = gents::pack::prepare_hosted_document_pack_archive(
         &access,
         owner,
@@ -448,7 +449,7 @@ pub(crate) async fn install_remote(
             .iter()
             .map(crate::commands::pack::PackSource::archive)
             .collect::<Vec<_>>(),
-        &|name| std::env::var(name).ok(),
+        &gents::pack::install_variables(&provided),
         &preparation,
         &overrides,
     )

@@ -58,6 +58,7 @@ fn admitted() -> (ToolLifecycleObservation, TimelineMessageRow) {
         ToolLifecycleObservation {
             row,
             spawned_by_tool_call_doc_id: None,
+            plugin_parent_tool_call_doc_id: None,
         },
         TimelineMessageRow::from_canonical("header-physical".into(), header, native),
     )

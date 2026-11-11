@@ -105,6 +105,14 @@ pub(crate) fn include_existing_by_version(
             r#"[{"op":"add","path":"/PackInstallation/Fields/-","value":{"Name":"source","Kind":"JSON"}},{"op":"add","path":"/PackInstallation/Fields/-","value":{"Name":"source_history","Kind":"JSON"}},{"op":"add","path":"/PackInstallation/Fields/-","value":{"Name":"variables","Kind":"JSON"}}]"#,
             &["source", "source_history", "variables"][..],
         ),
+        (
+            "Trigger",
+            "bafyreiez56udcss6hqfibh4j5fxfhbac7wp63y7pfz77vwvqz2fqrt5f74",
+            "bafyreicvfje3ivdjbxuxd6gbne5skoruiws3hm2vz5pngehfhsr4so4nuq",
+            "trigger-add-session-creation-and-fire-budget",
+            r#"[{"op":"add","path":"/Trigger/Fields/-","value":{"Name":"create_session","Kind":"Boolean"}},{"op":"add","path":"/Trigger/Fields/-","value":{"Name":"max_fires_per_hour","Kind":"Int"}}]"#,
+            &["create_session", "max_fires_per_hour"][..],
+        ),
     ] {
         let Some(current) = get_version(name)? else {
             continue;

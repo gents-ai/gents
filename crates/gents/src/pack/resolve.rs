@@ -57,6 +57,17 @@ pub struct ResolvedNamedPack {
     pub from: ResolvedFrom,
 }
 
+impl ResolvedNamedPack {
+    /// A pack opened by path or digest: opening admits it to the home's
+    /// store, so that is where it resolves from.
+    pub fn stored(archive: PackArchive) -> Self {
+        Self {
+            archive,
+            from: ResolvedFrom::Store,
+        }
+    }
+}
+
 pub struct ResolveOptions<'a> {
     pub home: Option<&'a Path>,
     pub registry_url: String,

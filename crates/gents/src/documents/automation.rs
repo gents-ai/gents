@@ -33,6 +33,8 @@ impl ResolvedTask {
 #[derive(Debug, Clone)]
 pub struct ResolvedSchedule {
     pub session_id_template: Option<String>,
+    pub create_session: bool,
+    pub max_fires_per_hour: u32,
     pub trigger_doc_id: String,
     pub schedule_doc_id: String,
     pub schedule_id: String,
@@ -60,6 +62,8 @@ pub struct ResolvedEventTrigger {
     pub event_source_doc_id: String,
     pub task_doc_id: String,
     pub session_id_template: Option<String>,
+    pub create_session: bool,
+    pub max_fires_per_hour: u32,
     pub trigger_doc_id: String,
     pub trigger_id: String,
     #[allow(dead_code)]

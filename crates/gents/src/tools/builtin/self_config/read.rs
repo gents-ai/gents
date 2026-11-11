@@ -27,7 +27,6 @@ pub(super) fn execution_settings(document: Option<&Value>) -> Result<Value> {
         "provider_idle_timeout_secs": execution.provider_idle_timeout_secs.unwrap_or(DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS as i64),
         "deadline_duration_secs": execution.deadline_duration_secs.unwrap_or(DEFAULT_DEADLINE_DURATION_SECS as i64),
         "retry_policy_id": execution.retry_policy_id,
-        "meaning": "Unset fields use the defaults shown. deadline_duration_secs caps elapsed time per request, including model and tool work; provider_idle_timeout_secs caps provider silence. max_total_tokens null means unlimited; retry_policy_id null uses the request-origin retry policy. stream_batch_ms batches persistence; stream_liveness_timeout_secs is the renewed execution lease, independent of provider output."
     }))
 }
 

@@ -131,12 +131,6 @@ pub(super) async fn agent_list(
         "available_profile_ids": catalog.published_profiles,
         "default_agent_did": default_agent_did,
         "agents": agents,
-        "activation": {
-            "durable_config": "after the admitted transaction commits",
-            "running_generation": "after the runtime reconciler generation swap",
-            "session": "select the agent in a new session; existing sessions remain bound to their original agent",
-            "pairing_and_restart": "canonical documents replicate to authorized paired clients and are reloaded after restart",
-        },
     });
     serde_json::to_string_pretty(&snapshot).map_err(|error| anyhow!("serialize catalog: {error}"))
 }

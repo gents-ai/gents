@@ -9,6 +9,7 @@ theorem accountOneOwnedTool_preserves_nextSeq
   unfold accountOneOwnedTool
   split <;> try rfl
   split <;> try rfl
+  split <;> try rfl
   split <;> rfl
 
 private theorem accountFold_preserves_frame

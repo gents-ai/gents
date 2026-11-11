@@ -97,19 +97,16 @@ mod no_model {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[ignore = "drives real launchd and a PTY; run through `make live-onboarding`"]
-    async fn a_home_with_no_runnable_agent_says_so_and_opens_nothing() -> Result<()> {
+    async fn a_home_with_no_runnable_agent_opens_the_shell_to_connect_a_model() -> Result<()> {
         let live = LiveBox::new()?;
         let home = live.init_home("home", NO_MODEL_ENDPOINT, NO_MODEL_NAME)?;
 
         let mut terminal = Terminal::spawn(&live.bare_gents(&home.home), &live.log("no-agent"))?;
 
-        terminal.expect("no agent can run", RUNTIME_UP).await?;
-        terminal.expect("gents status", EXIT).await?;
-        terminal.expect("gents config backend set", EXIT).await?;
-        terminal.expect_exit(1).await?;
+        terminal.quit_shell().await?;
         ensure!(
-            !terminal.transcript().contains(SHELL_UP),
-            "nothing may open: {}",
+            !terminal.transcript().contains("gents config backend set"),
+            "the shell connects a model, not a file: {}",
             terminal.transcript()
         );
         Ok(())
@@ -402,8 +399,8 @@ mod no_model {
         terminal
             .answer_root_and_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
             .await?;
-        terminal.expect("no agent can run", RUNTIME_UP).await?;
-        terminal.expect_exit(1).await?;
+        // With no model that answers, the shell opens on Setup, which connects one.
+        terminal.quit_shell().await?;
         assert_eq!(
             read_json_file(&folder.join("init.json"))?["tool_root"],
             json!(live.root.join(WORK_FOLDER).to_string_lossy())
@@ -426,8 +423,8 @@ mod no_model {
         terminal
             .answer_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
             .await?;
-        terminal.expect("no agent can run", RUNTIME_UP).await?;
-        terminal.expect_exit(1).await?;
+        // With no model that answers, the shell opens on Setup, which connects one.
+        terminal.quit_shell().await?;
         assert_eq!(
             read_json_file(&folder.join("init.json"))?["tool_root"],
             json!(live.root.to_string_lossy())
@@ -451,8 +448,8 @@ mod no_model {
             .answer("Server base URL", NO_MODEL_ENDPOINT)
             .await?;
         terminal.answer("Model", NO_MODEL_NAME).await?;
-        terminal.expect("no agent can run", RUNTIME_UP).await?;
-        terminal.expect_exit(1).await?;
+        // With no model that answers, the shell opens on Setup, which connects one.
+        terminal.quit_shell().await?;
 
         // The terminal itself echoes typing once; anything more came from `gents`.
         ensure!(
@@ -612,8 +609,8 @@ mod no_model {
                 PROMPT,
             )
             .await?;
-        terminal.expect("no agent can run", RUNTIME_UP).await?;
-        terminal.expect_exit(1).await?;
+        // With no model that answers, the shell opens on Setup, which connects one.
+        terminal.quit_shell().await?;
         Ok(())
     }
 
@@ -696,8 +693,8 @@ mod no_model {
         terminal
             .expect("gents config backend set --file", PROMPT)
             .await?;
-        terminal.expect("no agent can run", RUNTIME_UP).await?;
-        terminal.expect_exit(1).await?;
+        // With no model that answers, the shell opens on Setup, which connects one.
+        terminal.quit_shell().await?;
 
         ensure!(folder.join("init.json").is_file(), "setup kept going");
         Ok(())
@@ -721,8 +718,8 @@ mod no_model {
                 PROMPT,
             )
             .await?;
-        terminal.expect("no agent can run", RUNTIME_UP).await?;
-        terminal.expect_exit(1).await?;
+        // With no model that answers, the shell opens on Setup, which connects one.
+        terminal.quit_shell().await?;
         Ok(())
     }
 
@@ -736,8 +733,8 @@ mod no_model {
         terminal
             .answer(FOLDER_QUESTION, &home.home.to_string_lossy())
             .await?;
-        terminal.expect("no agent can run", RUNTIME_UP).await?;
-        terminal.expect_exit(1).await?;
+        // With no model that answers, the shell opens on Setup, which connects one.
+        terminal.quit_shell().await?;
 
         ensure!(
             !terminal.transcript().contains(INFERENCE_QUESTION)
@@ -764,8 +761,8 @@ mod no_model {
         terminal
             .answer_root_and_inference(NO_MODEL_ENDPOINT, NO_MODEL_NAME)
             .await?;
-        terminal.expect("no agent can run", RUNTIME_UP).await?;
-        terminal.expect_exit(1).await?;
+        // With no model that answers, the shell opens on Setup, which connects one.
+        terminal.quit_shell().await?;
 
         ensure!(
             !terminal.transcript().contains(FOLDER_QUESTION),

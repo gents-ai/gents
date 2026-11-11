@@ -398,11 +398,15 @@ theorem other_assignment_status_cannot_end_fire (state : State) (request : Reque
 theorem terminal_publication_gap (state : State) (id : Identity)
     (missing : id ∉ state.outcomes) : id ∉ (terminalize state id).outcomes := missing
 
+/-- A rendered destination is admitted when it names an owned same-agent
+session, or, with the Trigger's `create_session`, when it does not exist yet:
+the claim owner creates it through `AgentSession.ensure?` (`Proofs.Triggers.SessionKey`). -/
 def resolveSession (id : Identity) (target : Option String)
-    (ownedSameAgent : Bool) : Option String :=
+    (ownedSameAgent : Bool) (createMissing : Bool := false) : Option String :=
   match target with
   | none => some id.sessionId
-  | some value => if value.isEmpty || !ownedSameAgent then none else some value
+  | some value =>
+      if value.isEmpty || !(ownedSameAgent || createMissing) then none else some value
 
 def isCurrent (callerOwner callerSession listedOwner listedSession : String) : Bool :=
   callerOwner == listedOwner && callerSession == listedSession

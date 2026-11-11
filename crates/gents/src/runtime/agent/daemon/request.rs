@@ -148,13 +148,14 @@ where
             self.agent_config.openai_wire_api,
         )?;
         let effective_seed = effective_sampling.seed;
-        let admitted = self.load_admission(&request);
+        let admitted = self.load_admission(&request, lifecycle.resumed_from_backend());
         let Some(admitted) = prepare_unless_interrupted(&mut interrupt_rx, admitted).await else {
             return Ok(HandleRequestOutcome::Interrupted(
                 RequestInterruptionSource::Claimed,
             ));
         };
-        let (resume_from_history, aggregate_token_budget, context_calibration) = admitted?;
+        let (resume_from_history, resume_same_request, aggregate_token_budget, context_calibration) =
+            admitted?;
         let trace_attrs = RequestTraceAttrs::from_request(&request);
         let agent_name = self.agent_config.agent_did.clone();
         let admission_context = AdmissionCallContext::for_request(
@@ -178,8 +179,9 @@ where
                 )
             })?
             .to_string();
-        let capture_scope =
-            self.request_capture_scope(&request, lifecycle, stream_writer, &request_commit_cid)?;
+        let capture_scope = self
+            .request_capture_scope(&request, lifecycle, stream_writer, &request_commit_cid)
+            .await?;
         let handled = admission::scope_request(admission_context, async {
             let response_agent_did = lifecycle.agent_did().to_string();
             lifecycle
@@ -203,6 +205,7 @@ where
                 context_calibration: &context_calibration,
                 effective_seed,
                 resume_from_history,
+                resume_same_request,
             });
             let Some(prepared) = prepare_unless_interrupted(&mut interrupt_rx, preparation).await
             else {

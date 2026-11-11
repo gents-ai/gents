@@ -296,6 +296,10 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
                 set_goal(&home, &binding, &session, None).await?;
                 let retained = prepare_task_run_input(
                     access,
+                    &gents::store::identity::RegisteredIdentity::from_registered_did(
+                        access.actor_did().context("test actor")?,
+                        None,
+                    )?,
                     &owner,
                     &session,
                     true,

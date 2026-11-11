@@ -207,6 +207,8 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
                 task:config_docs["data"]["Task"][0]["_docID"].as_str().unwrap(),
             },
         ).unwrap()),
+        create_session: false,
+        max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
     };
     let snapshot = snapshot_with_agent_and_schedules(behavior.clone(), RapidHashMap::new());
     let (_tx, rx) = watch::channel(snapshot);

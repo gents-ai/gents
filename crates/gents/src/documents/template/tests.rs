@@ -481,3 +481,47 @@ fn authoring_rejects_a_bare_variable_that_is_not_a_context_root() {
         check_template_vocabulary(template).unwrap_or_else(|error| panic!("{template}: {error}"));
     }
 }
+
+#[test]
+fn a_manual_render_failure_names_what_the_run_does_not_define() {
+    let scope = TemplateScope {
+        session: Some(serde_json::json!({"session_id": "s"})),
+        request: Some(serde_json::json!({"request_id": "r"})),
+        event: serde_json::json!({"trigger_kind": "manual"}),
+        doc: None,
+        args: Some(serde_json::json!({"queue": "billing"})),
+        group: None,
+        node: serde_json::json!({}),
+        ctx: serde_json::json!({}),
+    };
+    let error = render_manual_template(
+        "desk-triage",
+        "Triage {{ doc.subject }} in {{ args.queue }} for {{ args.owner }}",
+        &scope,
+    )
+    .unwrap_err();
+    assert_eq!(error.undefined, ["args.owner", "doc.subject"]);
+    assert_eq!(error.reads, ["args.owner", "args.queue", "doc.subject"]);
+    let message = error.to_string();
+    assert!(
+        message.starts_with("render manual template for task desk-triage: "),
+        "{message}"
+    );
+    assert!(
+        message.contains("reads args.owner, doc.subject, which this run does not define"),
+        "{message}"
+    );
+    assert!(
+        message.contains(r#"options.args, e.g. {"owner":"VALUE"}"#),
+        "{message}"
+    );
+    assert!(
+        message.contains("options.args cannot supply them"),
+        "{message}"
+    );
+
+    assert_eq!(
+        render_manual_template("t", "Hello {{ args.queue }}", &scope).unwrap(),
+        "Hello billing"
+    );
+}

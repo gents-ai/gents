@@ -20,6 +20,13 @@ pub enum AuthoredDocumentCreateError {
     ProtectedCollection,
     #[error("document fields must be a nonempty object and cannot contain empty lists")]
     InvalidFields,
+    #[error("{collection} is declared @branchable, and a client-signed create cannot write a document of a branchable collection: its collection-level history is committed on the node. No operator command creates this document. An agent on the node creates it, with a collection write tool its Tools select (in its config tool: [\"help\",\"datastore\"])")]
+    BranchableCollection { collection: String },
+    #[error("the create omits {}, which {collection} declares with @default. A client-signed create cannot apply a default, so supply a value for each of them in the document's fields", .fields.join(", "))]
+    DefaultedFieldsOmitted {
+        collection: String,
+        fields: Vec<String>,
+    },
     #[error("authored document publication requires a held User and a running HTTP endpoint")]
     ClientSignerRequired,
     #[error("the authored schema does not match the live collection")]
@@ -44,6 +51,33 @@ pub(super) fn document_create_allowed(
         && matches_live
         && held_signer
         && http
+}
+
+/// The DefraDB client-create rule this document would break. DefraDB's
+/// builder (`ClientCreateSignatures::build`) answers each with the same
+/// `UnsupportedDocument`, so the rule is named here from the authored schema
+/// before anything is signed. `None` leaves every other rule to the builder.
+fn unsupported_client_create(
+    sdl: &str,
+    collection: &str,
+    fields: &Value,
+) -> Option<AuthoredDocumentCreateError> {
+    let schema = super::client_signed_agent::signing_schema(sdl, collection).ok()?;
+    if schema.is_branchable {
+        return Some(AuthoredDocumentCreateError::BranchableCollection {
+            collection: collection.to_owned(),
+        });
+    }
+    let omitted: Vec<String> = schema
+        .fields
+        .iter()
+        .filter(|field| field.default_value.is_some() && fields.get(&field.name).is_none())
+        .map(|field| field.name.clone())
+        .collect();
+    (!omitted.is_empty()).then(|| AuthoredDocumentCreateError::DefaultedFieldsOmitted {
+        collection: collection.to_owned(),
+        fields: omitted,
+    })
 }
 
 fn contains_empty_list(value: &Value) -> bool {
@@ -74,6 +108,9 @@ pub async fn create_authored_document(
     }
     if !fields.as_object().is_some_and(|fields| !fields.is_empty()) || contains_empty_list(fields) {
         return Err(AuthoredDocumentCreateError::InvalidFields);
+    }
+    if let Some(unsupported) = unsupported_client_create(sdl, collection, fields) {
+        return Err(unsupported);
     }
     // Offline access publishes through its owned node's signed loopback
     // endpoint, so the signing route, not the read transport, decides.
@@ -125,6 +162,40 @@ mod tests {
     use super::*;
     use crate::NodeIdentity;
     use serde_json::json;
+
+    /// The two client-create rules an operator can act on are named, each
+    /// with what to do; a document that breaks neither goes on to be signed.
+    #[test]
+    fn a_refused_client_create_names_the_rule_it_broke() {
+        let branchable = unsupported_client_create(
+            "type Ledger @branchable { name: String }",
+            "Ledger",
+            &json!({"name": "a"}),
+        )
+        .expect("a branchable collection is refused");
+        let message = branchable.to_string();
+        assert!(
+            message.starts_with("Ledger is declared @branchable")
+                && message.contains("No operator command creates this document")
+                && message.contains("An agent on the node creates it"),
+            "{message}"
+        );
+        const DEFAULTED: &str =
+            "type Entry { name: String, weight: Int @default(value: 1), done: Boolean @default(value: false) }";
+        let omitted =
+            unsupported_client_create(DEFAULTED, "Entry", &json!({"name": "a", "done": true}))
+                .expect("an omitted defaulted field is refused");
+        assert_eq!(
+            omitted.to_string(),
+            "the create omits weight, which Entry declares with @default. A client-signed create cannot apply a default, so supply a value for each of them in the document's fields"
+        );
+        assert!(unsupported_client_create(
+            DEFAULTED,
+            "Entry",
+            &json!({"name": "a", "weight": 2, "done": true})
+        )
+        .is_none());
+    }
 
     #[tokio::test]
     async fn offline_access_publishes_through_its_signed_loopback_endpoint() -> anyhow::Result<()> {

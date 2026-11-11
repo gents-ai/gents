@@ -267,6 +267,24 @@ pub(crate) struct PackWireArgs {
 }
 
 #[derive(clap::Args)]
+pub(crate) struct PackStarterArgs {
+    #[arg(
+        long,
+        value_name = "PACK",
+        action = clap::ArgAction::Append,
+        help = "Install this starter pack for the Engineer, approving the permissions it requests; repeat for each pack. The runtime must be stopped"
+    )]
+    pub(crate) approve: Vec<String>,
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Pack registry to resolve a pack the home's store does not hold"
+    )]
+    pub(crate) registry: Option<String>,
+}
+
+#[derive(clap::Args)]
 pub(crate) struct PackInstallArgs {
     #[arg(help = "A local path/sha256:<hex>, an installed coordinate, or a registry name")]
     pub(crate) package: String,
@@ -280,6 +298,9 @@ pub(crate) struct PackInstallArgs {
     #[arg(long = "dependency-variable", value_name = "NAMESPACE/PACK:NAME=VALUE", action = clap::ArgAction::Append,
         help = "Explicitly set an install variable for a dependency; repeat for each variable")]
     pub(crate) dependency_variables: Vec<String>,
+    #[arg(long = "bind-agent", value_name = "SLOT=AGENT_DID", action = clap::ArgAction::Append,
+        help = "Bind one of the pack's agent slots to an existing agent of this node instead of making a new one; repeat for each slot")]
+    pub(crate) bind_agents: Vec<String>,
     #[arg(
         long,
         default_value_t = false,
@@ -306,7 +327,7 @@ pub(crate) struct PackInstallArgs {
     pub(crate) drift: PackDriftArgs,
     #[arg(
         long,
-        help = "Allow the files, network or environment the pack's plugins ask for"
+        help = "Allow the files, network or environment the pack's plugins ask for, and its agents reading your tool root"
     )]
     pub(crate) grant_authority: bool,
     #[arg(

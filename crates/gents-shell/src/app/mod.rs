@@ -633,9 +633,16 @@ impl App {
             Update::Agents(agents) => self.set_agents(agents),
             Update::Skills { agent, skills } => self.skills = (agent, skills),
             Update::Connection(connection) => {
+                // A shell that opens with no agent to message lands on what connects one.
+                let opens_setup = self.connection == Connection::Connecting
+                    && matches!(connection, Connection::NoAgent(_))
+                    && self.layers.is_empty();
                 self.connection = connection;
                 self.setup_says_lost();
                 self.form_says_lost();
+                if opens_setup {
+                    self.push_layer(LayerKind::Setup);
+                }
             }
             Update::Branch(branch) => self.branch = Some(branch),
             Update::Notice(notice) => self.notice = Some(notice),
@@ -1434,6 +1441,12 @@ impl App {
             tab.input.clear();
             tab.scroll = 0;
             return self.emit(reply);
+        }
+        // A message has no agent to go to, so enter opens what connects one. The box keeps
+        // what was typed.
+        if let Connection::NoAgent(why) = &self.connection {
+            self.notice = Some(why.clone());
+            return self.push_layer(LayerKind::Setup);
         }
         if (message && !typed) || self.says_lost() {
             return;

@@ -120,18 +120,11 @@ impl FireIntent {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct MaterializeSkip {
+#[derive(Debug, thiserror::Error)]
+#[error("{reason}")]
+pub(crate) struct MaterializeBudgetExhausted {
     pub reason: String,
 }
-
-impl std::fmt::Display for MaterializeSkip {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.reason)
-    }
-}
-
-impl std::error::Error for MaterializeSkip {}
 
 #[derive(Debug, thiserror::Error)]
 #[error("fire already admitted as {request_id}")]
@@ -143,9 +136,9 @@ pub(crate) fn fire_result_from_materialize(result: anyhow::Result<String>) -> Fi
     match result {
         Ok(request_id) => FireResult::Fired { request_id },
         Err(error) => {
-            if let Some(skip) = error.downcast_ref::<MaterializeSkip>() {
-                FireResult::Skipped {
-                    reason: skip.reason.clone(),
+            if let Some(exhausted) = error.downcast_ref::<MaterializeBudgetExhausted>() {
+                FireResult::BudgetExhausted {
+                    reason: exhausted.reason.clone(),
                 }
             } else if let Some(duplicate) = error.downcast_ref::<MaterializeDuplicate>() {
                 FireResult::Duplicate {
@@ -171,6 +164,7 @@ pub enum FireResult {
     Skipped { reason: String },
     Errored { error: String },
     Rejected { error: String },
+    BudgetExhausted { reason: String },
 }
 
 pub trait TriggerSource: Send + Sync {

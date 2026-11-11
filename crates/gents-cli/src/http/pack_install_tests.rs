@@ -20,6 +20,7 @@ fn body(root: &PackArchive, dependencies: &[Arc<PackArchive>], node_did: &str) -
         dependencies,
         inference_slots: Vec::new(),
         dependency_variables: Vec::new(),
+        bind_agents: Vec::new(),
         overwrite: false,
         keep: false,
         preview: false,

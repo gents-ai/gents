@@ -1,0 +1,16 @@
+# A plugin's source held on the node: what `config plugin build` compiles,
+# tests and installs. `tests` holds {"cases": [{input, expect}]}. The built
+# artifact and its digest stay in the plugin store.
+type PluginSource @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6b93229d0c706380e71e", resource: "configuration") @index(fields: ["node_did", "plugin_id"], unique: true) {
+    plugin_id: String @index
+    node_did: String @index
+    description: String
+    language: String
+    source: String
+    input_schema: JSON
+    data: JSON
+    tests: JSON
+    created_at: String
+    updated_at: DateTime @index(direction: DESC)
+    tags: [String]
+}

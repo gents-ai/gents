@@ -146,7 +146,7 @@ async fn remove(args: PluginRemoveArgs) -> Result<()> {
     if let Some(coordinate) = &removed.owner_pack_coordinate {
         crate::commands::pack::warn_on_unrecorded_removal(
             coordinate,
-            crate::commands::pack::record_plugin_store_change(&home, coordinate, None).await,
+            crate::commands::pack::record_plugin_retirement(&home, coordinate).await,
         );
     }
     crate::print_json(&json!({ "removed": removed }))

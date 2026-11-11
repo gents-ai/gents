@@ -26,10 +26,6 @@ pub(super) async fn validate_accepted_invocation(
         plugin_effect,
         tool_name,
         deadline_at,
-        request,
-        agent,
-        session,
-        requester_filter,
         ..
     } = terminalization;
     let (accepted, _) = crate::session::load_canonical_message_in_txn(
@@ -65,43 +61,21 @@ pub(super) async fn validate_accepted_invocation(
             "plugin effect terminal arguments changed"
         );
     } else if let Some(parent_doc_id) = spawned_by_tool_call_doc_id {
-        let parent = escape_graphql_string(parent_doc_id);
-        let parent_rows = txn
-            .execute(&format!(
-                r#"{{ AgentToolCall(filter: {{
-            _docID: {{ _eq: "{parent}" }}, request_doc_id: {{ _eq: "{request}" }},
-            session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }}{requester_filter}
-        }}, limit: 2) {{ _docID tool_call_id tool_name message_sequence lifecycle_state
-            spawned_by_tool_call_doc_id }} }}"#
-            ))
+        let parent =
+            crate::tools::call::lifecycle::ToolCallLifecycle::load_accepted_binding_in_txn(
+                txn,
+                parent_doc_id,
+                node_did,
+                session_id,
+                requester_did,
+                true,
+            )
             .await?;
-        let parents = parent_rows["data"]["AgentToolCall"]
-            .as_array()
-            .context("spawned terminalization parent lookup omitted rows")?;
         anyhow::ensure!(
-            parents.len() == 1,
-            "spawned terminalization parent is missing or ambiguous"
-        );
-        let parent = &parents[0];
-        let parent_id = parent["tool_call_id"]
-            .as_str()
-            .context("spawned parent lacks native ID")?;
-        let parent_name = parent["tool_name"]
-            .as_str()
-            .context("spawned parent lacks tool name")?;
-        anyhow::ensure!(
-            parent["spawned_by_tool_call_doc_id"].is_null()
-                && parent_name == crate::tools::native::SPAWN_PROCESS_TOOL_NAME
-                && parent["message_sequence"].as_u64() == Some(u64::from(message_sequence))
-                && accepted.session_id == session_id
-                && accepted.request_doc_id.as_deref() == Some(request_doc_id)
-                && accepted.role == MessageRole::Assistant
-                && accepted.outcome == OutputOutcome::Complete
-                && accepted.sequence == message_sequence
-                && matches!(accepted.publication, MessagePublication::RequestExecution { .. })
-                && accepted.blocks.iter().any(|block| matches!(block,
-                    MessageBlock::ToolCall { tool_call_doc_id, id, name, .. }
-                    if tool_call_doc_id == parent_doc_id && id == parent_id && name == parent_name)),
+            parent.request_doc_id == request_doc_id
+                && parent.message_sequence == message_sequence
+                && parent.accepted_header_doc_id == accepted_header_doc_id
+                && parent.tool_name == crate::tools::native::SPAWN_PROCESS_TOOL_NAME,
             "spawned terminalization has no exact accepted spawn_process parent"
         );
     } else {

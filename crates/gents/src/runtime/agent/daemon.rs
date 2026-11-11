@@ -123,6 +123,7 @@ where
     M: ProviderModel,
 {
     node: Arc<defra_node::Node>,
+    backend_health: Option<crate::inference::backends::health::BackendHealthMap>,
     agent_config: Arc<ResolvedAgent>,
     provider_family: Option<String>,
     replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
@@ -157,6 +158,9 @@ where
 enum HandleRequestOutcome {
     Completed,
     FailedAfterResponse(anyhow::Error),
+    /// The provider stayed unavailable through the transport budget; the
+    /// request may wait for it instead of failing.
+    BackendUnavailable(anyhow::Error),
     Interrupted(RequestInterruptionSource),
 }
 

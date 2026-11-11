@@ -6,6 +6,7 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 
+use crate::request::lifecycle::is_background_completion_request;
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::escape_graphql_string;
 
@@ -101,9 +102,9 @@ async fn load_background_completion_diagnostics_scoped(
                     let wake_doc_ids = wakes
                         .iter()
                         .filter(|wake| {
-                            wake.input.as_ref().is_some_and(
-                                crate::request::lifecycle::is_background_completion_request,
-                            )
+                            wake.input
+                                .as_ref()
+                                .is_some_and(is_background_completion_request)
                         })
                         .filter_map(|wake| wake.doc_id.as_deref())
                         .collect::<BTreeSet<_>>();
@@ -148,7 +149,7 @@ async fn load_background_completion_diagnostics_scoped(
                     if wake
                         .input
                         .as_ref()
-                        .is_some_and(crate::request::lifecycle::is_background_completion_request)
+                        .is_some_and(is_background_completion_request)
                     {
                         sessions.insert(session_id);
                     }
@@ -238,7 +239,7 @@ fn summarize(
         .filter(|wake| {
             wake.input
                 .as_ref()
-                .is_some_and(crate::request::lifecycle::is_background_completion_request)
+                .is_some_and(is_background_completion_request)
         })
         .collect::<Vec<_>>();
     let roots_by_request_doc = wakes

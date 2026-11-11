@@ -431,6 +431,11 @@ pub struct TimelineToolCallRow {
     pub cancel_cause: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub child_request_id: Option<String>,
+    /// Why a derived call (a script's child, a spawned process) has no
+    /// arguments or result here: its canonical payload could not be read.
+    /// The row keeps its lifecycle facts so one such call never hides a run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload_unavailable: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
