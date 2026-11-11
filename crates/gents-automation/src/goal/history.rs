@@ -141,10 +141,10 @@ impl GoalAssignmentVersion {
 
 #[derive(Debug, Clone)]
 pub struct GoalVersion {
-    pub(crate) goal: GoalDocument,
-    pub(crate) commit_cid: String,
-    pub(crate) height: i64,
-    pub(crate) parent_commit_cids: Vec<String>,
+    pub goal: GoalDocument,
+    pub commit_cid: String,
+    pub height: i64,
+    pub parent_commit_cids: Vec<String>,
 }
 
 pub async fn load_goal_versions_for_session(

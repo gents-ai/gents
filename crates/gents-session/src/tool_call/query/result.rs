@@ -112,8 +112,8 @@ impl ReadSource<'_, '_> {
 
 #[derive(Debug)]
 pub struct CanonicalToolCallRead {
-    pub(crate) accepted_header_doc_id: String,
-    pub(crate) execution_generation: String,
+    pub accepted_header_doc_id: String,
+    pub execution_generation: String,
     pub request_doc_id: String,
     pub tool_name: String,
     pub lifecycle_state: ToolCallState,

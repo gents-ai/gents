@@ -95,7 +95,7 @@ impl<'a, 'txn> TxnCanonicalReader<'a, 'txn> {
         }
     }
 
-    pub(crate) fn clear_output_cache(&mut self) {
+    pub fn clear_output_cache(&mut self) {
         self.cache.requests.clear();
         self.cache.sources.clear();
     }
