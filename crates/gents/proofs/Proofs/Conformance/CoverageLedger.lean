@@ -1263,7 +1263,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "inference_visibility_cases"
       "InferenceVisibilityCases"
-      "observe::inference_observation::tests::visibility_matches_lean_for_direct_reads")
+      "runtime::agent::inference_read::tests::visibility_matches_lean_for_direct_reads")
       "client-shell" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "client_optimistic_send_cases"

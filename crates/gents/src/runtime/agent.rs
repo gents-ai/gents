@@ -28,6 +28,7 @@ mod builder;
 pub mod completion_retry;
 pub(crate) mod daemon;
 pub mod directory_projection;
+pub mod inference_read;
 pub(crate) mod document_view;
 pub(crate) mod loop_stream;
 pub(crate) mod output_obligation;
@@ -228,7 +229,7 @@ pub struct Gents {
     retry_policy: RetryPolicy,
     hook_failure_policy: FailurePolicy,
     background_execution_registry: BackgroundExecutionRegistry,
-    inference_observations: crate::observe::inference_observation::InferenceObservationRegistry,
+    inference_observations: crate::inference::inference_observation::InferenceObservationRegistry,
     health_checker_options: HealthCheckerOptions,
     backend_prober_options: BackendProberOptions,
     backend_health: BackendHealthMap,
@@ -360,7 +361,7 @@ impl Gents {
 
     pub fn inference_observations(
         &self,
-    ) -> &crate::observe::inference_observation::InferenceObservationRegistry {
+    ) -> &crate::inference::inference_observation::InferenceObservationRegistry {
         &self.inference_observations
     }
 

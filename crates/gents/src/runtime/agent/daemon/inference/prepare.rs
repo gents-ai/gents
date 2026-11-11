@@ -26,7 +26,7 @@ pub(super) struct InferencePreparation<'a> {
     pub(super) lifecycle: &'a crate::request::lifecycle::RequestLifecycle,
     pub(super) request_deadline: Option<DateTime<Utc>>,
     pub(super) inference_observation:
-        &'a Option<Arc<crate::observe::inference_observation::InferenceObservationGuard>>,
+        &'a Option<Arc<crate::inference::inference_observation::InferenceObservationGuard>>,
     pub(super) effective_seed: Option<i64>,
     pub(super) context_calibration: &'a ContextCalibration,
     pub(super) request_context_message: &'a Option<Message>,

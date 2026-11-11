@@ -1106,12 +1106,12 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
                 sleep(Duration::from_millis(50)).await;
             }
         }).await.context("waiting for activity request generation")??;
-        let key = gents::observe::inference_observation::InferenceKey {
+        let key = gents::inference::inference_observation::InferenceKey {
             node: node_did.clone(), session: session.clone(), request: request.clone(), generation,
         };
-        let url = format!("http://127.0.0.1:{port}{}", gents::observe::inference_observation::INFERENCE_ACTIVITY_PATH);
+        let url = format!("http://127.0.0.1:{port}{}", gents::inference::inference_observation::INFERENCE_ACTIVITY_PATH);
         let http = reqwest::Client::new();
-        let call = |actor: &dyn gents::NodeIdentity, key: gents::observe::inference_observation::InferenceKey| {
+        let call = |actor: &dyn gents::NodeIdentity, key: gents::inference::inference_observation::InferenceKey| {
             let capability = actor.client_signing_capability().expect("held client signing key");
             let endpoint = gents::store::config_client::GraphqlEndpoint::as_principal(&graphql, capability.did())
                 .with_client_signing_capability(capability)

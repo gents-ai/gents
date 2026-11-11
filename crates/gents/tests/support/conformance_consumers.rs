@@ -735,10 +735,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_inference_observation_traces",
         },
         ConformanceConsumer::RustTest {
-            id: "observe::inference_observation::tests::visibility_matches_lean_for_direct_reads",
+            id: "runtime::agent::inference_read::tests::visibility_matches_lean_for_direct_reads",
             package: "gents",
-            source_path: "crates/gents/src/observe/inference_observation.rs",
-            module_path: "observe::inference_observation::tests",
+            source_path: "crates/gents/src/runtime/agent/inference_read.rs",
+            module_path: "runtime::agent::inference_read::tests",
             function: "visibility_matches_lean_for_direct_reads",
         },
         ConformanceConsumer::RustTest {

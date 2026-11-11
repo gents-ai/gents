@@ -25,7 +25,7 @@ pub(super) struct RuntimeContext {
         Option<crate::inference::rendered_request::RenderedRequestCaptureFactory>,
     pub(super) background_execution_registry: BackgroundExecutionRegistry,
     pub(super) inference_observations:
-        crate::observe::inference_observation::InferenceObservationRegistry,
+        crate::inference::inference_observation::InferenceObservationRegistry,
     pub(super) startup_barrier: Arc<StartupBarrier>,
     pub(super) startup_readiness: crate::runtime::startup_readiness::StartupReadinessOptions,
     pub(super) runtime_status: crate::runtime::status::RuntimeStatusHandle,

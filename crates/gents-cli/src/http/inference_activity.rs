@@ -5,7 +5,8 @@ use axum::{
     Json,
 };
 use defra_http::ExtractIdentity;
-use gents::observe::inference_observation::{InferenceKey, InferenceObservationRead};
+use gents::inference::inference_observation::InferenceKey;
+use gents::runtime::agent::inference_read::InferenceObservationRead;
 
 use super::router::RuntimeHttpState;
 

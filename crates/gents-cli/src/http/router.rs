@@ -200,7 +200,7 @@ pub(crate) fn runtime_contract_router(
             post(crate::http::runtime_control::runtime_control_handler),
         )
         .route(
-            gents::observe::inference_observation::INFERENCE_ACTIVITY_PATH,
+            gents::inference::inference_observation::INFERENCE_ACTIVITY_PATH,
             post(crate::http::inference_activity::read),
         )
         .route(

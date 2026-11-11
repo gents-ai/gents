@@ -66,7 +66,7 @@ fn state() -> RuntimeHttpState {
 async fn inference_activity_requires_authenticated_identity() {
     let app = Router::new()
         .route(
-            gents::observe::inference_observation::INFERENCE_ACTIVITY_PATH,
+            gents::inference::inference_observation::INFERENCE_ACTIVITY_PATH,
             post(crate::http::inference_activity::read),
         )
         .with_state(state());
@@ -76,7 +76,7 @@ async fn inference_activity_requires_authenticated_identity() {
         axum::serve(listener, app).await.unwrap();
     }));
     let response = reqwest::Client::new()
-        .post(format!("http://{address}{}", gents::observe::inference_observation::INFERENCE_ACTIVITY_PATH))
+        .post(format!("http://{address}{}", gents::inference::inference_observation::INFERENCE_ACTIVITY_PATH))
         .json(&json!({"node":"node", "session":"session", "request":"request", "generation":"generation"}))
         .send()
         .await

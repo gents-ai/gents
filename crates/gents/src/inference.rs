@@ -4,6 +4,7 @@ pub mod backends;
 pub mod clients;
 pub mod compaction;
 pub(crate) mod connection_fingerprint;
+pub mod inference_observation;
 pub mod llm;
 pub mod profile_switch;
 pub mod rendered_request;
