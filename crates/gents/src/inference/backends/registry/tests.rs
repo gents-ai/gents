@@ -447,14 +447,14 @@ async fn backend_for_user(
 #[tokio::test]
 async fn scoped_backend_replacement_preserves_observations_and_resets_defaults() -> Result<()> {
     let (db, _user, access) =
-        crate::test_support::signed_test_node_without_agent("registry-replacement").await;
+        crate::test_support::root::signed_test_node_without_agent("registry-replacement").await;
     let other_db = crate::support::test_db("registry-other-node").await;
     let stranger_db = crate::support::test_db("registry-stranger").await;
     let node = db.node.clone();
     let owner = db.node_identity.did();
     let other_did = other_db.node_identity.did();
     let stranger = stranger_db.node_identity.did();
-    crate::test_support::bootstrap_signed_test_node(&access, other_did).await;
+    crate::test_support::documents::bootstrap_signed_test_node(&access, other_did).await;
     let mut backend = base_backend();
     backend.node_did = owner.to_owned();
     backend.backend_id = "reviewers\"quoted".into();
@@ -567,7 +567,7 @@ async fn seed_metadata(access: &crate::ConfigAccess, input: serde_json::Value) -
 #[tokio::test]
 async fn duplicate_backend_owner_keys_fail_without_overwriting_documents() -> Result<()> {
     let (db, _user, access) =
-        crate::test_support::signed_test_node_without_agent("registry-duplicate").await;
+        crate::test_support::root::signed_test_node_without_agent("registry-duplicate").await;
     let node = db.node.clone();
     let mut backend = base_backend();
     backend.node_did = db.node_identity.did().to_owned();
@@ -613,7 +613,7 @@ async fn duplicate_backend_owner_keys_fail_without_overwriting_documents() -> Re
 #[tokio::test]
 async fn backend_lists_skip_an_unknown_provider_kind_and_lookups_stay_strict() -> Result<()> {
     let (db, _user, access) =
-        crate::test_support::signed_test_node_without_agent("registry-future-kind").await;
+        crate::test_support::root::signed_test_node_without_agent("registry-future-kind").await;
     let node = db.node.clone();
     let owner = db.node_identity.did().to_owned();
     let mut backend = base_backend();
@@ -674,7 +674,7 @@ async fn record_catalog_for_runtime(
 #[tokio::test]
 async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catalog() -> Result<()> {
     let (db, _user, access) =
-        crate::test_support::signed_test_node_without_agent("registry-catalog").await;
+        crate::test_support::root::signed_test_node_without_agent("registry-catalog").await;
     let node = db.node.clone();
     let mut backend = base_backend();
     backend.node_did = db.node_identity.did().to_owned();
@@ -732,7 +732,7 @@ async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catal
 #[tokio::test]
 async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> Result<()> {
     let (db, _user, access) =
-        crate::test_support::signed_test_node_without_agent("registry-catalog").await;
+        crate::test_support::root::signed_test_node_without_agent("registry-catalog").await;
     let node = db.node.clone();
     let mut backend = base_backend();
     backend.node_did = db.node_identity.did().to_owned();
@@ -836,7 +836,7 @@ async fn spawn_echoing_models_server(secret: &'static str) -> String {
 async fn operator_discovery_publishes_scoped_credential_free_catalog() -> Result<()> {
     const SECRET: &str = "subscription-access-token-never-stored";
     let (db, _user, access) =
-        crate::test_support::signed_test_node_without_agent("registry-operator").await;
+        crate::test_support::root::signed_test_node_without_agent("registry-operator").await;
     let node = db.node.clone();
     let owner = db.node_identity.did().to_owned();
     let endpoint = spawn_echoing_models_server(SECRET).await;
@@ -966,7 +966,8 @@ fn catalog_action(
 #[tokio::test]
 async fn generated_catalog_refreshes_preserve_payload_commits_and_latest_freshness() -> Result<()> {
     let (db, _user, access) =
-        crate::test_support::signed_test_node_without_agent("registry-generated-catalog").await;
+        crate::test_support::root::signed_test_node_without_agent("registry-generated-catalog")
+            .await;
     let node = db.node.clone();
     for (index, case) in gents_lean_vocab::lean_catalog_refresh_cases()
         .iter()
@@ -1043,7 +1044,7 @@ async fn generated_catalog_refreshes_preserve_payload_commits_and_latest_freshne
 #[tokio::test]
 async fn catalog_freshness_survives_reopen_and_adopts_retained_payloads() -> Result<()> {
     let (mut db, user, access) =
-        crate::test_support::signed_test_node_without_agent("registry-reopen").await;
+        crate::test_support::root::signed_test_node_without_agent("registry-reopen").await;
     let node = db.node.clone();
     let mut backend = base_backend();
     backend.node_did = db.node_identity.did().to_owned();

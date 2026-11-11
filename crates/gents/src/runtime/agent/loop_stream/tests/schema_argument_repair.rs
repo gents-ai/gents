@@ -161,7 +161,7 @@ async fn config_container_repairs_preserve_native_validation_and_the_invalid_bud
     );
     let owner = identity.did().to_owned();
     let (node, hook, writer, mut lifecycle) = owned_test_hook_with_identity(identity.clone()).await;
-    let binding = crate::test_support::install_test_agent(&node, &owner, "general").await;
+    let binding = crate::test_support::inference::install_test_agent(&node, &owner, "general").await;
     let agent_did = binding.agent_did.clone();
     let grants = crate::tools::surface::SelfConfigToolConfig {
         enabled: true,

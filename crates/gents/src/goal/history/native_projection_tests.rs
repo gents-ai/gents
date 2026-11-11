@@ -89,7 +89,7 @@ impl ConfigRead for NativeReader<'_, '_> {
 #[tokio::test]
 async fn native_goal_projection_matches_full_history_with_fewer_reconstructions() {
     let (db, _user, _client, binding) =
-        crate::test_support::signed_test_node("goal-history-projection").await;
+        crate::test_support::root::signed_test_node("goal-history-projection").await;
     let node = db.node.clone();
     let owner = db.node_identity.did();
     let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)

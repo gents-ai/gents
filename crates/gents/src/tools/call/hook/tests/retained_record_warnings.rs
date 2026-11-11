@@ -71,7 +71,7 @@ async fn surviving_group_member_warns_once_until_its_group_exits() {
         })
         .unwrap();
 
-    crate::test_support::enable_scoped_event_capture();
+    crate::test_support::root::enable_scoped_event_capture();
     let events = RetainedRecordEvents::default();
     let subscriber = tracing_subscriber::Registry::default().with(events.clone());
     tracing::subscriber::with_default(subscriber, || {

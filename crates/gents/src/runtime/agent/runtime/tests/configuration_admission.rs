@@ -50,7 +50,7 @@ fn selection(configuration: &ResolvedConfiguration) -> &SelectedConfiguration {
 #[tokio::test]
 async fn client_rebinding_defers_the_superseded_generation_and_scopes_the_new_selection() {
     let (db, user, access, binding) =
-        crate::test_support::signed_test_node("configuration-admission").await;
+        crate::test_support::root::signed_test_node("configuration-admission").await;
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
     let owner = runtime.did().to_owned();
@@ -62,7 +62,7 @@ async fn client_rebinding_defers_the_superseded_generation_and_scopes_the_new_se
     )
     .await
     .unwrap();
-    crate::test_support::install_test_agent_binding_with_access(
+    crate::test_support::inference::install_test_agent_binding_with_access(
         &owner,
         "Sibling fixture agent",
         &sibling,
@@ -85,12 +85,15 @@ async fn client_rebinding_defers_the_superseded_generation_and_scopes_the_new_se
         ConfigurationAdmission::Claim
     );
 
-    let mut agent =
-        crate::test_support::test_agent_documents(&owner, "Default fixture agent", &binding)
-            .into_iter()
-            .find(|(collection, _)| *collection == Collection::Agent)
-            .unwrap()
-            .1;
+    let mut agent = crate::test_support::documents::test_agent_documents(
+        &owner,
+        "Default fixture agent",
+        &binding,
+    )
+    .into_iter()
+    .find(|(collection, _)| *collection == Collection::Agent)
+    .unwrap()
+    .1;
     agent["inference_profile_id"] = json!("editor-setup");
     let plan = DesiredStateApplyPlan::new(
         [
@@ -164,7 +167,7 @@ async fn client_rebinding_defers_the_superseded_generation_and_scopes_the_new_se
         "an agent that did not select the configuration must not read it: {sibling_read:?}"
     );
     let outsider = tokio::task::spawn_blocking(|| {
-        crate::support::fixtures::test_identity("configuration-admission-outsider")
+        crate::store::test_support::test_identity("configuration-admission-outsider")
     })
     .await
     .unwrap();

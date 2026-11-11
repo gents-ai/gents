@@ -12,7 +12,7 @@ pub(super) async fn test_node(
     name: &str,
 ) -> (crate::support::TestDb, KeyIdentity, crate::ConfigAccess) {
     let db = crate::support::test_db(name).await;
-    crate::test_support::signed_test_node_without_agent_from_db(db, name).await
+    crate::test_support::root::signed_test_node_without_agent_from_db(db, name).await
 }
 
 pub(super) async fn install_agent(
@@ -29,7 +29,7 @@ pub(super) async fn install_agent(
     )
     .await
     .unwrap();
-    crate::test_support::install_test_agent_binding_with_access(
+    crate::test_support::inference::install_test_agent_binding_with_access(
         identity.did(),
         name,
         &binding,
@@ -45,7 +45,7 @@ pub(super) async fn install_default_agent(
     owner: &crate::ConfigAccess,
 ) -> String {
     let did = install_agent(node, identity, owner, "Default fixture agent").await;
-    crate::test_support::set_test_default_agent_as(owner, identity.did(), &did).await;
+    crate::test_support::documents::set_test_default_agent_as(owner, identity.did(), &did).await;
     did
 }
 

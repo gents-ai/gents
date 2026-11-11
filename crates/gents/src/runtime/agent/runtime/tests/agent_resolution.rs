@@ -68,7 +68,7 @@ impl PrivateSessionFixture {
 #[tokio::test]
 async fn resolve_agent_rejects_missing_or_blank_explicit_selection() {
     let (db, _user, _access, _binding) =
-        crate::test_support::signed_test_node("agent-resolution-blank").await;
+        crate::test_support::root::signed_test_node("agent-resolution-blank").await;
     let node = db.node.clone();
     for selected in [None, Some(""), Some("   ")] {
         assert!(

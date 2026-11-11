@@ -156,7 +156,7 @@ async fn write_documents(
 
 #[tokio::test]
 async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
-    crate::test_support::enable_scoped_event_capture();
+    crate::test_support::root::enable_scoped_event_capture();
     let fixture = held_runtime_fixture(
         "control-watcher",
         "backend-control",
@@ -404,7 +404,7 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
 
 #[tokio::test]
 async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
-    crate::test_support::enable_scoped_event_capture();
+    crate::test_support::root::enable_scoped_event_capture();
     let fixture = held_runtime_fixture(
         "control-watcher-health",
         "backend-measured",
@@ -533,7 +533,7 @@ async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
 
 #[tokio::test]
 async fn control_watcher_recovers_after_resolve_error() {
-    crate::test_support::enable_scoped_event_capture();
+    crate::test_support::root::enable_scoped_event_capture();
     let fixture = held_runtime_fixture(
         "control-watcher-recover",
         "backend-control-recover",

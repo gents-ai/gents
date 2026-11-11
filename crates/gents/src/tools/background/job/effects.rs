@@ -617,7 +617,12 @@ mod tests {
 
     #[tokio::test]
     async fn descriptive_slot_provenance_cannot_grant_interrupt() {
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        let node = Arc::new(
+            crate::store::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let parent = insert(&node, "AgentRequest", json!({"request_id":"parent","purpose":"normal","node_did":"owner","requester_did":null,"session_id":"caller","agent_did":"configured","lifecycle_state":"processing"})).await;
         insert(&node, "AgentSession", json!({"session_id":"child","node_did":"owner","requester_did":null,"agent_did":"configured","created_at":"2026-01-01T00:00:00Z","provenance":{"parent_request_doc_id":parent}})).await;

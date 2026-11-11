@@ -11,7 +11,7 @@ use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 
 use super::*;
 use crate::session;
-use crate::test_support::first_content;
+use crate::store::test_support::first_content;
 use crate::turn::prompt::{LayeredPromptBuilder, PromptBuilder};
 use crate::turn::provider_input::budget::can_dispatch;
 use crate::turn::provider_input::ProviderInputProfile;
@@ -60,7 +60,7 @@ impl CompactionFixture {
         use gents_protocol::request_admission::{
             AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
         };
-        let (db, user, client, binding) = crate::test_support::signed_test_node(name).await;
+        let (db, user, client, binding) = crate::test_support::root::signed_test_node(name).await;
         let agent =
             crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
                 .unwrap();

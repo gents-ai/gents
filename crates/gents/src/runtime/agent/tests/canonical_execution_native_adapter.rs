@@ -1526,7 +1526,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
             );
             let initial_session_id = format!("lean-session-{}", seed.session_id);
             let (db, user, owner, binding) =
-                crate::test_support::signed_test_node("lean-canonical-execution").await;
+                crate::test_support::root::signed_test_node("lean-canonical-execution").await;
             let identity = db.node_identity.clone();
             let node_did = identity.did().to_owned();
             let node = db.node.clone();

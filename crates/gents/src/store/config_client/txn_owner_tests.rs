@@ -48,7 +48,12 @@ async fn tracked_transaction_finality_distinguishes_rejection_from_lost_receipt(
             .unwrap();
         case["unconfirmed"].as_bool().unwrap()
     };
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     let access = ConfigAccess::local(node.clone());
     let rejected = access
         .transact_write_with_finality("test.finality.callback", |_txn| {
@@ -2478,10 +2483,11 @@ async fn signed_update_commit_conflict_does_not_replay_callback() {
 }
 
 async fn held_fake_access(endpoint: String) -> ConfigAccess {
-    let identity =
-        tokio::task::spawn_blocking(|| crate::support::fixtures::test_identity("signed-conflict"))
-            .await
-            .unwrap();
+    let identity = tokio::task::spawn_blocking(|| {
+        crate::store::test_support::test_identity("signed-conflict")
+    })
+    .await
+    .unwrap();
     let endpoint = super::GraphqlEndpoint::as_principal(endpoint, identity.did())
         .with_client_signing_capability(identity.client_signing_capability().unwrap())
         .unwrap();

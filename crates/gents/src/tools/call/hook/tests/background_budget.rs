@@ -24,7 +24,7 @@ pub(super) async fn budget_hook_fixture(
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
     };
 
-    let (db, user, owner, binding) = crate::test_support::signed_test_node(name).await;
+    let (db, user, owner, binding) = crate::test_support::root::signed_test_node(name).await;
     let node = db.node.clone();
     let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
         .unwrap();

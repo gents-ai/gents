@@ -1,6 +1,6 @@
 use super::*;
 use crate::inference::llm::message::{Text, ToolResult, ToolResultContent, UserContent};
-use crate::test_support::first_content;
+use crate::store::test_support::first_content;
 
 async fn sequenced_history_on(
     access: &crate::ConfigAccess,
@@ -50,7 +50,7 @@ async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
     use crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
     use gents_protocol::tool_call::AwaitMode;
     let (db, user, client, binding) =
-        crate::test_support::signed_test_node("provider-history").await;
+        crate::test_support::root::signed_test_node("provider-history").await;
     let session_id = "session-steering-provider-history";
     publish_signed_history(
         &db,
@@ -127,7 +127,7 @@ async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
 async fn history_reconstruction_scans_a_shared_request_once() {
     use crate::store::identity::NodeIdentity;
     let (db, user, client, binding) =
-        crate::test_support::signed_test_node("history-shared-scan").await;
+        crate::test_support::root::signed_test_node("history-shared-scan").await;
     let session_id = "session-shared-request-scan";
     let messages = (1..=3)
         .map(|sequence| format!("message {sequence}"))
@@ -153,7 +153,7 @@ async fn history_reconstruction_scans_a_shared_request_once() {
 async fn history_reconstruction_batches_distinct_requests() {
     use crate::store::identity::NodeIdentity;
     let (db, user, client, binding) =
-        crate::test_support::signed_test_node("history-batch-scan").await;
+        crate::test_support::root::signed_test_node("history-batch-scan").await;
     let session_id = "session-many-request-scans";
     let count = crate::inference::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH + 3;
     let messages = (0..count)
@@ -191,7 +191,7 @@ async fn signed_compaction_fixture(
     crate::ConfigAccess,
     Vec<(String, String)>,
 ) {
-    let (db, user, client, binding) = crate::test_support::signed_test_node(name).await;
+    let (db, user, client, binding) = crate::test_support::root::signed_test_node(name).await;
     let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
         .unwrap();
     let access = crate::ConfigAccess::local_managed_agent(
@@ -626,7 +626,8 @@ async fn exact_compaction_redelivery_is_idempotent() {
 #[tokio::test]
 async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
     use crate::store::identity::NodeIdentity;
-    let (db, user, client, binding) = crate::test_support::signed_test_node("history-cursor").await;
+    let (db, user, client, binding) =
+        crate::test_support::root::signed_test_node("history-cursor").await;
     let session_id = "session-cursor";
     let keys = publish_signed_history(
         &db,
@@ -717,7 +718,8 @@ async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
 #[tokio::test]
 async fn close_session_preserves_creation_time() {
     use crate::store::identity::NodeIdentity;
-    let (db, user, client, binding) = crate::test_support::signed_test_node("close-session").await;
+    let (db, user, client, binding) =
+        crate::test_support::root::signed_test_node("close-session").await;
     let node_did = db.node_identity.did();
     reserve_signed_session(&db, &user, &client, &binding, "session-1").await;
     let before = client
@@ -751,7 +753,7 @@ async fn close_session_preserves_creation_time() {
 #[tokio::test]
 async fn create_session_with_id_is_idempotent() {
     let (db, user, client, binding) =
-        crate::test_support::signed_test_node("session-idempotent").await;
+        crate::test_support::root::signed_test_node("session-idempotent").await;
     let node_did = db.node_identity.did();
     reserve_signed_session(&db, &user, &client, &binding, "session-1").await;
     let before = client
@@ -805,7 +807,7 @@ async fn create_session_with_agent_did_rejects_mismatched_existing_binding() {
     use crate::store::identity::NodeIdentity;
 
     let (db, user, access, binding) =
-        crate::test_support::signed_test_node("session-binding").await;
+        crate::test_support::root::signed_test_node("session-binding").await;
     let node_did = db.node_identity.did();
     let other = crate::store::identity::provision_agent_identity_authorized(
         &db.node,
@@ -814,7 +816,7 @@ async fn create_session_with_agent_did_rejects_mismatched_existing_binding() {
     )
     .await
     .unwrap();
-    crate::test_support::install_test_agent_binding_with_access(
+    crate::test_support::inference::install_test_agent_binding_with_access(
         node_did,
         "Other fixture agent",
         &other,
@@ -977,7 +979,7 @@ async fn fork_reader_node(
 ) {
     use crate::store::config_client::NodePermission;
     use crate::store::identity::NodeIdentity;
-    let (db, user, client) = crate::test_support::signed_test_node_without_agent(name).await;
+    let (db, user, client) = crate::test_support::root::signed_test_node_without_agent(name).await;
     let runtime = db.node_identity.as_ref();
     let admin =
         crate::ConfigAccess::local_as(db.node.clone(), identity::Did::new(runtime.did()).unwrap());
@@ -990,15 +992,19 @@ async fn fork_reader_node(
         crate::store::identity::provision_agent_identity_authorized(&db.node, runtime, &user_did)
             .await
             .unwrap();
-    crate::test_support::install_test_agent_binding_with_access(
+    crate::test_support::inference::install_test_agent_binding_with_access(
         runtime.did(),
         "Default fixture agent",
         &binding,
         &admin,
     )
     .await;
-    crate::test_support::set_test_default_agent_as(&client, runtime.did(), &binding.agent_did)
-        .await;
+    crate::test_support::documents::set_test_default_agent_as(
+        &client,
+        runtime.did(),
+        &binding.agent_did,
+    )
+    .await;
     (db, user, client, binding)
 }
 
@@ -1099,7 +1105,7 @@ async fn a_reader_granted_only_the_fork_reads_its_whole_retained_transcript() {
     assert_eq!(grandchild.copied_messages, 2);
 
     let sharee =
-        tokio::task::spawn_blocking(|| crate::support::fixtures::test_identity("fork-sharee"))
+        tokio::task::spawn_blocking(|| crate::store::test_support::test_identity("fork-sharee"))
             .await
             .unwrap();
     let sharee_did = identity::Did::new(sharee.did()).unwrap();
@@ -1361,10 +1367,11 @@ async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_curren
             .unwrap(),
         history
     );
-    let foreign =
-        tokio::task::spawn_blocking(|| crate::support::fixtures::test_identity("retained-foreign"))
-            .await
-            .unwrap();
+    let foreign = tokio::task::spawn_blocking(|| {
+        crate::store::test_support::test_identity("retained-foreign")
+    })
+    .await
+    .unwrap();
     for changed in [
         ForkParams {
             boundary: ForkBoundary::BeforeMessageKey(&keys[1]),
@@ -1522,7 +1529,7 @@ async fn compaction_save_fault_leaves_chain_and_generation_intact() {
     use crate::store::identity::NodeIdentity;
     const SESSION: &str = "compaction-rollback";
     let (db, user, client, binding) =
-        crate::test_support::signed_test_node("compaction-rollback").await;
+        crate::test_support::root::signed_test_node("compaction-rollback").await;
     let node = &db.node;
     let node_did = db.node_identity.did();
     let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
@@ -1902,9 +1909,9 @@ pub(crate) async fn import_history_observation_as(
 async fn history_reads_exact_node_and_requester_scope() {
     use crate::store::identity::NodeIdentity;
     let (local_db, local_user, local_client, local_binding) =
-        crate::test_support::signed_test_node("history-local").await;
+        crate::test_support::root::signed_test_node("history-local").await;
     let (foreign_db, foreign_user, foreign_client, foreign_binding) =
-        crate::test_support::signed_test_node("history-foreign").await;
+        crate::test_support::root::signed_test_node("history-foreign").await;
     let local_node = local_db.node_identity.did();
     let foreign_node = foreign_db.node_identity.did();
     assert_ne!(local_node, foreign_node);
@@ -1996,9 +2003,9 @@ async fn history_reads_exact_node_and_requester_scope() {
 async fn authored_keys_are_immutable_and_sequences_are_node_scoped() {
     use crate::store::identity::NodeIdentity;
     let (first_db, first_user, first_client, first_binding) =
-        crate::test_support::signed_test_node("authored-local").await;
+        crate::test_support::root::signed_test_node("authored-local").await;
     let (second_db, second_user, second_client, second_binding) =
-        crate::test_support::signed_test_node("authored-foreign").await;
+        crate::test_support::root::signed_test_node("authored-foreign").await;
     let first_node = first_db.node_identity.did();
     let second_node = second_db.node_identity.did();
     assert_ne!(first_node, second_node);
@@ -2103,9 +2110,9 @@ async fn authored_keys_are_immutable_and_sequences_are_node_scoped() {
 async fn compaction_chains_with_equal_session_labels_remain_owner_scoped() {
     use crate::store::identity::NodeIdentity;
     let (local_db, local_user, local_client, local_binding) =
-        crate::test_support::signed_test_node("compaction-local").await;
+        crate::test_support::root::signed_test_node("compaction-local").await;
     let (foreign_db, foreign_user, foreign_client, foreign_binding) =
-        crate::test_support::signed_test_node("compaction-foreign").await;
+        crate::test_support::root::signed_test_node("compaction-foreign").await;
     let local_node = local_db.node_identity.did();
     let foreign_node = foreign_db.node_identity.did();
     assert_ne!(local_node, foreign_node);
@@ -2444,7 +2451,8 @@ async fn concurrent_keyed_appends_resolve_sequence_conflicts_without_duplicates(
     use crate::request::streaming::DefraStreamWriter;
     use crate::store::identity::NodeIdentity;
     use std::time::Duration;
-    let (db, user, client, binding) = crate::test_support::signed_test_node("append-race").await;
+    let (db, user, client, binding) =
+        crate::test_support::root::signed_test_node("append-race").await;
     let node = db.node.clone();
     let node_did = db.node_identity.did();
     let mut lifecycle = signed_claimed_authored_request(
@@ -2513,7 +2521,7 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
     use gents_protocol::output::MessagePublication;
 
     let (foreign_db, foreign_user, _foreign_client, _foreign_binding) =
-        crate::test_support::signed_test_node("header-coordinate-foreign").await;
+        crate::test_support::root::signed_test_node("header-coordinate-foreign").await;
     for case in [
         "unrelated",
         "key",
@@ -2524,7 +2532,7 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
         "fork",
     ] {
         let (db, user, client, binding) =
-            crate::test_support::signed_test_node(&format!("header-coordinate-{case}")).await;
+            crate::test_support::root::signed_test_node(&format!("header-coordinate-{case}")).await;
         let node_did = db.node_identity.did();
         let foreign_did = foreign_db.node_identity.did();
         let user_did = user.did();
@@ -2643,11 +2651,12 @@ async fn retry_frontier_matches_lean_admission() {
     use crate::store::identity::NodeIdentity;
     use crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
     use gents_protocol::tool_call::AwaitMode;
-    let (db, user, client, binding) = crate::test_support::signed_test_node("retry-frontier").await;
+    let (db, user, client, binding) =
+        crate::test_support::root::signed_test_node("retry-frontier").await;
     let node = &db.node;
     let node_did = db.node_identity.did();
     let other = tokio::task::spawn_blocking(|| {
-        crate::support::fixtures::test_identity("retry-foreign-user")
+        crate::store::test_support::test_identity("retry-foreign-user")
     })
     .await
     .unwrap();
@@ -2823,7 +2832,7 @@ async fn unsigned_starter_cannot_populate_the_index() {
         .unwrap();
     use crate::store::identity::NodeIdentity;
     let (db, user, access, binding) =
-        crate::test_support::signed_test_node("unsigned-starter").await;
+        crate::test_support::root::signed_test_node("unsigned-starter").await;
     let mut session = super::model_test_support::model_session(&case["before"]);
     session.node_did = db.node_identity.did().to_owned();
     session.requester_did = Some(user.did().to_owned());

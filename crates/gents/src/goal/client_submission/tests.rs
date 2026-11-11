@@ -198,7 +198,7 @@ async fn user_without_session_access_receives_the_modeled_refusal() {
     let owner_access = fixture.user_access();
     let requester = Arc::new(
         tokio::task::spawn_blocking(|| {
-            crate::support::fixtures::test_identity("goal-submission-denied-requester")
+            crate::store::test_support::test_identity("goal-submission-denied-requester")
         })
         .await
         .unwrap(),

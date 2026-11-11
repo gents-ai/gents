@@ -60,7 +60,7 @@ mod tests {
 
     #[tokio::test]
     async fn replacement_is_scoped_clears_context_and_rolls_back_dangling_links() -> Result<()> {
-        let node = Arc::new(crate::test_support::node_builder().build().await?);
+        let node = Arc::new(crate::store::test_support::node_builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local_as(
             node.clone(),
@@ -71,7 +71,7 @@ mod tests {
             .unwrap(),
         );
         for owner in ["did:key:owner", "did:key:other"] {
-            crate::test_support::bootstrap_signed_test_node(&access, owner).await;
+            crate::test_support::documents::bootstrap_signed_test_node(&access, owner).await;
             let backend = json!({"node_did":owner,"backend_id":"local","name":"Local",
                 "provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1",
                 "auth":{"kind":"unauthenticated"}});

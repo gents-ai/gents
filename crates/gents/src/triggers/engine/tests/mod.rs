@@ -642,7 +642,7 @@ pub(super) async fn signed_materializer_agent(
     crate::ConfigAccess,
     Arc<ResolvedAgent>,
 ) {
-    let (db, user, access, binding) = crate::test_support::signed_test_node(name).await;
+    let (db, user, access, binding) = crate::test_support::root::signed_test_node(name).await;
     let template = tokio::task::spawn_blocking(|| integration_test_agent("materializer-template"))
         .await
         .expect("build test agent template");

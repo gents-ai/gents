@@ -1295,7 +1295,7 @@ async fn group_marker_is_read_by_selected_held_agent_without_node_visibility() {
     .await
     .unwrap();
     let owner = db.node_identity.did().to_owned();
-    crate::test_support::install_test_agent_binding_with_access(
+    crate::test_support::inference::install_test_agent_binding_with_access(
         &owner,
         "other group Agent",
         &binding,

@@ -6,7 +6,7 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 async fn request_head_uses_exact_scope_and_timestamp_then_logical_id() {
     let temp = tempfile::tempdir().unwrap();
     let node = std::sync::Arc::new(
-        crate::test_support::node_builder()
+        crate::store::test_support::node_builder()
             .data_path(temp.path())
             .build()
             .await
@@ -45,7 +45,7 @@ async fn request_head_uses_exact_scope_and_timestamp_then_logical_id() {
 async fn batched_request_heads_preserve_scope_order_and_bound_query_count() {
     let temp = tempfile::tempdir().unwrap();
     let node = std::sync::Arc::new(
-        crate::test_support::node_builder()
+        crate::store::test_support::node_builder()
             .data_path(temp.path())
             .build()
             .await
@@ -146,7 +146,7 @@ async fn batched_request_heads_preserve_scope_order_and_bound_query_count() {
 async fn refresh_accepts_null_requester_and_rejects_changed_session_scope() {
     let temp = tempfile::tempdir().unwrap();
     let node = std::sync::Arc::new(
-        crate::test_support::node_builder()
+        crate::store::test_support::node_builder()
             .data_path(temp.path())
             .build()
             .await
@@ -294,7 +294,7 @@ async fn tie_fact(
 async fn same_second_claim_after_completion_becomes_the_observed_head() {
     let temp = tempfile::tempdir().unwrap();
     let node = std::sync::Arc::new(
-        crate::test_support::node_builder()
+        crate::store::test_support::node_builder()
             .data_path(temp.path())
             .build()
             .await
@@ -380,7 +380,7 @@ async fn generated_selection_cases_drive_the_native_request_head() {
     for (index, case) in cases.iter().enumerate() {
         let temp = tempfile::tempdir().unwrap();
         let node = std::sync::Arc::new(
-            crate::test_support::node_builder()
+            crate::store::test_support::node_builder()
                 .data_path(temp.path())
                 .build()
                 .await

@@ -137,7 +137,7 @@ fn transaction_create_doc_id_accepts_both_defradb_response_shapes() {
 }
 
 async fn test_db(name: &str) -> TestDb {
-    let (db, user, user_access, binding) = crate::test_support::signed_test_node(name).await;
+    let (db, user, user_access, binding) = crate::test_support::root::signed_test_node(name).await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let agent_identity =

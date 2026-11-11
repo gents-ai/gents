@@ -89,7 +89,7 @@ async fn fixture(enabled: bool) -> Result<Fixture> {
     let user_identity = crate::store::identity::resolve_agent_identity(&root, &user_binding)?;
     let agent_identity = crate::store::identity::resolve_agent_identity(&root, &agent_binding)?;
     let node = Arc::new(
-        crate::test_support::node_builder()
+        crate::store::test_support::node_builder()
             .with_node_identity_did(PIN_FIXED_DID)
             .with_node_acp_enabled()
             .build()

@@ -30,7 +30,7 @@ impl CaptureFixture {
             AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
         };
         let (db, user, client, binding) =
-            crate::test_support::signed_test_node("rendered-capture").await;
+            crate::test_support::root::signed_test_node("rendered-capture").await;
         let agent =
             crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
                 .unwrap();

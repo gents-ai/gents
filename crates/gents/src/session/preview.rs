@@ -179,7 +179,7 @@ mod tests {
         use crate::ConfigAccess;
         let temp = tempfile::tempdir().unwrap();
         let node = std::sync::Arc::new(
-            crate::test_support::node_builder()
+            crate::store::test_support::node_builder()
                 .data_path(temp.path())
                 .build()
                 .await

@@ -1208,7 +1208,7 @@ async fn session_list_names_the_starter_from_the_callers_own_receipt() {
     let root = crate::KeyIdentity::load_existing(admission.path.join("node.key"), None).unwrap();
     let binding = crate::store::identity::provision_agent_identity(&root).unwrap();
     let worker = crate::store::identity::resolve_agent_identity(&root, &binding).unwrap();
-    crate::test_support::install_test_agent_binding_with_access(
+    crate::test_support::inference::install_test_agent_binding_with_access(
         &caller.node_did,
         "started worker",
         &binding,
@@ -1855,7 +1855,7 @@ async fn agent_new_goal_publishes_for_target_with_the_caller_as_native_owner() {
     let target = crate::store::identity::resolve_agent_identity(&root, &binding).unwrap();
     // Agent configuration is authored by the User; a managed Agent cannot
     // publish another Agent's configuration document.
-    crate::test_support::install_test_agent_binding_with_access(
+    crate::test_support::inference::install_test_agent_binding_with_access(
         &caller.node_did,
         "nested Goal target",
         &binding,

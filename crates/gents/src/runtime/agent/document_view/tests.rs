@@ -16,7 +16,7 @@ async fn runtime_view_uses_reader_grant_and_hides_unlinked_agents() -> anyhow::R
     use crate::store::config_client::{ConfigAccess, NodePermission};
 
     let (db, user, owner, binding) =
-        crate::test_support::signed_test_node("runtime-view-reader").await;
+        crate::test_support::root::signed_test_node("runtime-view-reader").await;
     let runtime = db.node_identity.clone();
     let node = db.node.clone();
     let reader = tokio::task::spawn_blocking(|| test_identity("runtime-view-reader-actor")).await?;
@@ -67,7 +67,7 @@ async fn runtime_view_uses_reader_grant_and_hides_unlinked_agents() -> anyhow::R
 #[tokio::test]
 async fn existing_document_runtime_view_does_not_wait_for_mutation_gate() {
     let (db, _user, access, _binding) =
-        crate::test_support::signed_test_node("document-view-mutation-gate").await;
+        crate::test_support::root::signed_test_node("document-view-mutation-gate").await;
     let node = db.node.clone();
     let owner = db.node_identity.did();
     let principal = crate::documents::ensure_node(&node, owner).await.unwrap();
@@ -106,7 +106,7 @@ async fn existing_document_runtime_view_does_not_wait_for_mutation_gate() {
 #[tokio::test]
 async fn load_document_runtime_view_includes_referenced_documents() {
     let (db, _user, _access, binding) =
-        crate::test_support::signed_test_node("document-view-load").await;
+        crate::test_support::root::signed_test_node("document-view-load").await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let default_agent_did = binding.agent_did;
@@ -140,7 +140,7 @@ async fn load_document_runtime_view_includes_referenced_documents() {
 #[tokio::test]
 async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
     let (db, _user, user_access, binding) =
-        crate::test_support::signed_test_node("document-view-update").await;
+        crate::test_support::root::signed_test_node("document-view-update").await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let default_agent_did = binding.agent_did;
@@ -261,7 +261,7 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
     use crate::turn::prompt::LayeredPromptBuilder;
 
     let (db, _user, access, binding) =
-        crate::test_support::signed_test_node("document-view-skill").await;
+        crate::test_support::root::signed_test_node("document-view-skill").await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let default_agent_did = binding.agent_did;
@@ -356,7 +356,8 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
 
 #[tokio::test]
 async fn skill_crud_mutations_round_trip() {
-    let (db, user, access, _binding) = crate::test_support::signed_test_node("skill-crud").await;
+    let (db, user, access, _binding) =
+        crate::test_support::root::signed_test_node("skill-crud").await;
     grant_delete_permissions(&db, &user).await;
     seed_automation(
         &access,
@@ -398,7 +399,7 @@ async fn skill_crud_mutations_round_trip() {
 #[tokio::test]
 async fn apply_control_update_hot_reloads_skill() {
     let (db, user, access, _binding) =
-        crate::test_support::signed_test_node("document-view-skill-reload").await;
+        crate::test_support::root::signed_test_node("document-view-skill-reload").await;
     grant_delete_permissions(&db, &user).await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
@@ -433,7 +434,7 @@ async fn apply_control_update_hot_reloads_skill() {
     let foreign = tokio::task::spawn_blocking(|| test_identity("document-view-foreign-node"))
         .await
         .unwrap();
-    crate::test_support::bootstrap_signed_test_node(&access, foreign.did()).await;
+    crate::test_support::documents::bootstrap_signed_test_node(&access, foreign.did()).await;
     seed_automation(
         &access,
         vec![(
@@ -486,7 +487,7 @@ async fn seed_raw_tools(
 #[tokio::test]
 async fn resolve_quarantines_behavior_with_empty_agent_target_id() {
     let (db, _user, access, binding) =
-        crate::test_support::signed_test_node("document-view-invalid-tool-selection").await;
+        crate::test_support::root::signed_test_node("document-view-invalid-tool-selection").await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let node_did = identity.did();
@@ -525,7 +526,7 @@ async fn resolve_quarantines_behavior_with_empty_agent_target_id() {
 #[tokio::test]
 async fn resolve_quarantines_behavior_with_missing_local_agent_target() {
     let (db, _user, access, binding) =
-        crate::test_support::signed_test_node("document-view-missing-agent-target").await;
+        crate::test_support::root::signed_test_node("document-view-missing-agent-target").await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let node_did = identity.did();
@@ -849,7 +850,7 @@ fn retired_reserved_id_predicate_matches_both_namespaces() {
 #[tokio::test]
 async fn retired_reserved_ids_are_never_visible() {
     let (db, _user, access, _binding) =
-        crate::test_support::signed_test_node("document-view-retired-ids").await;
+        crate::test_support::root::signed_test_node("document-view-retired-ids").await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let node_did = identity.did();
@@ -907,7 +908,7 @@ async fn retired_reserved_ids_are_never_visible() {
 #[tokio::test]
 async fn usage_collection_write_never_reloads_the_runtime_view() {
     let (db, _user, _access, _binding) =
-        crate::test_support::signed_test_node("document-view-usage").await;
+        crate::test_support::root::signed_test_node("document-view-usage").await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let mut view = load_document_runtime_view(&node, identity.did())
@@ -930,7 +931,7 @@ async fn usage_collection_write_never_reloads_the_runtime_view() {
 #[tokio::test]
 async fn load_document_runtime_view_populates_tasks_and_schedules() {
     let (db, user, access, agent) =
-        crate::test_support::signed_test_node("document-view-tasks-schedules").await;
+        crate::test_support::root::signed_test_node("document-view-tasks-schedules").await;
     let node = &db.node;
     let node_did = db.node_identity.did();
     assert_eq!(
@@ -1039,7 +1040,7 @@ async fn load_document_runtime_view_populates_tasks_and_schedules() {
 #[tokio::test]
 async fn load_document_runtime_view_populates_event_triggers() {
     let (db, _user, access, _binding) =
-        crate::test_support::signed_test_node("document-view-event-triggers").await;
+        crate::test_support::root::signed_test_node("document-view-event-triggers").await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let node_did = identity.did();
@@ -1093,7 +1094,7 @@ async fn load_document_runtime_view_populates_event_triggers() {
 #[tokio::test]
 async fn resolve_produces_active_schedule_when_task_and_behavior_exist() {
     let (db, _user, access, binding) =
-        crate::test_support::signed_test_node("document-view-resolve-schedule-active").await;
+        crate::test_support::root::signed_test_node("document-view-resolve-schedule-active").await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let node_did = identity.did();
@@ -1163,7 +1164,7 @@ async fn resolve_produces_active_schedule_when_task_and_behavior_exist() {
 #[tokio::test]
 async fn resolve_produces_active_event_trigger_when_task_and_behavior_exist() {
     let (db, _user, access, binding) =
-        crate::test_support::signed_test_node("document-view-resolve-trigger-active").await;
+        crate::test_support::root::signed_test_node("document-view-resolve-trigger-active").await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let node_did = identity.did();
@@ -1231,7 +1232,7 @@ async fn resolve_produces_active_event_trigger_when_task_and_behavior_exist() {
 #[tokio::test]
 async fn persisted_required_source_fill_quarantines_and_recovers_event_trigger() {
     let (db, _user, access, binding) =
-        crate::test_support::signed_test_node("document-view-required-source-fill").await;
+        crate::test_support::root::signed_test_node("document-view-required-source-fill").await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let owner = identity.did();
@@ -1333,7 +1334,8 @@ async fn persisted_required_source_fill_quarantines_and_recovers_event_trigger()
 #[tokio::test]
 async fn resolve_marks_event_trigger_unavailable_when_task_missing_or_disabled() {
     let (db, _user, access, binding) =
-        crate::test_support::signed_test_node("document-view-resolve-trigger-unavailable").await;
+        crate::test_support::root::signed_test_node("document-view-resolve-trigger-unavailable")
+            .await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let node_did = identity.did();
@@ -1412,7 +1414,8 @@ async fn resolve_marks_event_trigger_unavailable_when_task_missing_or_disabled()
 #[tokio::test]
 async fn resolve_quarantines_event_trigger_with_invalid_source_collection() {
     let (db, _user, access, binding) =
-        crate::test_support::signed_test_node("document-view-resolve-trigger-injection").await;
+        crate::test_support::root::signed_test_node("document-view-resolve-trigger-injection")
+            .await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let node_did = identity.did();
@@ -1478,7 +1481,8 @@ async fn resolve_quarantines_event_trigger_with_invalid_source_collection() {
 #[tokio::test]
 async fn resolve_marks_schedule_unavailable_when_task_missing_or_disabled() {
     let (db, _user, access, binding) =
-        crate::test_support::signed_test_node("document-view-resolve-schedule-unavailable").await;
+        crate::test_support::root::signed_test_node("document-view-resolve-schedule-unavailable")
+            .await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let node_did = identity.did();
@@ -1551,7 +1555,7 @@ async fn resolve_marks_schedule_unavailable_when_task_missing_or_disabled() {
 #[tokio::test]
 async fn resolve_populates_active_tasks_for_enabled_tasks_with_ready_behaviors() {
     let (db, _user, access, binding) =
-        crate::test_support::signed_test_node("document-view-resolve-active-tasks").await;
+        crate::test_support::root::signed_test_node("document-view-resolve-active-tasks").await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let node_did = identity.did();
@@ -1703,7 +1707,7 @@ async fn insert_enabled_oauth_credential(node: &Arc<defra_node::Node>, node_did:
 #[tokio::test]
 async fn chatgpt_codex_behavior_without_credential_is_unavailable() {
     let (db, _user, access, binding) =
-        crate::test_support::signed_test_node("document-view-chatgpt-nocred").await;
+        crate::test_support::root::signed_test_node("document-view-chatgpt-nocred").await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let default_agent_did = binding.agent_did;
@@ -1742,7 +1746,7 @@ async fn chatgpt_codex_behavior_without_credential_is_unavailable() {
 #[tokio::test]
 async fn runtime_snapshot_skips_an_unknown_provider_kind_backend() {
     let (db, user, access, known) =
-        crate::test_support::signed_test_node("document-view-unknown-kind").await;
+        crate::test_support::root::signed_test_node("document-view-unknown-kind").await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let did = identity.did();
@@ -1753,8 +1757,10 @@ async fn runtime_snapshot_skips_an_unknown_provider_kind_backend() {
     )
     .await
     .unwrap();
-    crate::test_support::install_test_agent_binding_with_access(did, "future", &future, &access)
-        .await;
+    crate::test_support::inference::install_test_agent_binding_with_access(
+        did, "future", &future, &access,
+    )
+    .await;
     let doc = find_owned_doc(
         &access,
         "InferenceBackendMetadata",
@@ -1813,7 +1819,7 @@ async fn runtime_snapshot_skips_an_unknown_provider_kind_backend() {
 #[tokio::test]
 async fn chatgpt_codex_behavior_with_enabled_credential_is_runnable() {
     let (db, _user, access, binding) =
-        crate::test_support::signed_test_node("document-view-chatgpt-cred").await;
+        crate::test_support::root::signed_test_node("document-view-chatgpt-cred").await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let default_agent_did = binding.agent_did;
@@ -1842,7 +1848,7 @@ async fn chatgpt_codex_behavior_with_enabled_credential_is_runnable() {
 #[tokio::test]
 async fn readiness_follows_the_backend_account_reference() {
     let (db, _user, user_access, binding) =
-        crate::test_support::signed_test_node("document-view-account-ref").await;
+        crate::test_support::root::signed_test_node("document-view-account-ref").await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let default_agent_did = binding.agent_did;
@@ -1911,7 +1917,7 @@ async fn readiness_follows_the_backend_account_reference() {
 async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
     use crate::inference::auth::credential::{set_account_enabled, store_sign_in};
     let (db, _user, user_access, binding) =
-        crate::test_support::signed_test_node("document-view-account-lifecycle").await;
+        crate::test_support::root::signed_test_node("document-view-account-lifecycle").await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let did = identity.did().to_string();
@@ -1996,7 +2002,7 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
 async fn an_account_pool_agent_follows_its_enabled_accounts() {
     use crate::inference::auth::credential::{set_account_enabled, store_sign_in};
     let (db, _user, user_access, binding) =
-        crate::test_support::signed_test_node("document-view-account-pool").await;
+        crate::test_support::root::signed_test_node("document-view-account-pool").await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let did = identity.did().to_string();
@@ -2085,7 +2091,7 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
     use gents_protocol::node_readiness::is_behavior_unavailable_rejection;
     use gents_protocol::node_readiness::AgentReadinessUnavailableReason as Reason;
     let (db, _user, user_access, binding) =
-        crate::test_support::signed_test_node("document-view-account-rejection").await;
+        crate::test_support::root::signed_test_node("document-view-account-rejection").await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let did = identity.did().to_string();
@@ -2250,7 +2256,7 @@ async fn bind_default_agent_claude_backend(
 #[tokio::test]
 async fn claude_subscription_behavior_requires_enabled_credential() {
     let (db, _user, access, binding) =
-        crate::test_support::signed_test_node("document-view-claude-cred").await;
+        crate::test_support::root::signed_test_node("document-view-claude-cred").await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let default_agent_did = binding.agent_did;
@@ -2350,7 +2356,7 @@ async fn claude_subscription_behavior_requires_enabled_credential() {
 #[tokio::test]
 async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
     let (db, _user, access, binding) =
-        crate::test_support::signed_test_node("document-view-chatgpt-apply").await;
+        crate::test_support::root::signed_test_node("document-view-chatgpt-apply").await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let default_agent_did = binding.agent_did;
@@ -2454,7 +2460,7 @@ fn finding_decl() -> crate::documents::WriteToolDecl {
 #[tokio::test]
 async fn apply_control_update_evicts_surface_when_ownership_moves_away() {
     let (db, _user, access, _binding) =
-        crate::test_support::signed_test_node("document-view-surface-revoke").await;
+        crate::test_support::root::signed_test_node("document-view-surface-revoke").await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let node_did = identity.did();
@@ -2517,7 +2523,7 @@ async fn apply_control_update_evicts_surface_when_ownership_moves_away() {
 #[tokio::test]
 async fn unavailable_agent_scan_identity_follows_lean_candidates() {
     let (db, _user, _access, binding) =
-        crate::test_support::signed_test_node("unavailable-scan-root").await;
+        crate::test_support::root::signed_test_node("unavailable-scan-root").await;
     let node = db.node.clone();
     let root = db.node_identity.clone();
     let did = binding.agent_did;

@@ -390,7 +390,12 @@ mod tests {
 
     #[tokio::test]
     async fn local_relationships_use_the_explicit_actor_and_are_idempotent() {
-        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        let node = std::sync::Arc::new(
+            crate::store::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         let owner = identity::Did::new(
             node.node_identity_did()
                 .expect("fixture node has an identity"),

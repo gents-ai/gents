@@ -222,7 +222,12 @@ fn document_ux_install_admission_matches_lean() {
 }
 
 async fn access() -> ConfigAccess {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let access = node_access(&node);
     seed_pack_node(&access, OWNER).await.unwrap();
@@ -1279,7 +1284,8 @@ async fn dependency_fixture() -> (Arc<defra_node::Node>, ConfigAccess) {
     seed_pack_node(&node_access(&node), OWNER).await.unwrap();
     for profile in ["claude", "glm", "grok"] {
         let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
-        crate::test_support::install_test_agent_binding(&node, OWNER, profile, &binding).await;
+        crate::test_support::inference::install_test_agent_binding(&node, OWNER, profile, &binding)
+            .await;
     }
     let access = node_access(&node);
     (node, access)
@@ -1293,7 +1299,8 @@ async fn install_dependee(
     explicit: bool,
 ) {
     use crate::NodeIdentity as _;
-    let (_guard, dir) = crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
+    let (_guard, dir) =
+        crate::test_support::pack::fixture_pack_copy("dependee_fixture", &json!({}));
     let (bytes, _) = crate::pack::archive::pack_dir(&dir).unwrap();
     let archive = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
     let local = ConfigAccess::local_as(
@@ -1332,9 +1339,10 @@ async fn install_dependee(
 async fn locally_installed_pack_agent_holds_the_projected_baseline() {
     use crate::NodeIdentity as _;
     let (db, user, user_access) =
-        crate::test_support::signed_test_node_without_agent("local-pack-baseline").await;
+        crate::test_support::root::signed_test_node_without_agent("local-pack-baseline").await;
     let runtime = db.node_identity.clone();
-    let (_guard, dir) = crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
+    let (_guard, dir) =
+        crate::test_support::pack::fixture_pack_copy("dependee_fixture", &json!({}));
     let (bytes, _) = crate::pack::archive::pack_dir(&dir).unwrap();
     let archive = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
     let local = ConfigAccess::local_as(db.node.clone(), identity::Did::new(user.did()).unwrap());
@@ -1920,7 +1928,8 @@ fn install_fixture_plugins_into(
     sdl: &str,
     edit: impl FnOnce(&mut serde_json::Value),
 ) -> Result<Vec<crate::plugin::store::InstalledPlugin>> {
-    let (_guard, root) = crate::test_support::fixture_pack_copy("job_plugin_fixture", &json!({}));
+    let (_guard, root) =
+        crate::test_support::pack::fixture_pack_copy("job_plugin_fixture", &json!({}));
     std::fs::write(root.join("schemas/fixture_note.graphql"), sdl).unwrap();
     let path = root.join("manifest.json");
     let mut manifest: serde_json::Value =
@@ -2058,7 +2067,8 @@ fn installed_plugin_record_without_data_unique_keys_decodes() {
 }
 
 fn documents_archive() -> crate::pack::archive::PackArchive {
-    let (_guard, root) = crate::test_support::fixture_pack_copy("documents_fixture", &json!({}));
+    let (_guard, root) =
+        crate::test_support::pack::fixture_pack_copy("documents_fixture", &json!({}));
     let path = root.join("manifest.json");
     let mut manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -2169,7 +2179,8 @@ async fn explicit_self_config_reinstall_lowers_the_pack_record() {
 }
 
 fn documents_archive_shipping(files: &[(&str, &str)]) -> crate::pack::archive::PackArchive {
-    let (_guard, root) = crate::test_support::fixture_pack_copy("documents_fixture", &json!({}));
+    let (_guard, root) =
+        crate::test_support::pack::fixture_pack_copy("documents_fixture", &json!({}));
     let path = root.join("manifest.json");
     let mut manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -2190,7 +2201,8 @@ fn documents_archive_shipping(files: &[(&str, &str)]) -> crate::pack::archive::P
 
 #[tokio::test]
 async fn operator_installs_document_pack_ux_with_its_data_plugin() {
-    let (_guard, root) = crate::test_support::fixture_pack_copy("job_plugin_fixture", &json!({}));
+    let (_guard, root) =
+        crate::test_support::pack::fixture_pack_copy("job_plugin_fixture", &json!({}));
     let path = root.join("manifest.json");
     let mut manifest: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     std::fs::create_dir_all(root.join("ux/board")).unwrap();
@@ -2355,7 +2367,12 @@ async fn pack_job_block_is_refused_on_a_self_config_install() {
     let mut config = config(&[]);
     config.tools = vec![job_tools(json!({"agent_targets": ["wf-run"]}))];
     config.agent_targets = shipping(&["wf-run"]).agent_targets;
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     seed_pack_node(&node_access(&node), OWNER).await.unwrap();
     let access = node_access(&node);
@@ -2463,7 +2480,7 @@ fn dependee_with_variables(
     tools: &str,
     context: &str,
 ) -> (tempfile::TempDir, crate::pack::archive::PackArchive) {
-    let (guard, dir) = crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
+    let (guard, dir) = crate::test_support::pack::fixture_pack_copy("dependee_fixture", &json!({}));
     let edit = |name: &str, change: &dyn Fn(&mut Value)| {
         let path = dir.join(name);
         let mut value: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
@@ -2491,7 +2508,7 @@ fn dependee_with_variables(
 fn agentless_dependee(
     display_name: &str,
 ) -> (tempfile::TempDir, crate::pack::archive::PackArchive) {
-    let (guard, dir) = crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
+    let (guard, dir) = crate::test_support::pack::fixture_pack_copy("dependee_fixture", &json!({}));
     let path = dir.join("pack_config.json");
     let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     config.as_object_mut().unwrap().remove("agents");
@@ -2608,7 +2625,7 @@ fn documents_dependency_pair(
         std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     };
     let (dependee_guard, dependee_dir) =
-        crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
+        crate::test_support::pack::fixture_pack_copy("dependee_fixture", &json!({}));
     if dependee_plugin {
         std::fs::create_dir_all(dependee_dir.join("plugins")).unwrap();
         let wat = crate::plugin::test_fixtures::constant_output_wat(b"{}");
@@ -2632,7 +2649,7 @@ fn documents_dependency_pair(
         });
     }
     let (dependent_guard, dependent_dir) =
-        crate::test_support::fixture_pack_copy("dependent_fixture", &json!({}));
+        crate::test_support::pack::fixture_pack_copy("dependent_fixture", &json!({}));
     edit(&dependent_dir, &|manifest| {
         manifest["dependencies"] = json!(["fixture/dependee_fixture"]);
     });
@@ -3135,7 +3152,7 @@ async fn refused_dependency(dependee_plugin: bool, change: &dyn Fn(&mut Value)) 
         std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     };
     let (_dependee_guard, dependee_dir) =
-        crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
+        crate::test_support::pack::fixture_pack_copy("dependee_fixture", &json!({}));
     if dependee_plugin {
         std::fs::create_dir_all(dependee_dir.join("plugins")).unwrap();
         let wat = crate::plugin::test_fixtures::constant_output_wat(b"{}");
@@ -3160,7 +3177,7 @@ async fn refused_dependency(dependee_plugin: bool, change: &dyn Fn(&mut Value)) 
     }
     edit(&dependee_dir, change);
     let (_dependent_guard, dependent_dir) =
-        crate::test_support::fixture_pack_copy("dependent_fixture", &json!({}));
+        crate::test_support::pack::fixture_pack_copy("dependent_fixture", &json!({}));
     edit(&dependent_dir, &|manifest| {
         manifest["dependencies"] = json!(["fixture/dependee_fixture"]);
     });
@@ -3262,7 +3279,12 @@ async fn prepare_naming_plugin(
     manifest: &crate::pack::PackManifest,
     plugin_home: Option<&Path>,
 ) -> Result<PreparedDocumentPackInstall> {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     seed_pack_node(&node_access(&node), OWNER).await.unwrap();
     prepare_document_pack_install(
@@ -3304,7 +3326,7 @@ async fn remote_install_refuses_unverifiable_plugin_before_writes_and_installs_p
 
     let (_directory, identity, node, access) = super::super::agent_bindings::tests::fixture().await;
     let (_guard, directory) =
-        crate::test_support::fixture_pack_copy("documents_fixture", &json!({}));
+        crate::test_support::pack::fixture_pack_copy("documents_fixture", &json!({}));
     let manifest_path = directory.join("manifest.json");
     let mut manifest: Value =
         serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
@@ -4729,7 +4751,12 @@ async fn committed_ack_timeout_retains_staged_plugin_records() {
     )
     .await
     .unwrap();
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     let access = ConfigAccess::local(node.clone());
     access
         .add_collection("type AckProbe { value: String }")
@@ -4956,11 +4983,12 @@ async fn hosted_plugin_root_preserves_existing_pack_documents() -> Result<()> {
 async fn pack_install_applies_exactly_the_declared_placement_readers() {
     use crate::store::identity::{GrantSet, NodeIdentity as _};
     let (db, user, user_access) =
-        crate::test_support::signed_test_node_without_agent("pack-placement-readers").await;
+        crate::test_support::root::signed_test_node_without_agent("pack-placement-readers").await;
     let runtime = db.node_identity.clone();
     let root = tempfile::tempdir().unwrap();
     let host_path = root.path().to_string_lossy().into_owned();
-    let (_guard, dir) = crate::test_support::fixture_pack_copy("placement_fixture", &json!({}));
+    let (_guard, dir) =
+        crate::test_support::pack::fixture_pack_copy("placement_fixture", &json!({}));
     let (bytes, _) = crate::pack::archive::pack_dir(&dir).unwrap();
     let archive = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
     let local = ConfigAccess::local_as(db.node.clone(), identity::Did::new(user.did()).unwrap());

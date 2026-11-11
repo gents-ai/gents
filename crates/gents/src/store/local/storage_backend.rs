@@ -488,7 +488,7 @@ mod tests {
         let tempdir = tempfile::tempdir().unwrap();
         let data = tempdir.path().join("data");
         let node = std::sync::Arc::new(
-            crate::test_support::node_builder()
+            crate::store::test_support::node_builder()
                 .data_path(&data)
                 .with_storage_backend(defra_node::StorageBackend::Regolith)
                 .build()
@@ -498,7 +498,7 @@ mod tests {
         // The older collection keeps its identity policy binding, which the
         // migration owner checks before lineage, so only its schema lineage is
         // unknown.
-        crate::test_support::acp_policies::install_identity_acp_policies(&node)
+        crate::store::test_support::acp_policies::install_identity_acp_policies(&node)
             .await
             .unwrap();
         node.add_collection(&format!(

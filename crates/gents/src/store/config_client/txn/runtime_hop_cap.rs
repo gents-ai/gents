@@ -105,7 +105,7 @@ mod tests {
     async fn agent_transaction_reads_hidden_node_cap_as_runtime_and_fails_closed(
     ) -> anyhow::Result<()> {
         let (db, user, user_access, binding) =
-            crate::test_support::signed_test_node("runtime-hop-cap").await;
+            crate::test_support::root::signed_test_node("runtime-hop-cap").await;
         let runtime = db.node_identity.as_ref();
         let signer = crate::store::identity::resolve_agent_identity(runtime, &binding)?;
         let agent = ConfigAccess::local_managed_agent(

@@ -3,7 +3,12 @@ use super::*;
 const ARGS: &str = r#"{"file_path":"/tmp/transcript-contract.txt"}"#;
 
 async fn fixture(name: &str) -> (Arc<defra_node::Node>, DefraSessionHook, String, String) {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use crate::test_support::EnvVarGuard;
+use crate::store::test_support::EnvVarGuard;
 
 mod workspace_file_permissions;
 #[cfg(unix)]

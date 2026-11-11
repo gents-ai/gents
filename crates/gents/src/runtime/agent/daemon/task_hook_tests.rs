@@ -55,7 +55,8 @@ impl CompletionModel for ScriptedModel {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-        crate::test_support::capture_scripted_provider_request(&request, "scripted").await?;
+        crate::test_support::inference::capture_scripted_provider_request(&request, "scripted")
+            .await?;
         self.calls.fetch_add(1, Ordering::SeqCst);
         if self.fail {
             return Err(CompletionError::ProviderError("agent refused".into()));
@@ -97,7 +98,7 @@ impl Harness {
     async fn with_deadline(deadline: Duration) -> Self {
         use crate::store::config_client::NodePermission;
         let (db, user, user_access, binding) =
-            crate::test_support::signed_test_node("task-hooks").await;
+            crate::test_support::root::signed_test_node("task-hooks").await;
         let node = db.node.clone();
         let agent_identity =
             crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)

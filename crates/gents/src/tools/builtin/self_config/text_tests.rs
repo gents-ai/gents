@@ -1793,7 +1793,7 @@ async fn saved_config_audit_is_node_scoped_and_does_not_require_preview() {
         .await
         .unwrap();
     let access = fixture.user_access();
-    crate::test_support::bootstrap_signed_test_node(access, foreign.did()).await;
+    crate::test_support::documents::bootstrap_signed_test_node(access, foreign.did()).await;
     let node_response = access
         .execute(&format!(
             r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}) {{ _docID }} }}"#,

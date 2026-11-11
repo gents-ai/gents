@@ -1178,7 +1178,12 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
 
 #[tokio::test]
 async fn defra_query_tool_gated_by_selection() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = std::sync::Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
     let enabled = AgentToolSurfaceConfig::from_selection(
@@ -1359,7 +1364,12 @@ async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registrat
 async fn plugin_only_bindings_are_captured_for_trigger_execution() {
     use crate::documents::{PluginToolRef, WriteToolField, WriteToolFieldFill};
 
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = std::sync::Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let selected = AgentToolSurfaceConfig::from_selection(
         "evidence",
@@ -1667,7 +1677,12 @@ async fn explicitly_disabling_goal_tools_removes_them_from_names_and_runtime() {
 
 #[tokio::test]
 async fn goal_tools_are_independent_from_generic_meta_tools() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = std::sync::Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let surface = AgentToolSurfaceConfig::from_selection(
         "durable",
@@ -1756,7 +1771,12 @@ async fn goal_creation_requires_its_separate_capability() {
 
 #[tokio::test]
 async fn operator_ceiling_can_deny_goal_creation_only() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = std::sync::Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let mut ceiling_policy = ToolPolicySurface::runtime_all();
     ceiling_policy.goal_create = false;
@@ -1789,7 +1809,12 @@ async fn operator_ceiling_can_deny_goal_creation_only() {
 
 #[tokio::test]
 async fn operator_ceiling_denies_all_goal_mutation_when_base_capability_is_off() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = std::sync::Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let mut ceiling_policy = ToolPolicySurface::runtime_all();
     ceiling_policy.goal_tools = false;
@@ -1990,7 +2015,12 @@ fn absent_groups_grant_nothing_and_goal_controls_are_independent() {
 
 #[tokio::test]
 async fn session_history_tool_follows_selection() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = std::sync::Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
     let disabled = AgentToolSurfaceConfig::from_selection(
@@ -2558,7 +2588,12 @@ fn explain_mcp_empty_allowlist_denies_all_services_when_online() {
 
 #[tokio::test]
 async fn defra_query_is_off_by_default() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = std::sync::Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
     let default_surface = AgentToolSurfaceConfig::from_selection(
@@ -2605,7 +2640,12 @@ async fn defra_query_is_off_by_default() {
 
 #[tokio::test]
 async fn agent_config_alias_expands_to_config_scope() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = std::sync::Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
     let surface = AgentToolSurfaceConfig::from_selection(
@@ -3182,7 +3222,12 @@ fn provider_limits_is_available_under_an_agent_self_config_grant() {
 
 #[tokio::test]
 async fn only_a_host_call_plugin_adds_the_process_tools() {
-    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = std::sync::Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let node_did = node.node_identity_did().unwrap().to_owned();
     let without = tools_document(serde_json::json!({}));

@@ -157,8 +157,11 @@ impl ScopedWatcherFixture {
 
         let db = crate::support::test_db("scoped-watcher").await;
         let (home, user, client_access) =
-            crate::test_support::signed_test_node_without_agent_from_db(db, "scoped-watcher-user")
-                .await;
+            crate::test_support::root::signed_test_node_without_agent_from_db(
+                db,
+                "scoped-watcher-user",
+            )
+            .await;
         let node = home.node.clone();
         let runtime = home.node_identity.clone();
         let binding = crate::store::identity::provision_agent_identity_authorized(

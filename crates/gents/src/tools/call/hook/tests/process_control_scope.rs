@@ -175,7 +175,7 @@ async fn generated_wait_observer_interrupt_preserves_background_process() {
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::test_support::install_test_agent(&node, identity.did(), "general").await;
+    crate::test_support::inference::install_test_agent(&node, identity.did(), "general").await;
     let executions = BackgroundExecutionRegistry::default();
     let hook = signed_hook_as(&node, identity.did(), FailurePolicy::default())
         .await
@@ -277,7 +277,12 @@ async fn generated_wait_observer_interrupt_preserves_background_process() {
 
 #[tokio::test]
 async fn accepted_cross_agent_process_controls_preserve_the_owners_running_job() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
     let executions = BackgroundExecutionRegistry::default();

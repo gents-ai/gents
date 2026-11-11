@@ -148,7 +148,7 @@ fn group_caused_keeps_every_request_of_one_call() {
 async fn caused_requests_projection_omits_a_call_with_two_requests() {
     let dir = tempfile::tempdir().unwrap();
     let node = std::sync::Arc::new(
-        crate::test_support::node_builder()
+        crate::store::test_support::node_builder()
             .data_path(dir.path().join("node"))
             .build()
             .await
@@ -195,7 +195,7 @@ fn ids(links: &[SessionLink]) -> Vec<&str> {
 async fn physical_request_scope_batch_keeps_requested_missing_and_foreign_rows_distinct() {
     let dir = tempfile::tempdir().unwrap();
     let node = std::sync::Arc::new(
-        crate::test_support::node_builder()
+        crate::store::test_support::node_builder()
             .data_path(dir.path().join("node"))
             .build()
             .await
@@ -236,7 +236,7 @@ async fn physical_request_scope_batch_keeps_requested_missing_and_foreign_rows_d
 async fn a_parent_pointer_without_a_verified_starter_is_only_messaging() {
     let dir = tempfile::tempdir().unwrap();
     let node = std::sync::Arc::new(
-        crate::test_support::node_builder()
+        crate::store::test_support::node_builder()
             .data_path(dir.path().join("node"))
             .build()
             .await
@@ -296,7 +296,7 @@ async fn a_parent_pointer_without_a_verified_starter_is_only_messaging() {
 async fn recorded_opening_reads_the_exact_session_scope() {
     let dir = tempfile::tempdir().unwrap();
     let node = std::sync::Arc::new(
-        crate::test_support::node_builder()
+        crate::store::test_support::node_builder()
             .data_path(dir.path().join("node"))
             .build()
             .await

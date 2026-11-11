@@ -94,7 +94,8 @@ async fn fixture(case: &LeanInterruptQueueCase) -> QueueFixture {
         "modeled requester scope"
     );
     let (db, user, client, binding) =
-        crate::test_support::signed_test_node(&format!("interrupt-queue-{}", case.name)).await;
+        crate::test_support::root::signed_test_node(&format!("interrupt-queue-{}", case.name))
+            .await;
     let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
         .unwrap();
     let agent_access = ConfigAccess::local_managed_agent(

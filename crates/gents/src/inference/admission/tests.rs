@@ -29,7 +29,7 @@ pub(super) async fn test_node() -> (
 ) {
     lean_inference_slot_accounting_cases();
     let (db, _user, _access, binding) =
-        crate::test_support::signed_test_node("inference-admission").await;
+        crate::test_support::root::signed_test_node("inference-admission").await;
     let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
         .unwrap();
     let signer = agent.managed_agent_signer().unwrap();

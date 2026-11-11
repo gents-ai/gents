@@ -100,11 +100,11 @@ async fn a_request_published_between_seed_observations_takes_precedence() {
         since,
     )
     .await;
-    gents::test_support::update_trigger_runtime_fields(
+    gents::test_support::automation::update_trigger_runtime_fields(
         &home.node,
         home.did(),
         "seed-trigger",
-        gents::test_support::TriggerRuntimeUpdate {
+        gents::test_support::automation::TriggerRuntimeUpdate {
             last_fired_source_doc_id: Some(doc_id.clone()),
             ..Default::default()
         },

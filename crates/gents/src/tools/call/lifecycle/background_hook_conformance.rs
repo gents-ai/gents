@@ -121,7 +121,7 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
         .find(|case| case.name == "local-self-absent-requester")
         .unwrap();
     let (db, user, client, binding) =
-        crate::test_support::signed_test_node("background-hook-scope").await;
+        crate::test_support::root::signed_test_node("background-hook-scope").await;
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
     let agent = crate::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();

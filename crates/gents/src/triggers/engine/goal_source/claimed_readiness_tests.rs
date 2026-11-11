@@ -141,14 +141,18 @@ async fn install_claim(db: &TestDb, before: &Value) -> GoalDocument {
 }
 
 async fn install_claim_with_terminal(db: &TestDb, before: &Value, terminal: &str) -> GoalDocument {
-    let agent = crate::test_support::install_test_agent(&db.node, db.node_identity.did(), BEHAVIOR)
-        .await
-        .agent_did;
+    let agent = crate::test_support::inference::install_test_agent(
+        &db.node,
+        db.node_identity.did(),
+        BEHAVIOR,
+    )
+    .await
+    .agent_did;
     // The interrupted attempt is the Agent's own signed request in its own
     // session, so the Agent observes it when reconciling the claim.
     let access = agent_access(db).await;
     let signer = selected_identity(db).await;
-    crate::test_support::create_agent_owned_session(
+    crate::test_support::session::create_agent_owned_session(
         &access,
         db.node_identity.did(),
         SESSION,

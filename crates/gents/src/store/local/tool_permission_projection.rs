@@ -764,7 +764,7 @@ mod tests {
                 .expected
         };
         let (db, _user, user_access, binding) =
-            crate::test_support::signed_test_node("enrolled-tools-authoring").await;
+            crate::test_support::root::signed_test_node("enrolled-tools-authoring").await;
         let node_did = db.node_identity.did().to_owned();
         let agent = identity::Did::new(&binding.agent_did)?;
         let self_config =
@@ -802,7 +802,7 @@ mod tests {
         );
 
         let householder = tokio::task::spawn_blocking(|| {
-            crate::support::fixtures::test_identity("enrolled-tools-householder")
+            crate::store::test_support::test_identity("enrolled-tools-householder")
         })
         .await?;
         let householder_did = identity::Did::new(householder.did())?;

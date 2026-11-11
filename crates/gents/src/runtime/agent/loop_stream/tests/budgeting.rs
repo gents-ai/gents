@@ -536,7 +536,7 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
         let binding = crate::store::identity::provision_agent_identity(&root).unwrap();
         let agent = crate::store::identity::resolve_agent_identity(&root, &binding).unwrap();
         let node = Arc::new(
-            crate::test_support::node_builder()
+            crate::store::test_support::node_builder()
                 .data_path(&data_path)
                 .with_node_identity_did(root.did())
                 .build()

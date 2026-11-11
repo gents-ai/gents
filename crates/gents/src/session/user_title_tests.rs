@@ -29,7 +29,7 @@ async fn user_title_update_is_signed_on_authenticated_http() -> anyhow::Result<(
         .expect("modeled user rename");
     let title = case["title"]["text"].as_str().unwrap();
     let (db, user, access, binding) =
-        crate::test_support::signed_test_node("http-user-title").await;
+        crate::test_support::root::signed_test_node("http-user-title").await;
     let node_did = db.node_identity.did();
     crate::request::lifecycle::build_signed_client_request(
         &access,
@@ -93,7 +93,7 @@ async fn user_rename_rebuilds_after_confirmed_http_commit_conflict() -> anyhow::
     use anyhow::Context;
 
     let (db, user, access, binding) =
-        crate::test_support::signed_test_node("http-user-title-conflict").await;
+        crate::test_support::root::signed_test_node("http-user-title-conflict").await;
     let node_did = db.node_identity.did();
     let session_id = "http-title-conflict-session";
     crate::request::lifecycle::build_signed_client_request(
@@ -118,7 +118,7 @@ async fn user_rename_rebuilds_after_confirmed_http_commit_conflict() -> anyhow::
     .context("creating signed session")?;
 
     let reader = tokio::task::spawn_blocking(|| {
-        crate::support::fixtures::test_identity("http-user-title-reader")
+        crate::store::test_support::test_identity("http-user-title-reader")
     })
     .await?;
     let reader_did = identity::Did::new(reader.did())?;
@@ -248,8 +248,13 @@ async fn user_rename_rebuilds_after_confirmed_http_commit_conflict() -> anyhow::
 
 #[tokio::test]
 async fn title_transitions_preserve_session_and_request_observation() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::test_support::acp_policies::install_identity_acp_policies(&node)
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
+    crate::store::test_support::acp_policies::install_identity_acp_policies(&node)
         .await
         .unwrap();
     node.add_collection(gents_protocol::schemas::AGENT_SESSION)
@@ -432,8 +437,13 @@ async fn generated_user_title_cases_drive_the_shared_session_owner() {
     for case in cases {
         let before = model_session(&case["before"]);
         let expected = model_session(&case["after"]);
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        crate::test_support::acp_policies::install_identity_acp_policies(&node)
+        let node = Arc::new(
+            crate::store::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
+        crate::store::test_support::acp_policies::install_identity_acp_policies(&node)
             .await
             .unwrap();
         node.add_collection(gents_protocol::schemas::AGENT_SESSION)
@@ -522,7 +532,8 @@ async fn title_observation_uses_selected_agent_session_access() {
         .unwrap();
     }
 
-    let (db, user, owner, first) = crate::test_support::signed_test_node("title-observation").await;
+    let (db, user, owner, first) =
+        crate::test_support::root::signed_test_node("title-observation").await;
     let user_did = user.did().to_owned();
     let second = crate::store::identity::provision_agent_identity_authorized(
         &db.node,
@@ -531,7 +542,7 @@ async fn title_observation_uses_selected_agent_session_access() {
     )
     .await
     .unwrap();
-    crate::test_support::install_test_agent_binding_with_access(
+    crate::test_support::inference::install_test_agent_binding_with_access(
         db.node_identity.did(),
         "Other title agent",
         &second,

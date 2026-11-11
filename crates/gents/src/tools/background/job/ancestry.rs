@@ -132,7 +132,12 @@ mod tests {
     use crate::tools::call::lifecycle::admission_fixture::write_fixture_job_pin;
 
     async fn open() -> Arc<EmbeddedNode> {
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        let node = Arc::new(
+            crate::store::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::ensure_runtime_schemas(&node).await.unwrap();
         node
     }

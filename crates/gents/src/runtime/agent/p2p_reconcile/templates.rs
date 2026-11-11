@@ -226,7 +226,12 @@ mod tests {
 
     #[tokio::test]
     async fn requested_app_schema_is_local_and_fails_for_missing_collections() {
-        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        let node = std::sync::Arc::new(
+            crate::store::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::store::config_client::ConfigAccess::local(node.clone())
             .add_collection("type GameState @branchable { turn: String }")
             .await
@@ -245,7 +250,12 @@ mod tests {
 
     #[tokio::test]
     async fn client_schema_is_unreadable_until_migrations_register_every_collection() {
-        let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        let node = std::sync::Arc::new(
+            crate::store::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         let error = read_client_replicated_schema(node.clone())
             .await
             .unwrap_err();

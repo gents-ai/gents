@@ -1,6 +1,6 @@
 #[tokio::test]
 async fn unmet_output_obligation_blocks_terminal_and_continues_with_runtime_reminder() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(crate::store::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let actor =
         identity::Did::new("did:key:z6MkeXBLjYiSvqnhFb6D7sHm8yKm4jV45wwBFRaatf1cfZ76").unwrap();

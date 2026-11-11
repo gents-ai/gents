@@ -233,7 +233,7 @@ async fn another_nodes_account_is_not_touched() {
     let other_db = crate::support::test_db("credential-other-node").await;
     let mine = db.node_identity.did();
     let theirs = other_db.node_identity.did();
-    crate::test_support::bootstrap_signed_test_node(&access, theirs).await;
+    crate::test_support::documents::bootstrap_signed_test_node(&access, theirs).await;
     let signed = store(&access, Product::Claude.sign_in(theirs, "a", "refresh-a")).await;
     let id = signed.credential.credential_id.as_str();
     let before = rows(&access, theirs, CLAUDE_OAUTH_PROVIDER).await;

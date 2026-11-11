@@ -79,7 +79,7 @@ async fn generated_goal_client_controls_drive_signed_commands() {
         let (requester, access) = if case.facts["authorized"] == false {
             let requester = Arc::new(
                 tokio::task::spawn_blocking(|| {
-                    crate::support::fixtures::test_identity("goal-denied-requester")
+                    crate::store::test_support::test_identity("goal-denied-requester")
                 })
                 .await
                 .unwrap(),

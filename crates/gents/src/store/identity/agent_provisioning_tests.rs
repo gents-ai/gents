@@ -10,12 +10,12 @@ async fn authorized_provisioning_grants_no_direct_node_permission() {
         .expect("modeled Agent recipient");
     assert!(modeled.direct.is_empty());
     let (db, owner, _) =
-        crate::test_support::signed_test_node_without_agent("provision-no-direct").await;
+        crate::test_support::root::signed_test_node_without_agent("provision-no-direct").await;
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
     let runtime = runtime.as_ref();
     let outsider = tokio::task::spawn_blocking(|| {
-        crate::support::fixtures::test_identity("provision-outsider")
+        crate::store::test_support::test_identity("provision-outsider")
     })
     .await
     .unwrap();

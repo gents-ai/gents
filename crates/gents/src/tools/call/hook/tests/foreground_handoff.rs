@@ -57,7 +57,7 @@ async fn background_request_observation_uses_selected_agent_authority() {
     assert!(node_view.is_err() || node_view.unwrap()["data"]["AgentToolCall"] == json!([]));
 
     let foreign = tokio::task::spawn_blocking(|| {
-        crate::support::fixtures::test_identity("foreground-observation-foreign")
+        crate::store::test_support::test_identity("foreground-observation-foreign")
     })
     .await
     .unwrap();
@@ -110,7 +110,12 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
         .unwrap()
         .success());
     let pid_file = dir.path().join("pid");
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
@@ -348,7 +353,12 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
 
 #[tokio::test]
 async fn cancellation_winning_handoff_clears_the_request_and_cancels_the_same_execution() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
@@ -427,7 +437,12 @@ async fn cancellation_winning_handoff_clears_the_request_and_cancels_the_same_ex
 
 #[tokio::test]
 async fn refused_foreground_handoff_can_be_retried() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
@@ -528,7 +543,12 @@ async fn refused_foreground_handoff_can_be_retried() {
 
 #[tokio::test]
 async fn concurrent_background_starts_on_one_request_fill_exactly_the_ceiling() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
@@ -612,7 +632,12 @@ async fn interrupted_foreground_with_unverified_exit_remains_background_controll
         .iter()
         .find(|case| case.before == "running" && case.after == "running")
         .unwrap();
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
@@ -860,7 +885,12 @@ async fn confirmation_before_worker_release_keeps_typed_stop_receipt() {
         .iter()
         .find(|case| case.live_evidence == "exited" && case.worker_released)
         .unwrap();
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
@@ -910,7 +940,12 @@ async fn confirmation_before_worker_release_keeps_typed_stop_receipt() {
 
 #[tokio::test]
 async fn interruption_before_native_registration_cancels_without_starting_process() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();
@@ -948,7 +983,12 @@ async fn interrupt_sweep_preserves_confirmed_timeout_intent() {
         .find(|case| case.live_evidence == "exited" && case.worker_released)
         .unwrap();
     assert!(modeled.preserve_timeout);
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
     let hook = signed_hook(&node, FailurePolicy::default()).await;
     let session = hook.session_id().await.unwrap();

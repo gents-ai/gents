@@ -7,7 +7,8 @@ pub(super) async fn setup_private_hook(
     registry: BackgroundToolRegistry,
 ) -> DefraSessionHook {
     let node_did = db.node_identity.did();
-    let binding = crate::test_support::ensure_test_default_agent(&db.node, node_did).await;
+    let binding =
+        crate::test_support::inference::ensure_test_default_agent(&db.node, node_did).await;
     let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
         .expect("resolve the fixture's default Agent from its runtime root");
     setup_private_hook_for_agent(

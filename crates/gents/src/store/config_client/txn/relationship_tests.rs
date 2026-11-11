@@ -783,7 +783,12 @@ async fn http_relationships_and_ownership_use_the_transaction_actor() {
 #[tokio::test]
 async fn embedded_relationship_grants_and_revocations_follow_transaction_finality() {
     const READER: &str = "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR";
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     let owner_did = node
         .node_identity_did()
         .expect("fixture node has an identity")

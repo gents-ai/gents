@@ -116,7 +116,12 @@ async fn keyword_search_ranks_native_rows_and_preserves_query_boundaries() {
 }
 
 async fn seeded_node() -> Arc<defra_node::Node> {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     for (request_id, lifecycle_state) in [
@@ -144,7 +149,12 @@ async fn seeded_node() -> Arc<defra_node::Node> {
 
 #[tokio::test]
 async fn oversized_field_is_truncated_json_stays_valid() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
     let big_content = "x".repeat(MAX_FIELD_STRING_BYTES + 5_000);

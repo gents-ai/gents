@@ -225,9 +225,14 @@ mod cleanup_tests {
 
     #[tokio::test]
     async fn cleanup_removes_only_owned_verified_expired_intents() {
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        let node = Arc::new(
+            crate::store::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        let identity = Arc::new(crate::test_support::held_runtime_identity(
+        let identity = Arc::new(crate::store::test_support::held_runtime_identity(
             node.node_identity_did().unwrap(),
         ));
         let access = crate::store::config_client::ConfigAccess::local_as(

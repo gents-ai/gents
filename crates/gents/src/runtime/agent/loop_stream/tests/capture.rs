@@ -574,7 +574,7 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
         let agent =
             crate::store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
         let agent_did = binding.agent_did.clone();
-        crate::test_support::install_test_agent_binding(
+        crate::test_support::inference::install_test_agent_binding(
             &node,
             &node_did,
             "Capture test agent",

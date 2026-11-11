@@ -10,7 +10,7 @@ async fn session_token_usage_breakdown_sums_to_the_total() {
     use serde_json::json;
 
     let (db, user, user_access, binding) =
-        crate::test_support::signed_test_node("goal-session-usage").await;
+        crate::test_support::root::signed_test_node("goal-session-usage").await;
     let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
         .unwrap();
     let owner = db.node_identity.did();
@@ -234,7 +234,7 @@ async fn session_goal_delete_uses_selected_agent_native_owner() {
     };
 
     let (db, user, user_access, binding) =
-        crate::test_support::signed_test_node("goal-selected-agent-delete").await;
+        crate::test_support::root::signed_test_node("goal-selected-agent-delete").await;
     let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
         .unwrap();
     let admin = crate::ConfigAccess::local_as(
@@ -323,7 +323,7 @@ async fn held_user_deletes_own_goal_and_claim_by_physical_id() {
     };
 
     let (db, user, user_access, binding) =
-        crate::test_support::signed_test_node("goal-user-delete").await;
+        crate::test_support::root::signed_test_node("goal-user-delete").await;
     let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
         .unwrap();
     let admin = crate::ConfigAccess::local_as(
@@ -448,7 +448,7 @@ async fn goal_and_claim_publication_links_match_lean() {
 
     for case in &gents_lean_vocab::lean_contract_snapshot().goal_link_cases {
         let (db, user, user_access, binding) =
-            crate::test_support::signed_test_node("goal-links").await;
+            crate::test_support::root::signed_test_node("goal-links").await;
         let node = db.node.clone();
         let runtime = db.node_identity.clone();
         let agent =
@@ -814,7 +814,7 @@ async fn set_goal_runs_only_as_the_sessions_signed_agent() {
     };
 
     let (db, user, user_access, binding) =
-        crate::test_support::signed_test_node("goal-set-signed-agent").await;
+        crate::test_support::root::signed_test_node("goal-set-signed-agent").await;
     let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
         .unwrap();
     let create = AgentRequestCreate::base(
@@ -878,7 +878,7 @@ async fn set_goal_runs_only_as_the_sessions_signed_agent() {
     // Another managed Agent of this runtime is not the session's working Agent.
     let foreign_binding =
         crate::store::identity::provision_agent_identity(db.node_identity.as_ref()).unwrap();
-    crate::test_support::install_test_agent_binding(
+    crate::test_support::inference::install_test_agent_binding(
         &db.node,
         owner,
         "foreign goal Agent",

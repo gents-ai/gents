@@ -121,7 +121,11 @@ impl CompletionModel for ScriptedModel {
             gate.release.notified().await;
         }
         if self.capture_requests {
-            crate::test_support::capture_scripted_provider_request(&request, "test-model").await?;
+            crate::test_support::inference::capture_scripted_provider_request(
+                &request,
+                "test-model",
+            )
+            .await?;
         }
         self.seen_requests.lock().await.push(request.clone());
         self.seen_histories.lock().await.push(
@@ -240,7 +244,8 @@ impl CompletionModel for UsageScriptedModel {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-        crate::test_support::capture_scripted_provider_request(&request, "test-model").await?;
+        crate::test_support::inference::capture_scripted_provider_request(&request, "test-model")
+            .await?;
         self.seen_dispatches.lock().await.push((
             u64::try_from(
                 completion_request_input_components(
@@ -797,7 +802,7 @@ async fn owned_test_hook_with_identity_policy(
     let agent_identity =
         crate::store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
     let agent_did = binding.agent_did.clone();
-    crate::test_support::install_test_agent_binding(
+    crate::test_support::inference::install_test_agent_binding(
         &node,
         node_did,
         "Owned loop test agent",

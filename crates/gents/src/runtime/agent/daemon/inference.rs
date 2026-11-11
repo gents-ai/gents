@@ -500,7 +500,8 @@ pub(super) mod tests {
             &self,
             request: CompletionRequest,
         ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-            crate::test_support::capture_scripted_provider_request(&request, "scripted").await?;
+            crate::test_support::inference::capture_scripted_provider_request(&request, "scripted")
+                .await?;
             let items = vec![
                 Ok(RawStreamingChoice::Message("routed reply".to_string())),
                 Ok(RawStreamingChoice::FinalResponse(())),
@@ -550,7 +551,8 @@ pub(super) mod tests {
             &self,
             request: CompletionRequest,
         ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
-            crate::test_support::capture_scripted_provider_request(&request, "scripted").await?;
+            crate::test_support::inference::capture_scripted_provider_request(&request, "scripted")
+                .await?;
             let history =
                 serde_json::to_value(&request.chat_history).expect("serialize provider input");
             let title_preamble = super::super::title::title_generation_preamble();
@@ -678,7 +680,8 @@ pub(super) mod tests {
             &self,
             request: CompletionRequest,
         ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
-            crate::test_support::capture_scripted_provider_request(&request, "scripted").await?;
+            crate::test_support::inference::capture_scripted_provider_request(&request, "scripted")
+                .await?;
             self.0.fetch_add(1, Ordering::SeqCst);
             let inner: rig::streaming::StreamingResult<()> = Box::pin(stream::iter(vec![
                 Ok(RawStreamingChoice::Message("admitted reply".to_string())),
@@ -750,7 +753,7 @@ pub(super) mod tests {
         Arc<ResolvedAgent>,
     ) {
         use crate::store::config_client::NodePermission;
-        let (db, user, access, binding) = crate::test_support::signed_test_node(name).await;
+        let (db, user, access, binding) = crate::test_support::root::signed_test_node(name).await;
         let config = test_agent_with_binding(db.node_identity.clone(), binding);
         let admin =
             crate::ConfigAccess::local_as(db.node.clone(), db.node_identity.did().parse().unwrap());

@@ -254,7 +254,7 @@ mod tests {
         const SDL: &str = "type AuthoredDocumentFixture { name: String }";
         const WRONG: &str = "type AuthoredDocumentFixture { name: Int }";
         let (db, user, access, _) =
-            crate::test_support::signed_test_node("authored-document").await;
+            crate::test_support::root::signed_test_node("authored-document").await;
         // Schema installation is node administration; the held User authors documents only.
         let admin = ConfigAccess::local_as(
             db.node.clone(),

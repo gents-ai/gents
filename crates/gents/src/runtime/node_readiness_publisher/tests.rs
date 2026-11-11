@@ -274,7 +274,12 @@ async fn saturated_command_queue_cannot_block_owner_close_forever() {
 }
 
 async fn test_publisher() -> (NodeReadinessPublisherOwner, NodeReadinessPublisherHandle) {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let node_did = node
         .node_identity_did()
@@ -282,7 +287,7 @@ async fn test_publisher() -> (NodeReadinessPublisherOwner, NodeReadinessPublishe
         .to_owned();
     // Readiness is published under the Node document; production creates it
     // through the runtime owner's signed access before the publisher starts.
-    crate::test_support::ensure_test_node(&node, &node_did).await;
+    crate::test_support::documents::ensure_test_node(&node, &node_did).await;
     NodeReadinessPublisherHandle::start(node, node_did)
 }
 
@@ -972,7 +977,12 @@ async fn readiness_parent_recovery_matches_native_owner_and_model() {
         .iter()
         .find(|case| case["name"] == "unbound")
         .unwrap();
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     let unbound_sdl = gents_protocol::schemas::NODE_READINESS.replace(
         &format!(
             " @policy(id: \"{}\", resource: \"operations\")",

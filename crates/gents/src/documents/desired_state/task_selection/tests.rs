@@ -65,7 +65,7 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
     let old_policy = gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID;
     // Configuration publication reads every configuration collection, so the
     // node declares them all, configuration under the modeled policy.
-    crate::test_support::acp_policies::install_identity_acp_policies(&node).await?;
+    crate::store::test_support::acp_policies::install_identity_acp_policies(&node).await?;
     for (name, schema) in gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
         .iter()
         .zip(gents_protocol::schemas::RUNTIME_ALL)

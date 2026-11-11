@@ -224,7 +224,7 @@ fn install_plugin(
 /// every step 0 with `output`.
 async fn step0(output: Value, options: Options) -> Step0 {
     let (db, user, owner, caller_binding) =
-        crate::test_support::signed_test_node("plugin-job-dispatch").await;
+        crate::test_support::root::signed_test_node("plugin-job-dispatch").await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let caller =
@@ -239,7 +239,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
     )
     .await
     .unwrap();
-    crate::test_support::install_test_agent_binding_with_access(
+    crate::test_support::inference::install_test_agent_binding_with_access(
         identity.did(),
         "worker",
         &worker_binding,

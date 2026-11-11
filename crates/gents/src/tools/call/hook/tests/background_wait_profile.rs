@@ -1,5 +1,5 @@
 use super::*;
-use crate::test_support::read_observation::ReadCapture;
+use crate::store::test_support::read_observation::ReadCapture;
 use std::sync::Arc;
 use std::task::Poll;
 use std::time::{Duration, Instant};

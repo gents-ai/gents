@@ -29,7 +29,8 @@ struct PolicyFixture {
 
 impl PolicyFixture {
     async fn new(name: &str) -> Self {
-        let (db, _user, user_access, binding) = crate::test_support::signed_test_node(name).await;
+        let (db, _user, user_access, binding) =
+            crate::test_support::root::signed_test_node(name).await;
         let agent =
             crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
                 .expect("fixture Agent is derived from the held runtime");
@@ -92,7 +93,7 @@ impl PolicyFixture {
         )
         .await
         .unwrap();
-        crate::test_support::install_test_agent_binding_with_access(
+        crate::test_support::inference::install_test_agent_binding_with_access(
             self.db.node_identity.did(),
             display_name,
             &binding,

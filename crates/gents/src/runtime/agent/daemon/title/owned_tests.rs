@@ -89,7 +89,8 @@ impl CompletionModel for ReviewProvider {
             entered.notify_one();
             release.notified().await;
         }
-        crate::test_support::capture_scripted_provider_request(&request, "scripted").await?;
+        crate::test_support::inference::capture_scripted_provider_request(&request, "scripted")
+            .await?;
         let reply = self.reply.clone().unwrap_or_else(|| {
             let action_id = request.chat_history.iter().find_map(|message| {
                 let rig::message::Message::User { content } = message else { return None; };
@@ -1178,7 +1179,8 @@ impl CompletionModel for TitleProvider {
     ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
         assert!(!self.panic_on_stream, "scripted review worker panic");
         self.calls.fetch_add(1, Ordering::SeqCst);
-        crate::test_support::capture_scripted_provider_request(&request, "scripted").await?;
+        crate::test_support::inference::capture_scripted_provider_request(&request, "scripted")
+            .await?;
         if let Some(error) = &self.error {
             return Err(CompletionError::ProviderError(error.clone()));
         }
@@ -1284,11 +1286,12 @@ impl TitleFixture {
         content: Option<String>,
         parent_limit: Option<u64>,
     ) -> Self {
-        let (db, _user, user_access, binding) = crate::test_support::signed_test_node_from_db(
-            crate::support::test_db("title-owned").await,
-            "title-owned",
-        )
-        .await;
+        let (db, _user, user_access, binding) =
+            crate::test_support::root::signed_test_node_from_db(
+                crate::support::test_db("title-owned").await,
+                "title-owned",
+            )
+            .await;
         let node = db.node.clone();
         let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
         let agent_did = binding.agent_did.clone();

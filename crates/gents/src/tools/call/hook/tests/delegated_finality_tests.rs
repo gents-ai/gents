@@ -37,7 +37,7 @@ async fn fixture(name: &str) -> Fixture {
     let fixture_name = format!("finality-{name}");
     let db = crate::support::test_db(&fixture_name).await;
     let (db, user, user_access) =
-        crate::test_support::signed_test_node_without_agent_from_db(db, &fixture_name).await;
+        crate::test_support::root::signed_test_node_without_agent_from_db(db, &fixture_name).await;
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
     let value = json!({"node_did": runtime.did(), "enabled": true});
@@ -80,7 +80,7 @@ async fn fixture(name: &str) -> Fixture {
     let docs: Vec<_> = [("parent", &parent), ("child", &child)]
         .into_iter()
         .flat_map(|(name, binding)| {
-            crate::test_support::test_agent_documents(runtime.did(), name, binding)
+            crate::test_support::documents::test_agent_documents(runtime.did(), name, binding)
         })
         .map(|(collection, value)| DesiredStateApplyDocument {
             collection,
@@ -235,7 +235,7 @@ async fn fixture(name: &str) -> Fixture {
 /// projects an Agent's baseline node grants from its live Agent document
 /// (`GrantSet::AgentBaseline`), so disabling the document revokes them.
 async fn set_parent_enabled(fixture: &Fixture, enabled: bool) {
-    let (collection, mut value) = crate::test_support::test_agent_documents(
+    let (collection, mut value) = crate::test_support::documents::test_agent_documents(
         fixture.runtime.did(),
         "parent",
         &fixture.parent_binding,

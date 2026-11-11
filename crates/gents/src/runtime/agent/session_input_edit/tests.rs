@@ -57,8 +57,8 @@ impl Fixture {
                 .unwrap()
                 .with_client_signed_agent_creates(),
         );
-        crate::test_support::bootstrap_signed_test_node(&access, identity.did()).await;
-        crate::test_support::install_test_agent_binding_with_access(
+        crate::test_support::documents::bootstrap_signed_test_node(&access, identity.did()).await;
+        crate::test_support::inference::install_test_agent_binding_with_access(
             identity.did(),
             "General",
             &binding,

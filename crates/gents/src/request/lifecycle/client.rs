@@ -1498,7 +1498,7 @@ mod tests {
     async fn delegated_recovery_does_not_grant_a_signed_request_without_its_creation_receipt() {
         let db = crate::support::test_db("delegated-recovery").await;
         let (db, user, user_access, parent) =
-            crate::test_support::signed_test_node_from_db(db, "delegated-recovery").await;
+            crate::test_support::root::signed_test_node_from_db(db, "delegated-recovery").await;
         let node = db.node.clone();
         let runtime = db.node_identity.clone();
         let target = crate::store::identity::provision_agent_identity_authorized(
@@ -1508,7 +1508,7 @@ mod tests {
         )
         .await
         .unwrap();
-        crate::test_support::install_test_agent_binding_with_access(
+        crate::test_support::inference::install_test_agent_binding_with_access(
             runtime.did(),
             "target",
             &target,
@@ -1721,7 +1721,7 @@ mod tests {
         )
         .await
         .unwrap();
-        crate::test_support::install_test_agent_binding(
+        crate::test_support::inference::install_test_agent_binding(
             &node,
             runtime.did(),
             "one-shot fixture",
@@ -1924,7 +1924,7 @@ mod tests {
         let cases = &gents_lean_vocab::lean_contract_snapshot().goal_backed_runtime_cases;
         let modeled = |name: &str| cases.iter().find(|case| case["name"] == name).unwrap();
         let (db, user, client, binding) =
-            crate::test_support::signed_test_node("runtime-goal-opening").await;
+            crate::test_support::root::signed_test_node("runtime-goal-opening").await;
         let node = db.node.clone();
         let agent =
             crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)

@@ -195,20 +195,23 @@ async fn agent_step(
             .await?;
         return Ok(());
     }
-    let documents = crate::test_support::test_agent_documents(node_did, "Baseline agent", binding)
-        .into_iter()
-        .filter(|(collection, _)| action == "publish" || *collection == crate::Collection::Agent)
-        .map(|(collection, mut value)| {
-            if collection == crate::Collection::Agent {
-                value["enabled"] = serde_json::json!(action != "disable");
-            }
-            DesiredStateApplyDocument {
-                collection,
-                add: value.clone(),
-                update: value,
-            }
-        })
-        .collect();
+    let documents =
+        crate::test_support::documents::test_agent_documents(node_did, "Baseline agent", binding)
+            .into_iter()
+            .filter(|(collection, _)| {
+                action == "publish" || *collection == crate::Collection::Agent
+            })
+            .map(|(collection, mut value)| {
+                if collection == crate::Collection::Agent {
+                    value["enabled"] = serde_json::json!(action != "disable");
+                }
+                DesiredStateApplyDocument {
+                    collection,
+                    add: value.clone(),
+                    update: value,
+                }
+            })
+            .collect();
     let plan = DesiredStateApplyPlan::new(documents).expect("Agent plan");
     access
         .transact_write("test.grant_sets.agent", |txn| {
@@ -225,14 +228,14 @@ async fn agent_baseline_projection_follows_modeled_lifecycle() {
     assert!(!cases.is_empty());
     for case in cases {
         let (db, owner, owner_access) =
-            crate::test_support::signed_test_node_without_agent(&case.name).await;
+            crate::test_support::root::signed_test_node_without_agent(&case.name).await;
         let runtime = db.node_identity.clone();
         let runtime_did = runtime.did().to_owned();
         let admin =
             ConfigAccess::local_as(db.node.clone(), identity::Did::new(runtime.did()).unwrap());
         let actor_name = format!("{}-actor", case.name);
         let actor = tokio::task::spawn_blocking(move || {
-            crate::support::fixtures::test_identity(&actor_name)
+            crate::store::test_support::test_identity(&actor_name)
         })
         .await
         .unwrap();

@@ -457,7 +457,7 @@ mod tests {
                 .build()
                 .await?,
         );
-        crate::test_support::acp_policies::install_identity_acp_policies(&node).await?;
+        crate::store::test_support::acp_policies::install_identity_acp_policies(&node).await?;
         Ok(node)
     }
 

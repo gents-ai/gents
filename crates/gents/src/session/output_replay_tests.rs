@@ -588,7 +588,7 @@ async fn fixture_with_provider_payload_options(
     use crate::request::lifecycle::{RequestIdentity, RequestSigner, RequestSpec};
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     let (db, user, user_access, binding) =
-        crate::test_support::signed_test_node("canonical-replay").await;
+        crate::test_support::root::signed_test_node("canonical-replay").await;
     let node = db.node.clone();
     let node_did = db.node_identity.did().to_owned();
     let requester_did = user.did().to_owned();

@@ -13,21 +13,27 @@ async fn temp_home() -> EmbeddedHome {
         .unwrap();
     let binding = crate::store::identity::provision_agent_identity(home.identity.as_ref()).unwrap();
     let access = client_access(&home, home.identity.as_ref());
-    crate::test_support::bootstrap_signed_test_node(&access, home.did()).await;
-    crate::test_support::install_test_agent_binding_with_access(
+    crate::test_support::documents::bootstrap_signed_test_node(&access, home.did()).await;
+    crate::test_support::inference::install_test_agent_binding_with_access(
         home.did(),
         "General",
         &binding,
         &access,
     )
     .await;
-    crate::test_support::set_test_default_agent_as(&access, home.did(), &binding.agent_did).await;
+    crate::test_support::documents::set_test_default_agent_as(
+        &access,
+        home.did(),
+        &binding.agent_did,
+    )
+    .await;
     home
 }
 
 async fn agent_for(home: &EmbeddedHome) -> Arc<dyn NodeIdentity> {
     let binding =
-        crate::test_support::ensure_test_default_agent(&home.node, home.identity.did()).await;
+        crate::test_support::inference::ensure_test_default_agent(&home.node, home.identity.did())
+            .await;
     crate::store::identity::resolve_agent_identity(home.identity.as_ref(), &binding).unwrap()
 }
 
@@ -104,7 +110,7 @@ fn client_access(home: &EmbeddedHome, signer: &dyn NodeIdentity) -> ConfigAccess
 
 async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionInputEdit {
     let did = home.identity.did();
-    let binding = crate::test_support::ensure_test_default_agent(&home.node, did).await;
+    let binding = crate::test_support::inference::ensure_test_default_agent(&home.node, did).await;
     let access = client_access(home, home.identity.as_ref());
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,

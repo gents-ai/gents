@@ -660,7 +660,12 @@ async fn generated_count_carriers_bind_admission_parser_and_storage() {
             "parser: {case}"
         );
     }
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     for (index, case) in fields.iter().enumerate() {
         let schema = case["schema"].as_str().unwrap();
         let admitted = case["accepted"].as_bool().unwrap();

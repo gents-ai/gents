@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn canonical_selection_reuses_the_callers_read_snapshot() {
-    let builder = tokio::task::spawn_blocking(crate::test_support::node_builder)
+    let builder = tokio::task::spawn_blocking(crate::store::test_support::node_builder)
         .await
         .unwrap();
     let node = Arc::new(builder.build().await.unwrap());
@@ -70,7 +70,7 @@ fn missing_authorized_roots_do_not_certify_empty_selection() {
 #[tokio::test]
 async fn canonical_selection_enumerates_multiple_native_cursor_pages() {
     use crate::file_inventory::SessionCollection;
-    let builder = tokio::task::spawn_blocking(crate::test_support::node_builder)
+    let builder = tokio::task::spawn_blocking(crate::store::test_support::node_builder)
         .await
         .unwrap();
     let node = Arc::new(builder.build().await.unwrap());
@@ -170,7 +170,7 @@ async fn canonical_selection_enumerates_multiple_native_cursor_pages() {
 #[tokio::test]
 async fn hydration_segment_selection_uses_the_session_index() {
     use crate::file_inventory::SessionCollection;
-    let builder = tokio::task::spawn_blocking(crate::test_support::node_builder)
+    let builder = tokio::task::spawn_blocking(crate::store::test_support::node_builder)
         .await
         .unwrap();
     let node = Arc::new(builder.build().await.unwrap());
@@ -201,7 +201,7 @@ async fn hydration_segment_selection_uses_the_session_index() {
 
 #[tokio::test]
 async fn generated_terminal_selections_preserve_superseded_requests() -> Result<()> {
-    let node = Arc::new(crate::test_support::node_builder().build().await?);
+    let node = Arc::new(crate::store::test_support::node_builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
     let did = node.node_identity_did().unwrap().to_owned();
     let access = ConfigAccess::local(node.clone());

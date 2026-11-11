@@ -133,10 +133,15 @@ mod tests {
             node.clone(),
             ::identity::Did::new(identity.did()).unwrap(),
         );
-        crate::test_support::bootstrap_signed_test_node(&admin, &did).await;
+        crate::test_support::documents::bootstrap_signed_test_node(&admin, &did).await;
         let binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
-        crate::test_support::install_test_agent_binding(&node, &did, "manual fixture", &binding)
-            .await;
+        crate::test_support::inference::install_test_agent_binding(
+            &node,
+            &did,
+            "manual fixture",
+            &binding,
+        )
+        .await;
         let agent = crate::store::identity::resolve_agent_identity(&identity, &binding).unwrap();
         (node, did, agent)
     }

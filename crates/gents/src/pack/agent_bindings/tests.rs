@@ -167,7 +167,7 @@ pub(in crate::pack) async fn fixture() -> (
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let node = Arc::new(
-        crate::test_support::node_builder()
+        crate::store::test_support::node_builder()
             .with_node_identity_did(root.did())
             .with_node_acp_owner(root.did().to_owned())
             .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())

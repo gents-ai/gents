@@ -83,7 +83,7 @@ async fn keyed_delivery(
 #[tokio::test]
 async fn fires_for_one_key_admit_before_it_exists_and_share_one_session() {
     let (db, _user, _user_access, binding) =
-        crate::test_support::signed_test_node("keyed-session-fires").await;
+        crate::test_support::root::signed_test_node("keyed-session-fires").await;
     let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
         .unwrap();
     let owner = db.node_identity.did().to_owned();

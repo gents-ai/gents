@@ -554,7 +554,7 @@ async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
 
     let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
 
-    let poison = serde_json::Value::String(crate::test_support::CORRUPT_TOOL_ARGS_589.to_string());
+    let poison = serde_json::Value::String(crate::store::test_support::CORRUPT_TOOL_ARGS_589.to_string());
     let model = ScriptedModel::new_turns(vec![
         vec![
             RawStreamingChoice::ToolCall(RawStreamingToolCall::new(

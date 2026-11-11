@@ -70,7 +70,9 @@ fn a_trial_ceiling_grants_bash_only_when_the_definition_asks_for_it() {
         )
     );
     assert_eq!(
-        gents::test_support::tool_policy(&with).bash.execution_mode,
+        gents::test_support::tools::tool_policy(&with)
+            .bash
+            .execution_mode,
         CommandExecutionMode::WorkspaceWrite
     );
 }
@@ -359,7 +361,7 @@ async fn recollect_preserves_missing_terminal_evidence_as_infrastructure() {
     let row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
     let request = row.try_into().unwrap();
-    let mut lifecycle = gents::test_support::admitted_client_lifecycle(
+    let mut lifecycle = gents::test_support::session::admitted_client_lifecycle(
         home.node.clone(),
         home.identity.clone(),
         &request,

@@ -412,7 +412,7 @@ async fn concurrent_archive_calls_commit_one_revision() {
             .await
             .unwrap(),
     );
-    crate::test_support::acp_policies::install_identity_acp_policies(&node)
+    crate::store::test_support::acp_policies::install_identity_acp_policies(&node)
         .await
         .unwrap();
     node.add_collection(gents_protocol::schemas::AGENT_SESSION)

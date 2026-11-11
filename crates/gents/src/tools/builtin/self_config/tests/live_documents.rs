@@ -243,8 +243,10 @@ async fn plugin_build_saves_the_source_and_reports_build_and_case_failures() {
     };
     let _stub = PLUGIN_BUILDER_STUB.lock().await;
     stub("echo 'main.js:1: unexpected token' >&2; exit 1");
-    let _builder =
-        crate::test_support::EnvVarGuard::set("GENTS_PLUGIN_BUILDER", builder.to_str().unwrap());
+    let _builder = crate::store::test_support::EnvVarGuard::set(
+        "GENTS_PLUGIN_BUILDER",
+        builder.to_str().unwrap(),
+    );
     let (_fixture, tools) = fileless_tool("live-plugin", home.path()).await;
     let set = json!({
         "language": "js", "description": "Doubles n.",
@@ -344,8 +346,10 @@ async fn plugin_build_accepts_data_collections_that_live_on_the_node() {
         std::fs::set_permissions(&builder, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
     let _stub = PLUGIN_BUILDER_STUB.lock().await;
-    let _builder =
-        crate::test_support::EnvVarGuard::set("GENTS_PLUGIN_BUILDER", builder.to_str().unwrap());
+    let _builder = crate::store::test_support::EnvVarGuard::set(
+        "GENTS_PLUGIN_BUILDER",
+        builder.to_str().unwrap(),
+    );
     let (fixture, tools) = fileless_tool("live-plugin-data", &home_path).await;
     fixture.grant_agent_schema().await;
     fixture
@@ -415,8 +419,10 @@ async fn a_rebuild_moves_the_pins_of_the_tools_that_select_the_plugin() {
         std::fs::set_permissions(&builder, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
     let _stub = PLUGIN_BUILDER_STUB.lock().await;
-    let _builder =
-        crate::test_support::EnvVarGuard::set("GENTS_PLUGIN_BUILDER", builder.to_str().unwrap());
+    let _builder = crate::store::test_support::EnvVarGuard::set(
+        "GENTS_PLUGIN_BUILDER",
+        builder.to_str().unwrap(),
+    );
     let (_fixture, tools) = fileless_tool_guarded("live-plugin-pins", &home_path, true).await;
     let build = json!({"argv":["plugin","build"],"target_id":"probe","set":{"language":"rust","source":"fn main() {}"}});
 

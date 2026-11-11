@@ -46,7 +46,7 @@ async fn claimed_title_fixture() -> TitleFixture {
     let directory = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(directory.path().join("node.key"), None).unwrap();
     let node = Arc::new(
-        crate::test_support::node_builder()
+        crate::store::test_support::node_builder()
             .with_node_identity_did(identity.did())
             .build()
             .await
@@ -60,7 +60,7 @@ async fn claimed_title_fixture() -> TitleFixture {
         .write("test.title.node", &format!(r#"mutation {{ create_Node(input: {{node_did: "{root_did}", display_name: "fixture", enabled: true}}) {{ _docID }} }}"#))
         .await.unwrap();
     let binding = crate::store::identity::provision_agent_identity(&identity).unwrap();
-    crate::test_support::install_test_agent_binding(
+    crate::test_support::inference::install_test_agent_binding(
         &node,
         identity.did(),
         "title fixture",

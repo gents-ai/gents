@@ -369,7 +369,12 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
 #[tokio::test]
 async fn generated_fire_transactions_are_atomic_and_owner_scoped() {
     for case in contract()["admissions"].as_array().unwrap() {
-        let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+        let node = Arc::new(
+            crate::store::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
         ensure_runtime_schemas(&node).await.unwrap();
         let pre: State = decode(&case["pre"]);
         for (index, request) in pre.requests.iter().enumerate() {
@@ -758,7 +763,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                 .unwrap();
         let owner = root.did();
         let node = std::sync::Arc::new(
-            crate::test_support::node_builder()
+            crate::store::test_support::node_builder()
                 .with_node_identity_did(owner)
                 .with_node_acp_enabled()
                 .build()
@@ -767,7 +772,10 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
         );
         ensure_runtime_schemas(&node).await.unwrap();
         let binding = crate::store::identity::provision_agent_identity(&root).unwrap();
-        crate::test_support::install_test_agent_binding(&node, owner, "trigger", &binding).await;
+        crate::test_support::inference::install_test_agent_binding(
+            &node, owner, "trigger", &binding,
+        )
+        .await;
         let selected = crate::store::identity::resolve_agent_identity(&root, &binding).unwrap();
         let access = ConfigAccess::local_as(node.clone(), ::identity::Did::new(owner).unwrap());
         for permission in [
@@ -1083,7 +1091,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
             crate::store::identity::KeyIdentity::load_or_create(dir.path().join("node.key"), None)
                 .unwrap();
         let node = std::sync::Arc::new(
-            crate::test_support::node_builder()
+            crate::store::test_support::node_builder()
                 .with_node_identity_did(root.did())
                 .with_node_acp_enabled()
                 .build()
@@ -1093,7 +1101,10 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
         ensure_runtime_schemas(&node).await.unwrap();
         let binding = crate::store::identity::provision_agent_identity(&root).unwrap();
         let owner = root.did();
-        crate::test_support::install_test_agent_binding(&node, owner, "callback", &binding).await;
+        crate::test_support::inference::install_test_agent_binding(
+            &node, owner, "callback", &binding,
+        )
+        .await;
         let agent = crate::store::identity::resolve_agent_identity(&root, &binding).unwrap();
         let agent_access = ConfigAccess::local_managed_agent(
             node.clone(),

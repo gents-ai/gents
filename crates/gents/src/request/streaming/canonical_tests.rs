@@ -27,7 +27,7 @@ async fn fixture_with_ids(
     DefraStreamWriter,
 ) {
     use crate::store::identity::NodeIdentity;
-    let (db, user, owner, binding) = crate::test_support::signed_test_node(name).await;
+    let (db, user, owner, binding) = crate::test_support::root::signed_test_node(name).await;
     let node = db.node.clone();
     let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
         .unwrap();
@@ -137,7 +137,7 @@ async fn authored_publication_replays_and_reconstructs_exact_message() {
     use crate::store::identity::NodeIdentity;
 
     let (db, user, owner, binding) =
-        crate::test_support::signed_test_node("canonical-authored").await;
+        crate::test_support::root::signed_test_node("canonical-authored").await;
     let node = db.node.clone();
     let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
         .unwrap();

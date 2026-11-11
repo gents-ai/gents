@@ -100,7 +100,12 @@ async fn apply(tool: &SchemaTool, mut value: Value) -> Value {
     call(tool, preview["next_call"]["args"].clone()).await
 }
 async fn node() -> Arc<EmbeddedNode> {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let node = Arc::new(
+        crate::store::test_support::node_builder()
+            .build()
+            .await
+            .unwrap(),
+    );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     node
 }
@@ -122,7 +127,7 @@ async fn schema_preview_and_publication_expose_ignored_native_directives() {
     use crate::store::config_client::NodePermission;
 
     let (db, _user, _user_access, binding) =
-        crate::test_support::signed_test_node("schema-native-warnings").await;
+        crate::test_support::root::signed_test_node("schema-native-warnings").await;
     let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
         .unwrap();
     let admin = ConfigAccess::local_as(

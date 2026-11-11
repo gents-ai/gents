@@ -860,7 +860,7 @@ async fn stepper_wat(wat: &str) -> Stepper {
     for agent in ["a", "b"] {
         // Each target's Agent is a real signed fixture Agent of the runtime owner.
         let binding = super::super::input::tests::fresh_agent_binding();
-        crate::test_support::install_test_agent_binding_with_access(
+        crate::test_support::inference::install_test_agent_binding_with_access(
             node_did(),
             &format!("Target fixture agent {agent}"),
             &binding,

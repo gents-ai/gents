@@ -50,7 +50,7 @@ async fn test_node() -> (
 ) {
     let db = crate::support::test_db("execution-lease-fixture").await;
     let (db, _user, _access, agent) =
-        crate::test_support::signed_test_node_from_db(db, "execution-lease-owner").await;
+        crate::test_support::root::signed_test_node_from_db(db, "execution-lease-owner").await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     (node, db, identity, agent)
