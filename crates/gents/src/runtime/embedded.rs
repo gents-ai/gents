@@ -263,9 +263,11 @@ impl EmbeddedHome {
             .as_ref()
             .context("evaluation requires the held client signing capability")?;
         Ok(gents_store::config_client::ConfigAccess::Graphql(
-            gents_store::config_client::GraphqlEndpoint::as_principal(endpoint, did)
-                .with_client_signing_capability(capability.clone())?
-                .with_client_signed_agent_creates(),
+            crate::runtime::lifecycle_hooks::compose_endpoint(
+                gents_store::config_client::GraphqlEndpoint::as_principal(endpoint, did)
+                    .with_client_signing_capability(capability.clone())?
+                    .with_client_signed_agent_creates(),
+            )?,
         ))
     }
 

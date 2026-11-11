@@ -58,9 +58,6 @@ pub(super) enum EmbeddedTransactionPurpose {
 }
 
 impl<'a> ConfigApplyTxn<'a> {
-    /// The in-process node this transaction runs on: its embedded node, or
-    /// the node serving the loopback endpoint an embedded access routed it
-    /// through. A transaction over a plain GraphQL endpoint has none.
     fn local_node(&self) -> Option<&Arc<EmbeddedNode>> {
         match &self.backend {
             TxnBackend::Embedded { node, .. } => Some(node),
@@ -72,13 +69,17 @@ impl<'a> ConfigApplyTxn<'a> {
         self.local_node().is_some()
     }
 
-    /// The `T` attached to this transaction's in-process node
-    /// ([`crate::node_extension`]).
-    pub fn node_extension<T>(&self) -> Option<Arc<T>>
+    /// The `T` this transaction's in-process node carries or, for a
+    /// transaction over a plain GraphQL endpoint, the endpoint carries.
+    pub fn extension<T>(&self) -> Option<Arc<T>>
     where
         T: std::any::Any + Send + Sync,
     {
-        crate::node_extension::attached(self.local_node()?)
+        match (&self.backend, self.local_node()) {
+            (_, Some(node)) => crate::node_extension::attached(node),
+            (TxnBackend::Http { endpoint, .. }, None) => endpoint.extension::<T>(),
+            (TxnBackend::Embedded { .. }, None) => None,
+        }
     }
 
     /// An unbound local collection cannot hide individual rows through DAC.

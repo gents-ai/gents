@@ -33,9 +33,13 @@ pub enum HookError {
         operation: String,
     },
     #[error(
-        "no lifecycle plugins are attached to this node, or installed for this process's GraphQL transactions; the runtime was composed without them"
+        "no lifecycle plugins are attached to this node; start it through gents::runtime::node_start, which composes it"
     )]
     NotInstalled,
+    #[error(
+        "this GraphQL access carries no lifecycle plugins; build its endpoint with gents::runtime::lifecycle_hooks::compose_endpoint"
+    )]
+    EndpointNotComposed,
     #[error("lifecycle plugin declared an unreadable query: {0}")]
     Query(String),
     #[error(

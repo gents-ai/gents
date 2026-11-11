@@ -160,65 +160,42 @@ impl Registry {
         self.reads.iter().find(|read| read.name() == name)
     }
 
-    /// Gives `node` its plugins. The composition root attaches them to each
-    /// node it starts, before the node serves lifecycle transactions; a node
-    /// keeps the registry it was started with.
     pub fn attach(
         node: &Arc<defra_node::Node>,
         registry: Arc<Registry>,
-    ) -> Result<(), gents_store::node_extension::NodeExtensionError> {
+    ) -> Result<(), gents_store::node_extension::ExtensionError> {
         gents_store::node_extension::attach(node, registry)
     }
 
-    /// Core's points with no plugins. Tests of the crates below the plugins
-    /// have none to attach and run with this.
-    pub fn core_only() -> Arc<Registry> {
-        Arc::new(Registry::default())
+    pub fn carried_by(
+        endpoint: gents_store::config_client::GraphqlEndpoint,
+        registry: Arc<Registry>,
+    ) -> Result<gents_store::config_client::GraphqlEndpoint, gents_store::node_extension::ExtensionError>
+    {
+        endpoint.with_extension(registry)
     }
 
-    /// Hands this process the plugins its transactions over a GraphQL
-    /// endpoint run with: such a transaction has no node in this process to
-    /// carry them. The first registry wins, since bundled plugins are fixed
-    /// at build time.
-    pub fn install_for_remote_transactions(registry: Arc<Registry>) -> bool {
-        remote().set(registry).is_ok()
-    }
-
-    /// The registry a lifecycle transaction runs its points against: its
-    /// in-process node's, or this process's for a transaction over a GraphQL
-    /// endpoint.
     pub(crate) fn for_transaction(
         txn: &ConfigApplyTxn<'_>,
     ) -> Result<Arc<Registry>, super::stage::HookError> {
-        if txn.has_local_node() {
-            return txn.node_extension::<Registry>().map_or_else(unattached, Ok);
-        }
-        remote().get().map(Arc::clone).map_or_else(unattached, Ok)
+        txn.extension::<Registry>().ok_or(if txn.has_local_node() {
+            super::stage::HookError::NotInstalled
+        } else {
+            super::stage::HookError::EndpointNotComposed
+        })
     }
 
-    /// The registry admission, outside any lifecycle transaction, prepares
-    /// its decisions against on `node`.
     pub(crate) fn for_node(
         node: &defra_node::Node,
     ) -> Result<Arc<Registry>, super::stage::HookError> {
-        gents_store::node_extension::attached::<Registry>(node).map_or_else(unattached, Ok)
+        gents_store::node_extension::attached::<Registry>(node)
+            .ok_or(super::stage::HookError::NotInstalled)
     }
 }
 
-/// Bundled plugins are always on, so a node started without them is
-/// miscomposed and its lifecycle transitions fail rather than run without
-/// their plugins. Test builds run an unattached node's points core-only:
-/// most test nodes are built directly rather than through the composition
-/// root, and a test that needs the plugins attaches them to its node.
-fn unattached() -> Result<Arc<Registry>, super::stage::HookError> {
-    if cfg!(any(test, feature = "test-fixtures")) {
-        Ok(Registry::core_only())
-    } else {
-        Err(super::stage::HookError::NotInstalled)
-    }
-}
-
-fn remote() -> &'static std::sync::OnceLock<Arc<Registry>> {
-    static REMOTE: std::sync::OnceLock<Arc<Registry>> = std::sync::OnceLock::new();
-    &REMOTE
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn attach_no_lifecycle_plugins_for_tests(
+    node: &Arc<defra_node::Node>,
+) -> Result<(), gents_store::node_extension::ExtensionError> {
+    Registry::attach(node, Arc::new(Registry::default()))
 }

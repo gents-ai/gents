@@ -212,12 +212,14 @@ impl ClientCore {
                         self.node_identity.private_key_bytes(),
                     )?;
                 Ok(ConfigAccess::Graphql(
-                    gents_store::config_client::GraphqlEndpoint::as_principal(
-                        url,
-                        self.node_identity.did(),
-                    )
-                    .with_client_signing_capability(capability)?
-                    .with_client_signed_agent_creates(),
+                    gents::runtime::lifecycle_hooks::compose_endpoint(
+                        gents_store::config_client::GraphqlEndpoint::as_principal(
+                            url,
+                            self.node_identity.did(),
+                        )
+                        .with_client_signing_capability(capability)?
+                        .with_client_signed_agent_creates(),
+                    )?,
                 ))
             })
             .transpose()?
