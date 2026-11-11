@@ -198,7 +198,7 @@ impl DefraSessionHook {
         let result = if lifecycle.is_spawned_background()
             || crate::tools::native::is_bash_tool_name(lifecycle.tool_name())
         {
-            crate::tools::background::status::observe_canonical_tool_output_with_access(
+            crate::session::tool_output_rows::observe_canonical_tool_output_with_access(
                 &self.actor_access()?,
                 tool_doc_id,
                 lifecycle

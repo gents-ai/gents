@@ -2064,7 +2064,7 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
     assert_eq!(completed_tools.len(), 1);
     assert_eq!(completed_tools[0]["_docID"], a.tool_call_doc_id);
     assert_eq!(completed_tools[0]["lifecycle_state"], "completed");
-    let output = crate::tools::background::status::observe_canonical_tool_output_with_access(
+    let output = crate::session::tool_output_rows::observe_canonical_tool_output_with_access(
         &fixture_access(&node, &lifecycle),
         &a.tool_call_doc_id,
         &lifecycle.request().doc_id,

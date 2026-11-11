@@ -102,7 +102,7 @@ async fn stored_row(admission: &PublishedAdmission) -> Value {
 /// The row's closed canonical tool output.
 async fn stored_output(admission: &PublishedAdmission) -> String {
     let tool = &admission.tool;
-    match crate::tools::background::status::observe_canonical_tool_output_with_access(
+    match crate::session::tool_output_rows::observe_canonical_tool_output_with_access(
         &admission.tool.access().unwrap(),
         tool.doc_id().unwrap(),
         tool.request_doc_id().unwrap(),
@@ -113,8 +113,8 @@ async fn stored_output(admission: &PublishedAdmission) -> String {
     .await
     .unwrap()
     {
-        crate::tools::background::status::CanonicalToolOutputObservation::Closed(output) => output,
-        crate::tools::background::status::CanonicalToolOutputObservation::Open(output) => {
+        crate::session::tool_output_rows::CanonicalToolOutputObservation::Closed(output) => output,
+        crate::session::tool_output_rows::CanonicalToolOutputObservation::Open(output) => {
             panic!("job row output is still open: {output}")
         }
     }
@@ -938,7 +938,7 @@ impl Stepper {
     /// The row's closed canonical output.
     pub(crate) async fn output(&self, row: &str) -> Value {
         let tool = self.lifecycle(row).await;
-        match crate::tools::background::status::observe_canonical_tool_output_with_access(
+        match crate::session::tool_output_rows::observe_canonical_tool_output_with_access(
             &self.job.access,
             tool.doc_id().unwrap(),
             tool.request_doc_id().unwrap(),
@@ -949,10 +949,10 @@ impl Stepper {
         .await
         .unwrap()
         {
-            crate::tools::background::status::CanonicalToolOutputObservation::Closed(output) => {
+            crate::session::tool_output_rows::CanonicalToolOutputObservation::Closed(output) => {
                 serde_json::from_str(&output).unwrap()
             }
-            crate::tools::background::status::CanonicalToolOutputObservation::Open(output) => {
+            crate::session::tool_output_rows::CanonicalToolOutputObservation::Open(output) => {
                 panic!("job row output is still open: {output}")
             }
         }

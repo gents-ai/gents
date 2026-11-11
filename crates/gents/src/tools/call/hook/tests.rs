@@ -1568,7 +1568,7 @@ async fn fetch_tool_call_row_as(
         .pointer("/data/AgentToolCall/0")
         .cloned()
         .expect("tool call row");
-    let output = crate::tools::background::status::observe_canonical_tool_output_with_access(
+    let output = crate::session::tool_output_rows::observe_canonical_tool_output_with_access(
         access,
         row["_docID"].as_str().unwrap(),
         row["request_doc_id"].as_str().unwrap(),
@@ -1578,7 +1578,7 @@ async fn fetch_tool_call_row_as(
     )
     .await
     .ok()
-    .map(crate::tools::background::status::CanonicalToolOutputObservation::into_text);
+    .map(crate::session::tool_output_rows::CanonicalToolOutputObservation::into_text);
     row["result"] = output.map_or(serde_json::Value::Null, serde_json::Value::String);
     row
 }

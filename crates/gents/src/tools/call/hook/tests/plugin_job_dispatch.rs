@@ -1980,7 +1980,7 @@ impl Step0 {
         .await
         .unwrap()
         .unwrap();
-        match crate::tools::background::status::observe_canonical_tool_output_with_access(
+        match crate::session::tool_output_rows::observe_canonical_tool_output_with_access(
             &self.access(),
             row,
             tool.request_doc_id().unwrap(),
@@ -1991,10 +1991,10 @@ impl Step0 {
         .await
         .unwrap()
         {
-            crate::tools::background::status::CanonicalToolOutputObservation::Closed(output) => {
+            crate::session::tool_output_rows::CanonicalToolOutputObservation::Closed(output) => {
                 serde_json::from_str(&output).unwrap()
             }
-            crate::tools::background::status::CanonicalToolOutputObservation::Open(output) => {
+            crate::session::tool_output_rows::CanonicalToolOutputObservation::Open(output) => {
                 panic!("job row output is still open: {output}")
             }
         }

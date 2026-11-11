@@ -1280,7 +1280,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
                 .as_u64()
                 .expect("execution must report index work"),
         );
-        let output = crate::tools::background::status::canonical_tool_output(
+        let output = crate::session::tool_output_rows::canonical_tool_output(
             &node,
             "tool-doc",
             &request_id,
@@ -1292,7 +1292,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
         .unwrap();
         assert_eq!(output, "output");
         assert_eq!(
-            crate::tools::background::status::observe_canonical_tool_output_with_access(
+            crate::session::tool_output_rows::observe_canonical_tool_output_with_access(
                 &crate::store::config_client::ConfigAccess::local(node.clone()),
                 "tool-doc",
                 &request_id,
@@ -1302,7 +1302,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
             )
             .await
             .unwrap(),
-            crate::tools::background::status::CanonicalToolOutputObservation::Closed(output)
+            crate::session::tool_output_rows::CanonicalToolOutputObservation::Closed(output)
         );
     }
     assert_eq!(

@@ -15,9 +15,10 @@ use crate::store::config_client::ConfigAccess;
 use crate::tools::background::job::admit::StepChild;
 use crate::tools::background::job::input::{chain_of, derive_children, derive_children_for_jobs};
 use crate::tools::background::job::keys::job_spawn_key;
-use crate::tools::background::status::{
-    observe_canonical_tool_output_with_access, CanonicalToolOutputObservation, ProcessControlScope,
+use crate::session::tool_output_rows::{
+    observe_canonical_tool_output_with_access, CanonicalToolOutputObservation,
 };
+use crate::tools::background::status::ProcessControlScope;
 
 /// Which job row a view reads: by physical doc id, or by its address.
 #[derive(Debug, Clone, PartialEq, Eq)]

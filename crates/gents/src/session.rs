@@ -12,6 +12,7 @@ pub mod origin;
 pub(crate) mod plugin_effect_rows;
 pub mod tool_call_state;
 pub(crate) mod tool_presentation;
+pub mod tool_output_rows;
 pub use archive::set_session_archived_on;
 mod compaction_entries;
 mod control;

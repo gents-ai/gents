@@ -485,7 +485,7 @@ mod tests {
         _node: &std::sync::Arc<defra_node::Node>,
         tool: &crate::tools::call::lifecycle::ToolCallLifecycle,
     ) -> String {
-        crate::tools::background::status::observe_canonical_tool_output_with_access(
+        crate::session::tool_output_rows::observe_canonical_tool_output_with_access(
             &tool.access().unwrap(),
             tool.doc_id().unwrap(),
             tool.request_doc_id().unwrap(),

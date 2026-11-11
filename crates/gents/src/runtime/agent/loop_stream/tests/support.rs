@@ -976,7 +976,7 @@ pub(super) async fn agent_tool_output(
     tool_doc_id: &str,
 ) -> String {
     let request = lifecycle.request();
-    crate::tools::background::status::observe_canonical_tool_output_with_access(
+    crate::session::tool_output_rows::observe_canonical_tool_output_with_access(
         &lifecycle.access().expect("claimed Agent access"),
         tool_doc_id,
         &request.doc_id,

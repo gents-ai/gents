@@ -657,7 +657,7 @@ impl super::ToolCallLifecycle {
                 continue;
             };
             let output =
-                match crate::tools::background::status::observe_canonical_tool_output_with_access(
+                match crate::session::tool_output_rows::observe_canonical_tool_output_with_access(
                     access,
                     &row.doc_id,
                     request_doc_id,
