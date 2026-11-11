@@ -639,52 +639,22 @@ pub async fn remove_account(
         confirmed,
         "removing an account asks for confirmation; pass --yes when not running in a terminal"
     );
-    let (deleted, kept) = access
-        .transact_write("accounts.remove", |txn| {
-            let account = account.clone();
-            Box::pin(async move {
-                gents_inference::auth::credential::remove_account_in_txn(
-                    txn,
-                    node_did,
-                    &account.credential_id,
-                )
-                .await?;
-                let profiles =
-                    gents_documents::list_inference_profiles_in_txn(txn, node_did).await?;
-                let (kept, deleted): (Vec<_>, Vec<_>) =
-                    gents_documents::list_inference_backends_in_txn(txn, node_did)
-                        .await?
-                        .into_iter()
-                        .filter(|backend| {
-                            account.account_ref.is_some()
-                                && backend_account(backend, std::slice::from_ref(&account))
-                                    .flatten()
-                                    .is_some()
-                        })
-                        .map(|backend| backend.backend_id)
-                        .partition(|backend_id| {
-                            profiles
-                                .iter()
-                                .any(|profile| &profile.backend_id == backend_id)
-                        });
-                crate::config_import::apply_delete_collection(
-                    txn,
-                    gents_store::collection::Collection::InferenceBackend,
-                    node_did,
-                    &deleted,
-                )
-                .await?;
-                Ok::<_, anyhow::Error>((deleted, kept))
-            })
-        })
-        .await?;
+    let removal = gents_inference::operations::remove_account(access, node_did, &account)
+        .await
+        .map_err(|error| {
+            super::config::inference_failure::InferenceFailure::new(
+                error,
+                gents_protocol::operations::inference::InferenceDocument::Backend,
+                "update",
+            )
+        })?;
     Ok(json!({
         "removed": account.credential_id,
         "provider": account.provider,
         "label": account.label,
         "profiles": snapshot.account_profiles(&account),
-        "deleted_backends": deleted,
-        "kept_backends": kept,
+        "deleted_backends": removal.deleted_backends,
+        "kept_backends": removal.kept_backends,
     }))
 }
 
