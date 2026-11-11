@@ -1,8 +1,3 @@
-use rapidhash::{HashMapExt, RapidHashMap};
-
-use opentelemetry::global;
-use tracing_opentelemetry::OpenTelemetrySpanExt;
-
 use gents_protocol::row::AgentRequest;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,16 +58,6 @@ pub(crate) fn record_current_failure_class(error: &anyhow::Error) {
         .map(|class| class.as_str())
         .unwrap_or("external");
     tracing::Span::current().record("failure_class", failure_class);
-}
-
-pub(crate) fn current_trace_context_headers() -> RapidHashMap<String, String> {
-    let context = tracing::Span::current().context();
-    let mut headers = RapidHashMap::new();
-    global::get_text_map_propagator(|propagator| {
-        propagator.inject_context(&context, &mut headers);
-    });
-    headers.retain(|name, value| !name.trim().is_empty() && !value.trim().is_empty());
-    headers
 }
 
 fn clean_optional(value: Option<&str>) -> String {

@@ -285,7 +285,7 @@ impl McpPool {
             inner: Arc::new(RwLock::new(RapidHashMap::new())),
             connect_fn: default_connect_fn(resume_stats.clone()),
             trace_context_headers_fn: Arc::new(
-                crate::observe::runtime_trace::current_trace_context_headers,
+                crate::inference::trace_context::current_trace_context_headers,
             ),
             idle_ttl: Some(DEFAULT_MCP_IDLE_TTL),
             resume_stats,
@@ -339,7 +339,7 @@ impl McpPool {
                 },
             ),
             trace_context_headers_fn: Arc::new(
-                crate::observe::runtime_trace::current_trace_context_headers,
+                crate::inference::trace_context::current_trace_context_headers,
             ),
             idle_ttl: None,
             resume_stats: ResumeStatsRegistry::default(),
