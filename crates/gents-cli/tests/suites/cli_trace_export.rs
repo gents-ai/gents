@@ -2310,8 +2310,8 @@ fn projection_mock_squash(text: &str) -> String {
     text.chars().filter(|ch| !ch.is_whitespace()).collect()
 }
 
-fn projection_mock_has(query: &str, predicate: impl AsRef<str>) -> bool {
-    query.contains(&projection_mock_squash(predicate.as_ref()))
+fn projection_mock_has(query: &str, predicate: &str) -> bool {
+    query.contains(&projection_mock_squash(predicate))
 }
 
 #[derive(Debug, Deserialize)]
