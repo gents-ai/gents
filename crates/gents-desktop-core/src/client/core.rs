@@ -40,6 +40,7 @@ use super::query::{
 use crate::remote_admin::PairingErrorClass;
 
 pub use enrollment::EnrollmentRequestResult;
+pub use file_review::tool_file_changes_on;
 pub use goal::{GoalSubmissionReference, RetainedGoalSubmission};
 pub use inference_observation::{InferenceActivity, InferenceObservation, InferenceTarget};
 pub use observation_scope::ClientObservationAttachment;

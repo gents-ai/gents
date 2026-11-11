@@ -1,8 +1,77 @@
 use super::*;
 use crate::documents::{Agent, AgentContext, BashTools, BuiltInTools, FileTools, HostTools, Tools};
 use crate::store::config_client::{
-    validate_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    validate_desired_state_plan, ConfigAccess, ConfigClientError, DesiredStateApplyDocument,
+    DesiredStateApplyPlan, TransactionFailure,
 };
+use agent::admit;
+use gents_protocol::agent_identity::AgentIdentityBinding;
+use gents_protocol::operations::agent::{
+    AgentCreateInput, AgentOperationError, AgentOperationKind, AgentReceipt,
+};
+
+/// A materializer failure: the operation's own refusal, or another owner's
+/// failure on its way through. Keeping the two apart lets each front end
+/// answer a refusal from its declared recovery and hand any other failure to
+/// that owner's classifiers unchanged.
+#[derive(Debug)]
+pub(super) enum AgentApplyError {
+    Operation(AgentOperationError),
+    Other(anyhow::Error),
+}
+
+impl From<AgentOperationError> for AgentApplyError {
+    fn from(error: AgentOperationError) -> Self {
+        Self::Operation(error)
+    }
+}
+
+impl From<anyhow::Error> for AgentApplyError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Other(error)
+    }
+}
+
+impl From<ConfigClientError> for AgentApplyError {
+    fn from(error: ConfigClientError) -> Self {
+        Self::Other(error.into())
+    }
+}
+
+impl From<serde_json::Error> for AgentApplyError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::Other(error.into())
+    }
+}
+
+impl From<AgentApplyError> for anyhow::Error {
+    fn from(error: AgentApplyError) -> Self {
+        match error {
+            AgentApplyError::Operation(error) => error.into(),
+            AgentApplyError::Other(error) => error,
+        }
+    }
+}
+
+impl From<AgentApplyError> for AgentOperationError {
+    fn from(error: AgentApplyError) -> Self {
+        match error {
+            AgentApplyError::Operation(error) => error,
+            AgentApplyError::Other(error) => {
+                Self::Passthrough(error.reallocate_into_boxed_dyn_error_without_backtrace())
+            }
+        }
+    }
+}
+
+impl TransactionFailure for AgentApplyError {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Operation(_) => None,
+            Self::Other(error) => error.config_client_error(),
+        }
+    }
+}
 
 fn catalog_from_documents(refs: &crate::ConfigReferences) -> Result<agent::AgentCatalogView> {
     let mut view = agent::AgentCatalogView::default();
@@ -59,6 +128,36 @@ fn replacement(
     })
 }
 
+/// The receipt as the model reads it: fields in declaration order, each
+/// value compact.
+pub(super) fn receipt_text(receipt: &AgentReceipt<Agent>) -> Result<String> {
+    Ordered::from_serialize(receipt)?.pretty()
+}
+
+fn create_params(input: &AgentCreateInput, preview: bool) -> ConfigureAgentParams {
+    let operation = input.operation.kind().as_str();
+    ConfigureAgentParams {
+        action: if preview { "preview" } else { operation }.to_owned(),
+        identity_binding: None,
+        operation: preview.then(|| operation.to_owned()),
+        display_name: StringUpdate::Set(input.display_name.clone()),
+        description: input.description.clone(),
+        system_prompt: input.system_prompt.clone(),
+        agent_did: None,
+        clone_from: input.clone_from.clone(),
+        root: input.root.clone(),
+        preset: input
+            .preset
+            .clone()
+            .map(StringUpdate::Set)
+            .unwrap_or_default(),
+        profile_id: StringUpdate::Set(input.profile_id.clone()),
+        make_default: input.make_default,
+        enable_lsp: None,
+        network_mode: None,
+    }
+}
+
 #[cfg(test)]
 pub(super) async fn agent_mutate(
     node: &Arc<EmbeddedNode>,
@@ -80,7 +179,7 @@ pub async fn configure_agent(
     args: &ConfigureAgentParams,
     ceiling: &crate::tools::surface::SelfConfigProcessCeiling,
 ) -> Result<String> {
-    agent_apply_access(
+    let receipt = agent_apply_access(
         access,
         owner,
         args,
@@ -89,7 +188,22 @@ pub async fn configure_agent(
         None,
         None,
     )
-    .await
+    .await?;
+    receipt_text(&receipt)
+}
+
+/// `operations::agent::create`: the caller's access decides who signs, and
+/// no held-grant bound applies because the caller is not an Agent.
+pub(crate) async fn create_agent(
+    access: &ConfigAccess,
+    owner: &str,
+    identity_binding: AgentIdentityBinding,
+    input: &AgentCreateInput,
+    ceiling: &crate::tools::surface::SelfConfigProcessCeiling,
+) -> Result<AgentReceipt<Agent>, AgentOperationError> {
+    let mut args = create_params(input, false);
+    args.identity_binding = Some(identity_binding);
+    Ok(agent_apply_access(access, owner, &args, ceiling, false, None, None).await?)
 }
 
 #[cfg(test)]
@@ -100,7 +214,7 @@ async fn agent_apply(
     ceiling: &crate::tools::surface::SelfConfigProcessCeiling,
     preview: bool,
 ) -> Result<String> {
-    agent_apply_access(
+    let receipt = agent_apply_access(
         &ConfigAccess::local(node.clone()),
         owner,
         args,
@@ -109,7 +223,8 @@ async fn agent_apply(
         None,
         None,
     )
-    .await
+    .await?;
+    receipt_text(&receipt)
 }
 
 pub(super) async fn model_agent_preview(
@@ -139,11 +254,19 @@ pub(super) async fn model_agent_preview(
     )
     .await
     {
-        Ok(result) => Ok(result),
+        Ok(receipt) => receipt_text(&receipt),
         Err(error) => {
+            let error = anyhow::Error::from(error);
             ordered! {"admitted":false,"committed":false,"rejection":format!("{error:#}")}.pretty()
         }
     }
+}
+
+pub(super) async fn model_agent_create_preview(
+    core: &SelfConfigCore,
+    input: &AgentCreateInput,
+) -> Result<String> {
+    model_agent_preview(core, &create_params(input, true)).await
 }
 
 pub(super) async fn model_agent_mutate(
@@ -151,12 +274,27 @@ pub(super) async fn model_agent_mutate(
     identity: &dyn NodeIdentity,
     args: &ConfigureAgentParams,
 ) -> Result<String> {
+    let receipt = model_agent_apply(core, identity, args.clone()).await?;
+    receipt_text(&receipt)
+}
+
+pub(super) async fn model_agent_create(
+    core: &SelfConfigCore,
+    identity: &dyn NodeIdentity,
+    input: &AgentCreateInput,
+) -> Result<AgentReceipt<Agent>, AgentApplyError> {
+    model_agent_apply(core, identity, create_params(input, false)).await
+}
+
+async fn model_agent_apply(
+    core: &SelfConfigCore,
+    identity: &dyn NodeIdentity,
+    mut args: ConfigureAgentParams,
+) -> Result<AgentReceipt<Agent>, AgentApplyError> {
     let actor = core.identity()?;
-    anyhow::ensure!(
-        identity.did() == actor.to_string(),
-        "agent configuration requires its selected actor signer"
-    );
-    let mut args = args.clone();
+    if identity.did() != actor.to_string() {
+        return Err(anyhow!("agent configuration requires its selected actor signer").into());
+    }
     if matches!(
         args.operation.as_deref().unwrap_or(&args.action),
         "create" | "clone"
@@ -168,7 +306,8 @@ pub(super) async fn model_agent_mutate(
                 identity,
                 core.agent_did(),
             )
-            .await?,
+            .await
+            .map_err(anyhow::Error::from)?,
         );
     }
     agent_apply_access(
@@ -191,7 +330,7 @@ async fn agent_apply_access(
     preview: bool,
     held: Option<&ops::OperatorGrants>,
     node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
-) -> Result<String> {
+) -> Result<AgentReceipt<Agent>, AgentApplyError> {
     if preview {
         access
             .transact_readonly("self_config.agent", |txn| {
@@ -231,23 +370,29 @@ async fn agent_apply_in_txn(
     preview: bool,
     held: Option<&ops::OperatorGrants>,
     node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
-) -> Result<String> {
+) -> Result<AgentReceipt<Agent>, AgentApplyError> {
     let refs = crate::ConfigReferences::load_in_txn(txn, owner).await?;
     let view = catalog_from_documents(&refs)?;
-    anyhow::ensure!(
+    admit(
         args.action != "preview" || args.operation.is_some(),
-        "agent preview requires operation create, clone, edit, or disable"
-    );
+        AgentOperationError::PreviewRequiresOperation,
+    )?;
     let operation = args.operation.as_deref().unwrap_or(&args.action);
     if operation == "edit" {
-        anyhow::ensure!(
+        admit(
             args.clone_from.is_none(),
-            "agent edit does not accept clone_from; use agent clone"
-        );
-        anyhow::ensure!(!args.root.is_present() && !args.preset.is_present() && args.enable_lsp.is_none() && args.network_mode.is_none(), "agent edit changes Agent fields and its system_prompt; change root and tool grants through tools update");
+            AgentOperationError::EditRejectsCloneFrom,
+        )?;
+        admit(
+            !args.root.is_present()
+                && !args.preset.is_present()
+                && args.enable_lsp.is_none()
+                && args.network_mode.is_none(),
+            AgentOperationError::EditRejectsToolsFields,
+        )?;
     }
     if operation == "disable" {
-        anyhow::ensure!(
+        admit(
             !args.display_name.is_present()
                 && !args.description.is_present()
                 && !args.system_prompt.is_present()
@@ -257,8 +402,8 @@ async fn agent_apply_in_txn(
                 && args.clone_from.is_none()
                 && args.enable_lsp.is_none()
                 && args.network_mode.is_none(),
-            "agent disable accepts only the target ID"
-        );
+            AgentOperationError::DisableAcceptsOnlyTarget,
+        )?;
     }
     let mut patch = Vec::new();
     for (name, update) in [
@@ -271,43 +416,58 @@ async fn agent_apply_in_txn(
             patch.push((name.to_owned(), update.value().map(|value| json!(value))));
         }
     }
-    let op = match operation {
-        "create" | "clone" => agent::AgentOperation::Create(agent::AgentCreateRequest {
-            display_name: args.display_name.value().unwrap_or_default().to_owned(),
-            system_prompt: args.system_prompt.value().unwrap_or_default().to_owned(),
-            inference_profile_id: args.profile_id.value().unwrap_or_default().to_owned(),
-            clone_from: if operation == "clone" {
-                Some(args.clone_from.clone().context("clone requires from")?)
+    let (kind, op) = match operation {
+        "create" | "clone" => {
+            let kind = if operation == "clone" {
+                AgentOperationKind::Clone
             } else {
-                None
-            },
-        }),
-        "edit" => agent::AgentOperation::Edit(patch),
-        "disable" => agent::AgentOperation::Disable,
-        _ => bail!("unknown agent operation {operation:?}"),
+                AgentOperationKind::Create
+            };
+            let request = agent::AgentCreateRequest {
+                display_name: args.display_name.value().unwrap_or_default().to_owned(),
+                system_prompt: args.system_prompt.value().unwrap_or_default().to_owned(),
+                inference_profile_id: args.profile_id.value().unwrap_or_default().to_owned(),
+                clone_from: if operation == "clone" {
+                    Some(
+                        args.clone_from
+                            .clone()
+                            .ok_or(AgentOperationError::CloneRequiresFrom)?,
+                    )
+                } else {
+                    None
+                },
+            };
+            (kind, agent::AgentOperation::Create(request))
+        }
+        "edit" => (AgentOperationKind::Edit, agent::AgentOperation::Edit(patch)),
+        "disable" => (AgentOperationKind::Disable, agent::AgentOperation::Disable),
+        _ => return Err(AgentOperationError::UnknownOperation(operation.to_owned()).into()),
     };
     let id = match &op {
         agent::AgentOperation::Create(_) => args
             .identity_binding
             .as_ref()
-            .context("agent creation requires a runtime-provisioned identity binding")?
+            .ok_or(AgentOperationError::IdentityBindingRequired)?
             .agent_did
             .clone(),
         _ => args
             .agent_did
             .clone()
-            .context("agent operation requires an exact agent_did")?,
+            .ok_or(AgentOperationError::AgentDidRequired)?,
     };
     agent::decide_agent_operation(&view, &op, &id, args.make_default)?;
     let load = |collection: crate::Collection, id: &str| {
         refs.documents()
             .find(|((c, key), _)| *c == collection && key == id)
             .map(|(_, value)| value.clone())
-            .with_context(|| format!("missing {} {id:?}", collection.graphql_type()))
+            .ok_or_else(|| AgentOperationError::MissingDocument {
+                collection: collection.graphql_type(),
+                id: id.to_owned(),
+            })
     };
     let mut documents = Vec::new();
     let mut doc: Agent;
-    let mut root_access = Value::Null;
+    let mut root_access = None;
     match &op {
         agent::AgentOperation::Create(input) => {
             let mut context: AgentContext = match input.clone_from.as_deref() {
@@ -324,13 +484,12 @@ async fn agent_apply_in_txn(
                 None => serde_json::from_value(json!({"context_id":"", "node_did":owner}))?,
             };
             context.context_id = format!("{id}:context");
-            anyhow::ensure!(
-                !refs
-                    .documents()
-                    .any(|((c, key), _)| *c == crate::Collection::AgentContext
-                        && key == &context.context_id),
-                "generated context ID already exists"
-            );
+            admit(
+                !refs.documents().any(|((c, key), _)| {
+                    *c == crate::Collection::AgentContext && key == &context.context_id
+                }),
+                AgentOperationError::GeneratedContextIdExists,
+            )?;
             context.display_name = Some(input.display_name.clone());
             if args.system_prompt.is_present() {
                 context.system_prompt = args.system_prompt.owned_value();
@@ -348,11 +507,11 @@ async fn agent_apply_in_txn(
                 }
             }
             if let Some(preset) = args.preset.value() {
-                anyhow::ensure!(
+                admit(
                     operation != "clone",
-                    "clone inherits its source tools; edit the cloned Tools to change grants"
-                );
-                let fields = preset_fields(preset).context("unknown permission preset")?;
+                    AgentOperationError::ClonePresetRefused,
+                )?;
+                let fields = preset_fields(preset).ok_or(AgentOperationError::UnknownPreset)?;
                 let write = preset == crate::tools::surface::presets::PRESET_WRITE;
                 tools = Some(Tools {
                     host: Some(HostTools {
@@ -393,13 +552,12 @@ async fn agent_apply_in_txn(
             }
             if let Some(mut tools) = tools {
                 tools.tools_id = format!("{id}:tools");
-                anyhow::ensure!(
-                    !refs
-                        .documents()
-                        .any(|((c, key), _)| *c == crate::Collection::Tools
-                            && key == &tools.tools_id),
-                    "generated tools ID already exists"
-                );
+                admit(
+                    !refs.documents().any(|((c, key), _)| {
+                        *c == crate::Collection::Tools && key == &tools.tools_id
+                    }),
+                    AgentOperationError::GeneratedToolsIdExists,
+                )?;
                 tools.node_did = owner.to_owned();
                 let policy = crate::tools::surface::load_workspace_root_policy_in_txn(
                     txn,
@@ -429,8 +587,11 @@ async fn agent_apply_in_txn(
                     crate::tools::surface::ToolRootReader::Unpublished(_) => Some(None),
                 };
                 if let Some(published) = published {
-                    root_access =
-                        crate::tools::surface::reader_grant_step(&id, published.as_deref(), true);
+                    root_access = Some(crate::tools::surface::reader_grant_step(
+                        &id,
+                        published.as_deref(),
+                        true,
+                    ));
                 }
                 validate_tool_network_selection(args.network_mode)?;
                 context.tools_id = Some(tools.tools_id.clone());
@@ -439,13 +600,21 @@ async fn agent_apply_in_txn(
                     ops::guard_tools_keep_grants(
                         held,
                         None,
-                        candidate.as_object().context("Tools object required")?,
-                    ).with_context(|| format!("clone source {:?} carries an operator grant this agent does not hold; clone a source without it or ask the operator to grant it", input.clone_from.as_deref().unwrap_or_default()))?;
+                        candidate
+                            .as_object()
+                            .ok_or(AgentOperationError::ObjectRequired("Tools"))?,
+                    )
+                    .map_err(|source| {
+                        AgentOperationError::CloneSourceGrantNotHeld {
+                            from: input.clone_from.clone().unwrap_or_default(),
+                            source: source.into(),
+                        }
+                    })?;
                 }
                 documents.push(replacement(crate::Collection::Tools, tools)?);
             }
             doc = serde_json::from_value(
-                json!({"agent_did":id,"creation_nonce":args.identity_binding.as_ref().context("agent creation identity binding missing")?.creation_nonce,"node_did":owner,"display_name":input.display_name,"description":args.description.value(),"context_id":context.context_id,"inference_profile_id":input.inference_profile_id}),
+                json!({"agent_did":id,"creation_nonce":args.identity_binding.as_ref().ok_or(AgentOperationError::IdentityBindingMissing)?.creation_nonce,"node_did":owner,"display_name":input.display_name,"description":args.description.value(),"context_id":context.context_id,"inference_profile_id":input.inference_profile_id}),
             )?;
             guard_agent_profile_choice(
                 txn,
@@ -459,7 +628,10 @@ async fn agent_apply_in_txn(
         }
         agent::AgentOperation::Edit(patch) => {
             let stored = load(crate::Collection::Agent, &id)?;
-            let mut merged = stored.as_object().context("agent object required")?.clone();
+            let mut merged = stored
+                .as_object()
+                .ok_or(AgentOperationError::ObjectRequired("agent"))?
+                .clone();
             let agent_patch = patch
                 .iter()
                 .filter(|(field, _)| field != "system_prompt")
@@ -471,13 +643,29 @@ async fn agent_apply_in_txn(
                 &agent_patch,
             );
             if let Some(held) = held {
-                let selected_tools = |agent: &serde_json::Map<String, Value>| -> Result<Option<serde_json::Map<String, Value>>> {
-                    let Some(context_id) = agent.get("context_id").and_then(Value::as_str) else { return Ok(None); };
+                let selected_tools = |agent: &serde_json::Map<String, Value>| -> Result<
+                    Option<serde_json::Map<String, Value>>,
+                    AgentOperationError,
+                > {
+                    let Some(context_id) = agent.get("context_id").and_then(Value::as_str) else {
+                        return Ok(None);
+                    };
                     let context = load(crate::Collection::AgentContext, context_id)?;
-                    let Some(tools_id) = context.get("tools_id").and_then(Value::as_str) else { return Ok(None); };
-                    Ok(Some(load(crate::Collection::Tools, tools_id)?.as_object().context("Tools object required")?.clone()))
+                    let Some(tools_id) = context.get("tools_id").and_then(Value::as_str) else {
+                        return Ok(None);
+                    };
+                    Ok(Some(
+                        load(crate::Collection::Tools, tools_id)?
+                            .as_object()
+                            .ok_or(AgentOperationError::ObjectRequired("Tools"))?
+                            .clone(),
+                    ))
                 };
-                let before = selected_tools(stored.as_object().context("Agent object required")?)?;
+                let before = selected_tools(
+                    stored
+                        .as_object()
+                        .ok_or(AgentOperationError::ObjectRequired("Agent"))?,
+                )?;
                 let after = selected_tools(&merged)?;
                 ops::reselection_keeps_grants(held, before.as_ref(), after.as_ref())?;
             }
@@ -485,7 +673,7 @@ async fn agent_apply_in_txn(
                 let context_id = merged
                     .get("context_id")
                     .and_then(Value::as_str)
-                    .context("agent has no context; create and select a context first")?;
+                    .ok_or(AgentOperationError::AgentHasNoContext)?;
                 let sharers = refs
                     .documents()
                     .filter(|((c, _), value)| {
@@ -493,10 +681,7 @@ async fn agent_apply_in_txn(
                             && value.get("context_id").and_then(Value::as_str) == Some(context_id)
                     })
                     .count();
-                anyhow::ensure!(
-                    sharers == 1,
-                    "system_prompt edit requires an unshared context"
-                );
+                admit(sharers == 1, AgentOperationError::SystemPromptContextShared)?;
                 let mut context: AgentContext =
                     serde_json::from_value(load(crate::Collection::AgentContext, context_id)?)?;
                 context.system_prompt = args.system_prompt.owned_value();
@@ -515,7 +700,7 @@ async fn agent_apply_in_txn(
     if args.make_default {
         let mut node = load(crate::Collection::Node, owner)?;
         node.as_object_mut()
-            .context("node object required")?
+            .ok_or(AgentOperationError::ObjectRequired("node"))?
             .insert("default_agent_did".into(), json!(id));
         documents.push(replacement(crate::Collection::Node, node)?);
     }
@@ -529,7 +714,7 @@ async fn agent_apply_in_txn(
         for replacement in plan.documents() {
             let key = replacement.add[replacement.collection.unique_field()]
                 .as_str()
-                .context("candidate identity missing")?
+                .ok_or(AgentOperationError::CandidateIdentityMissing)?
                 .to_owned();
             merged.insert((replacement.collection, key), replacement.add.clone());
         }
@@ -549,17 +734,25 @@ async fn agent_apply_in_txn(
                 _ => {}
             }
         }
-        anyhow::ensure!(
+        admit(
             agent::materialize_agent(&view, &op, &id, args.make_default, &candidate, owner)
                 .is_some(),
-            "candidate agent does not resolve; inspect its context, profile and backend"
-        );
+            AgentOperationError::CandidateDoesNotResolve,
+        )?;
     }
     if !preview {
         crate::documents::apply_desired_state_plan_with_node_binding(txn, &plan, node_binding)
             .await?;
     }
-    ordered! {"committed":!preview,"admitted":true,"operation":operation,"agent_did":id,"host_root_access":root_access,"agent":doc,"make_default":args.make_default}.pretty()
+    Ok(AgentReceipt {
+        committed: !preview,
+        admitted: true,
+        operation: kind,
+        agent_did: id,
+        host_root_access: root_access,
+        agent: doc,
+        make_default: args.make_default,
+    })
 }
 
 /// Lean `SelfConfig.yoloGroup`: the User grants `agent_did`, an Agent the

@@ -185,12 +185,20 @@ pub(super) async fn bind_workspace_agent_documents(
             ),
         ] {
             let did = did.context("workspace selection omitted an Agent DID")?;
-            let query = format!(
-                r#"{{ Agent(filter: {{node_did: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}}}, limit: 2) {{ _docID node_did agent_did enabled }} }}"#,
-                crate::store::graphql::escape_graphql_string(node_did),
-                crate::store::graphql::escape_graphql_string(did)
-            );
-            let response = access.execute(&query).await?;
+            use gents_protocol::document_query::{
+                fields::agent as fields, Filter, Query, Selection,
+            };
+            let rendered = Query::select(
+                Selection::doc_id()
+                    .field(fields::NODE_DID)
+                    .field(fields::AGENT_DID)
+                    .field(fields::ENABLED),
+            )
+            .filter(Filter::eq(fields::NODE_DID, node_did))
+            .filter(Filter::eq(fields::AGENT_DID, did))
+            .limit(2)
+            .render();
+            let response = access.read(&rendered).await?;
             let rows = response
                 .pointer("/data/Agent")
                 .and_then(Value::as_array)
@@ -210,12 +218,20 @@ pub(super) async fn bind_workspace_agent_documents(
         }
         for reader in &mut action.readers {
             let did = &reader.agent_did;
-            let query = format!(
-                r#"{{ Agent(filter: {{node_did: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}}}, limit: 2) {{ _docID node_did agent_did enabled }} }}"#,
-                crate::store::graphql::escape_graphql_string(node_did),
-                crate::store::graphql::escape_graphql_string(did)
-            );
-            let response = access.execute(&query).await?;
+            use gents_protocol::document_query::{
+                fields::agent as fields, Filter, Query, Selection,
+            };
+            let rendered = Query::select(
+                Selection::doc_id()
+                    .field(fields::NODE_DID)
+                    .field(fields::AGENT_DID)
+                    .field(fields::ENABLED),
+            )
+            .filter(Filter::eq(fields::NODE_DID, node_did))
+            .filter(Filter::eq(fields::AGENT_DID, did))
+            .limit(2)
+            .render();
+            let response = access.read(&rendered).await?;
             let rows = response
                 .pointer("/data/Agent")
                 .and_then(Value::as_array)

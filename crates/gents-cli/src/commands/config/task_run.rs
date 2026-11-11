@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use anyhow::{anyhow, Context, Result};
 use gents::documents::template::{render_template, task_node_ctx, TemplateScope};
 use gents::store::graphql::escape_graphql_string;
@@ -64,8 +66,26 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     }
 
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
+    enqueue_task_run_on(
+        &access,
+        args.home.as_deref(),
+        &task_id,
+        args_value,
+        args.session_id.as_deref(),
+        args.continue_session.as_deref(),
+    )
+    .await
+}
 
-    let node_did = crate::resolve_node_did(args.home.as_deref(), None)?;
+pub(crate) async fn enqueue_task_run_on(
+    access: &ConfigAccess,
+    home: Option<&Path>,
+    task_id: &str,
+    args: Value,
+    session_id: Option<&str>,
+    continue_session: Option<&str>,
+) -> Result<TaskRunOutput> {
+    let node_did = crate::resolve_node_did(home, None)?;
     let actor_did = access
         .actor_did()
         .context("Task invocation requires an authenticated client identity")?;
@@ -73,7 +93,6 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     let (task_doc_id, task) = access
         .transact_write("cli.task_run.read", |txn| {
             let node_did = &node_did;
-            let task_id = &task_id;
             Box::pin(async move {
                 let (task_doc_id, value) =
                     gents::store::config_client::read_desired_state_record_in_txn(
@@ -111,11 +130,9 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     )?;
 
     let invocation_key = resolve_invocation_key(
-        &task_id,
+        task_id,
         goal_objective_template.is_some(),
-        goal_objective_template
-            .as_ref()
-            .and(args.session_id.as_deref()),
+        goal_objective_template.as_ref().and(session_id),
     )?;
     let identity = gents_protocol::trigger_delivery::FireIdentity {
         owner_did: node_did.clone(),
@@ -125,9 +142,9 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     };
     let fire_key = gents::request::lifecycle::task_fire_key(&identity);
     let request_id = format!("trigger-request:{fire_key}");
-    anyhow::ensure!(goal_objective_template.is_some() || args.session_id.is_none() || args.continue_session.is_none(),
+    anyhow::ensure!(goal_objective_template.is_some() || session_id.is_none() || continue_session.is_none(),
         "ordinary Tasks accept either --session-id for a session label or --continue-session for an existing session, not both");
-    let session_id = match args.continue_session.as_deref() {
+    let session_id = match continue_session {
         Some(id) => {
             anyhow::ensure!(
                 !id.trim().is_empty(),
@@ -135,14 +152,12 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
             );
             id.to_owned()
         }
-        None => args
-            .session_id
-            .as_ref()
+        None => session_id
             .filter(|id| goal_objective_template.is_none() && !id.trim().is_empty())
-            .cloned()
+            .map(str::to_owned)
             .unwrap_or_else(|| format!("trigger-session:{fire_key}")),
     };
-    let admitted = lookup_request_by_retry_key(&access, &node_did, &fire_key).await?;
+    let admitted = lookup_request_by_retry_key(access, &node_did, &fire_key).await?;
     let prior_created_at = admitted
         .as_ref()
         .map(|request| {
@@ -168,7 +183,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
             "trigger_kind": "manual",
         }),
         doc: None,
-        args: Some(args_value),
+        args: Some(args),
         group: None,
         node: node_scope,
         ctx: ctx_scope,
@@ -191,17 +206,17 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
 
     let (content, input) = content_and_input_with_prompt_selected_skill_ids(None, &content);
     let input = prepare_task_run_input(
-        &access,
+        access,
         &node_did,
         &session_id,
-        args.continue_session.is_some(),
+        continue_session.is_some(),
         rendered_goal_objective.is_some(),
         admitted.as_ref(),
         input,
     )
     .await?;
     let goal_id = prepare_task_run_goal_id(
-        &access,
+        access,
         &node_did,
         &session_id,
         rendered_goal_objective.is_some(),
@@ -209,11 +224,11 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     )
     .await?;
     let requester_did =
-        gents::session::client_requester_scope(&access, &node_did, &session_id, &actor_did).await?;
+        gents::session::client_requester_scope(access, &node_did, &session_id, &actor_did).await?;
     let admission =
         gents_protocol::request_admission::AgentRequestAdmissionRecord::client(&actor_did);
     let create = gents::request::lifecycle::build_signed_client_request(
-        &access,
+        access,
         gents::RequestSpec {
             input: input.clone(),
             trigger_lineage: gents::request::lifecycle::TriggerLineage {
@@ -242,7 +257,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     let fire = gents_protocol::trigger_delivery::TriggerFire {
         fire_key,
         identity,
-        task_id: task_id.clone(),
+        task_id: task_id.to_owned(),
         request_id: request_id.clone(),
         session_id: session_id.clone(),
         goal_id,
@@ -258,15 +273,15 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
         created_at: now,
     };
     let admitted = gents::request::lifecycle::write_task_delivery(
-        &access,
+        access,
         &fire,
-        args.continue_session.is_some(),
+        continue_session.is_some(),
         &create,
     )
     .await?;
 
     let (agent_did, input) = if admitted.duplicate {
-        let persisted = lookup_request_by_retry_key(&access, &node_did, &fire.fire_key)
+        let persisted = lookup_request_by_retry_key(access, &node_did, &fire.fire_key)
             .await?
             .context("duplicate Task fire is missing its admitted request")?;
         (
@@ -279,7 +294,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
         (agent_did, input)
     };
     Ok(TaskRunOutput {
-        task_id,
+        task_id: task_id.to_owned(),
         agent_did,
         node_did,
         request_id: admitted.request.request_id,
@@ -577,6 +592,83 @@ mod tests {
             .await
             .unwrap_err();
         assert!(format!("{error:#}").contains("signature"), "{error:#}");
+        Ok(())
+    }
+
+    /// The shell runs a task through its own access: with no runtime recorded in the home,
+    /// `resolve_config_access` would open the home's store instead.
+    #[tokio::test]
+    async fn run_now_uses_the_access_it_is_given() -> Result<()> {
+        let home = tempfile::tempdir()?;
+        let did = crate::caused_sessions::fixtures::FIXTURE_DID.to_string();
+        crate::home_state::write_init_config(
+            home.path(),
+            &crate::shared::StoredInitConfig {
+                home: home.path().to_string_lossy().into_owned(),
+                node_name: "fixture".into(),
+                node_did: did.clone(),
+                key_path: None,
+                identity_backend: None,
+                keychain_label: None,
+                secure_enclave_label: None,
+                tool_package: None,
+                tool_ceiling: crate::cli::args::ToolCeilingArg::MetaOnly,
+                tool_root: None,
+                store_encryption: None,
+            },
+        )?;
+        let served = crate::shared::test_support::served_config(json!({
+            "node": { "node_did": did, "default_agent_did": "engineer" },
+            "inference_backends": [{
+                "node_did": did,
+                "backend_id": "backend",
+                "name": "Backend",
+                "provider_kind": "OpenAiCompatible",
+                "endpoint": "http://127.0.0.1:1/v1",
+                "auth": { "kind": "unauthenticated" },
+            }],
+            "inference_profiles": [{
+                "node_did": did,
+                "profile_id": "profile",
+                "backend_id": "backend",
+                "model_name": "model",
+            }],
+            "agents": [{ "node_did": did, "agent_did": "engineer", "inference_profile_id": "profile" }],
+            "tasks": [{
+                "node_did": did,
+                "task_id": "digest",
+                "agent_did": "engineer",
+                "prompt_template": "digest the day",
+            }],
+        }))
+        .await;
+
+        let output = enqueue_task_run_on(
+            &ConfigAccess::Graphql(served.user.clone()),
+            Some(home.path()),
+            "digest",
+            json!({}),
+            None,
+            None,
+        )
+        .await?;
+
+        let written = ConfigAccess::Graphql(served.user.clone())
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                escape_graphql_string(&output.request_id)
+            ))
+            .await?;
+        assert_eq!(
+            written["data"]["AgentRequest"],
+            json!([{ "_docID": output.request_doc_id }])
+        );
+        assert_eq!(output.status, "pending");
+        assert!(
+            !crate::home_state::default_data_dir(home.path()).exists(),
+            "the home's store is never opened"
+        );
+        served.node.shutdown().await.expect("node shutdown");
         Ok(())
     }
 

@@ -55,12 +55,24 @@ pub async fn prepare(
     if access.actor_did().as_deref() != Some(signer.did()) {
         return Err(ClientControlError::NotAuthorized);
     }
-    let query = format!(
-        r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID node_did agent_did session_id session_doc_id request_doc_id requester_did tool_call_id }} }}"#,
-        escape_graphql_string(tool_call_doc_id)
-    );
+    use gents_protocol::document_query::{
+        fields::agent_tool_call as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::doc_id()
+            .field(fields::NODE_DID)
+            .field(fields::AGENT_DID)
+            .field(fields::SESSION_ID)
+            .field(fields::SESSION_DOC_ID)
+            .field(fields::REQUEST_DOC_ID)
+            .field(fields::REQUESTER_DID)
+            .field(fields::TOOL_CALL_ID),
+    )
+    .filter(Filter::eq(fields::DOC_ID, tool_call_doc_id))
+    .limit(2)
+    .render();
     let response = access
-        .execute(&query)
+        .read(&query)
         .await
         .map_err(|error| ClientControlError::Unavailable(error.into()))?;
     let rows: Vec<Invocation> = serde_json::from_value(response["data"]["AgentToolCall"].clone())
@@ -162,7 +174,14 @@ pub async fn submit(
         let actor = &actor;
         Box::pin(async move {
             crate::store::graphql::fence_arrivals(txn, "AgentToolControl").await?;
-            let prior = txn.execute(&format!(r#"{{ AgentToolControl(filter: {{ intent_id: {{ _eq: "{}" }}, client_did: {{ _eq: "{}" }} }}) {{ _docID intent_json }} }}"#, escape_graphql_string(&intent.intent_id), escape_graphql_string(actor.as_str()))).await?;
+            let prior = {
+                use gents_protocol::document_query::{fields::agent_tool_control as fields, Filter, Query, Selection};
+                let query = Query::select(Selection::doc_id().field(fields::INTENT_JSON))
+                    .filter(Filter::eq(fields::INTENT_ID, &intent.intent_id))
+                    .filter(Filter::eq(fields::CLIENT_DID, actor.as_str()))
+                    .render();
+                txn.run(&query).await?
+            };
             let rows = prior["data"]["AgentToolControl"].as_array().context("control identity query omitted rows")?;
             for row in rows {
                 let id = row["_docID"].as_str().context("control intent lacks document ID")?;
@@ -172,8 +191,23 @@ pub async fn submit(
                     return Ok(Some((id.to_owned(), false)));
                 }
             }
-            let query = format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID node_did agent_did session_id session_doc_id request_doc_id requester_did tool_call_id }} }}"#, escape_graphql_string(&intent.tool_call_doc_id));
-            let result = txn.execute(&query).await?;
+            let result = {
+                use gents_protocol::document_query::{fields::agent_tool_call as fields, Filter, Query, Selection};
+                let query = Query::select(
+                    Selection::doc_id()
+                        .field(fields::NODE_DID)
+                        .field(fields::AGENT_DID)
+                        .field(fields::SESSION_ID)
+                        .field(fields::SESSION_DOC_ID)
+                        .field(fields::REQUEST_DOC_ID)
+                        .field(fields::REQUESTER_DID)
+                        .field(fields::TOOL_CALL_ID),
+                )
+                .filter(Filter::eq(fields::DOC_ID, &intent.tool_call_doc_id))
+                .limit(2)
+                .render();
+                txn.run(&query).await?
+            };
             let rows: Vec<Invocation> = serde_json::from_value(result["data"]["AgentToolCall"].clone())?;
             let [row] = rows.as_slice() else { return Ok(None); };
             if !signed_invocation_authorized(intent, actor.as_str(), &intent.action, row) { return Ok(None); }
@@ -379,8 +413,42 @@ async fn claim_inner(
     access.transact_write("tool_control.claim", |txn| {
         Box::pin(async move {
             crate::store::graphql::fence_arrivals(txn, "AgentToolControlClaim").await?;
-            let query = format!(r#"{{ AgentToolControl(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID intent_id intent_json client_did agent_did node_did session_id session_doc_id request_doc_id requester_did tool_call_id tool_call_doc_id action state }} AgentToolControlClaim(filter: {{ intent_doc_id: {{ _eq: "{}" }} }}) {{ _docID agent_did intent_json receipt_json }} }}"#, escape_graphql_string(doc_id), escape_graphql_string(doc_id));
-            let response = txn.execute(&query).await?;
+            let response = {
+                use gents_protocol::document_query::{
+                    fields::{agent_tool_control as control, agent_tool_control_claim as control_claim},
+                    Filter, Query, QuerySet, Selection,
+                };
+                let control_row = Query::select(
+                    Selection::doc_id()
+                        .field(control::INTENT_ID)
+                        .field(control::INTENT_JSON)
+                        .field(control::CLIENT_DID)
+                        .field(control::AGENT_DID)
+                        .field(control::NODE_DID)
+                        .field(control::SESSION_ID)
+                        .field(control::SESSION_DOC_ID)
+                        .field(control::REQUEST_DOC_ID)
+                        .field(control::REQUESTER_DID)
+                        .field(control::TOOL_CALL_ID)
+                        .field(control::TOOL_CALL_DOC_ID)
+                        .field(control::ACTION)
+                        .field(control::STATE),
+                )
+                .filter(Filter::eq(control::DOC_ID, doc_id))
+                .limit(2);
+                let claim_rows = Query::select(
+                    Selection::doc_id()
+                        .field(control_claim::AGENT_DID)
+                        .field(control_claim::INTENT_JSON)
+                        .field(control_claim::RECEIPT_JSON),
+                )
+                .filter(Filter::eq(control_claim::INTENT_DOC_ID, doc_id));
+                let query = QuerySet::new()
+                    .plain(&control_row)
+                    .plain(&claim_rows)
+                    .render();
+                txn.run(&query).await?
+            };
             let intents: Vec<Intent> = serde_json::from_value(response["data"]["AgentToolControl"].clone())?;
             let [intent] = intents.as_slice() else { return Ok(None); };
             if intent.agent_did != agent.as_str() || !matches!(intent.state.as_str(), "pending" | "claimed") {
@@ -402,7 +470,23 @@ async fn claim_inner(
             if owners.len() != 1 || owners[0].owner.as_ref().map(identity::Did::as_str) != Some(intent.client_did.as_str()) {
                 return Ok(None);
             }
-            let target = txn.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID node_did agent_did session_id session_doc_id request_doc_id requester_did tool_call_id }} }}"#, escape_graphql_string(&intent.tool_call_doc_id))).await?;
+            let target = {
+                use gents_protocol::document_query::{fields::agent_tool_call as fields, Filter, Query, Selection};
+                let query = Query::select(
+                    Selection::doc_id()
+                        .field(fields::NODE_DID)
+                        .field(fields::AGENT_DID)
+                        .field(fields::SESSION_ID)
+                        .field(fields::SESSION_DOC_ID)
+                        .field(fields::REQUEST_DOC_ID)
+                        .field(fields::REQUESTER_DID)
+                        .field(fields::TOOL_CALL_ID),
+                )
+                .filter(Filter::eq(fields::DOC_ID, &intent.tool_call_doc_id))
+                .limit(2)
+                .render();
+                txn.run(&query).await?
+            };
             let rows: Vec<Invocation> = serde_json::from_value(target["data"]["AgentToolCall"].clone())?;
             let [row] = rows.as_slice() else { return Ok(None); };
             if !signed_invocation_authorized(&signed, &intent.client_did, &intent.action, row) {
@@ -454,7 +538,11 @@ async fn claim_inner(
                     "mutation($input: AgentToolControlClaimMutationInputArg!) { create_AgentToolControlClaim(input: $input) { _docID } }",
                     &serde_json::json!({"input": {"intent_doc_id": intent.doc_id, "intent_json": intent.intent_json, "agent_did": agent.as_str()}}),
                 ).await?;
-                txn.execute(&format!(r#"mutation {{ update_AgentToolControl(docID: "{}", input: {{ state: "claimed" }}) {{ _docID }} }}"#, escape_graphql_string(doc_id))).await?;
+                {
+                    use gents_protocol::document_query::{fields::agent_tool_control as fields, Input, Update};
+                    let update = Update::doc(doc_id, Input::new().set(fields::STATE, "claimed")).render();
+                    txn.run(&update).await?;
+                }
                 (crate::store::graphql::created_doc_id(&created, "AgentToolControlClaim")?, None)
             };
             Ok(Some(Intent {
@@ -480,28 +568,82 @@ pub(crate) async fn recover_claim(
         access.actor_did().as_deref() == Some(agent.as_str()),
         "claim recovery requires its selected agent"
     );
-    access.transact_readonly("tool_control.recover_claim", |txn| {
-        Box::pin(async move {
-            let response = txn.execute(&format!(r#"{{ AgentToolControlClaim(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID intent_doc_id intent_json agent_did receipt_json }} }}"#, escape_graphql_string(claim_doc_id))).await?;
-            let rows = response["data"]["AgentToolControlClaim"].as_array().context("claim recovery omitted rows")?;
-            let [row] = rows.as_slice() else { return Ok(None); };
-            let owners = txn.document_owners("AgentToolControlClaim", &[claim_doc_id.to_owned()]).await?;
-            if owners.len() != 1 || owners[0].owner.as_ref().map(identity::Did::as_str) != Some(agent.as_str()) || row["agent_did"].as_str() != Some(agent.as_str()) || !row["receipt_json"].is_null() { return Ok(None); }
-            let raw = row["intent_json"].as_str().context("claim has no retained signed intent")?;
-            let signed: gents_protocol::process_control::ToolControlIntent = serde_json::from_str(raw)?;
-            if signed.validate_shape().is_err() || signed.agent_did != agent.as_str() || signed.node_did != node_did
-                || !crate::store::identity::verify_did_signature(&signed.client_did, &signed.signing_payload()?, &signed.signature).unwrap_or(false) { return Ok(None); }
-            let intent_doc_id = row["intent_doc_id"].as_str().context("claim has no intent document")?;
-            Ok(Some(Intent {
-                doc_id: intent_doc_id.into(), intent_id: signed.intent_id, intent_json: raw.into(),
-                client_did: signed.client_did, agent_did: signed.agent_did, node_did: signed.node_did,
-                session_id: signed.session_id, session_doc_id: signed.session_doc_id, request_doc_id: signed.request_doc_id,
-                requester_did: signed.requester_did, tool_call_id: signed.tool_call_id,
-                tool_call_doc_id: signed.tool_call_doc_id, action: signed.action, state: "claimed".into(),
-                claim_doc_id: claim_doc_id.into(), existing_receipt: None,
-            }))
+    access
+        .transact_readonly("tool_control.recover_claim", |txn| {
+            Box::pin(async move {
+                let response = {
+                    use gents_protocol::document_query::{
+                        fields::agent_tool_control_claim as fields, Filter, Query, Selection,
+                    };
+                    let query = Query::select(
+                        Selection::doc_id()
+                            .field(fields::INTENT_DOC_ID)
+                            .field(fields::INTENT_JSON)
+                            .field(fields::AGENT_DID)
+                            .field(fields::RECEIPT_JSON),
+                    )
+                    .filter(Filter::eq(fields::DOC_ID, claim_doc_id))
+                    .limit(2)
+                    .render();
+                    txn.run(&query).await?
+                };
+                let rows = response["data"]["AgentToolControlClaim"]
+                    .as_array()
+                    .context("claim recovery omitted rows")?;
+                let [row] = rows.as_slice() else {
+                    return Ok(None);
+                };
+                let owners = txn
+                    .document_owners("AgentToolControlClaim", &[claim_doc_id.to_owned()])
+                    .await?;
+                if owners.len() != 1
+                    || owners[0].owner.as_ref().map(identity::Did::as_str) != Some(agent.as_str())
+                    || row["agent_did"].as_str() != Some(agent.as_str())
+                    || !row["receipt_json"].is_null()
+                {
+                    return Ok(None);
+                }
+                let raw = row["intent_json"]
+                    .as_str()
+                    .context("claim has no retained signed intent")?;
+                let signed: gents_protocol::process_control::ToolControlIntent =
+                    serde_json::from_str(raw)?;
+                if signed.validate_shape().is_err()
+                    || signed.agent_did != agent.as_str()
+                    || signed.node_did != node_did
+                    || !crate::store::identity::verify_did_signature(
+                        &signed.client_did,
+                        &signed.signing_payload()?,
+                        &signed.signature,
+                    )
+                    .unwrap_or(false)
+                {
+                    return Ok(None);
+                }
+                let intent_doc_id = row["intent_doc_id"]
+                    .as_str()
+                    .context("claim has no intent document")?;
+                Ok(Some(Intent {
+                    doc_id: intent_doc_id.into(),
+                    intent_id: signed.intent_id,
+                    intent_json: raw.into(),
+                    client_did: signed.client_did,
+                    agent_did: signed.agent_did,
+                    node_did: signed.node_did,
+                    session_id: signed.session_id,
+                    session_doc_id: signed.session_doc_id,
+                    request_doc_id: signed.request_doc_id,
+                    requester_did: signed.requester_did,
+                    tool_call_id: signed.tool_call_id,
+                    tool_call_doc_id: signed.tool_call_doc_id,
+                    action: signed.action,
+                    state: "claimed".into(),
+                    claim_doc_id: claim_doc_id.into(),
+                    existing_receipt: None,
+                }))
+            })
         })
-    }).await
+        .await
 }
 
 /// The physical invocation and action of a claimed, signature-verified control.
@@ -632,8 +774,16 @@ pub(crate) async fn execute_claimed(
             let signed = &signed;
             let intent = &intent;
             Box::pin(async move {
-                let query = format!(r#"{{ AgentToolControlClaim(filter: {{ _docID: {{ _eq: "{}" }}, intent_doc_id: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }} }}, limit: 2) {{ _docID receipt_json }} }}"#, escape_graphql_string(&intent.claim_doc_id), escape_graphql_string(&intent.doc_id), escape_graphql_string(agent.as_str()));
-                let response = txn.execute(&query).await?;
+                let response = {
+                    use gents_protocol::document_query::{fields::agent_tool_control_claim as fields, Filter, Query, Selection};
+                    let query = Query::select(Selection::doc_id().field(fields::RECEIPT_JSON))
+                        .filter(Filter::eq(fields::DOC_ID, &intent.claim_doc_id))
+                        .filter(Filter::eq(fields::INTENT_DOC_ID, &intent.doc_id))
+                        .filter(Filter::eq(fields::AGENT_DID, agent.as_str()))
+                        .limit(2)
+                        .render();
+                    txn.run(&query).await?
+                };
                 let rows = response["data"]["AgentToolControlClaim"].as_array().context("receipt claim query omitted rows")?;
                 let [row] = rows.as_slice() else { anyhow::bail!("receipt claim is unavailable"); };
                 let owners = txn.document_owners("AgentToolControlClaim", std::slice::from_ref(&intent.claim_doc_id)).await?;
@@ -695,11 +845,16 @@ pub(crate) async fn run(
                     continue;
                 }
             };
-            let claims_query = format!(
-                r#"{{ AgentToolControlClaim(filter: {{ agent_did: {{ _eq: "{}" }}, receipt_json: {{ _eq: null }} }}) {{ _docID }} }}"#,
-                escape_graphql_string(agent.as_str())
-            );
-            match access.execute(&claims_query).await {
+            let claims_query = {
+                use gents_protocol::document_query::{
+                    fields::agent_tool_control_claim as fields, Filter, Query, Selection,
+                };
+                Query::select(Selection::doc_id())
+                    .filter(Filter::eq(fields::AGENT_DID, agent.as_str()))
+                    .filter(Filter::is_null(fields::RECEIPT_JSON))
+                    .render()
+            };
+            match access.read(&claims_query).await {
                 Ok(result) => {
                     // An Agent without the baseline (a disabled one is still
                     // watched) cannot read its claims; that Agent's sweep is
@@ -734,12 +889,17 @@ pub(crate) async fn run(
                     tracing::warn!(agent_did = %agent, %error, "tool control claim sweep failed")
                 }
             }
-            let query = format!(
-                r#"{{ AgentToolControl(filter: {{ node_did: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }}, state: {{ _in: ["pending", "claimed"] }} }}) {{ _docID }} }}"#,
-                escape_graphql_string(&node_did),
-                escape_graphql_string(agent.as_str())
-            );
-            let result = match access.execute(&query).await {
+            let query = {
+                use gents_protocol::document_query::{
+                    fields::agent_tool_control as fields, Filter, Query, Selection,
+                };
+                Query::select(Selection::doc_id())
+                    .filter(Filter::eq(fields::NODE_DID, &node_did))
+                    .filter(Filter::eq(fields::AGENT_DID, agent.as_str()))
+                    .filter(Filter::any_of(fields::STATE, ["pending", "claimed"]))
+                    .render()
+            };
+            let result = match access.read(&query).await {
                 Ok(result) => result,
                 Err(error) => {
                     tracing::warn!(%error, "tool control sweep failed");
@@ -824,14 +984,53 @@ async fn read_receipt_inner(
     let actor = access
         .actor_did()
         .context("control receipt requires an authenticated actor")?;
-    let escape = crate::store::graphql::escape_graphql_string;
-    let query = format!(
-        r#"{{ AgentToolControl(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID client_did agent_did node_did session_id session_doc_id request_doc_id tool_call_id tool_call_doc_id action outcome_json }} AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID node_did agent_did session_id session_doc_id request_doc_id tool_call_id }} AgentToolControlClaim(filter: {{ intent_doc_id: {{ _eq: "{}" }} }}) {{ agent_did receipt_json }} }}"#,
-        escape(intent_doc_id),
-        escape(tool_call_doc_id),
-        escape(intent_doc_id)
-    );
-    let response = access.execute(&query).await?;
+    let query = {
+        use gents_protocol::document_query::{
+            fields::{
+                agent_tool_call as tool_call, agent_tool_control as control,
+                agent_tool_control_claim as control_claim,
+            },
+            Filter, Query, QuerySet, Selection,
+        };
+        let control_row = Query::select(
+            Selection::doc_id()
+                .field(control::CLIENT_DID)
+                .field(control::AGENT_DID)
+                .field(control::NODE_DID)
+                .field(control::SESSION_ID)
+                .field(control::SESSION_DOC_ID)
+                .field(control::REQUEST_DOC_ID)
+                .field(control::TOOL_CALL_ID)
+                .field(control::TOOL_CALL_DOC_ID)
+                .field(control::ACTION)
+                .field(control::OUTCOME_JSON),
+        )
+        .filter(Filter::eq(control::DOC_ID, intent_doc_id))
+        .limit(2);
+        let tool_row = Query::select(
+            Selection::doc_id()
+                .field(tool_call::NODE_DID)
+                .field(tool_call::AGENT_DID)
+                .field(tool_call::SESSION_ID)
+                .field(tool_call::SESSION_DOC_ID)
+                .field(tool_call::REQUEST_DOC_ID)
+                .field(tool_call::TOOL_CALL_ID),
+        )
+        .filter(Filter::eq(tool_call::DOC_ID, tool_call_doc_id))
+        .limit(2);
+        let claim_rows = Query::select(
+            Selection::new()
+                .field(control_claim::AGENT_DID)
+                .field(control_claim::RECEIPT_JSON),
+        )
+        .filter(Filter::eq(control_claim::INTENT_DOC_ID, intent_doc_id));
+        QuerySet::new()
+            .plain(&control_row)
+            .plain(&tool_row)
+            .plain(&claim_rows)
+            .render()
+    };
+    let response = access.read(&query).await?;
     let intents = response["data"]["AgentToolControl"]
         .as_array()
         .context("control intent observation omitted rows")?;

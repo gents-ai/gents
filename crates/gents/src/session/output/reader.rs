@@ -14,7 +14,6 @@ use gents_protocol::output::rows::{
     decode_output_segment_row, decode_scoped_request_output_segments,
     decode_transcript_message_row, AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS,
 };
-use gents_protocol::session::session_scope_filter;
 
 /// Resolve one exact header inside an existing authoritative transaction.  This
 /// is deliberately keyed by physical document identity: terminal selection and
@@ -391,12 +390,15 @@ pub(crate) async fn load_request_headers_in_txn(
         !request_doc_id.trim().is_empty(),
         "request header lookup requires request document id"
     );
-    let scope = session_scope_filter(node_did, session_id, requester_did);
-    let query = format!(
-        r#"{{ AgentMessage(filter: {{ {scope}, request_doc_id: {{ _eq: "{}" }} }}, order: {{ sequence: ASC }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#,
-        crate::store::graphql::escape_graphql_string(request_doc_id)
-    );
-    let response = txn.execute(&query).await?;
+    use gents_protocol::document_query::{
+        fields::agent_message as fields, session_scope, Direction, Filter, Query, Selection,
+    };
+    let query = Query::select(Selection::owned(AGENT_MESSAGE_FIELDS))
+        .filter(session_scope(node_did, session_id, requester_did))
+        .filter(Filter::eq(fields::REQUEST_DOC_ID, request_doc_id))
+        .order_by(fields::SEQUENCE, Direction::Asc)
+        .render();
+    let response = txn.run(&query).await?;
     let headers = rows_value(&response, "AgentMessage")?
         .iter()
         .map(|row| decode_transcript_message_row(row).map_err(anyhow::Error::from))

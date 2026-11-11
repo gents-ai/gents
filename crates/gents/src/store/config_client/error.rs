@@ -533,6 +533,11 @@ impl ConfigClientError {
         }
     }
 
+    /// Whether the transaction owner classified this failure as a replayable conflict.
+    pub fn is_transaction_conflict(&self) -> bool {
+        self.transaction_conflict().is_some()
+    }
+
     /// The conflict origin when the transaction owner may replay this failure.
     pub(crate) fn transaction_conflict(&self) -> Option<ConflictSource> {
         match self.access() {

@@ -614,13 +614,19 @@ async fn load_auxiliary_parent(
         .caused_by_parent_request_doc_id
         .as_deref()
         .context("auxiliary request lacks parent document")?;
-    let escaped = crate::store::graphql::escape_graphql_string(parent_doc_id);
-    let query = format!(
-        "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{escaped}\" }} }}, limit: 1) {{ {} }} }}",
-        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
-    );
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::owned(
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
+        ))
+        .filter(Filter::eq(fields::DOC_ID, parent_doc_id))
+        .limit(1)
+        .render()
+    };
     let response = access
-        .execute(&query)
+        .read(&query)
         .await
         .context("load auxiliary parent receipt")?;
     let value = response

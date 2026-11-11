@@ -552,14 +552,15 @@ async fn load_fire_task_id(
     node_did: &str,
     request_id: &str,
 ) -> Result<Option<String>> {
-    let response = access.execute(
-        &format!(
-            r#"{{ TriggerFire(filter: {{ owner_did: {{ _eq: "{}" }}, request_id: {{ _eq: "{}" }} }}, limit: 2) {{ task_id }} }}"#,
-            escape_graphql_string(node_did),
-            escape_graphql_string(request_id),
-        ),
-    )
-    .await?;
+    use gents_protocol::document_query::{
+        fields::trigger_fire as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(Selection::new().field(fields::TASK_ID))
+        .filter(Filter::eq(fields::OWNER_DID, node_did))
+        .filter(Filter::eq(fields::REQUEST_ID, request_id))
+        .limit(2)
+        .render();
+    let response = access.read(&query).await?;
     let rows: Vec<TaskIdRow> = serde_json::from_value(response["data"]["TriggerFire"].clone())?;
     anyhow::ensure!(
         rows.len() <= 1,
@@ -575,14 +576,13 @@ async fn load_trigger_task_id(
     node_did: &str,
     trigger_id: &str,
 ) -> Result<Option<String>> {
-    let response = access.execute(
-        &format!(
-            r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}, limit: 2) {{ task_id }} }}"#,
-            escape_graphql_string(node_did),
-            escape_graphql_string(trigger_id),
-        ),
-    )
-    .await?;
+    use gents_protocol::document_query::{fields::trigger as fields, Filter, Query, Selection};
+    let query = Query::select(Selection::new().field(fields::TASK_ID))
+        .filter(Filter::eq(fields::NODE_DID, node_did))
+        .filter(Filter::eq(fields::TRIGGER_ID, trigger_id))
+        .limit(2)
+        .render();
+    let response = access.read(&query).await?;
     let rows: Vec<TaskIdRow> = serde_json::from_value(response["data"]["Trigger"].clone())?;
     anyhow::ensure!(
         rows.len() <= 1,

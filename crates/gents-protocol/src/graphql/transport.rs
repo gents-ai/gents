@@ -61,7 +61,28 @@ pub async fn execute_graphql_async(
     options: GraphqlRequestOptions,
 ) -> Result<serde_json::Value> {
     ensure_query_document(query)?;
-    execute_graphql_async_with_tx(graphql, authorization, query, options, None).await
+    execute_graphql_async_with_tx(graphql, authorization, query, None, options, None).await
+}
+
+/// [`execute_graphql_async`] with GraphQL variables for the document.
+#[cfg(feature = "native")]
+pub async fn execute_graphql_with_variables_async(
+    graphql: &str,
+    authorization: Option<&str>,
+    query: &str,
+    variables: &serde_json::Value,
+    options: GraphqlRequestOptions,
+) -> Result<serde_json::Value> {
+    ensure_query_document(query)?;
+    execute_graphql_async_with_tx(
+        graphql,
+        authorization,
+        query,
+        Some(variables),
+        options,
+        None,
+    )
+    .await
 }
 
 #[cfg(feature = "native")]
@@ -69,6 +90,7 @@ pub(super) async fn execute_graphql_async_with_tx(
     graphql: &str,
     authorization: Option<&str>,
     query: &str,
+    variables: Option<&serde_json::Value>,
     options: GraphqlRequestOptions,
     txn_id: Option<&str>,
 ) -> Result<serde_json::Value> {
@@ -76,10 +98,11 @@ pub(super) async fn execute_graphql_async_with_tx(
     let mut last_error: Option<GraphqlError> = None;
 
     for attempt in 0..options.max_attempts.max(1) {
-        let mut request = client
-            .post(graphql)
-            .timeout(options.timeout)
-            .json(&serde_json::json!({ "query": query }));
+        let body = match variables {
+            Some(variables) => serde_json::json!({ "query": query, "variables": variables }),
+            None => serde_json::json!({ "query": query }),
+        };
+        let mut request = client.post(graphql).timeout(options.timeout).json(&body);
         if let Some(id) = txn_id {
             request = request.header("x-defradb-tx", id);
         }

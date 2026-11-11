@@ -3,9 +3,7 @@ use crate::store::config_client::agent_session::{
     load_agent_session_owner_in_txn, load_agent_session_row_in_txn,
 };
 use anyhow::Context;
-use gents_protocol::session::{
-    decode_session_row, session_scope_filter, validate_agent_session, SESSION_SCOPE_FIELDS,
-};
+use gents_protocol::session::{decode_session_row, validate_agent_session, SESSION_SCOPE_FIELDS};
 
 /// Reserve a PluginJob child in the transaction that will publish its opening.
 /// The exact pinned job and its authenticated parent are checked before any write.
@@ -202,8 +200,16 @@ async fn stage_caused_session_in_txn(
     );
     match expected {
         SessionCreationIntent::AgentNew => {
-            let escaped_tool = escape_graphql_string(tool_doc);
-            let tool = txn.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped_tool}" }} }}, limit: 2) {{ _docID tool_name }} }}"#)).await?;
+            let tool = {
+                use gents_protocol::document_query::{
+                    fields::agent_tool_call as fields, Filter, Query, Selection,
+                };
+                let rendered = Query::select(Selection::doc_id().field(fields::TOOL_NAME))
+                    .filter(Filter::eq(fields::DOC_ID, tool_doc))
+                    .limit(2)
+                    .render();
+                txn.run(&rendered).await?
+            };
             let tool_rows = tool["data"]["AgentToolCall"]
                 .as_array()
                 .context("agent_new tool lookup omitted rows")?;
@@ -294,8 +300,21 @@ async fn verify_caused_opening_in_txn(
         session.session.provenance.as_ref() == Some(&provisional),
         "agent_new provisional source changed"
     );
-    let session_doc = escape_graphql_string(session_doc_id);
-    let session_row = txn.execute(&format!(r#"{{ AgentSession(filter: {{ _docID: {{ _eq: "{session_doc}" }} }}, limit: 2) {{ _docID relationships_pending started_by_node_did started_by_session_id }} }}"#)).await?;
+    let session_row = {
+        use gents_protocol::document_query::{
+            fields::agent_session as fields, Filter, Query, Selection,
+        };
+        let rendered = Query::select(
+            Selection::doc_id()
+                .field(fields::RELATIONSHIPS_PENDING)
+                .field(fields::STARTED_BY_NODE_DID)
+                .field(fields::STARTED_BY_SESSION_ID),
+        )
+        .filter(Filter::eq(fields::DOC_ID, session_doc_id))
+        .limit(2)
+        .render();
+        txn.run(&rendered).await?
+    };
     let session_rows = session_row["data"]["AgentSession"]
         .as_array()
         .context("agent_new provisional lookup omitted rows")?;
@@ -307,8 +326,18 @@ async fn verify_caused_opening_in_txn(
             && session_rows[0]["started_by_session_id"] == source.session_id,
         "agent_new provisional immutable starter changed"
     );
-    let escaped = escape_graphql_string(opening_doc_id);
-    let response = txn.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 2) {{ {} }} }}"#, gents_protocol::request_admission::SIGNED_REQUEST_FIELDS)).await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        let rendered = Query::select(Selection::owned(
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
+        ))
+        .filter(Filter::eq(fields::DOC_ID, opening_doc_id))
+        .limit(2)
+        .render();
+        txn.run(&rendered).await?
+    };
     let rows = response["data"]["AgentRequest"]
         .as_array()
         .context("agent_new opening lookup omitted rows")?;
@@ -440,10 +469,21 @@ pub(crate) async fn grant_created_session_relationships(
                 let actor = txn
                     .actor_did()
                     .context("session relationship publication requires an actor")?;
-                let doc = escape_graphql_string(session_doc_id);
-                let response = txn.execute(&format!(
-                    r#"{{ AgentSession(filter: {{ _docID: {{ _eq: "{doc}" }} }}, limit: 2) {{ _docID node_did agent_did relationships_pending }} }}"#,
-                )).await?;
+                let response = {
+                    use gents_protocol::document_query::{
+                        fields::agent_session as fields, Filter, Query, Selection,
+                    };
+                    let rendered = Query::select(
+                        Selection::doc_id()
+                            .field(fields::NODE_DID)
+                            .field(fields::AGENT_DID)
+                            .field(fields::RELATIONSHIPS_PENDING),
+                    )
+                    .filter(Filter::eq(fields::DOC_ID, session_doc_id))
+                    .limit(2)
+                    .render();
+                    txn.run(&rendered).await?
+                };
                 let rows = response["data"]["AgentSession"]
                     .as_array()
                     .context("session relationship recovery omitted rows")?;
@@ -483,10 +523,19 @@ pub(crate) async fn grant_created_session_relationships(
                     owners.len() == 1
                         && owners[0].doc_id == session_doc_id
                         && owners[0].visible
-                        && owners[0].owner.as_ref().is_some_and(|owner| owner.as_str() == actor),
+                        && owners[0]
+                            .owner
+                            .as_ref()
+                            .is_some_and(|owner| owner.as_str() == actor),
                     "session relationship publication requires its native creator"
                 );
-                stage_created_session_relationships_in_txn(txn, session_doc_id, agent_doc_id, target).await
+                stage_created_session_relationships_in_txn(
+                    txn,
+                    session_doc_id,
+                    agent_doc_id,
+                    target,
+                )
+                .await
             })
         })
         .await
@@ -516,7 +565,7 @@ pub(crate) async fn stage_created_session_relationships_in_txn(
 }
 
 /// The caller verifies that the session was created by this transaction.
-pub(crate) async fn stage_session_relationships_in_txn(
+pub async fn stage_session_relationships_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     session_doc_id: &str,
     agent_doc_id: &str,
@@ -661,15 +710,15 @@ async fn ensure_session_with_pending_in_txn(
     }
     chrono::DateTime::parse_from_rfc3339(now).context("invalid session created_at")?;
 
-    let scope = session_scope_filter(node_did, session_id, requester_did);
-    let query = format!(
-        r#"{{
-            AgentSession(filter: {{ {scope} }}) {{
-                {SESSION_SCOPE_FIELDS}
-            }}
-        }}"#
-    );
-    let response = txn.execute(&query).await?;
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_session::Doc, session_scope, Query, Selection,
+        };
+        Query::select(Selection::owned(SESSION_SCOPE_FIELDS))
+            .filter(session_scope::<Doc>(node_did, session_id, requester_did))
+            .render()
+    };
+    let response = txn.run(&query).await?;
     let rows = response
         .get("data")
         .and_then(|data| data.get("AgentSession"))
@@ -754,7 +803,7 @@ async fn ensure_session_with_pending_in_txn(
     if created_doc.is_none() {
         // Revalidate scope through the same preserved-document contract so a
         // colliding writer cannot silently win with a different binding.
-        let response = txn.execute(&query).await?;
+        let response = txn.run(&query).await?;
         let rows = response
             .get("data")
             .and_then(|data| data.get("AgentSession"))
@@ -1029,7 +1078,7 @@ pub(super) async fn max_sequence_in_txn(
     node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<u32> {
-    let scope = session_scope_filter(node_did, session_id, requester_did);
+    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
     let response = txn.execute(&format!(r#"{{ AgentMessage(filter: {{ {scope} }}, order: {{sequence: DESC}}, limit: 1) {{ sequence }} }}"#)).await?;
     let rows = response
         .get("data")

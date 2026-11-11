@@ -393,15 +393,15 @@ async fn one_request(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     retry_key: &str,
 ) -> Result<Option<StoredRequest>> {
-    let response = txn
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}) {{
-                {}
-            }} }}"#,
-            crate::store::graphql::escape_graphql_string(retry_key),
-            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
-        ))
-        .await?;
+    use gents_protocol::document_query::{
+        fields::agent_request as fields, Filter, Query, Selection,
+    };
+    let rendered = Query::select(Selection::owned(
+        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
+    ))
+    .filter(Filter::eq(fields::RETRY_KEY, retry_key))
+    .render();
+    let response = txn.run(&rendered).await?;
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(serde_json::Value::as_array)

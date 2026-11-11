@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
+use gents::pack::PackChangeError;
 use gents::ConfigAccess;
 use serde_json::Value;
 
@@ -90,7 +91,7 @@ pub async fn install(
     grant_authority: bool,
     preview: bool,
     expect_digest: Option<String>,
-) -> Result<Value> {
+) -> Result<Value, PackChangeError> {
     capture_report(command::install(PackInstallArgs {
         package,
         inference_slots,
@@ -160,7 +161,6 @@ pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
         &access,
         &JobFilter {
             session_id: None,
-            requester: None,
             state: StateFilter::States(vec![JobState::Completed]),
             plugin: None,
         },
@@ -199,7 +199,7 @@ pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
         }));
     }
     workflows.sort_by_key(|workflow| std::cmp::Reverse(workflow["last_run_at"].as_u64()));
-    // Installed workflows are the home's job plugins, as Grok's `/workflows` lists them.
+    // Installed workflows are the home's job plugins.
     let installed: Vec<Value> = gents::plugin::store::list_records(&home)?
         .into_iter()
         .filter(|record| record.declaration.job.0)
@@ -320,7 +320,7 @@ pub async fn update(
     package: Option<String>,
     registry: Option<String>,
     edited: EditedDocuments,
-) -> Result<Value> {
+) -> Result<Value, PackChangeError> {
     capture_report(command::update::update(PackUpdateArgs {
         package,
         inference_slots: Vec::new(),
@@ -331,7 +331,11 @@ pub async fn update(
     .await
 }
 
-pub async fn remove(home: PathBuf, package: String, edited: EditedDocuments) -> Result<Value> {
+pub async fn remove(
+    home: PathBuf,
+    package: String,
+    edited: EditedDocuments,
+) -> Result<Value, PackChangeError> {
     capture_report(command::remove(PackRemoveArgs {
         package,
         scope: scope(home),

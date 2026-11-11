@@ -19,9 +19,9 @@ use crate::store::config_client::write_telemetry::{
 };
 
 #[derive(Debug)]
-pub(crate) struct TransactionFinalityError<E> {
-    pub(crate) error: E,
-    pub(crate) unconfirmed: bool,
+pub struct TransactionFinalityError<E> {
+    pub error: E,
+    pub unconfirmed: bool,
 }
 
 /// Replay policy for idempotent transactions (stable identities, durable-state-guarded updates).

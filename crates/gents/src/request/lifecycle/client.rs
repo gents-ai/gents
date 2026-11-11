@@ -96,10 +96,18 @@ pub(crate) async fn stage_runtime_request_in_txn(
         )?,
         "runtime request requires its valid signed receipt"
     );
-    let escaped = crate::store::graphql::escape_graphql_string(session);
-    let observed = txn.execute(&format!(
-        r#"{{ AgentSession(filter: {{_docID: {{_eq: "{escaped}"}}}}, limit: 2) {{_docID relationships_pending}} }}"#,
-    )).await?;
+    let observed = {
+        use gents_protocol::document_query::{
+            fields::agent_session as session_fields, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(Selection::doc_id().field(session_fields::RELATIONSHIPS_PENDING))
+                .filter(Filter::eq(session_fields::DOC_ID, session))
+                .limit(2)
+                .render(),
+        )
+        .await?
+    };
     let sessions = observed["data"]["AgentSession"]
         .as_array()
         .context("runtime request session check omitted rows")?;
@@ -140,10 +148,18 @@ pub(crate) async fn stage_client_request_in_txn(
         )?,
         "client request requires its valid signed receipt"
     );
-    let escaped = crate::store::graphql::escape_graphql_string(session);
-    let observed = txn.execute(&format!(
-        r#"{{ AgentSession(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 2) {{ _docID relationships_pending }} }}"#,
-    )).await?;
+    let observed = {
+        use gents_protocol::document_query::{
+            fields::agent_session as session_fields, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(Selection::doc_id().field(session_fields::RELATIONSHIPS_PENDING))
+                .filter(Filter::eq(session_fields::DOC_ID, session))
+                .limit(2)
+                .render(),
+        )
+        .await?
+    };
     let sessions = observed["data"]["AgentSession"]
         .as_array()
         .context("client request session check omitted rows")?;
@@ -155,12 +171,18 @@ pub(crate) async fn stage_client_request_in_txn(
     );
     // `AgentRequest.request_id` is only `@index`: a client create never adds
     // a second request under an identity the actor can already read.
-    let request_id = crate::store::graphql::escape_graphql_string(&create.request_id);
-    let held = txn
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ _docID }} }}"#,
-        ))
-        .await?;
+    let held = {
+        use gents_protocol::document_query::{
+            fields::agent_request as request_fields, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(Selection::doc_id())
+                .filter(Filter::eq(request_fields::REQUEST_ID, &create.request_id))
+                .limit(1)
+                .render(),
+        )
+        .await?
+    };
     anyhow::ensure!(
         held["data"]["AgentRequest"]
             .as_array()
@@ -208,10 +230,18 @@ pub(crate) async fn stage_pending_child_request_in_txn(
         )?,
         "pending child requires its valid signed receipt"
     );
-    let escaped = crate::store::graphql::escape_graphql_string(session);
-    let observed = txn.execute(&format!(
-        r#"{{ AgentSession(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 2) {{ _docID relationships_pending }} }}"#,
-    )).await?;
+    let observed = {
+        use gents_protocol::document_query::{
+            fields::agent_session as session_fields, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(Selection::doc_id().field(session_fields::RELATIONSHIPS_PENDING))
+                .filter(Filter::eq(session_fields::DOC_ID, session))
+                .limit(2)
+                .render(),
+        )
+        .await?
+    };
     let sessions = observed["data"]["AgentSession"]
         .as_array()
         .context("pending child session check omitted rows")?;
@@ -271,10 +301,20 @@ pub(crate) async fn stage_admitted_request_in_txn(
                 stage_runtime_request_in_txn(txn, create, session_doc, agent_doc).await?
             }
             AgentRequestAdmissionKind::Client | AgentRequestAdmissionKind::LocalSelf => {
-                let escaped = crate::store::graphql::escape_graphql_string(session_doc);
-                let response = txn.execute(&format!(
-                    r#"{{ AgentSession(filter: {{_docID: {{_eq: "{escaped}"}}}}, limit: 2) {{relationships_pending}} }}"#
-                )).await?;
+                let response = {
+                    use gents_protocol::document_query::{
+                        fields::agent_session as session_fields, Filter, Query, Selection,
+                    };
+                    txn.run(
+                        &Query::select(
+                            Selection::new().field(session_fields::RELATIONSHIPS_PENDING),
+                        )
+                        .filter(Filter::eq(session_fields::DOC_ID, session_doc))
+                        .limit(2)
+                        .render(),
+                    )
+                    .await?
+                };
                 let rows = response["data"]["AgentSession"]
                     .as_array()
                     .context("goal session publication state unavailable")?;
@@ -899,13 +939,49 @@ async fn validate_request_relationship_binding(
         txn.actor_did() == Some(actor),
         "request publication actor changed"
     );
-    let doc = crate::store::graphql::escape_graphql_string(request_doc);
-    let session_doc = crate::store::graphql::escape_graphql_string(session);
-    let agent_doc = crate::store::graphql::escape_graphql_string(agent);
-    let response = txn.execute(&format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}, limit: 2) {{ {} relationships_pending }} AgentSession(filter: {{ _docID: {{ _eq: "{session_doc}" }} }}, limit: 2) {{ _docID node_did session_id requester_did agent_did relationships_pending }} Agent(filter: {{ _docID: {{ _eq: "{agent_doc}" }} }}, limit: 2) {{ _docID node_did agent_did }} }}"#,
-        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
-    )).await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::{
+                agent as agent_fields, agent_request as request_fields,
+                agent_session as session_fields,
+            },
+            Filter, Query, QuerySet, Selection,
+        };
+        txn.run(
+            &QuerySet::new()
+                .plain(
+                    &Query::select(
+                        Selection::owned(gents_protocol::request_admission::SIGNED_REQUEST_FIELDS)
+                            .field(request_fields::RELATIONSHIPS_PENDING),
+                    )
+                    .filter(Filter::eq(request_fields::DOC_ID, request_doc))
+                    .limit(2),
+                )
+                .plain(
+                    &Query::select(
+                        Selection::doc_id()
+                            .field(session_fields::NODE_DID)
+                            .field(session_fields::SESSION_ID)
+                            .field(session_fields::REQUESTER_DID)
+                            .field(session_fields::AGENT_DID)
+                            .field(session_fields::RELATIONSHIPS_PENDING),
+                    )
+                    .filter(Filter::eq(session_fields::DOC_ID, session))
+                    .limit(2),
+                )
+                .plain(
+                    &Query::select(
+                        Selection::doc_id()
+                            .field(agent_fields::NODE_DID)
+                            .field(agent_fields::AGENT_DID),
+                    )
+                    .filter(Filter::eq(agent_fields::DOC_ID, agent))
+                    .limit(2),
+                )
+                .render(),
+        )
+        .await?
+    };
     let rows = response["data"]["AgentRequest"]
         .as_array()
         .context("request publication omitted request rows")?;
@@ -997,13 +1073,27 @@ async fn reconcile_client_request_inner(
     create: &AgentRequestCreate,
     actor: &str,
 ) -> anyhow::Result<bool> {
-    let scope = gents_protocol::session::session_scope_filter(
-        &create.node_did,
-        &create.session_id,
-        Some(&create.requester_did),
-    );
-    let request = crate::store::graphql::escape_graphql_string(&create.request_id);
-    let response = access.execute(&format!("{{ AgentRequest(filter: {{{scope}, request_id: {{ _eq: \"{request}\" }} }}, limit: 2) {{ {} relationships_pending }} }}", gents_protocol::request_admission::SIGNED_REQUEST_FIELDS)).await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::agent_request as request_fields, session_scope, Filter, Query, Selection,
+        };
+        access
+            .read(
+                &Query::select(
+                    Selection::owned(gents_protocol::request_admission::SIGNED_REQUEST_FIELDS)
+                        .field(request_fields::RELATIONSHIPS_PENDING),
+                )
+                .filter(session_scope(
+                    &create.node_did,
+                    &create.session_id,
+                    Some(create.requester_did.as_str()),
+                ))
+                .filter(Filter::eq(request_fields::REQUEST_ID, &create.request_id))
+                .limit(2)
+                .render(),
+            )
+            .await?
+    };
     let rows = response["data"]["AgentRequest"]
         .as_array()
         .context("request recovery omitted rows")?;
@@ -1082,11 +1172,22 @@ pub(crate) async fn complete_client_request_relationships(
     let actor = access
         .actor_did()
         .context("request relationship recovery requires an actor")?;
-    let escaped = crate::store::graphql::escape_graphql_string(request_doc);
-    let response = access.execute(&format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 2) {{ {} relationships_pending }} }}"#,
-        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
-    )).await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::agent_request as request_fields, Filter, Query, Selection,
+        };
+        access
+            .read(
+                &Query::select(
+                    Selection::owned(gents_protocol::request_admission::SIGNED_REQUEST_FIELDS)
+                        .field(request_fields::RELATIONSHIPS_PENDING),
+                )
+                .filter(Filter::eq(request_fields::DOC_ID, request_doc))
+                .limit(2)
+                .render(),
+            )
+            .await?
+    };
     let rows = response["data"]["AgentRequest"]
         .as_array()
         .context("request relationship recovery omitted rows")?;

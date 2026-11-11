@@ -26,7 +26,7 @@ fi
 
 case "${suite}" in
   runtime)
-    packages=(gents gents-loop)
+    packages=(gents gents-eval gents-loop)
     ;;
   cli)
     packages=(
@@ -46,7 +46,7 @@ case "${suite}" in
       gents-claude
       gents-claude-login
       gents-login-ui
-      gents-codex-protocol
+      gents-shell
     )
     ;;
   *)

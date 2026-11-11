@@ -143,17 +143,30 @@ pub(crate) async fn unanswered_goal_commands(
     agent_identity: &dyn NodeIdentity,
     _sweep: Sweep,
 ) -> Result<Vec<String>> {
-    let query = format!(
-        r#"{{ AgentSessionGoalControl(filter: {{ node_did: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }} }}) {{ _docID intent_json }} AgentSessionGoalReceipt {{ command_doc_id receipt_json relationships_pending }} }}"#,
-        escape_graphql_string(runtime.did()),
-        escape_graphql_string(agent_identity.did())
-    );
+    use gents_protocol::document_query::{
+        fields::{agent_session_goal_control as control, agent_session_goal_receipt as receipt},
+        Filter, Query, QuerySet, Selection,
+    };
+    let query = QuerySet::new()
+        .plain(
+            &Query::select(Selection::doc_id().field(control::INTENT_JSON)).filter(
+                Filter::eq(control::NODE_DID, runtime.did())
+                    .and(Filter::eq(control::AGENT_DID, agent_identity.did())),
+            ),
+        )
+        .plain(&Query::select(
+            Selection::new()
+                .field(receipt::COMMAND_DOC_ID)
+                .field(receipt::RECEIPT_JSON)
+                .field(receipt::RELATIONSHIPS_PENDING),
+        ))
+        .render();
     let access = crate::ConfigAccess::local_managed_agent(
         node.clone(),
         ::identity::Did::new(agent_identity.did())?,
         agent_identity,
     )?;
-    let response = access.execute(&query).await?;
+    let response = access.read(&query).await?;
     let rows = response["data"]["AgentSessionGoalControl"]
         .as_array()
         .context("goal command observation omitted rows")?;

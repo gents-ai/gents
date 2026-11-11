@@ -9,9 +9,14 @@ use gents_protocol::process_control::{
 };
 use serde_json::Value;
 
-use crate::commands::test_shim_fixtures::streaming_backend::{
-    MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse,
-};
+#[path = "../../../../../gents/tests/support/streaming_backend.rs"]
+#[expect(
+    dead_code,
+    reason = "The shared backend also supports stream gates and counters used by other test binaries."
+)]
+mod streaming_backend;
+
+use streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse};
 
 #[cfg(unix)]
 #[tokio::test]
@@ -85,7 +90,7 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
     // A runtime that refuses its configuration exits; report that refusal
     // rather than waiting out readiness.
     tokio::select! {
-        ready = gents::eval::runner::embedded::wait_for_runtime_ready(&node, &did) => ready.unwrap(),
+        ready = gents::runtime::embedded::wait_for_runtime_ready(&node, &did) => ready.unwrap(),
         exited = &mut running => panic!("runtime exited before readiness: {:?}",
             exited.map(|run| run.map_err(|error| format!("{error:#}")))),
     }

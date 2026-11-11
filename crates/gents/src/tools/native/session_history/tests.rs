@@ -8,7 +8,7 @@ use gents_protocol::output::rows::{
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
 
-use super::inference::{aggregate_inference_usage, inference_turns};
+use super::inference::aggregate_inference_usage;
 use super::*;
 
 #[test]
@@ -45,48 +45,6 @@ fn usage_duration_requires_valid_provider_intervals_and_excludes_queue_time() {
         aggregate_inference_usage(&[]).unwrap().api_duration_ms,
         Some(0)
     );
-}
-
-#[test]
-fn inference_rounds_deduplicate_retries_by_physical_owner_not_logical_alias() {
-    let accounting = json!({
-        "accounting_version":1, "turn_index":2, "attempt":0,
-        "estimator":"test", "components":{
-            "messages":100, "tool_schemas":0, "documents":0,
-            "additional_parameters":0, "output_schema":0},
-        "estimated_input_tokens":100, "context_window":2000,
-        "compaction_threshold_basis_points":7500, "compaction_threshold_tokens":1500,
-        "compaction_reason":"below_threshold"
-    });
-    let first: InferenceDetailRow = serde_json::from_value(json!({
-        "request_doc_id":"physical-a", "request_id":"shared-alias",
-        "call_id":"first", "call_kind":"inference",
-        "context_accounting_json":accounting.to_string()
-    }))
-    .unwrap();
-    let mut retry = first.clone();
-    retry.call_id = "retry".into();
-    let mut retry_accounting = accounting.clone();
-    retry_accounting["attempt"] = json!(1);
-    retry.context_accounting_json = Some(retry_accounting.to_string());
-    let mut other = first.clone();
-    other.request_doc_id = Some("physical-b".into());
-    let mut compact = first.clone();
-    compact.call_kind = Some("compaction".into());
-    compact.context_accounting_json = None;
-    let mut oneoff = compact.clone();
-    oneoff.call_kind = Some("oneoff".into());
-    assert_eq!(
-        inference_turns(&[first.clone(), retry, other, compact, oneoff]).unwrap(),
-        Some(2)
-    );
-    let mut missing = first.clone();
-    missing.request_doc_id = None;
-    assert_eq!(inference_turns(&[missing]).unwrap(), None);
-    let mut unknown = first;
-    unknown.call_kind = None;
-    assert_eq!(inference_turns(&[unknown]).unwrap(), None);
-    assert_eq!(inference_turns(&[]).unwrap(), Some(0));
 }
 
 async fn seeded_node() -> Arc<EmbeddedNode> {

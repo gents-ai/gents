@@ -1,6 +1,6 @@
 use super::*;
 use anyhow::Context;
-use gents_protocol::session::{decode_session_row, session_scope_filter, AGENT_SESSION_FIELDS};
+use gents_protocol::session::{decode_session_row, AGENT_SESSION_FIELDS};
 
 pub(crate) async fn session_stopped_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
@@ -8,12 +8,14 @@ pub(crate) async fn session_stopped_in_txn(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<bool> {
-    let scope = session_scope_filter(node_did, session_id, requester_did);
-    let response = txn
-        .execute(&format!(
-            r#"{{ AgentSession(filter: {{ {scope} }}, limit: 2) {{ stopped_at }} }}"#
-        ))
-        .await?;
+    use gents_protocol::document_query::{
+        fields::agent_session as session, session_scope, Query, Selection,
+    };
+    let rendered = Query::select(Selection::new().field(session::STOPPED_AT))
+        .filter(session_scope(node_did, session_id, requester_did))
+        .limit(2)
+        .render();
+    let response = txn.run(&rendered).await?;
     let rows = response
         .pointer("/data/AgentSession")
         .and_then(serde_json::Value::as_array)
@@ -89,21 +91,15 @@ pub(super) async fn load_agent_session_rows(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<gents_protocol::session::SessionOwnerRow>> {
-    let scope = session_scope_filter(node_did, session_id, requester_did);
-    let query = format!(
-        r#"{{
-            AgentSession(
-                filter: {{ {scope} }}
-            ) {{ {AGENT_SESSION_FIELDS} }}
-        }}"#
-    );
+    use gents_protocol::document_query::{
+        fields::agent_session as fields, session_scope, Query, Selection,
+    };
+    let rendered = Query::<fields::Doc>::select(Selection::owned(AGENT_SESSION_FIELDS))
+        .filter(session_scope(node_did, session_id, requester_did))
+        .render();
 
-    let resp = crate::store::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        "load_agent_session_rows",
-    )
-    .await?;
+    let resp =
+        crate::store::graphql::read_rendered(node, &rendered, "load_agent_session_rows").await?;
 
     let rows = crate::store::graphql::rows::<serde_json::Value>(&resp, "AgentSession")?;
     rows.iter()
@@ -134,17 +130,21 @@ pub(crate) async fn load_session_requester_scope(
     session_id: &str,
     agent_did: &str,
 ) -> Result<Option<String>> {
-    let query = format!(
-        r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }} }}) {{ {AGENT_SESSION_FIELDS} }} }}"#,
-        escape_graphql_string(node_did),
-        escape_graphql_string(session_id),
-        escape_graphql_string(agent_did)
-    );
+    use gents_protocol::document_query::{
+        fields::agent_session as session, Filter, Query, Selection,
+    };
+    let rendered = Query::select(Selection::owned(AGENT_SESSION_FIELDS))
+        .filter(
+            Filter::eq(session::NODE_DID, node_did)
+                .and(Filter::eq(session::SESSION_ID, session_id))
+                .and(Filter::eq(session::AGENT_DID, agent_did)),
+        )
+        .render();
     let response = crate::store::config_client::ConfigAccess::local_as(
         node.clone(),
         ::identity::Did::new(agent_did)?,
     )
-    .execute(&query)
+    .read(&rendered)
     .await?;
     let rows = response
         .pointer("/data/AgentSession")

@@ -25,7 +25,6 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
             "ClientShell",
             Boundary("projection theorems; desktop rendering is runtime-observed"),
         ),
-        ("CodexShim", Module("conformance/codex_shim.rs")),
         ("CommandPolicy", Module("conformance/command_policy.rs")),
         ("Compaction", Module("conformance/streaming_compaction.rs")),
         ("CompletionRetry", Module("conformance/completion_retry.rs")),
@@ -72,7 +71,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("Mailbox", Module("conformance/mailbox.rs")),
         ("MCPHealth", Module("conformance/mcp_health.rs")),
         ("NativeSpawn", WorkspaceTest("crates/gents/src/tools/exec/native_spawn.rs")),
-        ("Optimization", WorkspaceTest("crates/gents/src/eval/optimization/policy.rs")),
+        ("Optimization", WorkspaceTest("crates/gents-eval/src/optimization/policy.rs")),
         (
             "PairingReconcile",
             Module("conformance/pairing_reconcile.rs"),
