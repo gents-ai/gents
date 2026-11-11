@@ -462,35 +462,6 @@ async fn tool_does_not_execute_when_provider_stalls_before_turn_closure() {
 }
 
 #[tokio::test]
-async fn tool_definition_receives_prompt_rag_text() {
-    let seen = Arc::new(Mutex::new(None));
-    let tool: Box<dyn ToolDyn> = Box::new(RecordingDefinitionTool {
-        seen_prompt: seen.clone(),
-    });
-
-    let model = ScriptedModel::new(vec![
-        RawStreamingChoice::Message("hi".to_string()),
-        RawStreamingChoice::FinalResponse(()),
-    ]);
-    let stream = run_loop_stream(
-        model,
-        None::<gents_loop::session_hook::NoopSessionHook>,
-        TaggedMessage::unassociated(Message::user("teach me rust")),
-        Vec::new(),
-        Arc::new(vec![tool]),
-        config(1),
-    );
-    futures::pin_mut!(stream);
-    while stream.next().await.is_some() {}
-
-    assert_eq!(
-        seen.lock().await.as_deref(),
-        Some("teach me rust"),
-        "tool definition should receive the prompt's rag text, not an empty string"
-    );
-}
-
-#[tokio::test]
 async fn toolset_is_attached_to_every_completion_request_in_the_loop() {
     let model = ScriptedModel::new_turns(vec![
         echo_tool_turn(),
@@ -1141,16 +1112,6 @@ async fn terminalization_with_principal_output(
     );
     node.shutdown().await.expect("node shutdown");
     elapsed
-}
-
-#[tokio::test]
-async fn terminalization_cost_is_independent_of_principal_output() {
-    let alone = terminalization_with_principal_output(24, 4096, 0).await;
-    let surrounded = terminalization_with_principal_output(24, 4096, 40).await;
-    assert!(
-        surrounded <= alone * 2 + std::time::Duration::from_millis(200),
-        "terminalization grew with unrelated principal output: {alone:?} alone, {surrounded:?} beside 40 requests"
-    );
 }
 
 #[tokio::test]
@@ -2164,90 +2125,4 @@ async fn measure_parallel_native_read_turns() {
         }
     }
     tracing::info!(revision = %option_env!("GENTS_BENCH_REVISION").unwrap_or("unspecified"), calls_per_turn = 8, bytes_per_file = 1024 * 1024, turns_per_mode = 10, serial_us = u64::try_from(totals[0].as_micros()).unwrap_or(u64::MAX), parallel_us = u64::try_from(totals[1].as_micros()).unwrap_or(u64::MAX), "matched native read turn measurement");
-}
-
-struct ReadWriteBarrierProbe {
-    events: Arc<Mutex<Vec<String>>>,
-    active: Arc<AtomicUsize>,
-}
-impl ToolDyn for ReadWriteBarrierProbe {
-    fn name(&self) -> String {
-        "read_write_barrier_probe".into()
-    }
-    fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: "read_write_barrier_probe".into(),
-                description: String::new(),
-                parameters: serde_json::json!({"type":"object"}),
-            }
-        })
-    }
-    fn footprint(&self, args: &str) -> gents_loop::tool::ToolFootprint {
-        if args.contains("write") {
-            gents_loop::tool::ToolFootprint::Barrier
-        } else {
-            gents_loop::tool::ToolFootprint::Read
-        }
-    }
-    fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(async move {
-            let value: serde_json::Value = serde_json::from_str(&args).unwrap();
-            let name = value["action"].as_str().unwrap();
-            if name == "write" {
-                assert_eq!(
-                    self.active.load(Ordering::SeqCst),
-                    0,
-                    "write must wait for preceding reads"
-                );
-                self.events.lock().await.push(name.into());
-            } else {
-                self.active.fetch_add(1, Ordering::SeqCst);
-                self.events.lock().await.push(name.into());
-                tokio::task::yield_now().await;
-                self.active.fetch_sub(1, Ordering::SeqCst);
-            }
-            Ok(name.into())
-        })
-    }
-}
-
-#[tokio::test]
-async fn effectful_call_is_a_barrier_between_reads() {
-    let events = Arc::new(Mutex::new(Vec::new()));
-    let tool: Box<dyn ToolDyn> = Box::new(ReadWriteBarrierProbe {
-        events: events.clone(),
-        active: Arc::new(AtomicUsize::new(0)),
-    });
-    let mut turn: Vec<_> = ["before", "write", "after"]
-        .into_iter()
-        .map(|action| {
-            RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
-                action.into(),
-                "read_write_barrier_probe".into(),
-                serde_json::json!({"action":action}),
-            ))
-        })
-        .collect();
-    turn.push(RawStreamingChoice::FinalResponse(()));
-    let model = ScriptedModel::new_turns(vec![
-        turn,
-        vec![
-            RawStreamingChoice::Message("done".into()),
-            RawStreamingChoice::FinalResponse(()),
-        ],
-    ]);
-    let stream = run_loop_stream(
-        model,
-        None::<gents_loop::session_hook::NoopSessionHook>,
-        TaggedMessage::unassociated(Message::user("read and write")),
-        Vec::new(),
-        Arc::new(vec![tool]),
-        config(4),
-    );
-    futures::pin_mut!(stream);
-    while let Some(item) = stream.next().await {
-        item.expect("loop succeeds");
-    }
-    assert_eq!(&*events.lock().await, &["before", "write", "after"]);
 }

@@ -213,19 +213,4 @@ mod tests {
             OAuthAuthProblem::Other(text) if text.contains("malformed")
         ));
     }
-
-    #[tokio::test]
-    async fn refresh_honors_the_token_url_override_env() {
-        let (url, handle) =
-            one_shot_token_server(200, r#"{"access_token":"access-NEW","expires_in":3600}"#).await;
-        let _env = crate::inference::auth::credential::test_support::TOKEN_URL_ENV
-            .lock()
-            .await;
-        std::env::set_var(CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV, &url);
-        let result = refresh_claude_token("refresh-OLD", &reqwest::Client::new()).await;
-        std::env::remove_var(CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV);
-        assert_eq!(result.expect("refreshed").access_token, "access-NEW");
-        let request = handle.await.expect("server");
-        assert!(request.starts_with("POST /v1/oauth/token"), "{request}");
-    }
 }

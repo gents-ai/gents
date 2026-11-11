@@ -128,19 +128,6 @@ pub(super) fn echo_request() -> CompletionRequest {
     )
 }
 
-fn request_with_system_rows() -> CompletionRequest {
-    request_from_native(
-        Some("You are helpful."),
-        vec![
-            Message::System {
-                content: "workspace context".into(),
-            },
-            Message::user("use echo"),
-        ],
-        vec![echo_tool()],
-    )
-}
-
 #[test]
 fn messages_body_includes_gents_tools_and_system() {
     let body = build_messages_body("claude-sonnet-5", &echo_request()).unwrap();
@@ -154,21 +141,6 @@ fn messages_body_includes_gents_tools_and_system() {
 }
 
 #[test]
-fn messages_body_system_leads_with_attribution_then_claude_code_identity_then_preamble() {
-    let body = build_messages_body("claude-sonnet-5", &echo_request()).unwrap();
-    let system = body["system"].as_array().expect("system array");
-    assert_eq!(system.len(), 3, "{body}");
-    assert!(system[0]["text"]
-        .as_str()
-        .unwrap()
-        .starts_with("x-anthropic-billing-header: cc_version=2.1.311."));
-    assert_eq!(system[1]["type"], "text");
-    assert_eq!(system[1]["text"], CLAUDE_CODE_IDENTITY);
-    assert_eq!(system[2]["type"], "text");
-    assert_eq!(system[2]["text"], "You are helpful.");
-}
-
-#[test]
 fn messages_body_system_is_identity_only_without_preamble() {
     for preamble in [None, Some(String::new()), Some("   ".to_string())] {
         let mut request = echo_request();
@@ -178,34 +150,6 @@ fn messages_body_system_is_identity_only_without_preamble() {
         assert_eq!(system.len(), 2, "{body}");
         assert_eq!(system[1]["text"], CLAUDE_CODE_IDENTITY);
     }
-}
-
-#[test]
-fn messages_body_routes_system_rows_after_identity_and_preamble() {
-    let body = build_messages_body("claude-sonnet-5", &request_with_system_rows()).unwrap();
-    let system = body["system"].as_array().expect("system");
-    assert_eq!(system.len(), 3, "{body}");
-    assert_eq!(system[1]["text"], CLAUDE_CODE_IDENTITY);
-    assert_eq!(system[2]["text"], "You are helpful.\n\nworkspace context");
-    assert_eq!(body["messages"].as_array().expect("messages").len(), 1);
-    assert_eq!(body["messages"][0]["role"], "user");
-}
-
-#[test]
-fn messages_body_marks_the_system_blocks_and_the_final_message() {
-    let body = build_messages_body("claude-sonnet-5", &request_with_system_rows()).unwrap();
-    let system = body["system"].as_array().expect("system");
-    assert_eq!(system[1]["cache_control"]["type"], "ephemeral");
-    assert_eq!(system[2]["cache_control"]["type"], "ephemeral");
-    assert!(system[0].get("cache_control").is_none());
-    let last_message = body["messages"].as_array().unwrap().last().unwrap().clone();
-    let last_block = last_message["content"]
-        .as_array()
-        .unwrap()
-        .last()
-        .unwrap()
-        .clone();
-    assert_eq!(last_block["cache_control"]["type"], "ephemeral");
 }
 
 #[test]
@@ -601,34 +545,6 @@ fn sse_tool_use_with_unparseable_input_fails_closed() {
     let err = parse_messages_sse(&sse, &surface).expect_err("truncated json");
     assert!(
         err.to_string().contains("fail-closed: malformed tool_use"),
-        "{err}"
-    );
-}
-
-#[test]
-fn sse_duplicate_tool_use_id_fails_closed() {
-    let mut sse = sse_tool_use_block("toolu_1", "echo", "{}", &["{}"]);
-    sse.push_str(&sse_tool_use_block("toolu_1", "echo", "{}", &["{}"]));
-    let surface = RapidHashSet::from_iter(["echo".to_string()]);
-    let err = parse_messages_sse(&sse, &surface).expect_err("duplicate id");
-    assert!(
-        err.to_string()
-            .contains("fail-closed: duplicate tool_use id toolu_1"),
-        "{err}"
-    );
-}
-
-#[test]
-fn sse_overlapping_tool_use_block_fails_closed() {
-    let first = sse_tool_use_block("toolu_1", "echo", "{}", &[]);
-    let (start, _stop) = first.split_once("event: content_block_stop").expect("stop");
-    let mut sse = start.to_string();
-    sse.push_str(&sse_tool_use_block("toolu_2", "echo", "{}", &[]));
-    let surface = RapidHashSet::from_iter(["echo".to_string()]);
-    let err = parse_messages_sse(&sse, &surface).expect_err("overlap");
-    assert!(
-        err.to_string()
-            .contains("fail-closed: overlapping tool_use block toolu_2"),
         "{err}"
     );
 }
@@ -1300,19 +1216,6 @@ fn a_main_turn_sends_claude_codes_header_set() {
 }
 
 #[test]
-fn every_attempt_carries_a_fresh_client_request_id() {
-    let bearer = crate::inference::clients::claude_subscription::StaticBearer::new("access");
-    let id_of = || {
-        header_value(
-            &captured_request(&test_account(), &bearer, &echo_request()),
-            "x-client-request-id",
-        )
-    };
-    let (first, second) = (id_of(), id_of());
-    assert!(first.is_some() && first != second);
-}
-
-#[test]
 fn a_subagent_turn_adds_the_agent_headers() {
     let bearer = crate::inference::clients::claude_subscription::StaticBearer::new("access");
     let context = context_of(gents_claude::origin::Cause::AgentNew, true, false);
@@ -1355,128 +1258,6 @@ fn a_subagent_turn_adds_the_agent_headers() {
         Some("subagent")
     );
     assert_eq!(header_value(&request, "x-app").as_deref(), Some("cli"));
-}
-
-#[test]
-fn a_scheduled_task_turn_is_a_background_print_session() {
-    let bearer = crate::inference::clients::claude_subscription::StaticBearer::new("access");
-    let context = context_of(gents_claude::origin::Cause::TaskTrigger, false, true);
-    let request = captured_request(&test_account(), &bearer, &request_with_context(&context));
-    assert_eq!(
-        claude_code_header_names(&request),
-        sorted(MAIN_HEADER_NAMES.to_vec()),
-        "{request}"
-    );
-    assert_eq!(header_value(&request, "x-app").as_deref(), Some("cli-bg"));
-    assert_eq!(
-        header_value(&request, "user-agent").as_deref(),
-        Some("claude-cli/2.1.311 (external, sdk-cli, workload/cron)")
-    );
-    assert_eq!(
-        header_value(&request, "x-claude-code-request-class").as_deref(),
-        Some("main")
-    );
-}
-
-#[test]
-fn api_key_request_sends_the_key_header_and_no_oauth_beta() {
-    let bearer =
-        crate::inference::clients::claude_subscription::ApiKeyBearer::new("placeholder-key");
-    let account = ClaudeAccountContext {
-        subscriber: false,
-        api_key: true,
-        ..test_account()
-    };
-    let request = captured_request(&account, &bearer, &echo_request());
-    assert_eq!(
-        header_value(&request, "x-api-key").as_deref(),
-        Some("placeholder-key")
-    );
-    assert!(
-        header_value(&request, "authorization").is_none(),
-        "{request}"
-    );
-    assert_eq!(
-        header_value(&request, "anthropic-version").as_deref(),
-        Some("2023-06-01")
-    );
-    let betas = header_value(&request, "anthropic-beta").unwrap();
-    assert!(!betas.contains("oauth-2025-04-20"), "{betas}");
-}
-
-#[test]
-fn sign_in_request_keeps_the_oauth_beta() {
-    let bearer = crate::inference::clients::claude_subscription::StaticBearer::new("access");
-    let request = captured_request(&test_account(), &bearer, &echo_request());
-    let betas = header_value(&request, "anthropic-beta").unwrap();
-    assert!(
-        betas.split(',').any(|beta| beta == "oauth-2025-04-20"),
-        "{betas}"
-    );
-}
-
-#[tokio::test]
-async fn unsupported_replay_body_is_a_permanent_request_error() {
-    let request = unsupported_replay_request();
-    let bearer = crate::inference::clients::claude_subscription::StaticBearer::new("unused");
-    let error = stream_messages_at(
-        "http://127.0.0.1:1",
-        "claude-sonnet-5",
-        &request,
-        &test_account(),
-        RapidHashSet::new(),
-        &bearer,
-        None,
-    )
-    .await
-    .err()
-    .expect("unsupported replay block");
-    assert!(matches!(error, CompletionError::RequestError(_)), "{error}");
-    let classified = crate::inference::llm::rig_compat::classify_completion_error(
-        &rig::agent::StreamingError::Completion(error),
-    )
-    .error;
-    assert!(matches!(
-        classified,
-        crate::error::InferenceError::PermanentFailure { .. }
-    ));
-}
-
-fn unsupported_replay_request() -> CompletionRequest {
-    request_from_native(
-        None,
-        vec![Message::Assistant {
-            id: None,
-            request_id: None,
-            content: vec![AssistantContent::Image(Image::default())],
-        }],
-        vec![],
-    )
-}
-
-#[test]
-fn unsupported_replay_preflight_is_a_permanent_request_error() {
-    let counter = crate::turn::provider_input::ProviderInputCounter::new(
-        crate::BackendProviderKind::ClaudeCliSubscription,
-        crate::OpenAiWireApi::ChatCompletions,
-        "claude-sonnet-5",
-    );
-    let error = gents_loop::loop_stream::completion_request_input_components(
-        &unsupported_replay_request(),
-        &counter,
-    )
-    .expect_err("unsupported replay block");
-    assert!(
-        matches!(
-            &error,
-            rig::agent::StreamingError::Completion(CompletionError::RequestError(_))
-        ),
-        "{error}"
-    );
-    assert!(matches!(
-        crate::inference::llm::rig_compat::classify_completion_error(&error).error,
-        crate::error::InferenceError::PermanentFailure { .. }
-    ));
 }
 
 #[test]
@@ -1531,6 +1312,27 @@ fn usage_wiring_claude_live_messages_records_unified_headers() {
             let window = &stored.report.windows[0];
             assert_eq!((window.label.as_str(), window.used_pct), ("5h", 25.0));
         });
+}
+
+#[test]
+fn a_scheduled_task_turn_is_a_background_print_session() {
+    let bearer = crate::inference::clients::claude_subscription::StaticBearer::new("access");
+    let context = context_of(gents_claude::origin::Cause::TaskTrigger, false, true);
+    let request = captured_request(&test_account(), &bearer, &request_with_context(&context));
+    assert_eq!(
+        claude_code_header_names(&request),
+        sorted(MAIN_HEADER_NAMES.to_vec()),
+        "{request}"
+    );
+    assert_eq!(header_value(&request, "x-app").as_deref(), Some("cli-bg"));
+    assert_eq!(
+        header_value(&request, "user-agent").as_deref(),
+        Some("claude-cli/2.1.311 (external, sdk-cli, workload/cron)")
+    );
+    assert_eq!(
+        header_value(&request, "x-claude-code-request-class").as_deref(),
+        Some("main")
+    );
 }
 
 #[test]

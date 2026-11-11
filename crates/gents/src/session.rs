@@ -39,8 +39,7 @@ pub use title_text::display_session_title;
 mod tests;
 #[cfg(test)]
 pub(crate) use tests::{
-    import_history_observation, import_history_observation_as, publish_shared_signed_history,
-    publish_signed_history,
+    import_history_observation, import_history_observation_as, publish_signed_history,
 };
 
 pub use crate::tools::call::lifecycle::query::{

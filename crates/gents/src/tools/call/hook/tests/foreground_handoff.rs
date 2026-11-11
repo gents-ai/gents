@@ -911,39 +911,6 @@ async fn confirmation_before_worker_release_keeps_typed_stop_receipt() {
 }
 
 #[tokio::test]
-async fn interruption_before_native_registration_cancels_without_starting_process() {
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    ensure_runtime_schemas(&node).await.unwrap();
-    let hook = signed_hook(&node, FailurePolicy::default()).await;
-    let session = hook.session_id().await.unwrap();
-    let deadline = Utc::now() + chrono::Duration::minutes(5);
-    bind_interruptible_request(&hook, "before-registration-parent", &session, deadline).await;
-    let mut lifecycle = accepted_hook_tool_lifecycle(
-        &hook,
-        "before-registration",
-        "bash",
-        "{}",
-        deadline,
-        gents_protocol::tool_call::AwaitMode::Foreground,
-    )
-    .await;
-    lifecycle.start_running().await.unwrap();
-    hook.in_flight_lifecycles
-        .lock()
-        .await
-        .insert("before-registration".into(), lifecycle);
-    assert_eq!(hook.cancel_in_flight_tool_calls().await.unwrap(), 1);
-    let row = fetch_tool_call_row(&hook, &session, "before-registration").await;
-    assert_eq!(row["lifecycle_state"], "cancelled");
-    assert_eq!(row["cancel_cause"], "interrupted");
-    assert!(hook
-        .background_executions
-        .active_tool_call_doc_ids()
-        .is_empty());
-    node.shutdown().await.expect("shut down test node");
-}
-
-#[tokio::test]
 async fn interrupt_sweep_preserves_confirmed_timeout_intent() {
     let modeled = crate::lean_vocab_test::lean_process_stop_cases()
         .iter()

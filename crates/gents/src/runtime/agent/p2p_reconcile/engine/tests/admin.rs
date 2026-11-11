@@ -5,7 +5,6 @@ struct MockAdmin {
     connects: Mutex<Vec<Vec<String>>>,
     recorded_filters: Mutex<Vec<(Vec<String>, PairingFilters)>>,
     deleted_replicator_collections: Mutex<Vec<Vec<String>>>,
-    delete_replicator_not_found: Mutex<bool>,
     active: Mutex<Vec<String>>,
     fail_active_peers: bool,
     active_peers_started: Option<Arc<tokio::sync::Notify>>,
@@ -110,9 +109,6 @@ impl RemoteP2pAdmin for MockAdmin {
             .lock()
             .unwrap()
             .push(collections.to_vec());
-        if std::mem::take(&mut *self.delete_replicator_not_found.lock().unwrap()) {
-            return Err(RemoteP2pAdminError::RemoteNotFound(id.to_string()));
-        }
         let key = self
             .replicators
             .lock()

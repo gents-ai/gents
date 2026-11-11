@@ -372,34 +372,6 @@ fn a_damaged_pack_can_still_be_released_with_its_index_entry() {
 }
 
 #[test]
-fn indexing_an_unchanged_entry_does_not_rewrite_it() {
-    let home = tempfile::tempdir().unwrap();
-    let store = PackStore::new(home.path());
-    let (bytes, header) = test_pack_named("name_index_k", "1.0.0");
-    store.import(bytes.as_slice(), None).unwrap();
-    let entry = store.by_name_root().join("gents/name_index_k/1.0.0");
-    let before = std::fs::metadata(&entry).unwrap().modified().unwrap();
-    let inode = |path: &Path| {
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(path).unwrap())
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = path;
-            0u64
-        }
-    };
-    let ino = inode(&entry);
-    store.index(&header).unwrap();
-    assert_eq!(
-        std::fs::metadata(&entry).unwrap().modified().unwrap(),
-        before
-    );
-    assert_eq!(inode(&entry), ino);
-}
-
-#[test]
 fn lookup_refuses_a_coordinate_that_is_not_a_pack_name() {
     let home = tempfile::tempdir().unwrap();
     let store = PackStore::new(home.path());

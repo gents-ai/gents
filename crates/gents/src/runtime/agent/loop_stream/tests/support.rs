@@ -349,32 +349,6 @@ impl ToolDyn for FixedTool {
     }
 }
 
-pub(super) struct RecordingDefinitionTool {
-    pub(super) seen_prompt: Arc<Mutex<Option<String>>>,
-}
-
-impl ToolDyn for RecordingDefinitionTool {
-    fn name(&self) -> String {
-        "record".to_string()
-    }
-
-    fn definition<'a>(&'a self, prompt: String) -> BoxFuture<'a, ToolDefinition> {
-        let seen = self.seen_prompt.clone();
-        Box::pin(async move {
-            *seen.lock().await = Some(prompt);
-            ToolDefinition {
-                name: "record".to_string(),
-                description: "record".to_string(),
-                parameters: serde_json::json!({"type": "object"}),
-            }
-        })
-    }
-
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(async move { Ok("ok".to_string()) })
-    }
-}
-
 pub(super) fn echo_tool() -> Box<dyn ToolDyn> {
     Box::new(EchoTool {
         name: "echo".to_string(),

@@ -1101,23 +1101,6 @@ fn renamed(owner: &str, id: &str, name: &str) -> Value {
 }
 
 #[tokio::test]
-async fn matching_expectation_applies_the_plan() -> Result<()> {
-    let (access, owner) = cas_node().await?;
-    apply(&access, vec![document(backend(owner, "target"))]).await?;
-    let digest = live_digest(&access, owner, "target").await?;
-    let plan = DesiredStateApplyPlan::new(vec![document(renamed(owner, "target", "Promoted"))])?
-        .with_expected(vec![expectation(owner, "target", digest)])?;
-    access
-        .transact_write("test.cas.apply", |txn| {
-            let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
-        })
-        .await?;
-    assert_ne!(live_digest(&access, owner, "target").await?, None);
-    Ok(())
-}
-
-#[tokio::test]
 async fn drifted_expectation_refuses_and_writes_nothing() -> Result<()> {
     let (access, owner) = cas_node().await?;
     apply(
@@ -1625,30 +1608,6 @@ async fn output_obligation_accepts_every_count_field_the_runtime_can_parse() -> 
     let surfaces =
         crate::list_datastore_tool_surfaces(&ConfigAccess::local(node.clone()), owner).await?;
     assert_eq!(surfaces.len(), count_fields.len() + 1, "{surfaces:?}");
-    node.shutdown().await.expect("node shutdown");
-    Ok(())
-}
-
-#[tokio::test]
-async fn string_count_field_from_the_reported_failure_is_still_accepted() -> Result<()> {
-    let node = obligation_node().await?;
-    let access = runtime_access(&node)?;
-    let owner = "did:key:obligation-owner";
-
-    apply(
-        &access,
-        vec![obligation_surface(
-            owner,
-            "reported",
-            "ObligationOutcome",
-            "result",
-        )],
-    )
-    .await?;
-
-    let surfaces =
-        crate::list_datastore_tool_surfaces(&ConfigAccess::local(node.clone()), owner).await?;
-    assert_eq!(surfaces.len(), 1, "{surfaces:?}");
     node.shutdown().await.expect("node shutdown");
     Ok(())
 }

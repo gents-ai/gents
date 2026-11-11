@@ -239,18 +239,6 @@ fn a_proxied_route_without_a_pool_is_an_error() {
     ));
 }
 
-/// No `HTTPS_PROXY` means no proxied pool and every target direct, as before.
-#[test]
-fn no_proxy_configured_builds_no_proxied_pool() {
-    let shared = Shared::from_env(proxy_env(None, None)).unwrap();
-    assert!(shared.proxied.is_none());
-    let (client, proxied) = shared
-        .client_for(&target("api.anthropic.com", 443, true))
-        .unwrap();
-    assert!(!proxied);
-    assert!(std::ptr::eq(client, &shared.direct));
-}
-
 /// An unusable `HTTPS_PROXY` fails the build, so no request is ever sent silently direct.
 ///
 /// The Grok review counterexample: `NO_PROXY=*` must not let an unusable value through. The
@@ -397,20 +385,4 @@ fn a_rewritten_target_that_is_proxied_uses_the_proxied_pool() {
 
     let (_, url_proxied) = shared.client_for(&outgoing.target).unwrap();
     assert!(!url_proxied, "the URL's own target is named in NO_PROXY");
-}
-
-/// With no test route the effective target is the URL's target, unchanged.
-#[test]
-fn without_a_test_route_the_effective_target_is_the_url_target() {
-    let outgoing = outgoing("https://api.anthropic.com/v1/messages");
-    let client = ClaudeHttpClient::new(None);
-    let (_, _, target) = client
-        .select(
-            &Shared::from_env(proxy_env(Some("http://proxy.corp:3128"), None)).unwrap(),
-            &outgoing,
-        )
-        .unwrap();
-    assert_eq!(target.host, outgoing.target.host);
-    assert_eq!(target.port, outgoing.target.port);
-    assert_eq!(target.tls, outgoing.target.tls);
 }

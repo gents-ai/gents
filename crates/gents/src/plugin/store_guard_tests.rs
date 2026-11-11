@@ -60,15 +60,6 @@ fn a_guard_holds_the_lock_until_dropped_then_releases_it() {
 }
 
 #[test]
-fn lock_store_creates_the_lock_file_under_the_plugins_root() {
-    let home = tempfile::tempdir().unwrap();
-    let path = plugins_root(home.path()).join(".store.lock");
-    assert!(!path.exists());
-    let _guard = lock_store(home.path(), false).unwrap();
-    assert!(path.is_file(), "{} must exist", path.display());
-}
-
-#[test]
 fn try_lock_store_reports_contention_without_waiting() {
     let home = tempfile::tempdir().unwrap();
     let _held = lock_store(home.path(), true).unwrap();

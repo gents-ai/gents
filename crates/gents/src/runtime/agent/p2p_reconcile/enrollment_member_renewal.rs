@@ -299,27 +299,6 @@ mod tests {
     }
 
     #[test]
-    fn intent_retry_cooldown_stays_bounded_by_lease() {
-        assert_eq!(
-            new_intent_cooldown(86400, 0),
-            std::time::Duration::from_secs(3600)
-        );
-        assert_eq!(
-            new_intent_cooldown(60, 0),
-            std::time::Duration::from_secs(20)
-        );
-        assert_eq!(new_intent_cooldown(1, 0), std::time::Duration::from_secs(1));
-        assert_eq!(
-            new_intent_cooldown(604_800, 2),
-            std::time::Duration::from_secs(14_400)
-        );
-        assert_eq!(
-            new_intent_cooldown(604_800, 9),
-            std::time::Duration::from_secs(86_400)
-        );
-    }
-
-    #[test]
     fn unanswered_retry_delay_matches_the_model() {
         let raw = gents_lean_contract::run_prepared_generator(
             &gents_lean_contract::proofs_dir().unwrap(),

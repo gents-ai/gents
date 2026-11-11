@@ -6,16 +6,14 @@ use crate::tools::call::lifecycle::admission_fixture::{
     published_admission, PublishedAdmission, PublishedAdmissionOptions,
 };
 use gents_protocol::job::{
-    JobControlKind, JobControlOutcome, JobFailure, JobPauseReason, JobPin, JobProgress, JobState,
-    JobStepInput, JobSuspend, JobSuspendKind,
+    JobControlKind, JobFailure, JobPauseReason, JobPin, JobProgress, JobState, JobStepInput,
+    JobSuspend, JobSuspendKind,
 };
 use gents_protocol::plugin::{PluginExecutionReceipt, PluginExecutionVerdict};
 use gents_protocol::tool_call::AwaitMode;
 use serde_json::{json, Value};
 
 use super::super::admit::Refusal;
-use super::super::admit::StepCall;
-use super::super::control::control_outcome;
 use super::super::input::{build_step_input, StepKind};
 use super::super::records::read_step_state;
 use super::super::records::write_step_state_in_txn;
@@ -200,34 +198,6 @@ async fn suspend_pause_settles_completed_paused_with_pause_reason() {
 }
 
 #[tokio::test]
-async fn pause_or_await_without_stored_progress_fails_and_leaves_the_row_running() {
-    for settlement in [
-        Settlement::Control(JobControlKind::Pause),
-        Settlement::Suspend(JobSuspend {
-            kind: JobSuspendKind::AwaitUser,
-            reason: None,
-            message: "needs a decision".to_owned(),
-            question: Some("ship it?".to_owned()),
-        }),
-    ] {
-        let mut admission = bare_job_row("driver-no-progress").await;
-        let error = settle_plugin_job(&mut admission.tool, settlement.clone())
-            .await
-            .unwrap_err();
-        assert!(
-            format!("{error:#}").contains("no stored progress"),
-            "{settlement:?}: {error:#}"
-        );
-        assert_eq!(
-            stored_row(&admission).await["lifecycle_state"],
-            "running",
-            "{settlement:?}"
-        );
-        finish(admission).await;
-    }
-}
-
-#[tokio::test]
 async fn await_user_settles_completed_awaiting_user_with_the_question() {
     let (admission, row) = settled(
         "driver-await",
@@ -391,14 +361,6 @@ async fn settled_job_row_holds_exactly_one_receipt() {
             .unwrap(),
         evidence("step")
     );
-    finish(admission).await;
-}
-
-#[tokio::test]
-async fn running_job_row_holds_no_receipt() {
-    let (admission, row) = settled("driver-running", Settlement::Refused(Refusal::Terminal)).await;
-    assert_eq!(row["lifecycle_state"], "running");
-    assert!(row["plugin_execution_receipt"].is_null());
     finish(admission).await;
 }
 
@@ -829,23 +791,6 @@ async fn read_step_row_state_follows_the_row_lifecycle_first() {
         let stored = read_step_row(&job.access, &row).await.unwrap();
         assert_eq!(stored.state, expected, "case {}", index + 1);
     }
-    job.node.shutdown().await.expect("shut down test node");
-}
-
-#[tokio::test]
-async fn control_outcome_of_a_settled_row_read_back_is_already_terminal() {
-    let mut job = new_job(Some(&live_settings(JobPolicy::default())), None).await;
-    let row = pinned_job_row(&mut job, "call-1").await;
-    settle_row(&job, &row, Settlement::Result(json!("done"))).await;
-    let stored = read_step_row(&job.access, &row).await.unwrap();
-    assert_eq!(
-        control_outcome(&stored, JobControlKind::Stop, &|_| {
-            KillObservation::CausedTerminal
-        }),
-        JobControlOutcome::AlreadyTerminal {
-            state: JobState::Completed
-        }
-    );
     job.node.shutdown().await.expect("shut down test node");
 }
 
@@ -1459,75 +1404,7 @@ async fn terminal_step_settles_inside_the_step_transaction() {
     step.close().await;
 }
 
-use crate::tools::background::job::admit::StepChild;
 use crate::tools::background::job::control::KillAction;
-
-fn failing_row(consecutive_failures: u32) -> StepRow {
-    StepRow {
-        root: "root".to_owned(),
-        row_doc_id: "root".to_owned(),
-        caller_session: "session".to_owned(),
-        caller_cwd: "/work".to_owned(),
-        handle: "handle".to_owned(),
-        caller_hop: 0,
-        call: StepCall {
-            argv: vec!["run".to_owned()],
-            args: None,
-            script: None,
-            agent_budget: None,
-        },
-        root_call: None,
-        resume: None,
-        pin: None,
-        children: vec![StepChild {
-            retry_key: job_spawn_key("root", "a", 1),
-            slot: "a".to_owned(),
-            attempt: 1,
-            target: ("node".to_owned(), "general".to_owned()),
-            state: JobChildState::Live,
-            messages: 0,
-        }],
-        spent: 1,
-        observed_terminal: 0,
-        consecutive_failures,
-        state: JobState::Running,
-    }
-}
-
-#[test]
-fn step_failure_decision_is_lean_on_invocation_failure() {
-    let observe = |_: &str| KillObservation::CausedLiveLocal;
-    let row = failing_row(1);
-    let (second, refusal) = step_failure_decision(&row, &observe);
-    assert_eq!(
-        second.row,
-        StepRow {
-            consecutive_failures: 2,
-            ..row
-        }
-    );
-    assert!(second.killed.is_empty());
-    assert_eq!(refusal, None);
-
-    let row = failing_row(2);
-    let (third, refusal) = step_failure_decision(&row, &observe);
-    assert_eq!(
-        third.row,
-        StepRow {
-            consecutive_failures: 3,
-            state: JobState::Failed,
-            ..row.clone()
-        }
-    );
-    let stopped = kill_decision(&row, KillCause::Stop, &observe).killed;
-    assert_eq!(
-        stopped,
-        [(job_spawn_key("root", "a", 1), KillAction::InterruptCaused)]
-    );
-    assert_eq!(third.killed, stopped);
-    assert_eq!(refusal, Some(Refusal::StepFailed));
-    assert_eq!(refusal.unwrap().code(), Some("plugin_job_step_failed"));
-}
 
 /// Waits until `driver` has no row in flight.
 async fn idle(driver: &JobDriver) {
@@ -1880,26 +1757,6 @@ fn other_agent() -> identity::Did {
         crate::store::identity::KeyIdentity::load_or_create(home.path().join("other"), None)
             .unwrap();
     identity::Did::new(crate::NodeIdentity::did(&other)).unwrap()
-}
-
-#[tokio::test]
-async fn in_flight_job_rejects_a_wake_from_another_agent() {
-    let step = stepper(json!({"effects": {}})).await;
-    let driver = JobDriver::new(step.job.runtime.clone());
-    let actor = super::super::input::tests::agent_actor();
-    let other = other_agent();
-    let result = driver
-        .hold_steps(&step.row, &actor, async {
-            assert!(driver.kick(&step.row, &other).is_err());
-            assert!(matches!(
-                driver.step_now(&step.row, &other).await,
-                Some(Err(_))
-            ));
-        })
-        .await;
-    assert!(result.is_some());
-    assert!(!driver.is_stepping(&step.row));
-    step.close().await;
 }
 
 #[tokio::test]

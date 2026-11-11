@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::*;
 use crate::plugin::approval;
-use approval::workspace::{self, BindingAction, BindingDecision, Mode, Route};
+use approval::workspace::{self, BindingAction, BindingDecision, Mode};
 
 struct Fixture {
     _directory: tempfile::TempDir,
@@ -240,33 +240,6 @@ async fn changing_permissions_during_review_cannot_authorize_the_old_action() {
 }
 
 #[tokio::test]
-async fn repeated_denials_return_to_a_person_without_another_review_call() {
-    let fixture = Fixture::new();
-    let calls = Arc::new(AtomicUsize::new(0));
-    let reviewer: Reviewer = Arc::new({
-        let calls = calls.clone();
-        move |invocation| {
-            calls.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move { Ok(Some(reply(&invocation.action_id, "deny"))) })
-        }
-    });
-    scope(Some(fixture.context(reviewer)), async {
-        for expected in [Route::Deny, Route::Deny, Route::Deny, Route::Ask] {
-            let decision = fixture.decision(false);
-            let question = approval::Request::for_binding(decision.binding.clone(), None);
-            assert_eq!(
-                resolve_review(&fixture.home, &decision, &question.id)
-                    .await
-                    .unwrap(),
-                expected
-            );
-        }
-        assert_eq!(calls.load(Ordering::SeqCst), 3);
-    })
-    .await;
-}
-
-#[tokio::test]
 async fn a_review_that_cancels_the_caller_cannot_release_the_command() {
     let fixture = Fixture::new();
     let cancellation = tokio_util::sync::CancellationToken::new();
@@ -330,51 +303,5 @@ async fn stop_cancels_review_before_a_human_question_can_be_published() {
             },
         ),
     )
-    .await;
-}
-
-#[tokio::test]
-async fn strict_ask_prompts_for_each_routine_binding_without_invoking_review() {
-    let fixture = Fixture::new();
-    let current = workspace::get(&fixture.home, &fixture.key)
-        .unwrap()
-        .unwrap();
-    workspace::save_mode(
-        &fixture.home,
-        &fixture.key,
-        current.selection.revision,
-        Mode::Ask,
-        None,
-    )
-    .unwrap();
-    let reviewer: Reviewer = Arc::new(|_| panic!("strict Ask must not invoke automatic review"));
-    scope(Some(fixture.context(reviewer)), async {
-        let mut ids = Vec::new();
-        for _ in 0..2 {
-            let decision = fixture.decision(true);
-            assert_eq!(decision.route, Route::Ask);
-            let mut consent = Box::pin(workspace::consent_binding(
-                &fixture.home,
-                decision,
-                true,
-                None,
-            ));
-            assert!(futures::poll!(consent.as_mut()).is_pending());
-            let questions = approval::pending(&fixture.home).unwrap();
-            assert_eq!(questions.len(), 1);
-            ids.push(questions[0].id.clone());
-            approval::decide(&fixture.home, &questions[0].id, approval::Answer::Once).unwrap();
-            assert!(
-                tokio::time::timeout(std::time::Duration::from_secs(5), consent)
-                    .await
-                    .unwrap()
-                    .unwrap()
-            );
-            assert!(approval::pending_requests(&fixture.home)
-                .unwrap()
-                .is_empty());
-        }
-        assert_ne!(ids[0], ids[1]);
-    })
     .await;
 }

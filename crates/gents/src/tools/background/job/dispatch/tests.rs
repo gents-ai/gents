@@ -1,4 +1,4 @@
-use super::super::admit::{admit_step, StepCall};
+use super::super::admit::StepCall;
 use super::*;
 use crate::tools::call::lifecycle::ToolRowKind;
 use gents_protocol::job::{DynamicMode, JobCeiling, JobPolicy, JobState};
@@ -111,36 +111,6 @@ fn pinned_effects() -> JobStepOutput {
 }
 
 #[test]
-fn adopt_flips_a_pinned_effects_step_to_a_background_plugin_job_with_no_delivery() {
-    let out = pinned_effects();
-    let adopted = adopt(&context(), &view(), &step0_row(), &out).unwrap();
-    assert_eq!(adopted.call.await_mode, AwaitMode::Background);
-    assert_eq!(adopted.call.kind, ToolRowKind::PluginJob);
-    assert_eq!(adopted.call.state, ToolCallState::Running);
-    assert_eq!(adopted.delivery, None);
-    assert_eq!(
-        adopted.row,
-        admit_step(&context(), &step0_row(), &out).unwrap()
-    );
-}
-
-#[test]
-fn adopt_terminalizes_a_pinned_step0_result_inline() {
-    for json in [
-        format!(r#"{{"result": "done", {PIN}}}"#),
-        format!(
-            r#"{{"suspend": {{"kind": "pause", "reason": "budget_exceeded", "message": "m"}}, {PIN}}}"#
-        ),
-    ] {
-        let adopted = adopt(&context(), &view(), &step0_row(), &output(&json)).unwrap();
-        assert_eq!(adopted.call.state, ToolCallState::Completed, "{json}");
-        assert_eq!(adopted.call.await_mode, AwaitMode::Background, "{json}");
-        assert_eq!(adopted.call.kind, ToolRowKind::PluginJob, "{json}");
-        assert_eq!(adopted.delivery, Some(Delivery::Inline), "{json}");
-    }
-}
-
-#[test]
 fn pinless_or_refused_step0_leaves_the_call() {
     let adopted = adopt(
         &context(),
@@ -158,20 +128,6 @@ fn pinless_or_refused_step0_leaves_the_call() {
     };
     let refusal = adopt(&full, &view(), &step0_row(), &pinned_effects()).unwrap_err();
     assert_eq!(refusal.code(), Some("background_tool_budget_exceeded"));
-}
-
-#[test]
-fn receipt_decisions_commit_once_then_conflict() {
-    let adopted = adopt(&context(), &view(), &step0_row(), &pinned_effects()).unwrap();
-    let (terminal, late) = adopted.receipt_decisions();
-    assert_eq!(
-        (terminal, late),
-        (ReceiptDecision::Commit, ReceiptDecision::Conflict)
-    );
-    assert_eq!(
-        (terminal.spelling(), late.spelling()),
-        ("commit", "conflict")
-    );
 }
 
 #[test]

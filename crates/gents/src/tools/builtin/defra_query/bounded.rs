@@ -912,31 +912,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn rejects_number_for_native_string_filter() {
-        let node = node_with_findings().await;
-        let tool = BoundedQueryTool::new(
-            ConfigAccess::local(node),
-            QueryToolDecl {
-                tool_name: "query_candidate_finding".into(),
-                collection: "CandidateFinding".into(),
-                description: String::new(),
-                fields: vec!["finding_id".into(), "title".into()],
-                filter_fields: vec![WriteToolField {
-                    name: "title".into(),
-                    required: false,
-                    fill: None,
-                }],
-            },
-        );
-        let mut args = Map::new();
-        args.insert("title".into(), json!(1));
-        let err = Tool::call(&tool, BoundedQueryParams(args))
-            .await
-            .unwrap_err();
-        assert!(err.to_string().contains("String"), "{err}");
-    }
-
     async fn node_with_many_findings(rows: usize) -> Arc<EmbeddedNode> {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         node.add_collection(

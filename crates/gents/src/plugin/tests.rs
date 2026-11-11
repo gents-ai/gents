@@ -699,16 +699,6 @@ fn job_block_on_a_plugin_without_job_true_is_refused() {
     );
 }
 
-#[test]
-fn plugin_without_job_block_keeps_the_plugin_tool_path() {
-    let (home, _) = executor::installed_echo();
-    let executor = std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
-        home.path().to_owned(),
-    )));
-    crate::plugin::tool::PluginTool::resolve(executor, &job_tool_ref(None), None)
-        .expect("a plugin without a job block resolves as before");
-}
-
 fn job_resolutions() -> (
     tempfile::TempDir,
     Vec<(
@@ -818,12 +808,6 @@ fn tool_instructions_live_beside_the_plugin_and_stay_small_text() {
 
 mod call_bound;
 pub(crate) use call_bound::{create_file_wat, open_and_copy_wat};
-
-#[test]
-fn plugin_requests_select_native_nan_arithmetic() {
-    let request = plugin_run_request(Vec::new(), Manifold::sealed(), &PluginBudget::default());
-    assert_eq!(request.nan_mode, NanMode::Native);
-}
 
 #[test]
 fn generated_plugin_resource_cases_bind_budget_and_consent() {

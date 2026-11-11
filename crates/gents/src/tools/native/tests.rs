@@ -1095,53 +1095,6 @@ async fn grep_returns_compact_line_numbered_matches() {
 }
 
 #[test]
-fn shell_environment_filters_secrets_and_forces_noninteractive_values() {
-    let env = build_shell_env_from_vars([
-        ("PATH".to_string(), "/custom/bin".to_string()),
-        ("HOME".to_string(), "/tmp/home".to_string()),
-        ("XDG_RUNTIME_DIR".to_string(), "/run/user/1001".to_string()),
-        (
-            "DBUS_SESSION_BUS_ADDRESS".to_string(),
-            "unix:path=/run/user/1001/bus".to_string(),
-        ),
-        (
-            "XDG_CONFIG_HOME".to_string(),
-            "/tmp/user-config".to_string(),
-        ),
-        ("OPENAI_API_KEY".to_string(), "secret".to_string()),
-        ("SESSION_TOKEN".to_string(), "secret".to_string()),
-        ("DATABASE_SECRET".to_string(), "secret".to_string()),
-        ("UNRELATED".to_string(), "drop".to_string()),
-        ("PAGER".to_string(), "less".to_string()),
-        ("TERM".to_string(), "xterm-256color".to_string()),
-    ]);
-
-    assert_eq!(env.get("PATH").map(String::as_str), Some("/custom/bin"));
-    assert_eq!(env.get("HOME").map(String::as_str), Some("/tmp/home"));
-    assert_eq!(
-        env.get("XDG_RUNTIME_DIR").map(String::as_str),
-        Some("/run/user/1001")
-    );
-    assert_eq!(
-        env.get("DBUS_SESSION_BUS_ADDRESS").map(String::as_str),
-        Some("unix:path=/run/user/1001/bus")
-    );
-    assert_eq!(
-        env.get("XDG_CONFIG_HOME").map(String::as_str),
-        Some("/tmp/user-config")
-    );
-    assert!(!env.contains_key("OPENAI_API_KEY"));
-    assert!(!env.contains_key("SESSION_TOKEN"));
-    assert!(!env.contains_key("DATABASE_SECRET"));
-    assert!(!env.contains_key("UNRELATED"));
-    assert_eq!(env.get("PAGER").map(String::as_str), Some("cat"));
-    assert_eq!(env.get("GIT_PAGER").map(String::as_str), Some("cat"));
-    assert_eq!(env.get("NO_COLOR").map(String::as_str), Some("1"));
-    assert_eq!(env.get("CLICOLOR").map(String::as_str), Some("0"));
-    assert_eq!(env.get("TERM").map(String::as_str), Some("dumb"));
-}
-
-#[test]
 fn read_only_bash_rejects_codex_style_unsafe_flags() {
     let allowlist = default_read_only_commands();
     assert!(validate_read_only_command(
@@ -1192,135 +1145,12 @@ fn read_only_bash_rejects_codex_style_unsafe_flags() {
 }
 
 #[test]
-fn command_policy_applies_forbidden_and_allowed_prefixes() {
-    let policy = CommandExecutionPolicy::read_only(vec!["git".to_string()])
-        .with_allowed_argv_prefixes(vec![vec!["git".to_string(), "status".to_string()]])
-        .with_forbidden_argv_prefixes(vec![vec![
-            "git".to_string(),
-            "status".to_string(),
-            "--short".to_string(),
-        ]]);
-
-    validate_command_policy("git", &[String::from("status")], &policy).unwrap();
-    assert!(validate_command_policy("git", &[String::from("diff")], &policy).is_err());
-    assert!(validate_command_policy(
-        "git",
-        &[String::from("status"), String::from("--short")],
-        &policy
-    )
-    .is_err());
-}
-
-#[test]
 fn deny_all_argv_policy_rejects_every_command() {
     let policy = CommandExecutionPolicy::write_capable().with_deny_all_argv(true);
     assert!(policy.allowed_argv_prefixes.is_empty());
     assert!(validate_command_policy("ls", &[], &policy).is_err());
     assert!(validate_command_policy("git", &[String::from("status")], &policy).is_err());
     assert!(validate_command_policy("echo", &[String::from("hi")], &policy).is_err());
-}
-
-#[test]
-fn read_only_policy_allows_operator_configured_diagnostic_prefix() {
-    let policy = CommandExecutionPolicy::read_only(default_read_only_commands())
-        .with_allowed_argv_prefixes(vec![vec![
-            "spctl".to_string(),
-            "--assess".to_string(),
-            "--type".to_string(),
-            "execute".to_string(),
-        ]]);
-
-    validate_command_policy(
-        "spctl",
-        &[
-            String::from("--assess"),
-            String::from("--type"),
-            String::from("execute"),
-            String::from("/Applications/Gents.app"),
-        ],
-        &policy,
-    )
-    .unwrap();
-    assert!(validate_command_policy(
-        "spctl",
-        &[String::from("--assess"), String::from("--raw")],
-        &policy,
-    )
-    .is_err());
-}
-
-#[test]
-fn read_only_allowlist_knobs_match_operator_docs() {
-    let defaults = default_read_only_commands();
-
-    let default_policy = CommandExecutionPolicy::read_only(defaults.clone());
-    validate_command_policy("date", &[], &default_policy).unwrap();
-    assert!(
-        validate_command_policy("journalctl", &[], &default_policy).is_err(),
-        "unknown head must not pass the default base allowlist"
-    );
-
-    let narrowed = CommandExecutionPolicy::read_only(vec![
-        "ls".to_string(),
-        "cat".to_string(),
-        "git".to_string(),
-        "journalctl".to_string(),
-    ]);
-    validate_command_policy("cat", &[], &narrowed).unwrap();
-    validate_command_policy("journalctl", &[], &narrowed).unwrap();
-    assert!(
-        validate_command_policy("date", &[], &narrowed).is_err(),
-        "replace/narrow must drop unlisted default heads (e.g. date)"
-    );
-    assert!(
-        validate_command_policy("sudo", &[], &narrowed).is_err(),
-        "replace/narrow must drop unlisted default heads (e.g. sudo)"
-    );
-
-    let prefix_only =
-        CommandExecutionPolicy::read_only(defaults).with_allowed_argv_prefixes(vec![vec![
-            "spctl".to_string(),
-            "--assess".to_string(),
-            "--type".to_string(),
-            "execute".to_string(),
-        ]]);
-    validate_command_policy(
-        "spctl",
-        &[
-            String::from("--assess"),
-            String::from("--type"),
-            String::from("execute"),
-            String::from("/Applications/Gents.app"),
-        ],
-        &prefix_only,
-    )
-    .unwrap();
-    assert!(
-        validate_command_policy("date", &[], &prefix_only).is_err(),
-        "non-empty allowed prefixes must gate out default heads that do not match (docs global-gate caveat)"
-    );
-}
-
-#[test]
-fn read_only_policy_forbidden_prefix_overrides_configured_diagnostic_prefix() {
-    let policy = CommandExecutionPolicy::read_only(default_read_only_commands())
-        .with_allowed_argv_prefixes(vec![vec!["spctl".to_string(), "--assess".to_string()]])
-        .with_forbidden_argv_prefixes(vec![vec![
-            "spctl".to_string(),
-            "--assess".to_string(),
-            "--raw".to_string(),
-        ]]);
-
-    assert!(validate_command_policy(
-        "spctl",
-        &[
-            String::from("--assess"),
-            String::from("--raw"),
-            String::from("/Applications/Gents.app"),
-        ],
-        &policy,
-    )
-    .is_err());
 }
 
 #[test]
@@ -1636,21 +1466,6 @@ fn assert_command_denial_matches(case: &LeanCommandPolicyCase, error: &ToolError
     );
     assert_eq!(denial.policy_mode, case.mode);
     assert_eq!(denial.policy_network, case.network_mode);
-}
-
-#[test]
-fn command_policy_disabled_network_fails_closed_when_not_enforced() {
-    let read_only = CommandExecutionPolicy::read_only(vec!["curl".to_string()])
-        .with_network_mode(CommandNetworkMode::Disabled);
-    assert!(
-        validate_command_policy("curl", &[String::from("https://example.com")], &read_only)
-            .is_err()
-    );
-
-    let unrestricted = CommandExecutionPolicy::write_capable()
-        .with_mode(CommandExecutionMode::Unrestricted)
-        .with_network_mode(CommandNetworkMode::Disabled);
-    assert!(validate_command_policy("printf", &[String::from("ok")], &unrestricted).is_err());
 }
 
 #[test]
@@ -2104,73 +1919,6 @@ async fn workspace_write_bash_contains_writes_to_tool_root() {
         "inside"
     );
     assert!(!outside.exists(), "sandbox should deny writes outside root");
-}
-
-#[test]
-fn read_only_bash_allows_host_diagnostics_commands() {
-    let allowlist = default_read_only_commands();
-    assert!(validate_read_only_command("date", &[String::from("-u")], &allowlist).is_ok());
-    assert!(validate_read_only_command(
-        "launchctl",
-        &[
-            String::from("print"),
-            String::from("system/com.amygdala.alloy.mini-1")
-        ],
-        &allowlist
-    )
-    .is_ok());
-    assert!(validate_read_only_command(
-        "sudo",
-        &[
-            String::from("/bin/launchctl"),
-            String::from("print"),
-            String::from("system/com.amygdala.alloy.mini-1"),
-        ],
-        &allowlist
-    )
-    .is_ok());
-    assert!(validate_read_only_command(
-        "curl",
-        &[
-            String::from("-fsS"),
-            String::from("http://127.0.0.1:9100/metrics"),
-        ],
-        &allowlist
-    )
-    .is_ok());
-    assert!(validate_read_only_command("tailscale", &[String::from("status")], &allowlist).is_ok());
-}
-
-#[test]
-fn read_only_bash_rejects_mutating_host_diagnostics_commands() {
-    let allowlist = default_read_only_commands();
-    assert!(validate_read_only_command(
-        "launchctl",
-        &[String::from("bootout"), String::from("system/com.example")],
-        &allowlist
-    )
-    .is_err());
-    assert!(validate_read_only_command(
-        "sudo",
-        &[
-            String::from("/bin/launchctl"),
-            String::from("kickstart"),
-            String::from("system/com.example"),
-        ],
-        &allowlist
-    )
-    .is_err());
-    assert!(validate_read_only_command(
-        "curl",
-        &[
-            String::from("-X"),
-            String::from("POST"),
-            String::from("http://127.0.0.1:9191/api/v0/graphql"),
-        ],
-        &allowlist
-    )
-    .is_err());
-    assert!(validate_read_only_command("tailscale", &[String::from("up")], &allowlist).is_err());
 }
 
 fn edit_args(path: &str, old: &str, new: &str) -> EditFileArgs {

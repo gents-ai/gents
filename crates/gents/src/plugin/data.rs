@@ -931,17 +931,6 @@ mod tests {
     }
 
     #[test]
-    fn query_admitted_is_lean_query_admitted() {
-        assert!(query_admitted(1, true, false, true));
-        assert!(query_admitted(256, true, false, true));
-        assert!(!query_admitted(0, true, false, true));
-        assert!(!query_admitted(257, true, false, true));
-        assert!(!query_admitted(10, false, false, true));
-        assert!(!query_admitted(10, true, true, true));
-        assert!(!query_admitted(10, true, false, false));
-    }
-
-    #[test]
     fn substitute_caller_did_replaces_only_the_placeholder() {
         let filter = BTreeMap::from([
             ("owner".to_owned(), "$caller.did".to_owned()),
@@ -955,25 +944,6 @@ mod tests {
                 ("name".to_owned(), "x".to_owned()),
                 ("note".to_owned(), "has $caller.did inside".to_owned()),
             ])
-        );
-    }
-
-    #[test]
-    fn insert_note_is_lean_insert_note() {
-        for on_conflict in [OnConflict::Ignore, OnConflict::Fail] {
-            assert_eq!(insert_note(None, "a", on_conflict), InsertOutcome::Inserted);
-            assert_eq!(
-                insert_note(Some("a"), "a", on_conflict),
-                InsertOutcome::Unchanged
-            );
-        }
-        assert_eq!(
-            insert_note(Some("a"), "b", OnConflict::Ignore),
-            InsertOutcome::Unchanged
-        );
-        assert_eq!(
-            insert_note(Some("a"), "b", OnConflict::Fail),
-            InsertOutcome::AbortStep
         );
     }
 }

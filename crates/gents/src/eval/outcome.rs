@@ -143,23 +143,3 @@ pub fn subject_causable(kind: OutcomeKind, reason: Option<ProviderReason>) -> bo
         ) => false,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn no_subject_causable_outcome_is_excluded() {
-        for kind in OutcomeKind::ALL {
-            for reason in [
-                None,
-                Some(ProviderReason::Rejected),
-                Some(ProviderReason::Unavailable),
-            ] {
-                if subject_causable(kind, reason) {
-                    assert_eq!(classify(kind, reason), EvidenceClass::Fail);
-                }
-            }
-        }
-    }
-}

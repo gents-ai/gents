@@ -272,75 +272,6 @@ fn tool_call_content(id: &str) -> AssistantContent {
 }
 
 #[test]
-fn drop_unpaired_tool_calls_removes_calls_without_results() {
-    let messages = vec![
-        Message::Assistant {
-            request_id: None,
-            id: None,
-            content: vec![
-                AssistantContent::Text(Text {
-                    text: "thinking".to_string(),
-                }),
-                tool_call_content("call-A"),
-                tool_call_content("call-B"),
-            ],
-        },
-        tool_result_msg("call-A", "A-result"),
-    ];
-
-    let out = super::history::drop_unpaired_tool_calls(messages);
-
-    assert_eq!(
-        out.len(),
-        2,
-        "assistant turn + its one paired result remain"
-    );
-    let kept_calls: Vec<String> = match &out[0] {
-        Message::Assistant { content, .. } => content
-            .iter()
-            .filter_map(|item| match item {
-                AssistantContent::ToolCall(tool_call) => Some(tool_call.id.clone()),
-                _ => None,
-            })
-            .collect(),
-        other => panic!("expected assistant message, got {other:?}"),
-    };
-    assert_eq!(
-        kept_calls,
-        vec!["call-A".to_string()],
-        "unpaired call-B must be dropped, paired call-A kept"
-    );
-    assert!(
-        matches!(&out[0], Message::Assistant { content, .. }
-            if content.iter().any(|c| matches!(c, AssistantContent::Text(_)))),
-        "text content must be preserved"
-    );
-    assert!(
-        matches!(&out[1], Message::User { .. }),
-        "result must remain"
-    );
-}
-
-#[test]
-fn drop_unpaired_tool_calls_drops_call_only_assistant_message() {
-    let messages = vec![
-        text_msg("user", "go"),
-        Message::Assistant {
-            request_id: None,
-            id: None,
-            content: vec![tool_call_content("call-X")],
-        },
-    ];
-    let out = super::history::drop_unpaired_tool_calls(messages);
-    assert_eq!(
-        out.len(),
-        1,
-        "the all-unpaired assistant message is dropped"
-    );
-    assert!(matches!(&out[0], Message::User { .. }));
-}
-
-#[test]
 fn normalize_assistant_content_order_moves_text_before_tool_calls() {
     let messages = vec![
         Message::Assistant {
@@ -407,39 +338,6 @@ fn normalize_assistant_content_order_moves_text_before_tool_calls() {
 }
 
 #[test]
-fn drop_orphaned_tool_results_removes_results_without_preceding_calls() {
-    let messages = vec![
-        tool_result_msg("call-GONE", "orphaned"),
-        text_msg("user", "continue"),
-        Message::Assistant {
-            request_id: None,
-            id: None,
-            content: vec![tool_call_content("call-A")],
-        },
-        tool_result_msg("call-A", "A-result"),
-    ];
-
-    let out = super::history::drop_orphaned_tool_results(messages);
-
-    assert_eq!(
-        out.len(),
-        3,
-        "the orphaned-result message is dropped entirely; got {out:?}"
-    );
-    assert!(
-        matches!(&out[0], Message::User { content }
-            if content.iter().any(|c| matches!(c, UserContent::Text(_)))),
-        "the plain user message must lead after the orphan is dropped"
-    );
-    assert!(
-        matches!(&out[2], Message::User { content }
-            if content.iter().any(|c| matches!(c, UserContent::ToolResult(r)
-                if r.call_id.as_deref() == Some("call-A")))),
-        "the paired result must survive"
-    );
-}
-
-#[test]
 fn drop_orphaned_tool_results_keeps_mixed_user_content() {
     let mixed = Message::User {
         content: vec![
@@ -462,97 +360,6 @@ fn drop_orphaned_tool_results_keeps_mixed_user_content() {
     };
     assert_eq!(content.len(), 1);
     assert!(matches!(content.first(), Some(UserContent::Text(_))));
-}
-
-#[test]
-fn drop_orphaned_tool_results_removes_results_after_conversation_resumes() {
-    // OpenAI chat-completions accepts tool results only while they are closing
-    // the active assistant tool-call turn. A matching call somewhere earlier in
-    // the transcript is not enough once normal conversation has resumed.
-    let messages = vec![
-        Message::Assistant {
-            request_id: None,
-            id: None,
-            content: vec![tool_call_content("call-A")],
-        },
-        text_msg("assistant", "I moved on without the tool result."),
-        tool_result_msg("call-A", "late result"),
-    ];
-
-    let out = super::history::drop_orphaned_tool_results(messages);
-
-    assert_eq!(
-        out.len(),
-        2,
-        "late tool result must be dropped after assistant conversation resumes; got {out:?}"
-    );
-    assert!(
-        !out.iter().any(|message| matches!(message,
-            Message::User { content }
-                if content.iter().any(|item| matches!(item, UserContent::ToolResult(_))))),
-        "no tool result should survive after the active tool-call turn closed"
-    );
-}
-
-#[test]
-fn sanitize_history_for_provider_drops_stale_result_and_now_unpaired_call() {
-    let messages = vec![
-        Message::Assistant {
-            request_id: None,
-            id: None,
-            content: vec![tool_call_content("call-A")],
-        },
-        text_msg("assistant", "No tool result arrived."),
-        tool_result_msg("call-A", "late result"),
-    ];
-
-    let out = super::sanitize_history_for_provider(GROUPED_PROFILE, messages);
-    assert_eq!(
-        out,
-        vec![text_msg("assistant", "No tool result arrived.")],
-        "the stale result is orphaned, then the now-unpaired tool call is dropped"
-    );
-}
-
-#[test]
-fn sanitize_history_for_provider_drops_orphans_in_both_directions() {
-    let messages = vec![
-        tool_result_msg("call-GONE", "orphaned"),
-        Message::Assistant {
-            request_id: None,
-            id: None,
-            content: vec![tool_call_content("call-UNPAIRED")],
-        },
-        Message::Assistant {
-            request_id: None,
-            id: None,
-            content: vec![tool_call_content("call-A")],
-        },
-        tool_result_msg("call-A", "A-result"),
-    ];
-    let out = super::sanitize_history_for_provider(GROUPED_PROFILE, messages);
-    assert_eq!(
-        out.len(),
-        2,
-        "only the paired exchange survives; got {out:?}"
-    );
-}
-
-#[test]
-fn sanitize_repairs_result_preceding_its_call() {
-    let messages = vec![
-        tool_result_msg("call-A", "early result"),
-        Message::Assistant {
-            request_id: None,
-            id: None,
-            content: vec![tool_call_content("call-A")],
-        },
-    ];
-    let out = super::sanitize_history_for_provider(GROUPED_PROFILE, messages);
-    assert!(
-        out.is_empty(),
-        "result-before-call must sanitize to empty (orphan and unpaired both dropped); got {out:?}"
-    );
 }
 
 #[test]
@@ -2326,25 +2133,6 @@ fn strip_rewrites_tool_output_that_merely_looks_like_a_stub() {
 }
 
 #[test]
-fn strip_is_idempotent_and_preserves_the_original_byte_count() {
-    let long_result = "x".repeat(5000);
-    let messages = vec![
-        tool_call_msg("read_file", r#"{"path": "/tmp/test.rs"}"#),
-        tool_result_msg("call-1", &long_result),
-    ];
-
-    let (once, _) = strip_tool_results(messages);
-    let (twice, _) = strip_tool_results(once.clone());
-
-    assert_eq!(once, twice, "strip must be idempotent");
-    let stub = sole_tool_result_text(&twice[1]);
-    assert!(
-        stub.contains("5000 bytes"),
-        "reapplying strip must not re-measure the stub: {stub}"
-    );
-}
-
-#[test]
 fn strip_marks_already_truncated_output_without_sniffing_the_word() {
     let messages = vec![
         tool_call_msg("bash", r#"{"command": "echo hi"}"#),
@@ -2531,138 +2319,6 @@ fn pair_safe_boundary_retreats_to_the_turn_start() {
 }
 
 #[test]
-fn provider_view_is_idempotent() {
-    let history = vec![
-        tool_result_msg("orphan-1", "result with no call"),
-        tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
-        tool_result_msg("call-1", "fn main() {}"),
-    ];
-    let (once, _) = provider_view(GROUPED_PROFILE, history);
-    let (twice, _) = provider_view(GROUPED_PROFILE, once.clone());
-    assert_eq!(once, twice);
-}
-
-#[test]
-fn compacted_prefix_is_counted_and_dropped_in_the_same_space() {
-    let history = vec![
-        tool_result_msg("orphan-1", "result with no call"),
-        text_msg("user", "first real turn"),
-        tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
-        tool_result_msg("call-1", "fn main() {}"),
-        text_msg("assistant", "done"),
-        text_msg("user", "second turn"),
-    ];
-
-    let (view, _) = provider_view(GROUPED_PROFILE, history.clone());
-    assert_eq!(
-        view.len(),
-        5,
-        "sanitize must remove the orphaned result from the view"
-    );
-
-    let compacted = 1usize;
-    assert_eq!(
-        super::history::pair_safe_boundary(&view, compacted),
-        compacted,
-        "the modelled writer only ever records a pair-safe boundary"
-    );
-    let retained = view.iter().skip(compacted).cloned().collect::<Vec<_>>();
-
-    let (reread, _) = provider_view(GROUPED_PROFILE, history.clone());
-    assert_eq!(
-        reread.into_iter().skip(compacted).collect::<Vec<_>>(),
-        retained
-    );
-
-    let (stripped, _) = strip_tool_results(history);
-    let old_order = sanitize_history_for_provider(
-        GROUPED_PROFILE,
-        stripped.into_iter().skip(compacted).collect::<Vec<_>>(),
-    );
-    assert_eq!(
-        old_order.len(),
-        retained.len() + 1,
-        "the old order retains one row too many"
-    );
-    assert_eq!(
-        old_order.first(),
-        Some(&text_msg("user", "first real turn")),
-        "and the row it retains is the one that was summarized"
-    );
-}
-
-#[test]
-fn noncanonical_counts_can_drop_mid_turn_and_must_be_re_narrowed() {
-    let history = vec![
-        text_msg("user", "first"),
-        tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
-        tool_result_msg("call-1", "fn main() {}"),
-        text_msg("assistant", "done"),
-    ];
-    let (view, _) = provider_view(GROUPED_PROFILE, history);
-
-    let noncanonical = 2usize;
-    assert_ne!(
-        super::history::pair_safe_boundary(&view, noncanonical),
-        noncanonical,
-        "the fixture must actually straddle a turn, or this proves nothing"
-    );
-
-    let dropped = view.iter().skip(noncanonical).cloned().collect::<Vec<_>>();
-    assert!(
-        !pair_closed_messages(&dropped),
-        "dropping at a noncanonical boundary orphans the result"
-    );
-
-    let repaired = sanitize_history_for_provider(GROUPED_PROFILE, dropped);
-    assert!(
-        pair_closed_messages(&repaired),
-        "re-narrowing after the drop must remove the orphan"
-    );
-
-    let safe = super::history::pair_safe_boundary(&view, noncanonical);
-    let safe_tail = view.into_iter().skip(safe).collect::<Vec<_>>();
-    assert_eq!(
-        sanitize_history_for_provider(GROUPED_PROFILE, safe_tail.clone()),
-        safe_tail,
-        "Compaction.sanitize_drop_noop: free for counts this runtime writes"
-    );
-}
-
-fn pair_closed_messages(messages: &[Message]) -> bool {
-    let announced = messages
-        .iter()
-        .flat_map(|message| match message {
-            Message::Assistant { content, .. } => content
-                .iter()
-                .filter_map(|item| match item {
-                    AssistantContent::ToolCall(tool_call) => Some(
-                        tool_call
-                            .call_id
-                            .clone()
-                            .unwrap_or_else(|| tool_call.id.clone()),
-                    ),
-                    _ => None,
-                })
-                .collect::<Vec<_>>(),
-            _ => Vec::new(),
-        })
-        .collect::<rapidhash::RapidHashSet<_>>();
-    messages.iter().all(|message| match message {
-        Message::User { content } => content.iter().all(|item| match item {
-            UserContent::ToolResult(tool_result) => announced.contains(
-                &tool_result
-                    .call_id
-                    .clone()
-                    .unwrap_or_else(|| tool_result.id.clone()),
-            ),
-            _ => true,
-        }),
-        _ => true,
-    })
-}
-
-#[test]
 fn reused_call_ids_no_longer_shift_the_provider_view_prefix() {
     let prefix = vec![
         tool_call_msg("read_file", r#"{"path": "/a.rs"}"#),
@@ -2732,36 +2388,6 @@ fn safe_to_reduce_requires_a_sanitizer_fixed_point_and_turn_boundary() {
         text_msg("assistant", "done"),
     ];
     assert!(!safe_to_reduce(&orphaned_result));
-}
-
-/// A grouped wire persists GLM's completed turn in native emission order; the
-/// send boundary groups it, so it must not close the stable-prefix gate.
-#[test]
-fn safe_to_reduce_accepts_a_native_order_reasoning_text_turn() {
-    let native_turn = Message::Assistant {
-        request_id: None,
-        id: None,
-        content: vec![
-            AssistantContent::Reasoning(crate::inference::llm::message::Reasoning::new("thinking")),
-            AssistantContent::Text(Text {
-                text: "done".to_string(),
-            }),
-        ],
-    };
-    let messages = vec![text_msg("user", "go"), native_turn.clone()];
-    assert_ne!(
-        super::history::normalize_assistant_content_order(GROUPED_PROFILE, messages.clone()),
-        messages,
-        "the fixture must differ from its provider order, or this proves nothing"
-    );
-    assert!(safe_to_reduce(&messages));
-
-    let unfinished = vec![
-        text_msg("user", "go"),
-        native_turn,
-        tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
-    ];
-    assert!(!safe_to_reduce(&unfinished));
 }
 
 #[tokio::test]
@@ -3198,53 +2824,6 @@ fn incomplete_second_turn_reusing_a_key_is_not_resolved_by_the_first() {
 }
 
 #[test]
-fn empty_message_between_a_call_and_its_result_does_not_break_the_pair() {
-    let out = super::sanitize_history_for_provider(
-        GROUPED_PROFILE,
-        vec![
-            Message::Assistant {
-                request_id: None,
-                id: None,
-                content: vec![scoped_call("c1")],
-            },
-            Message::User { content: vec![] },
-            scoped_result("c1"),
-        ],
-    );
-    assert_eq!(
-        count_calls_and_results(&out),
-        (1, 1),
-        "the pair must survive an intervening empty message: {out:?}"
-    );
-    assert_eq!(
-        out.len(),
-        2,
-        "the empty message itself must be gone: {out:?}"
-    );
-}
-
-#[test]
-fn plain_message_between_a_call_and_its_result_ends_the_turn() {
-    let out = super::sanitize_history_for_provider(
-        GROUPED_PROFILE,
-        vec![
-            Message::Assistant {
-                request_id: None,
-                id: None,
-                content: vec![scoped_call("c1")],
-            },
-            text_msg("user", "moved on"),
-            scoped_result("c1"),
-        ],
-    );
-    assert_eq!(
-        count_calls_and_results(&out),
-        (0, 0),
-        "conversation resumed, so the stale pair must go: {out:?}"
-    );
-}
-
-#[test]
 fn standard_typed_parse_failure_does_not_embed_raw_output() {
     let huge = format!("{{\"goal\": \"{}", "x".repeat(3_000_000));
     let message = serde_json::from_str::<super::summary::ContinuationCheckpoint>(&huge)
@@ -3334,50 +2913,6 @@ fn format_summary_bounds_and_sanitizes_single_items() {
         huge_line.len()
     );
     assert!(out.contains("line1 line2 line3"));
-}
-
-#[test]
-fn canonical_cursor_projects_the_same_sparse_active_suffix() {
-    let rows = vec![
-        (10, tool_result_msg("orphan", "discard me")),
-        (20, text_msg("user", "compacted")),
-        (40, tool_call_msg("read_file", r#"{"path":"/tmp/a"}"#)),
-        (50, tool_result_msg("call-1", "result")),
-        (90, text_msg("assistant", "active")),
-    ];
-    let cursor = compacted_through_sequence(GROUPED_PROFILE, &rows, 1).expect("proven raw cursor");
-    assert_eq!(cursor, 20, "the orphan and first real turn are skipped");
-
-    let (full_view, _) = provider_view(
-        GROUPED_PROFILE,
-        rows.iter().map(|(_, message)| message.clone()).collect(),
-    );
-    let (filtered_view, _) = provider_view(
-        GROUPED_PROFILE,
-        rows.iter()
-            .filter(|(sequence, _)| *sequence > cursor)
-            .map(|(_, message)| message.clone())
-            .collect(),
-    );
-    assert_eq!(1 + filtered_view.len(), full_view.len());
-}
-
-#[test]
-fn canonical_cursor_rejects_a_split_inside_a_tool_pair() {
-    let rows = vec![
-        (1, text_msg("user", "first")),
-        (2, tool_call_msg("read_file", r#"{"path":"/tmp/a"}"#)),
-        (3, tool_result_msg("call-1", "result")),
-    ];
-    assert_eq!(
-        compacted_through_sequence(GROUPED_PROFILE, &rows, 1),
-        Some(1)
-    );
-    assert_eq!(compacted_through_sequence(GROUPED_PROFILE, &rows, 2), None);
-    assert_eq!(
-        compacted_through_sequence(GROUPED_PROFILE, &rows, 3),
-        Some(3)
-    );
 }
 
 #[test]

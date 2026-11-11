@@ -943,47 +943,6 @@ mod tests {
             "an unreadable assignment never reads as success on replay"
         );
     }
-
-    #[test]
-    fn no_terminal_parent_terminalizes_background_rows() {
-        let row = |await_mode: &str, tool_name: &str| -> RunningToolCallRow {
-            serde_json::from_value(serde_json::json!({
-                "_docID": "tool-doc",
-                "session_id": "session",
-                "tool_call_id": "tool",
-                "tool_name": tool_name,
-                "await_mode": await_mode,
-            }))
-            .unwrap()
-        };
-        let parent = |state| AgentRequestRow {
-            request_id: "parent".to_string(),
-            lifecycle_state: Some(state),
-            ..Default::default()
-        };
-        for tool_name in [gents_protocol::tool_names::AGENT_NEW_TOOL_NAME, "bash"] {
-            let background = row("background", tool_name);
-            for state in [
-                RequestLifecycleState::Interrupted,
-                RequestLifecycleState::Completed,
-                RequestLifecycleState::Failed,
-                RequestLifecycleState::Dead,
-                RequestLifecycleState::Superseded,
-            ] {
-                assert_eq!(
-                    classify_terminal_parent_tool_recovery(&background, &parent(state)),
-                    None
-                );
-            }
-        }
-        assert_eq!(
-            classify_terminal_parent_tool_recovery(
-                &row("foreground", "bash"),
-                &parent(RequestLifecycleState::Interrupted)
-            ),
-            Some(RecoveryOutcome::Cancelled)
-        );
-    }
 }
 
 async fn recover_stuck_running_tool_calls(

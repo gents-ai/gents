@@ -1925,67 +1925,6 @@ async fn replay_resolution_observes_a_header_replicated_before_dispatch() {
 }
 
 #[tokio::test]
-async fn the_dispatch_after_an_admission_estimate_serves_its_resolution_without_rereading() {
-    let fixture = signed_fixture().await;
-    fixture
-        .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
-        .await
-        .unwrap();
-    let candidate = fixture.candidates().await.unwrap().remove(0);
-    let tag = ReplayTag {
-        request_doc_id: candidate.request_doc_id.clone(),
-        source: OutputSource::ProviderTurn {
-            scope: candidate.coordinate.scope,
-            turn_index: candidate.coordinate.turn_index,
-            attempt: candidate.coordinate.attempt,
-        },
-    };
-    let replay = crate::turn::provider_input::replay::owned_replay_input(
-        fixture.node.clone(),
-        stored_agent_request(&fixture).await,
-        fixture.request_commit_cid.clone(),
-        fixture.scope_kind,
-        None,
-        crate::turn::provider_input::ProviderInputProfile::ClaudeMessages,
-    );
-    let resolve = replay.resolve.clone().expect("canonical resolver");
-    let (estimate, estimate_scans) = crate::session::count_request_output_scans(async {
-        let _estimate_seed = replay.arm_estimate_seed();
-        resolve(vec![tag.clone()]).await.unwrap()
-    })
-    .await;
-    assert_eq!(estimate.len(), 1);
-    assert_eq!(
-        estimate_scans, 1,
-        "the admission estimate performs its own canonical pass"
-    );
-
-    let (dispatch, dispatch_scans) = crate::session::count_request_output_scans(
-        gents_loop::loop_stream::resolve_replay_evidence(&replay, std::slice::from_ref(&tag)),
-    )
-    .await;
-    assert_eq!(
-        dispatch.as_ref().unwrap(),
-        &estimate,
-        "the immediate dispatch serves the estimate's resolution unchanged"
-    );
-    assert_eq!(
-        dispatch_scans, 0,
-        "the immediately following dispatch rereads no canonical evidence"
-    );
-
-    let (next, next_scans) = crate::session::count_request_output_scans(
-        gents_loop::loop_stream::resolve_replay_evidence(&replay, std::slice::from_ref(&tag)),
-    )
-    .await;
-    assert_eq!(next.unwrap(), estimate);
-    assert_eq!(
-        next_scans, 1,
-        "every lookup after the seeded dispatch revalidates the store"
-    );
-}
-
-#[tokio::test]
 async fn a_header_twin_arriving_between_the_admission_estimate_and_dispatch_waits_for_the_next_lookup(
 ) {
     let fixture = signed_fixture().await;

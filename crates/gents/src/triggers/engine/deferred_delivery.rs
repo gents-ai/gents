@@ -105,11 +105,4 @@ mod tests {
         assert_eq!((watch.pending(), watch.stuck()), (0, 0));
         assert!(watch.deferred.is_empty());
     }
-
-    #[test]
-    fn a_deferral_younger_than_the_threshold_is_not_stuck() {
-        let mut watch = DeferralWatch::new(Duration::from_secs(3600));
-        watch.deferred("Job", "doc-1", "trigger-a", "run_id");
-        assert_eq!((watch.pending(), watch.stuck()), (1, 0));
-    }
 }

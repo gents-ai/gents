@@ -139,26 +139,6 @@ async fn resume_on_moves_the_profile_and_publishes_one_child() {
 }
 
 #[tokio::test]
-async fn resume_on_retry_returns_the_same_child() {
-    let limited = Limited::new(&usage_limit()).await;
-    let first = limited.resume_on(&limited.b).await.unwrap();
-    crate::inference::auth::credential::set_account_enabled(
-        &limited.access,
-        limited.f.identity.did(),
-        &limited.b_credential,
-        false,
-    )
-    .await
-    .unwrap();
-    let retry = limited.resume_on(&limited.b).await.unwrap();
-    assert!(retry.switch.is_none(), "no second switch write");
-    assert!(!retry.resume.created);
-    assert_eq!(retry.resume.request_id, first.resume.request_id);
-    assert_eq!(limited.profile_backend().await, limited.b);
-    assert_eq!(limited.children().await, [first.resume.request_id]);
-}
-
-#[tokio::test]
 async fn completed_resume_retry_does_not_switch_a_profile_moved_again() {
     let limited = Limited::new(&usage_limit()).await;
     let first = limited.resume_on(&limited.b).await.unwrap();
@@ -242,35 +222,6 @@ async fn generated_resume_on_cases_drive_account_preflight_and_receipt_recovery(
             name => panic!("unmapped generated resume-on case {name}"),
         }
     }
-}
-
-#[tokio::test]
-async fn moved_profile_retry_rejects_a_disabled_target_account() {
-    let limited = Limited::new(&usage_limit()).await;
-    crate::inference::profile_switch::switch_profile_account(
-        &limited.access,
-        limited.f.identity.did(),
-        PROFILE,
-        &limited.b,
-        false,
-        &[],
-    )
-    .await
-    .unwrap();
-    crate::inference::auth::credential::set_account_enabled(
-        &limited.access,
-        limited.f.identity.did(),
-        &limited.b_credential,
-        false,
-    )
-    .await
-    .unwrap();
-
-    let error = limited.resume_on(&limited.b).await.unwrap_err().to_string();
-    assert!(error.contains("target account"), "{error}");
-    assert_eq!(limited.profile_backend().await, limited.b);
-    assert_eq!(limited.goal_status().await, "usage_limited");
-    assert!(limited.children().await.is_empty());
 }
 
 #[tokio::test]

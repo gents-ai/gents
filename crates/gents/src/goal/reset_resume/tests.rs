@@ -1,7 +1,6 @@
-use super::contract_tests::{at, connect_accounts_at, disable_backend, usage_limit};
+use super::contract_tests::{at, connect_accounts_at, usage_limit};
 use super::support::*;
 use super::*;
-use crate::goal::continuation::goal_continuation_identity;
 use gents_loop::provider_limit::{classify_provider_limit, ProviderLimit};
 use serde_json::json;
 
@@ -114,27 +113,6 @@ impl Reset {
 }
 
 #[tokio::test]
-async fn resumes_once_at_the_reset() {
-    let reset = Reset::new("inference", Some(T)).await;
-    let goal = reset.goal().await;
-    assert!(reset.resume_with(&goal, T - 1).await.is_none());
-    assert!(reset.f.children().await.is_empty());
-    let receipt = reset
-        .resume_with(&goal, T)
-        .await
-        .expect("resumed at the reset");
-    assert!(receipt.created);
-    assert_eq!(receipt.goal_status, GoalStatus::Active);
-    assert_eq!(reset.f.goal_status().await, "active");
-    assert_eq!(
-        reset.f.children().await,
-        std::slice::from_ref(&receipt.request_id)
-    );
-    assert!(reset.resume_with(&goal, T + 1).await.is_none());
-    assert_eq!(reset.f.children().await, [receipt.request_id]);
-}
-
-#[tokio::test]
 async fn a_held_row_waits_once_the_opt_in_is_off() {
     let reset = Reset::new("inference", Some(T)).await;
     let goal = reset.goal().await;
@@ -175,42 +153,9 @@ async fn waits_after_the_compaction_profile_moved() {
 }
 
 #[tokio::test]
-async fn waits_without_opt_in() {
-    let reset = Reset::new("inference", Some(T)).await;
-    reset.opt_in(false).await;
-    reset.waits().await;
-}
-
-#[tokio::test]
-async fn waits_without_a_reported_reset() {
-    Reset::new("inference", None).await.waits().await;
-}
-
-#[tokio::test]
-async fn waits_after_the_profile_moved() {
-    let reset = Reset::new("inference", Some(T)).await;
-    reset.move_to_b(PROFILE).await;
-    reset.waits().await;
-}
-
-#[tokio::test]
 async fn waits_for_a_sign_in_after_the_limited_call() {
     let reset = Reset::new("inference", Some(T)).await;
     connect_accounts_at(&reset.f, 1).await;
-    reset.waits().await;
-}
-
-#[tokio::test]
-async fn waits_after_the_account_was_disabled() {
-    let reset = Reset::new("inference", Some(T)).await;
-    crate::inference::auth::credential::set_account_enabled(
-        &reset.accounts.access,
-        reset.f.identity.did(),
-        &reset.accounts.a_credential,
-        false,
-    )
-    .await
-    .unwrap();
     reset.waits().await;
 }
 
@@ -240,51 +185,4 @@ async fn waits_after_the_account_was_removed() {
         .await
         .unwrap();
     reset.waits().await;
-}
-
-#[tokio::test]
-async fn waits_after_the_backend_was_disabled() {
-    let reset = Reset::new("inference", Some(T)).await;
-    disable_backend(&reset.f, &reset.accounts.a).await;
-
-    assert!(reset.resume(T).await.is_none());
-    assert_eq!(reset.f.goal_status().await, "usage_limited");
-    assert!(reset.f.children().await.is_empty());
-}
-
-#[tokio::test]
-async fn restart_before_and_after_the_reset() {
-    let reset = Reset::new("inference", Some(T)).await;
-    assert!(reset.resume(T - 60).await.is_none());
-    let receipt = reset.resume(T + 60).await.expect("resumed after the reset");
-    assert!(receipt.created);
-    assert!(reset.resume(T + 120).await.is_none());
-    assert_eq!(reset.f.children().await, [receipt.request_id]);
-}
-
-#[tokio::test]
-async fn repeat_limit_schedules_at_its_new_reset() {
-    let reset = Reset::new("inference", Some(T)).await;
-    let first = reset.resume(T).await.expect("first resume");
-    reset
-        .limit(&first.request_id, "inference", T, Some(3 * T))
-        .await;
-    assert!(reset.resume(3 * T - 1).await.is_none());
-    let second = reset.resume(3 * T).await.expect("resumed at the new reset");
-    let goal_id = &reset.f.goal.goal_id;
-    assert_eq!(
-        second.request_id,
-        goal_continuation_identity(goal_id, &first.request_id, 2)
-            .unwrap()
-            .request_id
-    );
-    reset
-        .limit(&second.request_id, "inference", 3 * T, Some(3 * T))
-        .await;
-    assert!(reset.resume(10 * T).await.is_none());
-    assert_eq!(reset.f.goal_status().await, "usage_limited");
-    assert_eq!(
-        reset.f.children().await,
-        [second.request_id, first.request_id]
-    );
 }

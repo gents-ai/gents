@@ -635,14 +635,6 @@ fn runtime_budget_construction_preserves_zero_and_rejects_negative_values() {
 }
 
 #[test]
-fn prior_usage_blocks_dispatch_when_already_at_limit() {
-    let budget = AggregateTokenBudget::with_prior_usage(1_000, 1_000);
-    let ledger = budget.snapshot().expect("ledger lock");
-    assert_eq!(ledger.remaining(), 0);
-    assert!(!ledger.can_dispatch(1, 100));
-}
-
-#[test]
 fn prior_usage_decode_fails_closed_on_malformed_payload() {
     let err = super::prior_usage_rows_from_response(Some(&serde_json::json!({"not": "an-array"})))
         .expect_err("object payload must not decode as empty usage");

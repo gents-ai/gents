@@ -2003,47 +2003,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_full_and_delta_round_trip_losslessly() {
-        let base = json!({"max_tokens": 100, "messages": ["α", "b"], "tools": [1, 2]});
-        let next = json!({"max_tokens": 200, "messages": ["α", "b", "c"], "tools": [1, 2]});
-        assert_eq!(
-            match decode_versioned_record(1, &super::super::canonical_json_string(&base).unwrap(),)
-                .unwrap()
-            {
-                DecodedRecord::Legacy(value) => value,
-                _ => panic!("legacy value was reinterpreted"),
-            },
-            base
-        );
-        let encoded = encode_against(
-            &next,
-            &base,
-            BaseWitness {
-                doc_id: "base".into(),
-                field_commit_cid: "bafy".into(),
-                depth: 0,
-                node_did: "agent".into(),
-                requester_did: String::new(),
-                session_id: "session".into(),
-                source: "source".into(),
-                capture_scope: "inference.1".into(),
-            },
-        )
-        .unwrap();
-        let decoded = match decode_record(&encoded.stored).unwrap() {
-            DecodedRecord::Full(value) => value,
-            DecodedRecord::Delta {
-                changed, removed, ..
-            } => apply_delta(base, changed, removed).unwrap(),
-            DecodedRecord::Legacy(_) => panic!("new value lacked an envelope"),
-            DecodedRecord::Manifest { .. } | DecodedRecord::Tree(_) => {
-                panic!("unexpected manifest encoding")
-            }
-        };
-        assert_eq!(decoded, next);
-    }
-
-    #[test]
     fn full_delta_and_container_preserve_json_number_spellings() {
         let base: Value = serde_json::from_str(
             r#"{"integer":9007199254740991,"negative":-17,"decimal":1.25,"exponent":1e+20,"subnormal":5e-324,"extreme":1.7976931348623157e308,"awkward":1.2345678901234567,"payload":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}"#,

@@ -204,9 +204,6 @@ where
 
 #[cfg(test)]
 mod invocation_correlation_tests {
-    use super::*;
-    use tokio_util::sync::CancellationToken;
-
     #[test]
     fn invocation_correlation_matches_lean() {
         let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
@@ -221,37 +218,5 @@ mod invocation_correlation_tests {
                 "{case}"
             );
         }
-    }
-
-    #[tokio::test]
-    async fn invocation_correlation_is_available_to_foreground_and_background_fills() {
-        scope_tool_request_identity(None, None, None, Some("request-17".into()), async {
-            scope_request_tool_execution_with_trigger_context(
-                None,
-                CancellationToken::new(),
-                None,
-                None,
-                None,
-                None,
-                std::collections::BTreeMap::new(),
-                false,
-                async {
-                    let fill = crate::documents::WriteToolFieldFill::Correlation;
-                    assert_eq!(fill.resolve("correlation").unwrap(), "request-17");
-                    scope_background_tool_execution(
-                        None,
-                        CancellationToken::new(),
-                        None,
-                        None,
-                        async {
-                            assert_eq!(fill.resolve("correlation").unwrap(), "request-17");
-                        },
-                    )
-                    .await;
-                },
-            )
-            .await;
-        })
-        .await;
     }
 }

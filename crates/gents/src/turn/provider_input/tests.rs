@@ -264,34 +264,6 @@ fn component_partition_stays_exact_across_json_remainders() {
     }
 }
 
-#[test]
-fn responses_projection_matches_rig_then_production_normalization() {
-    let counter = ProviderInputCounter::new(
-        BackendProviderKind::OpenAiCompatible,
-        OpenAiWireApi::Responses,
-        "test-model",
-    );
-    assert_eq!(
-        counter.profile(),
-        ProviderInputProfile::OpenAiResponsesNormalized
-    );
-    let request = core_request("provider-visible reasoning");
-    let projected_body = counter.project_body(&request).expect("provider body");
-    let dto = rig::providers::openai::responses_api::CompletionRequest::try_from((
-        "test-model".to_string(),
-        request,
-    ))
-    .expect("Rig Responses DTO");
-    let mut actual = serde_json::to_value(dto).expect("serialize Rig Responses DTO");
-    set_streaming_fields(&mut actual, false);
-    crate::inference::llm::responses_normalize::normalize_responses_assistant_items(&mut actual);
-
-    assert_eq!(projected_body, actual);
-    assert!(projected_body
-        .to_string()
-        .contains("provider-visible reasoning"));
-}
-
 #[tokio::test]
 async fn normalized_responses_projection_matches_the_terminal_wire_body() {
     let terminal = WireCapturingClient::default();

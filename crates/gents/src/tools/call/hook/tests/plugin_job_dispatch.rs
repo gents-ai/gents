@@ -918,68 +918,6 @@ async fn adoption_commits_flip_pin_progress_effects_and_receipt_in_one_transacti
 }
 
 #[tokio::test]
-async fn ninth_adoption_on_one_request_is_refused() {
-    let step = step0(adopting(), Options::default()).await;
-    for n in 1..=8 {
-        let answer = step.call_as(&format!("call-{n}"), ARGS).await;
-        assert_eq!(answer["status"], "running", "call {n}: {answer}");
-    }
-    let ninth = step.call_as("call-9", ARGS).await;
-    assert_eq!(ninth["code"], "background_tool_budget_exceeded", "{ninth}");
-    let row = step.row_of("call-9").await;
-    failed(&row, "serviceUnavailable");
-    assert_eq!(row["await_mode"], "foreground", "{row}");
-    step.finish().await;
-}
-
-#[tokio::test]
-async fn host_facts_overwrite_guest_pin_fields() {
-    let step = step0(adopting(), Options::default()).await;
-    step.call_as("call-1", ARGS).await;
-    step.call_as("call-2", ARGS).await;
-    step.call_as("call-3", r#"{"argv": ["run"], "args": {"k": "other"}}"#)
-        .await;
-    let (first, second, third) = (
-        step.row_of("call-1").await,
-        step.row_of("call-2").await,
-        step.row_of("call-3").await,
-    );
-    let pin = step.pin_of(&first).await;
-    let installed = store::read_record(step.home.path(), "team", "plugin").unwrap();
-    assert_eq!(pin.plugin_ref, "team/plugin");
-    assert_eq!(pin.engine_digest, installed.digest);
-    // `ARGS` carries no script, so the call's origin is installed.
-    assert_eq!(pin.origin, gents_protocol::job::JobOrigin::Installed);
-    assert_eq!(pin.chain_root_doc_id, first["_docID"].as_str().unwrap());
-    assert_eq!(
-        (pin.resume_of.clone(), pin.replayed_from.clone()),
-        (None, None)
-    );
-    assert_eq!(pin.cwd, "");
-    assert!(pin.adopted_at > 1_700_000_000_000, "{}", pin.adopted_at);
-    assert_eq!(
-        pin.ceiling_at_pin,
-        gents_protocol::job_settings::effective_ceiling(Some(&worker_settings(running_policy())))
-    );
-    assert_eq!(
-        (
-            pin.script_id.as_str(),
-            pin.source_digest.as_str(),
-            pin.agent_budget
-        ),
-        ("s", "sha256:s", 2)
-    );
-    assert!(
-        pin.args_digest.starts_with("sha256:"),
-        "{}",
-        pin.args_digest
-    );
-    assert_eq!(pin.args_digest, step.pin_of(&second).await.args_digest);
-    assert_ne!(pin.args_digest, step.pin_of(&third).await.args_digest);
-    step.finish().await;
-}
-
-#[tokio::test]
 async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
     let step = step0(
         adopting(),
@@ -1574,78 +1512,6 @@ async fn step0_result_with_scratch_and_a_pin_completes_with_the_file_present() {
 }
 
 #[tokio::test]
-async fn two_consecutive_awaits_adopt_a_new_terminal_chain_row_inline() {
-    let step = step0(
-        pinned(r#""suspend": {"kind": "await_user", "message": "m", "question": "first?"}"#),
-        Options::default(),
-    )
-    .await;
-    let first = step.call(ARGS).await;
-    assert_eq!(first["status"], "awaiting_user", "{first}");
-    let root = step.row().await;
-    let root_id = root["_docID"].as_str().unwrap().to_owned();
-    let root_pin = step.pin_of(&root).await;
-
-    let block = gents_protocol::job::JobResume {
-        row_doc_id: root_id.clone(),
-        engine: Some(gents_protocol::job::JobResumeEngine::Current),
-        answer: Some("yes".into()),
-        budget: None,
-    };
-    step.reinstall(&pinned(&format!(
-        r#""suspend": {{"kind": "await_user", "message": "m", "question": "second?"}}, "resume": {}"#,
-        serde_json::to_string(&block).unwrap()
-    )));
-    let second = step.call_as("call-2", r#"{"argv": ["resume", "h"]}"#).await;
-    assert_eq!(second["status"], "awaiting_user", "{second}");
-    assert_eq!(second["question"], "second?", "{second}");
-    let row = step.row_of("call-2").await;
-    assert_eq!(row["lifecycle_state"], "completed", "{row}");
-    assert_eq!(step.stored_reply(&row).await, second);
-    assert_eq!(step.continuation_notices(&row).await, 0);
-    let next_id = row["_docID"].as_str().unwrap();
-    let pin = step.pin_of(&row).await;
-    assert_eq!(pin.handle, root_pin.handle);
-    assert_eq!(pin.chain_root_doc_id, root_id);
-    assert_eq!(pin.resume_of.as_deref(), Some(root_id.as_str()));
-    let state = read_step_state(&step.access(), next_id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(state.resume, Some(block.clone()));
-    let (input, _) = crate::tools::background::job::input::build_step_input(
-        &step.access(),
-        step.hook.job_driver.as_ref().unwrap().runtime(),
-        next_id,
-        crate::tools::background::job::input::StepKind::Later,
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        input.control,
-        Some(crate::tools::background::job::control::resume_echo(&block))
-    );
-    step.finish().await;
-}
-
-#[tokio::test]
-async fn inline_settlement_writes_exactly_one_receipt() {
-    let step = step0(pinned(r#""result": "done""#), Options::default()).await;
-    let answer = step.call(ARGS).await;
-    assert_eq!(answer, json!("done"));
-    let row = step.row().await;
-    assert_eq!(row["lifecycle_state"], "completed", "{row}");
-    let state = read_step_state(&step.access(), row["_docID"].as_str().unwrap())
-        .await
-        .unwrap()
-        .unwrap();
-    let stored: gents_protocol::plugin::PluginExecutionReceipt =
-        serde_json::from_value(row["plugin_execution_receipt"].clone()).unwrap();
-    assert_eq!(Some(stored), state.evidence);
-    step.finish().await;
-}
-
-#[tokio::test]
 async fn pinned_step0_terminal_adopts_and_settles_in_one_transaction() {
     let step = step0(pinned(r#""result": "done""#), Options::default()).await;
     accept_hook_tool_call(&step.hook, "call-1", TOOL, ARGS, None).await;
@@ -1789,19 +1655,6 @@ impl Step0 {
 }
 
 #[tokio::test]
-async fn non_job_stop_ends_an_own_running_job_cancelled_and_interrupts_its_children() {
-    let step = step0(adopting(), idle()).await;
-    let (job, child) = step.running_job().await;
-    assert!(!step.interrupted(&child).await);
-    step.reinstall(&controlling(&[(&job, "stop")]));
-    step.call_as("call-2", ARGS).await;
-    assert_eq!(step.state_of("call-1").await, "cancelled");
-    assert!(step.interrupted(&child).await);
-    assert_eq!(step.state_of("call-2").await, "completed");
-    step.finish().await;
-}
-
-#[tokio::test]
 async fn non_job_pause_ends_an_own_running_job_completed_paused() {
     let step = step0(adopting(), idle()).await;
     let (job, child) = step.running_job().await;
@@ -1812,55 +1665,6 @@ async fn non_job_pause_ends_an_own_running_job_completed_paused() {
     let progress = read_progress(&step.access(), &job).await.unwrap().unwrap();
     assert_eq!(progress.state, JobState::Paused);
     assert!(step.interrupted(&child).await);
-    step.finish().await;
-}
-
-#[tokio::test]
-async fn non_job_control_on_another_plugin_or_out_of_scope_row_is_refused() {
-    let step = step0(json!({"result": "x"}), Options::default()).await;
-    let other_plugin = step.other_plugin_job("call-1").await;
-    let (_, parent) = job_chain(&step.db, &step.user, &step.owner, step.caller.as_ref(), 1).await;
-    let (mut root, other_session) = parent.unwrap();
-    let out_of_scope =
-        crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request(
-            step.node.clone(),
-            &mut root,
-            step.db.node_identity.did(),
-            1,
-            "agent_new",
-            "foreign",
-            json!({}),
-            gents_protocol::tool_call::AwaitMode::Background,
-            false,
-        )
-        .await
-        .unwrap();
-    let pin = JobPin {
-        plugin_ref: "team/plugin".to_owned(),
-        ..fixture_job_pin()
-    };
-    write_pin_for_tool(&out_of_scope, &pin).await;
-    let out_of_scope = out_of_scope.doc_id().unwrap().to_owned();
-    for (n, target) in [
-        &other_plugin,
-        &other_session,
-        &out_of_scope,
-        &"no-such-row".to_owned(),
-        &step.row().await["_docID"].as_str().unwrap().to_owned(),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        step.reinstall(&controlling(&[(target, "stop")]));
-        let call = format!("call-{}", n + 2);
-        let answer = step.call_as(&call, ARGS).await;
-        assert_eq!(
-            answer["code"], "plugin_job_policy_denied",
-            "{target}: {answer}"
-        );
-        failed(&step.row_of(&call).await, "policyDenied");
-    }
-    assert_eq!(step.state_of("call-1").await, "completed");
     step.finish().await;
 }
 

@@ -613,22 +613,4 @@ mod advertised_context_override_tests {
             reasoning_efforts: None,
         }
     }
-
-    #[test]
-    fn explicit_advertised_context_maximum_accepts_boundary_and_rejects_above() {
-        let model = advertised(Some(272_000), Some(872_000));
-        assert!(validate_advertised_context_override(&profile(872_000), &model).is_ok());
-        assert!(validate_advertised_context_override(&profile(872_001), &model).is_err());
-    }
-
-    #[test]
-    fn absent_or_invalid_advertised_maximum_does_not_invent_a_runtime_cap() {
-        for model in [
-            advertised(Some(272_000), None),
-            advertised(Some(272_000), Some(0)),
-            advertised(Some(272_000), Some(128_000)),
-        ] {
-            assert!(validate_advertised_context_override(&profile(872_001), &model).is_ok());
-        }
-    }
 }

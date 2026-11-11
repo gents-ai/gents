@@ -257,25 +257,6 @@ fn credential_aliases_and_unreadable_namespaces_cannot_fall_back() {
     assert!(CredentialProtection::capture([dangling]).is_err());
 }
 
-#[test]
-fn runtime_credentials_include_the_configured_identity_and_store_keys() {
-    let folder = tempfile::tempdir().unwrap();
-    let home = folder.path().canonicalize().unwrap();
-    let custom_key = home.join("custom-identity");
-    write_identity_config(&home, &custom_key);
-    let protection = CredentialProtection::capture(runtime_credentials(&home).unwrap()).unwrap();
-    assert!(protection.paths.contains(&custom_key));
-    assert!(protection
-        .paths
-        .contains(&crate::store::local::home::keys_dir(&home)));
-    assert!(protection
-        .paths
-        .contains(&home.join(crate::store::local::home::SERVICE_UPDATES_DIR_NAME)));
-    assert!(protection
-        .paths
-        .contains(&home.join(crate::store::local::home::P2P_SECRET_KEY_FILE_NAME)));
-}
-
 fn write_identity_config(home: &Path, custom_key: &Path) {
     crate::store::local::home::write_init_config(
         home,

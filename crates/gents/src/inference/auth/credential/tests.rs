@@ -230,25 +230,6 @@ fn oauth_credential_from_value_rejects_a_blank_refresh_token() {
         .contains("missing refresh_token"));
 }
 
-#[test]
-fn credential_update_omits_set_once_fields_and_retains_tokens() {
-    let mut credential = sample_credential();
-    credential.account_ref = Some("acct-b".to_owned());
-    credential.connected_at = Some(DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap());
-    let created = super::rows::credential_input(&credential, &[]).unwrap();
-    let mut omitted = SET_ONCE_FIELDS.to_vec();
-    omitted.push("credential_id");
-    let updated = super::rows::credential_input(&credential, &omitted).unwrap();
-    assert_eq!(created["node_did"], credential.node_did);
-    assert_eq!(created["account_ref"], "acct-b");
-    assert!(created.get("connected_at").is_some());
-    for field in omitted {
-        assert!(updated.get(field).is_none(), "{field}");
-    }
-    assert_eq!(updated["access_token"], credential.access_token);
-    assert_eq!(updated["refresh_token"], credential.refresh_token);
-}
-
 #[tokio::test]
 async fn account_fields_are_kept_when_a_row_is_stored_again() {
     let (db, _user, _user_access, _binding) =

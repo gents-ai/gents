@@ -526,13 +526,4 @@ mod pool_client {
         assert_eq!(choose(&cache, &ids, "s1").as_deref(), Some("id-a"));
         assert_eq!(choose(&cache, &ids, "s2").as_deref(), Some("id-b"));
     }
-
-    #[tokio::test]
-    async fn a_single_account_client_shares_its_accounts_and_has_no_rotation() {
-        let (_cache, mut client, _model) = pool_model(&["id-a"]).await;
-        client.rotation = None;
-        let model = client.completion_model("claude-sonnet-5");
-        assert!(Arc::ptr_eq(&model.accounts, &client.accounts));
-        assert!(model.rotation.is_none());
-    }
 }

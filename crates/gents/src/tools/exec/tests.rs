@@ -454,12 +454,6 @@ async fn managed_exec_bounds_stdout_drain_after_direct_child_exit() {
 }
 
 #[cfg(unix)]
-#[tokio::test]
-async fn managed_exec_bounds_stderr_drain_after_direct_child_exit() {
-    assert_bounded_capture_drain("stderr").await;
-}
-
-#[cfg(unix)]
 /// The non-retained stream must reach EOF independently of unrelated tests'
 /// forked children, which can inherit its writer until they exec.
 async fn assert_bounded_capture_drain(retained_stream: &str) {

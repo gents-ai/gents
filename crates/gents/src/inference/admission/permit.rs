@@ -56,11 +56,6 @@ impl AdmissionPermit {
     }
 
     #[cfg(test)]
-    pub(super) fn controller_generation_for_test(&self) -> u64 {
-        self.call.controller_generation
-    }
-
-    #[cfg(test)]
     pub(super) fn attribution_for_test(&self) -> &str {
         &self.call.backend_config_fingerprint
     }

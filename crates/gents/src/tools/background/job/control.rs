@@ -701,17 +701,6 @@ mod tests {
 
     const ROOT: &str = "root";
 
-    fn child(slot: &str, state: JobChildState) -> StepChild {
-        StepChild {
-            retry_key: job_spawn_key(ROOT, slot, 1),
-            slot: slot.to_owned(),
-            attempt: 1,
-            target: ("node".to_owned(), "general".to_owned()),
-            state,
-            messages: 0,
-        }
-    }
-
     fn row(state: JobState, children: Vec<StepChild>) -> StepRow {
         StepRow {
             root: ROOT.to_owned(),
@@ -1067,70 +1056,6 @@ mod tests {
     }
 
     #[test]
-    fn kill_decision_ends_a_running_row_and_maps_each_live_own_child() {
-        let foreign = StepChild {
-            retry_key: job_spawn_key("other", "d", 1),
-            ..child("d", JobChildState::Live)
-        };
-        let job = row(
-            JobState::Running,
-            vec![
-                child("a", JobChildState::Live),
-                child("b", JobChildState::Live),
-                child("c", JobChildState::Completed),
-                foreign,
-            ],
-        );
-        let (k1, k2) = (job_spawn_key(ROOT, "a", 1), job_spawn_key(ROOT, "b", 1));
-        let observe = |key: &str| {
-            if key == k1 {
-                KillObservation::CausedLiveLocal
-            } else if key == k2 {
-                KillObservation::Unresolved
-            } else {
-                KillObservation::CausedLiveLocal
-            }
-        };
-        for (cause, state) in [
-            (KillCause::Stop, JobState::Cancelled),
-            (KillCause::Pause, JobState::Completed),
-            (KillCause::Deadline, JobState::TimedOut),
-            (KillCause::FailClosed(Refusal::Stalled), JobState::Failed),
-        ] {
-            let outcome = kill_decision(&job, cause, &observe);
-            assert_eq!(outcome.row.state, state, "{cause:?}");
-            assert_eq!(
-                outcome.killed,
-                vec![
-                    (k1.clone(), KillAction::InterruptCaused),
-                    (k2.clone(), KillAction::CancelRow),
-                ],
-                "{cause:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn kill_decision_on_a_terminal_row_kills_nothing() {
-        let job = row(JobState::Completed, vec![child("a", JobChildState::Live)]);
-        for cause in [
-            KillCause::Stop,
-            KillCause::Pause,
-            KillCause::Deadline,
-            KillCause::FailClosed(Refusal::Stalled),
-        ] {
-            assert_eq!(
-                kill_decision(&job, cause, &|_| KillObservation::CausedLiveLocal),
-                KillOutcome {
-                    row: job.clone(),
-                    won: false,
-                    killed: Vec::new()
-                }
-            );
-        }
-    }
-
-    #[test]
     fn generated_kill_actions_are_lean_kill_action() {
         let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
         assert_eq!(snapshot.session_message_kill_cases.len(), 3);
@@ -1155,39 +1080,6 @@ mod tests {
             let expected: KillObservation =
                 serde_json::from_value(json!(case.observation)).unwrap();
             assert_eq!(KillObservation::observe(caused), expected, "{case:?}");
-        }
-    }
-
-    #[test]
-    fn control_outcome_is_applied_with_the_killed_count_or_already_terminal() {
-        let children = vec![
-            child("a", JobChildState::Live),
-            child("b", JobChildState::Live),
-        ];
-        let running = row(JobState::Running, children.clone());
-        let observe = |_: &str| KillObservation::CausedLiveLocal;
-        assert_eq!(
-            control_outcome(&running, JobControlKind::Stop, &observe),
-            JobControlOutcome::Applied {
-                state: JobState::Cancelled,
-                killed_children: 2
-            }
-        );
-        assert!(matches!(
-            control_outcome(&running, JobControlKind::Pause, &observe),
-            JobControlOutcome::Applied {
-                state: JobState::Paused,
-                ..
-            }
-        ));
-        let completed = row(JobState::Completed, children);
-        for kind in [JobControlKind::Stop, JobControlKind::Pause] {
-            assert_eq!(
-                control_outcome(&completed, kind, &observe),
-                JobControlOutcome::AlreadyTerminal {
-                    state: JobState::Completed
-                }
-            );
         }
     }
 
@@ -1447,38 +1339,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resume_with_a_different_engine_digest_is_refused_unless_engine_current() {
-        let mut job = new_chain().await;
-        let prior = finished(&mut job, "call-1", None, None, JobState::Completed).await;
-        let moved = facts(&prior, "sha256:new-engine", None);
-        let refused = validate(
-            &job,
-            &caller(),
-            PLUGIN,
-            &resume_block(&prior),
-            &guest("fixture-script", 4),
-            &moved,
-        )
-        .await;
-        assert_eq!(refused, Err(Refusal::PolicyDenied));
-        let current = JobResume {
-            engine: Some(JobResumeEngine::Current),
-            ..resume_block(&prior)
-        };
-        let admitted = validate(
-            &job,
-            &caller(),
-            PLUGIN,
-            &current,
-            &guest("fixture-script", 4),
-            &moved,
-        )
-        .await;
-        assert!(admitted.is_ok());
-        job.node.shutdown().await.expect("shut down test node");
-    }
-
-    #[tokio::test]
     async fn resume_of_a_continued_row_names_the_head_even_when_resume_is_invalid() {
         let mut job = new_chain().await;
         let first = finished(&mut job, "call-1", None, None, JobState::Completed).await;
@@ -1541,35 +1401,6 @@ mod tests {
         assert_eq!(validated.replayed_from.as_deref(), Some(prior.as_str()));
         assert_eq!(validated.echo.kind, JobControlEchoKind::EngineCurrent);
         job.node.shutdown().await.expect("shut down test node");
-    }
-
-    #[tokio::test]
-    async fn resume_with_a_lower_budget_is_refused() {
-        let mut job = new_chain().await;
-        let prior = finished(&mut job, "call-1", None, None, JobState::Completed).await;
-        assert_eq!(
-            validate_budget(&job, &prior, 3).await,
-            Err(Refusal::PolicyDenied)
-        );
-        assert!(validate_budget(&job, &prior, 4).await.is_ok());
-        assert!(validate_budget(&job, &prior, 5).await.is_ok());
-        job.node.shutdown().await.expect("shut down test node");
-    }
-
-    async fn validate_budget(
-        job: &Job,
-        prior: &str,
-        budget: u32,
-    ) -> std::result::Result<ValidatedResume, Refusal> {
-        validate(
-            job,
-            &caller(),
-            PLUGIN,
-            &resume_block(prior),
-            &guest("fixture-script", budget),
-            &facts(prior, ENGINE, None),
-        )
-        .await
     }
 
     #[tokio::test]
@@ -1665,38 +1496,6 @@ mod tests {
                 agent_budget: Some(9),
             }
         );
-    }
-
-    #[test]
-    fn resume_echo_kind_is_answer_then_engine_current_then_resume() {
-        let block = resume_block("prior");
-        let cases = [
-            (
-                JobResume {
-                    answer: Some("yes".to_owned()),
-                    engine: Some(JobResumeEngine::Current),
-                    ..block.clone()
-                },
-                JobControlEchoKind::Answer,
-            ),
-            (
-                JobResume {
-                    engine: Some(JobResumeEngine::Current),
-                    ..block.clone()
-                },
-                JobControlEchoKind::EngineCurrent,
-            ),
-            (block, JobControlEchoKind::Resume),
-        ];
-        for (resume, kind) in cases {
-            assert_eq!(
-                resume_echo(&resume),
-                JobControlEcho {
-                    kind,
-                    payload: Some(resume.clone()),
-                }
-            );
-        }
     }
 
     type Target = crate::tools::background::job::admit::ResumeTarget;

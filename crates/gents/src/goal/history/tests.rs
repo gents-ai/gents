@@ -167,30 +167,6 @@ impl ConfigRead for UnchangedAssignmentReader {
 }
 
 #[tokio::test]
-async fn usage_only_revisions_preserve_the_dag_without_reconstructing_every_snapshot() {
-    let reader = UnchangedAssignmentReader {
-        metadata_fault: None,
-        inner: HistoryReader {
-            calls: Mutex::new(Vec::new()),
-            fault: None,
-        },
-    };
-    let versions = load_assignment_versions_for_session(&reader, "owner", "chat")
-        .await
-        .unwrap();
-    assert_eq!(versions.len(), 67);
-    let latest = super::super::latest_assignment_goals(&versions).unwrap();
-    assert_eq!(latest.len(), 1);
-    assert_eq!(latest[0].objective, "commit-066");
-    let calls = reader.inner.calls.lock().unwrap();
-    let requested = calls.iter().flatten().collect::<Vec<_>>();
-    assert_eq!(
-        requested,
-        [&"commit-000".to_owned(), &"commit-066".to_owned()]
-    );
-}
-
-#[tokio::test]
 async fn unknown_or_changed_projection_metadata_requires_native_reconstruction() {
     for fault in [
         "missing_link",

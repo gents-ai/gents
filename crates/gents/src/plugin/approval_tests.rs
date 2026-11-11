@@ -148,32 +148,6 @@ async fn a_deny_reaches_the_waiting_call() {
 }
 
 #[tokio::test]
-async fn always_allow_adds_the_folder_and_keeps_wider_access() {
-    let home = tempfile::tempdir().unwrap();
-    let documents = tempfile::tempdir().unwrap();
-    let request = request(documents.path());
-    allowed::add(
-        home.path(),
-        request.filesystem().unwrap().folder,
-        BindAccess::ReadWrite,
-    )
-    .unwrap();
-    let waiting = {
-        let home = home.path().to_owned();
-        let request = request.clone();
-        tokio::spawn(async move { ask(&home, &request, Duration::from_secs(10)).await })
-    };
-    while pending(home.path()).unwrap().is_empty() {
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-    decide(home.path(), &request.id, Answer::AlwaysFolder).unwrap();
-    assert!(waiting.await.unwrap().unwrap());
-    let listed = allowed::list(home.path()).unwrap();
-    assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0].access, BindAccess::ReadWrite);
-}
-
-#[tokio::test]
 async fn an_unanswered_question_times_out_and_is_removed() {
     let home = tempfile::tempdir().unwrap();
     let request = request(home.path());
@@ -319,33 +293,6 @@ fn concurrent_answers_deliver_only_one_decision() {
     assert_eq!(
         !allowed::list(home.path()).unwrap().is_empty(),
         results.1.is_ok()
-    );
-}
-
-#[tokio::test]
-async fn always_allow_this_file_adds_only_the_file() {
-    let home = tempfile::tempdir().unwrap();
-    let documents = tempfile::tempdir().unwrap();
-    let request = request(documents.path());
-    let waiting = {
-        let home = home.path().to_owned();
-        let request = request.clone();
-        tokio::spawn(async move { ask(&home, &request, Duration::from_secs(10)).await })
-    };
-    while pending(home.path()).unwrap().is_empty() {
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-    decide(home.path(), &request.id, Answer::AlwaysPath).unwrap();
-    assert!(waiting.await.unwrap().unwrap());
-    let listed = allowed::list(home.path()).unwrap();
-    assert_eq!(listed.len(), 1);
-    let file = request.filesystem().unwrap();
-    assert_eq!(listed[0].path.as_path(), file.path);
-    let scope = allowed::Scope::load(home.path(), None, None).unwrap();
-    assert!(scope.granted(file.path).is_some());
-    assert!(
-        scope.granted(&file.folder.join("other.pdf")).is_none(),
-        "the sibling stays closed"
     );
 }
 

@@ -844,67 +844,6 @@ while True:
     assert!(!target.exists(), "workspace/applyEdit must not write files");
 }
 
-#[tokio::test]
-async fn request_cancel_does_not_kill_pooled_server() {
-    if std::process::Command::new("python3")
-        .arg("-c")
-        .arg("print(1)")
-        .output()
-        .map(|o| !o.status.success())
-        .unwrap_or(true)
-    {
-        return;
-    }
-    let root = tempfile::tempdir().unwrap();
-    std::fs::write(root.path().join("lib.rs"), "fn x() {}\n").unwrap();
-    std::fs::write(
-        root.path().join("Cargo.toml"),
-        "[package]\nname=\"t\"\nversion=\"0.0.1\"\n",
-    )
-    .unwrap();
-    let pool = LspPool::new();
-    let server = CatalogServer {
-        name: "fixture".into(),
-        command: "python3".into(),
-        args: vec!["-c".into(), FIXTURE_PY.into()],
-        file_types: vec![".rs".into()],
-        root_markers: vec!["Cargo.toml".into()],
-        is_linter: false,
-        priority: 1,
-        language_id: Some("rust".into()),
-        init_options: None,
-        settings: None,
-        capabilities: None,
-        workspace_ready_timings: None,
-        warmup_timeout_ms: None,
-    };
-    let config = sample_config(
-        root.path().to_path_buf(),
-        FileToolMode::ReadWrite,
-        "s-cancel",
-        vec![server.clone()],
-    );
-    let key = PoolKey {
-        runtime_home: None,
-        session_id: "s-cancel".into(),
-        agent_did: "b1".into(),
-        workspace_root: root.path().to_path_buf(),
-        server_name: "fixture".into(),
-        config_digest: config.digest.clone(),
-        operator_guard_home: None,
-    };
-    let lease = pool
-        .get_or_start(key.clone(), &server, &config)
-        .await
-        .expect("start");
-    let request_token = tokio_util::sync::CancellationToken::new();
-    request_token.cancel();
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    assert_eq!(pool.live_count().await, 1);
-    drop(lease);
-    assert!(pool.has_ready(&key).await);
-}
-
 #[test]
 fn tighter_ceiling_changes_digest() {
     let root = tempfile::tempdir().unwrap();

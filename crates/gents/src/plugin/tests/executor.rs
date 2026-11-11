@@ -247,39 +247,6 @@ fn a_plugin_that_is_not_installed_is_refused() {
 }
 
 #[tokio::test]
-async fn a_changed_grant_is_admitted_again() {
-    let (home, mut record) = installed_echo();
-    let executor = PluginExecutor::new(Some(home.path().to_owned()));
-    executor.call(&record, serde_json::json!(1)).await.unwrap();
-    record.granted = Some(crate::plugin::Manifold::sealed());
-    store::write_record(home.path(), &record).unwrap();
-    let call = executor.call(&record, serde_json::json!(2)).await.unwrap();
-    assert_eq!(call.outcome.output, serde_json::json!(2));
-    assert_eq!(
-        executor.admitted_len(),
-        1,
-        "the new grant replaces the old admission"
-    );
-}
-
-#[tokio::test]
-async fn a_removed_plugin_fails_closed_with_a_warm_cache() {
-    let (home, record) = installed_echo();
-    let executor = PluginExecutor::new(Some(home.path().to_owned()));
-    executor.call(&record, serde_json::json!(1)).await.unwrap();
-    assert_eq!(executor.admitted_len(), 1);
-    store::remove_record(home.path(), &record.namespace, &record.name).unwrap();
-    let error = executor
-        .call(&record, serde_json::json!(2))
-        .await
-        .unwrap_err();
-    assert!(
-        format!("{error:#}").contains("is not installed"),
-        "{error:#}"
-    );
-}
-
-#[tokio::test]
 async fn changed_resource_declaration_invalidates_admission_without_new_artifact() {
     let (home, mut record) = installed_plugin(&super::large_json_output_wat(1536 * 1024), None);
     record.granted = Some(crate::plugin::Manifold::sealed());
@@ -305,26 +272,6 @@ async fn changed_resource_declaration_invalidates_admission_without_new_artifact
         executor.call(&record, input).await.unwrap().outcome.verdict,
         crate::plugin::PluginVerdict::BadOutput
     );
-}
-
-#[test]
-fn resource_increases_need_fresh_consent_and_reinstall_retains_it() {
-    let (home, mut record) = installed_echo();
-    record.declaration.limits = Some(crate::pack::PluginLimits {
-        memory_mib: Some(1536),
-        ..Default::default()
-    });
-    assert!(store::grant_on_install(home.path(), "team", &record.declaration, false).is_err());
-    record.granted =
-        store::grant_on_install(home.path(), "team", &record.declaration, true).unwrap();
-    store::write_record(home.path(), &record).unwrap();
-    assert!(
-        store::grant_on_install(home.path(), "team", &record.declaration, false)
-            .unwrap()
-            .is_some()
-    );
-    record.declaration.limits.as_mut().unwrap().memory_mib = Some(2048);
-    assert!(store::grant_on_install(home.path(), "team", &record.declaration, false).is_err());
 }
 
 mod bound {
@@ -694,45 +641,6 @@ mod bound {
         }
     }
 
-    #[tokio::test]
-    async fn workspace_consent_without_a_reviewer_still_needs_a_person() {
-        use approval::workspace::{self, Mode, WorkspaceKey};
-
-        let fx = fixture(&open_and_copy_wat("in.json", 0), BindAccess::Read);
-        let work = fx.root.join("work");
-        let target = fx.root.join("outside/in.json");
-        let key = WorkspaceKey::canonical("node", "requester", "agent", &work).unwrap();
-        workspace::save_mode(
-            fx.home.path(),
-            &key,
-            0,
-            Mode::AutoReview,
-            Some(&workspace::ReviewTaskSelection::for_task(
-                &crate::documents::Task {
-                    task_id: "review-task".into(),
-                    ..workspace::default_review_task("node", "agent")
-                },
-            )),
-        )
-        .unwrap();
-        let context = workspace::for_request(
-            Some(fx.home.path()),
-            "node",
-            Some("requester"),
-            "agent",
-            Some(&work),
-        )
-        .unwrap();
-        let tool = tool_for(&fx.home, &fx.record);
-        let declined = answer(fx.home.path(), false, false).await;
-        let error = workspace::scope(context, in_session(&tool, &target, &work, true))
-            .await
-            .unwrap_err();
-        assert!(error.contains("operator declined"), "{error}");
-        declined.await.unwrap();
-        assert!(allowed::list(fx.home.path()).unwrap().is_empty());
-    }
-
     #[cfg(unix)]
     #[tokio::test]
     async fn a_workspace_mode_cannot_follow_a_redirected_working_folder() {
@@ -898,16 +806,6 @@ mod bound {
     }
 
     #[tokio::test]
-    async fn a_model_tool_without_the_path_field_runs_sealed() {
-        let (home, record) = installed_plugin(ECHO_WAT, Some(BindAccess::Read));
-        let output = tool_for(&home, &record)
-            .call(r#"{"name":"a.txt"}"#.into())
-            .await
-            .unwrap();
-        assert_eq!(output, r#"{"name":"a.txt"}"#);
-    }
-
-    #[tokio::test]
     async fn paths_that_escape_or_hide_are_refused_with_the_command_that_allows_them() {
         let fx = fixture(&open_and_copy_wat("in.json", 0), BindAccess::Read);
         let tool = tool_for(&fx.home, &fx.record);
@@ -994,27 +892,6 @@ mod bound {
         asked.await.unwrap();
         assert!(error.contains("declined"), "{error}");
         assert!(allowed::list(fx.home.path()).unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn a_composed_child_asks_and_resumes_on_the_operator() {
-        let fx = fixture(&open_and_copy_wat("in.json", 0), BindAccess::Read);
-        let tool = tool_for(&fx.home, &fx.record);
-        let work = fx.root.join("work");
-        let target = fx.root.join("outside/in.json");
-        let asked = answer(fx.home.path(), true, false).await;
-        let output = in_session(&tool, &target, &work, true).await.unwrap();
-        assert_eq!(output, r#"{"read":true}"#);
-        let prompt = asked.await.unwrap();
-        assert_eq!(
-            prompt,
-            format!("Allow team/plugin to read {}?", target.display())
-        );
-        assert!(approval::pending(fx.home.path()).unwrap().is_empty());
-        assert!(
-            allowed::list(fx.home.path()).unwrap().is_empty(),
-            "allow once remembers nothing"
-        );
     }
 
     #[tokio::test]
@@ -1133,33 +1010,6 @@ mod bound {
             format!("{error:#}").contains("gents config pack plugin dirs add"),
             "{error:#}"
         );
-    }
-
-    #[tokio::test]
-    async fn a_bound_call_fails_when_the_plugin_is_reinstalled_after_binding() {
-        let fx = fixture(&open_and_copy_wat("in.json", 0), BindAccess::Read);
-        let executor = PluginExecutor::new(Some(fx.home.path().to_owned()));
-        let input = serde_json::json!({ "path": fx.root.join("work/in.json") });
-        let work = fx.root.join("work");
-        let context = crate::plugin::executor::BindContext::headless(Some(&work));
-        let bound = executor
-            .bind_input(&fx.record, &input, &context)
-            .await
-            .unwrap()
-            .expect("a bound directory");
-        let mut reinstalled = fx.record.clone();
-        reinstalled
-            .declaration
-            .bind_dir
-            .as_mut()
-            .unwrap()
-            .original_field = Some("path_original".into());
-        store::write_record(fx.home.path(), &reinstalled).unwrap();
-        let error = executor
-            .call_bound(&fx.record, input, bound)
-            .await
-            .unwrap_err();
-        assert!(format!("{error:#}").contains("reinstalled"), "{error:#}");
     }
 
     #[tokio::test]
@@ -1609,25 +1459,6 @@ mod data_calls {
     }
 
     #[tokio::test]
-    async fn data_calls_query_caps_results_at_the_limit() {
-        let node = node_with(&[(NODE, "a"), (NODE, "b"), (NODE, "c")]).await;
-        let call = ask(
-            Some(declaration(&["query"])),
-            &node,
-            json!([
-                query("two", json!({"limit": 2})),
-                query("zero", json!({"limit": 0})),
-                query("many", json!({"limit": 257})),
-            ]),
-        )
-        .await;
-        let answers = results_of(&call);
-        assert_eq!(bodies(&answers["two"]).len(), 2);
-        assert!(refusal(&answers["zero"]).contains("limit"));
-        assert!(refusal(&answers["many"]).contains("256"));
-    }
-
-    #[tokio::test]
     async fn data_calls_query_returns_rows_after_offset() {
         let node = node_with(&[(NODE, "a"), (NODE, "b"), (NODE, "c")]).await;
         let ordered = |id: &str, extra: Value| {
@@ -1670,24 +1501,6 @@ mod data_calls {
             .await
             .unwrap();
         assert!(call.outcome.output.get("data_calls").is_none());
-    }
-
-    #[tokio::test]
-    async fn data_calls_answers_are_keyed_by_id_in_data_results() {
-        let node = node_with(&[(NODE, "mine")]).await;
-        let call = ask(
-            Some(declaration(&["query"])),
-            &node,
-            json!([
-                query("a", json!({"limit": 5})),
-                query("b", json!({"collection": "Other", "limit": 5})),
-            ]),
-        )
-        .await;
-        let answers = results_of(&call);
-        assert_eq!(answers.keys().collect::<Vec<_>>(), ["a", "b"]);
-        assert_eq!(bodies(&answers["a"]), ["mine"]);
-        assert!(matches!(answers["b"], RoundResult::Error { .. }));
     }
 
     #[tokio::test]

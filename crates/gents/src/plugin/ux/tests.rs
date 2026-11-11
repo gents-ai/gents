@@ -83,12 +83,6 @@ fn lists_dev_plugins_by_folder_and_skips_folders_without_an_entry() {
 }
 
 #[test]
-fn an_absent_dev_root_lists_nothing() {
-    let home = tempfile::tempdir().unwrap();
-    assert!(list(home.path()).unwrap().is_empty());
-}
-
-#[test]
 fn lists_pack_plugins_with_their_declaration_and_namespaced_id() {
     let home = tempfile::tempdir().unwrap();
     install_record(

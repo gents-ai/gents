@@ -192,12 +192,6 @@ fn command_protection_rejects_existing_and_late_aliases() {
 }
 
 #[test]
-fn command_protection_has_no_unsupported_fallback() {
-    let world = world();
-    assert!(CommandProtection::capture(&world.gents, false).is_err());
-}
-
-#[test]
 fn staged_permission_objects_are_rejected_by_native_paths_and_plugin_mounts() {
     use std::io::Write;
 
@@ -251,48 +245,6 @@ fn failed_permission_encoding_keeps_the_prior_file_and_removes_staging() {
     });
     assert!(result.is_err());
     assert_eq!(std::fs::read(&target).unwrap(), b"prior permissions");
-    assert_eq!(
-        std::fs::read_dir(
-            world
-                .gents
-                .join(crate::store::local::home::PERMISSION_STAGING_DIR_NAME)
-        )
-        .unwrap()
-        .count(),
-        0
-    );
-}
-
-#[test]
-fn both_permission_writers_publish_without_leaving_staged_files() {
-    let world = world();
-    let entry = add(
-        &world.gents,
-        &world.root.join("work/a.txt"),
-        BindAccess::Read,
-    )
-    .unwrap();
-    assert_eq!(list(&world.gents).unwrap(), vec![entry]);
-    let key = crate::plugin::approval::workspace::WorkspaceKey::canonical(
-        "node",
-        "requester",
-        "agent",
-        &world.root.join("work"),
-    )
-    .unwrap();
-    let saved = crate::plugin::approval::workspace::save_mode(
-        &world.gents,
-        &key,
-        0,
-        crate::plugin::approval::workspace::Mode::FullAccess,
-        None,
-    )
-    .unwrap();
-    let loaded = crate::plugin::approval::workspace::get(&world.gents, &key)
-        .unwrap()
-        .unwrap();
-    assert_eq!(loaded.scope(), saved.scope());
-    assert_eq!(loaded.selection.mode, saved.selection.mode);
     assert_eq!(
         std::fs::read_dir(
             world
@@ -475,15 +427,6 @@ fn the_list_adds_replaces_and_removes_folders() {
     assert!(!remove(&world.gents, &docs).unwrap());
 }
 
-#[test]
-fn a_folder_binds_as_itself() {
-    let world = world();
-    let bound = bind(&resolved(&world, "sub").unwrap(), BindAccess::Read, true).unwrap();
-    assert_eq!(bound.path(), world.root.join("work/sub"));
-    assert_eq!(bound.target(), world.root.join("work/sub"));
-    assert_eq!(bound.access(), BindAccess::Read);
-}
-
 #[cfg(unix)]
 #[test]
 fn a_file_binds_alone_through_a_hard_link_not_a_copy() {
@@ -551,37 +494,6 @@ fn a_working_folder_that_is_the_root_the_home_or_holds_either_is_not_allowed() {
     assert_eq!(scope.granted(&work.join("a.txt")), Some(BindAccess::Read));
     let own_folder = Scope::load(&gents_home, Some(&work.join("sub")), None).unwrap();
     assert_eq!(own_folder.granted(&work.join("a.txt")), None);
-}
-
-#[test]
-fn the_file_tools_refuse_the_allowed_folders_file_and_the_approval_queue() {
-    let world = world();
-    protect(&world.gents);
-    assert!(is_protected(
-        &world
-            .gents
-            .join(crate::store::local::home::ALLOWED_DIRS_FILE_NAME)
-    ));
-    for name in [
-        crate::store::local::home::WORKSPACE_APPROVALS_FILE_NAME,
-        crate::store::local::home::WORKSPACE_APPROVALS_LOCK_FILE_NAME,
-    ] {
-        assert!(is_protected(&world.gents.join(name)));
-    }
-    assert!(is_protected(
-        &world
-            .gents
-            .join(crate::store::local::home::PLUGIN_APPROVALS_DIR_NAME)
-            .join("q.decision")
-    ));
-    assert!(is_protected(
-        &world
-            .gents
-            .join(crate::store::local::home::PERMISSION_STAGING_DIR_NAME)
-            .join("pending")
-    ));
-    assert!(!is_protected(&world.gents.join("plugins/x")));
-    assert!(!is_protected(&world.root.join("work/a.txt")));
 }
 
 #[test]

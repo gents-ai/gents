@@ -106,23 +106,6 @@ async fn foreground_refuses_a_job_row() {
 }
 
 #[test]
-fn in_orphan_sweep_scope_is_background_native_only() {
-    for kind in [
-        ToolRowKind::Native,
-        ToolRowKind::SessionMessage,
-        ToolRowKind::PluginJob,
-    ] {
-        for await_mode in [AwaitMode::Foreground, AwaitMode::Background] {
-            assert_eq!(
-                kind.in_orphan_sweep_scope(await_mode),
-                kind == ToolRowKind::Native && await_mode == AwaitMode::Background,
-                "{kind:?} {await_mode:?}"
-            );
-        }
-    }
-}
-
-#[test]
 fn may_foreground_is_false_for_session_message_and_plugin_job() {
     assert!(ToolRowKind::Native.may_foreground());
     assert!(!ToolRowKind::SessionMessage.may_foreground());

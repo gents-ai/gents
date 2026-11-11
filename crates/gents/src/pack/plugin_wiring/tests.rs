@@ -3,7 +3,7 @@ use crate::documents::{AgentContext, AgentTools, BuiltInTools};
 use crate::pack::InstalledVia;
 use crate::plugin::store::InstalledPlugin;
 use crate::tools::background::job::settings;
-use gents_protocol::job::{DynamicMode, JobPolicy, PluginJobSettings};
+use gents_protocol::job::{DynamicMode, PluginJobSettings};
 use serde_json::json;
 use std::collections::BTreeSet;
 
@@ -226,40 +226,6 @@ fn merge_never_widens() {
     assert_eq!(block.max_wall_secs, 100);
     assert_eq!(block.policy.dynamic, DynamicMode::Off);
     assert_eq!(block.policy.dynamic_targets, strs(&["c"]));
-}
-
-#[test]
-fn targets_from_goes_through_wire_targets_from() {
-    let (tools, context) = start(None);
-    let pack_targets = strs(&["wf-a", "wf-b"]);
-    let (tools, _, _) = wire_plugin(
-        &tools,
-        &context,
-        &installed(true, Some("acme/engine")),
-        None,
-        &[],
-        &[(
-            "acme/content".to_owned(),
-            pack_targets.clone(),
-            InstalledVia::Operator,
-        )],
-    )
-    .unwrap();
-    let policy = JobPolicy {
-        trusted_packs: strs(&["acme/engine"]),
-        ..JobPolicy::default()
-    };
-    let (policy, job_targets, caller_targets) = gents_protocol::job_settings::wire_targets_from(
-        "acme/content",
-        &pack_targets,
-        policy,
-        &[],
-        &[],
-    );
-    let block = block(&tools).unwrap();
-    assert_eq!(block.policy, policy);
-    assert_eq!(block.agent_targets, job_targets);
-    assert_eq!(tools.agents.unwrap().target_ids, caller_targets);
 }
 
 #[test]

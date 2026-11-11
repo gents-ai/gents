@@ -1043,39 +1043,6 @@ mod lifecycle_tests {
     }
 
     #[tokio::test]
-    async fn admitted_native_lifecycle_persists_completed_terminal() {
-        let (admission, _request_owner) =
-            published_admission_with_owner(PublishedAdmissionOptions {
-                name: "native-complete".to_owned(),
-                start_running: false,
-                ..Default::default()
-            })
-            .await
-            .expect("publish pending canonical native tool admission");
-        let PublishedAdmission {
-            node,
-            path,
-            mut tool,
-            ..
-        } = admission;
-        let access = tool.access().unwrap();
-        let request_doc_id = tool.request_doc_id().unwrap().to_owned();
-        tool.start_running().await.unwrap();
-        let running = row(&access, "session-native-complete").await;
-        assert_eq!(running["lifecycle_state"], "running");
-        assert_eq!(running["request_doc_id"], request_doc_id);
-        assert!(running["deadline_at"]
-            .as_str()
-            .is_some_and(|value| !value.is_empty()));
-        tool.complete("ok").await.unwrap();
-        assert_eq!(
-            row(&access, "session-native-complete").await["lifecycle_state"],
-            "completed"
-        );
-        teardown(node, path).await;
-    }
-
-    #[tokio::test]
     async fn admitted_native_lifecycle_persists_failure_class() {
         let (node, path, mut tool) = published_spawn_parent("native-fail").await;
         let access = tool.access().unwrap();

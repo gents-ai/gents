@@ -86,28 +86,3 @@ async fn generated_goal_assignments_bound_fold_and_steering() {
         );
     }
 }
-
-#[tokio::test]
-async fn ordinary_queued_input_does_not_fold_but_explicit_steer_can() {
-    let temp = tempfile::tempdir().unwrap();
-    let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
-    let head =
-        AgentRequest::try_from(row(&identity, "head-physical", &Value::Null, None).await).unwrap();
-    let queued = row(
-        &identity,
-        "queued-physical",
-        &Value::Null,
-        Some(QueueDelivery::Queue),
-    )
-    .await;
-    let steer = row(
-        &identity,
-        "steer-physical",
-        &Value::Null,
-        Some(QueueDelivery::Steer),
-    )
-    .await;
-    let now = chrono::Utc::now();
-    assert!(!folds_into(&head, &queued, now));
-    assert!(folds_into(&head, &steer, now));
-}

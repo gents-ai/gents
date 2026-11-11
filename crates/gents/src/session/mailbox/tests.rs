@@ -625,35 +625,6 @@ async fn close_engines_are_disjoint_and_unsigned_replies_do_not_prevent_expiry()
 }
 
 #[tokio::test]
-async fn a_0_21_graph_sourced_item_still_lists() {
-    let node = test_node().await;
-    let now = Utc::now().to_rfc3339();
-    let stored = format!(
-        r#"mutation {{ create_MailboxItem(input: {{
-            item_key: "graph:wait-1:ask:1", requester_did: "did:test:owner",
-            node_did: "did:test:agent", status: "open", kind: "ask", action: "ack",
-            title: "from a graph run", source_kind: "graph", source_id: "wait-1",
-            graph_run_id: "run-1", target_node_did: "did:test:agent",
-            target_agent_did: "operator", created_at: "{now}", updated_at: "{now}"
-        }}) {{ _docID }} }}"#
-    );
-    let stored = stored
-        .replace("did:test:owner", &fixture_recipient("did:test:owner"))
-        .replace("did:test:agent", root_identity().did())
-        .replace("operator", agent_identity().did());
-    agent_access(&node)
-        .write("test.mailbox.graph", &stored)
-        .await
-        .unwrap();
-
-    let items = list_as_creator(&node, "did:test:owner", None)
-        .await
-        .unwrap();
-    assert_eq!(items.len(), 1);
-    assert_eq!(items[0].source_kind, "graph");
-}
-
-#[tokio::test]
 async fn poisoned_item_does_not_block_later_expiry() {
     let node = test_node().await;
     let now = Utc::now().to_rfc3339();

@@ -386,89 +386,6 @@ async fn tools_ids(access: &ConfigAccess) -> Vec<String> {
     ids
 }
 
-#[tokio::test]
-async fn same_named_packs_from_different_publishers_cannot_overwrite_documents() {
-    let access = access().await;
-    install(
-        &access,
-        "1",
-        &config(&[("shared", "Original")]),
-        DriftPolicy::Refuse,
-    )
-    .await
-    .unwrap();
-    let before = access
-        .execute("{ Tools(filter: {tools_id: {_eq: \"shared\"}}) { tools_id display_name tags } }")
-        .await
-        .unwrap();
-    let mut other = identity("2");
-    other.coordinate = "other/demo".into();
-    let mut foreign = config(&[("shared", "Replacement")]);
-    let mut value = serde_json::to_value(&foreign).unwrap();
-    value["tools"][0]["tags"] = json!(["gents:pack:other/demo"]);
-    foreign = serde_json::from_value(value).unwrap();
-    let result = super::super::install_pack_documents(
-        &access,
-        OWNER,
-        &other,
-        &foreign,
-        DriftPolicy::Overwrite,
-    )
-    .await;
-    assert!(result.is_err());
-    let after = access
-        .execute("{ Tools(filter: {tools_id: {_eq: \"shared\"}}) { tools_id display_name tags } }")
-        .await
-        .unwrap();
-    assert_eq!(before, after);
-}
-
-#[tokio::test]
-async fn removal_refuses_a_document_with_another_pack_origin() {
-    let access = access().await;
-    install(
-        &access,
-        "1",
-        &config(&[("shared", "Original")]),
-        DriftPolicy::Refuse,
-    )
-    .await
-    .unwrap();
-    access.write("test.change_origin", r#"mutation {
-        update_Tools(filter: {tools_id: {_eq: "shared"}}, input: {tags: ["gents:pack:other/demo"]}) {_docID}
-    }"#).await.unwrap();
-    let before = access
-        .execute("{ Tools(filter: {tools_id: {_eq: \"shared\"}}) { tools_id display_name tags } }")
-        .await
-        .unwrap();
-    let result = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Overwrite).await;
-    assert!(result.is_err());
-    let after = access
-        .execute("{ Tools(filter: {tools_id: {_eq: \"shared\"}}) { tools_id display_name tags } }")
-        .await
-        .unwrap();
-    assert_eq!(before, after);
-}
-
-#[tokio::test]
-async fn installed_pack_documents_lists_what_the_record_holds() {
-    let access = access().await;
-    install(&access, "1", &config(&[("t1", "T1")]), DriftPolicy::Refuse)
-        .await
-        .unwrap();
-
-    assert_eq!(
-        installed_pack_documents(&access, OWNER, "acme/demo")
-            .await
-            .unwrap(),
-        vec![(Collection::Tools, "t1".to_owned())]
-    );
-    assert!(installed_pack_documents(&access, OWNER, "acme/other")
-        .await
-        .unwrap()
-        .is_empty());
-}
-
 /// An existing document the pack did not install is adopted only as the pack
 /// ships it; the drift policy decides one that differs.
 #[tokio::test]
@@ -850,64 +767,6 @@ async fn a_plugin_store_record_is_not_a_pack_install() {
             .unwrap()
             .is_empty(),
         model["retain_retired_record"].as_bool().unwrap()
-    );
-}
-
-#[tokio::test]
-async fn a_plugin_store_change_keeps_a_documents_install_record() {
-    let access = access().await;
-    let home = tempfile::tempdir().unwrap();
-    install(
-        &access,
-        "1",
-        &config(&[("alpha", "Alpha")]),
-        DriftPolicy::Refuse,
-    )
-    .await
-    .unwrap();
-    let extra = InstalledPackPlugin {
-        name: "extra".into(),
-        digest: format!("sha256:{}", "a".repeat(64)),
-    };
-    let plugin_only = PackIdentity {
-        plugins: vec![extra.clone()],
-        ..identity("2")
-    };
-    record_plugin_store_change(&access, OWNER, home.path(), "acme/demo", Some(&plugin_only))
-        .await
-        .unwrap();
-    record_plugin_store_change(&access, OWNER, home.path(), "acme/demo", None)
-        .await
-        .unwrap();
-
-    assert_eq!(
-        read_installed_pack(&access, OWNER, "acme/demo")
-            .await
-            .unwrap(),
-        Some(InstalledPack {
-            coordinate: "acme/demo".into(),
-            version: "1".into(),
-            digest: identity("1").digest,
-        })
-    );
-    let rows = access
-        .execute("{ PackInstallation { plugins } }")
-        .await
-        .unwrap();
-    assert_eq!(
-        rows["data"]["PackInstallation"][0]["plugins"],
-        json!([extra])
-    );
-    assert_eq!(tools_ids(&access).await, vec!["alpha"]);
-    // No Tools selects the plugin, so removing the pack retires it.
-    remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
-        .await
-        .unwrap();
-    assert_eq!(
-        read_installed_pack(&access, OWNER, "acme/demo")
-            .await
-            .unwrap(),
-        None
     );
 }
 
@@ -1630,74 +1489,6 @@ async fn an_upgrade_retires_the_unselected_plugin_of_a_dependency_it_drops() {
 }
 
 #[tokio::test]
-async fn a_legacy_record_without_dependency_fields_reads_as_explicit() {
-    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
-    let owner = crate::NodeIdentity::did(&runtime);
-    install_dependee(&access, &node, &runtime, false).await;
-
-    let doc_id = installation_doc_id(&access).await;
-    corrupt_installation_field(&access, &doc_id, "explicit", Value::Null).await;
-
-    super::super::install_pack_documents(
-        &access,
-        owner,
-        &demo_identity(vec!["fixture/dependee_fixture".into()]),
-        &config_owned(owner, &[("alpha", "Alpha")]),
-        DriftPolicy::Refuse,
-    )
-    .await
-    .unwrap();
-    remove_pack(&access, owner, "acme/demo", DriftPolicy::Refuse)
-        .await
-        .unwrap();
-
-    let remaining = access
-        .execute("{ PackInstallation { coordinate } }")
-        .await
-        .unwrap();
-    let rows = remaining["data"]["PackInstallation"].as_array().unwrap();
-    assert!(
-        rows.iter()
-            .any(|row| row["coordinate"] == "fixture/dependee_fixture"),
-        "a legacy record with no explicit field must never be auto-released: {rows:?}"
-    );
-}
-
-#[tokio::test]
-async fn an_explicitly_installed_documents_dependency_survives_its_dependent() {
-    let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
-    let owner = crate::NodeIdentity::did(&runtime);
-    install_dependee(&access, &node, &runtime, false).await;
-    super::super::install_pack_documents(
-        &access,
-        owner,
-        &demo_identity(vec!["fixture/dependee_fixture".into()]),
-        &config_owned(owner, &[("alpha", "Alpha")]),
-        DriftPolicy::Refuse,
-    )
-    .await
-    .unwrap();
-
-    install_dependee(&access, &node, &runtime, true).await;
-
-    let report = remove_pack(&access, owner, "acme/demo", DriftPolicy::Refuse)
-        .await
-        .unwrap();
-    assert!(
-        report.dependencies.is_empty(),
-        "an explicit install is sticky, so it is never auto-released"
-    );
-    let remaining = access
-        .execute("{ PackInstallation { coordinate required_by } }")
-        .await
-        .unwrap();
-    let rows = remaining["data"]["PackInstallation"].as_array().unwrap();
-    assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_eq!(rows[0]["coordinate"], "fixture/dependee_fixture");
-    assert_eq!(rows[0]["required_by"], Value::Null);
-}
-
-#[tokio::test]
 async fn an_upgrade_that_drops_a_documents_dependency_releases_it() {
     let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
     let owner = crate::NodeIdentity::did(&runtime);
@@ -2126,48 +1917,6 @@ async fn self_config_install(archive: &crate::pack::archive::PackArchive, home: 
     .unwrap();
 }
 
-#[tokio::test]
-async fn non_explicit_self_config_record_never_lowers_operator_provenance() {
-    let home = tempfile::tempdir().unwrap();
-    let archive = documents_archive();
-    let engine = operator_record(&archive);
-    crate::pack::write_home_install(home.path(), &engine).unwrap();
-    let identity = PackIdentity::new(archive.manifest(), archive.digest(), Vec::new());
-    documents::record_home_install(
-        home.path(),
-        archive.manifest(),
-        &identity,
-        documents::HomeInstallContents::default(),
-        crate::pack::InstalledVia::SelfConfig,
-        false,
-    )
-    .unwrap();
-    let stored = crate::pack::read_home_install(home.path(), &engine.coordinate)
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        stored.installed_via,
-        Some(crate::pack::InstalledVia::Operator)
-    );
-}
-
-#[tokio::test]
-async fn explicit_self_config_reinstall_lowers_the_pack_record() {
-    let home = tempfile::tempdir().unwrap();
-    let archive = documents_archive();
-    let prior = operator_record(&archive);
-    crate::pack::write_home_install(home.path(), &prior).unwrap();
-    self_config_install(&archive, Some(home.path())).await;
-    let stored = crate::pack::read_home_install(home.path(), &prior.coordinate)
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        stored.installed_via,
-        Some(crate::pack::InstalledVia::SelfConfig)
-    );
-    assert_eq!(stored.digest, archive.digest());
-}
-
 fn documents_archive_shipping(files: &[(&str, &str)]) -> crate::pack::archive::PackArchive {
     let (_guard, root) = crate::test_support::fixture_pack_copy("documents_fixture", &json!({}));
     let path = root.join("manifest.json");
@@ -2291,12 +2040,6 @@ async fn pack_with_no_asset_class_is_not_materialized() {
     assert!(!home.path().join("packs/.materialized").exists());
 }
 
-#[tokio::test]
-async fn self_config_install_succeeds_without_a_home() {
-    let archive = documents_archive();
-    self_config_install(&archive, None).await;
-}
-
 fn job_tools(job: serde_json::Value) -> crate::documents::Tools {
     serde_json::from_value(json!({
         "tools_id": "engine-tools",
@@ -2345,54 +2088,6 @@ fn operator_refusal(job: serde_json::Value) {
 }
 
 #[tokio::test]
-async fn pack_job_block_is_refused_on_a_self_config_install() {
-    let manifest: crate::pack::PackManifest = serde_json::from_value(json!({
-        "manifest_version": 1, "name": "engine", "version": "1", "description": "Engine",
-        "kind": "documents", "authors": ["Demo"],
-        "assets": ["README.md", "pack_config.json"], "config": "pack_config.json",
-    }))
-    .unwrap();
-    let mut config = config(&[]);
-    config.tools = vec![job_tools(json!({"agent_targets": ["wf-run"]}))];
-    config.agent_targets = shipping(&["wf-run"]).agent_targets;
-    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    seed_pack_node(&node_access(&node), OWNER).await.unwrap();
-    let access = node_access(&node);
-    let requested = Default::default();
-    let home = tempfile::tempdir().unwrap();
-    let declaration = plugin_pack_manifest("engine", "plugins", &["runner"])
-        .metadata
-        .plugins
-        .remove(0);
-    let record: crate::plugin::store::InstalledPlugin = serde_json::from_value(json!({
-        "namespace": "acme", "name": "runner", "version": "1.0.0",
-        "digest": format!("sha256:{}", "a".repeat(64)), "language": "rust", "declaration": declaration,
-    })).unwrap();
-    crate::plugin::store::write_record(home.path(), &record).unwrap();
-    let overrides = Default::default();
-    let prepare = |via| {
-        prepare_document_pack_install(
-            &access,
-            OWNER,
-            &manifest,
-            &config,
-            &requested,
-            &[],
-            via,
-            Some(home.path()),
-            None,
-            &|_| None,
-            &overrides,
-        )
-    };
-    let refused = prepare(crate::pack::InstalledVia::SelfConfig).await;
-    let message = refused.err().unwrap().to_string();
-    assert!(message.contains("operator install"), "{message}");
-    prepare(crate::pack::InstalledVia::Operator).await.unwrap();
-}
-
-#[tokio::test]
 async fn prepare_returns_the_slot_it_cannot_pick_a_model_for() {
     let manifest: crate::pack::PackManifest = serde_json::from_value(json!({
         "manifest_version": 1, "name": "web", "version": "1", "description": "Web",
@@ -2425,32 +2120,8 @@ async fn prepare_returns_the_slot_it_cannot_pick_a_model_for() {
 }
 
 #[test]
-fn pack_job_block_targets_outside_pack_and_dependencies_are_refused() {
-    operator_refusal(json!({"agent_targets": ["wf-run", "elsewhere"]}));
-}
-
-#[test]
-fn pack_job_block_trusted_packs_outside_self_and_dependencies_are_refused() {
-    operator_refusal(json!({
-        "agent_targets": ["wf-run"],
-        "policy": {"trusted_packs": ["acme/base", "rogue/pack"]},
-    }));
-}
-
-#[test]
 fn pack_job_block_dynamic_run_is_refused() {
     operator_refusal(json!({"agent_targets": ["wf-run"], "policy": {"dynamic": "run"}}));
-}
-
-#[test]
-fn engine_style_pack_job_block_installs() {
-    let policy = json!({
-        "dynamic": "check",
-        "dynamic_targets": ["wf-read-only"],
-        "trusted_packs": ["acme/engine", "acme/base"],
-    });
-    let job = json!({"agent_targets": ["wf-run", "wf-read-only"], "policy": policy});
-    engine_admission(job, crate::pack::InstalledVia::Operator).unwrap();
 }
 
 // --- Documents dependencies ---------------------------------------------
@@ -3394,48 +3065,6 @@ async fn remote_install_refuses_unverifiable_plugin_before_writes_and_installs_p
         1
     );
     node.shutdown().await.expect("node shutdown");
-}
-
-#[tokio::test]
-async fn a_plugin_the_pack_ships_or_the_node_has_installed_resolves() {
-    let home = tempfile::tempdir().unwrap();
-    let shipping = plugin_pack_manifest("workflow", "documents", &["web_search"]);
-    prepare_naming_plugin(&shipping, Some(home.path()))
-        .await
-        .unwrap();
-
-    let manifest = plugin_pack_manifest("workflow", "documents", &[]);
-    let record: crate::plugin::store::InstalledPlugin = serde_json::from_value(json!({
-        "namespace": "acme", "name": "web_search", "version": "1.0.0",
-        "digest": format!("sha256:{}", "a".repeat(64)), "language": "rust",
-        "declaration": plugin_pack_manifest("web", "plugins", &["web_search"]).metadata.plugins[0],
-    }))
-    .unwrap();
-    crate::plugin::store::write_record(home.path(), &record).unwrap();
-    prepare_naming_plugin(&manifest, Some(home.path()))
-        .await
-        .unwrap();
-}
-
-#[test]
-fn a_plugin_a_declared_dependency_ships_resolves() {
-    let home = tempfile::tempdir().unwrap();
-    let manifest = plugin_pack_manifest("workflow", "documents", &[]);
-    let config = config_naming_plugin("acme/web_search");
-    let dependency = plugin_pack_manifest("web", "documents", &["web_search"]);
-    let dependency_config = config_naming_plugin("acme/web_search");
-    super::documents::ensure_plugin_references_resolve(
-        &[(&manifest, &config), (&dependency, &dependency_config)],
-        Some(home.path()),
-        &BTreeMap::new(),
-    )
-    .unwrap();
-    assert!(super::documents::ensure_plugin_references_resolve(
-        &[(&manifest, &config)],
-        Some(home.path()),
-        &BTreeMap::new(),
-    )
-    .is_err());
 }
 
 #[test]

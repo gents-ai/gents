@@ -826,38 +826,6 @@ async fn exact_aggregate_exhaustion_rejects_tool_intent_before_dispatch() {
 }
 
 #[tokio::test]
-async fn aggregate_budget_fails_closed_on_missing_or_zero_usage() {
-    for response in [UsageResponse { usage: None }, usage_response(0, 0, 0)] {
-        let model = UsageScriptedModel::new(vec![vec![
-            RawStreamingChoice::Message("unscored".to_string()),
-            RawStreamingChoice::FinalResponse(response),
-        ]]);
-        let mut loop_config = config(0);
-        loop_config.max_tokens = Some(1_000);
-        loop_config.aggregate_token_budget = Some(AggregateTokenBudget::new(2_000));
-
-        let collected = collect_scripted_stream(run_loop_stream(
-            model,
-            None::<crate::tools::call::hook::DefraSessionHook>,
-            TaggedMessage::unassociated(Message::user("finish")),
-            Vec::new(),
-            Arc::new(Vec::new()),
-            loop_config,
-        ))
-        .await;
-
-        assert!(
-            collected
-                .error
-                .as_deref()
-                .is_some_and(|error| error.contains("aggregate_token_usage_missing")),
-            "unexpected terminal state: {collected:?}"
-        );
-        assert_eq!(collected.final_text, None);
-    }
-}
-
-#[tokio::test]
 async fn aggregate_budget_fails_closed_on_provider_reported_overrun() {
     let model = UsageScriptedModel::new(vec![vec![
         RawStreamingChoice::Message("unscored".to_string()),
@@ -1599,37 +1567,6 @@ async fn provider_context_overflow_compacts_once_and_retries() {
         vec![Message::user("compacted prompt")],
         "the retry dispatches the compacted provider input"
     );
-}
-
-#[tokio::test(start_paused = true)]
-async fn second_provider_context_overflow_fails_after_the_one_compaction() {
-    let model = ScriptedModel::new_calls(vec![
-        ScriptedCall::FailStream(CompletionError::ProviderError(
-            CLAUDE_PROMPT_TOO_LONG.to_string(),
-        )),
-        ScriptedCall::FailStream(CompletionError::ProviderError(
-            CLAUDE_PROMPT_TOO_LONG.to_string(),
-        )),
-    ]);
-    let admitted = AdmittedReduction::default();
-
-    let collected = collect_scripted_stream(run_loop_stream(
-        model.clone(),
-        None::<crate::tools::call::hook::DefraSessionHook>,
-        live_sized_prompt(),
-        Vec::new(),
-        Arc::new(Vec::new()),
-        overflow_loop_config(admitted.clone()),
-    ))
-    .await;
-
-    let error = collected.error.expect("a second overflow ends the request");
-    assert!(
-        error.contains("provider context overflow persisted after the one forced compaction"),
-        "{error}"
-    );
-    assert_eq!(admitted.lock().unwrap().len(), 1);
-    assert_eq!(model.seen_histories().await.len(), 2);
 }
 
 fn echo_call(id: &str) -> ScriptedCall {

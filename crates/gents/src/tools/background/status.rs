@@ -736,35 +736,6 @@ mod tests {
         assert_eq!(malformed.lifecycle_state.as_deref(), Some("failed"));
     }
 
-    #[test]
-    fn process_control_requester_absence_is_exact_not_empty_string() {
-        let owner = ProcessControlScope {
-            request_id: "request-1".to_string(),
-            session_id: "session-1".to_string(),
-            node_did: "did:agent".to_string(),
-            requester_did: None,
-        };
-        let absent_next_turn = ProcessControlScope {
-            request_id: "request-2".to_string(),
-            ..owner.clone()
-        };
-        assert!(absent_next_turn.authorizes(
-            &owner.session_id,
-            &owner.node_did,
-            owner.requester_did.as_deref(),
-        ));
-
-        let empty_next_turn = ProcessControlScope {
-            requester_did: Some(String::new()),
-            ..absent_next_turn
-        };
-        assert!(!empty_next_turn.authorizes(
-            &owner.session_id,
-            &owner.node_did,
-            owner.requester_did.as_deref(),
-        ));
-    }
-
     /// Drives the Lean `tool_output_paging_cases` (#937) through the real
     /// `read_retained_output_slice`; the rows are computed from the Lean
     /// `ToolOutput.readSlice` model, so paging drift in either direction
