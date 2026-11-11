@@ -850,6 +850,48 @@ impl PluginExecutor {
     }
 }
 
+#[async_trait::async_trait]
+impl crate::tools::plugin_host::PluginHost for PluginExecutor {
+    fn home(&self) -> Option<&Path> {
+        PluginExecutor::home(self)
+    }
+
+    fn installed(&self) -> Result<Vec<InstalledPlugin>> {
+        PluginExecutor::installed(self)
+    }
+
+    fn installed_record(&self, coordinate: &str) -> Result<InstalledPlugin> {
+        PluginExecutor::installed_record(self, coordinate)
+    }
+
+    fn resolve(&self, coordinate: &str, pinned: Option<&str>) -> Result<InstalledPlugin> {
+        PluginExecutor::resolve(self, coordinate, pinned)
+    }
+
+    async fn call_outcome(
+        &self,
+        record: &InstalledPlugin,
+        input: serde_json::Value,
+    ) -> Result<PluginOutcome> {
+        Ok(PluginExecutor::call(self, record, input).await?.outcome)
+    }
+
+    async fn run_plugin_once(
+        self: Arc<Self>,
+        coordinate: &str,
+        selected: &[crate::documents::PluginToolRef],
+        node: Arc<defra_node::Node>,
+        node_did: &str,
+        agent_did: Option<&str>,
+        input: serde_json::Value,
+    ) -> Result<(serde_json::Value, Option<String>, Option<String>)> {
+        super::tool::PluginTool::for_run(self, coordinate, selected)?
+            .with_agent_data(node, node_did, agent_did)?
+            .run_once(input)
+            .await
+    }
+}
+
 pub async fn call_runner(
     coordinate: &str,
     runner: Arc<PluginRunner>,

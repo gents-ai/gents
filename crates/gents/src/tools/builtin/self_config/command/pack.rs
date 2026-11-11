@@ -1,5 +1,4 @@
 use super::*;
-use crate::plugin::tool::PluginTool;
 
 impl ConfigCommandTool {
     pub(super) fn plugin(&self, argv: &[String]) -> Result<String> {
@@ -93,13 +92,16 @@ impl ConfigCommandTool {
             .into());
         }
         let (output, unserved, binding_note) =
-            PluginTool::for_run(self.plugins.clone(), coordinate, &self.selected_plugins)?
-                .with_agent_data(
+            self.plugins
+                .clone()
+                .run_plugin_once(
+                    coordinate,
+                    &self.selected_plugins,
                     self.node.clone(),
                     &self.node_did,
                     Some(self.core.agent_did()),
-                )?
-                .run_once(input)
+                    input,
+                )
                 .await
                 .with_context(|| format!("calling plugin {coordinate}"))?;
         ordered! {"output": output, "unserved": unserved, "plugin": coordinate, "binding_note": binding_note}.pretty()

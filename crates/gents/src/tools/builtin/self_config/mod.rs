@@ -151,7 +151,7 @@ pub fn build_self_config_tools(
     node_did: String,
     identity: Option<Arc<dyn NodeIdentity>>,
     config: &SelfConfigToolConfig,
-    plugins: Arc<crate::plugin::executor::PluginExecutor>,
+    plugins: Arc<dyn crate::tools::plugin_host::PluginHost>,
 ) -> Vec<Box<dyn ToolDyn>> {
     build_self_config_tools_with_runtime(
         usage_cache,
@@ -216,7 +216,7 @@ pub async fn build_runtime_self_config_tools(
     agent_identity: Arc<dyn NodeIdentity>,
     runtime_identity: Arc<dyn NodeIdentity>,
     config: &SelfConfigToolConfig,
-    plugins: Arc<crate::plugin::executor::PluginExecutor>,
+    plugins: Arc<dyn crate::tools::plugin_host::PluginHost>,
 ) -> Result<Vec<Box<dyn ToolDyn>>> {
     let node_did = runtime_identity.did().to_owned();
     let binding = runtime_node_binding(&node, &node_did, runtime_identity.as_ref()).await?;
@@ -243,7 +243,7 @@ pub(crate) fn build_self_config_tools_with_runtime(
     identity: Option<Arc<dyn NodeIdentity>>,
     runtime_identity: Option<Arc<dyn NodeIdentity>>,
     config: &SelfConfigToolConfig,
-    plugins: Arc<crate::plugin::executor::PluginExecutor>,
+    plugins: Arc<dyn crate::tools::plugin_host::PluginHost>,
     node_binding: Option<crate::documents::ConfigurationNodeBinding>,
 ) -> Vec<Box<dyn ToolDyn>> {
     if !config.enabled {
