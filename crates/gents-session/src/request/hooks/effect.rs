@@ -49,7 +49,9 @@ pub struct Grant {
 }
 
 /// Lean `Hooks.Write`. There is no blind write and no upsert. A create's
-/// `grants` are published with the document it creates and nowhere else.
+/// `grants` are published with the document it creates and nowhere else. An
+/// update's or delete's `conflict` is what the caller is told when its
+/// revision fence is lost; it does not change what is applied.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Write {
     Create {
@@ -61,10 +63,12 @@ pub enum Write {
         doc: DocRef,
         expected: u64,
         value: Value,
+        conflict: Option<String>,
     },
     Delete {
         doc: DocRef,
         expected: u64,
+        conflict: Option<String>,
     },
 }
 
@@ -72,6 +76,14 @@ impl Write {
     pub fn doc(&self) -> &DocRef {
         match self {
             Self::Create { doc, .. } | Self::Update { doc, .. } | Self::Delete { doc, .. } => doc,
+        }
+    }
+
+    /// The caller-facing message for a lost revision fence.
+    pub fn conflict(&self) -> Option<&str> {
+        match self {
+            Self::Create { .. } => None,
+            Self::Update { conflict, .. } | Self::Delete { conflict, .. } => conflict.as_deref(),
         }
     }
 

@@ -16,7 +16,7 @@ use gents_session::request::hooks::effect::{
     DocRef, Effect, Grant, Manifest, OwnedCollection, Row, Subject, Write, SESSION_CHILD_GRANTS,
 };
 use gents_session::request::hooks::hook::{Direction, Hook, Outcome, Query};
-use gents_session::request::hooks::operations::{supersede_pending, StaleRequest};
+use gents_session::request::hooks::operations::{supersede_pending, Selector};
 use gents_session::request::hooks::prepared::{Decide, Verdict};
 use gents_session::request::hooks::queue_scope::{ScopeAnswer, ScopeAnswers, ScopeFailure};
 use gents_session::request::hooks::registry::{
@@ -144,6 +144,7 @@ impl PauseOnHalt {
                 doc: row.doc.clone(),
                 expected: row.revision,
                 value: input,
+                conflict: None,
             }),
             crate::triggers::lifecycle_hooks::settle_goal_outcomes(
                 &goal.node_did,
@@ -218,6 +219,7 @@ impl RestageOnResume {
                     doc: row.doc.clone(),
                     expected: row.revision,
                     value: operator_resume::resume_state_input(&goal, post, None, now),
+                    conflict: None,
                 })])
             }
             client_control::PreparedGoalControl::ResumeIdle { goal, predecessor } => {
@@ -251,6 +253,7 @@ impl RestageOnResume {
                             Some((resumed.sequence, &predecessor)),
                             now,
                         ),
+                        conflict: None,
                     }),
                     gents_session::request::lifecycle::requested_create::request_create(
                         resumed.create,
@@ -472,7 +475,7 @@ impl TaskGoalAssignment {
             fire.session_id == request.session_id,
             "Task receipt session differs from claimed request"
         );
-        let [sessions, goals, requests, usage] = rows else {
+        let [sessions, goals, usage] = rows else {
             bail!("Task Goal assignment was not shown its declared rows");
         };
         let previous = canonical_goal(&request.session_id, sessions, goals)?;
@@ -612,6 +615,7 @@ impl TaskGoalAssignment {
                     doc: row.doc.clone(),
                     expected: row.revision,
                     value: input.clone(),
+                    conflict: Some("Task Goal assignment lost its continuation fence".into()),
                 }));
                 let mut value = row.value.clone();
                 merge(&mut value, input);
@@ -620,27 +624,16 @@ impl TaskGoalAssignment {
         };
         let assigned: GoalDocument =
             serde_json::from_value(assigned).context("decoding the assigned Task Goal")?;
-        let requests = requests
-            .iter()
-            .map(|row| serde_json::from_value::<AgentRequestRow>(row.value.clone()))
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        let stale = request_head::stale_assignment_continuations(&assigned, None, &requests)?;
-        if !stale.is_empty() {
-            effects.push(supersede_pending(
-                &assigned.node_did,
-                at,
-                stale
-                    .into_iter()
-                    .map(|stale| StaleRequest {
-                        doc_id: stale.doc_id,
-                        request_id: stale.request_id,
-                        successor: stale.survivor_request_id,
-                        successor_doc: stale.survivor_doc_id,
-                        reason: request_head::STALE_ASSIGNMENT_REASON.into(),
-                    })
-                    .collect(),
-            ));
-        }
+        effects.push(supersede_pending(&Selector {
+            node_did: assigned.node_did.clone(),
+            session_id: assigned.session_id.clone(),
+            goal_id: assigned.goal_id.clone(),
+            root_doc_id: request.doc_id.clone(),
+            successor: request.request_id.clone(),
+            successor_doc: request.doc_id.clone(),
+            reason: request_head::STALE_ASSIGNMENT_REASON.into(),
+            at: at.to_owned(),
+        }));
         effects.push(crate::triggers::lifecycle_hooks::apply_goal_assignment(
             &fire.doc_id,
         ));
@@ -672,12 +665,6 @@ impl Hook<ClaimApplied> for TaskGoalAssignment {
         vec![
             session,
             goals,
-            Query::select(
-                "AgentRequest",
-                gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
-            )
-            .eq("node_did", request.node_did.clone())
-            .eq("session_id", request.session_id.clone()),
             Query::core(
                 gents_tools::native::SESSION_TOKEN_USAGE,
                 serde_json::json!({

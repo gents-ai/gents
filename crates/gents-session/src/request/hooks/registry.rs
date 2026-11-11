@@ -109,12 +109,6 @@ pub trait CoreOperation: Send + Sync {
         context: OperationContext<'_>,
         args: &Value,
     ) -> anyhow::Result<()>;
-
-    /// How many of the requesting plugin's bound these arguments consume: an
-    /// operation over a list counts its entries.
-    fn extent(&self, _args: &Value) -> usize {
-        1
-    }
 }
 
 /// A named core read a plugin may declare (Lean `Hooks.Read.core`). Core

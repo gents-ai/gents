@@ -88,6 +88,7 @@ fn effect(lean: &LeanLifecycleHookEffect) -> Effect {
             doc: DocRef::new(collection, doc),
             expected: *expected,
             value: Value::String(value.clone()),
+            conflict: None,
         }),
         LeanLifecycleHookEffect::Delete {
             collection,
@@ -96,6 +97,7 @@ fn effect(lean: &LeanLifecycleHookEffect) -> Effect {
         } => Effect::Write(Write::Delete {
             doc: DocRef::new(collection, doc),
             expected: *expected,
+            conflict: None,
         }),
         LeanLifecycleHookEffect::Core { op } => Effect::Core(CoreOp::new(op, Value::Null)),
     }
@@ -210,6 +212,7 @@ impl StoreDouble {
                 doc,
                 expected,
                 value,
+                ..
             } => {
                 let mut held = false;
                 for row in rows.iter_mut() {
@@ -221,7 +224,7 @@ impl StoreDouble {
                 }
                 held
             }
-            Write::Delete { doc, expected } => {
+            Write::Delete { doc, expected, .. } => {
                 if !rows
                     .iter()
                     .any(|row| &row.doc == doc && row.revision == *expected)
@@ -241,7 +244,10 @@ impl StoreDouble {
             match effect {
                 Effect::Write(write) => {
                     if !Self::write(&mut next.rows, write) {
-                        return Err(HookError::Conflict { plugin });
+                        return Err(HookError::Conflict {
+                            plugin,
+                            message: write.conflict().map(str::to_owned),
+                        });
                     }
                 }
                 Effect::Core(operation) => {
@@ -270,7 +276,7 @@ impl StoreDouble {
                     plugin: (*plugin).to_owned(),
                 }
             }
-            HookError::Conflict { plugin } => LeanLifecycleHookRefusal::Conflict {
+            HookError::Conflict { plugin, .. } => LeanLifecycleHookRefusal::Conflict {
                 plugin: (*plugin).to_owned(),
             },
             HookError::Operation(_) => LeanLifecycleHookRefusal::Conflict {

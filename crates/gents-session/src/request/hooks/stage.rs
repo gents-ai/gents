@@ -21,10 +21,12 @@ pub enum HookError {
     },
     #[error("lifecycle plugin {plugin} returned effects where only a verdict is accepted")]
     GateEffects { plugin: &'static str },
-    #[error(
-        "lifecycle plugin {plugin} staged a write against a row that changed or was not shown"
-    )]
-    Conflict { plugin: &'static str },
+    /// `message` is the plugin's caller-facing text for the lost fence.
+    #[error("{}", conflict_text(plugin, message.as_deref()))]
+    Conflict {
+        plugin: &'static str,
+        message: Option<String>,
+    },
     #[error("lifecycle plugin {plugin} requested the unknown core operation {operation}")]
     UnknownOperation {
         plugin: &'static str,
@@ -58,6 +60,16 @@ pub enum HookError {
     /// A declared named core read failed; the caller sees the read's own error.
     #[error(transparent)]
     CoreRead(anyhow::Error),
+}
+
+fn conflict_text(plugin: &str, message: Option<&str>) -> String {
+    let lost = format!(
+        "lifecycle plugin {plugin} staged a write against a row that changed or was not shown"
+    );
+    match message {
+        Some(message) => format!("{message} ({lost})"),
+        None => lost,
+    }
 }
 
 /// Why one plugin's effects were not applied. `clean` is whether the staged
