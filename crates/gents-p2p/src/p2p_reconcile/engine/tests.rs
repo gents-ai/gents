@@ -16,8 +16,8 @@ use super::sweep::{
 use super::*;
 use crate::p2p_reconcile::templates::PairingFilters;
 use crate::p2p_reconcile::{
-    to_replication_filters, RemoteP2pAdmin, RemoteP2pAdminError,
-    RemoteP2pAdminResult, RemoteReplicator,
+    to_replication_filters, RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult,
+    RemoteReplicator,
 };
 use gents_store::graphql::rows;
 
@@ -31,4 +31,5 @@ include!("tests/reconnect.rs");
 include!("tests/topology.rs");
 include!("tests/applied_state.rs");
 include!("tests/convergence.rs");
+include!("tests/tick.rs");
 include!("tests/overlay_acp.rs");

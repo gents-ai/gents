@@ -164,23 +164,6 @@ async fn stale_peer_dial_does_not_head_of_line_block_ready_peer() {
 }
 
 #[tokio::test]
-async fn read_failure_noops_without_remote_reads() {
-    let store = MockStore {
-        desired: Mutex::new(Err("boom".into())),
-        ..Default::default()
-    };
-    let admin = MockAdmin::default();
-
-    let outcome = reconcile_peer_tick(&admin, &store, "peer-a")
-        .await
-        .expect("tick result");
-
-    assert!(outcome.desired_read_failed);
-    assert!(outcome.ops_applied.is_empty());
-    assert!(admin.emitted.lock().unwrap().is_empty());
-}
-
-#[tokio::test]
 async fn peer_reconnect_between_sweeps_replays_on_connection_event() {
     let filter = one_filter("AgentRequest", "requester_did", "did:key:peer");
     let store = MockStore::with_desired(Some(PairingDesired {

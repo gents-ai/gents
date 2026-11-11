@@ -49,6 +49,7 @@ import Proofs.ToolCalls.Identity.ClientAgentJournal
 import Proofs.Conformance.Identity.NodeFileRequests
 import Proofs.Conformance.PairingOwnedDiff
 import Proofs.Conformance.PairingDataPlane
+import Proofs.Conformance.PairingTick
 import Proofs.Conformance.SchemaObligations
 import Proofs.Store.Identity.MailboxAccess
 import Proofs.Store.Identity.WorkspaceAndFileRequests

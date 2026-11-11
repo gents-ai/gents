@@ -6,8 +6,6 @@ const TEST_TRANSPORT_PEER_ID: &str =
     "6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb";
 const TEST_TRANSPORT_ADDRESS_A: &str =
     "127.0.0.1:56091/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb";
-const TEST_TRANSPORT_ADDRESS_B: &str =
-    "127.0.0.1:56092/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb";
 
 fn one_filter(collection: &str, field: &str, value: &str) -> PairingFilters {
     let mut filters = PairingFilters::new();
