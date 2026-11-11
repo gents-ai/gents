@@ -1,6 +1,7 @@
 import Proofs.Inference.InferenceCall.LimitObservation
 import Proofs.Inference.InferenceCall.Usage
 import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Family
 
 namespace Conformance.ProviderUsage
 
@@ -107,12 +108,22 @@ theorem witnesses_reject_subsets_and_summary_overflow :
   native_decide
 
 
-def limitReadCasesJson : String :=
-  let triggers := [(InferenceCall.LimitObservation.Trigger.cached, "cached"), (.open, "open"), (.refresh, "refresh")]
-  let times : List (Option Int) := [none, some 699, some 700, some 701, some 1000, some 1001]
-  jsonArray (triggers.flatMap fun (trigger, name) => times.map fun previous =>
-    "{\"trigger\":" ++ jsonString name ++ ",\"now\":1000,\"previous\":" ++
-    (match previous with | none => "null" | some time => toString time) ++
-    ",\"should_read\":" ++ toString (InferenceCall.LimitObservation.shouldRead trigger 1000 previous) ++ "}")
+deriving instance Lean.ToJson for InferenceCall.LimitObservation.Trigger
+
+structure LimitReadInput where
+  trigger : InferenceCall.LimitObservation.Trigger
+  now : Nat
+  previous : Option Nat
+  deriving Lean.ToJson
+
+@[conformance_family]
+def limitRead : Conformance.Family LimitReadInput Bool where
+  inputs :=
+    let triggers : List InferenceCall.LimitObservation.Trigger := [.cached, .open, .refresh]
+    let times : List (Option Nat) := [none, some 699, some 700, some 701, some 1000, some 1001]
+    triggers.flatMap fun trigger => times.map fun previous => { trigger, now := 1000, previous }
+  model := fun i =>
+    InferenceCall.LimitObservation.shouldRead i.trigger (i.now : Int)
+      (i.previous.map fun time => (time : Int))
 
 end Conformance.ProviderUsage
