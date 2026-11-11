@@ -56,7 +56,7 @@ pub(super) fn entry_matches_assignment(
     }
 }
 
-pub(crate) enum RequestAssignmentObservation {
+pub enum RequestAssignmentObservation {
     None,
     Unknown,
     Assigned(Box<GoalDocument>),
@@ -433,7 +433,7 @@ fn request_assignments(
     })
 }
 
-pub(crate) struct RequestAssignmentScopes<'a, R>
+pub struct RequestAssignmentScopes<'a, R>
 where
     R: gents_store::config_client::ConfigRead,
 {

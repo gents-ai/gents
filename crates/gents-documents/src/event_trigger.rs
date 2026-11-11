@@ -8,12 +8,12 @@ pub const TRIGGER_CURSOR_BATCH_SIZE: usize = 64;
 
 #[derive(Debug, Default, Clone)]
 pub struct TriggerRuntimeUpdate {
-    pub(crate) next_run_at: Option<String>,
-    pub(crate) last_attempt_at: Option<String>,
-    pub(crate) last_fired_source_doc_id: Option<String>,
-    pub(crate) last_status: Option<String>,
-    pub(crate) last_error: Option<String>,
-    pub(crate) fire_count_delta: Option<i64>,
+    pub next_run_at: Option<String>,
+    pub last_attempt_at: Option<String>,
+    pub last_fired_source_doc_id: Option<String>,
+    pub last_status: Option<String>,
+    pub last_error: Option<String>,
+    pub fire_count_delta: Option<i64>,
 }
 
 fn trigger_runtime_input(

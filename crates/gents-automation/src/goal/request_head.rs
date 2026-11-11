@@ -238,7 +238,7 @@ where
     })
 }
 
-pub(crate) struct AuthenticatedGoalRequestMembers<'a> {
+pub struct AuthenticatedGoalRequestMembers<'a> {
     pub(crate) entry: &'a AgentRequestRow,
     pub(crate) member_doc_ids: Vec<String>,
 }

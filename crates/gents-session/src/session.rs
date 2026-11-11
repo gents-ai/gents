@@ -3,6 +3,7 @@ use defra_node::Node as EmbeddedNode;
 use gents_inference::llm::message::Message;
 use serde::{Deserialize, Serialize};
 
+use gents_store::graphql::escape_graphql_string;
 
 mod archive;
 pub mod mailbox;

@@ -267,10 +267,10 @@ pub(crate) async fn stage_pending_child_request_in_txn(
 pub struct StageOptions<'a> {
     /// The request document this signed create already published (an
     /// idempotent retry); `None` publishes it in this transaction.
-    pub(crate) published_doc_id: Option<&'a str>,
+    pub published_doc_id: Option<&'a str>,
     /// A verified client graph publishes the request under its own signer.
-    pub(crate) signer: Option<&'a std::sync::Arc<db::block::builder::VerifiedClientCreate>>,
-    pub(crate) reserved_runtime_session: bool,
+    pub signer: Option<&'a std::sync::Arc<db::block::builder::VerifiedClientCreate>>,
+    pub reserved_runtime_session: bool,
 }
 
 /// Publish an admitted request through its admission kind, reread it, and

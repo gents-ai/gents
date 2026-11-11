@@ -140,7 +140,7 @@ impl GoalAssignmentVersion {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct GoalVersion {
+pub struct GoalVersion {
     pub(crate) goal: GoalDocument,
     pub(crate) commit_cid: String,
     pub(crate) height: i64,
