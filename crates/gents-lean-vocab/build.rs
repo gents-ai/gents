@@ -6,8 +6,6 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-/// One family's Rust types. A Lean enum becomes a type parameter, so the
-/// production enum is the decoder and its serde names are the checked vocabulary.
 #[derive(Default)]
 struct Module {
     structs: BTreeMap<String, (String, Vec<String>)>,
@@ -64,6 +62,7 @@ impl Module {
             };
             writeln!(body, "        pub {raw}{field_name}: {field_type},").unwrap();
         }
+        used.sort();
         if optional && !used.is_empty() {
             let bounds: Vec<String> = used
                 .iter()
@@ -103,17 +102,14 @@ fn main() {
             .expect("family schema JSON");
 
     let mut out = String::new();
-    for (key, vocabulary) in &schema["vocabularies"] {
+    for key in schema["vocabularies"].keys() {
         assert!(
             !schema["functions"].contains_key(key),
             "family key {key} names a function and a vocabulary"
         );
-        let name = vocabulary["enum"].as_str().expect("vocabulary enum name");
         writeln!(
             out,
             "pub mod {key} {{\n    \
-             /// Checks that `all`, every value of the production enum, is Lean `{name}`\n    \
-             /// under the same wire names.\n    \
              pub fn replay<T>(all: &[T])\n    where\n        \
              T: serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,\n    {{\n        \
              crate::family::replay_vocabulary({key:?}, all)\n    }}\n}}"
@@ -125,6 +121,7 @@ fn main() {
         let mut enums = Vec::new();
         let input = module.rust_type(&family["input"], &mut enums);
         let output = module.rust_type(&family["output"], &mut enums);
+        enums.sort();
         writeln!(out, "pub mod {key} {{").unwrap();
         for (name, (body, parameters)) in &module.structs {
             writeln!(

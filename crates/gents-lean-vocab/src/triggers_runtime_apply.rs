@@ -94,41 +94,6 @@ pub struct LeanClientAgentReadinessCase {
     pub expected_runtime_admissible: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanApplyDocRef {
-    pub node_did: String,
-    pub collection: String,
-    pub id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanApplyDesiredRow {
-    #[serde(rename = "ref")]
-    pub target: LeanApplyDocRef,
-    pub content: String,
-    pub refs: Vec<LeanApplyDocRef>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanApplyLiveRow {
-    #[serde(rename = "ref")]
-    pub target: LeanApplyDocRef,
-    pub value: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanApplyReconcileCase {
-    pub name: String,
-    pub accepted: bool,
-    pub candidate: Vec<LeanApplyDesiredRow>,
-    pub pre_desired: Vec<LeanApplyDesiredRow>,
-    pub pre_live: Vec<LeanApplyLiveRow>,
-    pub expected_after_live: Vec<LeanApplyLiveRow>,
-    pub expected_after_desired: Vec<LeanApplyDesiredRow>,
-    pub expected_retry_desired: Vec<LeanApplyDesiredRow>,
-    pub observations_preserved: bool,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct LeanReadinessPublicationCase {
     pub states: Vec<u64>,

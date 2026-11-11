@@ -46,7 +46,7 @@ import Proofs.Store.Identity.EnrollmentGrantConformance
 import Proofs.Store.Identity.ClientAgentCreation
 import Proofs.Store.Identity.AgentBlockSigning
 import Proofs.ToolCalls.Identity.ClientAgentJournal
-import Proofs.Store.Identity.NodeFileRequests
+import Proofs.Conformance.Identity.NodeFileRequests
 import Proofs.Store.Identity.MailboxAccess
 import Proofs.Store.Identity.WorkspaceAndFileRequests
 import Proofs.Store.Identity.PackPlacementReaders
@@ -698,7 +698,6 @@ def snapshotIdentityCasesJson : String :=
     ++ "\"workspace_publication_cases\":" ++ Identity.WorkspaceAndFileRequests.workspacePublicationCasesJson ++ ","
     ++ "\"workspace_quickstart_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceQuickstartCasesJson ++ ","
     ++ "\"mailbox_native_policy\":" ++ Identity.MailboxAccess.nativeCasesJson ++ ","
-    ++ "\"node_file_request_access_cases\":" ++ Identity.NodeFileRequests.requestAccessCasesJson ++ ","
     ++ "\"callback_workspace_actor_cases\":" ++ Identity.WorkspaceAndFileRequests.callbackActorCasesJson ++ ","
     ++ "\"session_input_edit_native_discovery_cases\":" ++ Identity.SessionInputEdit.discoveryCasesJson ++ ","
     ++ "\"session_input_edit_native_claim_cases\":" ++ Identity.SessionInputEdit.claimCasesJson ++ ","
@@ -825,16 +824,12 @@ def snapshotClientCasesJson : String :=
       ++ jsonArray (runtimeReconcileCases.map runtimeReconcileCaseJson) ++ ","
     ++ "\"client_agent_readiness_cases\":"
       ++ jsonArray (clientAgentReadinessCases.map clientAgentReadinessCaseJson) ++ ","
-    ++ "\"apply_reconcile_cases\":"
-      ++ ApplyReconcile.ContractCases.applyReconcileCasesJson ++ ","
     ++ "\"eval_outcome_cases\":"
       ++ Conformance.Eval.evalOutcomeCasesJson ++ ","
     ++ "\"eval_document_capture_cases\":"
       ++ Conformance.Eval.evalDocumentCaptureCasesJson ++ ","
     ++ "\"optimization_cases\":"
       ++ Conformance.Optimization.optimizationCasesJson ++ ","
-    ++ "\"publish_if_cases\":"
-      ++ ApplyReconcile.ContractCases.publishIfCasesJson ++ ","
     ++ "\"tool_policy_cases\":"
       ++ toolPolicyCasesJson ++ ","
     ++ "\"application_write_cases\":" ++ applicationWriteCasesJson ++ ","
@@ -923,12 +918,6 @@ def snapshotRuntimeCasesJson : String :=
     ++ "\"backend_resumed_turn_cases\":" ++ Conformance.BackendWake.resumedTurnCasesJson ++ ","
     ++ "\"completion_retry_cases\":"
       ++ CompletionRetry.Contracts.casesJson ++ ","
-    ++ "\"account_rotation_select_cases\":"
-      ++ AccountRotation.Contracts.selectCasesJson ++ ","
-    ++ "\"account_rotation_attempt_cases\":"
-      ++ AccountRotation.Contracts.attemptCasesJson ++ ","
-    ++ "\"account_rotation_observe_cases\":"
-      ++ AccountRotation.Contracts.observeCasesJson ++ ","
     ++ "\"boundaries\":"
       ++ boundariesJson ++ ","
     ++ "\"deviations\":"
