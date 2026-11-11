@@ -778,6 +778,10 @@ export function createChatActions({
     backgroundTool: (request: Parameters<DesktopApiAdapter["backgroundTool"]>[0]) =>
       api.backgroundTool(request),
     controlJob: (request: DesktopJobControlRequest) => api.jobControl(request),
+    listJobs: (request: Parameters<DesktopApiAdapter["listJobs"]>[0]) =>
+      api.listJobs(request),
+    getJobView: (request: Parameters<DesktopApiAdapter["getJobView"]>[0]) =>
+      api.getJobView(request),
     controlProcess: (request: OperatorProcessControlRequest) =>
       api.processControl(request),
     setChatFolder,

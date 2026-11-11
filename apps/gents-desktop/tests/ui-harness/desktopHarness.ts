@@ -630,6 +630,35 @@ function harnessWorkflowProgress(
   };
 }
 
+function workflowItems(): RenderedTimelineItem[] {
+  return [
+    {
+      kind: "toolGroup" as const,
+      itemKey: "workflow-tools",
+      messageSequence: 2,
+      tools: [
+        {
+          itemKey: "workflow-review",
+          toolName: "workflow",
+          statusKind: "running",
+          requestId: "request-intro",
+          toolCallId: "call-workflow-review",
+          toolCallDocId: WORKFLOW_ROW,
+          nodeDid: NODE_DID,
+          awaitMode: "background",
+          startedAt: STARTED_AT,
+          reconstruction: HARNESS_READY_RECONSTRUCTION,
+          presentation: { kind: "generic", input: null, output: null },
+          jobProgress: harnessWorkflowProgress(),
+          jobHandle: "review",
+          jobState: "running",
+          jobOrigin: "installed",
+        } as unknown as RenderedToolCallView,
+      ],
+    },
+  ];
+}
+
 function harnessAssistantItem(
   item: Omit<
     Extract<RenderedTimelineItem, { kind: "assistantMessage" }>,
@@ -668,6 +697,7 @@ export type DesktopUiHarnessScenario =
   | "days"
   | "automated-inputs"
   | "background"
+  | "workflows"
   | "notices"
   | "startup-port-in-use"
   | SharingScenario;
@@ -1231,6 +1261,7 @@ export function createDesktopUiHarness(
       ...(scenario === "days" ? dayItems() : []),
       ...(scenario === "automated-inputs" ? automatedInputItems() : []),
       ...(scenario === "background" ? backgroundItems() : []),
+      ...(scenario === "workflows" ? workflowItems() : []),
       ...(scenario === "coding"
         ? [
             {
@@ -4843,6 +4874,7 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "days":
     case "automated-inputs":
     case "background":
+    case "workflows":
     case "notices":
       return value;
     default:

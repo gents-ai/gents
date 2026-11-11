@@ -1,4 +1,4 @@
-import { useRef, type ReactNode } from "react";
+import { useRef, type ComponentProps, type ReactNode } from "react";
 import { ExternalLink } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import { href, type Route } from "@/lib/router";
@@ -16,6 +16,7 @@ export function EditorSheet({
   title,
   description,
   page,
+  finalFocus,
   children,
 }: {
   open: boolean;
@@ -23,6 +24,8 @@ export function EditorSheet({
   title: string;
   description?: string;
   page?: Route;
+  /* where focus goes on close; by default, back to what opened the sheet */
+  finalFocus?: ComponentProps<typeof SheetContent>["finalFocus"];
   children: ReactNode;
 }) {
   const body = useRef<HTMLDivElement>(null);
@@ -32,6 +35,7 @@ export function EditorSheet({
         side="right"
         className="flex w-full flex-col gap-0 border-border/60 max-md:max-w-full data-[side=right]:max-md:w-full md:w-[92vw] data-[side=right]:sm:max-w-3xl md:data-nested-dialog-open:-translate-x-[calc(var(--nested-dialogs)*1.5rem)] data-nested:shadow-[-16px_0_32px_-12px_rgb(0_0_0/0.35)]"
         overlayProps={{ onWheel: (e) => body.current?.scrollBy({ top: e.deltaY }) }}
+        finalFocus={finalFocus}
       >
         <SheetHeader className="pr-20">
           <SheetTitle>{title}</SheetTitle>
