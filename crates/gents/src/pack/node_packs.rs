@@ -19,6 +19,7 @@ use super::{
 };
 use crate::store::config_client::{ConfigAccess, ConfigurationNodeBinding, SchemaInstallPlan};
 
+pub use super::plugin_lifecycle::InstallError;
 pub use super::registry::split_pack_coordinate;
 pub use super::wiring::PluginWiring;
 pub(crate) use super::AgentProvisioner;
@@ -724,14 +725,14 @@ impl NodePacks<'_> {
         bindings: &PackInferenceBindings,
         actor: Option<::identity::Did>,
         node_binding: Option<ConfigurationNodeBinding>,
-    ) -> Result<plugin_lifecycle::InstalledHomePack> {
+    ) -> Result<plugin_lifecycle::InstalledHomePack, InstallError> {
         let home = self
             .home
             .context("plugins and assets packs require a runtime plugin home")?;
         let notify_access = self.access.clone();
         let notify_node = self.node_did.to_owned();
         let notify_home = home.to_owned();
-        let (record, plugins) = plugin_lifecycle::install(
+        let (record, plugins) = plugin_lifecycle::install_final(
             home,
             distribution.archive(),
             self.grants_authority,

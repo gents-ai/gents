@@ -255,8 +255,8 @@ impl ConfigCommandTool {
     /// puts every moved pin back: a Tools pinned to a digest that is not
     /// installed fails to build its tool surface. An install that failed
     /// after its publication became final
-    /// ([`crate::pack::plugin_lifecycle::publication_retained`]) keeps the moved pins,
-    /// which name the build that is installed.
+    /// ([`node_packs::InstallError::Retained`]) keeps the moved pins, which
+    /// name the build that is installed.
     async fn install_following_pins(
         &self,
         installer: PackInstaller,
@@ -275,13 +275,13 @@ impl ConfigCommandTool {
                 let call = pin_move_call(&conflict);
                 self.pin_edit_call(pin_edit(&conflict, &conflict.integrations))
                     .await
-                    .map_err(|error| CommandGuidance {
+                    .map_err(|error| anyhow::Error::from(CommandGuidance {
                         message: format!(
                             "plugin {coordinate} built and passed its cases, but nothing was installed: Tools {:?} of agent {} pins the previous build ({}) and could not be moved to {}: {error:#}. Move the pin with the tools update below, then repeat [\"plugin\",\"build\",{id:?}] with no set: the saved source builds to that same digest.",
                             conflict.tools, conflict.agent, conflict.pin, conflict.replacement
                         ),
                         next_call: call,
-                    })?;
+                    }))?;
                 followed.push(json!({"tools": conflict.tools, "agent": conflict.agent, "from": conflict.pin, "to": conflict.replacement}));
                 moved.push(conflict);
                 #[cfg(test)]
@@ -294,7 +294,7 @@ impl ConfigCommandTool {
                 }
             }
             installer
-                .plugins_pack(
+                .plugins_pack_final(
                     if update { "update" } else { "install" },
                     &PackChange {
                         expected_digest: Some(distribution.digest().to_owned()),
@@ -308,8 +308,8 @@ impl ConfigCommandTool {
         .await;
         match installed {
             Ok(receipt) => Ok((receipt, followed)),
-            Err(error) if crate::pack::plugin_lifecycle::publication_retained(&error) => {
-                Err(error.context(if moved.is_empty() {
+            Err(retained @ node_packs::InstallError::Retained(_)) => {
+                Err(anyhow::Error::new(retained).context(if moved.is_empty() {
                     "the new build is installed; no selection's pin was moved".to_owned()
                 } else {
                     format!(
@@ -318,7 +318,8 @@ impl ConfigCommandTool {
                     )
                 }))
             }
-            Err(error) => {
+            Err(node_packs::InstallError::NotInstalled(error)) => {
+                let error = error.into_anyhow();
                 let mut stranded = Vec::new();
                 for conflict in moved.iter().rev() {
                     if let Err(restore) = self

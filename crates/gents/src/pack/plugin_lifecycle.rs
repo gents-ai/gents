@@ -26,19 +26,39 @@ pub struct PluginStageChanges {
     pub(crate) installed: Vec<store::InstalledPlugin>,
 }
 
-/// The install failed after its publication became final: the plugins are
-/// installed in the home at the new digests, and only the node's record of
-/// them was not confirmed. A caller that staged anything for the new digests
-/// keeps it; every other install error means the publication was rolled back
-/// or never made.
+/// How an install of a plugins or assets pack failed, by what it left: the
+/// caller that staged anything for the new digests (a rebuild's moved pins)
+/// keeps it only when the publication stayed.
 #[derive(Debug, thiserror::Error)]
-#[error("the pack was installed locally, but its node notification was not confirmed; retry the pack operation to reconcile the node record")]
-pub struct PublicationRetained(#[source] Box<dyn std::error::Error + Send + Sync>);
+pub enum InstallError {
+    /// The publication was rolled back or never made: the home holds what it
+    /// held before.
+    #[error(transparent)]
+    NotInstalled(PackChangeError),
+    /// The publication is final: the plugins are installed in the home at
+    /// the new digests, and only the node's record of them was not
+    /// confirmed.
+    #[error("the pack was installed locally, but its node notification was not confirmed; retry the pack operation to reconcile the node record")]
+    Retained(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
 
-/// Whether `error` is an install failure that left the publication
-/// installed ([`PublicationRetained`]).
-pub fn publication_retained(error: &anyhow::Error) -> bool {
-    gents_protocol::error_chain::find_source::<PublicationRetained>(error.as_ref()).is_some()
+impl<E> From<E> for InstallError
+where
+    E: Into<PackChangeError>,
+{
+    fn from(error: E) -> Self {
+        Self::NotInstalled(error.into())
+    }
+}
+
+impl InstallError {
+    /// The failure for a caller that does not act on what it left.
+    pub fn into_change_error(self) -> PackChangeError {
+        match self {
+            Self::NotInstalled(error) => error,
+            retained @ Self::Retained(_) => PackChangeError::Other(anyhow::Error::new(retained)),
+        }
+    }
 }
 
 /// A local publication and its node notification share one owned task.
@@ -53,6 +73,35 @@ pub async fn install<F>(
     source: super::PackSource,
     notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
 ) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>), PackChangeError>
+where
+    F: Future<Output = std::result::Result<(), super::PluginStoreChangeError>> + Send + 'static,
+{
+    install_final(
+        home,
+        archive,
+        consent,
+        owner,
+        bindings,
+        installed_via,
+        source,
+        notify,
+    )
+    .await
+    .map_err(InstallError::into_change_error)
+}
+
+/// [`install`], with a failure that says what it left ([`InstallError`]).
+#[allow(clippy::too_many_arguments)]
+pub async fn install_final<F>(
+    home: &Path,
+    archive: &crate::pack::archive::PackArchive,
+    consent: bool,
+    owner: Option<&str>,
+    bindings: &BTreeMap<String, String>,
+    installed_via: InstalledVia,
+    source: super::PackSource,
+    notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
+) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>), InstallError>
 where
     F: Future<Output = std::result::Result<(), super::PluginStoreChangeError>> + Send + 'static,
 {
@@ -101,7 +150,7 @@ where
         notify,
     )
     .await
-    .map_err(PackChangeError::into_anyhow)
+    .map_err(|error| error.into_change_error().into_anyhow())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -114,7 +163,7 @@ async fn install_owned<F>(
     installed_via: InstalledVia,
     source: super::PackSource,
     notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
-) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>), PackChangeError>
+) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>), InstallError>
 where
     F: Future<Output = std::result::Result<(), super::PluginStoreChangeError>> + Send + 'static,
 {
@@ -237,9 +286,7 @@ where
                 .map_err(|error| anyhow::Error::from(error).into());
         }
         stage.finish(true).await?;
-        notification.map_err(|error| {
-            anyhow::Error::new(PublicationRetained(anyhow::Error::from(error).into()))
-        })?;
+        notification.map_err(|error| InstallError::Retained(anyhow::Error::from(error).into()))?;
         Ok((record, plugins))
     })
     .await
@@ -579,7 +626,7 @@ pub(crate) mod tests {
         let home = tempfile::tempdir().unwrap();
         let (_dir, _path, archive) = fixture("1.0.0", false);
         let coordinate = "fixture/native_echo_pack";
-        let error = install(
+        let error = install_final(
             home.path(),
             &archive,
             false,
@@ -597,11 +644,11 @@ pub(crate) mod tests {
         .unwrap_err();
         assert!(format!("{error:#}").contains("installed locally"));
         assert!(
-            publication_retained(&error.into_anyhow()),
+            matches!(error, InstallError::Retained(_)),
             "an unconfirmed notification is the typed retained publication"
         );
         let (_refused_dir, _, refused) = fixture("3.0.0", false);
-        let rolled_back = install(
+        let rolled_back = install_final(
             home.path(),
             &refused,
             false,
@@ -618,7 +665,7 @@ pub(crate) mod tests {
         .await
         .unwrap_err();
         assert!(
-            !publication_retained(&rolled_back.into_anyhow()),
+            matches!(rolled_back, InstallError::NotInstalled(_)),
             "a refused notification rolls the publication back"
         );
         assert_eq!(
