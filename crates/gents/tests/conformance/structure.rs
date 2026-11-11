@@ -25,7 +25,6 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
             "ClientShell",
             Boundary("projection theorems; desktop rendering is runtime-observed"),
         ),
-        ("CodexShim", Module("conformance/codex_shim.rs")),
         ("CommandPolicy", Module("conformance/command_policy.rs")),
         ("Compaction", Module("conformance/streaming_compaction.rs")),
         ("CompletionRetry", Module("conformance/completion_retry.rs")),

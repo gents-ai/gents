@@ -78,7 +78,6 @@ import Proofs.Workspace
 import Proofs.Conformance.FileInventory
 import Proofs.Conformance.FileReviewRoutes
 import Proofs.Callback
-import Proofs.CodexShim
 import Proofs.Properties.Safety
 import Proofs.Properties.Decidable
 import Proofs.Properties.Liveness

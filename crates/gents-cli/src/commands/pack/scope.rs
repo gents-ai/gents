@@ -82,7 +82,7 @@ pub(super) async fn resolve_plugin_slot_owner(
             tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
         }
     }
-    result?;
+    result.map_err(|error| error.into_anyhow())?;
     Ok(Some(owner))
 }
 
