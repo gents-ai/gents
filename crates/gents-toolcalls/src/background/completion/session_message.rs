@@ -167,7 +167,7 @@ impl TurnAssignmentHandoff {
     /// never changes on replay. A complete assignment is the reasonless
     /// success form (`assignment_complete` names the status, it is not
     /// emitted as a reason); failed turns keep their terminal reasons.
-    pub(crate) fn reason(&self) -> Option<&'static str> {
+    pub fn reason(&self) -> Option<&'static str> {
         if !self.turn_completed {
             return self.terminal_reason;
         }

@@ -128,7 +128,7 @@ struct ChildRead {
 }
 
 impl ChildRead {
-    fn new(rows: Vec<Stored>, result_bytes: u64) -> Result<Self> {
+    pub fn new(rows: Vec<Stored>, result_bytes: u64) -> Result<Self> {
         let caused: RapidHashSet<String> = rows.iter().map(|row| row.request_id.clone()).collect();
         let mut attempts: BTreeMap<(String, u32), Attempt> = BTreeMap::new();
         let mut sessions: RapidHashMap<String, (String, u32)> = RapidHashMap::new();
@@ -810,25 +810,7 @@ pub(crate) mod tests {
         node
     }
 
-    /// Inserts a document through `access` and returns its doc id. Rows owned
-    /// by an Agent must be written through that Agent's access.
-    pub(crate) async fn insert_as(access: &ConfigAccess, collection: &str, value: Value) -> String {
-        access
-            .transact_write("test.plugin_job_children", |txn| {
-                let value = &value;
-                Box::pin(async move {
-                    let query = format!(
-                        "mutation($input: {collection}MutationInputArg!) {{create_{collection}(input:$input){{_docID}}}}"
-                    );
-                    let response = txn
-                        .execute_with_variables(&query, &json!({ "input": value }))
-                        .await?;
-                    Ok::<_, anyhow::Error>(gents_protocol::graphql::extract_mutation_doc_id(&response, collection)?)
-                })
-            })
-            .await
-            .unwrap()
-    }
+    pub(crate) use crate::test_support::insert_as;
 
     pub(crate) async fn doc_id_of(
         access: &ConfigAccess,
@@ -1575,7 +1557,7 @@ pub(crate) mod tests {
             .unwrap()
     }
 
-    pub(crate) fn node_did() -> &'static str {
+    pub fn node_did() -> &'static str {
         use gents_store::identity::NodeIdentity as _;
         node_identity().did()
     }
@@ -1609,17 +1591,7 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) fn live_settings(policy: JobPolicy) -> PluginJobSettings {
-        PluginJobSettings {
-            agent_targets: vec!["a".into(), "b".into()],
-            max_live: 3,
-            max_spawns: 10,
-            max_messages_per_slot: 2,
-            result_bytes: 2048,
-            max_wall_secs: 600,
-            policy,
-        }
-    }
+    pub(crate) use crate::test_support::live_settings;
 
     fn binding(settings: Option<PluginJobSettings>) -> JobBinding {
         JobBinding {

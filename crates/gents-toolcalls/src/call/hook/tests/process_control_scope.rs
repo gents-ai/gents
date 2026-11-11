@@ -472,7 +472,7 @@ mod job_control {
     }
 
     impl JobHook {
-        async fn new() -> Self {
+        pub async fn new() -> Self {
             let dir = tempfile::tempdir().unwrap();
             let identity = gents_store::identity::KeyIdentity::load_or_create(
                 dir.path().join("owner.key"),
@@ -539,7 +539,7 @@ mod job_control {
                 .as_str()
         }
 
-        fn access(&self) -> ConfigAccess {
+        pub fn access(&self) -> ConfigAccess {
             self.owner.actor_access().unwrap()
         }
 

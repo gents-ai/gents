@@ -90,7 +90,7 @@ impl ToolCallLifecycle {
         Self::load_filtered(node, format!("session_id:{{_eq:\"{escaped_session_id}\"}},tool_call_id:{{_eq:\"{escaped_tool_call_id}\"}}")).await
     }
 
-    pub(crate) async fn load_as(
+    pub async fn load_as(
         node: Arc<EmbeddedNode>,
         actor: identity::Did,
         session_id: &str,
@@ -107,7 +107,7 @@ impl ToolCallLifecycle {
         .await
     }
 
-    pub(crate) async fn load_by_doc_id_as(
+    pub async fn load_by_doc_id_as(
         node: Arc<EmbeddedNode>,
         actor: identity::Did,
         doc_id: &str,

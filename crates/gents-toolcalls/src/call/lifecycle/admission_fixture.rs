@@ -39,7 +39,7 @@ impl Default for PublishedAdmissionOptions {
 }
 
 /// The `JobPin` every `job_pin: true` fixture row carries.
-pub(crate) fn fixture_job_pin() -> gents_protocol::job::JobPin {
+pub fn fixture_job_pin() -> gents_protocol::job::JobPin {
     gents_protocol::job::JobPin {
         script_id: "fixture-script".to_owned(),
         source_digest: "sha256:fixture-source".to_owned(),
@@ -79,7 +79,7 @@ pub(crate) async fn write_fixture_job_pin(
 }
 
 /// [`write_fixture_job_pin`] as `access`'s actor, for a row an Agent owns.
-pub(crate) async fn write_fixture_job_pin_as(
+pub async fn write_fixture_job_pin_as(
     access: &gents_store::config_client::ConfigAccess,
     tool_doc_id: &str,
 ) -> anyhow::Result<()> {
@@ -885,7 +885,7 @@ pub async fn published_background_bridge(
     (node, path, tool)
 }
 
-pub(crate) async fn materialize_session_message(
+pub async fn materialize_session_message(
     node: &Arc<EmbeddedNode>,
     request: &RequestLifecycle,
     tool: &mut ToolCallLifecycle,
