@@ -1,9 +1,8 @@
 use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
-use gents_automation::triggers::task_run::{
-    enqueue_task_run as enqueue_task_run_owner, read_runnable_task,
-};
+use gents_protocol::operations::agent::NextCall;
+use gents_protocol::operations::task::{TaskOperationError, TaskRunInput};
 #[cfg(test)]
 use gents_automation::triggers::task_run::{
     lookup_request_by_retry_key, prepare_task_run_goal_id, prepare_task_run_input,
@@ -15,7 +14,6 @@ use gents_protocol::request_input::RequestInput;
 use gents_protocol::row::AgentRequestRow;
 #[cfg(test)]
 use gents_store::graphql::escape_graphql_string;
-use gents_tools::task_run::TaskRunOptions;
 pub(crate) use gents_tools::task_run::TaskRunOutput;
 use serde_json::Value;
 
@@ -58,9 +56,6 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
 
     let args_value: Value =
         serde_json::from_str(&args.args).map_err(|e| anyhow!("--args is not valid JSON: {e}"))?;
-    if !args_value.is_object() {
-        anyhow::bail!("--args must be a JSON object (got: {args_value})");
-    }
 
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     enqueue_task_run_on(
@@ -87,19 +82,35 @@ pub(crate) async fn enqueue_task_run_on(
         .actor_did()
         .context("Task invocation requires an authenticated client identity")?;
     let signer = gents_store::identity::RegisteredIdentity::from_registered_did(&actor_did, None)?;
-    let task = read_runnable_task(access, &node_did, task_id).await?;
-    enqueue_task_run_owner(
+    gents_automation::operations::task::run(
         access,
         &node_did,
         &signer,
-        task,
-        &TaskRunOptions {
+        &TaskRunInput {
+            task_id: task_id.to_owned(),
             args,
             session_id: session_id.map(str::to_owned),
             continue_session: continue_session.map(str::to_owned),
         },
     )
     .await
+    .map_err(failure)
+}
+
+/// A refused Task operation, shown with the command that corrects it.
+pub(crate) fn failure(error: TaskOperationError) -> anyhow::Error {
+    let next = match error.recovery() {
+        NextCall::VerbHelp { resource, verb } => {
+            format!("gents automation {resource} {verb} --help")
+        }
+        NextCall::ResourceHelp { resource } => format!("gents automation {resource} --help"),
+        NextCall::Inspect { resource: "task" } => "gents automation task show <TASK_ID>".to_owned(),
+        NextCall::List { resource: "task" } => "gents automation task list".to_owned(),
+        NextCall::Inspect { resource } => format!("gents config {resource} show <ID>"),
+        NextCall::List { resource } => format!("gents config {resource} list"),
+    };
+    let message = format!("{error}\nNext: {next}");
+    anyhow::Error::new(error).context(message)
 }
 
 pub(crate) fn resolve_task_id_for(

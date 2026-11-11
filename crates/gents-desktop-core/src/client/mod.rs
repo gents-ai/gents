@@ -26,9 +26,8 @@ pub use core::{
 pub use mutations::{apply_config_components_on, patch_config_components_on, set_default_agent_on};
 pub use mutations::{
     delete_event_source_on, delete_schedule_on, delete_skill_on, delete_tool_service_registry_on,
-    delete_trigger_on, resolve_schedule_now_on, upsert_event_source_on, upsert_node_on,
+    delete_trigger_on, upsert_event_source_on, upsert_node_on,
     upsert_schedule_on, upsert_skill_on, upsert_tool_service_registry_on, upsert_trigger_on,
-    ManualTaskInvocation,
 };
 pub use mutations::{interrupt_request_on, RequestInterrupt};
 pub use mutations::{ConfigEditorDocument, ConfigEditorRevision};

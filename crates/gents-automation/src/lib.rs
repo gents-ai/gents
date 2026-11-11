@@ -1,5 +1,6 @@
 pub mod goal;
 pub mod lifecycle_hooks;
+pub mod operations;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_support;
 pub mod triggers;

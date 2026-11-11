@@ -10,7 +10,7 @@ use std::fmt::Display;
 use std::path::Path;
 
 use gents_desktop_core::client::{
-    apply_config_components_on, resolve_schedule_now_on, upsert_event_source_on,
+    apply_config_components_on, upsert_event_source_on,
     upsert_schedule_on, upsert_skill_on, upsert_tool_service_registry_on, upsert_trigger_on,
 };
 use gents_shell::sample::Tone;
@@ -174,10 +174,10 @@ async fn run_schedule(
     node_did: &str,
     schedule: &str,
 ) -> anyhow::Result<String> {
-    let invocation = resolve_schedule_now_on(access, node_did, schedule).await?;
-    Ok(run_task(access, home, &invocation.task_id)
-        .await?
-        .request_id)
+    let task = gents_automation::operations::task::scheduled_task(access, node_did, schedule)
+        .await
+        .map_err(crate::commands::config::task_run::failure)?;
+    Ok(run_task(access, home, &task).await?.request_id)
 }
 
 fn doc(form: &FormRef) -> Option<Doc> {
