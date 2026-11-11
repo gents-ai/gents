@@ -207,7 +207,7 @@ async fn later_stop_preserves_first_timeout_or_failure_and_projects_completion()
         assert_eq!(row.state().as_str(), expected);
         assert!(!registry.contains(&call, &doc).await);
         let key =
-            crate::tools::background::completion::background_completion_notification_message_key(
+            gents_protocol::background_completion::background_completion_notification_message_key(
                 &doc, "tool",
             );
         let escaped = crate::store::graphql::escape_graphql_string(&key);
@@ -324,7 +324,7 @@ async fn confirmed_background_stop_survives_terminal_write_failure() {
     assert_eq!(row.state().as_str(), model.durable_state);
     assert_eq!(row.request_id(), request_owner.request().request_id);
     assert!(!registry.contains(&call, &doc).await);
-    let key = crate::tools::background::completion::background_completion_notification_message_key(
+    let key = gents_protocol::background_completion::background_completion_notification_message_key(
         &doc, "tool",
     );
     let escaped = crate::store::graphql::escape_graphql_string(&key);
@@ -719,7 +719,7 @@ async fn failed_terminal_write_keeps_prepared_failure_presentation_for_retry() {
     .await
     .unwrap();
     assert_eq!(shown.result.as_deref(), Some(result));
-    let key = crate::tools::background::completion::background_completion_notification_message_key(
+    let key = gents_protocol::background_completion::background_completion_notification_message_key(
         &doc, "tool",
     );
     let escaped = crate::store::graphql::escape_graphql_string(&key);
@@ -783,7 +783,7 @@ async fn completed_background_call_resolves_parent_from_physical_request() {
         )),
     )
     .await;
-    let key = crate::tools::background::completion::background_completion_notification_message_key(
+    let key = gents_protocol::background_completion::background_completion_notification_message_key(
         &doc, "tool",
     );
     let escaped = crate::store::graphql::escape_graphql_string(&key);

@@ -1493,7 +1493,7 @@ impl Step0 {
     /// The Continuation completions appended for the tool call row.
     async fn continuation_notices(&self, row: &Value) -> usize {
         let key =
-            crate::tools::background::completion::background_completion_notification_message_key(
+            gents_protocol::background_completion::background_completion_notification_message_key(
                 row["_docID"].as_str().unwrap(),
                 "tool",
             );

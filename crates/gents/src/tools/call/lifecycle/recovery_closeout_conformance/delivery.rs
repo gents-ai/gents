@@ -276,7 +276,7 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
             &caller,
             "process done",
             "background-completion-notification:process:tool",
-            crate::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
+            gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
             crate::request::lifecycle::queue::RequestQueue {
                 delivery: Default::default(),
                 position: None,

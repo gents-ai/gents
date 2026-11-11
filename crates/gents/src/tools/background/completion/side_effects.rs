@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::background_completion::background_completion_notification_message_key;
 
 pub(super) struct ExistingNotification {
     pub(super) doc_id: String,

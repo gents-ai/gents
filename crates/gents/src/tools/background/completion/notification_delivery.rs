@@ -1,4 +1,7 @@
 use super::*;
+use gents_protocol::background_completion::{
+    background_completion_notification_message_key, BACKGROUND_COMPLETION_WAKE_PROMPT,
+};
 
 pub(super) struct SideEffects {
     pub(super) wake_request_id: Option<String>,

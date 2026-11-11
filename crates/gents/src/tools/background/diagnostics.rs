@@ -252,7 +252,7 @@ fn summarize(
     let mut notifications_by_root = BTreeMap::<String, BTreeSet<String>>::new();
     let mut notifications_by_request_doc = BTreeMap::<String, BTreeSet<String>>::new();
     for notification in notifications {
-        if !crate::tools::background::completion::is_background_completion_notification_message_key(
+        if !gents_protocol::background_completion::is_background_completion_notification_message_key(
             &notification.message_key,
         ) {
             continue;
@@ -463,7 +463,7 @@ fn snapshot_keys(wake: &AgentRequestRow) -> BTreeSet<String> {
         .unwrap_or_default()
         .into_iter()
         .filter(|key| {
-            crate::tools::background::completion::is_background_completion_notification_message_key(
+            gents_protocol::background_completion::is_background_completion_notification_message_key(
                 key,
             )
         })

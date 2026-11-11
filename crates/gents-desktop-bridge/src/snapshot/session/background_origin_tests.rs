@@ -54,7 +54,7 @@ async fn persisted_background_inputs_keep_origin_across_transcript_windows() {
             .unwrap();
         requests.push(gents::store::graphql::created_doc_id(&response, "AgentRequest").unwrap());
     }
-    let wake = gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
+    let wake = gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
     let success = "<tool-completion tool_call_id=\"spawned:one\" status=\"completed\"><result>done</result></tool-completion>";
     let failure = "<tool-completion tool_call_id=\"spawned:two\" status=\"failed\"><result>failed</result></tool-completion>";
     let messages = [

@@ -185,7 +185,7 @@ pub(super) fn message_origin(
     {
         return None;
     }
-    if gents::tools::background::completion::is_background_completion_notification_message_key(
+    if gents_protocol::background_completion::is_background_completion_notification_message_key(
         &message.message_key,
     ) {
         return Some(RequestOriginView::BackgroundCompletion { notification: true });

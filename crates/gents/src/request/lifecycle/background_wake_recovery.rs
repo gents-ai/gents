@@ -11,7 +11,7 @@ use crate::request::lifecycle::materialize::{
 use crate::request::lifecycle::ExecutionOrigin;
 use crate::store::config_client::ConfigApplyTxn;
 use crate::store::graphql::escape_graphql_string;
-use crate::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
+use gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
 
 use super::queue::{row_queue, RequestQueue};
 use super::{BackgroundWakeRedriveReport, RequestLifecycle};

@@ -367,6 +367,7 @@ mod folded_outcome_conformance {
 #[cfg(test)]
 mod turn_assignment_tests {
     use super::*;
+    use gents_protocol::background_completion::background_completion_notification_message_key;
     use crate::tools::call::lifecycle::admission_fixture::PublishedSessionMessage;
     use gents_protocol::tool_call::AwaitMode;
 

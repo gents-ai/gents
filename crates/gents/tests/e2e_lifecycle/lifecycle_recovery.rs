@@ -495,7 +495,7 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
     assert_eq!(successor.retry_root_request.as_deref(), Some("failed-wake"));
     assert_eq!(
         successor.content.as_deref(),
-        Some(gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT)
+        Some(gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT)
     );
     assert_eq!(successor.retry_count, Some(2));
     assert_eq!(successor.max_retries, Some(3));

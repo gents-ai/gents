@@ -98,7 +98,7 @@ fn automated_store() -> ClientStore {
             }
         })),
         content: Some(
-            gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT.into(),
+            gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT.into(),
         ),
         ..request("wake", "sess-1", 4)
     };
@@ -164,7 +164,7 @@ fn automated_store() -> ClientStore {
             "doc-wake",
             7,
             MessageRole::User,
-            gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
+            gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
         ),
         (
             "authored:doc-goal:prompt",
@@ -396,7 +396,7 @@ fn active_background_request_keeps_interrupt_and_queue_visible_after_public_comp
             "key":"background_completion:sess-1", "background_completion_wake_version":1
         }})),
         content: Some(
-            gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT.into(),
+            gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT.into(),
         ),
         ..request("wake", "sess-1", 1)
     };
@@ -437,7 +437,7 @@ fn active_background_request_keeps_interrupt_and_queue_visible_after_public_comp
     assert!(snapshot.pending_turn.is_none());
     let serialized = serde_json::to_string(&snapshot.timeline_items).unwrap();
     assert!(!serialized
-        .contains(gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT));
+        .contains(gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT));
     let summaries = session_summaries(&[header], &store.requests, "did:test:amy", &[], &[]);
     assert_eq!(summaries[0].latest_request_id.as_deref(), Some("wake"));
     assert_eq!(summaries[0].turn_state.as_deref(), Some("running"));

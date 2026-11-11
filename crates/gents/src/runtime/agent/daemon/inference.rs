@@ -35,7 +35,7 @@ fn wake_frontier_message(authored: &Message, wake_notifications: &[TaggedMessage
     if !wake_notifications.is_empty()
         && *authored
             == Message::user(
-                crate::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
+                gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
             )
     {
         Message::user(BACKGROUND_WAKE_RESULT_FRAMING)
@@ -917,7 +917,7 @@ pub(super) mod tests {
             request_entry, wake_frontier_message, TaggedMessage, BACKGROUND_WAKE_RESULT_FRAMING,
         };
         use crate::inference::llm::message::Message;
-        use crate::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
+        use gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
 
         let notification = TaggedMessage::unassociated(Message::user(
             "<tool-completion tool_call_id=\"c1\" status=\"completed\">".to_owned(),

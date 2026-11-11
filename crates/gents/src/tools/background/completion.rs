@@ -4,6 +4,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::Node as EmbeddedNode;
+use gents_protocol::background_completion::is_background_completion_notification_message_key;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
@@ -14,21 +15,6 @@ use crate::store::graphql::escape_graphql_string;
 use crate::tools::call::lifecycle::{FailureClass, ToolCallLifecycle};
 
 const AGENT_REQUEST_COLLECTION: &str = "AgentRequest";
-pub const BACKGROUND_COMPLETION_WAKE_PROMPT: &str =
-    "Review the new background completion results and continue the task if needed.";
-const BACKGROUND_COMPLETION_NOTIFICATION_MESSAGE_PREFIX: &str =
-    "background-completion-notification:";
-
-pub(crate) fn background_completion_notification_message_key(
-    stable_id: &str,
-    kind: &str,
-) -> String {
-    format!("{BACKGROUND_COMPLETION_NOTIFICATION_MESSAGE_PREFIX}{stable_id}:{kind}")
-}
-
-pub fn is_background_completion_notification_message_key(message_key: &str) -> bool {
-    message_key.starts_with(BACKGROUND_COMPLETION_NOTIFICATION_MESSAGE_PREFIX)
-}
 
 pub(crate) fn notification_receipt_keys(encoded: &str) -> Result<Vec<String>> {
     let keys: Vec<String> =

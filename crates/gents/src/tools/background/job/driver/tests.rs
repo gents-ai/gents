@@ -413,7 +413,7 @@ async fn non_inline_settlement_appends_one_continuation_completion() {
     )
     .await;
     let access = admission.tool.access().unwrap();
-    let key = crate::tools::background::completion::background_completion_notification_message_key(
+    let key = gents_protocol::background_completion::background_completion_notification_message_key(
         admission.tool.doc_id().unwrap(),
         "tool",
     );

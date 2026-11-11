@@ -929,7 +929,7 @@ mod tests {
     #[tokio::test]
     async fn owned_cancel_persists_custom_completion_reason_for_redrive() {
         use crate::store::identity::NodeIdentity;
-        use crate::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
+        use gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
         use gents_protocol::request_admission::SIGNED_REQUEST_FIELDS;
         let data_path = std::env::temp_dir().join(format!(
             "agent-tool-control-custom-cancel-{}",

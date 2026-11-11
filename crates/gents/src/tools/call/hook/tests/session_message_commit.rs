@@ -324,7 +324,7 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
         &access,
         &format!(
             r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-            crate::tools::background::completion::background_completion_notification_message_key(
+            gents_protocol::background_completion::background_completion_notification_message_key(
                 &tool_doc_id,
                 "tool"
             )

@@ -482,7 +482,7 @@ mod tests {
         for text in [
             "<tool-completion tool_call_id=\"spawned:call\" tool_name=\"bash_unrestricted\" status=\"completed\"><result>finished</result></tool-completion>",
             "<tool-completion tool_call_id=\"spawned:call\" tool_name=\"bash_unrestricted\" status=\"failed\"><result>error: no bin target named `verad`</result><reason>tool_failed</reason></tool-completion>",
-            gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
+            gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
         ] {
             let message = MessageView {
                 runtime_control: true,
@@ -499,7 +499,7 @@ mod tests {
 
     #[test]
     fn user_text_that_looks_like_a_control_message_still_renders() {
-        let content = gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
+        let content = gents_protocol::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
         let messages = vec![user_message("literal-user-text", 1, content)];
 
         let timeline = build_rendered_timeline(&messages, &[], &[]);
