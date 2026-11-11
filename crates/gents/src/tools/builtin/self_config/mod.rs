@@ -31,6 +31,8 @@ use requests::{
     profile_target_request, protect_working_agent, refuse_silent_tools_drops, tools_request,
 };
 #[cfg(test)]
+mod agent_operation_text_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod text_tests;

@@ -667,8 +667,138 @@ mod tests {
             .await?
             .expect("source tools unchanged");
         assert_eq!(source_tools.get("tools_id"), Some(&json!(tools_id)));
+
+        let mut printed = String::new();
+        let named = |text: String| {
+            let mut text = text;
+            for (value, name) in [
+                (outcome["agent"]["creation_nonce"].as_str(), "<NONCE>"),
+                (
+                    clone_outcome["agent"]["creation_nonce"].as_str(),
+                    "<CLONE_NONCE>",
+                ),
+                (Some(agent_did), "<CREATED>"),
+                (Some(cloned_id), "<CLONED>"),
+                (Some(root.as_str()), "<ROOT>"),
+                (Some(owner), "<NODE>"),
+            ] {
+                text = text.replace(value.expect("receipt names it"), name);
+            }
+            text
+        };
+        for (label, receipt) in [("create", &outcome), ("clone", &clone_outcome)] {
+            printed.push_str(&format!(
+                "## {label}\n{}\n",
+                named(serde_json::to_string_pretty(receipt)?)
+            ));
+        }
+        for (label, params) in [
+            (
+                "create with an unpublished profile",
+                ConfigureAgentParams {
+                    identity_binding: Some(provision().await?),
+                    action: "create".into(),
+                    display_name: StringUpdate::Set("Canonical".into()),
+                    system_prompt: StringUpdate::Set("Work.".into()),
+                    profile_id: StringUpdate::Set("absent".into()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "create with an unpublished root",
+                ConfigureAgentParams {
+                    identity_binding: Some(provision().await?),
+                    action: "create".into(),
+                    display_name: StringUpdate::Set("Canonical".into()),
+                    system_prompt: StringUpdate::Set("Work.".into()),
+                    preset: StringUpdate::Set("readonly".into()),
+                    root: StringUpdate::Set("/pinned/unpublished".into()),
+                    profile_id: StringUpdate::Set("profile-1".into()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "clone with a preset",
+                ConfigureAgentParams {
+                    identity_binding: Some(provision().await?),
+                    action: "clone".into(),
+                    clone_from: Some(agent_did.to_owned()),
+                    display_name: StringUpdate::Set("Cloned".into()),
+                    preset: StringUpdate::Set("write".into()),
+                    profile_id: StringUpdate::Set("profile-1".into()),
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let error = configure_agent(&access, owner, &params, &Default::default())
+                .await
+                .expect_err(label);
+            printed.push_str(&format!(
+                "## {label}\n{}\n",
+                named(format!("Error: {error:?}"))
+            ));
+        }
+        assert!(
+            printed == PINNED_OUTPUT,
+            "agent create/clone CLI output changed\n<<<TRANSCRIPT\n{printed}TRANSCRIPT>>>"
+        );
         Ok(())
     }
+
+    const PINNED_OUTPUT: &str = r###"## create
+{
+  "admitted": true,
+  "agent": {
+    "agent_did": "<CREATED>",
+    "context_id": "<CREATED>:context",
+    "creation_nonce": "<NONCE>",
+    "description": "Canonical test agent",
+    "display_name": "Canonical",
+    "inference_profile_id": "profile-1",
+    "node_did": "<NODE>"
+  },
+  "agent_did": "<CREATED>",
+  "committed": true,
+  "host_root_access": {
+    "answer": "Saved, but <CREATED> cannot use its host tools yet: a User must grant it reader on the published WorkspaceRoot <ROOT>. Until then the runtime cannot load its tools and reports the agent unavailable.",
+    "how_to_proceed": "Keep these Tools and give the User user_command to run from their own client; no config or policy call, and no change to your own Tools, can grant it.",
+    "published_root": "<ROOT>",
+    "state": "waiting_for_user",
+    "user_command": "gents config workspace-root grant-reader --graphql GRAPHQL_URL --path <ROOT> --agent-did <CREATED>"
+  },
+  "make_default": false,
+  "operation": "create"
+}
+## clone
+{
+  "admitted": true,
+  "agent": {
+    "agent_did": "<CLONED>",
+    "context_id": "<CLONED>:context",
+    "creation_nonce": "<CLONE_NONCE>",
+    "display_name": "Cloned",
+    "inference_profile_id": "profile-1",
+    "node_did": "<NODE>"
+  },
+  "agent_did": "<CLONED>",
+  "committed": true,
+  "host_root_access": {
+    "answer": "Saved, but <CLONED> cannot use its host tools yet: a User must grant it reader on the published WorkspaceRoot <ROOT>. Until then the runtime cannot load its tools and reports the agent unavailable.",
+    "how_to_proceed": "Keep these Tools and give the User user_command to run from their own client; no config or policy call, and no change to your own Tools, can grant it.",
+    "published_root": "<ROOT>",
+    "state": "waiting_for_user",
+    "user_command": "gents config workspace-root grant-reader --graphql GRAPHQL_URL --path <ROOT> --agent-did <CLONED>"
+  },
+  "make_default": false,
+  "operation": "clone"
+}
+## create with an unpublished profile
+Error: select a published inference profile
+## create with an unpublished root
+Error: Tools.host.root "/pinned/unpublished" is not admitted by published WorkspaceRoot policy: nonexistent path is outside the allowed roots
+## clone with a preset
+Error: clone inherits its source tools; edit the cloned Tools to change grants
+"###;
 
     #[tokio::test]
     async fn raw_set_rejects_dangling_profile_reference() -> Result<()> {
