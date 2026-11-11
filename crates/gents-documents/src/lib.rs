@@ -135,7 +135,7 @@ pub(crate) use serde_helpers::string_list_schema;
 pub use serde_helpers::{accepts_null, deserialize_default_on_null, noted, widen_schema};
 #[allow(unused_imports)]
 pub use surface_tool::validate_surface_tool_names;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use surface_tool::{confirm_visible_datastore_tool, revalidate_datastore_tool_in_txn};
 #[allow(unused_imports)]
 pub(crate) use surface_tool::{
