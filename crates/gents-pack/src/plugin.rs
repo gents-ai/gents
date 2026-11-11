@@ -711,6 +711,8 @@ pub mod model_binding;
 pub mod script_engine;
 pub mod store;
 pub mod ux;
+#[cfg(test)]
+mod profile_switch_tests;
 mod wasi_runtime;
 
 pub use afterburner_core::manifold::Manifold;

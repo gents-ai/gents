@@ -111,6 +111,8 @@ impl DocumentRuntimeView {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod account_event_tests;
 
 pub(crate) fn merge_surface_tools(
     tools: &Tools,
