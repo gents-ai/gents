@@ -481,10 +481,12 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
         tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
     }
     let mut output = result?;
-    // The pack installer opens the home itself, so the store claim this init
-    // held is released first.
+    // The pack installer opens the home itself, so the store claim and the
+    // node this init held are released first: the node's database lock goes
+    // with its last handle, not with its shutdown.
     drop(access);
     drop(held_store_access);
+    drop(init_node);
     if args.engineer && fresh_store && !args.no_default_packs {
         let engineer = output["default_agent_did"]
             .as_str()
