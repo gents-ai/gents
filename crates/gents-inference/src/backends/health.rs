@@ -157,7 +157,7 @@ impl BackendHealthMap {
         Self::default()
     }
 
-    pub(crate) fn subscribe_observations(&self) -> watch::Receiver<()> {
+    pub fn subscribe_observations(&self) -> watch::Receiver<()> {
         self.changed.subscribe()
     }
 
@@ -169,7 +169,7 @@ impl BackendHealthMap {
             .map(|entry| snapshot_from_entry(backend_id, entry))
     }
 
-    pub(crate) async fn healthy_observed_at(
+    pub async fn healthy_observed_at(
         &self,
         node: &defra_node::Node,
         node_did: &str,

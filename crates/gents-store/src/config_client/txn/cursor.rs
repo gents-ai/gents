@@ -77,7 +77,7 @@ impl<'txn> ConfigApplyTxn<'txn> {
         }
     }
 
-    pub(crate) async fn cursor_rows(
+    pub async fn cursor_rows(
         &self,
         collection: &str,
         fields: &str,

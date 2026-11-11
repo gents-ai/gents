@@ -227,7 +227,7 @@ pub struct DatastoreToolSource {
 }
 
 impl DatastoreToolSource {
-    pub(crate) async fn revalidate(
+    pub async fn revalidate(
         &self,
         txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     ) -> Result<()> {

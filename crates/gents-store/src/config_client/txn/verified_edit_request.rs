@@ -10,7 +10,7 @@ use super::{ConfigApplyTxn, ConfigClientError, Result};
 impl ConfigApplyTxn<'_> {
     /// The verified request and its user-owned relationships are staged with
     /// the selected Agent's queue update in the same native transaction.
-    pub(crate) async fn stage_verified_edit_request(
+    pub async fn stage_verified_edit_request(
         &self,
         create: &AgentRequestCreate,
         graph: Arc<db::block::builder::VerifiedClientCreate>,

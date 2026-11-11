@@ -407,7 +407,7 @@ impl ConfigAccess {
         Ok(Self::Local(Box::new(local)))
     }
 
-    pub(crate) fn local_with_optional_agent_signer(
+    pub fn local_with_optional_agent_signer(
         node: Arc<Node>,
         actor: identity::Did,
         signer: Option<crate::identity::ManagedAgentSigner>,
@@ -475,7 +475,7 @@ impl ConfigAccess {
         self
     }
 
-    pub(crate) fn managed_agent_signer(&self) -> Option<crate::identity::ManagedAgentSigner> {
+    pub fn managed_agent_signer(&self) -> Option<crate::identity::ManagedAgentSigner> {
         match self {
             Self::Local(local) => local.agent_signer(),
             Self::Graphql(_) => None,

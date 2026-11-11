@@ -593,8 +593,8 @@ const CREATE_RENDERED_REQUEST_BLOCKS_MUTATION: &str = "mutation($input: \
 const CAPTURE_BLOCK_CREATE_BATCH: usize = 32;
 
 pub struct BlockScope {
-    pub(crate) session_doc_id: String,
-    pub(crate) agent_did: String,
+    pub session_doc_id: String,
+    pub agent_did: String,
 }
 
 impl BlockScope {

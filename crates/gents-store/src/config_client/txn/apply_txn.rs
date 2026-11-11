@@ -485,7 +485,7 @@ impl<'a> ConfigApplyTxn<'a> {
     /// session activity each published tool terminal refreshes. A conflict
     /// then retries within the sibling budget, since such siblings conflict
     /// until one commits.
-    pub(crate) fn contend_with_request_siblings(&self) {
+    pub fn contend_with_request_siblings(&self) {
         self.contends_with_request_siblings
             .store(true, Ordering::Relaxed);
     }

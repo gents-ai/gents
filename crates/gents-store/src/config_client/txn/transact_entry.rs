@@ -188,7 +188,7 @@ impl ConfigAccess {
     /// failed write's commit may have landed. Only a confirmed abort is
     /// rebuilt (ClientSubmissionContention.tla); an unconfirmed commit never
     /// signs a second graph.
-    pub(crate) async fn transact_signed_conflict_rebuild_with_finality<'a, T, E, F>(
+    pub async fn transact_signed_conflict_rebuild_with_finality<'a, T, E, F>(
         &'a self,
         operation: &'static str,
         callback: F,
@@ -390,7 +390,7 @@ impl ConfigAccess {
     /// ordinary writes under the mutation gate. Authorization is re-checked
     /// before commit admission; native commit does not atomically check wall
     /// clock, so this is not a durable-commit-before-expiry guarantee.
-    pub(crate) async fn renew_execution_lease_with_signer<'a, T, E, F>(
+    pub async fn renew_execution_lease_with_signer<'a, T, E, F>(
         node: &'a Arc<EmbeddedNode>,
         identity: Option<Did>,
         signer: Option<crate::identity::ManagedAgentSigner>,

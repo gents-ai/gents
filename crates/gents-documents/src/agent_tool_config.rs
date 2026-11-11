@@ -21,7 +21,7 @@ impl AgentToolConfig {
         })
     }
 
-    pub(crate) fn from_document_with_targets<'a>(
+    pub fn from_document_with_targets<'a>(
         tools: &super::Tools,
         targets: impl IntoIterator<Item = &'a AgentTargetDocument>,
     ) -> Result<Self> {
@@ -76,7 +76,7 @@ impl AgentToolConfig {
         self.enabled && !self.targets.is_empty()
     }
 
-    pub(crate) fn target(&self, name: &str) -> Option<&AgentTargetDocument> {
+    pub fn target(&self, name: &str) -> Option<&AgentTargetDocument> {
         self.targets.iter().find(|target| target.name == name)
     }
 
@@ -87,7 +87,7 @@ impl AgentToolConfig {
             .collect()
     }
 
-    pub(crate) fn allows(&self, target_node_did: &str, agent_did: &str) -> bool {
+    pub fn allows(&self, target_node_did: &str, agent_did: &str) -> bool {
         self.targets.iter().any(|target| {
             target.target_node_did == target_node_did && target.agent_did == agent_did
         })

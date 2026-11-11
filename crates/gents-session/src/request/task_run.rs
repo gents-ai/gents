@@ -230,7 +230,7 @@ pub async fn enqueue_task_run(
                 ..Default::default()
             },
             retry_key: Some(fire_key.clone()),
-            ..crate::RequestSpec::new(
+            ..crate::request::lifecycle::RequestSpec::new(
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 crate::request::lifecycle::RequestIdentity {
                     request_id: request_id.clone(),
