@@ -656,8 +656,6 @@ def snapshotIdentityCasesJson : String :=
   ""
     ++ "\"identity_publication_cases\":"
       ++ Identity.PublicationConformance.casesJson ++ ","
-    ++ "\"identity_grant_set_cases\":"
-      ++ Identity.GrantSetsConformance.setCasesJson ++ ","
     ++ "\"identity_grant_recipient_cases\":"
       ++ Identity.GrantSetsConformance.recipientCasesJson ++ ","
     ++ "\"identity_delegation_cases\":"

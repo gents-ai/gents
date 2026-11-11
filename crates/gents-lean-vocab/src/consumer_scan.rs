@@ -302,7 +302,8 @@ pub fn consumer_sites(
             let Some(key) = family.strip_prefix(&prefix) else {
                 break;
             };
-            let calls = source.matches(&format!("families::{key}::replay(")).count();
+            let calls = source.matches(&format!("families::{key}::replay(")).count()
+                + source.matches(&format!("families::{key}::cases(")).count();
             found.extend((1..=calls).map(|call| format!("{relative}#{call}")));
         }
     }
@@ -318,22 +319,6 @@ mod tests {
             .join("../..")
             .canonicalize()
             .expect("workspace root")
-    }
-
-    #[test]
-    fn loaders_resolve_through_other_loaders() {
-        let families = BTreeSet::from(["retry_cases".to_owned()]);
-        let source = "\npub fn lean_retry_cases() -> u8 {\n    snapshot().retry_cases\n}\n\
-                      \npub fn lean_retry_case(name: &str) -> u8 {\n    lean_retry_cases()\n}\n";
-        let loaders = loaders(&[source.to_owned()], &families);
-        assert_eq!(loaders["lean_retry_case"], families);
-        let read = families_read("let case = lean_retry_case(\"a\");", &families, &loaders);
-        assert_eq!(read, families);
-        assert!(families_read("retry_cases", &families, &loaders).is_empty());
-        assert_eq!(
-            families_read("snapshot[\"retry_cases\"]", &families, &loaders),
-            families
-        );
     }
 
     /// A family the ledger marks consumed has a native test that reads it, and

@@ -255,7 +255,6 @@ pub struct LeanContractSnapshot {
     pub inference_visibility_cases: Vec<serde_json::Value>,
     pub inference_route_cases: Vec<serde_json::Value>,
     pub identity_publication_cases: Vec<serde_json::Value>,
-    pub identity_grant_set_cases: Vec<LeanGrantSetCase>,
     pub identity_grant_recipient_cases: Vec<LeanGrantRecipientCase>,
     pub identity_delegation_cases: Vec<LeanDelegationCase>,
     pub identity_agent_baseline_cases: Vec<LeanAgentBaselineCase>,
@@ -796,13 +795,6 @@ pub struct LeanIdentityClientAgentCreationCase {
     pub grants: String,
     pub expected_route: String,
     pub expected_publication: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGrantSetCase {
-    pub set: String,
-    pub permissions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
