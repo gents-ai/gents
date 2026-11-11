@@ -546,24 +546,29 @@ async fn resolve_request_agent_did(
         );
     }
     let requested = session_agent.as_deref().or(requested);
-    let escaped_node_did = gents_store::graphql::escape_graphql_string(node_did);
-    let response = post_graphql(
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::{agent, default_agent_selection, node},
+            Filter, Query, QuerySet, Selection,
+        };
+        let nodes = Query::select(Selection::owned("node_did enabled"))
+            .filter(Filter::eq(node::NODE_DID, node_did))
+            .limit(2);
+        let default_agent = Query::select(Selection::owned("default_agent_did"))
+            .filter(Filter::eq(default_agent_selection::NODE_DID, node_did))
+            .limit(1);
+        let agents = Query::select(Selection::owned("agent_did node_did enabled"))
+            .filter(Filter::eq(agent::NODE_DID, node_did));
+        QuerySet::new()
+            .plain(&nodes)
+            .plain(&default_agent)
+            .plain(&agents)
+            .render()
+    };
+    let response = gents_store::config_client::post_graphql_with_variables(
         graphql,
-        &format!(
-            r#"{{
-                Node(
-                    filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }},
-                    limit: 2
-                ) {{ node_did enabled }}
-                DefaultAgentSelection(
-                    filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }},
-                    limit: 1
-                ) {{ default_agent_did }}
-                Agent(
-                    filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }}
-                ) {{ agent_did node_did enabled }}
-            }}"#,
-        ),
+        &rendered.document,
+        &rendered.variables,
     )
     .await
     .context("loading authoritative request agent")?;
@@ -1030,12 +1035,12 @@ pub(crate) async fn fetch_request_view(
     graphql: &GraphqlEndpoint,
     request_id: &str,
 ) -> Result<AgentRequestRow> {
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                limit: 2
-            ) {{
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::owned(
+            r#"
                 _docID
                 request_id
                 node_did
@@ -1052,11 +1057,18 @@ pub(crate) async fn fetch_request_view(
                 requester_did
                 session_id
                 input
-            }}
-        }}"#,
-        request_id = escape_graphql_string(request_id),
-    );
-    let response = post_graphql(graphql, &query).await?;
+            "#,
+        ))
+        .filter(Filter::eq(fields::REQUEST_ID, request_id))
+        .limit(2)
+        .render()
+    };
+    let response = gents_store::config_client::post_graphql_with_variables(
+        graphql,
+        &rendered.document,
+        &rendered.variables,
+    )
+    .await?;
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(|v| v.as_array())
@@ -1259,12 +1271,12 @@ mod tests {
     }
 
     async fn stable_test_prepared_request() -> (
-        crate::shared::test_support::ClientHome,
+        gents_host::test_support::ClientHome,
         PreparedAgentRequest,
         Value,
     ) {
         use gents_store::identity::NodeIdentity;
-        let client = crate::shared::test_support::ClientHome::new().await;
+        let client = gents_host::test_support::ClientHome::new().await;
         let agent = client.agent("Receipt agent").await;
         let access = client.access.clone();
         let user = &client.user;
@@ -1315,13 +1327,14 @@ mod tests {
     /// transaction upstream but answers the commit with `lost`: the write is
     /// durable, its reply is not.
     async fn lose_committed_submission_reply(
-        client: &crate::shared::test_support::ClientHome,
+        client: &gents_host::test_support::ClientHome,
         lost: fn() -> Response,
     ) -> (
-        crate::shared::test_support::ForwardingProxy,
+        gents_host::test_support::ForwardingProxy,
         Arc<std::sync::atomic::AtomicUsize>,
     ) {
-        use crate::shared::test_support::{ForwardingProxy, ProxyDecision};
+        use gents_host::test_support::ForwardingProxy;
+        use gents_host::test_support::ProxyDecision;
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
         let creates = Arc::new(AtomicUsize::new(0));
         let staged = Arc::new(AtomicBool::new(false));
@@ -1349,7 +1362,7 @@ mod tests {
     }
 
     async fn durable_request_rows(
-        client: &crate::shared::test_support::ClientHome,
+        client: &gents_host::test_support::ClientHome,
         request_id: &str,
     ) -> usize {
         let response = client
@@ -1380,7 +1393,7 @@ mod tests {
         })
         .await;
         let submitted = submit_prepared_agent_request_committed(
-            &crate::shared::test_support::user_endpoint(&proxy.graphql, &client.user),
+            &gents_host::test_support::user_endpoint(&proxy.graphql, &client.user),
             &prepared,
         )
         .await
@@ -1409,7 +1422,7 @@ mod tests {
         })
         .await;
         let submitted = submit_prepared_agent_request_committed(
-            &crate::shared::test_support::user_endpoint(&proxy.graphql, &client.user),
+            &gents_host::test_support::user_endpoint(&proxy.graphql, &client.user),
             &prepared,
         )
         .await

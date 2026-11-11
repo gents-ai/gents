@@ -823,24 +823,12 @@ returns a child pid, which corresponds to the model's `running` state. Spawn
 failure is still modeled explicitly through `spawnFailed`.
 
 The same JSON includes `coverage_ledger`, maintained in
-`Proofs/Conformance/CoverageLedger.lean`. The Rust test
-`lean_contract_coverage_ledger_accounts_for_every_emitted_domain` compares that
-ledger against every emitted vocabulary domain, state-machine domain,
-trigger-case group, runtime witness group, session-recovery witness group,
-frontend and desktop ClientShell case groups, ToolExecution case group, and
-follow-up hook. Each entry must name a Rust/TypeScript consumer or an accepted
-product-boundary/follow-up, so adding a Lean contract also requires making its
-runtime coverage explicit.
-
-Coverage consumers are registered in
-`crates/gents/tests/support/conformance_consumers.rs`. Add a registry
-entry in the same change as a new `consumerCoverage` ledger row: Rust entries
-name the package, source file, module path, and `#[test]`/`#[tokio::test]`
-function, while TypeScript entries name the app, source file, suite, and test.
-The registry is validated by
-`lean_contract_coverage_ledger_accounts_for_every_emitted_domain`, so a renamed
-or deleted consumer test makes the ledger fail instead of silently leaving a
-stale string.
+`Proofs/Conformance/CoverageLedger.lean`. A row tags an emitted family with its
+feature and surfaces and says whether a native test consumes it, or names the
+accepted boundary or follow-up; it never names the test. The scan in
+`crates/gents-lean-vocab/src/consumer_scan.rs` finds each family's consumer
+tests from the snapshot key and this crate's loaders, and fails when a family
+no test reads lacks a boundary or follow-up row.
 
 When a Lean vocabulary, terminal partition, action, or legal transition changes,
 the generated JSON changes on the next Rust test run. The Rust tests then fail

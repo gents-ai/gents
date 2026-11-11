@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 
 use anyhow::Result;
-use gents_store::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
 use crate::cli::{TaskCommand, TaskListArgs, TaskShowArgs};
@@ -147,8 +146,8 @@ pub(crate) async fn load_task_inventory(
     access: &ConfigAccess,
     task_id_filter: Option<&str>,
 ) -> Result<TaskInventory> {
-    let query = task_inventory_query(task_id_filter);
-    let response = access.execute(&query).await?;
+    let rendered = task_inventory_query(task_id_filter);
+    let response = access.read(&rendered).await?;
     ensure_no_graphql_errors(&response, "query task inventory")?;
 
     let mut tasks = rows(&response, "Task");
@@ -179,43 +178,27 @@ pub(crate) async fn load_task_inventory(
     })
 }
 
-fn task_inventory_query(task_id_filter: Option<&str>) -> String {
-    let task_args = task_id_filter
-        .map(|task_id| {
-            format!(
-                r#"(filter: {{ task_id: {{ _eq: "{}" }} }}, limit: 1)"#,
-                escape_graphql_string(task_id)
-            )
-        })
-        .unwrap_or_default();
-    let trigger_args = task_id_filter
-        .map(|task_id| {
-            format!(
-                r#"(filter: {{ task_id: {{ _eq: "{}" }} }})"#,
-                escape_graphql_string(task_id)
-            )
-        })
-        .unwrap_or_default();
-
-    format!(
-        r#"{{
-            Task{task_args} {{
-                {TASK_FIELDS}
-            }}
-            Agent {{
-                {BEHAVIOR_FIELDS}
-            }}
-            Trigger{trigger_args} {{
-                {TRIGGER_FIELDS}
-            }}
-            Schedule {{
-                {SCHEDULE_FIELDS}
-            }}
-            EventSource {{
-                {EVENT_SOURCE_FIELDS}
-            }}
-        }}"#
-    )
+fn task_inventory_query(task_id_filter: Option<&str>) -> gents_protocol::document_query::Rendered {
+    use gents_protocol::document_query::{
+        fields::{agent, event_source, schedule, task, trigger},
+        Filter, Query, QuerySet, Selection,
+    };
+    let mut tasks = Query::<task::Doc>::select(Selection::owned(TASK_FIELDS));
+    let mut triggers = Query::<trigger::Doc>::select(Selection::owned(TRIGGER_FIELDS));
+    if let Some(task_id) = task_id_filter {
+        tasks = tasks.filter(Filter::eq(task::TASK_ID, task_id)).limit(1);
+        triggers = triggers.filter(Filter::eq(trigger::TASK_ID, task_id));
+    }
+    let agents = Query::<agent::Doc>::select(Selection::owned(BEHAVIOR_FIELDS));
+    let schedules = Query::<schedule::Doc>::select(Selection::owned(SCHEDULE_FIELDS));
+    let event_sources = Query::<event_source::Doc>::select(Selection::owned(EVENT_SOURCE_FIELDS));
+    QuerySet::new()
+        .plain(&tasks)
+        .plain(&agents)
+        .plain(&triggers)
+        .plain(&schedules)
+        .plain(&event_sources)
+        .render()
 }
 
 fn ensure_no_graphql_errors(response: &Value, context: &str) -> Result<()> {

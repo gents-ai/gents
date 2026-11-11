@@ -452,7 +452,7 @@ mod tests {
 
     #[tokio::test]
     async fn backend_reads_use_metadata_for_list_and_exact_show() -> Result<()> {
-        let node = Arc::new(crate::shared::test_support::node_builder().build().await?);
+        let node = Arc::new(gents_host::test_support::node_builder().build().await?);
         gents_store::schema::ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local(node.clone());
         for owner in ["owner-a", "owner-b"] {
@@ -477,7 +477,7 @@ mod tests {
 
     #[tokio::test]
     async fn canonical_reads_keep_shared_labels_in_the_selected_owner() -> Result<()> {
-        let client = crate::shared::test_support::ClientHome::new().await;
+        let client = gents_host::test_support::ClientHome::new().await;
         let peer_dir = tempfile::tempdir()?;
         let peer = gents_store::identity::KeyIdentity::load_or_create(
             peer_dir.path().join("peer.key"),

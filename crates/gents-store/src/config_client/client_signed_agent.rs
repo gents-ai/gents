@@ -538,3 +538,15 @@ pub async fn verify_request_evidence(
     .await
     .map_err(ConfigClientError::ClientAgentGraphJoin)?
 }
+
+#[cfg(test)]
+mod conformance {
+    use super::ordinary_mutation_allowed;
+
+    #[test]
+    fn ordinary_mutation_routes_match_the_lean_model() {
+        gents_lean_vocab::families::identity_configuration_ordinary_mutation_allowed::replay(|i| {
+            ordinary_mutation_allowed(i.client_intent, i.mutation)
+        });
+    }
+}

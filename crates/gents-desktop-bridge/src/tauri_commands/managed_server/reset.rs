@@ -32,12 +32,12 @@ pub(super) async fn plan_state_reset(
                 "Full reset requires a locally managed runtime.",
             )
         })?;
-        let config = gents_server::native_service::NativeServiceConfig::new(
+        let config = gents_service::native_service::NativeServiceConfig::new(
             home.to_path_buf(),
             std::env::current_exe().map_err(|error| BridgeError::untyped(error.to_string()))?,
         )
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
-        let platform = gents_server::native_service::NativeServicePlatform::current()
+        let platform = gents_service::native_service::NativeServicePlatform::current()
             .map_err(|error| BridgeError::untyped(error.to_string()))?;
         return plan_full_reset(
             Some(home),
@@ -322,7 +322,7 @@ async fn ensure_home_not_served(
     home: &Path,
     user: Option<&gents_store::config_client::ClientSigningCapability>,
 ) -> Result<(), BridgeError> {
-    let config = gents_server::server_host::ServerConfig::standard(home.to_path_buf());
+    let config = gents_service::server_host::ServerConfig::standard(home.to_path_buf());
     let managed_address = std::net::SocketAddr::new(config.http_addr, config.http_port);
     if matching_external_server(home, user).await?.is_some() {
         return Err(BridgeError::new(

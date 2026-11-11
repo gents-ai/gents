@@ -248,7 +248,7 @@ pub(crate) async fn ensure_managed_runtime_pairing(
         || async {
             grant_then_approve_managed(
                 || async {
-                    gents_server::server_host::grant_managed_client_enrollment(
+                    gents_service::server_host::grant_managed_client_enrollment(
                         node_home,
                         &target.graphql,
                         &request_id,
@@ -259,7 +259,7 @@ pub(crate) async fn ensure_managed_runtime_pairing(
                     .map_err(|error| format!("granting desktop User access to managed Node: {error:#}"))
                 },
                 || async {
-                    match gents_server::server_host::approve_managed_client_enrollment(
+                    match gents_service::server_host::approve_managed_client_enrollment(
                         node_home,
                         &target.graphql,
                         &request_id,
@@ -365,7 +365,7 @@ where
 
 pub(crate) fn enrollment_request_is_not_visible_yet(error: &anyhow::Error) -> bool {
     gents_protocol::error_chain::find_source::<
-        gents_server::server_host::EnrollmentDecisionRejected,
+        gents_service::enrollment_admin::EnrollmentDecisionRejected,
     >(error.as_ref())
     .is_some_and(|rejected| {
         rejected.code == Some(gents_protocol::enrollment::EnrollmentDecisionRefusalCode::NotPending)

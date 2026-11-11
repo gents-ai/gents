@@ -23,8 +23,8 @@ pub mod lifecycle_hooks;
 mod load;
 mod observation;
 pub mod operator_resume;
-#[cfg(test)]
-pub(crate) use operator_resume::support as operator_resume_test_support;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use operator_resume::support as operator_resume_test_support;
 pub mod readiness_gate;
 mod request_assignment;
 mod request_head;
@@ -49,8 +49,8 @@ pub use client_submission::{
     load_applied_opening_goal_provenance, prepare_session_goal_control,
     recover_session_goal_control, submit_prepared_session_goal_control, OpeningGoalProvenance,
 };
-#[cfg(test)]
-pub(crate) use edit::edit_active_goal;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use edit::edit_active_goal;
 pub use edit::{edit_active_goal_from_access, GoalEdit};
 pub use first_request_binding::task_assignment_goal_id;
 pub use first_request_binding::bind_goal_first_request_in_txn;

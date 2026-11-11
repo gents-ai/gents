@@ -54,7 +54,7 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
         return report;
     }
 
-    let manifest = match read_manifest(dir) {
+    let manifest = match gents_pack::pack::authoring::read_manifest(dir) {
         Ok(manifest) => manifest,
         Err(error) => {
             report.problems.push(format!("{error:#}"));
@@ -69,7 +69,7 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
         }
     };
     if manifest.metadata.kind == gents_pack::pack::PackKind::Documents {
-        match load_config(&archive) {
+        match gents_pack::pack::authoring::load_config(&archive) {
             Ok(config) => {
                 report.warnings =
                     gents_pack::pack::authoring::self_write_warnings(&config.documents);
@@ -88,14 +88,6 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
         }
     }
     report
-}
-
-fn read_manifest(dir: &Path) -> Result<gents_pack::pack::PackManifest> {
-    gents_pack::pack::authoring::read_manifest(dir)
-}
-
-fn load_config(archive: &PackArchive) -> Result<gents_pack::pack::AuthoredPackConfig> {
-    gents_pack::pack::authoring::load_config(archive)
 }
 
 async fn check_filters(
@@ -123,7 +115,7 @@ async fn check_filters(
     );
     gents_store::schema::ensure_runtime_schemas(node.as_ref()).await?;
     let access = gents_store::config_client::ConfigAccess::local(node.clone());
-    crate::commands::schema::apply_pack_schemas_if_present(&access, dir).await?;
+    gents_pack::pack::schema_apply::apply_pack_schemas_if_present(&access, dir).await?;
     for source in &config.event_sources {
         let Some(filter) = source.filter.as_deref() else {
             continue;
@@ -153,7 +145,7 @@ mod tests {
         let directory = super::super::test_support::fixture_dir("documents_fixture");
         let (bytes, _) = pack_dir(&directory).unwrap();
         let archive = PackArchive::from_bytes(&bytes).unwrap();
-        let config = load_config(&archive).unwrap();
+        let config = gents_pack::pack::authoring::load_config(&archive).unwrap();
         let mut problems = Vec::new();
         check_filters(&directory, &config.documents, &mut problems)
             .await
@@ -167,7 +159,7 @@ mod tests {
         assert!(!dirs.is_empty());
         for dir in dirs {
             let copy = copy_pack(&dir);
-            let manifest = read_manifest(copy.path()).unwrap();
+            let manifest = gents_pack::pack::authoring::read_manifest(copy.path()).unwrap();
             super::super::test_support::build_unbuilt_plugins(copy.path(), &manifest);
             let report = check_dir(copy.path()).await;
             assert!(
@@ -190,7 +182,7 @@ mod tests {
         let dir = copy_pack(&super::super::test_support::fixture_dir(
             "documents_fixture",
         ));
-        let manifest = read_manifest(dir.path()).unwrap();
+        let manifest = gents_pack::pack::authoring::read_manifest(dir.path()).unwrap();
         let dropped = manifest.metadata.assets[0].clone();
         std::fs::remove_file(dir.path().join(&dropped)).unwrap();
         std::fs::write(dir.path().join("notes.md"), "stray").unwrap();

@@ -1,3 +1,4 @@
+pub mod authoring;
 pub mod checks;
 pub mod optimization;
 pub mod report;

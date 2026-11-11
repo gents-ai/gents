@@ -19,13 +19,15 @@ pub(crate) fn recipient_sets(name: &str) -> Vec<GrantSet> {
 
 #[test]
 fn sets_match_lean_owner() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().identity_grant_set_cases;
-    assert_eq!(cases.len(), GrantSet::ALL.len());
-    for case in cases {
+    use gents_lean_vocab::families;
+    families::identity_grant_sets_grant_set_vocabulary::replay(&GrantSet::ALL);
+    families::identity_grant_sets_grant_set_native_admin::replay(|i| {
+        GrantSet::native_admin(i.grant_set)
+    });
+    for case in &gents_lean_vocab::lean_contract_snapshot().identity_grant_set_cases {
         let set = set_named(&case.set);
         let permissions: Vec<_> = set.permissions().iter().map(|p| p.as_str()).collect();
         assert_eq!(permissions, case.permissions, "{}", case.set);
-        assert_eq!(set.native_admin(), case.native_admin, "{}", case.set);
     }
 }
 

@@ -1,4 +1,5 @@
 use gents_session::request::lifecycle::materialize::*;
+use gents_store::graphql::escape_graphql_string;
 
     #[tokio::test]
     async fn pending_receipt_lookup_uses_the_selected_agent() {

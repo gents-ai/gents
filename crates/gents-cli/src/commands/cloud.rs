@@ -9,7 +9,8 @@ use tokio::time::Instant;
 
 use crate::cli::args::CloudLoginArgs;
 use crate::config_writes::ConfigAccess;
-use crate::{print_json, resolve_config_access, resolve_node_did};
+use crate::{print_json, resolve_config_access};
+use gents_service::home_state::resolve_node_did;
 
 /// A cloud endpoint must not leave the interactive sign-in waiting indefinitely.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);

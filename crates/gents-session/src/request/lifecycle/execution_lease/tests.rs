@@ -1,7 +1,11 @@
 use super::*;
+use crate::request::lifecycle::test_support::{
+    agent_access, agent_identity, agent_signer, agent_write_value, claimed_owner,
+    claimed_owner_caused_by, expire_observed_execution, observed_case_request, observed_execution,
+    output_segment_snapshot, owner, request_row, test_node,
+};
 use anyhow::Result;
 use std::{sync::Arc, time::Duration};
-use tracing::field::{Field, Visit};
 use tracing::instrument::WithSubscriber;
 use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
@@ -9,56 +13,6 @@ use tracing_subscriber::{Layer, Registry};
 mod generated_policy;
 mod request_row_writers;
 mod workspace_recovery;
-
-async fn test_node() -> (
-    Arc<EmbeddedNode>,
-    gents_inference::test_support::TestDb,
-    Arc<dyn gents_store::identity::NodeIdentity>,
-    gents_protocol::agent_identity::AgentIdentityBinding,
-) {
-    let db = gents_inference::test_support::test_db("execution-lease-fixture").await;
-    let (db, _user, _access, agent) =
-        gents_inference::test_support::signed_test_node_from_db(db, "execution-lease-owner").await;
-    let node = db.node.clone();
-    let identity = db.node_identity.clone();
-    (node, db, identity, agent)
-}
-
-async fn claimed_owner(
-    node: &Arc<EmbeddedNode>,
-    identity: &Arc<dyn gents_store::identity::NodeIdentity>,
-    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
-) -> RequestLifecycle {
-    claimed_owner_caused_by(node, identity, agent, TriggerLineage::default()).await
-}
-
-async fn claimed_owner_caused_by(
-    node: &Arc<EmbeddedNode>,
-    identity: &Arc<dyn gents_store::identity::NodeIdentity>,
-    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
-    lineage: TriggerLineage,
-) -> RequestLifecycle {
-    let agent_identity =
-        gents_store::identity::resolve_agent_identity(identity.as_ref(), agent).unwrap();
-    let mut lifecycle = RequestLifecycle::materialize_pending_with_execution_binding(
-        node.clone(),
-        &agent.agent_did,
-        identity.clone(),
-        "hello",
-        60,
-        ExecutionOrigin::Interactive,
-        "lease-test",
-        lineage,
-        Some(agent_identity),
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        lifecycle.claim_with_identity().await.unwrap(),
-        ClaimOutcome::Claimed
-    );
-    lifecycle
-}
 
 async fn claimed_owner_with_short_lease(
     node: &Arc<EmbeddedNode>,
@@ -84,87 +38,6 @@ async fn claimed_owner_with_short_lease(
         ClaimOutcome::Claimed
     );
     lifecycle
-}
-
-async fn owner(
-    node: &Arc<EmbeddedNode>,
-    identity: &Arc<dyn gents_store::identity::NodeIdentity>,
-    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
-) -> RequestLifecycle {
-    let mut lifecycle = claimed_owner(node, identity, agent).await;
-    let writer = crate::request::streaming::DefraStreamWriter::new_managed(
-        node.clone(),
-        gents_store::identity::resolve_agent_identity(identity.as_ref(), agent)
-            .unwrap()
-            .as_ref(),
-        Duration::ZERO,
-    )
-    .unwrap();
-    lifecycle.begin_owned_execution(&writer).await.unwrap();
-    lifecycle
-}
-
-fn agent_identity(
-    identity: &Arc<dyn gents_store::identity::NodeIdentity>,
-    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
-) -> Arc<dyn gents_store::identity::NodeIdentity> {
-    gents_store::identity::resolve_agent_identity(identity.as_ref(), agent).unwrap()
-}
-
-/// Request, output and transcript rows are owned by the Agent, so fixtures read
-/// and write them through the Agent's own signed access, never the node identity.
-fn agent_access(
-    node: &Arc<EmbeddedNode>,
-    identity: &Arc<dyn gents_store::identity::NodeIdentity>,
-    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
-) -> gents_store::config_client::ConfigAccess {
-    gents_store::config_client::ConfigAccess::local_managed_agent(
-        node.clone(),
-        identity::Did::new(&agent.agent_did).unwrap(),
-        agent_identity(identity, agent).as_ref(),
-    )
-    .unwrap()
-}
-
-fn agent_signer(
-    identity: &Arc<dyn gents_store::identity::NodeIdentity>,
-    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
-) -> gents_store::identity::ManagedAgentSigner {
-    agent_identity(identity, agent)
-        .managed_agent_signer()
-        .expect("managed Agent signer")
-}
-
-async fn agent_write_value(
-    access: &gents_store::config_client::ConfigAccess,
-    operation: &'static str,
-    mutation: &'static str,
-    variables: serde_json::Value,
-) -> serde_json::Value {
-    access
-        .transact_write(operation, |txn| {
-            let variables = &variables;
-            Box::pin(async move { txn.execute_with_variables(mutation, variables).await })
-        })
-        .await
-        .expect("Agent-signed canonical write")
-}
-
-async fn request_row(
-    access: &gents_store::config_client::ConfigAccess,
-    doc_id: &str,
-) -> AgentRequestRow {
-    let response = access
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ _docID request_id purpose node_did requester_did agent_did session_id lifecycle_state execution_generation execution_lease_expires_at terminal_output terminalized_at failure_reason }} }}"#,
-            escape_graphql_string(doc_id),
-        ))
-        .await
-        .expect("AgentRequest read as its Agent");
-    serde_json::from_value::<Vec<AgentRequestRow>>(response["data"]["AgentRequest"].clone())
-        .unwrap()
-        .pop()
-        .expect("AgentRequest visible to its Agent")
 }
 
 async fn request_composite_version(
@@ -707,34 +580,6 @@ async fn racing_owned_begins_commit_one_processing_transition_without_renewal() 
     );
 }
 
-async fn observed_execution(
-    access: &gents_store::config_client::ConfigAccess,
-    doc_id: &str,
-) -> AgentRequestRow {
-    let mut row = request_row(access, doc_id).await;
-    row.doc_id = Some(doc_id.to_owned());
-    row
-}
-
-async fn expire_observed_execution(
-    access: &gents_store::config_client::ConfigAccess,
-    doc_id: &str,
-) -> AgentRequestRow {
-    let expiry = (Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
-    access
-        .write(
-            "test.expire_observed_execution",
-            &format!(
-                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_lease_expires_at: "{}" }}) {{ _docID }} }}"#,
-                escape_graphql_string(doc_id),
-                escape_graphql_string(&expiry),
-            ),
-        )
-        .await
-        .expect("expire observed execution as its Agent");
-    observed_execution(access, doc_id).await
-}
-
 async fn recover_observed_execution(
     node: &Arc<EmbeddedNode>,
     row: &AgentRequestRow,
@@ -774,20 +619,6 @@ async fn recover_observed_execution(
             TerminalizeResult::Lost
         },
     )
-}
-
-async fn output_segment_snapshot(
-    access: &gents_store::config_client::ConfigAccess,
-    doc_id: &str,
-) -> serde_json::Value {
-    let response = access
-        .execute(&format!(
-            r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID ordinal payload close }} }}"#,
-            escape_graphql_string(doc_id),
-        ))
-        .await
-        .expect("AgentOutputSegment read as its Agent");
-    response["data"]["AgentOutputSegment"].clone()
 }
 
 #[tokio::test]
@@ -1330,24 +1161,6 @@ async fn native_doc_id_targeting_preserves_request_update_filters() {
             lease_tuple(&unrelated_before)
         );
     }
-}
-
-async fn observed_case_request(
-    node: &Arc<EmbeddedNode>,
-    identity: &Arc<dyn gents_store::identity::NodeIdentity>,
-    agent: &gents_protocol::agent_identity::AgentIdentityBinding,
-    case: &gents_lean_vocab::LeanRequestExecutionObservedCase,
-    epoch: DateTime<Utc>,
-) -> RequestLifecycle {
-    let lifecycle = owner(node, identity, agent).await;
-    let doc_id = escape_graphql_string(&lifecycle.request.doc_id);
-    let deadline =
-        epoch + chrono::Duration::seconds(case.pre.lease.explicit_deadline.unwrap() as i64);
-    agent_access(node, identity, agent).write("test.observed_lease_seed", &format!(
-        r#"mutation {{ update_AgentRequest(docID: "{doc_id}", input: {{ execution_lease_secs: {}, execution_lease_expires_at: "{}" }}) {{ _docID }} }}"#,
-        case.pre.lease.duration.unwrap(), escape_graphql_string(&deadline.to_rfc3339()),
-    )).await.unwrap();
-    lifecycle
 }
 
 #[tokio::test]
@@ -2294,21 +2107,4 @@ async fn backend_wait_parks_once_and_fences_the_execution_generation() {
         Some(new_generation.as_str())
     );
     assert!(!lifecycle.owns_execution().await.unwrap());
-}
-
-#[derive(Default)]
-struct PendingNativeOutcome(bool);
-
-impl Visit for PendingNativeOutcome {
-    fn record_str(&mut self, field: &Field, value: &str) {
-        if field.name() == "outcome" && value == "pending_native" {
-            self.0 = true;
-        }
-    }
-
-    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
-        if field.name() == "outcome" && format!("{value:?}").trim_matches('"') == "pending_native" {
-            self.0 = true;
-        }
-    }
 }

@@ -36,7 +36,7 @@ pub(crate) mod request;
 pub(crate) mod reset;
 pub(crate) mod response;
 pub(crate) mod schema;
-pub(crate) mod serve;
+pub(crate) mod serve_client;
 pub(crate) mod session;
 pub(crate) mod shell;
 pub(crate) mod start;

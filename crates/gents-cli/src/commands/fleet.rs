@@ -2,7 +2,9 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use crate::cli::args::{FleetCommand, FleetSlotsArgs};
-use crate::{http_get_json, print_json, resolve_graphql_endpoint};
+use crate::print_json;
+use gents_host::http_client::http_get_json;
+use gents_service::home_state::resolve_graphql_endpoint;
 
 pub(crate) async fn dispatch(command: FleetCommand) -> Result<()> {
     match command {

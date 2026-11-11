@@ -208,10 +208,10 @@ mod tests {
     use gents_documents::BackendAuth;
     use std::sync::Arc;
 
-    const OWNER: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
+    const OWNER: &str = gents_session::test_support::lineage_fixtures::FIXTURE_DID;
 
     async fn seed_backend(access: &ConfigAccess, backend: &InferenceBackend, status: Option<&str>) {
-        crate::shared::test_support::publish_test_node_as(
+        gents_host::test_support::publish_test_node_as(
             access.local_node().unwrap(),
             &backend.node_did,
         )
@@ -256,7 +256,7 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let node = Arc::new(
-            crate::shared::test_support::fixture_node_builder()
+            gents_host::test_support::fixture_node_builder()
                 .build()
                 .await
                 .unwrap(),
@@ -318,7 +318,7 @@ mod tests {
     async fn oauth_backend_uses_exact_owner_observation_without_discovery() {
         use gents_documents::apply_desired_state_plan;
         use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-        let client = crate::shared::test_support::ClientHome::new().await;
+        let client = gents_host::test_support::ClientHome::new().await;
         let owner = client.node_did().to_owned();
         let peer_dir = tempfile::tempdir().unwrap();
         let peer = gents_store::identity::KeyIdentity::load_or_create(
@@ -390,7 +390,7 @@ mod tests {
     async fn unprobed_oauth_backend_reports_the_runtime_probe_reason() {
         let owner = OWNER;
         let node = Arc::new(
-            crate::shared::test_support::fixture_node_builder()
+            gents_host::test_support::fixture_node_builder()
                 .build()
                 .await
                 .unwrap(),
@@ -441,9 +441,9 @@ mod tests {
 
     #[tokio::test]
     async fn diagnose_reports_an_xai_effort_that_will_not_be_sent() {
-        let (access, owner) = crate::shared::test_support::seed_unsent_xai_effort().await;
+        let (access, owner) = gents_host::test_support::seed_unsent_xai_effort().await;
         let owner = owner.as_str();
-        let mut backend = crate::shared::test_support::xai_effort_backend(owner);
+        let mut backend = gents_host::test_support::xai_effort_backend(owner);
         let object = backend.as_object_mut().unwrap();
         object.remove("catalogs");
         object.remove("probe_status");
@@ -451,7 +451,7 @@ mod tests {
             "format": "test", "node_did": owner, "exported_at": "2026-01-01T00:00:00Z",
             "access_mode": "local", "node": {"node_did": owner},
             "inference_backends": [backend],
-            "inference_profiles": [crate::shared::test_support::xai_effort_profile(owner)],
+            "inference_profiles": [gents_host::test_support::xai_effort_profile(owner)],
         }))
         .unwrap();
         let reports = diagnose_backends(&access, &bundle, &[], &BTreeMap::new()).await;

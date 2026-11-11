@@ -2,8 +2,9 @@ use std::io::{self, Write};
 
 use gents_eval::optimization::{Decision, JobState, JobView, JournalEntry, PolicyV2};
 
-use crate::commands::eval::render::{decision_label, signed_percent, wire};
+use crate::commands::eval::render::{decision_label, signed_percent};
 use crate::commands::eval::UNCALIBRATED_BANNER;
+use crate::shared::wire;
 
 const NOT_RECOMPUTABLE: &str = "not recomputable: definition changed or runs invalidated";
 

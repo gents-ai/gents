@@ -551,7 +551,7 @@ pub async fn fetch_tool_call_row_as(
 
 /// Publishes an unsigned hook's session as the runtime it runs as. That hook
 /// never writes its session, and an unsigned reader cannot resolve one.
-pub(super) async fn ensure_runtime_session(
+pub async fn ensure_runtime_session(
     node: &Arc<EmbeddedNode>,
     owner: &KeyIdentity,
     session_id: &str,

@@ -169,3 +169,15 @@ pub fn authorize_execution_revocation(
 pub fn provider_eof_is_failure(saw_explicit_final: bool) -> bool {
     !saw_explicit_final
 }
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn provider_eof_is_failure_matches_lean() {
+        gents_lean_vocab::families::request_execution_lease_provider_eof_is_failure::replay(|i| {
+            provider_eof_is_failure(i.saw_explicit_final)
+        });
+    }
+}

@@ -44,6 +44,19 @@ use requests::{
 #[cfg(test)]
 mod tests;
 
+/// Request builders and admission helpers that the root crate's self-config
+/// tests drive through the same owners production uses.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod test_support {
+    pub use super::agent_management::agent_mutate;
+    pub use super::agent_queries::{agent_inspect, node_default_agent};
+    pub use super::ops::ApplyRequest;
+    pub use super::requests::{
+        agent_request, anchored_request, backend_request, profile_create_request,
+        profile_request, profile_target_request, protect_working_agent, tools_request,
+    };
+}
+
 pub use ops::{
     apply_tool_grant_selection, guard_agent_keeps_reach, guard_backend_auth, guard_backend_choice,
     guard_tools_keep_control, guard_tools_keep_grants, reselection_keeps_grants,

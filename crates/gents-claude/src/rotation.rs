@@ -8,7 +8,8 @@
 //! holds the best tier. `select` is O(pool x limits) and allocates nothing.
 
 /// Model family a request is made for; limits bind per family.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Family {
     /// Opus models.
     Opus,
@@ -33,7 +34,8 @@ impl Family {
 }
 
 /// The window a limit applies to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Claim {
     /// The five hour session window.
     FiveHour,
@@ -90,7 +92,8 @@ pub struct Limit {
 }
 
 /// State of paid extra usage on an account.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Overage {
     /// Not reported.
     Absent,
@@ -242,3 +245,22 @@ where
 #[cfg(test)]
 #[path = "rotation_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn claim_binds_matches_lean() {
+        gents_lean_vocab::families::account_rotation_claim_binds::replay(|i| {
+            Claim::binds(i.claim, i.family)
+        });
+    }
+
+    #[test]
+    fn overage_serves_matches_lean() {
+        gents_lean_vocab::families::account_rotation_overage_serves::replay(|i| {
+            Overage::serves(i.overage)
+        });
+    }
+}

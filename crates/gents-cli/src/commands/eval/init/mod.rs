@@ -4,24 +4,22 @@ use std::path::PathBuf;
 use anyhow::{Context as _, Result};
 use gents_eval::checks::CheckRegistry;
 
-use self::contract::{first_turn, MAX_VALIDATION_ROUNDS, VALIDATION_PREFIX};
-use self::dossier::Dossier;
-use self::draft::parse_reply;
+use self::host::CliWriteHost;
 use self::turn::Turn;
-use self::validate::{assemble, validate, Assembled, Floors};
-use self::write::{case_table, commit, stage, Staged, Written};
 use super::{Deps, EvalContext};
 use crate::cli::EvalInitArgs;
-use crate::commands::pack::{resolve_pack_source, single_slot_agent, PackSource};
+use crate::commands::pack::single_slot_agent;
+use gents_eval::authoring::contract::{first_turn, MAX_VALIDATION_ROUNDS, VALIDATION_PREFIX};
+use gents_eval::authoring::dossier::{self, Dossier};
+use gents_eval::authoring::draft::{self, parse_reply};
+use gents_eval::authoring::validate::{assemble, validate, Assembled, Floors};
+use gents_eval::authoring::write::{self, case_table, commit, stage, Staged, Written};
+use gents_pack::pack::resolved_pack::{resolve_pack_source, ResolvedPack};
 
-mod contract;
-pub(crate) mod dossier;
-pub(crate) mod draft;
+mod host;
 mod pilot;
 mod readiness;
 pub(crate) mod turn;
-pub(super) mod validate;
-mod write;
 
 pub(crate) struct InitContext<'a> {
     pub(crate) dossier: Dossier,
@@ -85,7 +83,8 @@ pub(crate) async fn interview(
                     staged,
                     &ctx.out,
                     ctx.force,
-                    &crate::home_state::resolve_home_dir(ctx.scope.home.as_deref()),
+                    &gents_service::home_state::resolve_home_dir(ctx.scope.home.as_deref()),
+                    &CliWriteHost,
                 )?;
                 print_written(ctx, &assembled, &written, out)?;
                 return Ok(InitOutcome {
@@ -154,7 +153,7 @@ async fn checked(
     };
     let assembled = assemble(&draft, definition_id, &ctx.owner, &ctx.dossier.slot)?;
     validate(&assembled, ctx.registry, &ctx.dossier, &ctx.floors)?;
-    let staged = stage(&assembled, summary, &ctx.dossier, pilot).await?;
+    let staged = stage(&assembled, summary, &ctx.dossier, pilot, &CliWriteHost).await?;
     Ok((assembled, staged))
 }
 
@@ -208,7 +207,7 @@ pub(crate) async fn preflight(args: &EvalInitArgs) -> Result<()> {
         "{} already exists; pass --force to replace it",
         args.out.display()
     );
-    let home_dir = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+    let home_dir = gents_service::home_state::resolve_home_dir(args.scope.home.as_deref());
     let graphql = match args
         .scope
         .graphql
@@ -217,7 +216,9 @@ pub(crate) async fn preflight(args: &EvalInitArgs) -> Result<()> {
         .filter(|graphql| !graphql.is_empty())
     {
         Some(graphql) => Some(graphql.to_owned()),
-        None => crate::read_runtime_state(&home_dir)?.map(|state| state.graphql),
+        None => {
+            gents_service::home_state::read_runtime_state(&home_dir)?.map(|state| state.graphql)
+        }
     };
     let served = match graphql {
         Some(graphql) => crate::graphql_access::graphql_endpoint_available(&graphql).await,
@@ -227,7 +228,7 @@ pub(crate) async fn preflight(args: &EvalInitArgs) -> Result<()> {
         served,
         "start `gents runtime server` for this home and retry: the author runs on a served home"
     );
-    write::recover_output(&args.out, &home_dir)?;
+    write::recover_output(&args.out, &home_dir, &CliWriteHost)?;
     anyhow::ensure!(
         args.force || args.out.symlink_metadata().is_err(),
         "{} already exists; pass --force to replace it",
@@ -333,6 +334,7 @@ pub(crate) async fn run(
                 "interrupt: the pilot stops launching; the pack stays as written",
             ),
             options: deps.options.clone(),
+            proposer: None,
         };
         let piloted = pilot::pilot(
             ctx,
@@ -369,7 +371,7 @@ pub(crate) async fn run(
 pub(crate) async fn install_pack_slot(
     access: &gents_store::config_client::ConfigAccess,
     owner: &str,
-    pack: &PackSource,
+    pack: &ResolvedPack,
     slot: &str,
     profile: &str,
 ) -> Result<gents_pack::pack::InstallReport> {
@@ -407,7 +409,7 @@ pub(crate) async fn install_pack_slot(
 }
 
 pub(crate) fn pack_config(
-    pack: &PackSource,
+    pack: &ResolvedPack,
     owner: &str,
 ) -> Result<gents_pack::pack::AuthoredPackConfig> {
     gents_pack::pack::load_pack_authoring_config(
@@ -425,8 +427,9 @@ pub(crate) fn pack_config(
 mod tests {
     use serde_json::json;
 
+    use gents_eval::authoring::fixtures::{dossier, good, OWNER};
+
     use super::turn::ScriptedTurn;
-    use super::validate::tests::{dossier, good, OWNER};
     use super::*;
 
     pub(crate) fn draft_block(cases: &[serde_json::Value]) -> String {
@@ -664,11 +667,15 @@ mod tests {
             std::env::var("GENTS_EVAL_INIT_HOME")
                 .expect("GENTS_EVAL_INIT_HOME names a home gents server already serves"),
         );
-        let state = crate::home_state::read_runtime_state(&home_dir)
+        let state = gents_service::home_state::read_runtime_state(&home_dir)
             .unwrap()
             .expect("a runtime state written by `gents runtime server`");
-        crate::load_client_identity().await.unwrap();
-        let graphql = crate::home_graphql_endpoint(&home_dir, state.graphql.clone()).unwrap();
+        gents_service::home_state::load_client_identity()
+            .await
+            .unwrap();
+        let graphql =
+            gents_service::home_state::home_graphql_endpoint(&home_dir, state.graphql.clone())
+                .unwrap();
         let access = gents_store::config_client::ConfigAccess::Graphql(graphql.clone());
         let owner = state.node_did.clone();
 

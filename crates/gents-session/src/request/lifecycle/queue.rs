@@ -28,6 +28,7 @@ mod submission;
 
 pub use atomic_inputs::next_append_sequence_in_transaction;
 pub use atomic_inputs::persist_background_completion_with_message_canonical_with_access;
+pub use atomic_inputs::background_completion_gate;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use atomic_inputs::persist_background_completion_with_message_waking_with_access;
 use atomic_inputs::steering_transaction_attempt;
@@ -58,8 +59,8 @@ pub use folding::{
     fold_candidates, folded_input_key, heads_user_turn, load_consumed_folded_inputs, FoldedInput,
 };
 pub use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
-#[cfg(test)]
-use input::queue_is_automated_wakeup;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use input::queue_is_automated_wakeup;
 pub use input::row_is_automated_wakeup;
 pub(crate) use input::{background_wake_queue, is_automated_wakeup, row_queue};
 #[cfg(any(test, feature = "test-fixtures"))]
@@ -68,8 +69,8 @@ pub use intake::steer_reachable;
 pub(crate) use intake::{
     pending_ids_in_txn, pending_with_new_candidate_in_txn, SteerAdmissionRefusal,
 };
-#[cfg(test)]
-pub(crate) use intake::{pending_rows_in_txn, steering_compatible};
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use intake::{pending_rows_in_txn, steering_compatible};
 pub use intake::{steering_inputs, steering_snapshot};
 pub use management::{
     apply_pending_user_edit_in_txn, persisted_replacements_in_txn,

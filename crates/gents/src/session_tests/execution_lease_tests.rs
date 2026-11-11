@@ -1,7 +1,16 @@
 use anyhow::Result;
+use chrono::{DateTime, Utc};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_session::request::lifecycle::execution_lease::*;
+use gents_session::request::lifecycle::test_support::{
+    agent_access, agent_identity, agent_write_value, claimed_owner, claimed_owner_caused_by,
+    observed_execution, owner, request_row, test_node, PendingNativeOutcome,
+};
+use gents_session::request::lifecycle::{
+    ClaimOutcome, ExecutionOrigin, RequestLifecycle, TriggerLineage,
+};
+use gents_store::graphql::escape_graphql_string;
 use std::{sync::Arc, time::Duration};
-use tracing::field::{Field, Visit};
 use tracing::instrument::WithSubscriber;
 use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
@@ -119,7 +128,6 @@ async fn commit_signer_identities(
 
 #[tokio::test]
 async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload() {
-    use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
     use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables, AGENT_MESSAGE_FIELDS,
@@ -132,6 +140,7 @@ async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload
         StreamDeclaration, StreamPayload, ToolResultPart, TranscriptMessage,
     };
     use gents_protocol::tool_call::AwaitMode;
+    use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
 
     let (node, _dir, identity, agent) = test_node().await;
 
@@ -348,8 +357,14 @@ struct NativeCompletionRenewalObservation {
 
 #[tokio::test]
 async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_attempt() {
-    let cases: Vec<NativeCompletionRenewalCase> = serde_json::from_str(include_str!(
-        "../../tests/fixtures/native_completion.json"
+    let cases: Vec<NativeCompletionRenewalCase> = serde_json::from_value(serde_json::Value::from(
+        tokio::task::spawn_blocking(|| {
+            gents_lean_vocab::lean_contract_snapshot()
+                .native_completion_cases
+                .clone()
+        })
+        .await
+        .expect("Lean snapshot load"),
     ))
     .unwrap();
     let cases: Vec<_> = cases
@@ -368,7 +383,7 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
 
         let access = agent_access(&node, &identity, &agent);
         let mut lifecycle = owner(&node, &identity, &agent).await;
-        drop(lifecycle.renewal_task.take());
+        lifecycle.drop_renewal_task();
         let doc_id = lifecycle.request().doc_id.clone();
         let row = request_row(&access, &doc_id).await;
         let generation = row

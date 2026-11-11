@@ -49,7 +49,7 @@ pub(crate) async fn fetch(args: PackFetchArgs) -> Result<()> {
     if args.store {
         return fetch_into_store(args).await;
     }
-    let (namespace, name) = crate::commands::pack::split_namespace(&args.package);
+    let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(&args.package);
     let base_url = resolve_registry_url(args.registry.as_deref());
     let client = RegistryClient::new(base_url.clone());
 
@@ -102,7 +102,7 @@ pub(crate) async fn fetch(args: PackFetchArgs) -> Result<()> {
 }
 
 async fn fetch_into_store(args: PackFetchArgs) -> Result<()> {
-    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
     if let Some(local) = crate::commands::pack::local::classify(&args.package) {
         anyhow::ensure!(
             args.version.is_none(),
@@ -164,7 +164,7 @@ pub(crate) async fn search(args: PackSearchArgs) -> Result<()> {
 
 pub(crate) async fn publish(args: PackPublishArgs) -> Result<()> {
     let registry = resolve_registry_url(args.registry.as_deref());
-    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
     let token_flag = resolve_token_flag(args.token, args.token_stdin)?;
     let token = super::account::resolve_publish_token(token_flag.as_deref(), &registry, &home)?;
     let bytes =

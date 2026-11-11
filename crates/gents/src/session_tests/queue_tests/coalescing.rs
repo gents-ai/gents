@@ -1,4 +1,7 @@
 use super::*;
+use gents_session::request::lifecycle::queue::queue_is_automated_wakeup;
+use gents_session::request::lifecycle::test_support::test_db;
+use gents_store::graphql::escape_graphql_string;
 
 #[tokio::test]
 async fn atomic_background_completion_coalesces_keyed_agent_wakeups() {

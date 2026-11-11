@@ -443,7 +443,7 @@ pub async fn reserve_goal_session(
     Ok(session)
 }
 
-async fn reserve_client_targets(
+pub async fn reserve_client_targets(
     access: &ConfigAccess,
     create: &AgentRequestCreate,
 ) -> Result<(String, String), ClientSubmissionError> {
@@ -1475,21 +1475,13 @@ pub async fn reconcile_client_retry(
 mod tests {
     use super::*;
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+    use crate::test_support::{
+        client_access, grant_operator_user, seed_owned_agent, serve_client_node,
+    };
     use gents_store::identity::{KeyIdentity, NodeIdentity};
     use std::sync::Arc;
 
-    async fn assert_block_signer(node: &defra_node::Node, cid: &str, signer: &str) {
-        let (block, signature) = node
-            .authorized_signed_block_bytes(cid, Some(signer))
-            .await
-            .unwrap();
-        let block = defra_core::block::Block::from_dag_cbor(&block).unwrap();
-        let signature = defra_core::block::Signature::from_dag_cbor(&signature).unwrap();
-        assert_eq!(
-            db::block::verify::verified_signature_signer_did(&block, &signature).unwrap(),
-            signer
-        );
-    }
+    use crate::test_support::assert_block_signer;
 
     #[path = "claim_tests.rs"]
     mod claim_tests;
@@ -1675,88 +1667,6 @@ mod tests {
         node.shutdown().await.unwrap();
     }
 
-    async fn seed_owned_agent(
-        access: &ConfigAccess,
-        runtime_did: &str,
-        agent: &gents_protocol::agent_identity::AgentIdentityBinding,
-    ) {
-        let (node, agent_doc) = access.transact_write("test.client.owned_agent", |txn| Box::pin(async move {
-            let node = txn.execute_client_signed_create(
-                "mutation($input: NodeMutationInputArg!) { create_Node(input: $input) { _docID } }",
-                &serde_json::json!({"input":{"node_did":runtime_did}}),
-                gents_protocol::schemas::NODE,
-            ).await?;
-            let node = gents_store::graphql::created_doc_id(&node, "Node")?;
-            let created = txn.execute_client_signed_create(
-                "mutation($input: AgentMutationInputArg!) { create_Agent(input: $input) { _docID } }",
-                &serde_json::json!({"input":{"node_did":runtime_did,"agent_did":agent.agent_did,"creation_nonce":agent.creation_nonce,"inference_profile_id":"fixture","enabled":true}}),
-                gents_protocol::schemas::AGENT,
-            ).await?;
-            let agent_doc = gents_store::graphql::created_doc_id(&created, "Agent")?;
-            Ok::<_, anyhow::Error>((node, agent_doc))
-        })).await.unwrap();
-        access
-            .add_actor_relationship(
-                "Node",
-                &node,
-                "runtime_reader",
-                &identity::Did::new(runtime_did).unwrap(),
-            )
-            .await
-            .unwrap();
-        access
-            .add_resource_relationship("Agent", &agent_doc, "parent", "nodes", &node)
-            .await
-            .unwrap();
-        access
-            .add_actor_relationship(
-                "Agent",
-                &agent_doc,
-                "executor",
-                &identity::Did::new(&agent.agent_did).unwrap(),
-            )
-            .await
-            .unwrap();
-    }
-
-    /// Serves a fixture node over loopback HTTP. A user's configuration is
-    /// published only through its client-signed endpoint; embedded access
-    /// refuses non-runtime writes by design.
-    async fn serve_client_node(runtime: &dyn NodeIdentity) -> (Arc<defra_node::Node>, String) {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let node = Arc::new(
-            defra_node::Node::builder()
-                .enable_signing()
-                .with_node_identity_did(runtime.did())
-                .with_node_acp_enabled()
-                .with_http(defra_node::HttpConfig::with_listener(listener).unwrap())
-                .build()
-                .await
-                .unwrap(),
-        );
-        gents_store::schema::ensure_runtime_schemas(&node)
-            .await
-            .unwrap();
-        (node, format!("http://{address}/api/v0/graphql"))
-    }
-
-    /// Grants the user the `OperatorUser` set as the runtime admin, as
-    /// `signed_test_node` does. Without it, seeding the user's client-signed
-    /// Node and Agent ends in an incomplete signing conversation.
-    async fn grant_operator_user(
-        node: &Arc<defra_node::Node>,
-        runtime: &dyn NodeIdentity,
-        user: &KeyIdentity,
-    ) {
-        let admin =
-            ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
-        gents_store::identity::GrantSet::OperatorUser
-            .grant(&admin, &identity::Did::new(user.did()).unwrap())
-            .await
-            .unwrap();
-    }
-
     /// Grants a fixture Agent the node permissions production projects from
     /// its live managed Agent document; document ACP still decides visibility.
     async fn grant_agent_baseline(
@@ -1770,14 +1680,6 @@ mod tests {
             .grant(&admin, &identity::Did::new(agent_did).unwrap())
             .await
             .unwrap();
-    }
-
-    fn client_access(endpoint: &str, identity: &KeyIdentity) -> ConfigAccess {
-        ConfigAccess::Graphql(
-            gents_store::config_client::GraphqlEndpoint::as_principal(endpoint, identity.did())
-                .with_client_signing_capability(identity.client_signing_capability().unwrap())
-                .unwrap(),
-        )
     }
 
     #[tokio::test]

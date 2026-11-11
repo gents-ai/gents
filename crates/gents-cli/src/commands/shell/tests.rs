@@ -39,11 +39,11 @@ const WAIT: Duration = Duration::from_secs(10);
 const SHORT_WAIT: Duration = Duration::from_secs(1);
 
 /// The fixture runtime the nodes here run as.
-pub(super) const OWNER: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
+pub(super) const OWNER: &str = gents_session::test_support::lineage_fixtures::FIXTURE_DID;
 
 /// The DID a fixture's Agent named `name` takes.
 pub(super) fn did(name: &str) -> String {
-    crate::shared::test_support::fixture_agent_named(name).agent_did
+    gents_host::test_support::fixture_agent_named(name).agent_did
 }
 
 pub(super) async fn within<F>(future: F) -> F::Output
@@ -89,7 +89,7 @@ fn test_user() -> &'static gents_store::identity::KeyIdentity {
 
 /// The test User's signed endpoint on `graphql`, as `work_for`'s endpoint signs.
 fn user_endpoint(graphql: &str) -> GraphqlEndpoint {
-    crate::shared::test_support::user_endpoint(graphql, test_user())
+    gents_host::test_support::user_endpoint(graphql, test_user())
 }
 
 /// The test User's access for writing fixtures: the same signer, without the signed-create
@@ -107,7 +107,7 @@ fn chat_config(agents: &[&str]) -> Value {
     let agents: Vec<_> = agents
         .iter()
         .map(|name| {
-            let binding = crate::shared::test_support::fixture_agent_named(name);
+            let binding = gents_host::test_support::fixture_agent_named(name);
             json!({
                 "node_did": OWNER, "agent_did": binding.agent_did,
                 "creation_nonce": binding.creation_nonce, "display_name": name,
@@ -202,7 +202,7 @@ impl ChatNode {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let graphql = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
         let http = gents::defra_node::HttpConfig::with_listener(listener).unwrap();
-        let builder = crate::shared::test_support::fixture_node_builder();
+        let builder = gents_host::test_support::fixture_node_builder();
         let node = Arc::new(builder.with_http(http).build().await.unwrap());
         gents_store::schema::ensure_runtime_schemas(&node)
             .await
@@ -519,7 +519,8 @@ impl ChatNode {
             session_id: request.session_id.clone().unwrap(),
             requester_did: Some(OWNER.to_string()),
         };
-        let mut session = crate::caused_sessions::fixtures::fixture_session(OWNER, child);
+        let mut session =
+            gents_session::test_support::lineage_fixtures::fixture_session(OWNER, child);
         session.agent_did = did(agent);
         session.created_at = self.next_at();
         let mut provenance = SessionProvenance {
@@ -551,7 +552,7 @@ impl ChatNode {
             }),
             signature: Vec::new(),
         };
-        let signer = crate::caused_sessions::fixtures::fixture_signer();
+        let signer = gents_session::test_support::lineage_fixtures::fixture_signer();
         receipt.signature = signer.sign(&receipt.signing_payload()).await.unwrap();
         provenance.creation_receipt = Some(receipt);
         let input = json!({ "provenance": provenance });
@@ -728,7 +729,7 @@ async fn serve(State(shared): State<Arc<Shared>>, request: axum::extract::Reques
         let upgrade = upgrade.await.unwrap();
         let upstream = shared.upstream.replacen("http://", "ws://", 1);
         return upgrade.on_upgrade(move |socket| {
-            crate::shared::test_support::pipe_websocket(socket, upstream, parts)
+            gents_host::test_support::pipe_websocket(socket, upstream, parts)
         });
     }
     let body = axum::body::to_bytes(body, usize::MAX).await.unwrap();
@@ -2220,9 +2221,9 @@ pub(super) fn home_serving(
         Some(key) => {
             let identity = gents_store::identity::KeyIdentity::load_or_create(key, None).unwrap();
             let did = gents_store::identity::NodeIdentity::did(&identity).to_string();
-            crate::home_state::write_init_config(
+            gents_service::home_state::write_init_config(
                 home.path(),
-                &crate::shared::StoredInitConfig {
+                &gents_service::state::StoredInitConfig {
                     home: path.clone(),
                     node_name: "fixture".into(),
                     node_did: did.clone(),
@@ -2231,7 +2232,7 @@ pub(super) fn home_serving(
                     keychain_label: None,
                     secure_enclave_label: None,
                     tool_package: None,
-                    tool_ceiling: crate::cli::args::ToolCeilingArg::MetaOnly,
+                    tool_ceiling: gents_service::args::ToolCeilingArg::MetaOnly,
                     tool_root: None,
                     store_encryption: None,
                 },
@@ -2241,9 +2242,9 @@ pub(super) fn home_serving(
         }
         None => OWNER.to_string(),
     };
-    crate::home_state::write_runtime_state(
+    gents_service::home_state::write_runtime_state(
         home.path(),
-        &crate::shared::StoredRuntimeState {
+        &gents_service::state::StoredRuntimeState {
             home: path,
             graphql: graphql.to_string(),
             node_name: "fixture".into(),
@@ -2263,7 +2264,7 @@ pub(super) fn home_serving(
 async fn work_for_signs_as_this_clis_user() {
     let graphql = "http://127.0.0.1:39999/api/v0/graphql";
     let (home, _) = home_serving(graphql, None);
-    let user = crate::shared::test_support::cli_user().await;
+    let user = gents_host::test_support::cli_user().await;
 
     let work = work::work_for(home.path()).expect("this CLI's User signs");
 
@@ -3003,10 +3004,10 @@ pub(super) fn mailbox_item(
 /// Answers the open-mailbox list with the open `items`, newest first as the node orders them,
 /// each `_docID` read with its item. The node answers every other query.
 fn mailbox_answer(query: &str, items: &[Value]) -> Option<Value> {
-    if !query.trim_start().starts_with("{ MailboxItem(") {
+    if !query.contains("{ MailboxItem(") {
         return None;
     }
-    let rows: Vec<&Value> = match query.split_once(r#"_docID: { _eq: ""#) {
+    let rows: Vec<&Value> = match query.split_once(r#"_docID: {_eq: ""#) {
         Some((_, rest)) => {
             let id = rest.split('"').next().unwrap();
             items.iter().filter(|item| item["_docID"] == id).collect()
@@ -3435,8 +3436,8 @@ async fn filed(
         parent_item_id: None,
         deadline_at: None,
     };
-    let root = crate::caused_sessions::fixtures::fixture_signer();
-    let binding = crate::shared::test_support::fixture_agent_named("engineer");
+    let root = gents_session::test_support::lineage_fixtures::fixture_signer();
+    let binding = gents_host::test_support::fixture_agent_named("engineer");
     let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
     let actor = ::identity::Did::new(agent.did()).unwrap();
     let access = gents_store::config_client::ConfigAccess::local_managed_agent(
@@ -3764,7 +3765,7 @@ async fn served_settings() -> (Arc<defra_node::Node>, Work, tempfile::TempDir) {
 
 /// A node served with `config`, and the shell's work on it as the User who owns it.
 async fn served(config: Value) -> (Arc<defra_node::Node>, Work, tempfile::TempDir) {
-    let served = crate::shared::test_support::served_config(config).await;
+    let served = gents_host::test_support::served_config(config).await;
     let home = tempfile::tempdir().unwrap();
     let work = Work {
         endpoint: served.user.clone(),
@@ -5073,7 +5074,7 @@ async fn packs_wait_for_the_runtime() {
     let keys = tempfile::tempdir().unwrap();
     let key = keys.path().join("principal.key");
     let (home, did) = home_serving("http://127.0.0.1:1/api/v0/graphql", Some(&key));
-    crate::shared::test_support::cli_user().await;
+    gents_host::test_support::cli_user().await;
     let work = work::work_for(home.path());
     assert!(
         work.is_ok(),
@@ -5086,7 +5087,7 @@ async fn packs_wait_for_the_runtime() {
     let rows = super::packs::read(&work, home.path(), &did, &runtime, "", 1).await;
     let off_rows = super::packs::read(&off, home.path(), &did, &runtime, "", 1).await;
 
-    let data = crate::home_state::default_data_dir(home.path());
+    let data = gents_service::home_state::default_data_dir(home.path());
     assert!(!data.exists(), "a pack call opened the store");
     assert!(
         !data.with_extension("lock").exists(),

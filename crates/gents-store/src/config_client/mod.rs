@@ -40,6 +40,7 @@ pub mod agent_session;
 mod client_signed_agent_conformance;
 mod common;
 mod destructive_decision;
+pub mod document_decide;
 #[cfg(test)]
 mod dormant_file_request_conformance;
 mod error;

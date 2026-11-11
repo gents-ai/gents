@@ -1,5 +1,9 @@
+use std::sync::Arc;
+
+use defra_node::Node as EmbeddedNode;
 use gents_loop::tool::Tool as _;
-use serde_json::json;
+use gents_store::config_client::ConfigAccess;
+use serde_json::{json, Value};
 use gents_tools::builtin::schema_help::*;
 use gents_tools::surface::{AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling};
 use gents_protocol::tool_names::SCHEMA_TOOL_NAME;

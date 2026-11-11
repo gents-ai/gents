@@ -1,8 +1,12 @@
 use super::*;
 use gents_session::request::admission::AgentRequestAdmissionVerifier;
 use gents_session::request::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle};
+use gents_protocol::request_admission::AgentRequestCreate;
 use gents_protocol::row::AgentRequest;
-use gents_store::config_client::NodePermission;
+use gents_session::test_support::{
+    client_access, grant_operator_user, seed_owned_agent, serve_client_node,
+};
+use gents_store::config_client::{ConfigAccess, NodePermission};
 
 #[tokio::test]
 async fn watcher_routes_native_private_requests_as_their_selected_agents() {

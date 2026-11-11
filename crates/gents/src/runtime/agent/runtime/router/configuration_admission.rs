@@ -7,7 +7,8 @@ use gents_inference::resolved::visibility::ConfigurationVisibilityError;
 use gents_inference::resolved::ResolvedConfiguration;
 use gents_protocol::row::AgentRequest;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(in crate::runtime::agent) enum ConfigurationAdmission {
     Claim,
     AwaitNewerGeneration,
@@ -66,4 +67,16 @@ impl DeferredRequests {
 
 fn retries_deferred(deferred_at: u64, active: u64) -> bool {
     deferred_at < active
+}
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn configuration_admission_matches_lean() {
+        gents_lean_vocab::families::runtime_state_configuration_admission::replay(|i| {
+            configuration_admission(i.visible)
+        });
+    }
 }

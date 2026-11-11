@@ -125,32 +125,14 @@ fn assert_engine_files_hide_entries(data: &Path, entries: &[(Vec<u8>, Vec<u8>)])
 
 #[test]
 fn every_recovery_observation_matches_lean() {
-    for case in &gents_lean_vocab::lean_contract_snapshot().store_encryption_upgrade_cases {
-        let phase: Phase = serde_json::from_value(case["phase"].clone()).unwrap();
-        let action = next(
-            phase,
-            case["source"].as_bool().unwrap(),
-            case["stage"].as_bool().unwrap(),
-            case["retired"].as_bool().unwrap(),
-        );
-        assert_eq!(
-            serde_json::to_value(action).unwrap(),
-            case["action"],
-            "{case}"
-        );
-        assert_eq!(
-            serde_json::to_value(after_recheck(case["equal"].as_bool().unwrap())).unwrap(),
-            case["rechecked_phase"]
-        );
-        assert_eq!(
-            may_finish(
-                phase,
-                case["metadata"].as_bool().unwrap(),
-                case["accepted"].as_bool().unwrap()
-            ),
-            case["may_finish"].as_bool().unwrap()
-        );
-    }
+    use gents_lean_vocab::families;
+    families::store_encryption_upgrade_next::replay(|i| {
+        next(i.phase, i.source, i.stage, i.retired)
+    });
+    families::store_encryption_upgrade_after_recheck::replay(|i| after_recheck(i.equal));
+    families::store_encryption_upgrade_may_finish::replay(|i| {
+        may_finish(i.phase, i.metadata_committed, i.native_accepted)
+    });
 }
 
 #[tokio::test]

@@ -1,5 +1,13 @@
 use std::sync::Arc;
+use defra_node::Node as EmbeddedNode;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequest;
 use gents_session::request::lifecycle::claim::*;
+use gents_session::request::lifecycle::{
+    ClaimOutcome, ExecutionOrigin, LocalLifecycleState, RequestLifecycle, DEFAULT_REQUEST_MAX_RETRIES,
+};
+use gents_session::session;
+use gents_store::graphql::escape_graphql_string;
 
     fn test_node_did() -> String {
         use gents_store::identity::NodeIdentity as _;
@@ -253,8 +261,8 @@ use gents_session::request::lifecycle::claim::*;
         assert_eq!(receipt.execution_generation, "lean-generation-7");
         assert_eq!(receipt.lease_ms, 5_000);
         assert_eq!(lifecycle.state, LocalLifecycleState::Pending);
-        assert!(lifecycle.execution_lease.is_none());
-        assert!(lifecycle.renewal_task.is_none());
+        assert!(!lifecycle.holds_execution_lease());
+        assert!(!lifecycle.holds_renewal_task());
 
         let claimed = durable_request_row(&node, &doc_id).await;
         assert_eq!(

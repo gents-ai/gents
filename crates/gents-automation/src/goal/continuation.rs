@@ -11,7 +11,7 @@ use gents_session::request::lifecycle::queue::parent_agent_did;
 use gents_session::request::lifecycle::{ExecutionOrigin, TriggerLineage, WorkspaceLineage};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GoalContinuationIdentity {
+pub struct GoalContinuationIdentity {
     pub request_id: String,
     pub(crate) retry_key: String,
     pub(crate) queue_key: String,

@@ -74,7 +74,7 @@ impl PolicyFixture {
     /// Grants the Engineer its modeled default-Agent sets, as init does, then
     /// each extra permission as the runtime owner.
     async fn grant_engineer_sets(&self, extra: &[NodePermission]) {
-        gents_tools::builtin::self_config::tests::grant_modeled_direct_sets(
+        super::tests::grant_modeled_direct_sets(
             &self.db,
             "default-agent",
             &self.agent_did,

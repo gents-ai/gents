@@ -56,8 +56,14 @@ async fn startup_subscriptions_use_one_batch_with_the_exact_allowed_scope() {
     reason = "retries a file lock on a blocking-pool thread; the lock has no release notification"
 )]
 async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
-    let fixture: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../gents/tests/fixtures/native_claim_lifetime.json"
+    let fixture: serde_json::Value = serde_json::from_value(serde_json::Value::from(
+        tokio::task::spawn_blocking(|| {
+            gents_lean_vocab::lean_contract_snapshot()
+                .native_claim_lifetime_cases
+                .clone()
+        })
+        .await
+        .expect("Lean snapshot load"),
     ))
     .expect("generated native claim lifetime fixture");
     let case = fixture

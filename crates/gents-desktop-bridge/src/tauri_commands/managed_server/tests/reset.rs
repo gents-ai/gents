@@ -249,7 +249,7 @@ fn starting_fresh_from_a_refused_client_store_retires_its_paired_home_before_rel
 
     let entries = gents_store::local::home::home_entries(&home, &[]).unwrap();
     assert!(entries.owned.is_empty(), "{:?}", entries.owned);
-    assert!(!gents_server::server_host::initialized_home(&home));
+    assert!(!gents_service::server_host::initialized_home(&home));
     assert!(home.join("grok-port-home/data/MANIFEST").is_file());
     assert!(!desktop.node_data_dir().exists());
     assert!(!desktop.root().join(MANAGED_SERVER_CONFIG).exists());

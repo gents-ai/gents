@@ -1,3 +1,4 @@
+use gents_host::usage_read::UsageReadCommand;
 use std::io::{IsTerminal, Write};
 
 use anyhow::{Context, Result};
@@ -15,7 +16,8 @@ use serde_json::{json, Value};
 use crate::cli::args::{AccountsCommand, AccountsTargetArgs};
 use crate::cli::output_format::OutputFormat;
 use crate::config_writes::ConfigAccess;
-use crate::{print_json, resolve_config_access, resolve_node_did};
+use crate::{print_json, resolve_config_access};
+use gents_service::home_state::resolve_node_did;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct AccountRow {
@@ -31,75 +33,6 @@ pub(crate) struct AccountRow {
     pub(crate) profiles: Vec<String>,
     pub(crate) usage: Option<UsageView>,
     pub(crate) read: Option<UsageRead>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct UsageReadCommand {
-    pub(crate) trigger: UsageTrigger,
-    pub(crate) provider: Option<String>,
-    pub(crate) signer_did: String,
-    pub(crate) issued_at: String,
-    pub(crate) nonce: String,
-    pub(crate) sig: Vec<u8>,
-}
-
-const USAGE_READ_SIGNATURE_DOMAIN: &str = "gents-account-usage-read-v1";
-
-impl UsageReadCommand {
-    pub(crate) async fn signed(
-        identity: &dyn gents_store::identity::NodeIdentity,
-        trigger: UsageTrigger,
-        provider: Option<&str>,
-    ) -> Result<Self> {
-        let mut command = Self {
-            trigger,
-            provider: provider.map(str::to_owned),
-            signer_did: identity.did().to_owned(),
-            issued_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            nonce: uuid::Uuid::new_v4().simple().to_string(),
-            sig: Vec::new(),
-        };
-        command.sig = identity
-            .sign(&command.signing_payload())
-            .await
-            .context("signing the usage read request")?;
-        Ok(command)
-    }
-
-    pub(crate) fn signing_payload(&self) -> Vec<u8> {
-        let trigger = match self.trigger {
-            UsageTrigger::Cached => "cached",
-            UsageTrigger::Open => "open",
-            UsageTrigger::Refresh => "refresh",
-        };
-        gents_protocol::enrollment::canonical_domain_payload(
-            USAGE_READ_SIGNATURE_DOMAIN,
-            [
-                trigger,
-                self.provider.as_deref().unwrap_or_default(),
-                &self.signer_did,
-                &self.issued_at,
-                &self.nonce,
-            ],
-        )
-    }
-
-    pub(crate) fn validate_at(&self, now: chrono::DateTime<chrono::Utc>) -> Result<()> {
-        anyhow::ensure!(self.sig.len() == 64, "invalid usage read signature length");
-        let issued = chrono::DateTime::parse_from_rfc3339(&self.issued_at)
-            .context("usage read issued_at")?
-            .with_timezone(&chrono::Utc);
-        anyhow::ensure!(
-            issued <= now + chrono::Duration::seconds(5),
-            "usage read request is issued in the future"
-        );
-        anyhow::ensure!(
-            now - issued <= chrono::Duration::seconds(60),
-            "usage read request expired"
-        );
-        Ok(())
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -458,7 +391,7 @@ pub(crate) async fn list_with_usage(
                 UsageTrigger::Open
             };
             let requested = async {
-                let identity = crate::load_client_identity().await?;
+                let identity = gents_service::home_state::load_client_identity().await?;
                 request_usage_reads(&identity, graphql, trigger, provider).await
             }
             .await;

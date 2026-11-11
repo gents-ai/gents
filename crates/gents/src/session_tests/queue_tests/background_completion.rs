@@ -3,6 +3,19 @@ use super::*;
 use gents_session::request::lifecycle::RequestTerminalOutcome;
 use gents_session::session;
 
+async fn agent_data(db: &TestDb, query: &str) -> serde_json::Value {
+    db.agent_access.execute(query).await.unwrap()["data"].clone()
+}
+
+async fn agent_write(db: &TestDb, operation: &'static str, mutation: &str) {
+    db.agent_access
+        .transact_write(operation, |txn| {
+            Box::pin(async move { Ok::<_, anyhow::Error>(txn.execute(mutation).await?) })
+        })
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn background_wakes_and_goal_continuations_keep_the_project_directory() {
     let db = test_db("continuation-project-directory").await;
@@ -397,7 +410,7 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
     .await
     .unwrap();
     assert_eq!(recovery.background_wakes_redriven, 0);
-    let before = crate::load_background_completion_diagnostics(&db.agent_access, db.node_did())
+    let before = gents_toolcalls::background::diagnostics::load_background_completion_diagnostics(&db.agent_access, db.node_did())
         .await
         .unwrap();
     assert_eq!(before.pending_notifications, 1);
@@ -441,7 +454,7 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
         .await
         .unwrap();
 
-    let after = crate::load_background_completion_diagnostics(&db.agent_access, db.node_did())
+    let after = gents_toolcalls::background::diagnostics::load_background_completion_diagnostics(&db.agent_access, db.node_did())
         .await
         .unwrap();
     assert_eq!(after.pending_notifications, 0);
@@ -527,7 +540,7 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
         .await
         .unwrap();
     let unpublished_terminal =
-        crate::load_background_completion_diagnostics(&db.agent_access, db.node_did())
+        gents_toolcalls::background::diagnostics::load_background_completion_diagnostics(&db.agent_access, db.node_did())
             .await
             .unwrap();
     assert_eq!(unpublished_terminal.pending_notifications, 1);
@@ -568,7 +581,7 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
         .await
         .unwrap();
     assert_eq!(first_repair.repaired, 0);
-    let first = crate::load_background_completion_diagnostics(&db.agent_access, db.node_did())
+    let first = gents_toolcalls::background::diagnostics::load_background_completion_diagnostics(&db.agent_access, db.node_did())
         .await
         .unwrap();
     assert_eq!(first.pending_notifications, 0);
@@ -584,7 +597,7 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
         .await
         .unwrap();
     assert_eq!(second_repair.repaired, 0);
-    let second = crate::load_background_completion_diagnostics(&db.agent_access, db.node_did())
+    let second = gents_toolcalls::background::diagnostics::load_background_completion_diagnostics(&db.agent_access, db.node_did())
         .await
         .unwrap();
     assert_eq!(
@@ -597,7 +610,7 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
 async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
     use gents_session::request::watcher::{DefraWatcher, Watcher};
     use gents_toolcalls::call::lifecycle::admission_fixture::complete_child_managed_verified;
-    let (selected, successor_child) = gents_toolcalls::call::lifecycle::completion_owner_conformance::selected_background_wake_with_successor(true).await;
+    let (selected, successor_child) = crate::toolcalls_tests::lifecycle::completion_owner_conformance::selected_background_wake_with_successor(true).await;
     let admission = selected.admission;
     let node = admission.node.clone();
     let did = admission.node_did.clone();
@@ -654,6 +667,7 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         gents_toolcalls::background::completion::settle_running_session_message_rows_with_access(
             &node,
             &admission.tool.access().unwrap(),
+            &gents_session::session::message::NoSessionMessageGoals,
             &did
         )
         .await
@@ -734,7 +748,7 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         )
         .await
         .unwrap();
-    let diagnostics = crate::load_background_completion_diagnostics(&access, &did)
+    let diagnostics = gents_toolcalls::background::diagnostics::load_background_completion_diagnostics(&access, &did)
         .await
         .unwrap();
     assert_eq!(diagnostics.pending_notifications, 0);

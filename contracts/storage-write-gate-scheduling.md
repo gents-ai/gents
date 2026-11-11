@@ -42,8 +42,8 @@ Existing transaction and lifecycle owners retain those decisions.
 
 ## Conformance
 
-`Proofs/Conformance/StorageWriteGate.lean` emits
-`crates/gents/tests/fixtures/storage_write_gate.json`. Its expected gate states
+`Proofs/Conformance/StorageWriteGate.lean` emits the snapshot's
+`storage_write_gate_cases`. Its expected gate states
 are computed from the executable model, not separately authored in Rust.
 
 `admission/stream_guard/conformance.rs` consumes all three cases:
@@ -67,11 +67,11 @@ further stream polls, and both durable rows are read back. This fences the Gents
 adapter with actual native writes, while the deliberately delayed callback is
 still an injected observation rather than a fault inside DefraDB.
 
-Run the narrow generator and check the committed fixture byte-for-byte:
+Build the model; the Rust bridge reads the cases from the snapshot it
+generates:
 
 ```sh
 cd crates/gents/proofs
-lake env lean --run Proofs/Conformance/StorageWriteGate.lean
 lake build
 ```
 

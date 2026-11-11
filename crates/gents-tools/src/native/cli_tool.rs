@@ -15,12 +15,12 @@ use super::shared::{
 use super::CliToolConfig;
 
 #[derive(Clone)]
-pub(super) struct CliTool {
+pub struct CliTool {
     config: CliToolConfig,
 }
 
 impl CliTool {
-    pub(super) fn new(config: CliToolConfig) -> Self {
+    pub fn new(config: CliToolConfig) -> Self {
         Self { config }
     }
 }

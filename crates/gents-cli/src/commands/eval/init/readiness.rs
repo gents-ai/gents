@@ -3,7 +3,6 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use gents_protocol::row::{project_node_readiness, NodeReadinessRow, ProjectedAgentReadiness};
 use gents_store::config_client::ConfigAccess;
-use gents_store::graphql::escape_graphql_string;
 
 /// Pack publication precedes router reconciliation, so an HTTP-ready server
 /// can still reject the author's first request as unassigned.
@@ -14,15 +13,25 @@ pub(super) async fn wait_for_author(
     timeout: Duration,
     poll: Duration,
 ) -> Result<()> {
-    let query = format!(
-        r#"{{ NodeReadiness(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{ node_did snapshot_json updated_at }} }}"#,
-        escape_graphql_string(owner)
-    );
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::node_readiness as fields, Filter, Query, Selection,
+        };
+        Query::select(
+            Selection::new()
+                .field(fields::NODE_DID)
+                .field(fields::SNAPSHOT_JSON)
+                .field(fields::UPDATED_AT),
+        )
+        .filter(Filter::eq(fields::NODE_DID, owner))
+        .limit(1)
+        .render()
+    };
     let mut last = "no readiness observation".to_owned();
     let waited = tokio::time::timeout(timeout, async {
         loop {
             let response = access
-                .execute(&query)
+                .read(&rendered)
                 .await
                 .context("reading runtime readiness for the eval author")?;
             let row = response

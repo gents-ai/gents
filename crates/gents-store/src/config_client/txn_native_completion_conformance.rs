@@ -129,8 +129,14 @@ async fn signed_node() -> (Arc<EmbeddedNode>, Arc<BlockingSigner>, ReleaseSigner
 
 #[tokio::test]
 async fn lean_auto_commit_completion_owns_the_real_signed_worker() {
-    let cases: Vec<Case> = serde_json::from_str(include_str!(
-        "../../../gents/tests/fixtures/native_completion.json"
+    let cases: Vec<Case> = serde_json::from_value(serde_json::Value::from(
+        tokio::task::spawn_blocking(|| {
+            gents_lean_vocab::lean_contract_snapshot()
+                .native_completion_cases
+                .clone()
+        })
+        .await
+        .expect("Lean snapshot load"),
     ))
     .unwrap();
     let mut exercised = 0;
@@ -251,8 +257,14 @@ async fn wait_for_native_count(tracker: &NativeOperationTracker, expected: usize
 
 #[tokio::test]
 async fn lean_abandoned_registry_retains_gate_until_every_native_operation_drains() {
-    let cases: Vec<Case> = serde_json::from_str(include_str!(
-        "../../../gents/tests/fixtures/native_completion.json"
+    let cases: Vec<Case> = serde_json::from_value(serde_json::Value::from(
+        tokio::task::spawn_blocking(|| {
+            gents_lean_vocab::lean_contract_snapshot()
+                .native_completion_cases
+                .clone()
+        })
+        .await
+        .expect("Lean snapshot load"),
     ))
     .unwrap();
     let concurrent = cases

@@ -29,7 +29,7 @@ pub use guards::{
 pub use guards::{
     guard_backend_choice_in_txn, guard_compaction_choice_in_txn, profile_backend_id,
 };
-pub(crate) use request::ApplyRequest;
+pub use request::ApplyRequest;
 
 #[derive(Debug, thiserror::Error)]
 #[error("no owned {} with ID {id:?}. This is a document ID, not an agent name. List this resource to find its exact IDs; agent get shows a role's selected Context, Tools and profile", target.collection_name())]

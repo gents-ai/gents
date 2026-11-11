@@ -1,5 +1,8 @@
+use defra_node::Node as EmbeddedNode;
 use gents_session::request::interrupt::*;
+use gents_store::graphql::escape_graphql_string;
 use serde_json::{json, Value};
+use std::sync::Arc;
 
 #[tokio::test]
 async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues() {

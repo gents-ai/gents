@@ -1,4 +1,5 @@
 use super::*;
+use chrono::Utc;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -223,7 +224,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
             let session = hook.session_id().await.unwrap();
             // In this fixture the runtime identity is also the session's working
             // Agent; Goal history is written and retired as that creator.
-            let agent_access = super::ensure_runtime_session(&node, &identity, &session)
+            let agent_access = gents_toolcalls::call::hook::fixtures::ensure_runtime_session(&node, &identity, &session)
                 .await
                 .unwrap();
             let session_doc_id = agent_access

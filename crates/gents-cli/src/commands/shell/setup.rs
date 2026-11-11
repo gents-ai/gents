@@ -599,7 +599,7 @@ mod tests {
     }
 
     /// The node `served_config` publishes a config's `owner` as.
-    const OWNER: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
+    const OWNER: &str = gents_session::test_support::lineage_fixtures::FIXTURE_DID;
 
     /// The owner's `collection` documents, whole, as the store reads them back.
     async fn stored(access: &ConfigAccess, collection: Collection) -> Vec<Value> {
@@ -640,7 +640,7 @@ mod tests {
 
     #[tokio::test]
     async fn saving_adds_a_backend_beside_the_existing_one() {
-        let served = crate::shared::test_support::served_config(owner_with_anthropic()).await;
+        let served = gents_host::test_support::served_config(owner_with_anthropic()).await;
         let access = ConfigAccess::Graphql(served.user.clone());
         let backends = stored(&access, Collection::InferenceBackend).await;
         let profiles = stored(&access, Collection::InferenceProfile).await;

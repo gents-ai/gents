@@ -16,7 +16,7 @@ use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 use gents_store::graphql::escape_graphql_string;
 
 const TEXT_CHARS: usize = 8_000;
-const TOOL_PREVIEW_CHARS: usize = 240;
+pub const TOOL_PREVIEW_CHARS: usize = 240;
 const STATUS_LIMIT: usize = 20;
 
 #[derive(Debug, Clone, Default, Deserialize)]

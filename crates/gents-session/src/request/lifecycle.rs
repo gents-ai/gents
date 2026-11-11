@@ -37,8 +37,8 @@ pub(crate) use claim::supersede_pending_in_txn;
 pub use claim::{claim_gate_in_txn, ClaimGate};
 pub mod execution_lease;
 mod execution_renewal;
-#[cfg(test)]
-pub(crate) use execution_renewal::renew_in_transaction;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use execution_renewal::renew_in_transaction;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use execution_renewal::renew_once_at_with_access as renew_execution_lease_once_at_with_access;
 #[cfg(test)]
@@ -341,7 +341,7 @@ pub fn extract_single_doc_id(response: &defra_node::QueryResponse, key: &str) ->
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LocalLifecycleState {
+pub enum LocalLifecycleState {
     Pending,
     Claimed,
     Streaming,
@@ -575,7 +575,7 @@ pub struct RequestLifecycle {
     configured_max_total_tokens: Option<u64>,
     claimed_deadline_at: Option<chrono::DateTime<chrono::Utc>>,
     background_completion_input_through_sequence: Option<u32>,
-    state: LocalLifecycleState,
+    pub state: LocalLifecycleState,
     valid_until_at_claim: Option<chrono::DateTime<chrono::Utc>>,
     execution_lease: Option<RequestExecutionLease>,
     execution_lease_duration_secs: u64,
@@ -589,6 +589,21 @@ pub struct RequestLifecycle {
     folded_selection: Vec<queue::FoldedInput>,
     natural_finish_allowed: bool,
     resumed_from_backend: bool,
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+impl RequestLifecycle {
+    pub fn holds_execution_lease(&self) -> bool {
+        self.execution_lease.is_some()
+    }
+
+    pub fn holds_renewal_task(&self) -> bool {
+        self.renewal_task.is_some()
+    }
+
+    pub fn drop_renewal_task(&mut self) {
+        drop(self.renewal_task.take());
+    }
 }
 
 impl RequestLifecycle {
@@ -778,36 +793,8 @@ impl gents_loop::request_lifecycle::RequestLifecycleControl for RequestLifecycle
 mod tests {
     use super::*;
     use gents_lean_vocab::{
-        assert_lean_contract_vocabulary_matches, assert_state_machine_contract_is_complete,
-        lean_state_machine_contract, LeanContractVocabulary,
+        assert_state_machine_contract_is_complete, lean_state_machine_contract,
     };
-
-    #[test]
-    fn rust_request_lifecycle_state_vocabulary_matches_lean_model() {
-        let rust_states = RequestLifecycleState::ALL
-            .iter()
-            .copied()
-            .map(RequestLifecycleState::as_str)
-            .collect::<Vec<_>>();
-        assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
-            domain: "RequestState",
-            rust_source: "RequestLifecycleState::ALL",
-            rust_values: &rust_states,
-        });
-    }
-
-    #[test]
-    fn rust_execution_origin_vocabulary_matches_lean_model() {
-        let rust_origins = vec![
-            ExecutionOrigin::Interactive.as_str(),
-            ExecutionOrigin::Scheduled.as_str(),
-        ];
-        assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
-            domain: "ExecutionOrigin",
-            rust_source: "ExecutionOrigin::{Interactive, Scheduled}",
-            rust_values: &rust_origins,
-        });
-    }
 
     #[test]
     fn request_state_machine_contract_is_complete() {

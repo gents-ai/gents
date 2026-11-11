@@ -10,7 +10,7 @@ pub(crate) async fn outdated_packs(
     scope: &crate::cli::ScopeArgs,
     registry: Option<&str>,
 ) -> Result<Vec<Value>> {
-    let home = crate::home_state::resolve_home_dir(scope.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(scope.home.as_deref());
     let node =
         if scope.graphql.is_some() || gents_store::local::home::init_config_path(&home).is_file() {
             Some(super::resolve_scope_owner(scope).await?)
@@ -35,7 +35,7 @@ pub(crate) async fn outdated_packs_on(
     let client = RegistryClient::new(resolve_registry_url(registry));
     let mut report = Vec::new();
     for pack in installed {
-        let (namespace, name) = super::split_namespace(&pack.coordinate);
+        let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(&pack.coordinate);
         let (latest, outdated, error) = match client.package(namespace, name).await {
             Err(error) => (None, None, Some(format!("{error:#}"))),
             Ok(package) => match package["latest"].as_str() {
@@ -80,7 +80,7 @@ fn select_packs<'a>(packs: &'a [Value], package: Option<&str>) -> Result<Vec<&'a
         .iter()
         .filter(|pack| {
             package.is_none_or(|package| {
-                let (namespace, name) = super::split_namespace(package);
+                let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(package);
                 pack["pack"] == format!("{namespace}/{name}").as_str()
             })
         })
@@ -326,7 +326,8 @@ mod tests {
         crate::commands::init::init(init_args)
             .await
             .expect("identity-only init");
-        let node_did = crate::home_state::resolve_node_did(Some(home.path()), None).unwrap();
+        let node_did =
+            gents_service::home_state::resolve_node_did(Some(home.path()), None).unwrap();
         let profile_id = format!("{node_did}:default-profile");
         // An identity-only init publishes no inference profile; the home's
         // client configures the one the worker slot names.

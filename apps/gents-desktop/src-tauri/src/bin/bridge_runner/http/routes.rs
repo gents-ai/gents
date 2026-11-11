@@ -266,13 +266,13 @@ pub(super) async fn handle_request(
                 .ok_or_else(|| anyhow!("live bridge runner has no deployment"))?;
             let node = fixture.runtime_node()?;
             let identity = Arc::clone(fixture.runtime_identity()?);
-            let network = gents_desktop_bridge::enrollment::ensure_enrollment_network(
+            let network = gents_p2p::p2p_reconcile::ensure_enrollment_network(
                 node,
                 identity.as_ref(),
                 fixture.deployment_label(),
             )
             .await?;
-            let issuer = gents_desktop_bridge::enrollment::EnrollmentOfferIssuer::new(
+            let issuer = gents_p2p::p2p_reconcile::EnrollmentOfferIssuer::new(
                 identity,
                 fixture.runtime_p2p()?,
                 network.network_id,

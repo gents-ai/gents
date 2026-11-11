@@ -176,8 +176,8 @@ pub fn test_root_identity() -> gents_store::identity::KeyIdentity {
     gents_store::test_support::pin_fixed_signing_identity(home.path())
 }
 
-#[cfg(test)]
-pub(crate) fn test_node_builder() -> defra_node::NodeBuilder {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn test_node_builder() -> defra_node::NodeBuilder {
     use gents_store::identity::NodeIdentity as _;
     defra_node::Node::builder()
         .with_node_identity_did(test_root_identity().did())
@@ -202,8 +202,8 @@ pub fn test_agent_did() -> String {
     test_agent_identity().did().to_owned()
 }
 
-#[cfg(test)]
-pub(crate) fn test_agent_access(
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn test_agent_access(
     node: &Arc<defra_node::Node>,
 ) -> gents_store::config_client::ConfigAccess {
     let agent = test_agent_identity();
@@ -246,8 +246,8 @@ pub(crate) fn test_snapshot(
     tokio::sync::watch::channel(snapshot).1
 }
 
-#[cfg(test)]
-pub(crate) async fn seed_test_agent(node: &std::sync::Arc<defra_node::Node>, owner: &str) {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn seed_test_agent(node: &std::sync::Arc<defra_node::Node>, owner: &str) {
     let agent = test_agent_did();
     let access = gents_store::config_client::ConfigAccess::local_as(
         node.clone(),
