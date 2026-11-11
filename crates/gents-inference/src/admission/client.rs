@@ -39,11 +39,7 @@ pub struct AdmittedCompletionModel<M> {
 }
 
 impl<M> AdmittedCompletionModel<M> {
-    pub fn new(
-        inner: M,
-        admission: AdmissionRegistry,
-        connection: impl Into<Arc<str>>,
-    ) -> Self {
+    pub fn new(inner: M, admission: AdmissionRegistry, connection: impl Into<Arc<str>>) -> Self {
         Self {
             inner,
             admission,
@@ -222,10 +218,7 @@ tokio::task_local! {
     static ADMISSION_CALL_CONTEXT: AdmissionCallContext;
 }
 
-pub async fn scope_request<T>(
-    context: AdmissionCallContext,
-    future: impl Future<Output = T>,
-) -> T {
+pub async fn scope_request<T>(context: AdmissionCallContext, future: impl Future<Output = T>) -> T {
     ADMISSION_CALL_CONTEXT.scope(context, future).await
 }
 

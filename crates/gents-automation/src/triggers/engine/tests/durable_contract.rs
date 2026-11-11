@@ -485,11 +485,8 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                 .unwrap(),
         );
         ensure_runtime_schemas(&node).await.unwrap();
-        crate::triggers::callback::seed_test_agent(
-            &node,
-            gents_store::test_support::PIN_FIXED_DID,
-        )
-        .await;
+        crate::triggers::callback::seed_test_agent(&node, gents_store::test_support::PIN_FIXED_DID)
+            .await;
         let agent = crate::triggers::callback::test_agent_identity();
         let access = crate::triggers::callback::test_agent_access(&node);
         let mut published = std::collections::BTreeMap::new();

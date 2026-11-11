@@ -90,11 +90,15 @@ mod conformance {
 
     #[test]
     fn tool_call_states_are_the_lean_tool_call_states() {
-        gents_lean_vocab::families::tool_execution_tool_call_state_vocabulary::replay(&ToolCallState::ALL);
+        gents_lean_vocab::families::tool_execution_tool_call_state_vocabulary::replay(
+            &ToolCallState::ALL,
+        );
     }
 
     #[test]
     fn cancel_causes_are_the_lean_cancel_causes() {
-        gents_lean_vocab::families::tool_execution_cancel_cause_vocabulary::replay(CancelCause::ALL);
+        gents_lean_vocab::families::tool_execution_cancel_cause_vocabulary::replay(
+            CancelCause::ALL,
+        );
     }
 }

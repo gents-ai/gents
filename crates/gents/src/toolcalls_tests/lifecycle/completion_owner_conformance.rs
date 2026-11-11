@@ -1,17 +1,17 @@
-use gents_protocol::tool_call::AwaitMode;
-use gents_toolcalls::call::lifecycle::admission_fixture::{
-    published_admission, PublishedAdmission, PublishedAdmissionOptions,
-};
-use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
-use gents_automation::goal::{load_canonical_goal_in_txn, set_goal_from_access};
 use anyhow::Context;
+use gents_automation::goal::{load_canonical_goal_in_txn, set_goal_from_access};
 use gents_lean_vocab::{
     lean_r6_backgrounding_case, lean_r6_backgrounding_cases, LeanR6BackgroundingCase,
 };
 use gents_protocol::goal_status::GoalStatus;
 use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
+use gents_protocol::tool_call::AwaitMode;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
+use gents_toolcalls::call::lifecycle::admission_fixture::{
+    published_admission, PublishedAdmission, PublishedAdmissionOptions,
+};
+use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
 use serde_json::{json, Value};
 
 async fn rows(access: &ConfigAccess, query: &str, field: &str) -> Vec<Value> {
@@ -713,14 +713,14 @@ pub(crate) async fn selected_background_wake() -> SelectedBackgroundWake {
 pub async fn selected_background_wake_with_successor(
     prepare_successor: bool,
 ) -> (SelectedBackgroundWake, Option<String>) {
-    use gents_toolcalls::call::lifecycle::admission_fixture::{
-        complete_child_managed_verified, publish_accepted_on_claimed_request,
-        published_session_message_with_owner,
-    };
     use gents_protocol::message::{AssistantContent, Message};
     use gents_protocol::output::TerminalOutput;
     use gents_session::request::lifecycle::{RequestTerminalOutcome, TerminalizeResult};
     use gents_session::request::watcher::{DefraWatcher, Watcher};
+    use gents_toolcalls::call::lifecycle::admission_fixture::{
+        complete_child_managed_verified, publish_accepted_on_claimed_request,
+        published_session_message_with_owner,
+    };
     use std::time::Duration;
 
     let case =
@@ -776,15 +776,16 @@ pub async fn selected_background_wake_with_successor(
         )
         .await
         .unwrap();
-        let receipt = gents_toolcalls::call::lifecycle::admission_fixture::materialize_session_message(
-            node,
-            &owner,
-            &mut call,
-            did,
-            "second work",
-        )
-        .await
-        .unwrap();
+        let receipt =
+            gents_toolcalls::call::lifecycle::admission_fixture::materialize_session_message(
+                node,
+                &owner,
+                &mut call,
+                did,
+                "second work",
+            )
+            .await
+            .unwrap();
         Some(receipt.request_id)
     } else {
         None
@@ -803,14 +804,15 @@ pub async fn selected_background_wake_with_successor(
         admission.runtime.clone(),
     )
     .await;
-    let settled = gents_toolcalls::background::completion::settle_running_session_message_rows_with_access(
-        node,
-        &admission.tool.access().unwrap(),
-        &gents_session::session::message::NoSessionMessageGoals,
-        did,
-    )
-    .await
-    .unwrap();
+    let settled =
+        gents_toolcalls::background::completion::settle_running_session_message_rows_with_access(
+            node,
+            &admission.tool.access().unwrap(),
+            &gents_session::session::message::NoSessionMessageGoals,
+            did,
+        )
+        .await
+        .unwrap();
     assert_eq!(settled, 1, "the caused request's terminal settles its row");
 
     let notifications = notification_texts(&admission).await;

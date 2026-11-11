@@ -730,4 +730,3 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
     node.shutdown().await.expect("shut down test node");
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
-

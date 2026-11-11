@@ -145,12 +145,8 @@ async fn signed_skill_publication_and_self_configuration_use_native_grants() -> 
         .transact_write("test.skill.install", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                crate::apply_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles)
+                    .await
             })
         })
         .await?;
@@ -272,12 +268,8 @@ async fn signed_skill_publication_and_self_configuration_use_native_grants() -> 
         .transact_write("test.skill.unrelated", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                crate::apply_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles)
+                    .await
             })
         })
         .await?;
@@ -373,12 +365,8 @@ async fn signed_skill_publication_and_self_configuration_use_native_grants() -> 
         .transact_write("test.skill.create_removal_target", |txn| {
             let plan = &user_plan;
             Box::pin(async move {
-                crate::apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                crate::apply_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles)
+                    .await
             })
         })
         .await?;

@@ -94,9 +94,9 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
         ScriptedSummaryModel::summary_turn(),
     ]);
     let mut config = scheduled_origin_config();
-    config.on_rendered_request = Some(gents_inference::rendered_request::scope::ambient_arming_sink(
-        CaptureScopeKind::Compaction,
-    ));
+    config.on_rendered_request = Some(
+        gents_inference::rendered_request::scope::ambient_arming_sink(CaptureScopeKind::Compaction),
+    );
     let compactor = ProviderReductionEngine::new(std::sync::Arc::new(model), config);
 
     let mut fixture = CompactionFixture::new(

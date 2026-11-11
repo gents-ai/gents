@@ -27,7 +27,10 @@ pub fn hook_execution_fixture_key(hook: &DefraSessionHook, request_id: &str) -> 
     format!("{:p}:{request_id}", Arc::as_ptr(&hook.node))
 }
 
-pub async fn hook_managed_identity(hook: &DefraSessionHook, request_id: &str) -> Arc<dyn NodeIdentity> {
+pub async fn hook_managed_identity(
+    hook: &DefraSessionHook,
+    request_id: &str,
+) -> Arc<dyn NodeIdentity> {
     let fixtures = hook_execution_fixtures().lock().await;
     let fixture = fixtures
         .get(&hook_execution_fixture_key(hook, request_id))
@@ -103,7 +106,10 @@ pub async fn hook_query(hook: &DefraSessionHook, query: &str) -> serde_json::Val
 }
 
 /// Loads the hook's transcript as its selected Agent, which owns the session.
-pub async fn hook_history(hook: &DefraSessionHook, session_id: &str) -> anyhow::Result<Vec<Message>> {
+pub async fn hook_history(
+    hook: &DefraSessionHook,
+    session_id: &str,
+) -> anyhow::Result<Vec<Message>> {
     gents_session::session::load_history_with_access(
         &hook.actor_access()?,
         session_id,
@@ -116,7 +122,10 @@ pub async fn hook_history(hook: &DefraSessionHook, session_id: &str) -> anyhow::
 /// A hook whose session belongs to an Agent derived from `node`'s held
 /// runtime root, bound to that Agent's managed signer the way the daemon binds
 /// one before it claims work.
-pub async fn signed_hook(node: &Arc<EmbeddedNode>, failure_policy: FailurePolicy) -> DefraSessionHook {
+pub async fn signed_hook(
+    node: &Arc<EmbeddedNode>,
+    failure_policy: FailurePolicy,
+) -> DefraSessionHook {
     let node_did = node
         .node_identity_did()
         .expect("fixture node has a runtime identity")
@@ -583,4 +592,3 @@ pub async fn ensure_runtime_session(
     }
     Ok(access)
 }
-

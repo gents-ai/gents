@@ -13,7 +13,6 @@ use gents_tools::builtin::self_config::test_support::{
 mod live_documents;
 mod pack_authoring;
 
-
 static PLUGIN_BUILDER_STUB: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn test_plugins() -> Arc<gents_toolcalls::plugin::executor::PluginExecutor> {
@@ -1829,13 +1828,14 @@ async fn effective_config_reports_inherited_workspace_network_as_disabled() {
     fixture.grant_selected_configuration().await;
     let root = tempfile::tempdir().unwrap();
     fixture.publish_workspace_root(root.path()).await;
-    let core = fixture
-        .core()
-        .with_process_ceiling(gents_tools::surface::SelfConfigProcessCeiling {
-            file_mode: gents_documents::FileToolMode::ReadWrite,
-            bash_mode: gents_documents::BashMode::Unrestricted,
-            root: Some(root.path().into()),
-        });
+    let core =
+        fixture
+            .core()
+            .with_process_ceiling(gents_tools::surface::SelfConfigProcessCeiling {
+                file_mode: gents_documents::FileToolMode::ReadWrite,
+                bash_mode: gents_documents::BashMode::Unrestricted,
+                root: Some(root.path().into()),
+            });
     core.apply(tools_request(
         &core,
         vec![(
@@ -2309,9 +2309,10 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
     assert!(!backend_before
         .to_string()
         .contains("FAKE_DISCOVERY_SECRET_123"));
-    let services_before = gents_tools::mcp::registry::configured_mcp_services_on(&agent_access, &owner)
-        .await
-        .unwrap();
+    let services_before =
+        gents_tools::mcp::registry::configured_mcp_services_on(&agent_access, &owner)
+            .await
+            .unwrap();
 
     let approved_prompt = format!(
         "Review repository changes and report evidence. Source: {}.",
@@ -2612,7 +2613,9 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
         &core,
         vec![(
             "tags".into(),
-            Some(json!([gents_tools::builtin::self_config::ENGINEER_AGENT_TAG])),
+            Some(json!([
+                gents_tools::builtin::self_config::ENGINEER_AGENT_TAG
+            ])),
         )],
     ))
     .await
@@ -3251,7 +3254,9 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
             &setup,
             vec![(
                 "tags".into(),
-                Some(json!([gents_tools::builtin::self_config::ENGINEER_AGENT_TAG])),
+                Some(json!([
+                    gents_tools::builtin::self_config::ENGINEER_AGENT_TAG
+                ])),
             )],
         ))
         .await
@@ -4444,13 +4449,14 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
     )
     .await
     .unwrap();
-    let core = fixture
-        .core()
-        .with_process_ceiling(gents_tools::surface::SelfConfigProcessCeiling {
-            file_mode: gents_documents::FileToolMode::ReadOnly,
-            bash_mode: gents_documents::BashMode::Off,
-            root: Some(ceiling.path().to_path_buf()),
-        });
+    let core =
+        fixture
+            .core()
+            .with_process_ceiling(gents_tools::surface::SelfConfigProcessCeiling {
+                file_mode: gents_documents::FileToolMode::ReadOnly,
+                bash_mode: gents_documents::BashMode::Off,
+                root: Some(ceiling.path().to_path_buf()),
+            });
     let patch = |root: &std::path::Path| {
         vec![(
             "host".into(),
@@ -4676,8 +4682,10 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
             .await
             .expect("resolve fresh-request tool surface"),
     );
-    let runtime =
-        gents_tools::surface::ToolRuntimeContext::oneshot_with_node_did(node.clone(), owner.clone());
+    let runtime = gents_tools::surface::ToolRuntimeContext::oneshot_with_node_did(
+        node.clone(),
+        owner.clone(),
+    );
 
     let cases = [
         (
@@ -5620,13 +5628,13 @@ async fn a_created_agent_with_host_tools_names_the_users_root_reader_grant() {
             .contains("policy grant"),
         "{hosted}"
     );
-    let ceiled = core
-        .clone()
-        .with_process_ceiling(gents_tools::surface::SelfConfigProcessCeiling {
-            file_mode: gents_documents::FileToolMode::ReadOnly,
-            bash_mode: gents_documents::BashMode::ReadOnly,
-            root: Some(std::path::PathBuf::from(&root)),
-        });
+    let ceiled =
+        core.clone()
+            .with_process_ceiling(gents_tools::surface::SelfConfigProcessCeiling {
+                file_mode: gents_documents::FileToolMode::ReadOnly,
+                bash_mode: gents_documents::BashMode::ReadOnly,
+                root: Some(std::path::PathBuf::from(&root)),
+            });
     let inspected: Value =
         serde_json::from_str(&agent_inspect(&ceiled, created).await.unwrap()).unwrap();
     let observed = &inspected["effective_config"]["runtime_effective"]["root_access"];
@@ -5960,7 +5968,9 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             &setup,
             vec![(
                 "tags".into(),
-                Some(json!([gents_tools::builtin::self_config::ENGINEER_AGENT_TAG])),
+                Some(json!([
+                    gents_tools::builtin::self_config::ENGINEER_AGENT_TAG
+                ])),
             )],
         ))
         .await
@@ -8216,9 +8226,9 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
     let (workspace, artifact, archive) =
         gents_pack::pack::plugin_lifecycle::tests::fixture("1.0.0", false);
     let home = tempfile::tempdir().unwrap();
-    let plugins = Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(Some(
-        home.path().to_owned(),
-    )));
+    let plugins = Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(
+        Some(home.path().to_owned()),
+    ));
     let fixture = SelfConfigFixture::new("native-pack").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_pack_install().await;
@@ -8345,9 +8355,10 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
     .resolve(&node, &did, &*plugins)
     .await
     .unwrap();
-    let runtime = gents_tools::surface::ToolRuntimeContext::oneshot_with_node_did(node.clone(), &did)
-        .with_agent_for_test(fixture.db.node_identity.clone(), fixture.agent.clone())
-        .with_plugins(plugins.clone());
+    let runtime =
+        gents_tools::surface::ToolRuntimeContext::oneshot_with_node_did(node.clone(), &did)
+            .with_agent_for_test(fixture.db.node_identity.clone(), fixture.agent.clone())
+            .with_plugins(plugins.clone());
     let fresh_tools = surface.build_tools(&runtime).await.unwrap();
     let fresh_tool = fresh_tools
         .iter()
@@ -8448,9 +8459,9 @@ async fn native_pack_local_paths_and_approval_fail_closed() {
     let (workspace, artifact, _) =
         gents_pack::pack::plugin_lifecycle::tests::fixture("1.0.0", true);
     let home = tempfile::tempdir().unwrap();
-    let plugins = Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(Some(
-        home.path().to_owned(),
-    )));
+    let plugins = Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(
+        Some(home.path().to_owned()),
+    ));
     let fixture = SelfConfigFixture::new("native-pack-refusals").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_pack_install().await;
@@ -8764,9 +8775,9 @@ async fn native_pack_local_path_plugins_only_still_requires_operator_grant() {
     let (workspace, artifact, _) =
         gents_pack::pack::plugin_lifecycle::tests::fixture("1.0.0", true);
     let home = tempfile::tempdir().unwrap();
-    let plugins = Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(Some(
-        home.path().to_owned(),
-    )));
+    let plugins = Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(
+        Some(home.path().to_owned()),
+    ));
     let workspace = &workspace;
     let (_agent_fixture, tools) =
         pack_tool_with_local_read("local-plugins-only", plugins, workspace.path()).await;

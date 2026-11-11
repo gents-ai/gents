@@ -906,11 +906,13 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     let gents_documents::SurfaceToolDecl::Query(query_decl) = declaration.clone() else {
         unreachable!()
     };
-    let cached_tool =
-        gents_tools::builtin::defra_query::BoundedQueryTool::new(sibling_writer.clone(), query_decl)
-            .with_actor(sibling_did.clone())
-            .declared_by(Some("fixture/surface".into()))
-            .with_surface_owner(runtime.did().to_owned());
+    let cached_tool = gents_tools::builtin::defra_query::BoundedQueryTool::new(
+        sibling_writer.clone(),
+        query_decl,
+    )
+    .with_actor(sibling_did.clone())
+    .declared_by(Some("fixture/surface".into()))
+    .with_surface_owner(runtime.did().to_owned());
     let write_decl = gents_documents::WriteToolDecl {
         tool_name: "write_fixture_entry".into(),
         collection: "FixtureEntry".into(),
@@ -1072,9 +1074,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         Some(write_signer.as_str())
     );
     let found = cached_tool
-        .call(gents_tools::builtin::defra_query::bounded::BoundedQueryParams(
-            Default::default(),
-        ))
+        .call(gents_tools::builtin::defra_query::bounded::BoundedQueryParams(Default::default()))
         .await
         .map_err(|error| anyhow::anyhow!("cached query failed: {error}"))?;
     assert!(found.contains("selected-agent-write"));

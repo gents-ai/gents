@@ -15,10 +15,10 @@ use crate::triggers::callback::documents::{load_callback, load_invocation, Callb
 use gents_documents::apply_desired_state_plan;
 use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents_pack::plugin::store;
+use gents_pack::plugin::test_fixtures::{asking_plugin_wat, installed_plugin};
 use gents_store::config_client::ConfigAccess;
 use gents_store::subscription_source::UpdateSubscriptionSource;
 use gents_toolcalls::plugin::executor::PluginExecutor;
-use gents_pack::plugin::test_fixtures::{asking_plugin_wat, installed_plugin};
 
 const OWNER: &str = gents_store::test_support::PIN_FIXED_DID;
 const CALLBACK: &str = "saturation";
@@ -220,8 +220,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
         &asking_plugin_wat("http_calls", "http_results", &canned, false),
         None,
     );
-    let _identity =
-        gents_store::test_support::pin_fixed_signing_identity(home.path());
+    let _identity = gents_store::test_support::pin_fixed_signing_identity(home.path());
     plugin.declaration.manifold = Some(json!({
         "fs": "None", "net": {"OutboundHttp": [format!("http://{address}")]},
         "env": "None", "crypto": false, "child_process": false

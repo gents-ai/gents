@@ -228,10 +228,7 @@ impl ConfigReferences {
     /// The retained documents that name application collection `name`: each
     /// `DatastoreToolSurface` holding an entry on it, with those entries' tool
     /// names, and each `EventSource` reading it.
-    pub fn application_collection_users(
-        &self,
-        name: &str,
-    ) -> Result<(SurfaceTools, Vec<String>)> {
+    pub fn application_collection_users(&self, name: &str) -> Result<(SurfaceTools, Vec<String>)> {
         let mut surfaces = BTreeMap::new();
         let mut sources = Vec::new();
         for ((collection, id), value) in &self.documents {

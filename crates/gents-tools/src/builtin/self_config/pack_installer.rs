@@ -113,10 +113,7 @@ impl PackInstaller {
 
     /// Pack slots have no current backend: each bound profile must be
     /// account-free or on its provider's default account.
-    pub async fn fence_bindings(
-        &self,
-        bindings: &BTreeMap<String, String>,
-    ) -> anyhow::Result<()> {
+    pub async fn fence_bindings(&self, bindings: &BTreeMap<String, String>) -> anyhow::Result<()> {
         let owner = self.core.node_did();
         self.core
             .access()?
@@ -239,11 +236,7 @@ impl PackInstaller {
         .into())
     }
 
-    pub async fn preview(
-        &self,
-        operation: &str,
-        args: PackChange,
-    ) -> anyhow::Result<String> {
+    pub async fn preview(&self, operation: &str, args: PackChange) -> anyhow::Result<String> {
         let distribution = self.resolve(operation, &args).await?;
         if let Some(expected) = args.expected_digest.as_deref() {
             anyhow::ensure!(

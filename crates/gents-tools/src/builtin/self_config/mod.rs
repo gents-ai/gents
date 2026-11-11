@@ -52,8 +52,8 @@ pub mod test_support {
     pub use super::agent_queries::{agent_inspect, node_default_agent};
     pub use super::ops::ApplyRequest;
     pub use super::requests::{
-        agent_request, anchored_request, backend_request, profile_create_request,
-        profile_request, profile_target_request, protect_working_agent, tools_request,
+        agent_request, anchored_request, backend_request, profile_create_request, profile_request,
+        profile_target_request, protect_working_agent, tools_request,
     };
 }
 
@@ -335,4 +335,3 @@ pub fn self_config_tool_names(config: &SelfConfigToolConfig) -> Vec<String> {
     names.push(CONFIG_TOOL_NAME.to_string());
     names
 }
-

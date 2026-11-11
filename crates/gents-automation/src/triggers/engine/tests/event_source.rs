@@ -587,11 +587,8 @@ async fn configured_event_node() -> Arc<defra_node::Node> {
             .unwrap(),
     );
     ensure_runtime_schemas(&node).await.unwrap();
-    crate::triggers::callback::seed_test_agent(
-        &node,
-        gents_store::test_support::PIN_FIXED_DID,
-    )
-    .await;
+    crate::triggers::callback::seed_test_agent(&node, gents_store::test_support::PIN_FIXED_DID)
+        .await;
     node
 }
 

@@ -691,10 +691,7 @@ fn retry_backoff_doubles_and_is_capped() {
     assert_eq!(crate::plugin::retry_backoff(1), Duration::from_secs(1));
     assert_eq!(crate::plugin::retry_backoff(2), Duration::from_secs(2));
     assert_eq!(crate::plugin::retry_backoff(4), Duration::from_secs(8));
-    assert_eq!(
-        crate::plugin::retry_backoff(40),
-        Duration::from_secs(60)
-    );
+    assert_eq!(crate::plugin::retry_backoff(40), Duration::from_secs(60));
 }
 
 #[test]
@@ -719,7 +716,6 @@ fn tool_instructions_live_beside_the_plugin_and_stay_small_text() {
     let oversized = vec![b'a'; crate::pack::MAX_TOOL_INSTRUCTIONS_BYTES + 1];
     assert!(crate::pack::tool_instructions("lint", &oversized).is_err());
 }
-
 
 #[test]
 fn generated_plugin_resource_cases_bind_budget_and_consent() {
@@ -841,7 +837,6 @@ fn bound_guest_can_read_inside_but_cannot_write_or_follow_a_symlink_out() {
     }
     assert!(!inside.join("created.txt").exists());
 }
-
 
 // ---- the `gents::run_script` host import -----------------------------------
 
@@ -999,4 +994,3 @@ fn a_failed_second_run_script_call_does_not_hand_back_the_first_answer() {
         outcome.diagnostics
     );
 }
-

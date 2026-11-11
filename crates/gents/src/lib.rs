@@ -88,9 +88,9 @@ pub mod __test_internals {
 }
 
 #[cfg(test)]
-mod toolcalls_tests;
-#[cfg(test)]
 mod automation_tests;
+#[cfg(test)]
+mod toolcalls_tests;
 
 #[cfg(test)]
 mod documents_config_tests;

@@ -1,12 +1,12 @@
-use gents_toolcalls::background::completion::session_message::*;
 use gents_automation::goal::session_message::SessionGoals;
-use gents_session::session::message::NoSessionMessageGoals;
-use gents_store::graphql::escape_graphql_string;
-use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
-use std::sync::Arc;
-use gents_toolcalls::call::lifecycle::admission_fixture::PublishedSessionMessage;
 use gents_protocol::background_completion::background_completion_notification_message_key;
 use gents_protocol::tool_call::AwaitMode;
+use gents_session::session::message::NoSessionMessageGoals;
+use gents_store::graphql::escape_graphql_string;
+use gents_toolcalls::background::completion::session_message::*;
+use gents_toolcalls::call::lifecycle::admission_fixture::PublishedSessionMessage;
+use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
+use std::sync::Arc;
 
 fn recovery_identities(
     admission: &gents_toolcalls::call::lifecycle::admission_fixture::PublishedAdmission,
@@ -199,9 +199,7 @@ async fn folded_session_message_waits_for_exact_head_and_replays_once() {
         "head",
         "interactive",
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-            &caused_agent,
-        ),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&caused_agent),
     );
     gents_session::request::admission::sign_agent_request_create(&signer, &mut head)
         .await
@@ -309,12 +307,13 @@ async fn folded_session_message_waits_for_exact_head_and_replays_once() {
                 && case.named_head == case.actual_head
         })
         .unwrap();
-    let foreign_agent_accepted = gents_toolcalls::background::status::load_session_message_terminal(
-        &owner,
-        &caused_request_doc_id,
-    )
-    .await
-    .is_ok();
+    let foreign_agent_accepted =
+        gents_toolcalls::background::status::load_session_message_terminal(
+            &owner,
+            &caused_request_doc_id,
+        )
+        .await
+        .is_ok();
     assert_eq!(foreign_agent_accepted, foreign_agent_model.expected);
     assert_eq!(
         settle_running_session_message_rows_with_access(
@@ -492,11 +491,8 @@ async fn managed_parent_receives_child_completion_when_node_cannot_read_request(
         "the Node cannot substitute for the held Agent"
     );
     let runtime = Arc::new(
-        gents_store::identity::KeyIdentity::load_existing(
-            admission.path.join("node.key"),
-            None,
-        )
-        .expect("open the retained fixture runtime identity"),
+        gents_store::identity::KeyIdentity::load_existing(admission.path.join("node.key"), None)
+            .expect("open the retained fixture runtime identity"),
     );
     gents_toolcalls::call::lifecycle::admission_fixture::complete_child_managed_verified(
         node,
@@ -507,9 +503,14 @@ async fn managed_parent_receives_child_completion_when_node_cannot_read_request(
     )
     .await;
     assert_eq!(
-        settle_running_session_message_rows_with_access(node, &access, &NoSessionMessageGoals, &admission.node_did)
-            .await
-            .unwrap(),
+        settle_running_session_message_rows_with_access(
+            node,
+            &access,
+            &NoSessionMessageGoals,
+            &admission.node_did
+        )
+        .await
+        .unwrap(),
         1
     );
     let key = background_completion_notification_message_key(&tool_doc_id, "tool");
@@ -535,9 +536,14 @@ async fn managed_parent_receives_child_completion_when_node_cannot_read_request(
     assert!(tool["completion_notification_delivered_at"]
         .as_str()
         .is_some());
-    settle_running_session_message_rows_with_access(node, &access, &NoSessionMessageGoals, &admission.node_did)
-        .await
-        .unwrap();
+    settle_running_session_message_rows_with_access(
+        node,
+        &access,
+        &NoSessionMessageGoals,
+        &admission.node_did,
+    )
+    .await
+    .unwrap();
     let replay = access.execute(&query).await.unwrap();
     assert_eq!(replay["data"]["AgentMessage"].as_array().unwrap().len(), 1);
     assert_eq!(replay["data"]["AgentToolCall"][0], *tool);
@@ -975,8 +981,7 @@ async fn crash_before_notice_redrive_renders_the_persisted_assignment_reason() {
         .unwrap();
     assert_eq!(report.side_effects_converged, 1);
     let notifications =
-        session_message_notifications(&admission.tool.access().unwrap(), did, &session_id)
-            .await;
+        session_message_notifications(&admission.tool.access().unwrap(), did, &session_id).await;
     assert_eq!(notifications.len(), 1);
     assert!(
         notifications[0].contains("<reason>assignment_active</reason>"),
@@ -1069,7 +1074,9 @@ async fn bind_caused_assignment(
     let session = caused_session_id(access, request_doc).await;
     let goal = access
         .transact_readonly("test.load_caused_goal", |txn| {
-            Box::pin(gents_automation::goal::load_canonical_goal_in_txn(txn, did, &session))
+            Box::pin(gents_automation::goal::load_canonical_goal_in_txn(
+                txn, did, &session,
+            ))
         })
         .await
         .unwrap()

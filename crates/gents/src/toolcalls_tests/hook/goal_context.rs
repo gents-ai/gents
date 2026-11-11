@@ -13,7 +13,12 @@ fn goal_id(owner: &str, session: &str, id: u64) -> String {
     if id == 1 {
         gents_protocol::goal::deterministic_goal_id(owner, session)
     } else {
-        gents_automation::goal::replacement_goal_identity(owner, session, &format!("assignment-{id}")).goal_id
+        gents_automation::goal::replacement_goal_identity(
+            owner,
+            session,
+            &format!("assignment-{id}"),
+        )
+        .goal_id
     }
 }
 
@@ -91,7 +96,8 @@ pub(super) async fn bind_signed_request(
         .transact_write("test.goal_tool_bind_existing_goal", |txn| {
             Box::pin(async {
                 if let Some(goal) =
-                    gents_automation::goal::load_canonical_goal_in_txn(txn, identity.did(), session).await?
+                    gents_automation::goal::load_canonical_goal_in_txn(txn, identity.did(), session)
+                        .await?
                 {
                     if goal.assignment_root_request_doc_id.is_none() {
                         gents_automation::goal::bind_goal_first_request_in_txn(
@@ -224,9 +230,11 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
             let session = hook.session_id().await.unwrap();
             // In this fixture the runtime identity is also the session's working
             // Agent; Goal history is written and retired as that creator.
-            let agent_access = gents_toolcalls::call::hook::fixtures::ensure_runtime_session(&node, &identity, &session)
-                .await
-                .unwrap();
+            let agent_access = gents_toolcalls::call::hook::fixtures::ensure_runtime_session(
+                &node, &identity, &session,
+            )
+            .await
+            .unwrap();
             let session_doc_id = agent_access
                 .execute(&format!(
                     r#"{{AgentSession(filter: {{session_id: {{_eq: "{}"}}}}) {{_docID}}}}"#,
@@ -527,10 +535,14 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     );
                 }
                 if allowed && tool == gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME {
-                    let goal = gents_automation::goal::load_canonical_goal(&node, identity.did(), &session)
-                        .await
-                        .unwrap()
-                        .unwrap();
+                    let goal = gents_automation::goal::load_canonical_goal(
+                        &node,
+                        identity.did(),
+                        &session,
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap();
                     let expected_root = case["observation"]["identity"]["root"]
                         .as_u64()
                         .map(|root| roots[&root].clone())

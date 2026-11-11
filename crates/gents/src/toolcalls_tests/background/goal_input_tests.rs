@@ -1,18 +1,18 @@
-use anyhow::Result;
 use super::*;
+use anyhow::Result;
 use gents_automation::goal::operator_resume_test_support::Fixture;
 use gents_automation::goal::session_message::SessionGoals;
 use gents_protocol::job::keys::{job_message_key, job_session_id, job_spawn_key};
-use gents_protocol::request_lifecycle::SessionMessageCause;
-use gents_toolcalls::background::job::effects::stage_request;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
 use gents_protocol::request_input::GoalAssignmentInput;
+use gents_protocol::request_lifecycle::SessionMessageCause;
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
+use gents_toolcalls::background::job::effects::stage_request;
 use serde_json::{json, Value};
 
 fn reference(value: &Value, name: &str, roots: &[String; 2]) -> Option<GoalAssignmentInput> {
@@ -174,14 +174,15 @@ async fn deliver(
         event_source_generation: None,
         max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
     };
-    let admitted = gents_automation::triggers::engine::durable::write_trigger_delivery_with_identity(
-        &f.node,
-        identity::Did::new(f.agent.did()).unwrap(),
-        &prepared,
-        &create,
-        Some(f.agent.as_ref()),
-    )
-    .await?;
+    let admitted =
+        gents_automation::triggers::engine::durable::write_trigger_delivery_with_identity(
+            &f.node,
+            identity::Did::new(f.agent.did()).unwrap(),
+            &prepared,
+            &create,
+            Some(f.agent.as_ref()),
+        )
+        .await?;
     Ok((admitted.request.doc_id, admitted.request.request_id))
 }
 
@@ -210,13 +211,15 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
             identity.session_id()
         };
         if case["expected"].is_null() {
-            assert!(gents_automation::triggers::engine::durable::resolve_session_id(
-                &identity,
-                Some(&session),
-                false,
-                false
-            )
-            .is_none());
+            assert!(
+                gents_automation::triggers::engine::durable::resolve_session_id(
+                    &identity,
+                    Some(&session),
+                    false,
+                    false
+                )
+                .is_none()
+            );
             f.node.shutdown().await.unwrap();
             continue;
         }

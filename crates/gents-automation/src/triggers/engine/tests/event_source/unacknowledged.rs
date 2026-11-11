@@ -339,12 +339,8 @@ async fn refused_fire_fails_once_visibly_and_is_delivered_once_after_reconfigura
         intent.event_vars["source_doc_id"].as_str(),
         Some(delivery.doc_id.as_str())
     );
-    let result = admit_selected_event(
-        &node,
-        &intent,
-        gents_store::test_support::PIN_FIXED_DID,
-    )
-    .await;
+    let result =
+        admit_selected_event(&node, &intent, gents_store::test_support::PIN_FIXED_DID).await;
     (intent.on_result)(result);
     let repeats = delivery.drain(Duration::from_secs(1), |_| None).await;
     assert_eq!(repeats, 0, "an admitted arrival fired again");
@@ -568,12 +564,8 @@ async fn repaired_document_is_delivered_once(drop_notification: bool) {
         .expect("the repaired document was not retried")
         .expect("source closed");
     assert_eq!(intent.doc_vars.as_ref().unwrap()["handoff_id"], "handoff-1");
-    let result = admit_selected_event(
-        &node,
-        &intent,
-        gents_store::test_support::PIN_FIXED_DID,
-    )
-    .await;
+    let result =
+        admit_selected_event(&node, &intent, gents_store::test_support::PIN_FIXED_DID).await;
     (intent.on_result)(result);
     assert_eq!(delivery.drain(Duration::from_secs(1), |_| None).await, 0);
     assert!(delivery.pending_documents().await.is_empty());

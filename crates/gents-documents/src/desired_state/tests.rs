@@ -568,12 +568,7 @@ async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() ->
         |txn| {
             let plan = &plan;
             Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                apply_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         },
     ))
@@ -709,12 +704,8 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
             .transact_write("test.default.preview", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    validate_desired_state_plan(
-                        txn,
-                        plan,
-                        &crate::test_support::AdmitAllProfiles,
-                    )
-                    .await
+                    validate_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles)
+                        .await
                 })
             })
             .await;
@@ -722,12 +713,8 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
             .transact_write("test.default.publish", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    apply_desired_state_plan(
-                        txn,
-                        plan,
-                        &crate::test_support::AdmitAllProfiles,
-                    )
-                    .await
+                    apply_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles)
+                        .await
                 })
             })
             .await;
@@ -816,12 +803,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
         .transact_write("test.preview.replacement", |txn| {
             let plan = &preview_plan;
             Box::pin(async move {
-                validate_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                validate_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await
@@ -835,12 +817,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
         .transact_write("test.preview.removal", |txn| {
             let plan = &preview_removal;
             Box::pin(async move {
-                validate_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                validate_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await
@@ -851,12 +828,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
         .transact_write("test.preview.addition", |txn| {
             let plan = &preview_addition;
             Box::pin(async move {
-                validate_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                validate_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await?;
@@ -882,12 +854,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
         .transact_write("test.reject.removal", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                apply_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await
@@ -917,12 +884,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
         .transact_write("test.remove.cycle", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                apply_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await?;
@@ -1088,12 +1050,7 @@ async fn drifted_expectation_refuses_and_writes_nothing() -> Result<()> {
         .transact_write("test.cas.stale", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                apply_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await
@@ -1122,12 +1079,7 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
         .transact_write("test.cas.absent_ok", |txn| {
             let plan = &must_be_absent;
             Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                apply_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await?;
@@ -1138,12 +1090,7 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
         .transact_write("test.cas.absent_stale", |txn| {
             let plan = &wrongly_absent;
             Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                apply_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await
@@ -1158,12 +1105,7 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
         .transact_write("test.cas.present_stale", |txn| {
             let plan = &wrongly_present;
             Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                apply_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await
@@ -1245,12 +1187,8 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
             .transact_write("test.cas.lean", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    apply_desired_state_plan(
-                        txn,
-                        plan,
-                        &crate::test_support::AdmitAllProfiles,
-                    )
-                    .await
+                    apply_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles)
+                        .await
                 })
             })
             .await;
@@ -1294,12 +1232,8 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
                 .transact_write("test.cas.lean.replay", |txn| {
                     let plan = &plan;
                     Box::pin(async move {
-                        apply_desired_state_plan(
-                            txn,
-                            plan,
-                            &crate::test_support::AdmitAllProfiles,
-                        )
-                        .await
+                        apply_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles)
+                            .await
                     })
                 })
                 .await;
@@ -1488,12 +1422,7 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
         .transact_write("test.obligation.preview", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                validate_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                validate_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await
@@ -1625,12 +1554,7 @@ async fn creation_judges_the_count_field_of_the_add_payload() -> Result<()> {
         .transact_write("test.obligation.preview.add", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                validate_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                validate_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await
@@ -1695,12 +1619,7 @@ async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()
         .transact_write("test.obligation.preview.update", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                validate_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                validate_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await
@@ -1859,12 +1778,7 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
         .transact_write("test.event_source.preview", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                validate_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                validate_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await
@@ -2060,12 +1974,7 @@ async fn creation_judges_the_count_field_of_the_event_source_add_payload() -> Re
         .transact_write("test.event_source.preview.add", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                validate_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                validate_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await
@@ -2135,12 +2044,7 @@ async fn replacement_judges_the_count_field_of_the_event_source_update_payload()
         .transact_write("test.event_source.preview.update", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                validate_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                validate_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await
@@ -2383,12 +2287,7 @@ async fn publication_applies_native_route_template_fields_the_schema_does_not_de
         .transact_write("test.native_route.preview", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                validate_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+                validate_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles).await
             })
         })
         .await?;
@@ -2627,13 +2526,9 @@ async fn projection_binding_publication_follows_modeled_native_ownership() -> Re
         .transact_write("test.projection.create", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
-                .map(|_| ())
+                apply_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles)
+                    .await
+                    .map(|_| ())
             })
         })
         .await?;

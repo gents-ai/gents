@@ -1,15 +1,7 @@
 use base64::Engine as _;
-use gents_tools::native::file_tools::change_capture::*;
-use gents_tools::native::args::WriteFileArgs;
-use gents_tools::native::file_tools::file_mutation_lock_for;
-use gents_tools::native::file_tools::write_file::WriteFileTool;
-use gents_tools::native::shared::ToolContext;
-use gents_toolcalls::call::lifecycle::admission_fixture::{
-    published_admission, PublishedAdmissionOptions,
-};
+use gents_loop::live_output::DeferredToolWrites;
 use gents_loop::live_output::LiveToolOutputRegistry;
 use gents_loop::tool::Tool;
-use gents_loop::live_output::DeferredToolWrites;
 use gents_protocol::file_changes::{
     FileChangeImages as FileChange, FileImage, ToolFileChanges as ChangeBatch,
     MAX_FILE_IMAGE_BYTES as MAX_IMAGE_BYTES,
@@ -17,8 +9,15 @@ use gents_protocol::file_changes::{
 use gents_session::file_contents::{content_hash, FileChanges};
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
+use gents_toolcalls::call::lifecycle::admission_fixture::{
+    published_admission, PublishedAdmissionOptions,
+};
+use gents_tools::native::args::WriteFileArgs;
+use gents_tools::native::file_tools::change_capture::*;
+use gents_tools::native::file_tools::file_mutation_lock_for;
+use gents_tools::native::file_tools::write_file::WriteFileTool;
+use gents_tools::native::shared::ToolContext;
 use serde_json::Value;
-
 
 fn decoded_image(value: &Value) -> Vec<u8> {
     assert_eq!(value["kind"], "file");
@@ -116,10 +115,12 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
     )
     .await
     .unwrap();
-    let pending_inventory =
-        gents_observe::file_inventory::FileInventorySnapshot::load(&admission.node, &inventory_admission)
-            .await
-            .unwrap();
+    let pending_inventory = gents_observe::file_inventory::FileInventorySnapshot::load(
+        &admission.node,
+        &inventory_admission,
+    )
+    .await
+    .unwrap();
     assert_eq!(pending_inventory.binding().coverage.pending, 1);
     assert_eq!(pending_inventory.binding().coverage.unknown, 0);
     assert!(pending_inventory.entries().is_empty());
@@ -230,10 +231,12 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
     )
     .await
     .unwrap();
-    let inventory =
-        gents_observe::file_inventory::FileInventorySnapshot::load(&admission.node, &inventory_admission)
-            .await
-            .unwrap();
+    let inventory = gents_observe::file_inventory::FileInventorySnapshot::load(
+        &admission.node,
+        &inventory_admission,
+    )
+    .await
+    .unwrap();
     assert_eq!(inventory.binding().coverage.entries, 1);
     assert_eq!(inventory.binding().coverage.pending, 0);
     assert_eq!(inventory.binding().coverage.unknown, 0);
@@ -252,11 +255,12 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
         .contains("replacement bytes"));
     let mut wrong_session = inventory_admission.clone();
     wrong_session.session_doc_id = "different-physical-session".into();
-    assert!(
-        gents_observe::file_inventory::FileInventorySnapshot::load(&admission.node, &wrong_session,)
-            .await
-            .is_err()
-    );
+    assert!(gents_observe::file_inventory::FileInventorySnapshot::load(
+        &admission.node,
+        &wrong_session,
+    )
+    .await
+    .is_err());
     let ids = vec![projection["_docID"].as_str().unwrap().to_owned()];
     let owners = ConfigAccess::transact_local_readonly(
         &admission.node,
@@ -394,8 +398,8 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
 
 #[tokio::test]
 async fn readonly_receipts_commit_without_images_and_survive_terminal_retry() {
-    use gents_tools::native::file_tools::read_tools::ReadFileTool;
     use gents_loop::tool_call_lifecycle::runtime::{call_tool_managed, ToolOutcome};
+    use gents_tools::native::file_tools::read_tools::ReadFileTool;
 
     let admission = published_admission(PublishedAdmissionOptions {
         name: "readonly-capture-terminal".into(),
@@ -466,7 +470,6 @@ async fn readonly_receipts_commit_without_images_and_survive_terminal_retry() {
     assert!(failed.result.is_err());
     assert!(failed.deferred_writes.is_none());
 }
-
 
 #[tokio::test]
 async fn maximum_images_survive_the_terminal_transaction_and_scoped_read() {

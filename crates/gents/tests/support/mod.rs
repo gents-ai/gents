@@ -75,13 +75,10 @@ impl TestDb {
             .expect("test home GraphQL endpoint");
         gents_store::config_client::ConfigAccess::Graphql(
             gents::runtime::lifecycle_hooks::compose_endpoint(
-                gents_store::config_client::GraphqlEndpoint::as_principal(
-                    endpoint,
-                    identity.did(),
-                )
-                .with_client_signing_capability(identity.client_signing_capability().unwrap())
-                .unwrap()
-                .with_client_signed_agent_creates(),
+                gents_store::config_client::GraphqlEndpoint::as_principal(endpoint, identity.did())
+                    .with_client_signing_capability(identity.client_signing_capability().unwrap())
+                    .unwrap()
+                    .with_client_signed_agent_creates(),
             )
             .unwrap(),
         )

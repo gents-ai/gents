@@ -1352,7 +1352,10 @@ async fn group_marker_is_read_by_selected_held_agent_without_node_visibility() {
     let snapshot = Arc::new(
         ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
             agent.agent_did.clone(),
-            vec![with_default_tools(agent.clone()), with_default_tools(sibling.clone())],
+            vec![
+                with_default_tools(agent.clone()),
+                with_default_tools(sibling.clone()),
+            ],
             RapidHashMap::new(),
             RapidHashMap::new(),
             RapidHashMap::new(),

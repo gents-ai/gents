@@ -52,11 +52,12 @@ async fn only_a_host_call_plugin_adds_the_process_tools() {
         }
         let mut expected = names[0].clone();
         expected.push("plugin".to_owned());
-        let process_tools =
-            gents_tools::native::background_tool_names(&gents_tools::surface::BackgroundToolConfig {
+        let process_tools = gents_tools::native::background_tool_names(
+            &gents_tools::surface::BackgroundToolConfig {
                 allowlist: vec!["plugin".to_owned()],
                 timeouts: Default::default(),
-            });
+            },
+        );
         if host_call {
             expected.extend(process_tools);
             assert_eq!(background[1], ["plugin".to_owned()]);

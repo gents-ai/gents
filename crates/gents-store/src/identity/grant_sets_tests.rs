@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
+use super::test_support::*;
 use super::*;
 use crate::identity::NodeIdentity;
-use super::test_support::*;
 
 pub(crate) fn recipient_sets(name: &str) -> Vec<GrantSet> {
     let case = gents_lean_vocab::lean_contract_snapshot()

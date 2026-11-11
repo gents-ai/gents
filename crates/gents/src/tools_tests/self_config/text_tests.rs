@@ -2112,9 +2112,9 @@ async fn ux_preview_tools(label: &str, home: &std::path::Path) -> (SelfConfigFix
     grants.agent_did = fixture.agent_did().to_owned();
     let tools = fixture.tools_with_plugins(
         &grants,
-        std::sync::Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(Some(
-            home.to_owned(),
-        ))),
+        std::sync::Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(
+            Some(home.to_owned()),
+        )),
     );
     (fixture, tools)
 }

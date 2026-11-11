@@ -1,4 +1,3 @@
-
 #[test]
 fn update_goal_cannot_resume_from_budget_limited() {
     use crate::goal::{GoalAction, GoalState};
@@ -19,8 +18,7 @@ fn update_goal_cannot_resume_from_budget_limited() {
     );
     // And the operator transition helper must reject it too.
     assert!(
-        crate::goal::apply_operator_status_transition(budget_limited, GoalStatus::Active)
-            .is_err(),
+        crate::goal::apply_operator_status_transition(budget_limited, GoalStatus::Active).is_err(),
         "update_goal to active from budget_limited must be rejected"
     );
 }

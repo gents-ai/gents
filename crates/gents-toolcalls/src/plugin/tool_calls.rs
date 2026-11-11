@@ -244,8 +244,8 @@ mod tests {
 
     #[tokio::test]
     async fn an_installed_wasm_plugin_gets_only_explicitly_granted_tool_calls() {
-        use gents_pack::plugin::test_fixtures::{asking_plugin_wat, installed_plugin};
         use gents_loop::tool::ToolDyn;
+        use gents_pack::plugin::test_fixtures::{asking_plugin_wat, installed_plugin};
         let request =
             json!({"tool_calls":{"requests":[{"id":"table","tool_name":"query","arguments":{}}]}});
         let wat = asking_plugin_wat("tool_calls", "tool_results", &request, false);
@@ -278,8 +278,8 @@ mod tests {
 
     #[tokio::test]
     async fn receipt_records_effective_tool_service_and_exact_first_guest_input() {
-        use gents_pack::plugin::test_fixtures::installed_echo;
         use gents_loop::tool::ToolDyn;
+        use gents_pack::plugin::test_fixtures::installed_echo;
         use sha2::{Digest, Sha256};
 
         let (home, record) = installed_echo();

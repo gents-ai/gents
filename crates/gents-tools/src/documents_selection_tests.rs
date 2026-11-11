@@ -241,11 +241,8 @@ async fn modeled_skill_selection_and_revocation_follow_native_source_edges() -> 
             enabled: true,
         };
         let ceiling = gents_documents::skills::skill_tool_ceiling(Vec::<String>::new(), &[], false);
-        let tool = crate::native::skills::LoadSkillTool::for_agent(
-            vec![skill],
-            ceiling,
-            &configuration,
-        );
+        let tool =
+            crate::native::skills::LoadSkillTool::for_agent(vec![skill], ceiling, &configuration);
         let loaded = tool
             .call(crate::native::skills::LoadSkillArgs {
                 name: "skill".into(),

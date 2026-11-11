@@ -1,5 +1,5 @@
-use gents_automation::goal::continuation::{goal_continuation_identity, prepare_goal_continuation};
 use super::*;
+use gents_automation::goal::continuation::{goal_continuation_identity, prepare_goal_continuation};
 use gents_session::request::lifecycle::RequestTerminalOutcome;
 use gents_session::session;
 
@@ -100,13 +100,14 @@ async fn a_returned_result_is_admitted_into_a_paired_client_session() {
         .verify_fresh(&wake, db.agent_did())
         .await
         .unwrap();
-    let mut lifecycle = gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
-        db.node.clone(),
-        verified.clone(),
-        60,
-        ExecutionOrigin::Scheduled,
-        "backend-test",
-    );
+    let mut lifecycle =
+        gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
+            db.node.clone(),
+            verified.clone(),
+            60,
+            ExecutionOrigin::Scheduled,
+            "backend-test",
+        );
     lifecycle
         .bind_managed_agent(db.agent_identity.as_ref())
         .unwrap();
@@ -402,17 +403,21 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
         .await
         .unwrap();
 
-    let recovery = gents_session::request::lifecycle::RequestLifecycle::recover_all_with_identities(
-        &node,
+    let recovery =
+        gents_session::request::lifecycle::RequestLifecycle::recover_all_with_identities(
+            &node,
+            db.node_did(),
+            std::slice::from_ref(&db.agent_identity),
+        )
+        .await
+        .unwrap();
+    assert_eq!(recovery.background_wakes_redriven, 0);
+    let before = gents_toolcalls::background::diagnostics::load_background_completion_diagnostics(
+        &db.agent_access,
         db.node_did(),
-        std::slice::from_ref(&db.agent_identity),
     )
     .await
     .unwrap();
-    assert_eq!(recovery.background_wakes_redriven, 0);
-    let before = gents_toolcalls::background::diagnostics::load_background_completion_diagnostics(&db.agent_access, db.node_did())
-        .await
-        .unwrap();
     assert_eq!(before.pending_notifications, 1);
     assert_eq!(before.acknowledged_notifications, 0);
     assert_eq!(before.epochs[0].state, "pending");
@@ -424,13 +429,14 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
     .await
     .unwrap()
     .unwrap();
-    let mut lifecycle = gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
-        node.clone(),
-        request,
-        60,
-        ExecutionOrigin::Scheduled,
-        "backend-test",
-    );
+    let mut lifecycle =
+        gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
+            node.clone(),
+            request,
+            60,
+            ExecutionOrigin::Scheduled,
+            "backend-test",
+        );
     lifecycle
         .bind_managed_agent(db.agent_identity.as_ref())
         .unwrap();
@@ -454,9 +460,12 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
         .await
         .unwrap();
 
-    let after = gents_toolcalls::background::diagnostics::load_background_completion_diagnostics(&db.agent_access, db.node_did())
-        .await
-        .unwrap();
+    let after = gents_toolcalls::background::diagnostics::load_background_completion_diagnostics(
+        &db.agent_access,
+        db.node_did(),
+    )
+    .await
+    .unwrap();
     assert_eq!(after.pending_notifications, 0);
     assert_eq!(after.acknowledged_notifications, 1);
     assert_eq!(after.epochs[0].state, "acknowledged");
@@ -498,13 +507,14 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
     .await
     .unwrap()
     .unwrap();
-    let mut lifecycle = gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
-        node.clone(),
-        request,
-        60,
-        ExecutionOrigin::Scheduled,
-        "backend-test",
-    );
+    let mut lifecycle =
+        gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
+            node.clone(),
+            request,
+            60,
+            ExecutionOrigin::Scheduled,
+            "backend-test",
+        );
     lifecycle
         .bind_managed_agent(db.agent_identity.as_ref())
         .unwrap();
@@ -540,9 +550,12 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
         .await
         .unwrap();
     let unpublished_terminal =
-        gents_toolcalls::background::diagnostics::load_background_completion_diagnostics(&db.agent_access, db.node_did())
-            .await
-            .unwrap();
+        gents_toolcalls::background::diagnostics::load_background_completion_diagnostics(
+            &db.agent_access,
+            db.node_did(),
+        )
+        .await
+        .unwrap();
     assert_eq!(unpublished_terminal.pending_notifications, 1);
     assert_eq!(unpublished_terminal.acknowledged_notifications, 0);
     lifecycle
@@ -581,9 +594,12 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
         .await
         .unwrap();
     assert_eq!(first_repair.repaired, 0);
-    let first = gents_toolcalls::background::diagnostics::load_background_completion_diagnostics(&db.agent_access, db.node_did())
-        .await
-        .unwrap();
+    let first = gents_toolcalls::background::diagnostics::load_background_completion_diagnostics(
+        &db.agent_access,
+        db.node_did(),
+    )
+    .await
+    .unwrap();
     assert_eq!(first.pending_notifications, 0);
     assert_eq!(first.acknowledged_notifications, 1);
     assert_eq!(first.epochs[0].state, "acknowledged");
@@ -597,9 +613,12 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
         .await
         .unwrap();
     assert_eq!(second_repair.repaired, 0);
-    let second = gents_toolcalls::background::diagnostics::load_background_completion_diagnostics(&db.agent_access, db.node_did())
-        .await
-        .unwrap();
+    let second = gents_toolcalls::background::diagnostics::load_background_completion_diagnostics(
+        &db.agent_access,
+        db.node_did(),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         second, first,
         "acknowledgement projection must be restart-idempotent"
@@ -748,7 +767,10 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         )
         .await
         .unwrap();
-    let diagnostics = gents_toolcalls::background::diagnostics::load_background_completion_diagnostics(&access, &did)
+    let diagnostics =
+        gents_toolcalls::background::diagnostics::load_background_completion_diagnostics(
+            &access, &did,
+        )
         .await
         .unwrap();
     assert_eq!(diagnostics.pending_notifications, 0);
@@ -760,9 +782,10 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         .find(|epoch| epoch.root_request_id == first_id)
         .unwrap();
     assert_eq!(first_epoch.state, "acknowledged_by_successor");
-    let timeline = gents_observe::observe::run_timeline_fetch::load_run_timeline(&access, &first_id)
-        .await
-        .unwrap();
+    let timeline =
+        gents_observe::observe::run_timeline_fetch::load_run_timeline(&access, &first_id)
+            .await
+            .unwrap();
     assert_eq!(timeline.background_completions.len(), 2);
     assert!(timeline.background_completion_diagnostics_error.is_none());
     assert!(timeline.child_request_ids.is_empty());
@@ -1019,11 +1042,13 @@ async fn desktop_owned_session(
         })
         .await
         .unwrap();
-    let parent =
-        gents_session::request::binding::load_agent_request_with_access(&db.agent_access, "desktop-parent")
-            .await
-            .unwrap()
-            .unwrap();
+    let parent = gents_session::request::binding::load_agent_request_with_access(
+        &db.agent_access,
+        "desktop-parent",
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let writer = gents_session::request::streaming::DefraStreamWriter::new_managed(
         db.node.clone(),
         db.agent_identity.as_ref(),
@@ -1122,19 +1147,22 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
         } else {
             "runtime-control".into()
         };
-        let request =
-            gents_session::request::binding::load_agent_request_with_access(&db.agent_access, &request_id)
-                .await
-                .unwrap()
-                .unwrap();
+        let request = gents_session::request::binding::load_agent_request_with_access(
+            &db.agent_access,
+            &request_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
         assert_eq!(request.requester_did.as_deref(), Some(desktop.did()));
-        let mut lifecycle = gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
-            db.node.clone(),
-            request.clone(),
-            60,
-            ExecutionOrigin::Scheduled,
-            "backend-test",
-        );
+        let mut lifecycle =
+            gents_session::request::lifecycle::RequestLifecycle::new_with_execution_binding(
+                db.node.clone(),
+                request.clone(),
+                60,
+                ExecutionOrigin::Scheduled,
+                "backend-test",
+            );
         lifecycle
             .bind_managed_agent(db.agent_identity.as_ref())
             .unwrap();
@@ -1382,7 +1410,9 @@ async fn desktop_session_runtime_controls_adopt_owner_and_reject_foreign_ancestr
     }
 }
 
-fn admission_verifier(db: &TestDb) -> gents_session::request::admission::AgentRequestAdmissionVerifier {
+fn admission_verifier(
+    db: &TestDb,
+) -> gents_session::request::admission::AgentRequestAdmissionVerifier {
     let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
     gents_session::request::admission::AgentRequestAdmissionVerifier::new(
         db.node.clone(),

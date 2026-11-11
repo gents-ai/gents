@@ -31,10 +31,7 @@ pub fn anchored_request(
     request
 }
 #[cfg(any(test, feature = "test-fixtures"))]
-pub fn agent_request(
-    core: &SelfConfigCore,
-    patch: SelfConfigPatch,
-) -> ApplyRequest<'static> {
+pub fn agent_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<'static> {
     let id = core.agent_did().to_owned();
     let mut request = ApplyRequest::new(SelfConfigTarget::Agent, patch);
     request.resolve_unique = Box::new(move |_| Ok(id.clone()));
@@ -142,10 +139,7 @@ fn stored_host_root(stored: &serde_json::Map<String, serde_json::Value>) -> Opti
         .root
 }
 
-pub fn tools_request(
-    core: &SelfConfigCore,
-    patch: SelfConfigPatch,
-) -> ApplyRequest<'static> {
+pub fn tools_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<'static> {
     let mut request = anchored_request(SelfConfigTarget::Tools, "tools_id", patch);
     let ceiling_root = core.process_ceiling().root.clone();
     let node_did = core.node_did().to_owned();

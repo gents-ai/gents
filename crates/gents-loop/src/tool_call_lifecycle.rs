@@ -54,6 +54,8 @@ mod conformance {
 
     #[test]
     fn failure_classes_are_the_lean_tool_failure_classes() {
-        gents_lean_vocab::families::tool_execution_failure_class_vocabulary::replay(&FailureClass::ALL);
+        gents_lean_vocab::families::tool_execution_failure_class_vocabulary::replay(
+            &FailureClass::ALL,
+        );
     }
 }

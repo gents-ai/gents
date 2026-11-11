@@ -1,15 +1,15 @@
 use gents_documents::AgentToolConfig;
 use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};
 use gents_protocol::session::SessionScope;
+use gents_protocol::tool_call::AwaitMode;
+use gents_session::session::message::target::session_target_allowed;
+use gents_session::session::message::*;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
+use gents_store::identity::NodeIdentity as _;
 use gents_toolcalls::call::lifecycle::admission_fixture::{
     published_session_message, PublishedAdmissionOptions, PublishedSessionMessage,
 };
-use gents_session::session::message::target::session_target_allowed;
-use gents_session::session::message::*;
-use gents_protocol::tool_call::AwaitMode;
-use gents_store::identity::NodeIdentity as _;
 
 #[tokio::test]
 async fn remote_signed_creation_survives_parent_evidence_arriving_after_claim() {
@@ -546,7 +546,6 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
 
-
 pub(super) async fn started(
     name: &str,
 ) -> (
@@ -622,7 +621,9 @@ async fn materialize_session_at(
                     &caused.agent_did,
                     caused.requester_did.as_deref(),
                     None,
-                    gents_session::request::lifecycle::materialize::created_session_provenance(&caused),
+                    gents_session::request::lifecycle::materialize::created_session_provenance(
+                        &caused,
+                    ),
                     &created_at,
                 )
                 .await
@@ -879,8 +880,10 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
     let snapshot = owner(&message)
         .transact_readonly("test.steer.predecessor_order", move |txn| {
             Box::pin(async move {
-                gents_session::request::lifecycle::queue::pending_rows_in_txn(txn, node_did, session_id)
-                    .await
+                gents_session::request::lifecycle::queue::pending_rows_in_txn(
+                    txn, node_did, session_id,
+                )
+                .await
             })
         })
         .await
@@ -1541,7 +1544,8 @@ async fn caused_session_records_its_opening_request() {
     );
     without_call.caused_by_parent_request_doc_id = None;
     assert!(
-        gents_session::request::lifecycle::materialize::created_session_provenance(&without_call).is_none()
+        gents_session::request::lifecycle::materialize::created_session_provenance(&without_call)
+            .is_none()
     );
     without_call.caused_by_trigger_id = Some("task-trigger".to_owned());
     without_call.caused_by_trigger_kind = Some("event".to_owned());

@@ -1,8 +1,8 @@
 use super::*;
-use gents_session::request::admission::AgentRequestAdmissionVerifier;
-use gents_session::request::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle};
 use gents_protocol::request_admission::AgentRequestCreate;
 use gents_protocol::row::AgentRequest;
+use gents_session::request::admission::AgentRequestAdmissionVerifier;
+use gents_session::request::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle};
 use gents_session::test_support::{
     client_access, grant_operator_user, seed_owned_agent, serve_client_node,
 };
@@ -373,12 +373,12 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
 
 #[tokio::test]
 async fn client_tool_control_claim_rechecks_native_authority_and_retains_committed_claim() {
+    use gents_protocol::tool_call::AwaitMode;
     use gents_toolcalls::call::control::client::{
         claim, claim_paused, claim_unavailable, execute_claimed, prepare, read_receipt,
         recover_claim, submit, ClaimPause,
     };
     use gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
-    use gents_protocol::tool_call::AwaitMode;
 
     let model = &gents_lean_vocab::lean_contract_snapshot().client_process_claim_cases;
     let grant_model = &gents_lean_vocab::lean_contract_snapshot().client_control_grant_cases;

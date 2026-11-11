@@ -2,14 +2,13 @@ use std::sync::Arc;
 
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::tool::PluginTool;
+pub use crate::test_support::{
+    asking_plugin_wat, host_call_plugin_wat, installed_echo, installed_plugin,
+};
 use gents_documents::PluginToolRef;
 use gents_loop::tool::ToolDyn;
 use gents_pack::plugin::store::{self, InstalledPlugin};
 use gents_pack::plugin::test_fixtures::{build_plugin_pack, ECHO_WAT};
-pub use crate::test_support::{
-    asking_plugin_wat, host_call_plugin_wat, installed_echo, installed_plugin,
-};
-
 
 #[test]
 fn staged_plugin_resolution_conforms_to_lean() {
@@ -26,8 +25,6 @@ fn staged_plugin_resolution_conforms_to_lean() {
         );
     }
 }
-
-
 
 fn tool_ref(digest: Option<&str>) -> PluginToolRef {
     PluginToolRef {
@@ -148,7 +145,10 @@ fn a_plugin_that_is_not_installed_is_refused() {
 
 #[tokio::test]
 async fn changed_resource_declaration_invalidates_admission_without_new_artifact() {
-    let (home, mut record) = installed_plugin(&gents_pack::plugin::tests::large_json_output_wat(1536 * 1024), None);
+    let (home, mut record) = installed_plugin(
+        &gents_pack::plugin::tests::large_json_output_wat(1536 * 1024),
+        None,
+    );
     record.granted = Some(gents_pack::plugin::Manifold::sealed());
     record.declaration.limits = Some(gents_pack::pack::PluginLimits {
         max_output_mib: Some(2),
@@ -1868,7 +1868,7 @@ mod job_calls {
                         cause,
                         plan,
                     )
-                        .await?;
+                    .await?;
                     Ok::<_, anyhow::Error>(())
                 })
             })
@@ -1899,7 +1899,7 @@ mod job_calls {
                         cause,
                         plan,
                     )
-                        .await?;
+                    .await?;
                     staged.store(true, std::sync::atomic::Ordering::SeqCst);
                     anyhow::bail!("abort the opening transaction")
                 })
@@ -1931,7 +1931,7 @@ mod job_calls {
                         cause,
                         plan,
                     )
-                        .await?;
+                    .await?;
                     Ok::<_, anyhow::Error>(())
                 })
             })

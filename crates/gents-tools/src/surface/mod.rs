@@ -207,9 +207,7 @@ impl ToolSurface {
         fields
     }
 
-    pub fn output_obligations(
-        &self,
-    ) -> Vec<(String, gents_documents::WriteToolOutputObligation)> {
+    pub fn output_obligations(&self) -> Vec<(String, gents_documents::WriteToolOutputObligation)> {
         self.write_tools
             .iter()
             .filter_map(|decl| {

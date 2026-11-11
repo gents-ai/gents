@@ -13,11 +13,11 @@ use super::{
     embedded_phase_timeout, retry, ConfigApplyTxn, ConfigClientError, Result, TransactionFailure,
     EMBEDDED_TRANSACTION_CALLBACK_TIMEOUT,
 };
-use crate::config_client::RerunNote;
 use crate::config_client::write_telemetry::{
     ConflictSource, RetryOwner, RollbackStatus, WriteAttemptOrdinal, WriteBackend, WriteMode,
     WriteOperation, WriteOutcome,
 };
+use crate::config_client::RerunNote;
 
 #[derive(Debug)]
 pub struct TransactionFinalityError<E> {

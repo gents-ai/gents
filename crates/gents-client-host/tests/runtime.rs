@@ -1030,7 +1030,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             .await;
         if matches!(journey, Journey::Conversation) && predecessor.is_none() {
             let pending =
-                gents_service::server_host::pending_managed_enrollments(&node_home, graphql).await?;
+                gents_service::server_host::pending_managed_enrollments(&node_home, graphql)
+                    .await?;
             let members =
                 gents_service::server_host::managed_enrollment_members(&node_home, graphql).await?;
             ensure!(

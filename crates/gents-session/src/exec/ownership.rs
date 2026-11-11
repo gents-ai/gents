@@ -739,12 +739,16 @@ mod conformance {
 
     #[test]
     fn process_stop_outcomes_are_the_lean_stop_outcomes() {
-        gents_lean_vocab::families::managed_exec_stop_outcome_vocabulary::replay(&ProcessStopOutcome::ALL);
+        gents_lean_vocab::families::managed_exec_stop_outcome_vocabulary::replay(
+            &ProcessStopOutcome::ALL,
+        );
     }
 
     #[test]
     fn cancel_process_replies_are_the_lean_cancel_replies() {
-        gents_lean_vocab::families::managed_exec_cancel_reply_vocabulary::replay(&CancelProcessReply::ALL);
+        gents_lean_vocab::families::managed_exec_cancel_reply_vocabulary::replay(
+            &CancelProcessReply::ALL,
+        );
     }
 
     #[test]

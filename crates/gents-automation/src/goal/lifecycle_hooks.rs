@@ -20,8 +20,8 @@ use gents_session::request::hooks::operations::supersede_pending;
 use gents_session::request::hooks::prepared::{Decide, Verdict};
 use gents_session::request::hooks::queue_scope::{ScopeAnswer, ScopeAnswers, ScopeFailure};
 use gents_session::request::hooks::registry::{
-    AdmitShown, ClaimApplied, ClaimCandidate, QueueScopeAsk, Registry, RequestCreated,
-    SessionHalt, SessionResume,
+    AdmitShown, ClaimApplied, ClaimCandidate, QueueScopeAsk, Registry, RequestCreated, SessionHalt,
+    SessionResume,
 };
 use gents_session::request::hooks::supersede::Selector;
 use gents_store::config_client::agent_session::{decode_agent_session_read, AgentSessionRowRead};

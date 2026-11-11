@@ -1,7 +1,7 @@
 use super::*;
+use chrono::Utc;
 use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents_store::identity::NodeIdentity;
-use chrono::Utc;
 
 struct PanickingTool;
 
@@ -55,16 +55,17 @@ async fn accepted_background_panic_terminalizes_and_notifies_before_release() {
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         AgentRequestAdmissionRecord::client(user.did()),
     );
-    let mut lifecycle = gents_toolcalls::call::lifecycle::admission_fixture::pending_client_fixture_request(
-        &node,
-        &owner,
-        db.node_identity.clone(),
-        &user,
-        agent.as_ref(),
-        create,
-    )
-    .await
-    .unwrap();
+    let mut lifecycle =
+        gents_toolcalls::call::lifecycle::admission_fixture::pending_client_fixture_request(
+            &node,
+            &owner,
+            db.node_identity.clone(),
+            &user,
+            agent.as_ref(),
+            create,
+        )
+        .await
+        .unwrap();
     assert_eq!(
         lifecycle.claim_with_identity().await.unwrap(),
         gents_session::request::lifecycle::ClaimOutcome::Claimed

@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
 
+use chrono::Utc;
 use gents_inference::llm::message::{
     AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResultContent,
     UserContent,
@@ -11,12 +12,11 @@ use gents_inference::llm::{HookAction, ToolCallHookAction};
 use gents_loop::provider_input::ProviderInputProfile;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use serde_json::json;
-use chrono::Utc;
 
+use defra_node::Node as EmbeddedNode;
 use gents_store::schema::ensure_runtime_schemas;
 use gents_toolcalls::call::hook::fixtures::*;
 use gents_toolcalls::call::hook::*;
-use defra_node::Node as EmbeddedNode;
 
 mod background_admission;
 mod background_budget;
@@ -644,10 +644,17 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
             let session_id = &session_id;
             let owner = identity.did();
             Box::pin(async move {
-                let goal = gents_automation::goal::load_canonical_goal_in_txn(txn, owner, session_id)
-                    .await?
-                    .expect("Goal exists");
-                gents_automation::goal::bind_goal_first_request_in_txn(txn, &goal, request_doc, None).await
+                let goal =
+                    gents_automation::goal::load_canonical_goal_in_txn(txn, owner, session_id)
+                        .await?
+                        .expect("Goal exists");
+                gents_automation::goal::bind_goal_first_request_in_txn(
+                    txn,
+                    &goal,
+                    request_doc,
+                    None,
+                )
+                .await
             })
         })
         .await
@@ -918,8 +925,8 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     let identity_dir = tempfile::tempdir().unwrap();
     let identity =
         KeyIdentity::load_or_create(identity_dir.path().join("owner.key"), None).unwrap();
-    use gents_automation::goal::load_canonical_goal;
     use crate::runtime::agent::output_obligation::{ActiveOutputObligation, OutputObligationGate};
+    use gents_automation::goal::load_canonical_goal;
     use gents_documents::{WriteToolOutputObligation, WriteToolOutputObligationScope};
     use gents_protocol::goal_status::GoalStatus;
 
