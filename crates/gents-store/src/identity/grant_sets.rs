@@ -3,7 +3,8 @@ use crate::config_client::{ConfigAccess, ConfigClientError, NodePermission};
 /// The named node-permission sets Gents issues. Lean `Identity.GrantSets`
 /// owns their contents and recipients; native NAC decides every change as
 /// the access's actor under its held-bounded rule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum GrantSet {
     /// Projected from each live managed Agent document, never granted directly
     /// in production.

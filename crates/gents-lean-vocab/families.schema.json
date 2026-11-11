@@ -1,5 +1,77 @@
 {
   "functions": {
+    "account_rotation_claim_binds": {
+      "input": {
+        "fields": [
+          [
+            "claim",
+            {
+              "enum": "Claim",
+              "values": [
+                "five_hour",
+                "seven_day",
+                "seven_day_opus",
+                "seven_day_sonnet",
+                "unknown"
+              ]
+            }
+          ],
+          [
+            "family",
+            {
+              "enum": "Family",
+              "values": [
+                "opus",
+                "sonnet",
+                "other"
+              ]
+            }
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": "bool"
+    },
+    "account_rotation_overage_serves": {
+      "input": {
+        "fields": [
+          [
+            "overage",
+            {
+              "enum": "Overage",
+              "values": [
+                "absent",
+                "allowed",
+                "warning",
+                "rejected"
+              ]
+            }
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": "bool"
+    },
+    "identity_grant_sets_grant_set_native_admin": {
+      "input": {
+        "fields": [
+          [
+            "grant_set",
+            {
+              "enum": "GrantSet",
+              "values": [
+                "agent-baseline",
+                "operator-user",
+                "household-owner",
+                "policy-delegate"
+              ]
+            }
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": "bool"
+    },
     "store_encryption_upgrade_after_recheck": {
       "input": {
         "fields": [
@@ -89,6 +161,15 @@
     }
   },
   "vocabularies": {
+    "identity_grant_sets_grant_set": {
+      "enum": "GrantSet",
+      "values": [
+        "agent-baseline",
+        "operator-user",
+        "household-owner",
+        "policy-delegate"
+      ]
+    },
     "request_state": {
       "enum": "RequestState",
       "values": [

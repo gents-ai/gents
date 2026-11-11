@@ -1,3 +1,5 @@
+import Proofs.Conformance.Functions.Shared
+import Proofs.Conformance.Functions.Store
 import Proofs.Conformance.StorageWriteGate
 import Proofs.Conformance.StorageWriteGateAdmission
 import Proofs.Conformance.StorageWriteGateStreamWaiter

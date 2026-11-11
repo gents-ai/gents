@@ -107,7 +107,17 @@ initialize registerBuiltinAttribute {
 the expectation, and the cases are its whole domain. -/
 private def familyTerm (declaration : Name) : TermElabM (TSyntax `term) := do
   forallTelescope (← getConstInfo declaration).type fun parameters result => do
-    let names ← parameters.mapM fun parameter => parameter.fvarId!.getUserName
+    -- An equation-style definition leaves its parameters unnamed; such a
+    -- parameter takes the name of its type.
+    let names ← parameters.mapM fun parameter => do
+      let name ← parameter.fvarId!.getUserName
+      unless name.hasMacroScopes do return name
+      let .const type _ ← whnfR (← inferType parameter)
+        | throwError "{declaration}: an unnamed parameter needs a named type"
+      let typeName := type.getString!
+      pure (Name.mkSimple (typeName.take 1 |>.toLower |>.append (typeName.drop 1)))
+    unless names.toList.Nodup do
+      throwError "{declaration}: parameters {names} do not have distinct names"
     let idents := names.map mkIdent
     let fields ← parameters.mapIdxM fun index parameter => do
       `(($(quote names[index]!.toString), $(← schemaTerm (← inferType parameter))))

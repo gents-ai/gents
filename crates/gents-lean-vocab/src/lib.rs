@@ -802,7 +802,6 @@ pub struct LeanIdentityClientAgentCreationCase {
 pub struct LeanGrantSetCase {
     pub set: String,
     pub permissions: Vec<String>,
-    pub native_admin: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
