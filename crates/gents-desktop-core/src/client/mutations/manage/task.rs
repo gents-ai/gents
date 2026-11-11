@@ -294,7 +294,7 @@ fn render_task_invocation(
     if !task.enabled {
         bail!("task {task_id} is disabled");
     }
-    gents::goal::validate_task_goal_declaration(
+    gents::documents::task_goal_declaration::validate_task_goal_declaration(
         task.goal_objective_template.as_deref(),
         task.goal_token_budget,
     )?;

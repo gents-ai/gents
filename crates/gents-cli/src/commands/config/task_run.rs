@@ -123,7 +123,7 @@ pub(crate) async fn enqueue_task_run_on(
     let prompt_template = task.prompt_template;
     let goal_objective_template = task.goal_objective_template;
     let goal_token_budget = task.goal_token_budget;
-    gents::goal::validate_task_goal_declaration(
+    gents::documents::task_goal_declaration::validate_task_goal_declaration(
         goal_objective_template.as_deref(),
         goal_token_budget,
     )?;

@@ -1,4 +1,5 @@
 use super::*;
+use crate::documents::mailbox_write_decl::validate_mailbox_write_decl;
 
 pub(super) fn stored_value(item: &MailboxItem) -> Value {
     let mut value = serde_json::to_value(item).unwrap();

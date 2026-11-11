@@ -50,7 +50,7 @@ async fn messages_queued_behind_a_busy_turn_run_as_separate_turns_in_order() {
         prompt,
         vec![StreamChunk::tool_call(
             "queued-user-messages-call",
-            gents::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME,
+            gents::documents::mailbox_write_decl::FILE_MAILBOX_ITEM_TOOL_NAME,
             serde_json::json!({"title":"Status", "summary":"working"}).to_string(),
         )],
         Vec::new(),

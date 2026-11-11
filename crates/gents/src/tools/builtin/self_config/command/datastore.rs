@@ -4,7 +4,7 @@ pub(super) fn mailbox_entries(
     policy: crate::session::mailbox::MailboxNotificationPolicy,
 ) -> Result<Value> {
     policy.validate()?;
-    let mut declaration = crate::session::mailbox::canonical_mailbox_write_decl();
+    let mut declaration = crate::documents::mailbox_write_decl::canonical_mailbox_write_decl();
     declaration.notification = Some(policy);
     Ok(json!([crate::documents::SurfaceToolDecl::Create(
         declaration
@@ -39,7 +39,7 @@ fn mailbox_option_uses_canonical_declaration_and_rejects_ambiguous_patches() {
         "enabled=true".into(),
     ];
     let patch = surface_patch(&args).unwrap();
-    let mut canonical = crate::session::mailbox::canonical_mailbox_write_decl();
+    let mut canonical = crate::documents::mailbox_write_decl::canonical_mailbox_write_decl();
     canonical.notification = Some(serde_json::from_value(policy).unwrap());
     assert!(patch.contains(&(
         "entries".into(),

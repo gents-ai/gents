@@ -395,8 +395,8 @@ impl ConfigReferences {
                     TriggerSource::Schedule { .. } => {
                         // The fire-time owner, so publication refuses exactly
                         // what every schedule fire would error on (#2080).
-                        crate::triggers::engine::validate_task_delivery_options(
-                            crate::triggers::engine::TriggerKind::Schedule,
+                        crate::documents::task_delivery::validate_task_delivery_options(
+                            crate::documents::task_delivery::TriggerKind::Schedule,
                             task.emit_outcome,
                             doc.concurrency.unwrap_or_default(),
                             doc.session_id_template.is_some(),
@@ -467,7 +467,7 @@ impl ConfigReferences {
                     correlation_field,
                     outputs,
                     ..
-                } => crate::triggers::callback::plugin::validate_handler(
+                } => crate::documents::callback_plugin_handler::validate_handler(
                     &plugin,
                     &digest,
                     correlation_field.as_deref(),
@@ -483,7 +483,7 @@ impl ConfigReferences {
                         .get(&(Collection::EventSource, doc.event_source_id.clone()))
                         .context("callback event source missing")?,
                 )?;
-                crate::triggers::callback::reject_secret_bearing_callback_fields(
+                crate::documents::callback_secret_fields::reject_secret_bearing_callback_fields(
                     &doc.binding_id,
                     source.filter.as_deref(),
                     None,

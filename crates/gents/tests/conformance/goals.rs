@@ -257,16 +257,17 @@ fn generated_task_goal_cases_fence_declaration_and_identity() {
     for case in cases {
         let declaration_valid = match case.goal_token_budget {
             Some(budget) => i64::try_from(budget).is_ok_and(|budget| {
-                gents::goal::validate_task_goal_declaration(
+                gents::documents::task_goal_declaration::validate_task_goal_declaration(
                     case.goal_objective.as_deref(),
                     Some(budget),
                 )
                 .is_ok()
             }),
-            None => {
-                gents::goal::validate_task_goal_declaration(case.goal_objective.as_deref(), None)
-                    .is_ok()
-            }
+            None => gents::documents::task_goal_declaration::validate_task_goal_declaration(
+                case.goal_objective.as_deref(),
+                None,
+            )
+            .is_ok(),
         };
         assert_eq!(
             declaration_valid, case.declaration_valid,

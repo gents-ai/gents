@@ -19,9 +19,6 @@ mod workers;
 #[cfg(test)]
 mod tests;
 
-pub use documents::reject_secret_bearing_callback_fields;
-#[cfg(test)]
-pub(crate) use documents::strip_secret_fields;
 #[cfg(test)]
 pub(crate) use documents::{
     create_callback_result, create_pending_invocation, flush_workspace_docs, update_invocation,

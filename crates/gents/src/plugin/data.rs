@@ -298,10 +298,9 @@ pub fn admit_write(
         let applicable = applicable_stamps(&declared, collection_fields);
         admit_write_observation(&WriteObservation {
             in_own_sdl: granted,
-            runtime_or_protected: crate::triggers::callback::plugin::writable_output_collection(
-                collection,
-            )
-            .is_err(),
+            runtime_or_protected:
+                crate::documents::callback_plugin_handler::writable_output_collection(collection)
+                    .is_err(),
             actor_is_invoker: true,
             op_granted: data.ops.iter().any(|op| op == op_name(write.op)),
             stamped_supplied_by_guest: write
@@ -544,7 +543,8 @@ impl Session {
         let collection = query.collection.as_str();
         let in_own_sdl = data.collections.iter().any(|c| c == collection);
         let runtime_or_protected =
-            crate::triggers::callback::plugin::writable_output_collection(collection).is_err();
+            crate::documents::callback_plugin_handler::writable_output_collection(collection)
+                .is_err();
         let query_granted = data.ops.iter().any(|op| op == "query");
         if !query_admitted(query.limit, in_own_sdl, runtime_or_protected, query_granted) {
             if !in_own_sdl || runtime_or_protected {

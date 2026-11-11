@@ -365,12 +365,14 @@ pub(crate) fn validate_write_tool_declarations(
                 decl.tool_name
             )
         })?;
-        crate::session::mailbox::validate_mailbox_write_decl(decl).map_err(|error| {
-            anyhow::anyhow!(
-                "write_tools[{i}] (tool {:?}) violates mailbox registration policy: {error}",
-                decl.tool_name
-            )
-        })?;
+        crate::documents::mailbox_write_decl::validate_mailbox_write_decl(decl).map_err(
+            |error| {
+                anyhow::anyhow!(
+                    "write_tools[{i}] (tool {:?}) violates mailbox registration policy: {error}",
+                    decl.tool_name
+                )
+            },
+        )?;
         if !decl.output_obligation_is_well_formed() {
             return Err(anyhow::anyhow!(
                 "write_tools[{i}] (tool {:?}) output_obligation.minimum_writes must be greater than zero and output_obligation.expected_count_field, when present, must name a required model-provided field",

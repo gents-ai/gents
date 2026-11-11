@@ -9,13 +9,14 @@ use defra_node::Node as EmbeddedNode;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
+use crate::documents::task_delivery::TriggerKind;
 use crate::documents::{
     load_trigger_next_run_at_batch, update_trigger_runtime_fields, TriggerRuntimeUpdate,
     TRIGGER_CURSOR_BATCH_SIZE,
 };
 use crate::runtime::snapshot::ActiveRuntimeSnapshot;
 use crate::store::config_client::{ConfigAccess, ConfigClientError};
-use crate::triggers::engine::{FireIntent, FireResult, TriggerKind, TriggerSource};
+use crate::triggers::engine::{FireIntent, FireResult, TriggerSource};
 
 async fn schedule_visibility(
     node: &Arc<EmbeddedNode>,

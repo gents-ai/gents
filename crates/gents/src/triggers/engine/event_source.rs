@@ -16,7 +16,8 @@ use crate::runtime::snapshot::ActiveRuntimeSnapshot;
 use crate::triggers::event_delivery::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
 use crate::store::subscription_source::UpdateSubscriptionSource;
 
-use super::{FireIntent, TriggerKind, TriggerSource};
+use super::{FireIntent, TriggerSource};
+use crate::documents::task_delivery::TriggerKind;
 
 mod durable;
 

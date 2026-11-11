@@ -907,7 +907,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         output_obligation: None,
         notification: None,
     };
-    let mailbox_decl = crate::session::mailbox::canonical_mailbox_write_decl();
+    let mailbox_decl = crate::documents::mailbox_write_decl::canonical_mailbox_write_decl();
     let surface = json!({"surface_id":"fixture/surface", "node_did":runtime.did(),
         "entries":[declaration.clone(), crate::documents::SurfaceToolDecl::Create(write_decl.clone()),
             crate::documents::SurfaceToolDecl::Create(mailbox_decl.clone())]});

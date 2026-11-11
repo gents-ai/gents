@@ -3,10 +3,11 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use super::{
-    durable, trigger_prompt_header, validate_task_delivery_options, ActiveRuntimeSnapshot,
-    FireIntent, FireResult, TriggerEngine, TriggerKind, SERIAL_BUSY,
+    durable, trigger_prompt_header, ActiveRuntimeSnapshot, FireIntent, FireResult, TriggerEngine,
+    SERIAL_BUSY,
 };
 use crate::documents::automation::ResolvedSchedule;
+use crate::documents::task_delivery::{validate_task_delivery_options, TriggerKind};
 use crate::documents::template::TemplateScope;
 use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
 

@@ -2072,7 +2072,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             captured.iter().any(|body| body["tools"]
                 .as_array()
                 .is_some_and(|tools| tools.iter().any(|tool| tool["function"]["name"]
-                    == gents::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME))),
+                    == gents::documents::mailbox_write_decl::FILE_MAILBOX_ITEM_TOOL_NAME))),
             "the default Engineer must advertise its question tool"
         );
         editor_result?;

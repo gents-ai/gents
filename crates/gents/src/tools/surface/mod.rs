@@ -532,7 +532,7 @@ impl ToolSurface {
         let mut registered_names: RapidHashSet<String> =
             tools.iter().map(|tool| tool.name()).collect();
         for decl in &self.write_tools {
-            crate::session::mailbox::validate_mailbox_write_decl(decl)?;
+            crate::documents::mailbox_write_decl::validate_mailbox_write_decl(decl)?;
             if !decl.is_well_formed() || !decl.output_obligation_is_well_formed() {
                 anyhow::bail!(
                     "write tool `{}` reached registration with an invalid declaration",

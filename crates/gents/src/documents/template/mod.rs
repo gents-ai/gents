@@ -645,8 +645,11 @@ pub(crate) fn render_task(
         .map(|template| render_template(template, scope))
         .transpose()
         .map_err(|error| format!("goal template: {error}"))?;
-    crate::goal::validate_task_goal_declaration(objective.as_deref(), goal_token_budget)
-        .map_err(|error| format!("goal declaration: {error}"))?;
+    crate::documents::task_goal_declaration::validate_task_goal_declaration(
+        objective.as_deref(),
+        goal_token_budget,
+    )
+    .map_err(|error| format!("goal declaration: {error}"))?;
     Ok((prompt, objective))
 }
 

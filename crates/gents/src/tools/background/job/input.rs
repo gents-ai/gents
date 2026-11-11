@@ -2429,7 +2429,7 @@ pub(crate) mod tests {
         assert!(secret.is_empty(), "{secret:?}");
         let value = serde_json::to_value(&input).unwrap();
         assert_eq!(
-            crate::triggers::callback::strip_secret_fields(value.clone()),
+            crate::documents::callback_secret_fields::strip_secret_fields(value.clone()),
             value
         );
     }

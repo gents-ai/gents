@@ -18,14 +18,15 @@ use super::claim::{claim_invocation, invocation_is_claimable};
 use super::documents::{
     create_callback_result, flush_workspace_docs, load_callback, load_callback_module_as,
     load_callback_result, load_isolated_workspace, load_memory_workspace_docs,
-    load_repository_placement, load_trusted_callback_signers, strip_secret_fields,
-    update_invocation, CallbackInvocationDoc, CallbackModuleDoc, CallbackResultDoc,
+    load_repository_placement, load_trusted_callback_signers, update_invocation,
+    CallbackInvocationDoc, CallbackModuleDoc, CallbackResultDoc,
 };
 use super::planner::{plan_from_module, validate_callback_module};
 use super::{
     LIFECYCLE_CLAIMED, LIFECYCLE_DENIED, LIFECYCLE_FAILED, LIFECYCLE_PENDING, LIFECYCLE_RUNNING,
     LIFECYCLE_SUCCEEDED,
 };
+use crate::documents::callback_secret_fields::strip_secret_fields;
 use crate::plugin::executor::PluginExecutor;
 
 /// Action N+1 must not enter Executing until N is ResultDocsWritten.

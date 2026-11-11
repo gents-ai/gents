@@ -1399,7 +1399,7 @@ async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
     let granted = config_for_selected_surface(
         &runtime.node_did,
         vec![crate::documents::SurfaceToolDecl::Create(
-            crate::session::mailbox::canonical_mailbox_write_decl(),
+            crate::documents::mailbox_write_decl::canonical_mailbox_write_decl(),
         )],
     )
     .resolve(&node, &runtime.node_did, &Default::default())
@@ -1407,12 +1407,12 @@ async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
     .unwrap();
     assert!(granted
         .tool_names()
-        .contains(&crate::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME.to_string()));
+        .contains(&crate::documents::mailbox_write_decl::FILE_MAILBOX_ITEM_TOOL_NAME.to_string()));
     assert!(granted.source_fill_fields().contains("requester_did"));
     let built = granted.build_tools(&runtime).await.unwrap();
-    assert!(built
-        .iter()
-        .any(|tool| tool.name() == crate::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME));
+    assert!(built.iter().any(
+        |tool| tool.name() == crate::documents::mailbox_write_decl::FILE_MAILBOX_ITEM_TOOL_NAME
+    ));
 
     let without_grant = AgentToolSurfaceConfig::meta_only()
         .resolve(&runtime.node, &runtime.node_did, &Default::default())
@@ -1420,7 +1420,7 @@ async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
         .unwrap();
     assert!(!without_grant
         .tool_names()
-        .contains(&crate::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME.to_string()));
+        .contains(&crate::documents::mailbox_write_decl::FILE_MAILBOX_ITEM_TOOL_NAME.to_string()));
     assert!(!without_grant.source_fill_fields().contains("requester_did"));
 }
 

@@ -710,6 +710,8 @@ pub use documents::automation::{
     EventTriggerFireMode, ResolvedEventTrigger, ResolvedSchedule, ResolvedTask,
     MAX_EVENT_TRIGGER_GROUP_DOCS,
 };
+pub use documents::callback_secret_fields::reject_secret_bearing_callback_fields;
+pub use documents::task_delivery::TriggerKind;
 pub use documents::template::{
     check_template_vocabulary, parse_template_for_validation, render_template, TemplateError,
     TemplateScope, VariableRef,
@@ -855,12 +857,9 @@ pub use tools::surface::{
     cli_tool, AgentToolSurfaceConfig, CustomToolFactory, ResolvedToolSelection, ToolCeiling,
     ToolPolicyVersion, ToolRuntimeContext, ToolSurface, TOOL_POLICY_V1,
 };
-pub use triggers::callback::reject_secret_bearing_callback_fields;
 pub use triggers::engine::event_source::EventSource;
 pub use triggers::engine::goal_source::GoalSource;
-pub use triggers::engine::{
-    run_trigger_engine, FireIntent, FireResult, TriggerKind, TriggerSource,
-};
+pub use triggers::engine::{run_trigger_engine, FireIntent, FireResult, TriggerSource};
 pub use truncation::{TruncationLimits, TruncationMode};
 pub use turn::prompt::{LayeredPromptBuilder, PromptBuilder};
 

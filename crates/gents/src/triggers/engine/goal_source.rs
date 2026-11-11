@@ -31,7 +31,8 @@ use crate::store::graphql::escape_graphql_string;
 use crate::store::subscription_source::UpdateSubscriptionSource;
 use gents_protocol::row::AgentRequest;
 
-use super::{FireIntent, FireResult, TriggerKind, TriggerSource};
+use super::{FireIntent, FireResult, TriggerSource};
+use crate::documents::task_delivery::TriggerKind;
 
 mod intent_phases;
 

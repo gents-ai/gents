@@ -17,7 +17,7 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
     let (prepared, turn) = crate::support::signed_mailbox::prepare_signed_mailbox_turn(
         &db, "mailbox-tool-turn-backend", "mailbox-tool-turn-model", request_id,
         "mailbox-tool-turn-session", prompt,
-        vec![StreamChunk::tool_call("mailbox-tool-turn-call", gents::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME,
+        vec![StreamChunk::tool_call("mailbox-tool-turn-call", gents::documents::mailbox_write_decl::FILE_MAILBOX_ITEM_TOOL_NAME,
             serde_json::json!({"title":"Crew ready", "summary":"Two agents configured.\n\n- builder\n- reviewer"}).to_string())],
         Vec::new(), None,
     ).await.unwrap();
@@ -187,7 +187,7 @@ async fn an_optional_question_skip_reaches_the_asking_session() {
         "mailbox-question-prompt",
         vec![StreamChunk::tool_call(
             "mailbox-question-call",
-            gents::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME,
+            gents::documents::mailbox_write_decl::FILE_MAILBOX_ITEM_TOOL_NAME,
             serde_json::json!({"title":"Release", "question":question}).to_string(),
         )],
         vec![StreamPlan::new(
@@ -336,7 +336,7 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
         prompt,
         vec![StreamChunk::tool_call(
             "mailbox-question-busy-call",
-            gents::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME,
+            gents::documents::mailbox_write_decl::FILE_MAILBOX_ITEM_TOOL_NAME,
             serde_json::json!({"title":"Continue", "question":question}).to_string(),
         )],
         vec![StreamPlan::new(

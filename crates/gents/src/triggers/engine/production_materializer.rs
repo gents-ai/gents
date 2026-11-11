@@ -9,12 +9,13 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
 use crate::documents::automation::ResolvedTask;
+use crate::documents::task_delivery::TriggerKind;
 use crate::request::lifecycle::{
     task_goal_session_title, task_session_title, ExecutionOrigin, TriggerLineage, WorkspaceLineage,
 };
 use crate::runtime::snapshot::ActiveRuntimeSnapshot;
 use crate::store::graphql::{escape_graphql_string, rows};
-use crate::triggers::engine::{MaterializerHandle, TriggerKind};
+use crate::triggers::engine::MaterializerHandle;
 
 type ResolvedAgent = (
     String,

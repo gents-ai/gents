@@ -120,9 +120,8 @@ pub use state::{
 };
 pub(crate) use task_fire::{apply_claimed_task_goal_in_txn, task_goal_fire_key};
 pub use task_fire::{
-    decide_task_goal_fire_recovery, task_goal_fire_identity, validate_task_goal_declaration,
-    TaskGoalFireIdentity, TaskGoalFireRecoveryDecision, TaskGoalFireRecoveryDisposition,
-    TaskGoalRequestBinding,
+    decide_task_goal_fire_recovery, task_goal_fire_identity, TaskGoalFireIdentity,
+    TaskGoalFireRecoveryDecision, TaskGoalFireRecoveryDisposition, TaskGoalRequestBinding,
 };
 pub(crate) use tool_context::load_goal_tool_context;
 use tool_context::same_goal_assignment;

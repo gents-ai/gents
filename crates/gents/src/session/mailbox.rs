@@ -8,7 +8,9 @@ use defra_node::Node as EmbeddedNode;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::documents::{WriteToolDecl, WriteToolField};
+use crate::documents::mailbox_write_decl::{
+    canonical_mailbox_write_decl, FILE_MAILBOX_ITEM_TOOL_NAME,
+};
 use crate::inference::llm::tool::ToolDefinition;
 use crate::store::graphql::{
     escape_graphql_string, rows, single_mutation_document, validate_collection_identifier,
@@ -38,8 +40,6 @@ pub use notification::{
 };
 #[cfg(test)]
 mod notification_tests;
-
-pub const FILE_MAILBOX_ITEM_TOOL_NAME: &str = "file_mailbox_item";
 
 pub const MAILBOX_FIELDS: &str = r#"
     _docID
@@ -277,54 +277,6 @@ pub struct FileMailboxItemArgs {
     pub parent_item_id: Option<String>,
     #[serde(default)]
     pub deadline_at: Option<String>,
-}
-
-fn canonical_field(name: &str, required: bool) -> WriteToolField {
-    WriteToolField {
-        name: name.to_string(),
-        required,
-        fill: None,
-    }
-}
-
-pub fn canonical_mailbox_write_decl() -> WriteToolDecl {
-    WriteToolDecl {
-        notification: Some(MailboxNotificationPolicy::default()),
-        tool_name: FILE_MAILBOX_ITEM_TOOL_NAME.to_string(),
-        collection: MAILBOX_COLLECTION.to_string(),
-        description: "Publish notification content using the configured identity and handling policy; runtime stamps ownership and provenance.".to_string(),
-        fields: [
-            ("title", true),
-            ("summary", false),
-            ("payload", false),
-        ]
-        .into_iter()
-        .map(|(name, required)| canonical_field(name, required))
-        .collect(),
-        output_obligation: None,
-    }
-}
-
-pub fn validate_mailbox_write_decl(decl: &WriteToolDecl) -> Result<()> {
-    if decl.collection != MAILBOX_COLLECTION {
-        anyhow::ensure!(
-            decl.notification.is_none(),
-            "notification policy is only valid for MailboxItem"
-        );
-        return Ok(());
-    }
-    decl.notification
-        .as_ref()
-        .context("MailboxItem requires an explicit notification policy")?
-        .validate()?;
-    let mut canonical = canonical_mailbox_write_decl();
-    canonical.notification = decl.notification.clone();
-    if decl != &canonical {
-        bail!(
-            "MailboxItem may only be targeted by the canonical `{FILE_MAILBOX_ITEM_TOOL_NAME}` declaration"
-        );
-    }
-    Ok(())
 }
 
 fn nonempty(value: Option<String>) -> Option<String> {

@@ -37,7 +37,7 @@ pub fn reply(request: &Value) -> Option<ChatAction> {
         } else {
             ChatAction::Sse(fake_llm::tool_call_sse_with_id(
                 "question-cancel",
-                gents::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME,
+                gents::documents::mailbox_write_decl::FILE_MAILBOX_ITEM_TOOL_NAME,
                 &json!({
                     "title":"Interrupted plan", "question": {
                         "version":3, "prompt":"Should this cancelled task proceed?",
@@ -74,7 +74,7 @@ pub fn reply(request: &Value) -> Option<ChatAction> {
     Some(ChatAction::Sse(if returned("question-approaches") {
         fake_llm::completion_text_sse("Choose the worker approach below.")
     } else {
-        fake_llm::tool_call_sse_with_id("question-approaches", gents::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME, &json!({
+        fake_llm::tool_call_sse_with_id("question-approaches", gents::documents::mailbox_write_decl::FILE_MAILBOX_ITEM_TOOL_NAME, &json!({
             "title":"Worker approach", "question":{
                 "version":3, "prompt":"What should the worker inspect?", "allow_free_text":true,
                 "options":[

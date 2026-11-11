@@ -18,10 +18,9 @@ use crate::tools::workspace::{
 
 use super::claim::invocation_is_claimable;
 use super::documents::{
-    create_callback_result_mutation, strip_secret_fields, succeeded_missing_result,
-    succeeded_repair_cutoff, update_invocation_mutation, validate_callback_binding,
-    CallbackBindingDoc, CallbackInvocationDoc, CallbackModuleDoc, CallbackResultDoc,
-    CallbackResultInvocationRow,
+    create_callback_result_mutation, succeeded_missing_result, succeeded_repair_cutoff,
+    update_invocation_mutation, validate_callback_binding, CallbackBindingDoc,
+    CallbackInvocationDoc, CallbackModuleDoc, CallbackResultDoc, CallbackResultInvocationRow,
 };
 use super::planner::{
     compute_module_id, fixture_create_workspace_artifact, invoke_plugin_planner, plan_from_module,
@@ -34,6 +33,9 @@ use super::run::{
 };
 use super::{
     LIFECYCLE_DENIED, LIFECYCLE_FAILED, LIFECYCLE_PENDING, LIFECYCLE_RUNNING, LIFECYCLE_SUCCEEDED,
+};
+use crate::documents::callback_secret_fields::{
+    reject_secret_bearing_callback_fields, strip_secret_fields,
 };
 
 fn binding() -> CallbackBindingDoc {
@@ -450,7 +452,7 @@ fn apply_rejects_secret_bearing_source_fields() {
 
 #[test]
 fn apply_rejects_secret_bearing_filter_fields() {
-    let error = super::documents::reject_secret_bearing_callback_fields(
+    let error = reject_secret_bearing_callback_fields(
         "bind-1",
         Some(r#"{ api_token: { _eq: "x" } }"#),
         None,
@@ -458,7 +460,7 @@ fn apply_rejects_secret_bearing_filter_fields() {
     .unwrap_err()
     .to_string();
     assert!(error.contains("secret-bearing"), "{error}");
-    assert!(super::documents::reject_secret_bearing_callback_fields(
+    assert!(reject_secret_bearing_callback_fields(
         "bind-1",
         Some(r#"{ work_unit_id: { _eq: "TOKEN" } }"#),
         None

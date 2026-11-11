@@ -14,10 +14,13 @@ use crate::store::subscription_source::UpdateSubscriptionSource;
 
 use super::claim::invocation_is_claimable;
 use super::documents::{
-    create_pending_invocation, list_enabled_bindings, load_event_source, strip_secret_fields,
-    validate_callback_binding, CallbackBindingDoc, CallbackInvocationDoc,
+    create_pending_invocation, list_enabled_bindings, load_event_source, validate_callback_binding,
+    CallbackBindingDoc, CallbackInvocationDoc,
 };
 use super::{CallbackEngine, LIFECYCLE_PENDING};
+use crate::documents::callback_secret_fields::{
+    reject_secret_bearing_callback_fields, strip_secret_fields,
+};
 
 use crate::triggers::engine::event_delivery::source_scan::{load_doc_ids, load_source_rows};
 
@@ -553,11 +556,7 @@ impl CallbackEngine {
             "callback EventSource requires supported created event kind"
         );
 
-        super::documents::reject_secret_bearing_callback_fields(
-            &binding.binding_id,
-            event.filter.as_deref(),
-            None,
-        )?;
+        reject_secret_bearing_callback_fields(&binding.binding_id, event.filter.as_deref(), None)?;
         let (callback_doc, callback) =
             super::documents::load_config_record::<crate::documents::Callback>(
                 &self.node,
@@ -719,11 +718,7 @@ impl CallbackEngine {
         expected_docs: Option<(&str, &str, &str, &crate::documents::Callback)>,
     ) -> Result<bool> {
         validate_callback_binding(binding)?;
-        super::documents::reject_secret_bearing_callback_fields(
-            &binding.binding_id,
-            source.filter.as_deref(),
-            None,
-        )?;
+        reject_secret_bearing_callback_fields(&binding.binding_id, source.filter.as_deref(), None)?;
         let (binding_doc, current_binding) =
             super::documents::load_config_record::<CallbackBindingDoc>(
                 &self.node,

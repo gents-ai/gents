@@ -113,7 +113,7 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
             other => panic!("unknown modeled trigger kind {other}"),
         };
         assert_eq!(
-            super::super::validate_task_delivery_options(
+            crate::documents::task_delivery::validate_task_delivery_options(
                 kind,
                 case["emit_outcome"].as_bool().unwrap(),
                 decode(&case["concurrency"]),
