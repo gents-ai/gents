@@ -16,13 +16,14 @@ use gents_session::request::hooks::effect::{
     DocRef, Effect, Grant, Manifest, OwnedCollection, Row, Subject, Write, SESSION_CHILD_GRANTS,
 };
 use gents_session::request::hooks::hook::{Direction, Hook, Outcome, Query};
-use gents_session::request::hooks::operations::{supersede_pending, Selector};
+use gents_session::request::hooks::operations::supersede_pending;
 use gents_session::request::hooks::prepared::{Decide, Verdict};
 use gents_session::request::hooks::queue_scope::{ScopeAnswer, ScopeAnswers, ScopeFailure};
 use gents_session::request::hooks::registry::{
     AdmitShown, ClaimApplied, ClaimCandidate, QueueScopeAsk, Registry, RequestCreated,
     SessionHalt, SessionResume,
 };
+use gents_session::request::hooks::supersede::Selector;
 use gents_store::config_client::agent_session::{decode_agent_session_read, AgentSessionRowRead};
 
 pub(super) const PLUGIN: &str = "goals";
@@ -710,6 +711,10 @@ impl TaskGoalAssignment {
             successor: request.request_id.clone(),
             successor_doc: request.doc_id.clone(),
             reason: request_head::STALE_ASSIGNMENT_REASON.into(),
+            next: Some(format!(
+                "gents automation goal show --session {}",
+                assigned.session_id
+            )),
             at: at.to_owned(),
         }));
         effects.push(crate::triggers::lifecycle_hooks::apply_goal_assignment(
