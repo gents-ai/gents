@@ -363,6 +363,7 @@ pub struct ConfigCommandTool {
     pub(super) process_ceiling: crate::surface::SelfConfigProcessCeiling,
     pub(super) execution: Arc<super::execution::ExecutionObservation>,
     pub(super) plugins: Arc<dyn crate::plugin_host::PluginHost>,
+    pub(super) tasks: Arc<dyn crate::task_run::TaskRunService>,
     /// The plugins the calling agent's Tools select for this request.
     pub(super) selected_plugins: Vec<gents_documents::PluginToolRef>,
     /// The plugin tool names the process ceiling admits; `None` is all.

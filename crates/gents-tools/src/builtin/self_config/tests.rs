@@ -656,6 +656,7 @@ impl SelfConfigFixture {
             Some(self.db.node_identity.clone()),
             grants,
             plugins,
+            Arc::new(crate::task_run::NoTaskRunService),
             Some(self.node_binding.clone()),
         )
     }
@@ -998,6 +999,7 @@ async fn build_fails_closed_without_node_did() {
         None,
         &config(&["agent"]),
         test_plugins(),
+        Arc::new(crate::task_run::NoTaskRunService),
     );
     assert!(
         tools.is_empty(),
@@ -1020,6 +1022,7 @@ async fn build_registers_gated_family() {
         None,
         &config(&["agent", "backend"]),
         test_plugins(),
+        Arc::new(crate::task_run::NoTaskRunService),
     );
     assert_eq!(
         tools.len(),
@@ -7596,6 +7599,7 @@ async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
         Some(fixture.db.node_identity.clone()),
         &tool_config,
         test_plugins(),
+        Arc::new(crate::task_run::NoTaskRunService),
         Some(fixture.node_binding.clone()),
     );
     let config = tools

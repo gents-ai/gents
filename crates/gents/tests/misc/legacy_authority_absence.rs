@@ -210,8 +210,8 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
         ),
         (
             "task runs",
-            "crate::request::lifecycle::build_signed_client_request",
-            include_str!("../../../gents-session/src/request/task_run.rs"),
+            "gents_session::request::lifecycle::build_signed_client_request",
+            include_str!("../../../gents-automation/src/triggers/task_run.rs"),
         ),
         (
             "desktop requests",

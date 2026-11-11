@@ -65,6 +65,7 @@ impl SelfConfig {
             self.db.node_identity.clone(),
             config,
             test_plugins(),
+            std::sync::Arc::new(gents_automation::triggers::task_run::TaskRuns),
         )
         .await
         .expect("runtime registers the Agent's config tool")

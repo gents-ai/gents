@@ -396,6 +396,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         Some(runtime.clone()),
         &tool_config,
         Arc::<crate::plugin::executor::PluginExecutor>::default(),
+        Arc::new(crate::task_run::NoTaskRunService),
         Some(node_binding),
     );
     let tool = tools

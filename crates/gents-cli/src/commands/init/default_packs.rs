@@ -760,6 +760,7 @@ async fn engineer_config(
         std::sync::Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(
             Some(home.to_owned()),
         )),
+        std::sync::Arc::new(gents_automation::triggers::task_run::TaskRuns),
     )
     .await?
     .into_iter()

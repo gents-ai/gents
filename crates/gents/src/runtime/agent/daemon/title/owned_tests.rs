@@ -683,6 +683,7 @@ async fn selected_review_policy_survives_configuration_edits(launch: bool) {
         Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(
             Some(home.path().to_owned()),
         )),
+        Arc::new(gents_automation::triggers::task_run::TaskRuns),
     );
     let config = tools
         .iter()
