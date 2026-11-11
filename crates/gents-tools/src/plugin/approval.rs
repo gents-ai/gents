@@ -1,6 +1,6 @@
 mod question;
 mod queue;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub mod testing;
 pub mod workspace;
 pub use question::{CommandApproval, FilesystemApproval, Request};

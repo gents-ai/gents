@@ -122,7 +122,7 @@ pub fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext> {
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub(crate) use gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session;
 pub(crate) use gents_loop::tool_call_lifecycle::runtime::{
     call_tool_managed, call_tool_managed_with_cleanup,
@@ -130,7 +130,7 @@ pub(crate) use gents_loop::tool_call_lifecycle::runtime::{
     tool_execution_bounds,
 };
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn scope_request_tool_execution<F, T>(
     deadline_at: Option<DateTime<Utc>>,
     cancellation_token: CancellationToken,
@@ -149,7 +149,7 @@ where
     .await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub(crate) async fn scope_request_tool_execution_with_workspace<F, T>(
     deadline_at: Option<DateTime<Utc>>,
     cancellation_token: CancellationToken,
