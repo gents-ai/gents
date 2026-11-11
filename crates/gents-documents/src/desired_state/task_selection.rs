@@ -20,7 +20,7 @@ fn selected_agent(node_did: &str, value: Option<&Value>) -> Result<Option<String
 
 /// The Task owner manages its target Agent userset in the same transaction as
 /// the reference. A replay must not restore a deliberately revoked relation.
-pub(super) async fn apply_task_selections(
+pub async fn apply_task_selections(
     txn: &ConfigApplyTxn<'_>,
     changes: &[Change],
 ) -> Result<()> {

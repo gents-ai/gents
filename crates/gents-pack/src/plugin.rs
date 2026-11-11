@@ -704,8 +704,6 @@ pub fn retry_backoff(attempts: u32) -> std::time::Duration {
         .min(std::time::Duration::from_secs(60))
 }
 pub mod host_bridge;
-#[cfg(test)]
-pub(crate) use host_calls::live as live_guests;
 pub mod host_imports;
 pub mod http_calls;
 pub mod install;
@@ -717,6 +715,8 @@ mod wasi_runtime;
 
 pub use afterburner_core::manifold::Manifold;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod http_test_server;
+#[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_fixtures;
 pub mod tests;

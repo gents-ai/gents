@@ -168,7 +168,7 @@ fn plugin_documents_fixture_loads_slot_authoring_and_literal_prompt_assets() {
 
 #[test]
 fn every_fixture_pack_that_ships_a_config_loads_it_cleanly() {
-    for name in crate::support::fixtures::fixture_pack_names() {
+    for name in crate::test_support::fixture_pack_names() {
         let (_guard, copy) = crate::test_support::fixture_pack_copy(&name, &json!({}));
         let root = copy;
         let manifest: PackManifest =

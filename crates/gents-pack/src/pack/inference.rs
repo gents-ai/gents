@@ -536,7 +536,7 @@ mod tests {
                     gents_documents::apply_desired_state_plan(
                         txn,
                         plan,
-                        &crate::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await
                     .map(|_| ())
@@ -587,7 +587,7 @@ mod tests {
                     gents_documents::apply_desired_state_plan(
                         txn,
                         plan,
-                        &crate::inference::resolved::ProviderProfilePolicy,
+                        &gents_inference::resolved::ProviderProfilePolicy,
                     )
                     .await
                     .map(|_| ())

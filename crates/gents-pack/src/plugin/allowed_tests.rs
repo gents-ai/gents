@@ -192,47 +192,6 @@ fn command_protection_rejects_existing_and_late_aliases() {
 }
 
 #[test]
-fn staged_permission_objects_are_rejected_by_native_paths_and_plugin_mounts() {
-    use std::io::Write;
-
-    let world = world();
-    let directory = world
-        .gents
-        .join(gents_store::local::home::PERMISSION_STAGING_DIR_NAME);
-    let context = crate::tools::native::ToolContext::new(world.root.clone(), false).unwrap();
-    write_permission_file(&world.gents, &file(&world.gents), |output| {
-        output.write_all(b"new permissions")?;
-        let staged = std::fs::read_dir(&directory)?.next().unwrap()?.path();
-        let alias = world.root.join("work/permission-alias");
-        std::fs::hard_link(&staged, &alias)?;
-        assert!(context.resolve_path(staged.to_str().unwrap()).is_err());
-        assert!(context.resolve_path(alias.to_str().unwrap()).is_err());
-        assert!(context
-            .resolve_path_allow_create(staged.to_str().unwrap())
-            .is_err());
-        assert!(context
-            .resolve_path_allow_create(alias.to_str().unwrap())
-            .is_err());
-        assert!(ensure_mount_safe(&directory).is_err());
-        assert!(ensure_mount_safe(&world.root.join("work")).is_err());
-        std::fs::remove_file(alias)?;
-        Ok(())
-    })
-    .unwrap();
-    assert_eq!(
-        std::fs::read(file(&world.gents)).unwrap(),
-        b"new permissions"
-    );
-    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
-    let ordinary = world.gents.join("plugins/source.txt");
-    std::fs::write(&ordinary, "plugin source").unwrap();
-    assert_eq!(
-        context.resolve_path(ordinary.to_str().unwrap()).unwrap(),
-        ordinary
-    );
-}
-
-#[test]
 fn failed_permission_encoding_keeps_the_prior_file_and_removes_staging() {
     use std::io::Write;
 

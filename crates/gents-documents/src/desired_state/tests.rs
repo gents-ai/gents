@@ -9,6 +9,10 @@ use super::validate::{
 };
 use super::*;
 use crate::apply_desired_state_plan;
+use crate::test_support::desired_state_fixtures::{
+    apply, apply_with_counts, backend, config, document, register_config_schemas,
+    register_config_schemas_dropping_unique_indexes, runtime_access,
+};
 use anyhow::Context;
 use defra_node::Node as EmbeddedNode;
 use gents_store::config_client::schema_introspection::SchemaField;
@@ -241,17 +245,6 @@ where
     }
 }
 
-fn backend(owner: &str, id: &str) -> Value {
-    json!({"node_did":owner,"backend_id":id,"name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1","auth":{"kind":"unauthenticated"}})
-}
-fn document(value: Value) -> DesiredStateApplyDocument {
-    DesiredStateApplyDocument {
-        collection: Collection::InferenceBackend,
-        add: value.clone(),
-        update: value,
-    }
-}
-
 /// An out-of-band row for an InferenceBackend identity. Backends are stored as
 /// `InferenceBackendMetadata` (their credential lives apart), so an injected
 /// duplicate or drift targets that physical collection.
@@ -262,115 +255,6 @@ fn backend_metadata_mutation(owner: &str, id: &str, name: &str) -> String {
         escape_graphql_string(id),
         escape_graphql_string(name),
     )
-}
-
-async fn register_config_schemas(node: &EmbeddedNode) -> Result<()> {
-    register_config_schemas_dropping_unique_indexes(node, &[]).await
-}
-
-async fn register_config_schemas_dropping_unique_indexes(
-    node: &EmbeddedNode,
-    duplicate_collections: &[Collection],
-) -> Result<()> {
-    gents_store::test_support::acp_policies::install_identity_acp_policies(node).await?;
-    for (name, schema) in gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
-        .iter()
-        .zip(gents_protocol::schemas::RUNTIME_ALL)
-        .chain(
-            gents_protocol::schemas::ALL_COLLECTION_NAMES
-                .iter()
-                .zip(gents_protocol::schemas::ALL),
-        )
-    {
-        // Runtime-only schemas (the backend observation has no Collection variant)
-        // are installed alongside the configuration collections, as in production.
-        if gents_protocol::schemas::RUNTIME_COLLECTION_NAMES.contains(name)
-            || Collection::ALL
-                .iter()
-                .any(|collection| collection.graphql_type() == *name)
-        {
-            let mut schema = (*schema).to_owned();
-            for collection in duplicate_collections {
-                if collection.graphql_type() == *name {
-                    schema = schema.replace(
-                        &format!(
-                            "@index(fields: [\"node_did\", \"{}\"], unique: true)",
-                            collection.unique_field()
-                        ),
-                        "",
-                    );
-                }
-            }
-            node.add_collection(&schema).await?;
-        }
-    }
-    Ok(())
-}
-
-/// Configuration writes are signed by the fixture node's own identity. Anonymous
-/// access cannot complete the relationship grants that Node and configuration
-/// publication queue, so it fails with `RelationshipActorRequired`.
-fn runtime_access(node: &Arc<EmbeddedNode>) -> Result<ConfigAccess> {
-    let runtime = node
-        .node_identity_did()
-        .context("fixture node has no node identity")?;
-    Ok(ConfigAccess::local_as(
-        node.clone(),
-        identity::Did::new(runtime)?,
-    ))
-}
-
-async fn apply(access: &ConfigAccess, docs: Vec<DesiredStateApplyDocument>) -> Result<()> {
-    apply_with_counts(access, docs).await.map(|_| ())
-}
-
-/// Configuration writes require the owner's Node document. Publishes it for
-/// each owner the plan writes to that has none yet.
-async fn ensure_owner_nodes(
-    access: &ConfigAccess,
-    docs: &[DesiredStateApplyDocument],
-) -> Result<()> {
-    let owners: std::collections::BTreeSet<&str> = docs
-        .iter()
-        .filter(|document| !matches!(document.collection, Collection::Node))
-        .filter_map(|document| document.add["node_did"].as_str())
-        .collect();
-    for owner in owners {
-        let response = access
-            .execute(&format!(
-                "{{ Node(filter: {{node_did: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
-                gents_store::graphql::escape_graphql_string(owner)
-            ))
-            .await?;
-        if response["data"]["Node"]
-            .as_array()
-            .is_some_and(Vec::is_empty)
-        {
-            crate::test_support::bootstrap_signed_test_node(access, owner).await;
-        }
-    }
-    Ok(())
-}
-
-async fn apply_with_counts(
-    access: &ConfigAccess,
-    docs: Vec<DesiredStateApplyDocument>,
-) -> Result<DesiredStateApplyCounts> {
-    ensure_owner_nodes(access, &docs).await?;
-    let plan = DesiredStateApplyPlan::new(docs)?;
-    access
-        .transact_write("test.desired.apply", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
-                )
-                .await
-            })
-        })
-        .await
 }
 
 #[tokio::test]
@@ -687,7 +571,7 @@ async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() ->
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &crate::test_support::AdmitAllProfiles,
                 )
                 .await
             })
@@ -736,14 +620,6 @@ async fn read_records_rejects_duplicate_live_documents_naming_them() -> Result<(
     );
     assert!(message.contains("dup"), "{message}");
     Ok(())
-}
-
-fn config(collection: Collection, value: Value) -> DesiredStateApplyDocument {
-    DesiredStateApplyDocument {
-        collection,
-        add: value.clone(),
-        update: value,
-    }
 }
 
 /// Agent DIDs are globally unique (`Agent.agent_did` is a unique index), so each
@@ -844,7 +720,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
                     validate_desired_state_plan(
                         txn,
                         plan,
-                        &crate::inference::resolved::ProviderProfilePolicy,
+                        &crate::test_support::AdmitAllProfiles,
                     )
                     .await
                 })
@@ -857,7 +733,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
                     apply_desired_state_plan(
                         txn,
                         plan,
-                        &crate::inference::resolved::ProviderProfilePolicy,
+                        &crate::test_support::AdmitAllProfiles,
                     )
                     .await
                 })
@@ -921,7 +797,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
                 validate_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &crate::test_support::AdmitAllProfiles,
                 )
                 .await
             })
@@ -940,7 +816,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
                 validate_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &crate::test_support::AdmitAllProfiles,
                 )
                 .await
             })
@@ -956,7 +832,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
                 validate_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &crate::test_support::AdmitAllProfiles,
                 )
                 .await
             })
@@ -987,7 +863,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &crate::test_support::AdmitAllProfiles,
                 )
                 .await
             })
@@ -1022,7 +898,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &crate::test_support::AdmitAllProfiles,
                 )
                 .await
             })
@@ -1193,7 +1069,7 @@ async fn drifted_expectation_refuses_and_writes_nothing() -> Result<()> {
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &crate::test_support::AdmitAllProfiles,
                 )
                 .await
             })
@@ -1227,7 +1103,7 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &crate::test_support::AdmitAllProfiles,
                 )
                 .await
             })
@@ -1243,7 +1119,7 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &crate::test_support::AdmitAllProfiles,
                 )
                 .await
             })
@@ -1263,7 +1139,7 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &crate::test_support::AdmitAllProfiles,
                 )
                 .await
             })
@@ -1350,7 +1226,7 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
                     apply_desired_state_plan(
                         txn,
                         plan,
-                        &crate::inference::resolved::ProviderProfilePolicy,
+                        &crate::test_support::AdmitAllProfiles,
                     )
                     .await
                 })
@@ -1399,7 +1275,7 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
                         apply_desired_state_plan(
                             txn,
                             plan,
-                            &crate::inference::resolved::ProviderProfilePolicy,
+                            &crate::test_support::AdmitAllProfiles,
                         )
                         .await
                     })
@@ -1477,68 +1353,6 @@ fn rule_documents(
         serde_json::from_value(task)?,
         serde_json::from_value(source)?,
     ))
-}
-
-#[tokio::test]
-async fn preview_rejects_a_context_window_above_the_advertised_maximum() -> Result<()> {
-    let node = Arc::new(gents_store::test_support::node_builder().build().await?);
-    register_config_schemas(&node).await?;
-    let access = runtime_access(&node)?;
-    let owner = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
-    let profile = |window: Value| {
-        config(
-            Collection::InferenceProfile,
-            json!({"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model","context_window":window}),
-        )
-    };
-    apply(
-        &access,
-        vec![document(backend(owner, "backend")), profile(Value::Null)],
-    )
-    .await?;
-    let typed: crate::InferenceBackend = serde_json::from_value(backend(owner, "backend"))?;
-    crate::inference::backends::registry::record_model_catalog(
-        &node,
-        &typed,
-        serde_json::from_value(json!({
-            "node_did": null,
-            "observed_at": "2026-09-25T00:00:00Z",
-            "models": [{"model_name":"model","context_window":272000,"max_context_window":872000}],
-        }))?,
-    )
-    .await?;
-
-    let rejected = preview_window(&access, &profile, 900_000)
-        .await
-        .expect_err("above the advertised maximum");
-    assert!(
-        format!("{rejected:#}").contains("exceeds model model advertised maximum 872000"),
-        "{rejected:#}"
-    );
-    preview_window(&access, &profile, 500_000).await?;
-    preview_window(&access, &profile, 872_000).await?;
-    Ok(())
-}
-
-async fn preview_window(
-    access: &ConfigAccess,
-    profile: &dyn Fn(Value) -> DesiredStateApplyDocument,
-    window: u64,
-) -> Result<()> {
-    let plan = DesiredStateApplyPlan::new(vec![profile(json!(window))])?;
-    access
-        .transact_write("test.preview.context_window", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                validate_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
-                )
-                .await
-            })
-        })
-        .await
 }
 
 fn obligation_surface(
@@ -1655,7 +1469,7 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
                 validate_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &crate::test_support::AdmitAllProfiles,
                 )
                 .await
             })
@@ -1792,7 +1606,7 @@ async fn creation_judges_the_count_field_of_the_add_payload() -> Result<()> {
                 validate_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &crate::test_support::AdmitAllProfiles,
                 )
                 .await
             })
@@ -1862,7 +1676,7 @@ async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()
                 validate_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &crate::test_support::AdmitAllProfiles,
                 )
                 .await
             })
@@ -2026,7 +1840,7 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
                 validate_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &crate::test_support::AdmitAllProfiles,
                 )
                 .await
             })
@@ -2227,7 +2041,7 @@ async fn creation_judges_the_count_field_of_the_event_source_add_payload() -> Re
                 validate_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &crate::test_support::AdmitAllProfiles,
                 )
                 .await
             })
@@ -2302,7 +2116,7 @@ async fn replacement_judges_the_count_field_of_the_event_source_update_payload()
                 validate_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &crate::test_support::AdmitAllProfiles,
                 )
                 .await
             })
@@ -2550,7 +2364,7 @@ async fn publication_applies_native_route_template_fields_the_schema_does_not_de
                 validate_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &crate::test_support::AdmitAllProfiles,
                 )
                 .await
             })
@@ -2794,7 +2608,7 @@ async fn projection_binding_publication_follows_modeled_native_ownership() -> Re
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &crate::test_support::AdmitAllProfiles,
                 )
                 .await
                 .map(|_| ())

@@ -3,9 +3,9 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
-use crate::apply_desired_state_plan;
-use crate::inference::resolved::{SelectedConfiguration, SelectedConfigurationDocument};
-use crate::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents_documents::apply_desired_state_plan;
+use crate::resolved::{SelectedConfiguration, SelectedConfigurationDocument};
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents_store::collection::Collection;
 use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
 use gents_store::identity::NodeIdentity;
@@ -28,7 +28,7 @@ async fn publish(access: &ConfigAccess, documents: Vec<(Collection, Value)>) -> 
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &gents_documents::test_support::AdmitAllProfiles,
                 )
                 .await
                 .map(|_| ())

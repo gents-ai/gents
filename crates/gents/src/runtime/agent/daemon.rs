@@ -11,6 +11,8 @@ pub(crate) const TRACING_TARGET: &str = module_path!();
 mod auxiliary_tasks;
 mod construction;
 #[cfg(test)]
+mod enrollment_claim_boundary_tests;
+#[cfg(test)]
 mod failure_reason_tests;
 mod inference;
 mod owned_work;

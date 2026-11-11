@@ -14,7 +14,11 @@ async fn seed_agent_request_for_session(
 ) {
     let request_id = escape_graphql_string(request_id);
     let node_did = "did:key:host";
-    let requester_did_field = crate::session::requester_did_create_field(requester_did);
+    let requester_did_field = requester_did
+        .map(str::trim)
+        .filter(|did| !did.is_empty())
+        .map(|did| format!(r#"requester_did: "{}","#, escape_graphql_string(did)))
+        .unwrap_or_default();
     let session_id = escape_graphql_string(session_id);
     let agent_did = escape_graphql_string(&format!("{node_did}:default"));
     let mutation = format!(

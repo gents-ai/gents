@@ -86,3 +86,15 @@ pub mod __test_internals {
     pub use crate::runtime::agent::principal_assembly::AgentBuildError;
     pub use gents_protocol::request_lifecycle::EnqueuedAgentRequest;
 }
+
+#[cfg(test)]
+mod documents_config_tests;
+
+#[cfg(test)]
+mod documents_selection_tests;
+
+#[cfg(test)]
+mod pack_export_tests;
+
+#[cfg(test)]
+mod pack_installation_root_tests;

@@ -433,8 +433,8 @@ pub async fn checkpoint_prefix(
     .await
 }
 
-#[cfg(test)]
-pub(crate) async fn acknowledge_fire(
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn acknowledge_fire(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
     consumer: &EventConsumer,

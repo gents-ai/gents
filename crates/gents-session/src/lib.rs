@@ -7,3 +7,6 @@ pub mod session;
 pub mod test_support;
 pub mod tool_call;
 pub mod workspace;
+
+#[cfg(test)]
+mod documents_task_selection_tests;

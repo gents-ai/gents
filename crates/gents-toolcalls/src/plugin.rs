@@ -9,5 +9,7 @@ mod rounds;
 mod service;
 #[cfg(test)]
 pub mod tests;
+#[cfg(test)]
+mod http_calls_executor_tests;
 pub mod tool;
 pub mod tool_calls;
