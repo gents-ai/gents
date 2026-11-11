@@ -132,7 +132,7 @@ pub enum ToolFileChangeRead {
         changes: gents_protocol::file_changes::ToolFileChanges,
         /// File documents holding the retained versions; empty for rows that
         /// still carry their images inline.
-        contents: Vec<crate::tools::native::file_contents::ContentDocument>,
+        contents: Vec<crate::file_contents::ContentDocument>,
     },
 }
 
@@ -262,14 +262,10 @@ async fn load_tool_file_change_observation_source(
         requester_did: requester_did.map(str::to_owned),
     };
     let reader = match source {
-        ReadSource::Access(access) => {
-            crate::tools::native::file_contents::ContentReader::Access(access)
-        }
-        ReadSource::Txn(txn) => {
-            crate::tools::native::file_contents::ContentReader::Transaction(txn)
-        }
+        ReadSource::Access(access) => crate::file_contents::ContentReader::Access(access),
+        ReadSource::Txn(txn) => crate::file_contents::ContentReader::Transaction(txn),
     };
-    let (changes, contents) = crate::tools::native::file_contents::decode_observation(
+    let (changes, contents) = crate::file_contents::decode_observation(
         reader,
         &scope,
         tool_call_doc_id,

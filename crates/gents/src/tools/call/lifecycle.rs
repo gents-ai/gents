@@ -32,7 +32,6 @@ pub(crate) mod delivery;
 pub(crate) use delivery::publish_background_receipt_in_txn;
 pub(crate) mod file_inventory;
 pub(crate) mod query;
-pub use crate::tools::native::file_contents::ContentDocument;
 pub use query::{
     load_tool_call_arguments, load_tool_call_file_changes, load_tool_call_presentation,
     load_tool_call_result, load_tool_file_change_observation, render_tool_result,
@@ -49,6 +48,7 @@ use gents_loop::tool_call_lifecycle::FailureClass;
 #[doc(hidden)]
 #[allow(dead_code)]
 pub mod admission_fixture;
+
 #[cfg(test)]
 mod background_conformance;
 #[cfg(test)]
@@ -59,6 +59,8 @@ mod client_control_race_tests;
 pub(crate) mod completion_owner_conformance;
 #[cfg(test)]
 mod composed_conformance;
+#[cfg(test)]
+mod file_contents_store_tests;
 #[cfg(test)]
 mod recovery_closeout_conformance;
 #[cfg(test)]
@@ -279,11 +281,11 @@ impl ToolCallLifecycle {
             if let Some(pending) = writes.downcast_ref::<delivery::PluginToolWrites>() {
                 self.plugin_writes = Some(pending.clone());
             }
-            if let Some(changes) = writes.downcast_ref::<crate::tools::native::FileChanges>() {
+            if let Some(changes) = writes.downcast_ref::<crate::file_contents::FileChanges>() {
                 self.file_capture = Some(file_inventory::FileCapture::Images(changes.clone()));
             }
             if writes
-                .downcast_ref::<crate::tools::native::VerifiedUnchanged>()
+                .downcast_ref::<crate::file_contents::VerifiedUnchanged>()
                 .is_some()
             {
                 self.file_capture = Some(file_inventory::FileCapture::Unchanged {

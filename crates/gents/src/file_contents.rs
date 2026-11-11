@@ -13,7 +13,13 @@ use crate::store::graphql::{
 };
 use gents_protocol::session::SessionScope;
 
-use super::content_hash;
+mod changes;
+pub(crate) use changes::{FileChanges, VerifiedUnchanged};
+
+pub(crate) fn content_hash(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("sha256:{:x}", Sha256::digest(bytes))
+}
 
 const VERSION: &str = "_version { cid height fieldName }";
 
@@ -283,10 +289,7 @@ pub(crate) async fn decode_observation(
         } else {
             (value, Vec::new())
         };
-    Ok((
-        crate::tools::native::FileChanges::decode(tool_call_doc_id, value)?,
-        contents,
-    ))
+    Ok((FileChanges::decode(tool_call_doc_id, value)?, contents))
 }
 
 /// Resolves a stored observation into the images readers receive, reading
@@ -481,5 +484,4 @@ fn decode_hex(text: &str) -> Result<Vec<u8>> {
 }
 
 #[cfg(test)]
-#[path = "file_contents/tests.rs"]
-mod tests;
+pub(crate) mod tests;

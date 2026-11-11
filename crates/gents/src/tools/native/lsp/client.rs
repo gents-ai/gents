@@ -325,7 +325,7 @@ impl LspClient {
         language_id: &str,
         text: &str,
     ) -> Result<(), String> {
-        let hash = crate::tools::native::file_tools::content_hash(text.as_bytes());
+        let hash = crate::file_contents::content_hash(text.as_bytes());
         if self.versions.lock().await.contains_key(uri) {
             if self.document_hashes.lock().await.get(uri) == Some(&hash) {
                 return Ok(());
@@ -386,7 +386,7 @@ impl LspClient {
                 *current
             } else {
                 drop(versions);
-                let hash = crate::tools::native::file_tools::content_hash(text.as_bytes());
+                let hash = crate::file_contents::content_hash(text.as_bytes());
                 self.open_document(uri, language_id, text, hash).await?;
                 return Ok(1);
             }
@@ -401,7 +401,7 @@ impl LspClient {
         .await?;
         self.document_hashes.lock().await.insert(
             uri.to_string(),
-            crate::tools::native::file_tools::content_hash(text.as_bytes()),
+            crate::file_contents::content_hash(text.as_bytes()),
         );
         Ok(version)
     }

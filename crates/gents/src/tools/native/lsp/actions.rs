@@ -277,7 +277,7 @@ async fn run_file_action(
             {
                 let mut rename = prepare_rename(path.clone(), dest_path).map_err(policy)?;
                 rename.expected_hash =
-                    Some(super::super::file_tools::content_hash(text.as_bytes()));
+                    Some(crate::file_contents::content_hash(text.as_bytes()));
                 prepared.push(rename);
             }
         }

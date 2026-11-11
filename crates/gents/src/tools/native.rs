@@ -18,8 +18,6 @@ pub mod command_observability;
 mod context_budget;
 pub mod edit_match;
 mod file_tools;
-pub(crate) use file_tools::change_capture::{FileChanges, VerifiedUnchanged};
-pub(crate) use file_tools::file_contents;
 mod goal;
 pub(crate) mod lsp;
 mod native_runner;

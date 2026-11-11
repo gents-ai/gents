@@ -2,7 +2,8 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use super::super::file_tools::{content_hash, file_content_hash, file_mutation_lock_for};
+use crate::file_contents::content_hash;
+use super::super::file_tools::{file_content_hash, file_mutation_lock_for};
 use gents_loop::tool_call_lifecycle::FailureClass;
 use crate::tools::native::shared::{ToolContext, ToolError};
 

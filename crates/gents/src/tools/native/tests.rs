@@ -2253,7 +2253,9 @@ async fn write_file_guards_existing_content_by_hash_or_explicit_overwrite() {
     let stale = stale.to_string();
     assert!(stale.contains("has changed since it was read"), "{stale}");
     assert!(
-        !stale.contains(&super::file_tools::content_hash(b"changed by operator\n")),
+        !stale.contains(&crate::file_contents::content_hash(
+            b"changed by operator\n"
+        )),
         "the stale refusal must not disclose the current hash: {stale}"
     );
     assert_eq!(
@@ -2262,7 +2264,8 @@ async fn write_file_guards_existing_content_by_hash_or_explicit_overwrite() {
     );
 
     let mut current = write_args("notes.txt", "two\n");
-    current.expected_content_hash = Some(super::file_tools::content_hash(b"changed by operator\n"));
+    current.expected_content_hash =
+        Some(crate::file_contents::content_hash(b"changed by operator\n"));
     let current = crate::inference::llm::tool::Tool::call(&writer, current)
         .await
         .expect("the current hash authorizes the replacement");
@@ -2278,7 +2281,7 @@ async fn write_file_guards_existing_content_by_hash_or_explicit_overwrite() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "three\n");
 
     let mut both = write_args("notes.txt", "four\n");
-    both.expected_content_hash = Some(super::file_tools::content_hash(b"three\n"));
+    both.expected_content_hash = Some(crate::file_contents::content_hash(b"three\n"));
     both.overwrite = true;
     let both = crate::inference::llm::tool::Tool::call(&writer, both)
         .await
@@ -2362,7 +2365,7 @@ async fn edit_file_stale_hash_rejects_before_matching_without_disclosing_current
     let text = err.to_string();
     assert!(text.contains("changed since"), "{text}");
     assert!(
-        !text.contains(&super::file_tools::content_hash(b"dup\ndup\n")),
+        !text.contains(&crate::file_contents::content_hash(b"dup\ndup\n")),
         "the stale refusal must not disclose the current hash: {text}"
     );
     assert!(

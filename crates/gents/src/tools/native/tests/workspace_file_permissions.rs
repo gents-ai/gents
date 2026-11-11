@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use super::*;
 use crate::inference::llm::tool::Tool;
 use crate::plugin::approval::{self, workspace, Answer, Request};
-use crate::tools::native::file_tools::{content_hash, file_mutation_lock_for};
+use crate::file_contents::content_hash;
+use crate::tools::native::file_tools::file_mutation_lock_for;
 
 struct Fixture {
     home: tempfile::TempDir,

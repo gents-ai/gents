@@ -40,6 +40,7 @@ pub use request::admission::{
     sign_agent_request_create, sign_agent_request_create_as_registered_target,
 };
 pub mod exec;
+pub mod file_contents;
 pub mod session;
 pub mod tools;
 pub mod triggers;

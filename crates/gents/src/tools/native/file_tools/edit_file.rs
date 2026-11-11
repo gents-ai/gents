@@ -10,9 +10,9 @@ use super::super::args::EditFileArgs;
 use super::super::edit_match::{self, EditOutcome, EditRequest, MatchMode, Operation};
 use super::super::shared::{ToolContext, ToolError};
 use super::{
-    content_hash, deny_workspace_file_writes, file_mutation_lock_for, merge_optional_notes,
-    render_tool_output,
+    deny_workspace_file_writes, file_mutation_lock_for, merge_optional_notes, render_tool_output,
 };
+use crate::file_contents::content_hash;
 use gents_loop::tool_call_lifecycle::FailureClass;
 
 #[derive(Clone)]
