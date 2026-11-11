@@ -60,7 +60,8 @@ const DYNAMIC_RUN_ON_APPROVAL: &[&str] = &["gents/dynamic_workflows"];
 
 /// The default packs whose approval is also the consent to their plugins
 /// calling the Engineer's own tools: approving one wires its plugins with
-/// `tool_calls: true`. Without it a script only computes and sleeps.
+/// `tool_calls: true`. Declining wires them without it; the Engineer's own
+/// Tools edits can still turn it on later.
 const TOOL_CALLS_ON_APPROVAL: &[&str] = &["gents/script"];
 
 /// What approving a pack that ships agents with host tools grants them: the
@@ -82,7 +83,7 @@ fn turns_on(pack: &str, reads_root: bool) -> Vec<&'static str> {
     }
     if TOOL_CALLS_ON_APPROVAL.contains(&pack) {
         turned_on.push(
-            "Lets a script it runs call the Engineer's own tools. Declined, a script only computes and waits.",
+            "Lets a script it runs call the Engineer's own tools. Declined, it is installed without that for now; the Engineer can still turn it on later in its own Tools.",
         );
     }
     turned_on
@@ -470,7 +471,16 @@ pub(crate) async fn approve(
         {
             Ok(Outcome::Installed(report)) => installed.push(report),
             Ok(Outcome::Unapproved { .. }) => unreachable!("an approved pack is never unapproved"),
-            Err(error) => failed.push(json!({"pack": pack, "error": format!("{error:#}")})),
+            // A pack that installed and then failed a later step is on the
+            // node with its permissions granted; approving again finishes it.
+            Err(error) => failed.push(json!({
+                "pack": pack,
+                "error": format!("{error:#}"),
+                "installed": gents::pack::read_home_install(home, pack)
+                    .ok()
+                    .flatten()
+                    .is_some(),
+            })),
         }
     }
     Ok(json!({"installed": installed, "failed": failed}))
@@ -772,7 +782,7 @@ async fn install_one(
     release(access).await;
     let (wired, skills, host_tool_roots) = attached?;
     if tool_calls && !approved {
-        eprintln!("  {pack} is wired without the Engineer's tools, which was not approved: a script only computes and waits. Approve it with: {}", approve_command(home, pack));
+        eprintln!("  {pack} is wired without the Engineer's tools for now, which was not approved; the Engineer can still turn that on in its own Tools. Approve it with: {}", approve_command(home, pack));
     }
     Ok(Outcome::Installed(json!({
         "pack": coordinate,
@@ -1192,6 +1202,8 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+        assert_eq!(half["failed"][0]["installed"], true, "{half}");
+        assert_eq!(other["failed"][0]["installed"], false, "{other}");
         let listed = status(home.path(), &names, unreachable).await.unwrap();
         assert_eq!(listed[1].state, PackState::NeedsApproval, "{listed:?}");
         assert_eq!(

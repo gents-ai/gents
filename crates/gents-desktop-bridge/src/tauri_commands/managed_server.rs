@@ -380,7 +380,7 @@ where
         .map(|approval| (approval.pack, approval.digest))
         .collect();
     let outcome = std::sync::Arc::new(tokio::sync::Mutex::new(None));
-    restart_managed_server(&app, restart, &state, || {
+    let restarted = restart_managed_server(&app, restart, &state, || {
         let (home, outcome) = (home.clone(), outcome.clone());
         async move {
             *outcome.lock().await = Some(
@@ -392,11 +392,18 @@ where
             Ok(())
         }
     })
-    .await?;
-    let report =
-        outcome.lock().await.take().ok_or_else(|| {
-            BridgeError::untyped("the node restarted without installing the packs")
-        })??;
+    .await;
+    let report = outcome.lock().await.take();
+    if let Err(mut error) = restarted {
+        // The packs were installed, or failed, before the node did not come
+        // back: the restart error carries what happened to them.
+        if let Some(Ok(report)) = &report {
+            error.message = format!("{} {}", error.message, installed_before_restart(report));
+        }
+        return Err(error);
+    }
+    let report = report
+        .ok_or_else(|| BridgeError::untyped("the node restarted without installing the packs"))??;
     let failed = serde_json::from_value(report["failed"].clone())
         .map_err(|error| BridgeError::untyped(format!("invalid pack report: {error}")))?;
     let listed: crate::types::DefaultPacksView =
@@ -405,6 +412,37 @@ where
         packs: listed.packs,
         failed,
     })
+}
+
+/// What an approval did to the packs before its node restart failed.
+fn installed_before_restart(report: &serde_json::Value) -> String {
+    let packs = |key: &str| {
+        report[key]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|pack| pack["pack"].as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let part = |packs: String, some: &str, none: &str| {
+        if packs.is_empty() {
+            none.to_owned()
+        } else {
+            format!("{some}: {packs}.")
+        }
+    };
+    format!(
+        "Before the local node failed to start again, {} {}",
+        part(
+            packs("installed"),
+            "these starter packs were installed",
+            "no starter pack was installed."
+        ),
+        part(packs("failed"), "These were not", "")
+    )
+    .trim_end()
+    .to_owned()
 }
 
 async fn restart_managed_server<R, P, WhileStopped>(

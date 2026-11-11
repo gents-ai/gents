@@ -198,3 +198,21 @@ impl FakeLaunch {
         self.start_calls.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
+
+/// A restart that fails after the starter packs were installed still says
+/// what happened to them.
+#[test]
+fn a_failed_restart_reports_the_packs_installed_before_it() {
+    let report = serde_json::json!({
+        "installed": [{"pack": "gents/web"}, {"pack": "gents/charts"}],
+        "failed": [{"pack": "gents/script", "error": "simulated", "installed": true}],
+    });
+    assert_eq!(
+        installed_before_restart(&report),
+        "Before the local node failed to start again, these starter packs were installed: gents/web, gents/charts. These were not: gents/script."
+    );
+    assert_eq!(
+        installed_before_restart(&serde_json::json!({"installed": [], "failed": []})),
+        "Before the local node failed to start again, no starter pack was installed."
+    );
+}

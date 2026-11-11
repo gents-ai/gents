@@ -245,6 +245,10 @@ pub struct DefaultPacksApprovalView {
 pub struct DefaultPackFailureView {
     pub pack: String,
     pub error: String,
+    /// The pack is installed, with its permissions granted, and a later
+    /// step failed: approving it again finishes it.
+    #[serde(default)]
+    pub installed: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]

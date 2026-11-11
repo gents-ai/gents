@@ -119,8 +119,9 @@ export function DefaultPacksReview({
                   {failure && (
                     <div role="alert" className="grid gap-1">
                       <p className="text-sm text-warning">
-                        Couldn't install {shortName(pack.pack)}. Nothing changed for it;
-                        you can try again.
+                        {failure.installed
+                          ? `${shortName(pack.pack)} is installed with its permissions granted, but setting it up for the Engineer didn't finish. Approve it again to finish.`
+                          : `Couldn't install ${shortName(pack.pack)}. Nothing changed for it; you can try again.`}
                       </p>
                       <ErrorDetail error={failure.error} />
                     </div>
