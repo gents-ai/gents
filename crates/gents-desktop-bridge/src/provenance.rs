@@ -5,9 +5,9 @@ use gents::session::origin::{group_caused, lineage, single_caused, starting_requ
 use gents::session::public_request_filter;
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::graphql_string_list_literal;
-use gents::tools::native::is_session_message_tool;
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::tool_names::is_session_message_tool;
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::session::session_scope_filter;
 use gents_protocol::session::SessionScope;

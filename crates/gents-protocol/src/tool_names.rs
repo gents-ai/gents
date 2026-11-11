@@ -52,3 +52,7 @@ pub const NATIVE_TOOL_NAMES: [&str; 8] = [
     BASH_TOOL_NAME,
     BASH_UNRESTRICTED_TOOL_NAME,
 ];
+
+pub fn is_session_message_tool(tool_name: &str) -> bool {
+    tool_name == AGENT_NEW_TOOL_NAME || tool_name == AGENT_MESSAGE_TOOL_NAME
+}

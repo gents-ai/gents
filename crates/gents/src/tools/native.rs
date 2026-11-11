@@ -1,5 +1,5 @@
 use gents_protocol::tool_names::{
-    AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME, AGENT_TOOL_NAMES, CANCEL_PROCESS_TOOL_NAME,
+    AGENT_NEW_TOOL_NAME, AGENT_TOOL_NAMES, CANCEL_PROCESS_TOOL_NAME,
     LIST_PROCESSES_TOOL_NAME, READ_PROCESS_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME,
     WAIT_PROCESS_TOOL_NAME,
 };
@@ -643,10 +643,6 @@ pub fn build_native_tools() -> Result<Vec<Box<dyn ToolDyn>>> {
         .bash_read_only()
         .build()
         .build_native_tools()
-}
-
-pub fn is_session_message_tool(tool_name: &str) -> bool {
-    tool_name == AGENT_NEW_TOOL_NAME || tool_name == AGENT_MESSAGE_TOOL_NAME
 }
 
 pub(crate) fn agent_tool_names(config: &AgentToolConfig) -> Vec<String> {
