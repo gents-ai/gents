@@ -3,8 +3,9 @@ use std::time::Duration;
 
 use gents::{
     ConfigAccess, DocumentRuntimeOptions, Gents, ProcessLifecycleObserver, ProcessLifecycleState,
-    RuntimeSnapshotObserver, ToolCeiling,
+    ToolCeiling,
 };
+use gents::triggers::snapshot_observer::RuntimeSnapshotObserver;
 use tokio::sync::watch;
 
 use crate::support::fixtures::bind_managed_agent_backend;

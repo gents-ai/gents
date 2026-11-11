@@ -1,6 +1,7 @@
 pub(crate) mod callback;
 pub(crate) mod engine;
 pub mod event_delivery;
+pub mod snapshot_observer;
 
 pub use engine::durable::{
     task_fire_key, write_task_delivery, write_task_delivery_local, TaskDeliveryAdmission,

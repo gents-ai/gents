@@ -51,7 +51,7 @@ struct CliRuntimeSnapshotObserver {
     activation_tx: watch::Sender<RuntimeActivationObservation>,
 }
 
-impl gents::RuntimeSnapshotObserver for CliRuntimeSnapshotObserver {
+impl gents::triggers::snapshot_observer::RuntimeSnapshotObserver for CliRuntimeSnapshotObserver {
     fn on_event_sources_reconciled(
         &self,
         generation: u64,

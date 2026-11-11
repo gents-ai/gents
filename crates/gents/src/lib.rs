@@ -823,7 +823,7 @@ pub use request::streaming::{DefraStreamWriter, StreamWriter, MAX_LIVE_REASONING
 pub use request::watcher::{DefraWatcher, Watcher};
 pub use runtime::agent::{
     AgentBuilder, DocumentRuntimeOptions, Gents, GentsBuilder, ProcessLifecycleObserver,
-    ProcessLifecycleState, RuntimeSnapshotObserver,
+    ProcessLifecycleState,
 };
 pub use runtime::oneshot::{
     run_openai_oneshot_admitted, run_openai_oneshot_with_tools_admitted, OneshotRunResult,
