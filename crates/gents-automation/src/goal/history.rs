@@ -147,6 +147,86 @@ pub struct GoalVersion {
     pub(crate) parent_commit_cids: Vec<String>,
 }
 
+/// The Goal fields that identify an assignment, which a revision must not
+/// write to carry its parent's projection.
+const ASSIGNMENT_IDENTITY_FIELDS: &str =
+    "goal_id node_did session_id assignment_root_request_doc_id status";
+
+/// The declared read of a session's Goal history at `request.queue.scope`:
+/// every native revision of the session's Goals, deleted ones included,
+/// projected on assignment identity.
+pub(crate) fn assignment_history_read(
+    node_did: &str,
+    session_id: &str,
+) -> gents_session::request::hooks::hook::Query {
+    gents_session::request::hooks::hook::Query::select("Goal", ASSIGNMENT_IDENTITY_FIELDS)
+        .eq("node_did", node_did)
+        .eq("session_id", session_id)
+        .revisions(GOAL_FIELDS)
+}
+
+/// The assignment versions the rows of `assignment_history_read` show. A
+/// version's snapshot holds its assignment identity only.
+pub(crate) fn assignment_versions_from_rows(
+    expected_node_did: &str,
+    expected_session_id: &str,
+    rows: &[gents_session::request::hooks::effect::Row],
+) -> Result<Vec<GoalAssignmentVersion>> {
+    let mut versions = Vec::with_capacity(rows.len());
+    for row in rows {
+        let revision = row
+            .value
+            .get("_revision")
+            .context("Goal history row carries no native revision")?;
+        let cid = revision
+            .get("cid")
+            .and_then(serde_json::Value::as_str)
+            .context("Goal history row carries no commit")?
+            .to_owned();
+        let height = revision
+            .get("height")
+            .and_then(serde_json::Value::as_i64)
+            .context("Goal history row carries no height")?;
+        let parents: Vec<String> = serde_json::from_value(
+            revision
+                .get("parents")
+                .cloned()
+                .context("Goal history row carries no parents")?,
+        )?;
+        let inherited = revision
+            .get("inherited")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let snapshot: GoalDocument = serde_json::from_value(row.value.clone())
+            .context("decoding historical Goal versions")?;
+        if !inherited {
+            anyhow::ensure!(
+                snapshot.node_did == expected_node_did,
+                "Goal commit {} belongs to a different owner",
+                cid
+            );
+            anyhow::ensure!(
+                snapshot.session_id == expected_session_id,
+                "Goal commit {} reconstructed session {}, expected {}",
+                cid,
+                snapshot.session_id,
+                expected_session_id
+            );
+            anyhow::ensure!(
+                !snapshot.goal_id.trim().is_empty()
+                    && !snapshot.node_did.trim().is_empty()
+                    && !snapshot.status.trim().is_empty(),
+                "Goal commit {} reconstructed without complete goal, agent, and status identity",
+                cid
+            );
+        }
+        versions.push(GoalAssignmentVersion::from_snapshot(
+            snapshot, cid, height, parents,
+        ));
+    }
+    Ok(versions)
+}
+
 pub async fn load_goal_versions_for_session(
     access: &impl ConfigRead,
     node_did: &str,

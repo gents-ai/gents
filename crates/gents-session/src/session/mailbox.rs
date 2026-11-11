@@ -641,10 +641,7 @@ impl MailboxCreateTool {
         self
     }
 
-    pub fn with_surface_source(
-        mut self,
-        source: gents_documents::DatastoreToolSource,
-    ) -> Self {
+    pub fn with_surface_source(mut self, source: gents_documents::DatastoreToolSource) -> Self {
         self.surface_source = Some(source);
         self
     }

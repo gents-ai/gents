@@ -293,11 +293,13 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
     );
     for (actor, expected_case) in [(a.did(), "task-selected"), (b.did(), "task-unrelated")] {
         let value = json!({"node_did":runtime.did(), "task_id":"published-task", "agent_did":a.did(), "prompt_template":"work"});
-        let plan = gents_documents::DesiredStateApplyPlan::new(vec![gents_documents::DesiredStateApplyDocument {
-            collection: Collection::Task,
-            add: value.clone(),
-            update: value,
-        }])?;
+        let plan = gents_documents::DesiredStateApplyPlan::new(vec![
+            gents_documents::DesiredStateApplyDocument {
+                collection: Collection::Task,
+                add: value.clone(),
+                update: value,
+            },
+        ])?;
         // Publish once; repeating the same plan must preserve its native edge.
         signed_access
             .transact_write("test.task_target.apply", |txn| {
@@ -357,11 +359,13 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
         user.did()
     );
     let value = json!({"node_did":runtime.did(), "task_id":"published-task", "agent_did":b.did(), "prompt_template":"work"});
-    let plan = gents_documents::DesiredStateApplyPlan::new(vec![gents_documents::DesiredStateApplyDocument {
-        collection: Collection::Task,
-        add: value.clone(),
-        update: value,
-    }])?;
+    let plan = gents_documents::DesiredStateApplyPlan::new(vec![
+        gents_documents::DesiredStateApplyDocument {
+            collection: Collection::Task,
+            add: value.clone(),
+            update: value,
+        },
+    ])?;
     signed_access
         .transact_write("test.task_target.apply_rebind", |txn| {
             let plan = &plan;

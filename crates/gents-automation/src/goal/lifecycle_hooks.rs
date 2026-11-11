@@ -14,7 +14,10 @@ use gents_session::request::hooks::claim::{ClaimVerdict, Successor};
 use gents_session::request::hooks::effect::{Effect, Manifest, OwnedCollection, Row, Write};
 use gents_session::request::hooks::hook::{Hook, Outcome, Query};
 use gents_session::request::hooks::prepared::{Decide, Verdict};
-use gents_session::request::hooks::registry::{AdmitShown, ClaimCandidate, Registry, SessionHalt};
+use gents_session::request::hooks::queue_scope::{ScopeAnswer, ScopeAnswers, ScopeFailure};
+use gents_session::request::hooks::registry::{
+    AdmitShown, ClaimCandidate, QueueScopeAsk, Registry, SessionHalt,
+};
 use gents_store::config_client::agent_session::{decode_agent_session_read, AgentSessionRowRead};
 
 pub(super) const PLUGIN: &str = "goals";
@@ -317,10 +320,101 @@ impl Decide<AgentRequestRow, AdmitShown> for ContinuationEdge {
     }
 }
 
+/// `request.queue.scope`: each asked request's Goal assignment scope (Lean
+/// `Hooks.QueueScope.goals`), from its signed reference or, for a request
+/// without one, the session's retained assignments. The Goal history is
+/// declared only when some asked request needs it, so a queue site whose
+/// requests all carry signed references reads no Goal row.
+struct AssignmentScope {
+    manifest: Manifest,
+}
+
+impl AssignmentScope {
+    fn assignments(
+        event: &QueueScopeAsk,
+        goals: Vec<GoalDocument>,
+    ) -> request_assignment::RequestAssignments {
+        request_assignment::RequestAssignments::over(Arc::clone(&event.requests), goals)
+    }
+
+    fn retained(event: &QueueScopeAsk, rows: &[Vec<Row>]) -> Result<Vec<GoalDocument>> {
+        match rows {
+            [] => Ok(Vec::new()),
+            [history] => request_assignment::latest_assignment_goals(
+                &history::assignment_versions_from_rows(
+                    &event.node_did,
+                    &event.session_id,
+                    history,
+                )?,
+            ),
+            _ => bail!("Goal queue scope was not shown its declared rows"),
+        }
+    }
+
+    fn answers(event: &QueueScopeAsk, rows: &[Vec<Row>]) -> ScopeAnswers {
+        let (assignments, unavailable) = match Self::retained(event, rows) {
+            Ok(goals) => (Self::assignments(event, goals), None),
+            Err(error) => (
+                Self::assignments(event, Vec::new()),
+                Some(ScopeFailure::of(&error)),
+            ),
+        };
+        let mut answers = ScopeAnswers::default();
+        for doc in &event.asked {
+            let scope =
+                assignments.request(doc).and_then(|_| {
+                    match request_assignment::signed_scope(&assignments, doc) {
+                        Ok(Some(scope)) => Ok(Ok(scope)),
+                        _ => match &unavailable {
+                            Some(failure) => Ok(Err(failure.clone())),
+                            None => assignments.scope(doc).map(Ok),
+                        },
+                    }
+                });
+            let answer = match scope {
+                Ok(Ok(scope)) => ScopeAnswer::Keyed(scope),
+                Ok(Err(failure)) => ScopeAnswer::Failed(failure),
+                Err(error) => ScopeAnswer::Failed(ScopeFailure::of(&error)),
+            };
+            answers.insert(doc.clone(), answer);
+        }
+        answers
+    }
+}
+
+impl Hook<QueueScopeAsk> for AssignmentScope {
+    type Value = ScopeAnswers;
+
+    fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+
+    fn reads(&self, event: &QueueScopeAsk) -> Vec<Query> {
+        if request_assignment::scopes_need_history(
+            &Self::assignments(event, Vec::new()),
+            &event.asked,
+        ) {
+            vec![history::assignment_history_read(
+                &event.node_did,
+                &event.session_id,
+            )]
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn decide(&self, event: &QueueScopeAsk, rows: &[Vec<Row>]) -> Outcome<ScopeAnswers> {
+        Outcome::proceed(Self::answers(event, rows))
+    }
+}
+
 pub fn register(registry: &mut Registry) {
     registry
         .request_admit_verify
         .push(Arc::new(ContinuationEdge));
+    registry.queue_scope.push(Arc::new(AssignmentScope {
+        manifest: manifest(),
+    }));
     registry.claim_gate.push(Arc::new(ClaimFence {
         manifest: manifest(),
     }));

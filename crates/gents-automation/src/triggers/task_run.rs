@@ -189,7 +189,8 @@ pub async fn enqueue_task_run(
     )
     .await?;
     let requester_did =
-        gents_session::session::client_requester_scope(access, node_did, &session_id, &actor_did).await?;
+        gents_session::session::client_requester_scope(access, node_did, &session_id, &actor_did)
+            .await?;
     let admission =
         gents_protocol::request_admission::AgentRequestAdmissionRecord::client(&actor_did);
     let create = gents_session::request::lifecycle::build_signed_client_request(
@@ -210,7 +211,8 @@ pub async fn enqueue_task_run(
                     agent_did: agent_did.clone(),
                     session_id: session_id.clone(),
                     content: content.clone(),
-                    execution_origin: gents_session::request::lifecycle::ExecutionOrigin::Interactive,
+                    execution_origin:
+                        gents_session::request::lifecycle::ExecutionOrigin::Interactive,
                     created_at: now.clone(),
                 },
                 admission,

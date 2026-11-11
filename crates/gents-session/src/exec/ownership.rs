@@ -159,10 +159,7 @@ impl ProcessStopOutcome {
         }
     }
 
-    pub const fn from_observations(
-        before: ProcessObservation,
-        after: ProcessObservation,
-    ) -> Self {
+    pub const fn from_observations(before: ProcessObservation, after: ProcessObservation) -> Self {
         match (before, after) {
             (ProcessObservation::Running, ProcessObservation::Exited) => Self::Stopped,
             (ProcessObservation::Running, _) => Self::StillRunning,
@@ -370,10 +367,7 @@ impl ProcessRecorder {
         }
     }
 
-    pub fn with_failure_decision(
-        mut self,
-        report: impl Fn() + Send + Sync + 'static,
-    ) -> Self {
+    pub fn with_failure_decision(mut self, report: impl Fn() + Send + Sync + 'static) -> Self {
         self.failure_decided = Some(Arc::new(report));
         self
     }

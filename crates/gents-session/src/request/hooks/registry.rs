@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use super::claim::ClaimVerdict;
 use super::prepared::Decider;
+use super::queue_scope::{ScopeAnswers, SessionRequests};
 use super::stage::Plugin;
 use gents_store::config_client::ConfigApplyTxn;
 
@@ -38,6 +39,18 @@ pub struct AdmitShown {
     pub parent: AgentRequestRow,
 }
 
+/// `request.queue.scope`: core asks for the queue partition of the requests
+/// `asked` names before it compares them. `requests` are the session's request
+/// rows core read in this transaction; a plugin may decide from them which
+/// further rows it needs.
+#[derive(Debug, Clone)]
+pub struct QueueScopeAsk {
+    pub node_did: String,
+    pub session_id: String,
+    pub requests: Arc<SessionRequests>,
+    pub asked: Vec<String>,
+}
+
 /// `control.session.halt`: an interrupt or stop latch is written in this
 /// transaction. The latch always commits.
 #[derive(Debug, Clone)]
@@ -65,6 +78,7 @@ pub trait CoreOperation: Send + Sync {
 pub struct Registry {
     pub request_admit_verify: Vec<Decider<AgentRequestRow, AdmitShown, ()>>,
     pub claim_gate: Vec<Plugin<ClaimCandidate, ClaimVerdict>>,
+    pub queue_scope: Vec<Plugin<QueueScopeAsk, ScopeAnswers>>,
     pub request_terminal: Vec<Plugin<RequestTerminal, ()>>,
     pub session_halt: Vec<Plugin<SessionHalt, ()>>,
     pub operations: Vec<Arc<dyn CoreOperation>>,

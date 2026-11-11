@@ -41,7 +41,8 @@ async fn event_admitted(
     access
         .transact_readonly("test.event_grants.admission", |txn| {
             Box::pin(async move {
-                gents_documents::event_consumer::validate_event_admission(txn, fire, generation).await
+                gents_documents::event_consumer::validate_event_admission(txn, fire, generation)
+                    .await
             })
         })
         .await

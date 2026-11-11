@@ -102,17 +102,15 @@ async fn persisted_disable_blocks_stale_admission_and_exclusion_but_not_committe
         event_source_generation: Some(generation),
     };
     publish(access, vec![trigger(false)]).await?;
-    assert!(
-        write_trigger_delivery_with_identity(
-            node,
-            identity::Did::new(agent_did)?,
-            &prepared,
-            &create,
-            Some(fixture.agent_identity.as_ref())
-        )
-        .await
-        .is_err()
-    );
+    assert!(write_trigger_delivery_with_identity(
+        node,
+        identity::Did::new(agent_did)?,
+        &prepared,
+        &create,
+        Some(fixture.agent_identity.as_ref())
+    )
+    .await
+    .is_err());
     assert!(agent
         .transact_write("test.cursor.exclude_disabled", |txn| Box::pin(async move {
             exclude_arrival(txn, PIN_FIXED_DID, &trigger_consumer(), "WorkA", "1").await

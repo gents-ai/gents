@@ -541,23 +541,36 @@ async fn background_completion_transaction_attempt(
     let pending_rows: Vec<AgentRequestRow> =
         serde_json::from_value(response["data"]["pending"].clone())
             .context("decode pending AgentRequest rows")?;
-    let mut assignments =
-        crate::goal::load_request_assignment_scopes(txn, &parent.node_did, &parent.session_id)
-            .await?;
-    let parent_scope = assignments
-        .scope_for_request(&parent.doc_id, &parent.request_id)
-        .await?;
+    let asked = std::iter::once(parent.doc_id.clone())
+        .chain(
+            pending_rows
+                .iter()
+                .filter(|row| {
+                    row_matches_coalesced_source_and_key(
+                        row,
+                        QueueSource::BackgroundCompletion,
+                        queue_key,
+                    )
+                })
+                .filter_map(|row| row.doc_id.clone()),
+        )
+        .collect();
+    let assignments = crate::request::hooks::points::queue_scope(
+        txn,
+        &parent.node_did,
+        &parent.session_id,
+        asked,
+    )
+    .await?;
+    let parent_scope = assignments.scope_for_request(&parent.doc_id, &parent.request_id)?;
     let mut matching = None;
     for row in pending_rows {
         if row_matches_coalesced_source_and_key(&row, QueueSource::BackgroundCompletion, queue_key)
-            && assignments
-                .scope(
-                    row.doc_id
-                        .as_deref()
-                        .context("pending wake has no physical identity")?,
-                )
-                .await?
-                == parent_scope
+            && assignments.scope(
+                row.doc_id
+                    .as_deref()
+                    .context("pending wake has no physical identity")?,
+            )? == parent_scope
         {
             matching = Some(row);
             break;
@@ -612,13 +625,7 @@ async fn background_completion_transaction_attempt(
                 None,
                 &parent.doc_id,
             );
-            wake_input.goal_assignment = match &parent_scope {
-                gents_protocol::goal::RequestAssignmentScope::Referenced(reference) => {
-                    Some(reference.clone())
-                }
-                gents_protocol::goal::RequestAssignmentScope::Unassigned
-                | gents_protocol::goal::RequestAssignmentScope::Unresolved { .. } => None,
-            };
+            wake_input.goal_assignment = parent_scope.referenced().cloned();
             let request_mutation =
                 super::mutation::session_request_create_mutation_at_hop_with_signer(
                     parent,

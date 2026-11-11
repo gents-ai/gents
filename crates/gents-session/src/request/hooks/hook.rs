@@ -5,6 +5,14 @@ use super::effect::{Effect, Manifest, Row};
 /// A declared read: rows of one collection selected by equality on its
 /// fields. A plugin declares its reads from the event alone and gets one
 /// round; it cannot issue a read that depends on a row it was shown.
+///
+/// With `revisions`, the read is of every native revision of the matching
+/// documents, deleted ones included: one row per composite commit, carrying
+/// `fields` at that commit and the commit's `_revision` (`cid`, `height`,
+/// `parents`, `inherited`). `revisions` names the fields a commit may link;
+/// a commit with one parent that links only those, none of them in
+/// `fields`, carries its parent's values without a reconstruction read
+/// (`inherited`). A revision row is history: it is never a write target.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Query {
     pub collection: String,
@@ -12,6 +20,7 @@ pub struct Query {
     pub filter: Vec<(String, Value)>,
     pub order: Vec<(String, Direction)>,
     pub limit: Option<u64>,
+    pub revisions: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +37,7 @@ impl Query {
             filter: Vec::new(),
             order: Vec::new(),
             limit: None,
+            revisions: None,
         }
     }
 
@@ -43,6 +53,11 @@ impl Query {
 
     pub fn limit(mut self, limit: u64) -> Self {
         self.limit = Some(limit);
+        self
+    }
+
+    pub fn revisions(mut self, links: impl Into<String>) -> Self {
+        self.revisions = Some(links.into());
         self
     }
 }

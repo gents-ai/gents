@@ -273,13 +273,6 @@ where
                     return Ok(None);
                 }
                 let snapshot = if capture_background_snapshot {
-                    let mut assignments = crate::goal::load_request_assignment_scopes(
-                        txn,
-                        &request.node_did,
-                        session_id,
-                    )
-                    .await?;
-                    let assignment = assignments.scope(&request.doc_id).await?;
                     let response = txn.execute_local_response(snapshot_query).await?;
                     let through_sequence = response
                         .data
@@ -290,6 +283,26 @@ where
                         .and_then(|row| row.get("sequence"))
                         .and_then(serde_json::Value::as_u64)
                         .and_then(|sequence| u32::try_from(sequence).ok());
+                    let notifications = || response.data.as_ref()
+                        .and_then(|data| data.get("notifications"))
+                        .and_then(serde_json::Value::as_array)
+                        .into_iter().flatten()
+                        .filter(|row| row.get("sequence").and_then(serde_json::Value::as_u64)
+                            .zip(through_sequence.map(u64::from))
+                            .is_some_and(|(sequence, cutoff)| sequence <= cutoff));
+                    let asked = std::iter::once(request.doc_id.clone())
+                        .chain(notifications().filter_map(|row| {
+                            row.get("request_doc_id").and_then(serde_json::Value::as_str).map(str::to_owned)
+                        }))
+                        .collect();
+                    let assignments = crate::request::hooks::points::queue_scope(
+                        txn,
+                        &request.node_did,
+                        session_id,
+                        asked,
+                    )
+                    .await?;
+                    let assignment = assignments.scope(&request.doc_id)?;
                     let current = assignments.request(&request.doc_id)?;
                     let (retained_keys, retained_cutoff) = if let Some(parent_doc) = current.retry_parent_request_doc_id.as_deref() {
                         let parent = assignments.request(parent_doc)?;
@@ -318,15 +331,7 @@ where
                         (retained, cutoff)
                     } else { (Vec::new(), None) };
                     let mut notification_keys = Vec::new();
-                    for row in response.data.as_ref()
-                        .and_then(|data| data.get("notifications"))
-                        .and_then(serde_json::Value::as_array)
-                        .into_iter().flatten()
-                    {
-                        if !row.get("sequence").and_then(serde_json::Value::as_u64)
-                            .zip(through_sequence.map(u64::from))
-                            .is_some_and(|(sequence, cutoff)| sequence <= cutoff)
-                        { continue; }
+                    for row in notifications() {
                         let source = row.get("request_doc_id").and_then(serde_json::Value::as_str)
                             .context("background notification has no physical request binding")?;
                         let key = row.get("message_key").and_then(serde_json::Value::as_str)
@@ -334,7 +339,7 @@ where
                         let retained = retained_keys.iter().any(|prior| prior == key)
                             && row.get("sequence").and_then(serde_json::Value::as_u64)
                                 .zip(retained_cutoff).is_some_and(|(sequence,cutoff)| sequence <= cutoff);
-                        if assignments.scope(source).await? == assignment || retained {
+                        if assignments.scope(source)? == assignment || retained {
                             notification_keys.push(key.to_string());
                         }
                     }

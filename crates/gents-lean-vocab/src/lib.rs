@@ -628,6 +628,7 @@ pub struct LeanContractSnapshot {
     pub lifecycle_hook_must_commit_cases: Vec<LeanLifecycleHookMustCommitCase>,
     pub lifecycle_hook_combine_cases: Vec<LeanLifecycleHookCombineCase>,
     pub lifecycle_hook_gate_cases: Vec<LeanLifecycleHookGateCase>,
+    pub lifecycle_hook_queue_scope_cases: Vec<LeanLifecycleHookQueueScopeCase>,
     pub lifecycle_hook_delivery_cases: Vec<LeanLifecycleHookDeliveryCase>,
     pub lifecycle_hook_admit_cases: Vec<LeanLifecycleHookAdmitCase>,
     pub follow_up_hooks: Vec<String>,
@@ -3001,6 +3002,10 @@ pub fn lean_lifecycle_hook_combine_cases() -> &'static [LeanLifecycleHookCombine
 
 pub fn lean_lifecycle_hook_gate_cases() -> &'static [LeanLifecycleHookGateCase] {
     &lean_contract_snapshot().lifecycle_hook_gate_cases
+}
+
+pub fn lean_lifecycle_hook_queue_scope_cases() -> &'static [LeanLifecycleHookQueueScopeCase] {
+    &lean_contract_snapshot().lifecycle_hook_queue_scope_cases
 }
 
 pub fn lean_lifecycle_hook_delivery_cases() -> &'static [LeanLifecycleHookDeliveryCase] {
