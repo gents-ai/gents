@@ -387,6 +387,7 @@ async fn run_inner(
         let overrides = crate::commands::pack::parse_dependency_variables(
             &received.request.dependency_variables,
         )?;
+        let provided = crate::commands::pack::parse_agent_bindings(&received.request.bind_agents)?;
         let mut prepared = gents::pack::prepare_document_pack_archive(
             &access,
             &state.node_did,
@@ -399,7 +400,7 @@ async fn run_inner(
                 .collect::<Vec<_>>(),
             gents::pack::InstalledVia::Operator,
             Some(&home),
-            &|name| std::env::var(name).ok(),
+            &gents::pack::install_variables(&provided),
             &overrides,
         )
         .await?;

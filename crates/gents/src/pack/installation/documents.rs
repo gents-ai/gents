@@ -1032,11 +1032,12 @@ async fn load_dependency(
     let installer = bindings
         .provisioner
         .and_then(|context| context.selected_agent_did);
+    let environment = super::super::agent_bindings::without_agent_bindings(environment);
     let resolver = super::super::loader::DependencyVariableResolver::new(
         record.doc_id.is_some(),
         &record.variables,
         selected,
-        environment,
+        &environment,
     );
     let bound = super::super::agent_bindings::load_pack_install_config_with_dependencies(
         access,

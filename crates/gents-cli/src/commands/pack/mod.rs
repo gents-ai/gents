@@ -25,7 +25,8 @@ use crate::cli::*;
 use anyhow::{Context, Result};
 pub(crate) use install::{
     check_expected_digest, install, install_documents_pack, install_documents_pack_resolved,
-    parse_dependency_variables, wire_pack_plugins, wire_pack_plugins_consenting,
+    parse_agent_bindings, parse_dependency_variables, wire_pack_plugins,
+    wire_pack_plugins_consenting,
 };
 pub(crate) use scope::{
     plugin_notification_scope, record_plugin_retirement, resolve_home_owner_under_plugin_store,

@@ -26,6 +26,7 @@ async fn install(home: &Path, package: String) -> anyhow::Result<Value> {
         package,
         inference_slots: Vec::new(),
         dependency_variables: Vec::new(),
+        bind_agents: Vec::new(),
         preview: false,
         scope: scope(home),
         output: OutputFormat::Json,

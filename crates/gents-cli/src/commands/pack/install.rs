@@ -55,6 +55,41 @@ pub(crate) fn parse_dependency_variables(
     Ok(result)
 }
 
+/// `--bind-agent SLOT=AGENT_DID` as the install variables that bind those
+/// slots: the only source an agent binding is read from
+/// ([`gents::pack::install_variables`]).
+pub(crate) fn parse_agent_bindings(
+    values: &[String],
+) -> Result<std::collections::BTreeMap<String, String>> {
+    let mut provided = std::collections::BTreeMap::new();
+    for item in values {
+        let (slot, agent) = item
+            .split_once('=')
+            .filter(|(slot, agent)| !slot.trim().is_empty() && !agent.trim().is_empty())
+            .with_context(|| format!("--bind-agent {item:?} must be SLOT=AGENT_DID"))?;
+        anyhow::ensure!(
+            provided
+                .insert(
+                    gents::pack::agent_binding_variable(slot.trim()),
+                    agent.trim().to_owned()
+                )
+                .is_none(),
+            "--bind-agent names slot {slot:?} more than once"
+        );
+    }
+    Ok(provided)
+}
+
+/// What a preview lists for `--bind-agent`: each slot the installer binds
+/// and the agent it takes.
+fn agent_binding_preview(values: &[String]) -> Vec<serde_json::Value> {
+    values
+        .iter()
+        .filter_map(|item| item.split_once('='))
+        .map(|(slot, agent)| json!({"slot": slot.trim(), "agent_did": agent.trim(), "source": "provided"}))
+        .collect()
+}
+
 pub(super) fn reused_variable_preview(
     pack: &PackSource,
     config: &gents::documents::PackConfig,
@@ -364,6 +399,9 @@ async fn install_documents_pack_resolved_inner(
             "inference_needs": needs,
             "would_write": false,
         });
+        if !args.bind_agents.is_empty() {
+            preview["bind_agents"] = agent_binding_preview(&args.bind_agents).into();
+        }
         let dependency_manifests: Vec<_> = dependencies.iter().map(PackSource::manifest).collect();
         merge(
             &mut preview,
@@ -372,6 +410,8 @@ async fn install_documents_pack_resolved_inner(
         Ok::<_, anyhow::Error>(preview)
     };
     let overrides = parse_dependency_variables(&args.dependency_variables)?;
+    let provided = parse_agent_bindings(&args.bind_agents)?;
+    let environment = gents::pack::install_variables(&provided);
     let dependency_archives = dependencies
         .iter()
         .map(PackSource::archive)
@@ -384,7 +424,7 @@ async fn install_documents_pack_resolved_inner(
             &requested,
             &dependency_archives,
             Some(home.as_path()),
-            &|name| std::env::var(name).ok(),
+            &environment,
             local.runtime.as_ref(),
             &overrides,
         )
@@ -398,7 +438,7 @@ async fn install_documents_pack_resolved_inner(
             &dependency_archives,
             gents::pack::InstalledVia::Operator,
             args.scope.graphql.is_none().then_some(home.as_path()),
-            &|name| std::env::var(name).ok(),
+            &environment,
             &overrides,
         )
         .await
@@ -426,7 +466,7 @@ async fn install_documents_pack_resolved_inner(
                     node_did: owner.to_owned(),
                 },
                 &|path| Ok(pack.asset(path)?.to_vec()),
-                &|name| std::env::var(name).ok(),
+                &environment,
             )?;
             let variables = vec![install_variable_preview(pack, owner)?];
             let mut preview = review(

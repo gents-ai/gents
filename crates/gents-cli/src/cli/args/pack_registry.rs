@@ -298,6 +298,9 @@ pub(crate) struct PackInstallArgs {
     #[arg(long = "dependency-variable", value_name = "NAMESPACE/PACK:NAME=VALUE", action = clap::ArgAction::Append,
         help = "Explicitly set an install variable for a dependency; repeat for each variable")]
     pub(crate) dependency_variables: Vec<String>,
+    #[arg(long = "bind-agent", value_name = "SLOT=AGENT_DID", action = clap::ArgAction::Append,
+        help = "Bind one of the pack's agent slots to an existing agent of this node instead of making a new one; repeat for each slot")]
+    pub(crate) bind_agents: Vec<String>,
     #[arg(
         long,
         default_value_t = false,

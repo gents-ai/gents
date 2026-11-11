@@ -425,9 +425,44 @@ pub(super) async fn load_pack_install_config_with_dependencies(
     })
 }
 
+const AGENT_BINDING_VARIABLE_PREFIX: &str = "GENTS_PACK_BIND_AGENT_";
+
+/// The variables of one install as its installer gave them: `provided` (the
+/// CLI's flags, the config tool's `options.var`) first, then the process
+/// environment. An agent binding ([`agent_binding_variable`]) is read from
+/// `provided` alone: it hands one of the node's agents to the pack being
+/// installed, so a variable left set in a shell or a service's environment
+/// must not bind a later pack's same-named slot.
+pub fn install_variables(
+    provided: &BTreeMap<String, String>,
+) -> impl Fn(&str) -> Option<String> + Sync + '_ {
+    |name| match provided.get(name) {
+        Some(value) => Some(value.clone()),
+        None if name.starts_with(AGENT_BINDING_VARIABLE_PREFIX) => None,
+        None => std::env::var(name).ok(),
+    }
+}
+
+/// `environment` without agent bindings: what a dependency resolves its
+/// variables from. A binding names a slot of the pack being installed, so a
+/// dependency's same-named slot never inherits it; only a variable given for
+/// that dependency binds one of its slots.
+pub(super) fn without_agent_bindings<'a>(
+    environment: &'a (dyn Fn(&str) -> Option<String> + Sync),
+) -> impl Fn(&str) -> Option<String> + Sync + 'a {
+    move |name| {
+        if name.starts_with(AGENT_BINDING_VARIABLE_PREFIX) {
+            None
+        } else {
+            environment(name)
+        }
+    }
+}
+
 /// The install variable that binds the agent slot `slot` to an existing Agent
 /// of the node, by DID: the slot upper-cased, every other character an
-/// underscore, so it is a name `--var` and a shell environment both carry.
+/// underscore. It is an explicit argument of one install
+/// ([`install_variables`]), never the ambient environment.
 pub fn agent_binding_variable(slot: &str) -> String {
     let slot: String = slot
         .chars()
@@ -439,7 +474,7 @@ pub fn agent_binding_variable(slot: &str) -> String {
             }
         })
         .collect();
-    format!("GENTS_PACK_BIND_AGENT_{slot}")
+    format!("{AGENT_BINDING_VARIABLE_PREFIX}{slot}")
 }
 
 /// The existing Agent the installer bound `slot` to with

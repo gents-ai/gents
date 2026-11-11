@@ -347,6 +347,7 @@ fn document_install_args(
         package: spec.to_str().unwrap().to_owned(),
         inference_slots,
         dependency_variables: Vec::new(),
+        bind_agents: Vec::new(),
         preview: false,
         scope: ScopeArgs {
             home: Some(home.to_path_buf()),
@@ -1049,4 +1050,32 @@ async fn a_new_dependencys_agents_take_the_installers_root_and_its_grant() {
     assert_eq!(roots.len(), 1, "{report}");
     assert_eq!(roots[0]["root"], engineer_root, "{report}");
     assert!(roots[0]["reader_on"].is_string(), "{report}");
+}
+
+/// An agent binding is an argument of the install it is given to, and its
+/// preview lists it.
+#[tokio::test]
+async fn a_preview_lists_the_agent_bindings_its_install_was_given() {
+    let (home, initialized) = engineer_home().await;
+    let engineer = initialized["default_agent_did"].as_str().unwrap();
+    let pack = host_tools_pack_dir("bound", json!({"files": {"mode": "ReadOnly"}}));
+    let mut args = document_install_args(home.path(), pack.path(), Vec::new());
+    args.preview = true;
+    args.bind_agents = vec![format!("bound-worker={engineer}")];
+    let preview = crate::request_helpers::capture_report(install(args))
+        .await
+        .unwrap();
+    assert_eq!(
+        preview["bind_agents"],
+        json!([{"slot": "bound-worker", "agent_did": engineer, "source": "provided"}]),
+        "{preview}"
+    );
+    assert_eq!(
+        super::parse_agent_bindings(&["bound-worker=did:key:given".into()]).unwrap(),
+        std::collections::BTreeMap::from([(
+            "GENTS_PACK_BIND_AGENT_BOUND_WORKER".to_owned(),
+            "did:key:given".to_owned()
+        )])
+    );
+    assert!(super::parse_agent_bindings(&["bound-worker".into()]).is_err());
 }

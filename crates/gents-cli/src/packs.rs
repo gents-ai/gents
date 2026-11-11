@@ -96,6 +96,7 @@ pub async fn install(
         package,
         inference_slots,
         dependency_variables: Vec::new(),
+        bind_agents: Vec::new(),
         preview,
         scope: scope(home),
         output: OutputFormat::Json,

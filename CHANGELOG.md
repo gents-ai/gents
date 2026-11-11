@@ -54,10 +54,13 @@ source consistency checks, not a separate runtime compatibility version.
   and the call that unwires it (`pack wire PACKAGE --remove`).
 - Breaking: a pack's agent slot no longer binds to an existing agent because
   their names match. It binds only when the installer names the agent's DID in
-  the install variable `GENTS_PACK_BIND_AGENT_<SLOT>` (`options.var` in the
-  config tool, the environment for `gents config pack install`); otherwise
-  the pack provisions its own agent. `pack export` returns the variables that
-  bind each slot to the agent it was exported from (`bind_agents`).
+  that install's own arguments: `--bind-agent SLOT=AGENT_DID` on
+  `gents config pack install`, or the install variable
+  `GENTS_PACK_BIND_AGENT_<SLOT>` in the config tool's `options.var`. The
+  process environment never binds a slot, and a dependency's same-named slot
+  does not inherit the binding; otherwise the pack provisions its own agent.
+  `pack export` returns both forms for the agents it was exported from
+  (`bind_agents`), and the install preview lists the bindings.
 - A Trigger can open one session per rendered key (`create_session`), and has
   a fire budget, `max_fires_per_hour` (default 1000): exhausting it disables
   the Trigger and records why in `last_status` and `last_error`.
