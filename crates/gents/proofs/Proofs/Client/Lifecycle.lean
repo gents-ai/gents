@@ -1,4 +1,5 @@
 import Proofs.Client.Types
+import Proofs.Request.Transition
 
 theorem deriveAttempt_total (view : AttemptView) :
     ∃ s : ClientTurnState, deriveAttempt view = s :=

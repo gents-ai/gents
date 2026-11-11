@@ -1,4 +1,6 @@
 import Proofs.CrossMachineComposed.State
+import Proofs.ToolExecution.Properties
+import Mathlib.Data.Nat.Basic
 
 namespace ComposedState
 

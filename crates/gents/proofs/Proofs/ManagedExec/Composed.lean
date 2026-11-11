@@ -1,5 +1,5 @@
-import Proofs.Request
-import Proofs.ToolExecution
+import Proofs.Request.State
+import Proofs.ToolExecution.State
 import Proofs.ManagedExec.Properties
 
 namespace ManagedExec

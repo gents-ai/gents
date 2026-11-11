@@ -1,8 +1,8 @@
-import Proofs.Request
+import Proofs.Request.State
 import Proofs.Process
 import Proofs.Persistence
 import Proofs.StorageObservation
-import Proofs.InferenceCall
+import Proofs.InferenceCall.State
 import Proofs.Scheduling
 import Mathlib.Data.Fintype.Card
 

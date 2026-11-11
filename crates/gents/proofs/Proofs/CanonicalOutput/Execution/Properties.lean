@@ -1,4 +1,5 @@
 import Proofs.CanonicalOutput.Execution.Transition
+import Proofs.RequestExecutionLease.Properties
 
 namespace CanonicalOutput.Execution
 

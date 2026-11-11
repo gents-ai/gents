@@ -1,7 +1,7 @@
 import Proofs.CanonicalOutput.Message
 import Proofs.Request.State
-import Proofs.RequestExecutionLease
-import Proofs.Transcript
+import Proofs.RequestExecutionLease.State
+import Proofs.Transcript.State
 import Proofs.ToolExecution.Executable
 import Proofs.Session.State
 import Proofs.StorageWriteGate

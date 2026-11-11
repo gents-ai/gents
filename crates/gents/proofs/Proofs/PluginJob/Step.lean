@@ -1,6 +1,7 @@
 import Batteries.Tactic.OpenPrivate
 import Proofs.PluginJob.Adoption
 import Proofs.ToolPolicy.PluginCalls
+import Mathlib.Algebra.BigOperators.Group.List.Basic
 
 open private admitStep_pinned liveCount_addSpawns from Proofs.PluginJob.Admission
 

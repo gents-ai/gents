@@ -1,8 +1,8 @@
 import Proofs.Process
-import Proofs.Request
-import Proofs.InferenceCall
+import Proofs.Request.Transition
+import Proofs.InferenceCall.Transition
 import Proofs.Persistence
-import Proofs.ToolExecution
+import Proofs.ToolExecution.Transition
 import Proofs.ManagedExec.Composed
 
 structure ComposedState where

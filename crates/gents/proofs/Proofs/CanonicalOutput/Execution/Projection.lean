@@ -1,6 +1,7 @@
 import Proofs.CanonicalOutput.Execution.State
 import Proofs.CanonicalOutput.ToolDelivery
 import Proofs.ToolPolicy.PluginCalls
+import Proofs.RequestExecutionLease.Transition
 
 namespace CanonicalOutput.Execution
 
