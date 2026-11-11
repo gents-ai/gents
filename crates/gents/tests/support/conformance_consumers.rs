@@ -1309,10 +1309,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_artifact_mode_meet_cases_drive_command_effect_intersection",
         },
         ConformanceConsumer::RustTest {
-            id: "workspace::overlay::overlay_tests::generated_artifact_admission_cases_drive_live_binding_and_launch_policy",
+            id: "tools::native::tests::workspace_artifact_admission::generated_artifact_admission_cases_drive_live_binding_and_launch_policy",
             package: "gents",
-            source_path: "crates/gents/src/workspace/overlay_tests.rs",
-            module_path: "workspace::overlay::overlay_tests",
+            source_path: "crates/gents/src/tools/native/tests/workspace_artifact_admission.rs",
+            module_path: "tools::native::tests::workspace_artifact_admission",
             function: "generated_artifact_admission_cases_drive_live_binding_and_launch_policy",
         },
         ConformanceConsumer::RustTest {

@@ -76,6 +76,15 @@ pub(crate) use overlay::{
 };
 
 #[cfg(test)]
+pub(crate) use binding::{admit_workspace_binding, new_binding, AdmitBinding};
+#[cfg(test)]
+pub(crate) use documents::workspace_integrate_docs_mutation;
+#[cfg(test)]
+pub(crate) use tests::{
+    bind_integrate, git, git_worktree_caps, integrate_writer, seal_writer, Fixture,
+};
+
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]

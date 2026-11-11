@@ -12,6 +12,9 @@ use crate::store::test_support::EnvVarGuard;
 mod workspace_file_permissions;
 #[cfg(unix)]
 mod workspace_permissions;
+mod workspace_command_policy;
+#[cfg(target_os = "macos")]
+mod workspace_artifact_admission;
 
 use super::args::{
     BashArgs, EditFileArgs, GlobArgs, GrepArgs, ListFilesArgs, ReadFileArgs, WriteFileArgs,

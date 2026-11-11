@@ -1519,7 +1519,7 @@ def caseCoverage : List CoverageEntry :=
       "artifact_admission_cases"
       "ArtifactAdmissionCases"
       boundaryCommandPolicyHostExecutionAssumptionsId
-      "workspace::overlay::overlay_tests::generated_artifact_admission_cases_drive_live_binding_and_launch_policy")
+      "tools::native::tests::workspace_artifact_admission::generated_artifact_admission_cases_drive_live_binding_and_launch_policy")
       "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "artifact_spawn_cases"
