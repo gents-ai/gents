@@ -8,12 +8,13 @@ use self::host::CliWriteHost;
 use self::turn::Turn;
 use super::{Deps, EvalContext};
 use crate::cli::EvalInitArgs;
-use crate::commands::pack::{resolve_pack_source, single_slot_agent, PackSource};
+use crate::commands::pack::single_slot_agent;
 use gents_eval::authoring::contract::{first_turn, MAX_VALIDATION_ROUNDS, VALIDATION_PREFIX};
 use gents_eval::authoring::dossier::{self, Dossier};
 use gents_eval::authoring::draft::{self, parse_reply};
 use gents_eval::authoring::validate::{assemble, validate, Assembled, Floors};
 use gents_eval::authoring::write::{self, case_table, commit, stage, Staged, Written};
+use gents_pack::pack::resolved_pack::{resolve_pack_source, ResolvedPack};
 
 mod host;
 mod pilot;
@@ -370,7 +371,7 @@ pub(crate) async fn run(
 pub(crate) async fn install_pack_slot(
     access: &gents_store::config_client::ConfigAccess,
     owner: &str,
-    pack: &PackSource,
+    pack: &ResolvedPack,
     slot: &str,
     profile: &str,
 ) -> Result<gents_pack::pack::InstallReport> {
@@ -408,7 +409,7 @@ pub(crate) async fn install_pack_slot(
 }
 
 pub(crate) fn pack_config(
-    pack: &PackSource,
+    pack: &ResolvedPack,
     owner: &str,
 ) -> Result<gents_pack::pack::AuthoredPackConfig> {
     gents_pack::pack::load_pack_authoring_config(

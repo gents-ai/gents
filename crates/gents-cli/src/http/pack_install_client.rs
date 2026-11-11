@@ -421,9 +421,9 @@ impl PackReplayTransport for PackReplaySession {
 pub(crate) async fn install_remote(
     endpoint: &GraphqlEndpoint,
     owner: &str,
-    pack: &crate::commands::pack::PackSource,
-    dependencies: &[crate::commands::pack::PackSource],
-    args: &crate::cli::PackInstallArgs,
+    pack: &gents_pack::pack::resolved_pack::ResolvedPack,
+    dependencies: &[gents_pack::pack::resolved_pack::ResolvedPack],
+    args: &gents_pack::pack::install_flow::DocumentsInstallRequest,
     explicit: bool,
 ) -> Result<Value> {
     ensure!(args.wire.is_empty(), "remote pack install does not yet support --wire with client-held signing; install the pack and wire it separately on the owning node");
@@ -437,8 +437,10 @@ pub(crate) async fn install_remote(
     let mut session = PackInstallSession::start(endpoint, request, owner, &digests).await?;
     let preparation = session.preparation().clone();
     let access = gents_store::config_client::ConfigAccess::Graphql(endpoint.clone());
-    let requested = crate::commands::pack::parse_inference_slot_bindings(&args.inference_slots)?;
-    let overrides = crate::commands::pack::parse_dependency_variables(&args.dependency_variables)?;
+    let requested =
+        gents_pack::pack::install_flow::parse_inference_slot_bindings(&args.inference_slots)?;
+    let overrides =
+        gents_pack::pack::install_flow::parse_dependency_variables(&args.dependency_variables)?;
     let mut prepared = gents_pack::pack::prepare_hosted_document_pack_archive(
         &access,
         owner,
@@ -446,14 +448,18 @@ pub(crate) async fn install_remote(
         &requested,
         &dependencies
             .iter()
-            .map(crate::commands::pack::PackSource::archive)
+            .map(gents_pack::pack::resolved_pack::ResolvedPack::archive)
             .collect::<Vec<_>>(),
         &|name| std::env::var(name).ok(),
         &preparation,
         &overrides,
     )
     .await?;
-    crate::commands::pack::PackSource::record_graph_sources(&mut prepared, pack, dependencies);
+    gents_pack::pack::resolved_pack::ResolvedPack::record_graph_sources(
+        &mut prepared,
+        pack,
+        dependencies,
+    );
     let prepared = std::sync::Arc::new(prepared);
     let graph_archive = pack.shared_archive();
     let graph_prepared = prepared.clone();

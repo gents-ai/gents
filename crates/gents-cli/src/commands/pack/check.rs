@@ -115,7 +115,7 @@ async fn check_filters(
     );
     gents_store::schema::ensure_runtime_schemas(node.as_ref()).await?;
     let access = gents_store::config_client::ConfigAccess::local(node.clone());
-    crate::commands::schema::apply_pack_schemas_if_present(&access, dir).await?;
+    gents_pack::pack::schema_apply::apply_pack_schemas_if_present(&access, dir).await?;
     for source in &config.event_sources {
         let Some(filter) = source.filter.as_deref() else {
             continue;

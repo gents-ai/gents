@@ -610,7 +610,7 @@ async fn referenced_plugin_removal_refuses_before_changing_pack_or_store_records
         let (access, owner) = super::super::resolve_scope_owner(&scope(home.path()))
             .await
             .unwrap();
-        let mut request = crate::commands::pack::wire::WireRequest {
+        let mut request = gents_pack::pack::plugin_wire::WireRequest {
             plugin: "acme/shared".into(),
             agent: selected_agent(&access, &owner).await,
             targets_from: Vec::new(),
@@ -619,9 +619,15 @@ async fn referenced_plugin_removal_refuses_before_changing_pack_or_store_records
             dynamic_consent: false,
             tool_calls_consent: false,
         };
-        crate::commands::pack::wire::wire_in(&access, &owner, home.path(), &request)
-            .await
-            .unwrap();
+        gents_pack::pack::plugin_wire::wire_in(
+            &access,
+            &owner,
+            home.path(),
+            &request,
+            gents_service::home_state::load_held_user_identity,
+        )
+        .await
+        .unwrap();
         access
             .local_node()
             .unwrap()
@@ -660,9 +666,15 @@ async fn referenced_plugin_removal_refuses_before_changing_pack_or_store_records
             .await
             .unwrap();
         request.remove = true;
-        crate::commands::pack::wire::wire_in(&access, &owner, home.path(), &request)
-            .await
-            .unwrap();
+        gents_pack::pack::plugin_wire::wire_in(
+            &access,
+            &owner,
+            home.path(),
+            &request,
+            gents_service::home_state::load_held_user_identity,
+        )
+        .await
+        .unwrap();
         access
             .local_node()
             .unwrap()
@@ -700,18 +712,20 @@ async fn wiring_holds_store_lock_through_pin_commit() {
     let expected_digest = gents_pack::plugin::store::read_record(home.path(), "acme", "shared")
         .unwrap()
         .digest;
-    let pause = std::sync::Arc::new(super::super::wire::WireTestPause {
+    let pause = std::sync::Arc::new(gents_pack::pack::plugin_wire::WireTestPause {
         home: home.path().to_owned(),
         reached: tokio::sync::Notify::new(),
         release: tokio::sync::Notify::new(),
     });
-    *super::super::wire::WIRE_TEST_PAUSE.lock().unwrap() = Some(pause.clone());
+    *gents_pack::pack::plugin_wire::WIRE_TEST_PAUSE
+        .lock()
+        .unwrap() = Some(pause.clone());
     let writer = tokio::spawn({
         let access = access.clone();
         let owner = owner.clone();
         let path = home.path().to_owned();
         async move {
-            let request = super::super::wire::WireRequest {
+            let request = gents_pack::pack::plugin_wire::WireRequest {
                 plugin: "acme/shared".into(),
                 agent: selected_agent(&access, &owner).await,
                 targets_from: Vec::new(),
@@ -720,7 +734,14 @@ async fn wiring_holds_store_lock_through_pin_commit() {
                 dynamic_consent: false,
                 tool_calls_consent: false,
             };
-            super::super::wire::wire_in(&access, &owner, &path, &request).await
+            gents_pack::pack::plugin_wire::wire_in(
+                &access,
+                &owner,
+                &path,
+                &request,
+                gents_service::home_state::load_held_user_identity,
+            )
+            .await
         }
     });
     pause.reached.notified().await;
@@ -770,7 +791,9 @@ async fn wiring_holds_store_lock_through_pin_commit() {
     assert!(format!("{:#}", result.unwrap_err()).contains("plugin store is busy"));
     pause.release.notify_one();
     writer.await.unwrap().unwrap();
-    *super::super::wire::WIRE_TEST_PAUSE.lock().unwrap() = None;
+    *gents_pack::pack::plugin_wire::WIRE_TEST_PAUSE
+        .lock()
+        .unwrap() = None;
     let agent = selected_agent(&access, &owner).await;
     let (_, tools) = access
         .transact_write("test.wire.pin", |txn| {
@@ -888,7 +911,7 @@ async fn remote_wire_refuses_new_pin_before_http_access_but_allows_preview_and_r
             .await
             .unwrap();
     for (preview, remove) in [(false, false), (true, false), (false, true)] {
-        let request = super::super::wire::WireRequest {
+        let request = gents_pack::pack::plugin_wire::WireRequest {
             plugin: "acme/missing".into(),
             agent: "engineer".into(),
             targets_from: vec![],
@@ -897,9 +920,15 @@ async fn remote_wire_refuses_new_pin_before_http_access_but_allows_preview_and_r
             dynamic_consent: false,
             tool_calls_consent: false,
         };
-        let error = super::super::wire::wire_in(&access, "did:key:remote", home.path(), &request)
-            .await
-            .unwrap_err();
+        let error = gents_pack::pack::plugin_wire::wire_in(
+            &access,
+            "did:key:remote",
+            home.path(),
+            &request,
+            gents_service::home_state::load_held_user_identity,
+        )
+        .await
+        .unwrap_err();
         let text = format!("{error:#}");
         let allowed = cases["pack_wire_target_cases"]
             .as_array()
@@ -961,7 +990,7 @@ async fn wire_refuses_even_the_initialized_homes_served_endpoint() {
     )
     .unwrap();
     let access = gents_store::config_client::ConfigAccess::graphql(url);
-    let request = super::super::wire::WireRequest {
+    let request = gents_pack::pack::plugin_wire::WireRequest {
         plugin: "acme/missing".into(),
         agent: "engineer".into(),
         targets_from: vec![],
@@ -970,9 +999,15 @@ async fn wire_refuses_even_the_initialized_homes_served_endpoint() {
         dynamic_consent: false,
         tool_calls_consent: false,
     };
-    let error = super::super::wire::wire_in(&access, &init.node_did, home.path(), &request)
-        .await
-        .unwrap_err();
+    let error = gents_pack::pack::plugin_wire::wire_in(
+        &access,
+        &init.node_did,
+        home.path(),
+        &request,
+        gents_service::home_state::load_held_user_identity,
+    )
+    .await
+    .unwrap_err();
     assert!(format!("{error:#}").contains("stop the runtime"));
 }
 
@@ -999,7 +1034,7 @@ async fn removal_holds_plugin_lock_after_reference_check_until_deletion() {
     // at the offline open that reads installed plugins or at the pin publish.
     let result = async {
         let (access, owner) = super::super::resolve_scope_owner(&scope(home.path())).await?;
-        let request = super::super::wire::WireRequest {
+        let request = gents_pack::pack::plugin_wire::WireRequest {
             plugin: "acme/shared".into(),
             agent: selected_agent(&access, &owner).await,
             targets_from: vec![],
@@ -1008,7 +1043,14 @@ async fn removal_holds_plugin_lock_after_reference_check_until_deletion() {
             dynamic_consent: false,
             tool_calls_consent: false,
         };
-        let wired = super::super::wire::wire_in(&access, &owner, home.path(), &request).await;
+        let wired = gents_pack::pack::plugin_wire::wire_in(
+            &access,
+            &owner,
+            home.path(),
+            &request,
+            gents_service::home_state::load_held_user_identity,
+        )
+        .await;
         access
             .local_node()
             .unwrap()

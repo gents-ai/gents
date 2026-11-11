@@ -1,11 +1,12 @@
 use anyhow::Result;
+use gents_pack::pack::resolved_pack::{resolve_pack_source, ResolvedPack};
 use serde_json::json;
 
 use crate::cli::{PackDiffArgs, PackShowArgs, PackVerifyArgs};
 
 pub(super) async fn show(args: PackShowArgs) -> Result<()> {
     let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
-    let pack = super::resolve_pack_source(&args.package, args.registry.as_deref(), &home).await?;
+    let pack = resolve_pack_source(&args.package, args.registry.as_deref(), &home).await?;
     if args.config {
         return show_config(&pack);
     }
@@ -44,7 +45,7 @@ pub(super) async fn show(args: PackShowArgs) -> Result<()> {
     }))
 }
 
-fn show_config(pack: &super::PackSource) -> Result<()> {
+fn show_config(pack: &ResolvedPack) -> Result<()> {
     let preview = gents_pack::pack::authoring::preview_config(pack.manifest(), &|path| {
         pack.asset(path).map(Vec::from)
     })?;
@@ -66,12 +67,12 @@ const COMPARED_OWNER: &str = "did:key:zPackDiffPlaceholderOwner";
 
 pub(super) async fn diff(args: PackDiffArgs) -> Result<()> {
     let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
-    let a = super::resolve_pack_source(&args.a, args.registry.as_deref(), &home).await?;
-    let b = super::resolve_pack_source(&args.b, args.registry.as_deref(), &home).await?;
+    let a = resolve_pack_source(&args.a, args.registry.as_deref(), &home).await?;
+    let b = resolve_pack_source(&args.b, args.registry.as_deref(), &home).await?;
     crate::print_json(&pack_diff(&a, &b)?)
 }
 
-pub(super) fn pack_diff(a: &super::PackSource, b: &super::PackSource) -> Result<serde_json::Value> {
+pub(super) fn pack_diff(a: &ResolvedPack, b: &ResolvedPack) -> Result<serde_json::Value> {
     let (files_a, files_b) = (file_digests(a)?, file_digests(b)?);
     let (docs_a, docs_b) = (document_digests(a)?, document_digests(b)?);
     Ok(json!({
@@ -82,7 +83,7 @@ pub(super) fn pack_diff(a: &super::PackSource, b: &super::PackSource) -> Result<
     }))
 }
 
-fn file_digests(pack: &super::PackSource) -> Result<std::collections::BTreeMap<String, String>> {
+fn file_digests(pack: &ResolvedPack) -> Result<std::collections::BTreeMap<String, String>> {
     use sha2::Digest;
     gents_pack::pack::declared_paths(pack.manifest())
         .into_iter()
@@ -93,9 +94,7 @@ fn file_digests(pack: &super::PackSource) -> Result<std::collections::BTreeMap<S
         .collect()
 }
 
-fn document_digests(
-    pack: &super::PackSource,
-) -> Result<std::collections::BTreeMap<String, String>> {
+fn document_digests(pack: &ResolvedPack) -> Result<std::collections::BTreeMap<String, String>> {
     if pack.manifest().config.is_none() {
         return Ok(Default::default());
     }

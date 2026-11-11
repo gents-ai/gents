@@ -454,7 +454,7 @@ enum Outcome {
 
 /// A default pack's archive with its dependencies and what its plugins ask.
 struct Resolved {
-    source: command::PackSource,
+    source: gents_pack::pack::resolved_pack::ResolvedPack,
     requested: Value,
 }
 
@@ -469,7 +469,7 @@ impl Resolved {
 async fn resolve(home: &Path, pack: &str, registry: Option<&str>) -> Result<Resolved> {
     let source = tokio::time::timeout(
         RESOLVE_BOUND,
-        command::resolve_pack_source(pack, registry, home),
+        gents_pack::pack::resolved_pack::resolve_pack_source(pack, registry, home),
     )
     .await
     .map_err(|_| {
@@ -483,14 +483,14 @@ async fn resolve(home: &Path, pack: &str, registry: Option<&str>) -> Result<Reso
         dependencies.push(
             tokio::time::timeout(
                 RESOLVE_BOUND,
-                command::resolve_pack_source(coordinate, registry, home),
+                gents_pack::pack::resolved_pack::resolve_pack_source(coordinate, registry, home),
             )
             .await
             .map_err(|_| anyhow::anyhow!("its dependency {coordinate} did not resolve in time"))?
             .with_context(|| format!("resolving its dependency {coordinate}"))?,
         );
     }
-    let requested = command::wire::requested_authority(
+    let requested = gents_pack::pack::plugin_wire::requested_authority(
         source.manifest(),
         &dependencies
             .iter()
@@ -512,7 +512,7 @@ async fn install_one(
     expect_digest: Option<&str>,
 ) -> Result<Outcome> {
     let Resolved { source, requested } = resolve(home, pack, registry).await?;
-    command::check_expected_digest(expect_digest, source.digest())?;
+    gents_pack::pack::install_flow::check_expected_digest(expect_digest, source.digest())?;
     let wire = !source.manifest().metadata.plugins.is_empty();
     let asks = requested.as_array().is_some_and(|asks| !asks.is_empty());
     let tool_calls = TOOL_CALLS_ON_APPROVAL.contains(&pack);
@@ -597,7 +597,7 @@ async fn install_one(
             anyhow::bail!("simulated wire failure for {pack}");
         }
         let wired = if wire {
-            command::wire_pack_plugins_consenting(
+            gents_pack::pack::plugin_wire::wire_pack_plugins_consenting(
                 &access,
                 &owner,
                 home,
@@ -605,6 +605,7 @@ async fn install_one(
                 &[engineer.to_owned()],
                 approved && dynamic,
                 approved && tool_calls,
+                gents_service::home_state::load_held_user_identity,
             )
             .await
             .with_context(|| {
@@ -613,12 +614,13 @@ async fn install_one(
         } else {
             Vec::new()
         };
-        let skills = command::wire::attach_pack_skills(
+        let skills = gents_pack::pack::plugin_wire::attach_pack_skills(
             &access,
             &owner,
             engineer,
             &coordinate,
             source.digest(),
+            gents_service::home_state::load_held_user_identity,
         )
         .await
         .with_context(|| {

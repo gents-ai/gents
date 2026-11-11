@@ -45,7 +45,8 @@ pub(super) async fn install_dependencies(
             args.push("--grant-authority".to_owned());
         }
         let dependency_pack =
-            super::super::resolve_pack_source(package, ctx.registry, ctx.home).await?;
+            gents_pack::pack::resolved_pack::resolve_pack_source(package, ctx.registry, ctx.home)
+                .await?;
         for slot in &dependency_pack.manifest().metadata.inference_slots {
             args.push("--inference-slot".to_owned());
             args.push(format!("{}={}", slot.name, ctx.inference_profile_id));

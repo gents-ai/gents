@@ -195,7 +195,7 @@ pub(crate) struct ConfigApplyReport {
     pub(crate) access_mode: String,
     pub(crate) node_did: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) schemas: Option<crate::commands::schema::PackSchemaPhase>,
+    pub(crate) schemas: Option<gents_pack::pack::schema_apply::PackSchemaPhase>,
     pub(crate) planned: desired_state::DesiredStateDiffCollectionsCounts,
     pub(crate) applied: ConfigApplyCounts,
     pub(crate) pruned: ConfigApplyCounts,

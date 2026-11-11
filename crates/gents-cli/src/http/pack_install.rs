@@ -15,9 +15,8 @@ use gents_pack::pack::PackKind;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::router::RuntimeHttpState;
-use crate::cli::output_format::OutputFormat;
-use crate::cli::{PackDriftArgs, PackInstallArgs, ScopeArgs};
-use crate::commands::pack::PackSource;
+use gents_pack::pack::install_flow::{DocumentsInstallRequest, InstallDrift};
+use gents_pack::pack::resolved_pack::ResolvedPack;
 
 pub(crate) mod session;
 
@@ -122,9 +121,9 @@ fn encode_request(
 pub(crate) async fn install_remote(
     endpoint: &gents_store::config_client::GraphqlEndpoint,
     owner: &str,
-    pack: &PackSource,
-    dependencies: &[PackSource],
-    args: &PackInstallArgs,
+    pack: &ResolvedPack,
+    dependencies: &[ResolvedPack],
+    args: &DocumentsInstallRequest,
     explicit: bool,
 ) -> Result<serde_json::Value> {
     let mut url = reqwest::Url::parse(endpoint.url())?;
@@ -170,9 +169,9 @@ pub(crate) async fn install_remote(
 }
 
 pub(crate) async fn encode_install_request(
-    pack: &PackSource,
-    dependencies: &[PackSource],
-    args: &PackInstallArgs,
+    pack: &ResolvedPack,
+    dependencies: &[ResolvedPack],
+    args: &DocumentsInstallRequest,
     owner: &str,
     explicit: bool,
 ) -> Result<serde_json::Value> {
@@ -184,7 +183,7 @@ pub(crate) async fn encode_install_request(
         .collect();
     let dependencies = dependencies
         .iter()
-        .map(PackSource::shared_archive)
+        .map(ResolvedPack::shared_archive)
         .collect::<Vec<_>>();
     let node_did = owner.to_owned();
     let inference_slots = args.inference_slots.clone();
@@ -311,8 +310,8 @@ fn delegated_install_access(
 }
 
 struct Received {
-    root: PackSource,
-    dependencies: Vec<PackSource>,
+    root: ResolvedPack,
+    dependencies: Vec<ResolvedPack>,
     request: InstallRequest,
 }
 
@@ -343,8 +342,8 @@ fn decode_install_request(mut request: InstallRequest, node_did: &str) -> Result
         request.dependency_sources.len() == request.dependencies.len(),
         "dependency source count does not match archives"
     );
-    let open = |archive: Archive, source| -> Result<PackSource> {
-        PackSource::received(PackArchive::from_bytes(&archive.0)?, source)
+    let open = |archive: Archive, source| -> Result<ResolvedPack> {
+        ResolvedPack::received(PackArchive::from_bytes(&archive.0)?, source)
     };
     let root = open(
         std::mem::replace(&mut request.root, Archive(Vec::new())),
@@ -371,7 +370,7 @@ fn decode_install_request(mut request: InstallRequest, node_did: &str) -> Result
 }
 
 /// The received dependencies are exactly the root manifest's dependency list.
-fn ensure_exact_closure(root: &PackSource, dependencies: &[PackSource]) -> Result<()> {
+fn ensure_exact_closure(root: &ResolvedPack, dependencies: &[ResolvedPack]) -> Result<()> {
     let mut expected = root
         .manifest()
         .metadata
@@ -412,45 +411,39 @@ async fn install_owned(
         dependencies,
         request,
     } = received;
-    let args = PackInstallArgs {
-        package: root.manifest().name.clone(),
+    let explicit = request.explicit;
+    let args = DocumentsInstallRequest {
+        home: home.clone(),
+        remote: false,
         inference_slots: request.inference_slots,
         dependency_variables: request.dependency_variables,
         preview: request.preview,
-        scope: ScopeArgs {
-            home: Some(home.clone()),
-            graphql: None,
-            node_did: None,
-        },
-        output: OutputFormat::Json,
         force_rebind_concrete_did: request.force_rebind,
-        registry: None,
-        drift: PackDriftArgs {
+        drift: InstallDrift {
             overwrite: request.overwrite,
             keep: request.keep,
         },
         grant_authority: request.grant_authority,
         wire: request.wire,
-        expect_digest: None,
-        explicit: request.explicit,
     };
-    let mut result = crate::commands::pack::install_documents_pack_resolved(
+    let mut result = gents_pack::pack::install_flow::install_documents_pack_resolved(
         &access,
         &state.node_did,
         &root,
         &args,
-        args.explicit,
+        explicit,
         dependencies,
     )
     .await
     .map_err(gents_pack::pack::PackChangeError::into_anyhow)?;
     if !args.wire.is_empty() && !args.preview {
-        result["wired"] = crate::commands::pack::wire_pack_plugins(
+        result["wired"] = gents_pack::pack::plugin_wire::wire_pack_plugins(
             &access,
             &state.node_did,
             &home,
             &root,
             &args.wire,
+            gents_service::home_state::load_held_user_identity,
         )
         .await?
         .into();

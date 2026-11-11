@@ -5156,6 +5156,7 @@ dependencies = [
  "afterburner-afb",
  "afterburner-core",
  "anyhow",
+ "async-trait",
  "axum",
  "base64 0.22.1",
  "chrono",
@@ -5192,6 +5193,7 @@ dependencies = [
  "tokio",
  "tracing",
  "ts-rs",
+ "uuid",
  "wasmtime",
  "wat",
 ]

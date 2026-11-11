@@ -35,11 +35,11 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
         &notification_scope
     {
         use futures_util::StreamExt;
-        let source = crate::commands::pack::PackSource::received(pack.archive, source)?;
+        let source = gents_pack::pack::resolved_pack::ResolvedPack::received(pack.archive, source)?;
         let dependencies =
             futures_util::stream::iter(source.manifest().metadata.dependencies.iter())
                 .map(|coordinate| {
-                    crate::commands::pack::resolve_pack_source(
+                    gents_pack::pack::resolved_pack::resolve_pack_source(
                         coordinate,
                         args.registry.as_deref(),
                         &home,
@@ -50,24 +50,16 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
                 .await
                 .into_iter()
                 .collect::<Result<Vec<_>>>()?;
-        let pack_args = crate::cli::PackInstallArgs {
-            package: args.name.clone(),
+        let pack_args = gents_pack::pack::install_flow::DocumentsInstallRequest {
+            home: home.clone(),
+            remote: false,
             inference_slots: Vec::new(),
             dependency_variables: Vec::new(),
             preview: false,
-            scope: crate::cli::ScopeArgs {
-                home: Some(home.clone()),
-                graphql: None,
-                node_did: None,
-            },
-            output: crate::cli::output_format::OutputFormat::Json,
             force_rebind_concrete_did: false,
-            registry: args.registry.clone(),
             drift: Default::default(),
             grant_authority: args.grant_authority,
             wire: Vec::new(),
-            expect_digest: None,
-            explicit: true,
         };
         let result = crate::http::pack_install_client::install_remote(
             endpoint,

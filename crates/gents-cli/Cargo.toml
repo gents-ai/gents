@@ -162,6 +162,7 @@ jsonschema = { version = "0.46.5", default-features = false }
 gents = { path = "../gents", features = ["test-home-guard"] }
 gents-service = { workspace = true, features = ["test-home-guard"] }
 gents-session = { workspace = true, features = ["test-fixtures"] }
+gents-pack = { workspace = true, features = ["test-fixtures"] }
 ctor = "0.2"
 acp.workspace = true
 crypto.workspace = true

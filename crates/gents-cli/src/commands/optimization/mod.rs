@@ -25,7 +25,8 @@ use crate::commands::eval::{
     cancel_on_ctrl_c, default_id, follow_progress, load_policy, source_commit, source_dirty,
     write_json, Deps, EvalContext, Progress,
 };
-use crate::commands::pack::{resolve_pack_source, resolve_subject_pack, single_slot};
+use crate::commands::pack::{resolve_subject_pack, single_slot};
+use gents_pack::pack::resolved_pack::resolve_pack_source;
 
 use behavior_proposer::AgentProposer;
 

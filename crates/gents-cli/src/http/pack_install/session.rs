@@ -381,10 +381,10 @@ async fn run_inner(
         let received =
             tokio::task::spawn_blocking(move || decode_install_request(request, &node_did))
                 .await??;
-        let requested = crate::commands::pack::parse_inference_slot_bindings(
+        let requested = gents_pack::pack::install_flow::parse_inference_slot_bindings(
             &received.request.inference_slots,
         )?;
-        let overrides = crate::commands::pack::parse_dependency_variables(
+        let overrides = gents_pack::pack::install_flow::parse_dependency_variables(
             &received.request.dependency_variables,
         )?;
         let mut prepared = gents_pack::pack::prepare_document_pack_archive(
@@ -403,7 +403,7 @@ async fn run_inner(
             &overrides,
         )
         .await?;
-        crate::commands::pack::PackSource::record_graph_sources(
+        gents_pack::pack::resolved_pack::ResolvedPack::record_graph_sources(
             &mut prepared,
             &received.root,
             &received.dependencies,
@@ -516,7 +516,7 @@ async fn run_inner(
         .await
         .map_err(|error| (anyhow::Error::new(error), "not_installed"))?
         .map_err(|error| (error, "not_installed"))?;
-        crate::commands::schema::apply_pack_schemas_if_present(&runtime_access, temp.path())
+        gents_pack::pack::schema_apply::apply_pack_schemas_if_present(&runtime_access, temp.path())
             .await
             .map_err(|error| (error, "not_installed"))?
     } else {

@@ -11,7 +11,6 @@ mod install;
 mod local;
 pub(crate) mod registry;
 mod remove;
-mod review;
 pub(crate) use remove::{ensure_home_plugins_unreferenced, remove, remove_home_install_with_guard};
 mod scaffold;
 mod scenario;
@@ -22,47 +21,18 @@ mod test;
 pub(crate) mod update;
 pub(crate) mod wire;
 use crate::cli::*;
-use anyhow::{Context, Result};
-pub(crate) use install::{
-    check_expected_digest, install, install_documents_pack, install_documents_pack_resolved,
-    parse_dependency_variables, wire_pack_plugins, wire_pack_plugins_consenting,
-};
+use anyhow::Result;
+pub(crate) use install::{install, install_documents_pack};
 pub(crate) use scope::{
     plugin_notification_scope, record_plugin_retirement, resolve_home_owner_under_plugin_store,
     resolve_scope_owner, warn_on_unrecorded_removal,
 };
 use serde_json::json;
-use source::{asset_cache_root, materialize_cached_pack};
-pub(crate) use source::{
-    resolve_pack_source, resolve_subject_pack, single_slot, single_slot_agent, PackSource,
-    SubjectPack,
-};
-use std::collections::BTreeMap;
+use source::asset_cache_root;
+pub(crate) use source::{resolve_subject_pack, single_slot, single_slot_agent, SubjectPack};
 
 use gents_pack::pack::materialize::CacheRelease;
 use gents_pack::pack::PackChangeError;
-
-pub(crate) fn parse_inference_slot_bindings(
-    values: &[String],
-) -> Result<gents_pack::pack::PackInferenceBindings> {
-    let mut bindings = BTreeMap::new();
-    for value in values {
-        let (slot, profile_id) = value.split_once('=').with_context(|| {
-            format!("invalid inference slot binding {value:?}; expected NAME=PROFILE_ID")
-        })?;
-        anyhow::ensure!(
-            !slot.trim().is_empty() && !profile_id.trim().is_empty(),
-            "invalid inference slot binding {value:?}; slot and profile ID must not be blank"
-        );
-        anyhow::ensure!(
-            bindings
-                .insert(slot.trim().to_owned(), profile_id.trim().to_owned())
-                .is_none(),
-            "inference slot {slot:?} was bound more than once"
-        );
-    }
-    Ok(bindings)
-}
 
 pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
     match command {
@@ -152,16 +122,23 @@ pub(crate) mod test_support {
         }
     }
 
-    pub(crate) fn local_pack_source(dir: &Path, home: &Path) -> super::PackSource {
+    pub(crate) fn local_pack_source(
+        dir: &Path,
+        home: &Path,
+    ) -> gents_pack::pack::resolved_pack::ResolvedPack {
         let archive = super::local::open(&super::local::LocalName::Path(dir), home)
             .unwrap_or_else(|error| panic!("opening {}: {error:#}", dir.display()));
-        super::PackSource {
-            archive: archive.into(),
-            from: gents_pack::pack::PackSource::Local { file_name: None },
-        }
+        gents_pack::pack::resolved_pack::ResolvedPack::received(
+            archive,
+            gents_pack::pack::PackSource::Local { file_name: None },
+        )
+        .unwrap_or_else(|error| panic!("receiving {}: {error:#}", dir.display()))
     }
 
-    pub(crate) fn fixture_pack_source(name: &str, home: &Path) -> super::PackSource {
+    pub(crate) fn fixture_pack_source(
+        name: &str,
+        home: &Path,
+    ) -> gents_pack::pack::resolved_pack::ResolvedPack {
         local_pack_source(&fixture_dir(name), home)
     }
 

@@ -5,20 +5,20 @@
 //! Each is read from its owner; nothing here decides whether the install may
 //! go on.
 
+use crate::pack::{PackInferenceBindingPreview, PackInferenceBindings, PackManifest};
 use anyhow::{Context, Result};
-use gents_pack::pack::{PackInferenceBindingPreview, PackInferenceBindings, PackManifest};
 use serde_json::{json, Value};
 
 /// One pack's inference as its install would bind it, and the required slots
 /// that binding still leaves out.
-pub(super) struct PackInference {
+pub struct PackInference {
     coordinate: String,
     preview: PackInferenceBindingPreview,
     unbound: Vec<String>,
 }
 
 impl PackInference {
-    pub(super) fn bound(manifest: &PackManifest, preview: PackInferenceBindingPreview) -> Self {
+    pub fn bound(manifest: &PackManifest, preview: PackInferenceBindingPreview) -> Self {
         Self {
             coordinate: coordinate(manifest),
             preview,
@@ -26,7 +26,7 @@ impl PackInference {
         }
     }
 
-    pub(super) fn is_bound(&self) -> bool {
+    pub fn is_bound(&self) -> bool {
         self.unbound.is_empty()
     }
 }
@@ -40,7 +40,7 @@ fn coordinate(manifest: &PackManifest) -> String {
 /// the answer. When it refuses because required slots are missing, the
 /// non-enforcing owner reports the slots and profiles, and those slots are
 /// unbound. Any other refusal is the install's own: `None`.
-pub(super) async fn pack_inference(
+pub async fn pack_inference(
     access: &gents_store::config_client::ConfigAccess,
     owner: &str,
     manifest: &PackManifest,
@@ -59,14 +59,13 @@ pub(super) async fn pack_inference(
         .map(|(slot, profile)| (slot.clone(), profile.clone()))
         .collect();
     if let Ok(preview) =
-        gents_pack::pack::preview_pack_inference_bindings(access, manifest, owner, &requested).await
+        crate::pack::preview_pack_inference_bindings(access, manifest, owner, &requested).await
     {
         return Some(PackInference::bound(manifest, preview));
     }
-    let preview =
-        gents_pack::pack::inspect_pack_inference_bindings(access, manifest, owner, &requested)
-            .await
-            .ok()?;
+    let preview = crate::pack::inspect_pack_inference_bindings(access, manifest, owner, &requested)
+        .await
+        .ok()?;
     let unbound: Vec<String> = preview
         .slots
         .iter()
@@ -85,7 +84,7 @@ pub(super) async fn pack_inference(
 /// profile bound to it (and whether the install chose it itself), the node's
 /// profiles, and the required slots still unbound. A slot one pack binds by
 /// itself and another leaves unbound is unbound.
-pub(super) fn inference_needs(packs: &[PackInference]) -> Value {
+pub fn inference_needs(packs: &[PackInference]) -> Value {
     struct Slot<'a> {
         name: &'a str,
         description: &'a str,
@@ -146,17 +145,15 @@ pub(super) fn inference_needs(packs: &[PackInference]) -> Value {
 /// asks for beyond a sealed sandbox, worded by the authority owner. An install
 /// that would newly grant any of it is refused without `--grant-authority`;
 /// one already granted that much installs without it.
-pub(super) fn identity_and_authority(
+pub fn identity_and_authority(
     manifest: &PackManifest,
     dependencies: &[&PackManifest],
 ) -> Result<Value> {
     let packs = || std::iter::once(manifest).chain(dependencies.iter().copied());
     let mut authority = Vec::new();
     for plugin in packs().flat_map(|pack| &pack.metadata.plugins) {
-        let declared = gents_pack::plugin::authority::declared_manifold(plugin)?;
-        if let Some(asks) =
-            gents_pack::plugin::authority::describe_plugin_authority(plugin, &declared)
-        {
+        let declared = crate::plugin::authority::declared_manifold(plugin)?;
+        if let Some(asks) = crate::plugin::authority::describe_plugin_authority(plugin, &declared) {
             authority.push(json!({ "plugin": plugin.name, "asks": asks }));
         }
     }
@@ -174,9 +171,9 @@ pub(super) fn identity_and_authority(
 /// preview bound it to: that DID is minted for this preview only, and the
 /// install mints its own. Every document that refers to the agent refers to
 /// its slot instead, and the agent's creation nonce is left out.
-pub(super) fn documents_by_slot(
+pub fn documents_by_slot(
     config: &gents_documents::PackConfig,
-    bindings: &gents_pack::pack::PackAgentBindings,
+    bindings: &crate::pack::PackAgentBindings,
     variables: &VariableFields,
 ) -> Result<Vec<Value>> {
     let slots: std::collections::BTreeMap<&str, &str> = bindings
@@ -208,8 +205,8 @@ pub(super) fn documents_by_slot(
 /// The documents an authored pack declares before its agent slots are bound
 /// to Agent DIDs, as a preview with unbound inference shows them: each agent
 /// by its slot, since its DID is minted only when it is installed.
-pub(super) fn authored_documents(
-    config: &gents_pack::pack::AuthoredPackConfig,
+pub fn authored_documents(
+    config: &crate::pack::AuthoredPackConfig,
     variables: &VariableFields,
 ) -> Result<Vec<Value>> {
     let mut documents = documents(&config.documents, variables)?;
@@ -244,7 +241,7 @@ pub(super) fn authored_documents(
 /// the install writes, without the fields it leaves unset), and for a data
 /// tool surface the tools it declares. The node document is the install's
 /// owner, not something the pack adds.
-pub(super) fn documents(
+pub fn documents(
     config: &gents_documents::PackConfig,
     variables: &VariableFields,
 ) -> Result<Vec<Value>> {
@@ -277,7 +274,7 @@ pub(super) fn documents(
                 "content": content,
             });
             if let Some((field, readers)) =
-                gents_pack::pack::declared_readers(document.collection, &document.add)
+                crate::pack::declared_readers(document.collection, &document.add)
                     .filter(|(_, readers)| !readers.is_empty())
             {
                 item["declared_access"] = json!({ "field": field, "readers": readers });
@@ -300,7 +297,7 @@ pub(super) fn documents(
 /// The access policy the pack declares on the documents it would write: for
 /// each document that grants readers, the field and the readers it names, as
 /// the declared-access owner reads them.
-pub(super) fn declared_access(documents: &[Value]) -> Value {
+pub fn declared_access(documents: &[Value]) -> Value {
     documents
         .iter()
         .filter_map(|document| {
@@ -323,13 +320,11 @@ const REDACTED: &str = "[redacted]";
 /// to. A variable may carry a secret, so a review names variables and where
 /// their values come from, and shows the fields they set only as redacted.
 #[derive(Debug, Default)]
-pub(super) struct VariableFields(
-    Vec<(gents_store::collection::Collection, Option<String>, String)>,
-);
+pub struct VariableFields(Vec<(gents_store::collection::Collection, Option<String>, String)>);
 
 impl VariableFields {
     /// From the `uses` of install-variable previews.
-    pub(super) fn of(previews: &[Value]) -> Self {
+    pub fn of(previews: &[Value]) -> Self {
         let mut fields = Vec::new();
         for entry in previews
             .iter()
@@ -440,11 +435,11 @@ fn content(
 /// them, or `None` when the pack carries schema patches: a patch changes
 /// collections it does not declare, so the declared ones would not be the
 /// whole of what it touches.
-pub(super) fn collections(
+pub fn collections(
     manifest: &PackManifest,
     asset: impl Fn(&str) -> Result<Vec<u8>>,
 ) -> Result<Option<Vec<String>>> {
-    let Ok(paths) = gents_pack::pack::document_pack_schema_paths(manifest) else {
+    let Ok(paths) = crate::pack::document_pack_schema_paths(manifest) else {
         return Ok(None);
     };
     let mut names = Vec::new();
@@ -465,13 +460,13 @@ pub(super) fn collections(
 /// schema owner's read-only preview finds them. `None` when that can't be
 /// known before the install: the pack carries schema patches, or the owner
 /// refuses a schema, which the install then reports.
-pub(super) async fn shared_collections(
+pub async fn shared_collections(
     access: &gents_store::config_client::ConfigAccess,
     manifest: &PackManifest,
     asset: impl Fn(&str) -> Result<Vec<u8>>,
 ) -> Option<Vec<String>> {
     let mut shared = Vec::new();
-    for path in gents_pack::pack::document_pack_schema_paths(manifest).ok()? {
+    for path in crate::pack::document_pack_schema_paths(manifest).ok()? {
         let bytes = asset(path).ok()?;
         let sdl = std::str::from_utf8(&bytes).ok()?;
         let plan = gents_store::config_client::preview_schema_install(access, sdl)
@@ -487,13 +482,13 @@ pub(super) async fn shared_collections(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents_pack::pack::archive::PackArchive;
+    use crate::pack::archive::PackArchive;
 
     fn fixture(name: &str) -> PackArchive {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../gents/tests/fixtures/packs")
             .join(name);
-        let (bytes, _) = gents_pack::pack::archive::pack_dir(&root).unwrap();
+        let (bytes, _) = crate::pack::archive::pack_dir(&root).unwrap();
         PackArchive::from_bytes(&bytes).unwrap()
     }
 
@@ -510,9 +505,9 @@ mod tests {
             collections(manifest, asset).unwrap(),
             Some(vec!["FixtureJob".to_owned()])
         );
-        let config = gents_pack::pack::load_pack_authoring_config(
+        let config = crate::pack::load_pack_authoring_config(
             manifest,
-            &gents_pack::pack::PackInstallOptions {
+            &crate::pack::PackInstallOptions {
                 node_did: "did:key:zReviewOwner".into(),
             },
             &|path| Ok(archive.asset(path)?.to_vec()),
@@ -548,9 +543,9 @@ mod tests {
     #[test]
     fn a_pack_reports_the_access_policy_its_documents_declare() {
         let archive = fixture("placement_fixture");
-        let config = gents_pack::pack::load_pack_authoring_config(
+        let config = crate::pack::load_pack_authoring_config(
             archive.manifest(),
-            &gents_pack::pack::PackInstallOptions {
+            &crate::pack::PackInstallOptions {
                 node_did: "did:key:zReviewOwner".into(),
             },
             &|path| Ok(archive.asset(path)?.to_vec()),
@@ -623,11 +618,11 @@ mod tests {
     fn a_data_tool_surface_reports_its_tools() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../examples/ux-plugins/board_docs");
-        let (bytes, _) = gents_pack::pack::archive::pack_dir(&root).unwrap();
+        let (bytes, _) = crate::pack::archive::pack_dir(&root).unwrap();
         let archive = PackArchive::from_bytes(&bytes).unwrap();
-        let config = gents_pack::pack::load_pack_config(
+        let config = crate::pack::load_pack_config(
             archive.manifest(),
-            &gents_pack::pack::PackInstallOptions {
+            &crate::pack::PackInstallOptions {
                 node_did: "did:key:zReviewOwner".into(),
             },
             &|path| Ok(archive.asset(path)?.to_vec()),
