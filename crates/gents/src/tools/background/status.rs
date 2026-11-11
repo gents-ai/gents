@@ -11,9 +11,7 @@ use crate::tools::native::background_args::{
     ListBackgroundToolsArgs, ListBackgroundToolsEntry, ListBackgroundToolsResponse,
     ListStatusFilter, ReadToolOutputArgs, ReadToolOutputResponse,
 };
-pub(crate) use gents_loop::live_output::{
-    LiveOutputStream, LiveToolOutputRegistry, LiveToolOutputWriter,
-};
+use gents_loop::live_output::LiveToolOutputRegistry;
 use gents_protocol::wait_status::WaitLifecycle;
 pub use status_projection::OutputEvidence;
 use status_projection::WaitStatusProjection;

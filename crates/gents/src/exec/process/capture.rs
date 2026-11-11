@@ -5,7 +5,7 @@ use futures::FutureExt;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::Notify;
 
-use crate::tools::background::status::{LiveOutputStream, LiveToolOutputWriter};
+use gents_loop::live_output::{LiveOutputStream, LiveToolOutputWriter};
 
 // After the direct child exits, drain the OS pipe but do not let an orphan
 // descendant that inherited it write forever.

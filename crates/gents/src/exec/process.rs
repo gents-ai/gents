@@ -10,7 +10,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
-use crate::tools::background::status::LiveToolOutputWriter;
+use gents_loop::live_output::LiveToolOutputWriter;
 
 use super::output::ManagedExecOutcome;
 
@@ -109,7 +109,7 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
         request.live_output.clone().map(|writer| {
             (
                 writer,
-                crate::tools::background::status::LiveOutputStream::Stdout,
+                gents_loop::live_output::LiveOutputStream::Stdout,
             )
         }),
     );
@@ -119,7 +119,7 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
         request.live_output.clone().map(|writer| {
             (
                 writer,
-                crate::tools::background::status::LiveOutputStream::Stderr,
+                gents_loop::live_output::LiveOutputStream::Stderr,
             )
         }),
     );
@@ -303,7 +303,7 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
         request.live_output.clone().map(|writer| {
             (
                 writer,
-                crate::tools::background::status::LiveOutputStream::Stdout,
+                gents_loop::live_output::LiveOutputStream::Stdout,
             )
         }),
     );
@@ -313,7 +313,7 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
         request.live_output.clone().map(|writer| {
             (
                 writer,
-                crate::tools::background::status::LiveOutputStream::Stderr,
+                gents_loop::live_output::LiveOutputStream::Stderr,
             )
         }),
     );

@@ -154,7 +154,7 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
     let text = format!("BEGIN\n{}\nEND ✅", "abcdefghij".repeat(10_000));
     writer
         .append(
-            crate::tools::background::status::LiveOutputStream::Stdout,
+            gents_loop::live_output::LiveOutputStream::Stdout,
             text.as_bytes(),
         )
         .await;
@@ -220,7 +220,7 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
     let overflow = vec![b'x'; 256 * 1024 + 17];
     writer
         .append(
-            crate::tools::background::status::LiveOutputStream::Stdout,
+            gents_loop::live_output::LiveOutputStream::Stdout,
             &overflow,
         )
         .await;

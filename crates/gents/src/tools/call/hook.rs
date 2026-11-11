@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::session;
 use crate::session::tool_call_state::CancelCause;
-use crate::tools::background::status::LiveToolOutputRegistry;
+use gents_loop::live_output::LiveToolOutputRegistry;
 use crate::tools::call::lifecycle::{InterruptDisposition, ToolCallLifecycle};
 use crate::tools::mcp::meta::selected_remote_identity;
 use crate::truncation::TruncationLimits;
@@ -160,14 +160,14 @@ impl BackgroundLiveOutputState {
     async fn writer_for(
         &self,
         tool_call_id: impl Into<String>,
-    ) -> crate::tools::background::status::LiveToolOutputWriter {
+    ) -> gents_loop::live_output::LiveToolOutputWriter {
         self.registry.writer_for(tool_call_id).await
     }
 
     async fn canonical_writer_for(
         &self,
         binding: crate::tools::call::lifecycle::delivery::ToolOutputBinding,
-    ) -> crate::tools::background::status::LiveToolOutputWriter {
+    ) -> gents_loop::live_output::LiveToolOutputWriter {
         let tool_call_doc_id = binding.tool_call_doc_id.clone();
         self.registry
             .canonical_writer_for(tool_call_doc_id, Arc::new(binding))
@@ -1806,7 +1806,7 @@ impl DefraSessionHook {
     pub(crate) async fn foreground_live_output_writer(
         &self,
         internal_call_id: &str,
-    ) -> crate::tools::background::status::LiveToolOutputWriter {
+    ) -> gents_loop::live_output::LiveToolOutputWriter {
         let binding = self
             .in_flight_lifecycles
             .lock()
