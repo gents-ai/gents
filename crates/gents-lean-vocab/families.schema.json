@@ -943,6 +943,113 @@
         ]
       }
     },
+    "session_operations_reissue_decision": {
+      "input": {
+        "fields": [
+          [
+            "kind",
+            {
+              "enum": "ReissueKind",
+              "values": [
+                "retry",
+                "resend"
+              ]
+            }
+          ],
+          [
+            "parent",
+            {
+              "enum": "ReissueParent",
+              "values": [
+                "failed",
+                "stale_dead",
+                "other_terminal",
+                "live"
+              ]
+            }
+          ],
+          [
+            "interactive",
+            "bool"
+          ],
+          [
+            "budget_remains",
+            "bool"
+          ],
+          [
+            "deadline_open",
+            "bool"
+          ],
+          [
+            "latest",
+            "bool"
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": {
+        "enum": "ReissueDecision",
+        "values": [
+          "admit",
+          "refuse_parent_state",
+          "refuse_not_interactive",
+          "refuse_budget_exhausted",
+          "refuse_deadline_closed",
+          "refuse_not_latest"
+        ]
+      }
+    },
+    "session_operations_request_lookup": {
+      "input": {
+        "fields": [
+          [
+            "found",
+            {
+              "enum": "Matches",
+              "values": [
+                "none",
+                "one",
+                "many"
+              ]
+            }
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": {
+        "enum": "Lookup",
+        "values": [
+          "not_found",
+          "found",
+          "ambiguous"
+        ]
+      }
+    },
+    "session_operations_resolve_delivery": {
+      "input": {
+        "fields": [
+          [
+            "choice",
+            {
+              "enum": "DeliveryChoice",
+              "values": [
+                "unspecified",
+                "queue",
+                "steer"
+              ]
+            }
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": {
+        "enum": "Delivery",
+        "values": [
+          "queue",
+          "steer"
+        ]
+      }
+    },
     "store_encryption_upgrade_after_recheck": {
       "input": {
         "fields": [

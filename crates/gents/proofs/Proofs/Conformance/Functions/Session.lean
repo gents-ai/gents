@@ -4,6 +4,7 @@ import Proofs.Session.CommandPolicy.ArtifactAuthority
 import Proofs.Session.CommandPolicy.Sandbox
 import Proofs.Session.DurableLineage
 import Proofs.Session.ManagedExec.Ownership
+import Proofs.Session.Operations
 import Proofs.Session.PromptAssembly.ClaudeCache
 import Proofs.Session.Request.State
 import Proofs.Session.RequestExecutionLease.State
@@ -51,3 +52,12 @@ deriving instance Lean.ToJson for Outcome
 attribute [conformance_function] Outcome.requestState providerEofIsFailure
 
 end RequestExecutionLease
+
+namespace SessionOperations
+
+deriving instance Lean.ToJson for DeliveryChoice, Delivery, Matches, Lookup, ReissueKind,
+  ReissueParent, ReissueDecision
+
+attribute [conformance_function] resolveDelivery requestLookup reissueDecision
+
+end SessionOperations
