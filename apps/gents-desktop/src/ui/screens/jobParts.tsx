@@ -22,6 +22,7 @@ import { duration } from "@/lib/duration";
 import { href, navigate } from "@/lib/router";
 import { compactTokens } from "@/lib/tokens";
 import { useApp } from "../app/AppContext";
+import { useWorkerAgents, WorkerAgents } from "./WorkerAgents";
 
 export const words = (value: string) => value.replace(/_/g, " ");
 
@@ -96,7 +97,8 @@ export function JobProgressBody({
           </li>
         ))}
       </ol>
-      <p className="flex min-w-0 gap-x-1.5 text-xs text-muted-foreground">
+      <p className="flex min-w-0 items-center gap-x-1.5 text-xs text-muted-foreground">
+        <LiveAgents active={progress.active} />
         <span data-testid="job-agents" className="shrink-0 tabular-nums">
           {spent} of {total} agents
         </span>
@@ -119,6 +121,23 @@ export function JobProgressBody({
 }
 
 const STAGE_CELLS = 10;
+
+/* the agents working now, by their sessions as this app lists them; one
+   whose session isn't listed yet isn't drawn */
+function LiveAgents({ active }: { active: JobProgress["active"] }) {
+  const agents = useWorkerAgents((state) =>
+    active.flatMap((child) => {
+      const session = state.bySessionId[child.session_id];
+      return session ? [session] : [];
+    }),
+  );
+  if (agents.length === 0) return null;
+  return (
+    <span data-testid="job-live-agents" className="shrink-0">
+      <WorkerAgents agents={agents} />
+    </span>
+  );
+}
 
 /** What a run's state looks like at the start of its row: the kit's loader
     while it runs, an icon otherwise. */

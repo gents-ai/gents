@@ -84,7 +84,7 @@ export function JobProgressCell({ tool }: { tool: RenderedToolCallView }) {
   ].join("|");
   return (
     <div
-      className="grid gap-2 rounded-lg border border-border/70 px-3 py-2.5"
+      className="grid gap-2 rounded-lg bg-accent/40 px-3 py-2.5"
       data-testid="job-progress"
     >
       <div className="flex min-w-0 items-center gap-3 text-sm">

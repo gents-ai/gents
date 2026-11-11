@@ -620,7 +620,13 @@ function harnessWorkflowProgress(
       { title: "review", state: "active" },
       { title: "report", state: "pending" },
     ],
-    active: [],
+    active: [
+      {
+        slot: "review",
+        title: "Review the diff",
+        session_id: "session-workflow-review",
+      },
+    ],
     spawned: 2,
     budget: { total: 4, spent: 2, remaining: 2 },
     last_event: "agent 2 started",
@@ -1450,6 +1456,31 @@ export function createDesktopUiHarness(
       context: harnessSessionContext(),
       timelineItems: [],
     });
+  }
+  if (scenario === "workflows") {
+    /* the run's agents, listed so its card can draw who is working */
+    for (const [sessionId, agentDid, title] of [
+      ["session-workflow-review", "ops", "Review the diff"],
+      ["session-workflow-verify", DEFAULT_AGENT_DID, "Run the checks"],
+    ] as const)
+      sessions.set(sessionId, {
+        sessionId,
+        nodeDid: NODE_DID,
+        agentDid,
+        title,
+        previewText: "",
+        status: "active",
+        turnState: sessionId === "session-workflow-review" ? "running" : "completed",
+        latestRequestId: `request-${sessionId}`,
+        goal: verifiedNoGoal(sessionId),
+        retryEligibility: { eligible: false, denialReason: null },
+        latestRequestOutcome: null,
+        pendingTurn: null,
+        queuedTurns: [],
+        foldedInputs: [],
+        context: harnessSessionContext(),
+        timelineItems: [],
+      });
   }
   if (scenario === "notices") {
     /* sessions holding each notice the app draws: a failed turn, one that
