@@ -12,3 +12,9 @@ pub mod serve;
 pub mod test_support;
 pub mod tool_ceiling;
 pub mod usage_read;
+
+#[cfg(test)]
+#[ctor::ctor]
+fn select_unit_test_homes() {
+    gents_service::home_state::use_unit_test_homes();
+}

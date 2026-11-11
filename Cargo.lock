@@ -4917,6 +4917,7 @@ dependencies = [
  "chrono",
  "clap",
  "crypto",
+ "ctor",
  "db",
  "defra-core",
  "defra-http",

@@ -72,6 +72,7 @@ gents = { path = "../gents", features = ["test-home-guard"] }
 gents-service = { workspace = true, features = ["test-home-guard"] }
 gents-session = { workspace = true, features = ["test-fixtures"] }
 acp.workspace = true
+ctor = "0.2"
 crypto.workspace = true
 db.workspace = true
 futures = "0.3"
