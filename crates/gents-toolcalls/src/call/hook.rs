@@ -1291,6 +1291,7 @@ pub struct DefraSessionHook {
     remote_tools: Option<gents_documents::RemoteTools>,
     goal_tools_enabled: bool,
     goal_creation_enabled: bool,
+    session_goals: Arc<dyn gents_session::session::message::SessionMessageGoals>,
     job_tools: RapidHashMap<String, crate::background::job::JobBinding>,
     /// The runtime's job driver, whose handles step 0 of a job tool runs on.
     pub(crate) job_driver: Option<Arc<crate::background::job::driver::JobDriver>>,
@@ -1511,6 +1512,7 @@ impl DefraSessionHook {
             remote_tools: None,
             goal_tools_enabled: false,
             goal_creation_enabled: false,
+            session_goals: Arc::new(gents_session::session::message::NoSessionMessageGoals),
             job_tools: RapidHashMap::new(),
             job_driver: None,
             output_obligation_gate: None,
@@ -1606,6 +1608,7 @@ impl DefraSessionHook {
             remote_tools: None,
             goal_tools_enabled: false,
             goal_creation_enabled: false,
+            session_goals: Arc::new(gents_session::session::message::NoSessionMessageGoals),
             job_tools: RapidHashMap::new(),
             job_driver: None,
             output_obligation_gate: None,
@@ -1640,6 +1643,15 @@ impl DefraSessionHook {
     ) -> Self {
         self.goal_tools_enabled = goal_tools_enabled;
         self.goal_creation_enabled = goal_tools_enabled && goal_creation_enabled;
+        self
+    }
+
+    /// The Goals the session-message tools plan, commit and inspect with.
+    pub fn with_session_goals(
+        mut self,
+        goals: Arc<dyn gents_session::session::message::SessionMessageGoals>,
+    ) -> Self {
+        self.session_goals = goals;
         self
     }
 

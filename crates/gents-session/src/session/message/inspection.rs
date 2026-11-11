@@ -393,6 +393,7 @@ fn tool_summaries(
 
 pub async fn agent_session_read(
     node: &Arc<EmbeddedNode>,
+    goals: &dyn super::SessionMessageGoals,
     caller: &gents_protocol::row::AgentRequest,
     tools: &AgentToolConfig,
     args: &AgentSessionReadArgs,
@@ -470,7 +471,7 @@ pub async fn agent_session_read(
             if args.view == ReadView::Status {
                 result["tools_in_flight"] = tools_in_flight(txn, &scope).await?;
                 result["queued_steering"] = queued_steering(txn, &scope).await?;
-                result["goal"] = match crate::goal::load_canonical_goal_in_txn(txn, &target.node_did, &target.session_id).await? {
+                result["goal"] = match goals.session_goal_in_txn(txn, &target.node_did, &target.session_id).await? {
                     Some(goal) => { let (objective, truncated) = bounded(&goal.objective, TOOL_PREVIEW_CHARS); json!({"goal_id": goal.goal_id, "status": goal.status, "objective": objective, "objective_truncated": truncated, "tokens_used": goal.tokens_used, "token_budget": goal.token_budget, "active_time_seconds": goal.active_time_seconds}) },
                     None => Value::Null,
                 };
@@ -560,6 +561,43 @@ mod tests {
                 assert!(!rendered.contains("unmodeled"), "{rendered}");
                 assert!(!rendered.contains("invalid type"), "{rendered}");
             }
+        }
+    }
+
+    /// The Goal the Goals plugin reports for the inspected session.
+    struct ReadWorkerGoal;
+
+    #[async_trait::async_trait]
+    impl super::super::SessionMessageGoals for ReadWorkerGoal {
+        async fn session_goal_in_txn(
+            &self,
+            _txn: &ConfigApplyTxn<'_>,
+            _node_did: &str,
+            session_id: &str,
+        ) -> Result<Option<super::super::SessionGoal>> {
+            Ok(
+                (session_id == "read-worker").then(|| super::super::SessionGoal {
+                    goal_id: "read-worker-goal".to_owned(),
+                    status: "active".to_owned(),
+                    objective: "verify shard R3a".to_owned(),
+                    tokens_used: Some(0),
+                    token_budget: Some(1000),
+                    active_time_seconds: Some(0),
+                    assignment_root_request_doc_id: None,
+                }),
+            )
+        }
+
+        async fn stage_goal_backed_request_in_txn(
+            &self,
+            _txn: &ConfigApplyTxn<'_>,
+            _node_did: &str,
+            _session_id: &str,
+            _objective: &str,
+            _token_budget: Option<i64>,
+            _request: &gents_protocol::request_admission::AgentRequestCreate,
+        ) -> Result<gents_protocol::request_lifecycle::EnqueuedAgentRequest> {
+            anyhow::bail!("session inspection stages no request")
         }
     }
 
@@ -654,15 +692,6 @@ mod tests {
         )
         .await
         .unwrap();
-        crate::goal::create_goal_for_session_from_access(
-            &caller_access,
-            identity.did(),
-            "read-worker",
-            "verify shard R3a",
-            Some(1000),
-        )
-        .await
-        .unwrap();
         let tools = AgentToolConfig {
             enabled: true,
             targets: Vec::new(),
@@ -706,15 +735,18 @@ mod tests {
             view: ReadView::Status,
             ..Default::default()
         };
-        let status = agent_session_read(&node, &caller, &tools, &args)
+        let status = agent_session_read(&node, &ReadWorkerGoal, &caller, &tools, &args)
             .await
             .unwrap();
         assert_eq!(status["request"]["request_id"], worker.request().request_id);
         assert_eq!(status["request"]["lifecycle_state"], "processing");
         assert_eq!(status["request"]["causal_hop"], 0);
-        // Status read adds only the read-start timestamp; the Goal was
-        // created before the read and is exposed as-is.
-        assert_eq!(status["goal"]["objective"], "verify shard R3a");
+        // Status read adds only the read-start timestamp; the session's
+        // Goal is exposed as-is.
+        assert_eq!(
+            status["goal"],
+            json!({"goal_id": "read-worker-goal", "status": "active", "objective": "verify shard R3a", "objective_truncated": false, "tokens_used": 0, "token_budget": 1000, "active_time_seconds": 0})
+        );
         assert!(status["observation_started_at"].is_string());
         chrono::DateTime::parse_from_rfc3339(status["observation_started_at"].as_str().unwrap())
             .unwrap();
@@ -780,7 +812,7 @@ mod tests {
             .await
             .unwrap();
         args.view = ReadView::Last;
-        let last = agent_session_read(&node, &caller, &tools, &args)
+        let last = agent_session_read(&node, &ReadWorkerGoal, &caller, &tools, &args)
             .await
             .unwrap();
         assert_eq!(last["messages"]["items"][0]["text"], "shard R3a verified");
@@ -795,7 +827,7 @@ mod tests {
         args.limit = Some(1);
         let mut messages = Vec::new();
         loop {
-            let page = agent_session_read(&node, &caller, &tools, &args)
+            let page = agent_session_read(&node, &ReadWorkerGoal, &caller, &tools, &args)
                 .await
                 .unwrap();
             assert!(!page.to_string().contains("private tool arguments"));
@@ -853,16 +885,18 @@ mod tests {
             Box::pin(async move { txn.execute_with_variables(&format!("mutation($input: AgentSessionMutationInputArg!) {{update_AgentSession(filter: {{{scope}}}, input: $input) {{_docID}}}}"), &json!({"input": {"observation": observation}})).await })
         }).await.unwrap();
         args.view = ReadView::Status;
-        let unavailable = agent_session_read(&node, &caller, &tools, &args)
+        let unavailable = agent_session_read(&node, &ReadWorkerGoal, &caller, &tools, &args)
             .await
             .unwrap();
         assert_eq!(unavailable["request"]["request_id"], "unobserved-request");
         assert_eq!(unavailable["request"]["available"], false);
         assert!(unavailable["observation_started_at"].is_string());
         args.session_id = caller.session_id.clone();
-        assert!(agent_session_read(&node, &caller, &tools, &args)
-            .await
-            .is_err());
+        assert!(
+            agent_session_read(&node, &ReadWorkerGoal, &caller, &tools, &args)
+                .await
+                .is_err()
+        );
         let foreign_identity = gents_store::identity::KeyIdentity::load_or_create(
             message.admission.path.join("other-principal.key"),
             None,
@@ -873,7 +907,7 @@ mod tests {
             ..caller.clone()
         };
         args.session_id = "read-worker".to_owned();
-        let error = agent_session_read(&node, &foreign, &tools, &args)
+        let error = agent_session_read(&node, &ReadWorkerGoal, &foreign, &tools, &args)
             .await
             .unwrap_err();
         assert!(error.to_string().contains("not messageable"), "{error:#}");

@@ -30,6 +30,7 @@ mod request_assignment;
 mod request_head;
 mod reset_resume;
 pub mod session_goal_control;
+pub mod session_message;
 mod state;
 mod task_fire;
 mod tool_context;

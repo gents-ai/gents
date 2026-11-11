@@ -3,9 +3,9 @@
 //! CLI's `gents automation task run` and the Engineer's `config task run` both come here.
 
 use anyhow::{anyhow, Context, Result};
+use async_trait::async_trait;
 use gents_protocol::request_input::RequestInput;
 use gents_protocol::row::AgentRequestRow;
-use serde::Serialize;
 use serde_json::Value;
 
 use crate::goal::{load_canonical_goal_in_txn, prepare_client_goal_input, task_assignment_goal_id};
@@ -17,36 +17,7 @@ use gents_documents::{read_desired_state_record_in_txn, Agent, Task};
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
-
-/// What a caller supplies for one fire.
-#[derive(Debug, Clone)]
-pub struct TaskRunOptions {
-    /// A JSON object bound as the `args.*` template scope.
-    pub args: Value,
-    /// A goal-backed Task's stable invocation key; otherwise a session label.
-    pub session_id: Option<String>,
-    /// An existing session to continue with this Task.
-    pub continue_session: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct TaskRunOutput {
-    pub task_id: String,
-    pub agent_did: String,
-    pub node_did: String,
-    pub request_id: String,
-    pub session_id: String,
-    pub request_doc_id: String,
-    pub input: RequestInput,
-    pub status: &'static str,
-    pub duplicate: bool,
-}
-
-/// A Task loaded for firing, with its enabled agent verified.
-pub struct RunnableTask {
-    pub task: Task,
-    doc_id: String,
-}
+use gents_tools::task_run::{RunnableTask, TaskRunOptions, TaskRunOutput, TaskRunService};
 
 /// Loads an enabled Task whose agent is enabled, or fails naming which is not.
 pub async fn read_runnable_task(
@@ -218,34 +189,34 @@ pub async fn enqueue_task_run(
     )
     .await?;
     let requester_did =
-        crate::session::client_requester_scope(access, node_did, &session_id, &actor_did).await?;
+        gents_session::session::client_requester_scope(access, node_did, &session_id, &actor_did).await?;
     let admission =
         gents_protocol::request_admission::AgentRequestAdmissionRecord::client(&actor_did);
-    let create = crate::request::lifecycle::build_signed_client_request(
+    let create = gents_session::request::lifecycle::build_signed_client_request(
         access,
-        crate::request::lifecycle::RequestSpec {
+        gents_session::request::lifecycle::RequestSpec {
             input: input.clone(),
-            trigger_lineage: crate::request::lifecycle::TriggerLineage {
+            trigger_lineage: gents_session::request::lifecycle::TriggerLineage {
                 trigger_kind: Some("manual".to_string()),
                 ..Default::default()
             },
             retry_key: Some(fire_key.clone()),
-            ..crate::request::lifecycle::RequestSpec::new(
+            ..gents_session::request::lifecycle::RequestSpec::new(
                 gents_protocol::request_admission::RequestPurpose::Normal,
-                crate::request::lifecycle::RequestIdentity {
+                gents_session::request::lifecycle::RequestIdentity {
                     request_id: request_id.clone(),
                     node_did: node_did.to_owned(),
                     requester_did: Some(requester_did),
                     agent_did: agent_did.clone(),
                     session_id: session_id.clone(),
                     content: content.clone(),
-                    execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
+                    execution_origin: gents_session::request::lifecycle::ExecutionOrigin::Interactive,
                     created_at: now.clone(),
                 },
                 admission,
             )
         },
-        crate::request::lifecycle::RequestSigner::Identity(signer),
+        gents_session::request::lifecycle::RequestSigner::Identity(signer),
     )
     .await?;
     let fire = gents_protocol::trigger_delivery::TriggerFire {
@@ -426,4 +397,31 @@ pub async fn lookup_request_by_retry_key(
             Ok(row)
         })
         .transpose()
+}
+
+/// The Task runtime handed to tools that sit below the Task delivery owner.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct TaskRuns;
+
+#[async_trait]
+impl TaskRunService for TaskRuns {
+    async fn read_runnable_task(
+        &self,
+        access: &ConfigAccess,
+        node_did: &str,
+        task_id: &str,
+    ) -> Result<RunnableTask> {
+        read_runnable_task(access, node_did, task_id).await
+    }
+
+    async fn enqueue_task_run(
+        &self,
+        access: &ConfigAccess,
+        node_did: &str,
+        signer: &dyn NodeIdentity,
+        runnable: RunnableTask,
+        options: &TaskRunOptions,
+    ) -> Result<TaskRunOutput> {
+        enqueue_task_run(access, node_did, signer, runnable, options).await
+    }
 }

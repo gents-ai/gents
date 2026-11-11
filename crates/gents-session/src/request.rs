@@ -7,6 +7,5 @@ pub mod interrupt;
 pub mod lifecycle;
 pub mod seam_error;
 pub mod streaming;
-pub mod task_run;
 pub mod watcher;
 pub mod workspace_binding;

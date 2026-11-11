@@ -150,6 +150,7 @@ pub fn build_self_config_tools(
     identity: Option<Arc<dyn NodeIdentity>>,
     config: &SelfConfigToolConfig,
     plugins: Arc<dyn crate::plugin_host::PluginHost>,
+    tasks: Arc<dyn crate::task_run::TaskRunService>,
 ) -> Vec<Box<dyn ToolDyn>> {
     build_self_config_tools_with_runtime(
         usage_cache,
@@ -159,6 +160,7 @@ pub fn build_self_config_tools(
         None,
         config,
         plugins,
+        tasks,
         None,
     )
 }
@@ -215,6 +217,7 @@ pub async fn build_runtime_self_config_tools(
     runtime_identity: Arc<dyn NodeIdentity>,
     config: &SelfConfigToolConfig,
     plugins: Arc<dyn crate::plugin_host::PluginHost>,
+    tasks: Arc<dyn crate::task_run::TaskRunService>,
 ) -> Result<Vec<Box<dyn ToolDyn>>> {
     let node_did = runtime_identity.did().to_owned();
     let binding = runtime_node_binding(&node, &node_did, runtime_identity.as_ref()).await?;
@@ -226,6 +229,7 @@ pub async fn build_runtime_self_config_tools(
         Some(runtime_identity),
         config,
         plugins,
+        tasks,
         Some(binding),
     ))
 }
@@ -242,6 +246,7 @@ pub(crate) fn build_self_config_tools_with_runtime(
     runtime_identity: Option<Arc<dyn NodeIdentity>>,
     config: &SelfConfigToolConfig,
     plugins: Arc<dyn crate::plugin_host::PluginHost>,
+    tasks: Arc<dyn crate::task_run::TaskRunService>,
     node_binding: Option<gents_documents::ConfigurationNodeBinding>,
 ) -> Vec<Box<dyn ToolDyn>> {
     if !config.enabled {
@@ -289,6 +294,7 @@ pub(crate) fn build_self_config_tools_with_runtime(
         process_ceiling: config.process_ceiling.clone(),
         execution: Arc::new(execution::ExecutionObservation::default()),
         plugins,
+        tasks,
         selected_plugins: config.selected_plugins.clone(),
         ceiling_plugins: config.ceiling_plugins.clone(),
     }));

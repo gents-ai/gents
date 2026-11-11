@@ -422,6 +422,7 @@ impl DefraSessionHook {
             .context("session message requires a managed Agent signer")?;
         let mut plan = match gents_session::session::message::plan_with_delivery(
             &self.node,
+            self.session_goals.as_ref(),
             &cause,
             &target,
             rendered,
@@ -511,7 +512,12 @@ impl DefraSessionHook {
         plan: Plan,
     ) -> SessionMessagePhase<ToolCallHookAction> {
         let receipt = match gents_session::session::message::commit(
-            &self.node, &cause, lifecycle, plan, !create,
+            &self.node,
+            self.session_goals.as_ref(),
+            &cause,
+            lifecycle,
+            plan,
+            !create,
         )
         .await
         {
@@ -725,7 +731,11 @@ impl DefraSessionHook {
             }
             return Ok(json_string(
                 gents_session::session::message::agent_session_read(
-                    &self.node, &caller, &tools, &parsed,
+                    &self.node,
+                    self.session_goals.as_ref(),
+                    &caller,
+                    &tools,
+                    &parsed,
                 )
                 .await?,
             ));

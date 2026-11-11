@@ -2234,6 +2234,7 @@ mod tests {
                 ..Default::default()
             },
             std::sync::Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::default()),
+            std::sync::Arc::new(gents_automation::triggers::task_run::TaskRuns),
         );
         let config = tools
             .iter()

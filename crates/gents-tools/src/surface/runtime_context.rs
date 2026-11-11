@@ -6,6 +6,7 @@ use crate::mcp::health::ServiceHealthMap;
 use crate::mcp::pool::McpPool;
 use crate::native::lsp::LspPool;
 use crate::plugin_host::{NoPluginHost, PluginHost};
+use crate::task_run::{NoTaskRunService, TaskRunService};
 use gents_store::identity::NodeIdentity;
 
 #[derive(Clone)]
@@ -22,6 +23,7 @@ pub struct ToolRuntimeContext {
     pub(super) agent_identity: Option<Arc<dyn NodeIdentity>>,
     pub(super) configuration: gents_inference::resolved::ResolvedConfiguration,
     pub(super) plugins: Arc<dyn PluginHost>,
+    pub(super) tasks: Arc<dyn TaskRunService>,
 }
 
 impl ToolRuntimeContext {
@@ -65,6 +67,7 @@ impl ToolRuntimeContext {
             agent_identity: None,
             configuration: gents_inference::resolved::ResolvedConfiguration::Static,
             plugins: Arc::new(NoPluginHost),
+            tasks: Arc::new(NoTaskRunService),
         }
     }
 
@@ -86,6 +89,7 @@ impl ToolRuntimeContext {
             agent_identity: None,
             configuration: gents_inference::resolved::ResolvedConfiguration::Static,
             plugins: Arc::new(NoPluginHost),
+            tasks: Arc::new(NoTaskRunService),
         }
     }
 
@@ -121,6 +125,11 @@ impl ToolRuntimeContext {
 
     pub fn with_plugins(mut self, plugins: Arc<dyn PluginHost>) -> Self {
         self.plugins = plugins;
+        self
+    }
+
+    pub fn with_tasks(mut self, tasks: Arc<dyn TaskRunService>) -> Self {
+        self.tasks = tasks;
         self
     }
 

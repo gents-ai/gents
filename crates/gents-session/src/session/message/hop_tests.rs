@@ -95,6 +95,7 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
         };
         let planned = plan_with_delivery(
             &node,
+            &NoSessionMessageGoals,
             &cause,
             &target,
             body,
@@ -171,10 +172,19 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
         content: "staged".to_owned(),
         goal: None,
     };
-    let planned = plan(&node, &cause, &target, body, None, false, &signer(&message))
-        .await
-        .unwrap()
-        .unwrap();
+    let planned = plan(
+        &node,
+        &NoSessionMessageGoals,
+        &cause,
+        &target,
+        body,
+        None,
+        false,
+        &signer(&message),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let load_tool = || {
         crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
@@ -202,7 +212,9 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
         .access()
         .unwrap()
         .transact_write("session_message.test_stage", move |txn| {
-            Box::pin(async move { stage_planned_write_in_txn(txn, cause, planned).await })
+            Box::pin(async move {
+                stage_planned_write_in_txn(txn, &NoSessionMessageGoals, cause, planned).await
+            })
         })
         .await
         .unwrap();
@@ -265,6 +277,7 @@ async fn stage_planned_write_in_txn_refuses_a_session_that_moved_past_the_planne
     };
     let planned = plan(
         &node,
+        &NoSessionMessageGoals,
         &stale_cause,
         &target,
         body,
@@ -278,6 +291,7 @@ async fn stage_planned_write_in_txn_refuses_a_session_that_moved_past_the_planne
     let ahead_cause = cause(&message, 10).await;
     let ahead = plan(
         &node,
+        &NoSessionMessageGoals,
         &ahead_cause,
         &target,
         RenderedBody {
@@ -299,7 +313,9 @@ async fn stage_planned_write_in_txn_refuses_a_session_that_moved_past_the_planne
         .access()
         .unwrap()
         .transact_write("session_message.test_ahead_stage", move |txn| {
-            Box::pin(async move { stage_planned_write_in_txn(txn, ahead_cause, ahead).await })
+            Box::pin(async move {
+                stage_planned_write_in_txn(txn, &NoSessionMessageGoals, ahead_cause, ahead).await
+            })
         })
         .await
         .unwrap();
@@ -310,7 +326,9 @@ async fn stage_planned_write_in_txn_refuses_a_session_that_moved_past_the_planne
         .access()
         .unwrap()
         .transact_write("session_message.test_stale_stage", move |txn| {
-            Box::pin(async move { stage_planned_write_in_txn(txn, stale_cause, planned).await })
+            Box::pin(async move {
+                stage_planned_write_in_txn(txn, &NoSessionMessageGoals, stale_cause, planned).await
+            })
         })
         .await
         .unwrap_err();
