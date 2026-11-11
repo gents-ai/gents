@@ -444,7 +444,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/turn/provider_context_reduction.rs",
+      "path": "crates/gents/src/session/provider_context_reduction.rs",
       "collection": "AgentMessage",
       "arguments": "filter: { $GENTS_session_scope$ }, order: { sequence: DESC }, limit: 1"
     },
@@ -459,7 +459,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/turn/provider_context_reduction.rs",
+      "path": "crates/gents/src/session/provider_context_reduction.rs",
       "collection": "RenderedRequest",
       "arguments": "filter: { request_doc_id: { _eq: \"$GENTS_0$\" } capture_scope: { _like: \"inference.%\" } turn_index: { _ge: $GENTS_1$ } provenance_json: { _like: \"%$GENTS_2$%\" } }, order: [{ turn_index: DESC }, { attempt: DESC }], limit: 64"
     },

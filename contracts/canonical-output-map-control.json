@@ -151,7 +151,7 @@
     "fixture_status": "summary_only",
     "native_owner_paths": [
       "crates/gents/src/request/lifecycle/queue/draining.rs",
-      "crates/gents/src/request/lifecycle/queue/goal_continuation.rs",
+      "crates/gents/src/goal/continuation.rs",
       "crates/gents/src/tools/background/completion/notification_delivery.rs"
     ],
     "consumer_paths": [
