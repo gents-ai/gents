@@ -863,34 +863,6 @@ pub struct LeanPackIdentityBinding {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanPackIdentityCase {
-    pub name: String,
-    pub recorded: Vec<LeanPackIdentityBinding>,
-    pub requested: Vec<String>,
-    pub provisioned: Vec<LeanPackIdentityBinding>,
-    pub accepted: bool,
-    pub selected: Vec<LeanPackIdentityBinding>,
-    pub next_recorded: Vec<LeanPackIdentityBinding>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanPackIdentityDependencyBindings {
-    pub coordinate: String,
-    pub bindings: Vec<LeanPackIdentityBinding>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanPackIdentityReferenceCase {
-    pub name: String,
-    pub declared: Vec<String>,
-    pub available: Vec<LeanPackIdentityDependencyBindings>,
-    pub dependency: String,
-    pub slot: String,
-    pub expected: Option<LeanPackIdentityBinding>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanPackEvalSubjectCase {
     pub name: String,
     pub selected: Option<LeanPackIdentityBinding>,

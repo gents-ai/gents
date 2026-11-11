@@ -1,28 +1,116 @@
 import Proofs.Documents.Configuration
 import Proofs.Store.Identity.State
 import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
 
 namespace Conformance.Contracts.PackInstallation
 
-def ownershipCasesJson : String := jsonArray (
-  ["acme/demo", "other/demo", "acme/other"].flatMap fun coordinate =>
+structure OwnershipInput where
+  coordinate : String
+  origin : Option String
+  deriving Lean.ToJson
+
+structure OwnershipObservation where
+  allowed : Bool
+  removalAllowed : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def ownership : Conformance.Family OwnershipInput OwnershipObservation where
+  inputs := ["acme/demo", "other/demo", "acme/other"].flatMap fun coordinate =>
     [none, some "acme/demo", some "other/demo", some "demo"].map fun origin =>
-      "{\"coordinate\":" ++ jsonString coordinate ++
-      ",\"origin\":" ++ (match origin with | none => "null" | some value => jsonString value) ++
-      ",\"allowed\":" ++ toString (Configuration.packDocumentWriteAllowed coordinate origin) ++
-      ",\"removal_allowed\":" ++ toString (Configuration.packDocumentRemovalAllowed coordinate origin) ++ "}")
+      OwnershipInput.mk coordinate origin
+  model := fun i =>
+    OwnershipObservation.mk (Configuration.packDocumentWriteAllowed i.coordinate i.origin)
+      (Configuration.packDocumentRemovalAllowed i.coordinate i.origin)
 
-def schemaCasesJson : String := jsonArray (
-  [false, true].flatMap fun scope => [false, true].flatMap fun signed =>
-    [false, true].map fun nativeUpdate =>
-      "{\"scope_matches\":" ++ toString scope ++
-      ",\"signed\":" ++ toString signed ++
-      ",\"native_update\":" ++ toString nativeUpdate ++
-      ",\"allowed\":" ++ toString (Identity.hostedSchemaAllowed scope signed nativeUpdate) ++ "}")
+structure HostedSchemaInput where
+  scopeMatches : Bool
+  signed : Bool
+  nativeUpdate : Bool
+  deriving Lean.ToJson
 
-def homeCasesJson : String := jsonArray (Configuration.hostedPackHomeCases.map fun written =>
-  "{\"home_written\":" ++ toString written ++ ",\"reported_success\":" ++
-    toString (Configuration.hostedPackReportedSuccess true true written) ++ "}")
+@[conformance_family]
+def hostedSchema : Conformance.Family HostedSchemaInput Bool where
+  inputs := [false, true].flatMap fun scope => [false, true].flatMap fun signed =>
+    [false, true].map fun nativeUpdate => HostedSchemaInput.mk scope signed nativeUpdate
+  model := fun i => Identity.hostedSchemaAllowed i.scopeMatches i.signed i.nativeUpdate
+
+structure HostedHomeInput where
+  homeWritten : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def hostedHome : Conformance.Family HostedHomeInput Bool where
+  inputs := Configuration.hostedPackHomeCases.map HostedHomeInput.mk
+  model := fun i => Configuration.hostedPackReportedSuccess true true i.homeWritten
+
+structure HostedEvidenceInput where
+  actorMatches : Bool
+  graphVerified : Bool
+  planApproved : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def hostedEvidence : Conformance.Family HostedEvidenceInput Bool where
+  inputs := Configuration.hostedPackEffectCases.map fun (actor, graph, plan) =>
+    HostedEvidenceInput.mk actor graph plan
+  model := fun i =>
+    Configuration.hostedPackEffectAllowed i.actorMatches i.graphVerified i.planApproved true
+
+deriving instance Lean.ToJson for Configuration.PackIdentity.Binding,
+  Configuration.PackIdentity.DependencyBindings
+
+structure IdentityPlanInput where
+  name : String
+  recorded : List Configuration.PackIdentity.Binding
+  requested : List String
+  provisioned : List Configuration.PackIdentity.Binding
+  deriving Lean.ToJson
+
+structure IdentityPlanResult where
+  accepted : Bool
+  selected : List Configuration.PackIdentity.Binding
+  nextRecorded : List Configuration.PackIdentity.Binding
+  deriving Lean.ToJson
+
+/-- Production holds bindings in a map keyed by slot, so its observation lists
+them in slot order. -/
+def bySlot (bindings : List Configuration.PackIdentity.Binding) :
+    List Configuration.PackIdentity.Binding :=
+  (bindings.toArray.qsort fun a b => decide (a.slot < b.slot)).toList
+
+@[conformance_family]
+def identityPlan : Conformance.Family IdentityPlanInput IdentityPlanResult where
+  inputs := Configuration.PackIdentity.cases.map fun c =>
+    IdentityPlanInput.mk c.name c.recorded c.requested c.provisioned
+  model := fun i =>
+    let result := Configuration.PackIdentity.plan i.recorded i.requested i.provisioned
+    IdentityPlanResult.mk result.isSome (bySlot ((result.map (·.selected)).getD []))
+      (bySlot ((result.map (·.recorded)).getD []))
+
+structure IdentityReferenceInput where
+  name : String
+  declared : List String
+  available : List Configuration.PackIdentity.DependencyBindings
+  dependency : String
+  slot : String
+  deriving Lean.ToJson
+
+structure ResolvedBinding where
+  creationNonce : String
+  agentDid : String
+  deriving Lean.ToJson
+
+@[conformance_family]
+def identityReference :
+    Conformance.Family IdentityReferenceInput (Option ResolvedBinding) where
+  inputs := Configuration.PackIdentity.referenceCases.map fun c =>
+    IdentityReferenceInput.mk c.name c.declared c.available c.dependency c.slot
+  model := fun i =>
+    (Configuration.PackIdentity.resolveDependency i.declared i.available i.dependency i.slot).map
+      fun binding => ResolvedBinding.mk binding.creationNonce binding.agentDid
+
 
 def hostedPluginCasesJson : String := jsonArray (
   [false, true].flatMap fun reviewed => [false, true].flatMap fun plan =>
@@ -30,14 +118,6 @@ def hostedPluginCasesJson : String := jsonArray (
       "{\"reviewed\":" ++ toString reviewed ++
       ",\"plan\":" ++ toString plan ++ ",\"native\":" ++ toString native ++
       ",\"allowed\":" ++ toString (Configuration.hostedPluginInstallAllowed reviewed plan native) ++ "}")
-
-def evidenceCasesJson : String := jsonArray (Configuration.hostedPackEffectCases.map fun
-    (actor, graph, plan) =>
-  "{\"actor_matches\":" ++ toString actor ++
-    ",\"graph_verified\":" ++ toString graph ++
-    ",\"plan_approved\":" ++ toString plan ++
-    ",\"allowed\":" ++ toString
-      (Configuration.hostedPackEffectAllowed actor graph plan true) ++ "}")
 
 def finalityCasesJson : String := jsonArray (Configuration.packFinalityCases.map fun attempts =>
   let name := fun event : Configuration.PackAttemptEvidence => match event with
@@ -115,31 +195,6 @@ def identityBindingJson (binding : Configuration.PackIdentity.Binding) : String 
   "{\"slot\":" ++ jsonString binding.slot ++
     ",\"creation_nonce\":" ++ jsonString binding.creationNonce ++
     ",\"agent_did\":" ++ jsonString binding.agentDid ++ "}"
-
-def identityBindingsJson (bindings : List Configuration.PackIdentity.Binding) : String :=
-  jsonArray (bindings.map identityBindingJson)
-
-def identityCasesJson : String := jsonArray (Configuration.PackIdentity.cases.map fun c =>
-  let result := Configuration.PackIdentity.plan c.recorded c.requested c.provisioned
-  "{\"name\":" ++ jsonString c.name ++
-    ",\"recorded\":" ++ identityBindingsJson c.recorded ++
-    ",\"requested\":" ++ jsonStringArray c.requested ++
-    ",\"provisioned\":" ++ identityBindingsJson c.provisioned ++
-    ",\"accepted\":" ++ toString result.isSome ++
-    ",\"selected\":" ++ identityBindingsJson ((result.map (·.selected)).getD []) ++
-    ",\"next_recorded\":" ++ identityBindingsJson ((result.map (·.recorded)).getD []) ++ "}")
-
-def identityReferenceCasesJson : String := jsonArray (Configuration.PackIdentity.referenceCases.map fun c =>
-  let result := Configuration.PackIdentity.resolveDependency c.declared c.available c.dependency c.slot
-  "{\"name\":" ++ jsonString c.name ++
-    ",\"declared\":" ++ jsonStringArray c.declared ++
-    ",\"available\":" ++ jsonArray (c.available.map fun entry =>
-      "{\"coordinate\":" ++ jsonString entry.coordinate ++
-      ",\"bindings\":" ++ identityBindingsJson entry.bindings ++ "}") ++
-    ",\"dependency\":" ++ jsonString c.dependency ++
-    ",\"slot\":" ++ jsonString c.slot ++
-    ",\"expected\":" ++ (match result with
-      | none => "null" | some binding => identityBindingJson binding) ++ "}")
 
 def evalSubjectCasesJson : String := jsonArray (Configuration.PackIdentity.evalSubjectCases.map fun c =>
   let result := Configuration.PackIdentity.resolveEvalSubject c.selected c.slot
