@@ -1,5 +1,6 @@
 import type {
   AllowedFolderAccess,
+  DefaultPackApproval,
   DesktopApiAdapter,
   PackEditedChoice,
   PackInstallRequest,
@@ -29,6 +30,9 @@ export function createHostActions({ api }: { api: DesktopApiAdapter }) {
       api.bindPackPlugin(plugin, profile),
     wirePack: (request: PackWireRequest) => api.wirePack(request),
     listPackWireSources: () => api.listPackWireSources(),
+    listDefaultPacks: () => api.listDefaultPacks(),
+    approveDefaultPacks: (packs: DefaultPackApproval[]) =>
+      api.approveDefaultPacks(packs),
     listDynamicWorkflows: () => api.listDynamicWorkflows(),
     getDynamicWorkflow: (selector: string) => api.getDynamicWorkflow(selector),
     promoteWorkflow: (request: WorkflowPromoteRequest) => api.promoteWorkflow(request),

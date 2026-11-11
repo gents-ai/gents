@@ -123,6 +123,9 @@ import type {
   WorkflowPromoted,
   PackWireResult,
   PackWireSources,
+  DefaultPacks,
+  DefaultPackApproval,
+  DefaultPacksApproval,
 } from "../types/packs.js";
 import type {
   AllowedFolderAccess,
@@ -482,6 +485,10 @@ export type DesktopApiAdapter = {
   bindPackPlugin: (plugin: string, profile: string | null) => Promise<void>;
   wirePack: (request: PackWireRequest) => Promise<PackWireResult>;
   listPackWireSources: () => Promise<PackWireSources>;
+  /** the packs the Engineer starts with on the local node, and how each stands */
+  listDefaultPacks: () => Promise<DefaultPacks>;
+  /** installs the approved packs; the local node restarts around the install */
+  approveDefaultPacks: (packs: DefaultPackApproval[]) => Promise<DefaultPacksApproval>;
   listDynamicWorkflows: () => Promise<DynamicWorkflows>;
   getDynamicWorkflow: (selector: string) => Promise<DynamicWorkflow>;
   promoteWorkflow: (
@@ -534,6 +541,8 @@ export type PackCommand =
   | "bindPackPlugin"
   | "wirePack"
   | "listPackWireSources"
+  | "listDefaultPacks"
+  | "approveDefaultPacks"
   | "listDynamicWorkflows"
   | "getDynamicWorkflow"
   | "promoteWorkflow"

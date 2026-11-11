@@ -8,7 +8,7 @@ use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::{current_core, DesktopAppState};
 use gents_server::packs::{self, EditedDocuments};
 
-fn home(state: &DesktopAppState) -> Result<std::path::PathBuf, BridgeError> {
+pub(super) fn home(state: &DesktopAppState) -> Result<std::path::PathBuf, BridgeError> {
     state.policy.node_home.clone().ok_or_else(|| {
         BridgeError::new(
             BridgeErrorCode::Unsupported,
@@ -24,7 +24,7 @@ fn failed(error: anyhow::Error) -> BridgeError {
 /// Runs a pack operation on a blocking thread that drives it to completion:
 /// opening the local node holds state that must stay on one thread, which a
 /// command future may not. Commands use the runtime `install_runtime` registers.
-async fn run<T, F, Fut>(operation: F) -> Result<T, BridgeError>
+pub(super) async fn run<T, F, Fut>(operation: F) -> Result<T, BridgeError>
 where
     T: DeserializeOwned,
     F: FnOnce() -> Fut + Send + 'static,
@@ -88,6 +88,30 @@ pub async fn desktop_pack_info(
     {
         run(move || packs::info(registry, package)).await
     }
+}
+
+/// The Engineer's default packs as the local node's home has them. A read:
+/// it works while the node runs.
+#[tauri::command]
+pub async fn desktop_default_packs(
+    state: State<'_, DesktopAppState>,
+) -> Result<DefaultPacksView, BridgeError> {
+    let home = home(&state)?;
+    run(move || packs::default_packs(home, None)).await
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct DefaultPacksApproveRequest {
+    pub packs: Vec<DefaultPackApproval>,
+}
+
+/// One approved default pack, at the archive its listing showed.
+#[derive(Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct DefaultPackApproval {
+    pub pack: String,
+    pub digest: String,
 }
 
 #[derive(Debug, Deserialize, TS)]

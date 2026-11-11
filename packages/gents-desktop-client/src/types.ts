@@ -183,6 +183,12 @@ export type {
   PackWireResult,
   PackWireSources,
   WireReport,
+  DefaultPacks,
+  DefaultPack,
+  DefaultPackState,
+  DefaultPackApproval,
+  DefaultPacksApproval,
+  DefaultPackFailure,
 } from "./types/packs.js";
 export type {
   AllowedFolder,

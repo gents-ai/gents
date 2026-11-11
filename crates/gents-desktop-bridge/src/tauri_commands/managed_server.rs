@@ -339,7 +339,86 @@ pub async fn desktop_managed_server_restart<R>(
 where
     R: Runtime,
 {
+    restart_managed_server(&app, request, &state, || async { Ok(()) }).await
+}
+
+/// Approves the Engineer's default packs named in `request` and installs
+/// them. A default pack is installed through the home's own store, as
+/// `init --engineer` installs it, and a running node holds that store, so
+/// the node is restarted around the install: stopped, the packs installed,
+/// started again. A pack that fails is reported and never keeps the node
+/// stopped.
+#[tauri::command]
+pub async fn desktop_default_packs_approve<R>(
+    app: AppHandle<R>,
+    request: super::packs::DefaultPacksApproveRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<crate::types::DefaultPacksApprovalView, BridgeError>
+where
+    R: Runtime,
+{
     ensure_allowed(&state)?;
+    let home = super::packs::home(&state)?;
+    let stored = load_bound_preference(&state).await?;
+    let restart = stored
+        .and_then(|stored| {
+            Some(ManagedServerRestartRequest {
+                node_name: stored.node_name,
+                tool_ceiling: stored.tool_ceiling?,
+                tool_root: stored.tool_root,
+            })
+        })
+        .ok_or_else(|| {
+            BridgeError::new(
+                BridgeErrorCode::Unsupported,
+                "starter packs install into the local Node this desktop runs; start it first",
+            )
+        })?;
+    let approved: Vec<_> = request
+        .packs
+        .into_iter()
+        .map(|approval| (approval.pack, approval.digest))
+        .collect();
+    let outcome = std::sync::Arc::new(tokio::sync::Mutex::new(None));
+    restart_managed_server(&app, restart, &state, || {
+        let (home, outcome) = (home.clone(), outcome.clone());
+        async move {
+            *outcome.lock().await = Some(
+                super::packs::run::<serde_json::Value, _, _>(move || {
+                    gents_server::packs::approve_default_packs(home, approved, None)
+                })
+                .await,
+            );
+            Ok(())
+        }
+    })
+    .await?;
+    let report =
+        outcome.lock().await.take().ok_or_else(|| {
+            BridgeError::untyped("the node restarted without installing the packs")
+        })??;
+    let failed = serde_json::from_value(report["failed"].clone())
+        .map_err(|error| BridgeError::untyped(format!("invalid pack report: {error}")))?;
+    let listed: crate::types::DefaultPacksView =
+        super::packs::run(move || gents_server::packs::default_packs(home, None)).await?;
+    Ok(crate::types::DefaultPacksApprovalView {
+        packs: listed.packs,
+        failed,
+    })
+}
+
+async fn restart_managed_server<R, P, WhileStopped>(
+    app: &AppHandle<R>,
+    request: ManagedServerRestartRequest,
+    state: &DesktopAppState,
+    while_stopped: P,
+) -> Result<ManagedServerStatus, BridgeError>
+where
+    R: Runtime,
+    P: FnOnce() -> WhileStopped,
+    WhileStopped: Future<Output = Result<(), BridgeError>>,
+{
+    ensure_allowed(state)?;
     let authority = EffectiveManagedAuthority::from_request(
         request.tool_ceiling,
         request.tool_root.as_deref(),
@@ -351,9 +430,9 @@ where
         )
     })?;
     refuse_renaming_home(&node_home, &request.node_name).await?;
-    let lifecycle = lock_lifecycle_superseding_start(&state).await;
-    ensure_app_not_quitting(&state)?;
-    let managed_selection = run_native(native_service(&app, &state)?, |service| {
+    let lifecycle = lock_lifecycle_superseding_start(state).await;
+    ensure_app_not_quitting(state)?;
+    let managed_selection = run_native(native_service(app, state)?, |service| {
         if let Some(id) = service.pending_update()? {
             anyhow::bail!("Managed runtime update {id} is in progress. Reconnect after it finishes, or run `gents runtime service update-status --home <node-home> {id}` with this node's home to resume its supervisor.");
         }
@@ -377,10 +456,10 @@ where
             return Err(BridgeError::untyped("This runtime was selected by a managed update. Restart preserves its existing authority; use external administration to change its configuration."));
         }
     }
-    ensure_launchable_here(&app, &state)?;
+    ensure_launchable_here(app, state)?;
     let port = observe_port_readiness(
         &node_home,
-        user_status_signer(&state, &node_home).await.as_ref(),
+        user_status_signer(state, &node_home).await.as_ref(),
     )
     .await?;
     ensure_selected_restart_compatible(managed_selection, &port)?;
@@ -396,16 +475,16 @@ where
     };
     let (tool_ceiling, tool_root) = authority.stored();
     let service_status =
-        match run_native(native_service(&app, &state)?, |service| service.status()).await {
+        match run_native(native_service(app, state)?, |service| service.status()).await {
             Ok(status) => status,
             Err(error) => {
                 state.managed_server.lock().await.last_error = Some(error.message.clone());
-                emit_status(&app, &state).await;
+                emit_status(app, state).await;
                 return Err(error);
             }
         };
     ensure_native_owns_running_endpoint(&port, service_status.job_loaded)?;
-    drain_managed_runtime_pairing(&state).await;
+    drain_managed_runtime_pairing(state).await;
     let was_enabled = service_status.enabled;
     let provision = gents_server::server_host::ProvisionOptions {
         home: node_home.clone(),
@@ -416,21 +495,21 @@ where
         default_packs: true,
     };
     if let Err(error) = stop_before_reprovision(
-        || async { run_native(native_service(&app, &state)?, |service| service.stop(false)).await },
+        || async { run_native(native_service(app, state)?, |service| service.stop(false)).await },
         || async {
-            if managed_selection {
-                return Ok(());
+            if !managed_selection {
+                gents_server::server_host::ensure_standard_home(
+                    tauri::async_runtime::handle().inner(),
+                    provision,
+                )
+                .await
+                .map_err(|error| BridgeError::untyped(format!("{error:#}")))?;
             }
-            gents_server::server_host::ensure_standard_home(
-                tauri::async_runtime::handle().inner(),
-                provision,
-            )
-            .await
-            .map_err(|error| BridgeError::untyped(format!("{error:#}")))
+            while_stopped().await
         },
         || async {
             save_confirmed_preference(
-                &state,
+                state,
                 &node_home,
                 &StoredManagedServer {
                     node_name: request.node_name.clone(),
@@ -445,24 +524,24 @@ where
     .await
     {
         state.managed_server.lock().await.last_error = Some(error.message.clone());
-        emit_status(&app, &state).await;
+        emit_status(app, state).await;
         return Err(error);
     }
-    if let (Some(core), Some(node_did)) = (current_core(&state), previous_did.as_deref()) {
+    if let (Some(core), Some(node_did)) = (current_core(state), previous_did.as_deref()) {
         if let Err(error) = core.mark_managed_runtime_restarting(node_did).await {
             let message = format!(
                 "The node was stopped, but desktop restart bookkeeping failed: {error:#}. Retry Restart Node."
             );
             state.managed_server.lock().await.last_error = Some(message.clone());
-            emit_status(&app, &state).await;
+            emit_status(app, state).await;
             return Err(BridgeError::untyped(message));
         }
     }
-    let token = begin_start_wait(&state).await;
-    emit_status(&app, &state).await;
+    let token = begin_start_wait(state).await;
+    emit_status(app, state).await;
     let launch = NativeLaunch {
-        app: &app,
-        state: &state,
+        app: app,
+        state: state,
         node_home: &node_home,
         enable_at_login: was_enabled,
     };
@@ -472,19 +551,19 @@ where
         }
         ensure_default_port_identity(
             &node_home,
-            user_status_signer(&state, &node_home).await.as_ref(),
+            user_status_signer(state, &node_home).await.as_ref(),
         )
         .await
         .map_err(|mut error| {
             error.message = format!("Your node was stopped; {}", error.message);
             error
         })?;
-        run_native(launchable_native_service(&app, &state)?, |service| {
+        run_native(launchable_native_service(app, state)?, |service| {
             service.install()
         })
         .await
     };
-    let launched = match install_then_launch(&state, &token, lifecycle, install, &launch).await {
+    let launched = match install_then_launch(state, &token, lifecycle, install, &launch).await {
         Ok((ready, lifecycle)) => match validate_ready_runtime(&ready, &authority, &node_home) {
             Ok(()) => Ok(lifecycle),
             Err(error) => Err(LaunchFailure {
@@ -498,29 +577,29 @@ where
     };
     let _lifecycle = match launched {
         Ok(lifecycle) => {
-            finish_start_wait(&state, &token).await;
+            finish_start_wait(state, &token).await;
             state.managed_server.lock().await.incompatible_store = None;
             lifecycle
         }
         Err(failure) => {
             return Err(
-                fail_managed_start(&app, &state, &token, &node_home, was_enabled, failure).await,
+                fail_managed_start(app, state, &token, &node_home, was_enabled, failure).await,
             )
         }
     };
-    emit_status(&app, &state).await;
-    if let Some(core) = current_core(&state) {
-        start_running_managed_pairing(&state, core).await;
+    emit_status(app, state).await;
+    if let Some(core) = current_core(state) {
+        start_running_managed_pairing(state, core).await;
     }
-    let native = run_native(native_service(&app, &state)?, |service| service.status()).await?;
+    let native = run_native(native_service(app, state)?, |service| service.status()).await?;
     let mut status = matching_external_server(
         &node_home,
-        user_status_signer(&state, &node_home).await.as_ref(),
+        user_status_signer(state, &node_home).await.as_ref(),
     )
     .await?
     .map(|external| project_external_status(external, &native))
     .ok_or_else(|| BridgeError::untyped("native service did not become ready"))?;
-    status.pairing_ready = pairing_is_ready(&state, status.node_did.as_deref()).await;
+    status.pairing_ready = pairing_is_ready(state, status.node_did.as_deref()).await;
     Ok(status)
 }
 

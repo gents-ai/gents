@@ -1,4 +1,5 @@
 import type {
+  DefaultPackApproval,
   PackEditedChoice,
   PackInstallRequest,
   DynamicWorkflow,
@@ -44,6 +45,9 @@ export function createPackCommands(
       invokeDesktop("desktop_pack_wire_sources").then(
         (report) => report as PackWireSources,
       ),
+    listDefaultPacks: () => invokeDesktop("desktop_default_packs"),
+    approveDefaultPacks: (packs: DefaultPackApproval[]) =>
+      invokeDesktop("desktop_default_packs_approve", { request: { packs } }),
     listDynamicWorkflows: () =>
       invokeDesktop("desktop_workflows_dynamic").then(
         (report) => report as DynamicWorkflows,
