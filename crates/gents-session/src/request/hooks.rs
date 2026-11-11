@@ -8,5 +8,7 @@ pub mod effect;
 pub mod hook;
 pub(crate) mod native;
 pub mod points;
+pub mod queue_scope;
 pub mod registry;
+mod revisions;
 pub mod stage;

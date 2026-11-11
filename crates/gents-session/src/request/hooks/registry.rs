@@ -5,6 +5,7 @@ use gents_protocol::row::AgentRequest;
 use serde_json::Value;
 
 use super::claim::ClaimVerdict;
+use super::queue_scope::{ScopeAnswers, SessionRequests};
 use super::stage::Plugin;
 use gents_store::config_client::ConfigApplyTxn;
 
@@ -26,6 +27,18 @@ pub struct ClaimCandidate {
     pub request: AgentRequest,
     pub client: bool,
     pub at: String,
+}
+
+/// `request.queue.scope`: core asks for the queue partition of the requests
+/// `asked` names before it compares them. `requests` are the session's request
+/// rows core read in this transaction; a plugin may decide from them which
+/// further rows it needs.
+#[derive(Debug, Clone)]
+pub struct QueueScopeAsk {
+    pub node_did: String,
+    pub session_id: String,
+    pub requests: Arc<SessionRequests>,
+    pub asked: Vec<String>,
 }
 
 /// `control.session.halt`: an interrupt or stop latch is written in this
@@ -54,6 +67,7 @@ pub trait CoreOperation: Send + Sync {
 #[derive(Default)]
 pub struct Registry {
     pub claim_gate: Vec<Plugin<ClaimCandidate, ClaimVerdict>>,
+    pub queue_scope: Vec<Plugin<QueueScopeAsk, ScopeAnswers>>,
     pub request_terminal: Vec<Plugin<RequestTerminal, ()>>,
     pub session_halt: Vec<Plugin<SessionHalt, ()>>,
     pub operations: Vec<Arc<dyn CoreOperation>>,

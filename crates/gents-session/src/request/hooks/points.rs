@@ -1,6 +1,7 @@
 use super::claim::{combine, ClaimVerdict};
 use super::native::TxnHost;
-use super::registry::{ClaimCandidate, Registry, RequestTerminal, SessionHalt};
+use super::queue_scope::{QueueScopes, SessionRequests};
+use super::registry::{ClaimCandidate, QueueScopeAsk, Registry, RequestTerminal, SessionHalt};
 use super::stage::{gate, stage_dropping, HookError, Staged};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_store::config_client::ConfigApplyTxn;
@@ -10,7 +11,7 @@ use gents_store::config_client::ConfigApplyTxn;
 fn surface(error: HookError) -> anyhow::Error {
     match error {
         HookError::Store(error) => error.into(),
-        HookError::Operation(error) => error,
+        HookError::Operation(error) | HookError::Revisions(error) => error,
         other => other.into(),
     }
 }
@@ -92,4 +93,35 @@ pub async fn claim_gate(
             .await
             .map_err(surface)?,
     ))
+}
+
+/// `request.queue.scope` (may refuse): core reads the session's request rows
+/// and asks every plugin for the queue partition of the requests in `asked`.
+/// A failure to answer one request is reported when the caller consults that
+/// request.
+pub async fn queue_scope(
+    txn: &ConfigApplyTxn<'_>,
+    node_did: &str,
+    session_id: &str,
+    asked: Vec<String>,
+) -> anyhow::Result<QueueScopes> {
+    let requests = std::sync::Arc::new(SessionRequests::load(txn, node_did, session_id).await?);
+    let event = QueueScopeAsk {
+        node_did: node_did.to_owned(),
+        session_id: session_id.to_owned(),
+        requests: std::sync::Arc::clone(&requests),
+        asked,
+    };
+    let registry = Registry::for_transaction(txn)?;
+    let host = TxnHost::new(txn, &registry);
+    let answers = gate(&host, &registry.queue_scope, &event)
+        .await
+        .map_err(surface)?;
+    let named = registry
+        .queue_scope
+        .iter()
+        .map(|plugin| plugin.manifest().name)
+        .zip(answers)
+        .collect();
+    Ok(QueueScopes::new(requests, &event.asked, named))
 }

@@ -261,6 +261,16 @@ impl<'a, 'txn> TxnHost<'a, 'txn> {
 #[async_trait::async_trait]
 impl Host for TxnHost<'_, '_> {
     async fn select(&self, query: &Query) -> Result<Vec<Row>, HookError> {
+        if let Some(links) = &query.revisions {
+            identifier(&query.collection)?;
+            selection(&query.fields)?;
+            for (field, _) in &query.filter {
+                identifier(field)?;
+            }
+            return super::revisions::read(self.txn, query, links)
+                .await
+                .map_err(HookError::Revisions);
+        }
         let fields = selection(&query.fields)?;
         let rows = self.rows(query, &fields).await?;
         let mut shown = self

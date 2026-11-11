@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use super::claim::ClaimVerdict;
 use super::effect::{validate, Access, DocRef, Effect, InvalidEffects, Manifest, Row};
 use super::hook::{Hook, Outcome, Query};
 
@@ -49,6 +48,9 @@ pub enum HookError {
     Operation(#[source] anyhow::Error),
     #[error("a lifecycle hook could not read or write its rows")]
     Store(#[from] gents_store::config_client::ConfigClientError),
+    /// A declared revision read failed; the caller sees the read's own error.
+    #[error(transparent)]
+    Revisions(anyhow::Error),
 }
 
 /// Why one plugin's effects were not applied. `clean` is whether the staged
@@ -248,13 +250,14 @@ pub fn owed(staged: &[Staged]) -> Vec<&'static str> {
         .collect()
 }
 
-/// Lean `Hooks.gate`: every plugin answers on the transaction's snapshot with
-/// a verdict and no effects; a result that carries any is invalid.
-pub async fn gate<E, H>(
+/// Lean `Hooks.answer` (`Hooks.gate` at `request.claim.gate`): every plugin
+/// answers on the transaction's snapshot with a value and no effects; a
+/// result that carries any is invalid.
+pub async fn gate<E, V, H>(
     host: &H,
-    plugins: &[Plugin<E, ClaimVerdict>],
+    plugins: &[Plugin<E, V>],
     event: &E,
-) -> Result<Vec<ClaimVerdict>, HookError>
+) -> Result<Vec<V>, HookError>
 where
     H: Host,
 {
