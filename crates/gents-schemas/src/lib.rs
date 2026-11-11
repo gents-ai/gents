@@ -15,6 +15,8 @@ pub const NODE_RUNTIME_NAME: &str = "NodeRuntime";
 pub const NODE_RUNTIME: &str = include_str!("../schemas/agent/node_runtime.graphql");
 pub const NODE_READINESS_NAME: &str = "NodeReadiness";
 pub const NODE_READINESS: &str = include_str!("../schemas/agent/node_readiness.graphql");
+pub const OWED_DELIVERY_NAME: &str = "OwedDelivery";
+pub const OWED_DELIVERY: &str = include_str!("../schemas/agent/owed_delivery.graphql");
 pub const NODE_DIRECTORY_ENTRY_NAME: &str = "NodeDirectoryEntry";
 pub const NODE_DIRECTORY_ENTRY: &str =
     include_str!("../schemas/agent/node_directory_entry.graphql");
@@ -219,6 +221,7 @@ pub const ALL: &[&str] = &[
     AGENT_TARGET,
     NODE_RUNTIME,
     NODE_READINESS,
+    OWED_DELIVERY,
     NODE_DIRECTORY_ENTRY,
     TOOLS,
     SKILL,
@@ -303,6 +306,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_TARGET_NAME,
     NODE_RUNTIME_NAME,
     NODE_READINESS_NAME,
+    OWED_DELIVERY_NAME,
     NODE_DIRECTORY_ENTRY_NAME,
     TOOLS_NAME,
     SKILL_NAME,
@@ -420,6 +424,7 @@ pub const LOCAL_ONLY_COLLECTION_NAMES: &[&str] = &[
     ENROLLMENT_RENEWAL_POLICY_NAME,
     FILE_INVENTORY_REPLY_NAME,
     FILE_INVENTORY_PROGRESS_NAME,
+    OWED_DELIVERY_NAME,
     PENDING_CHAT_SUBMISSION_NAME,
 ];
 
