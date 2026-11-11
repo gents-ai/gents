@@ -1438,6 +1438,11 @@ struct ComposingParent {
     completed: Arc<std::sync::Mutex<Vec<(u32, bool)>>>,
 }
 
+/// Stand in a child's arguments for the `tool_call_id` the `spawn_process`
+/// child returned and the `session_id` the `agent_new` child returned.
+const SPAWNED_PROCESS: &str = "$spawned_process";
+const NEW_SESSION: &str = "$new_session";
+
 impl ToolDyn for ComposingParent {
     fn name(&self) -> String {
         "plugin".into()
@@ -1456,15 +1461,31 @@ impl ToolDyn for ComposingParent {
     fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
             let dispatcher = gents_loop::tool_effects::current().expect("live dispatcher");
+            let mut spawned = String::new();
+            let mut session = String::new();
             for (ordinal, name, arguments) in &self.children {
-                let outcome = dispatcher.call(*ordinal, name, arguments).await;
+                let arguments = arguments
+                    .replace(SPAWNED_PROCESS, &spawned)
+                    .replace(NEW_SESSION, &session);
+                let outcome = dispatcher.call(*ordinal, name, &arguments).await;
                 assert!(
                     !matches!(
                         outcome,
                         Err(gents_loop::tool_effects::ToolEffectError::Fatal(_))
                     ),
-                    "{name} #{ordinal} ended the parent"
+                    "{name} #{ordinal} ended the parent: {outcome:?}"
                 );
+                if let Ok(crate::tools::call::lifecycle::ToolOutcome::Completed(receipt)) = &outcome
+                {
+                    let receipt: serde_json::Value =
+                        serde_json::from_str(receipt).unwrap_or_default();
+                    let field = |name: &str| receipt[name].as_str().map(str::to_owned);
+                    if *name == crate::tools::native::SPAWN_PROCESS_TOOL_NAME {
+                        spawned = field("tool_call_id").expect("spawn receipt names its process");
+                    } else if *name == crate::tools::native::AGENT_NEW_TOOL_NAME {
+                        session = field("session_id").expect("agent_new receipt names its session");
+                    }
+                }
                 let completed = matches!(
                     outcome,
                     Ok(crate::tools::call::lifecycle::ToolOutcome::Completed(_))
@@ -1519,31 +1540,138 @@ impl ToolDyn for AdmissionChild {
     }
 }
 
+/// The process the `spawn_process` route starts: any ordinal no composed
+/// child uses, so its run is not read as a child's own invocation.
+const SPAWNED_ORDINAL: u64 = u64::MAX;
+
+/// Every `HookOwnedTool::ROUTES` entry as a composed child its owner admits
+/// and settles: the arguments it is called with and the durable state its row
+/// reaches. The goal routes run in the order that gives `update_goal` a goal,
+/// the process routes after the spawn whose handle they name, and
+/// `agent_message` after the `agent_new` whose session it addresses.
+fn hook_owned_children() -> Vec<(&'static str, serde_json::Value, &'static str)> {
+    use crate::tools::native as names;
+    let process = serde_json::json!({"tool_call_id": SPAWNED_PROCESS});
+    vec![
+        (crate::goal::GET_GOAL_TOOL_NAME, serde_json::json!({}), "completed"),
+        (
+            crate::goal::CREATE_GOAL_TOOL_NAME,
+            serde_json::json!({"objective": "drive every route"}),
+            "completed",
+        ),
+        (
+            crate::goal::UPDATE_GOAL_TOOL_NAME,
+            serde_json::json!({"objective": "drive every hook-owned route"}),
+            "completed",
+        ),
+        (names::AGENT_LIST_TOOL_NAME, serde_json::json!({}), "completed"),
+        (names::AGENT_SESSION_LIST_TOOL_NAME, serde_json::json!({}), "completed"),
+        (names::AGENT_SESSION_READ_TOOL_NAME, serde_json::json!({"session_id": "absent"}), "completed"),
+        (names::AGENT_INTERRUPT_TOOL_NAME, serde_json::json!({"session_id": "absent"}), "completed"),
+        (names::AGENT_STOP_TOOL_NAME, serde_json::json!({"session_id": "absent"}), "completed"),
+        (names::AGENT_RESUME_TOOL_NAME, serde_json::json!({"session_id": "absent"}), "completed"),
+        (names::AGENT_NEW_TOOL_NAME, serde_json::json!({"agent": "general", "prompt": "work"}), "running"),
+        (names::AGENT_MESSAGE_TOOL_NAME, serde_json::json!({"session_id": NEW_SESSION, "message": "more"}), "running"),
+        (
+            names::SPAWN_PROCESS_TOOL_NAME,
+            serde_json::json!({"tool_name": "child", "args": {"ordinal": SPAWNED_ORDINAL}}),
+            "completed",
+        ),
+        (names::LIST_PROCESSES_TOOL_NAME, serde_json::json!({}), "completed"),
+        (names::WAIT_PROCESS_TOOL_NAME, process.clone(), "completed"),
+        (names::READ_PROCESS_TOOL_NAME, process.clone(), "completed"),
+        (names::CANCEL_PROCESS_TOOL_NAME, process, "completed"),
+    ]
+}
+
+/// Selects the request's own Agent as the `general` target of its Tools, so
+/// the session-message routes have an agent they may start and address.
+async fn allow_general_agent_target(
+    node: &Arc<defra_node::Node>,
+    request: &gents_protocol::row::AgentRequest,
+) {
+    let node_did = request.node_did.as_str();
+    let agent_did = request.agent_did.as_str();
+    let documents = [
+        (
+            crate::Collection::AgentTarget,
+            serde_json::to_value(crate::documents::AgentTargetDocument {
+                target_id: "general:general".to_owned(),
+                node_did: node_did.to_owned(),
+                target_node_did: node_did.to_owned(),
+                agent_did: agent_did.to_owned(),
+                name: "general".to_owned(),
+                description: None,
+                tags: Vec::new(),
+            })
+            .unwrap(),
+        ),
+        (
+            crate::Collection::Tools,
+            serde_json::json!({
+                "node_did": node_did,
+                "tools_id": format!("{agent_did}:tools"),
+                "agents": { "enabled": true, "target_ids": ["general:general"] }
+            }),
+        ),
+    ];
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(
+        documents
+            .into_iter()
+            .map(|(collection, value)| crate::store::config_client::DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
+            })
+            .collect(),
+    )
+    .unwrap();
+    let actor = node.node_identity_did().expect("fixture node has an identity");
+    crate::ConfigAccess::local_as(node.clone(), ::identity::Did::new(actor).unwrap())
+        .transact_write("test.allow_general_agent_target", |txn| {
+            let plan = &plan;
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn generated_child_admission_cases_drive_real_dispatcher() {
     let cases = crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases
         ["child_admission"]
         .as_array()
         .unwrap();
-    let hook_owned = [crate::goal::GET_GOAL_TOOL_NAME];
+    let hook_owned = hook_owned_children();
+    let mut driven: Vec<&str> = hook_owned.iter().map(|(name, ..)| *name).collect();
+    let mut routes: Vec<&str> = crate::tools::call::hook::persistence::HookOwnedTool::ROUTES
+        .iter()
+        .map(|(name, _)| *name)
+        .collect();
+    driven.sort_unstable();
+    routes.sort_unstable();
+    assert_eq!(driven, routes, "every hook-owned route is driven exactly once");
     for selected in [false, true] {
         let mut children = Vec::new();
         let mut expected = std::collections::BTreeMap::new();
         for case in cases.iter().filter(|case| case["selected"] == selected) {
-            let names = match case["route"].as_str().unwrap() {
-                "ordinary" => vec!["child"],
-                "hook_owned" => hook_owned.to_vec(),
-                route => panic!("unknown route {route}"),
-            };
-            for name in names {
-                let ordinal = children.len() as u32 + 1;
-                let arguments = if name == crate::goal::GET_GOAL_TOOL_NAME && case["admitted"] == true {
-                    serde_json::json!({})
-                } else {
-                    serde_json::json!({"admit": case["admitted"], "ordinal": ordinal})
+            let admitted = case["admitted"] == true;
+            let refused = |ordinal: u32| serde_json::json!({"admit": false, "ordinal": ordinal});
+            let calls: Vec<(&'static str, serde_json::Value, &'static str)> =
+                match case["route"].as_str().unwrap() {
+                    "ordinary" => vec![("child", serde_json::json!({"admit": admitted}), "completed")],
+                    "hook_owned" => hook_owned.clone(),
+                    route => panic!("unknown route {route}"),
                 };
+            for (name, mut arguments, settled) in calls {
+                let ordinal = children.len() as u32 + 1;
+                if !admitted {
+                    arguments = refused(ordinal);
+                } else if name == "child" {
+                    arguments["ordinal"] = ordinal.into();
+                }
                 children.push((ordinal, name, arguments.to_string()));
-                expected.insert(ordinal, (case.clone(), case["expected"] == true));
+                expected.insert(ordinal, (case.clone(), name, case["expected"] == true, settled));
             }
         }
         let completed = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1553,7 +1681,7 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
             completed: completed.clone(),
         })];
         if selected {
-            for name in std::iter::once("child").chain(hook_owned) {
+            for name in std::iter::once("child").chain(hook_owned.iter().map(|(name, ..)| *name)) {
                 tools.push(Box::new(AdmissionChild {
                     name,
                     invoked: invoked.clone(),
@@ -1561,7 +1689,18 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
             }
         }
         let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
-        let hook = hook.with_goal_tool_authority(true, false);
+        let hook = hook
+            .with_goal_tool_authority(true, true)
+            .with_background_tool_registry(
+                crate::tools::call::hook::BackgroundToolRegistry::from_tools(
+                    vec![Box::new(AdmissionChild {
+                        name: "child",
+                        invoked: invoked.clone(),
+                    })],
+                    &["child".into()],
+                ),
+            );
+        allow_general_agent_target(&node, lifecycle.request()).await;
         let stream = run_loop_stream(
             ScriptedModel::new_turns(plugin_call_then_text_turns()),
             Some(hook.clone()),
@@ -1601,18 +1740,27 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
                 ))
             })
             .collect();
+        let mut mismatches = Vec::new();
         for (ordinal, observed) in completed {
-            let (case, admissible) = &expected[&ordinal];
-            assert_eq!(observed, *admissible, "dispatcher result {case}");
-            assert_eq!(
-                invoked.contains(&u64::from(ordinal)),
-                *admissible && case["route"] == "ordinary",
-                "invocation {case}"
-            );
-            assert_eq!(
-                states[&u64::from(ordinal)],
-                if *admissible { "completed" } else { "failed" },
-                "durable child {case}"
+            let (case, name, admissible, settled) = &expected[&ordinal];
+            if observed != *admissible {
+                mismatches.push(format!("dispatcher result {observed} for {name} {case}"));
+            }
+            if invoked.contains(&u64::from(ordinal))
+                != (*admissible && case["route"] == "ordinary")
+            {
+                mismatches.push(format!("invocation of {name} {case}"));
+            }
+            let state = &states[&u64::from(ordinal)];
+            if state != if *admissible { *settled } else { "failed" } {
+                mismatches.push(format!("durable child {name} is {state} {case}"));
+            }
+        }
+        assert!(mismatches.is_empty(), "{mismatches:#?}");
+        if selected {
+            assert!(
+                invoked.contains(&SPAWNED_ORDINAL),
+                "spawn_process ran the process it admitted"
             );
         }
         node.shutdown().await.expect("node shutdown");
