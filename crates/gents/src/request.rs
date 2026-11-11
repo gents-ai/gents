@@ -7,3 +7,4 @@ pub mod lifecycle;
 pub mod streaming;
 pub mod task_run;
 pub mod watcher;
+pub mod workspace_binding;
