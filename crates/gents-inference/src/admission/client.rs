@@ -35,11 +35,11 @@ pub struct AdmittedCompletionModel<M> {
     pub(crate) model_name: Option<String>,
     pub(crate) profile_id: Option<String>,
     pub(crate) separate_reasoning: bool,
-    pub(crate) agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
+    pub agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
 }
 
 impl<M> AdmittedCompletionModel<M> {
-    pub(crate) fn new(
+    pub fn new(
         inner: M,
         admission: AdmissionRegistry,
         connection: impl Into<Arc<str>>,

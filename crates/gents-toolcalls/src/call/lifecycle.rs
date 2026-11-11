@@ -44,13 +44,13 @@ pub(crate) mod plugin_receipt;
 pub use plugin_receipt::ReceiptDecision;
 mod recovery;
 mod session_message_call;
-mod transition;
-
-use gents_loop::tool_call_lifecycle::FailureClass;
 #[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 #[allow(dead_code)]
 pub mod admission_fixture;
+mod transition;
+
+use gents_loop::tool_call_lifecycle::FailureClass;
 
 #[cfg(test)]
 mod background_conformance;
@@ -174,10 +174,10 @@ struct SelectedToolIdentity {
 
 #[derive(Clone, Debug)]
 pub struct SpawnedBackgroundToolAdmission {
-    pub(crate) tool_name: String,
-    pub(crate) deadline_at: chrono::DateTime<chrono::Utc>,
+    pub tool_name: String,
+    pub deadline_at: chrono::DateTime<chrono::Utc>,
     /// Remote target identity recorded at creation for later wait-policy lookup.
-    pub(crate) selected_tool_identity: Option<(String, String)>,
+    pub selected_tool_identity: Option<(String, String)>,
 }
 
 impl ToolCallLifecycle {

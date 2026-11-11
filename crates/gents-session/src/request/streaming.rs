@@ -663,10 +663,10 @@ impl DefraStreamWriter {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 impl DefraStreamWriter {
     /// Moves the batch clock as if `elapsed` had passed since the last flush.
-    pub(crate) async fn advance_batch_clock(&self, doc_id: &str, elapsed: Duration) {
+    pub async fn advance_batch_clock(&self, doc_id: &str, elapsed: Duration) {
         if let Some(buffer) = self.buffers.lock().await.get_mut(doc_id) {
             buffer.last_flush_at = buffer
                 .last_flush_at

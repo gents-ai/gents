@@ -47,7 +47,7 @@ pub async fn close_provider_attempt_with_signer(
     .await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn close_provider_attempt_at_with_access(
     access: &ConfigAccess,
     generation: &str,

@@ -490,7 +490,7 @@ pub async fn capture_source_boundary(
         .await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn persist(
     node: &std::sync::Arc<EmbeddedNode>,
     signer: &gents_store::identity::ManagedAgentSigner,

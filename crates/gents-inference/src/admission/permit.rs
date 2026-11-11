@@ -67,8 +67,8 @@ impl AdmissionPermit {
         self.provider_activity = activity;
     }
 
-    #[cfg(test)]
-    pub(crate) async fn finish_success(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn finish_success(
         &mut self,
         usage: Option<ProviderCallUsage>,
     ) -> Result<(), AdmissionError> {

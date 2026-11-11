@@ -201,6 +201,7 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
     let provider_calls = Arc::new(AtomicUsize::new(0));
     let mut daemon = AgentDaemon::new(AgentDaemonInit {
         node: node.clone(),
+        tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
         model: Arc::new(ProviderCallCountingModel(provider_calls.clone())),
@@ -318,6 +319,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
     let provider_calls = Arc::new(AtomicUsize::new(0));
     let mut daemon = AgentDaemon::new(AgentDaemonInit {
         node: node.clone(),
+        tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
         model: Arc::new(ProviderCallCountingModel(provider_calls.clone())),
@@ -515,6 +517,7 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
     let provider_calls = Arc::new(AtomicUsize::new(0));
     let mut daemon = AgentDaemon::new(AgentDaemonInit {
         node: node.clone(),
+        tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
         model: Arc::new(ProviderCallCountingModel(provider_calls.clone())),

@@ -15,7 +15,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("SessionFork", WorkspaceTest("crates/gents/tests/e2e_runtime/fork_invariants.rs")),
         ("ApplyReconcile", Gap("Atomic publication requires the canonical transaction/installer owner; the retired ranked writer and test-local simulator do not implement the contract.")),
         ("AccountRotation", WorkspaceTest("crates/gents-claude/src/rotation_tests.rs")),
-        ("AuxiliaryAdmission", WorkspaceTest("crates/gents/src/request/admission/title_tests.rs")),
+        ("AuxiliaryAdmission", WorkspaceTest("crates/gents-session/src/request/admission/title_tests.rs")),
         ("Background", Module("conformance/background.rs")),
         ("BackendHealth", Module("conformance/backend_health.rs")),
         ("Callback", Module("conformance/callback_lifecycle.rs")),
@@ -50,21 +50,21 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ),
         (
             "CrossMachineComposed",
-            WorkspaceTest("crates/gents/src/tools/call/lifecycle/composed_conformance.rs"),
+            WorkspaceTest("crates/gents-toolcalls/src/call/lifecycle/composed_conformance.rs"),
         ),
         ("DurableLineage", Module("conformance/background.rs")),
         ("EditMatch", Module("conformance/edit_match.rs")),
         ("Enrollment", Module("conformance/enrollment.rs")),
         (
             "TextNormalization",
-            WorkspaceTest("crates/gents/src/goal/edit/contract_tests.rs"),
+            WorkspaceTest("crates/gents-automation/src/goal/edit/contract_tests.rs"),
         ),
-        ("TitleText", WorkspaceTest("crates/gents/src/session/title_text.rs")),
+        ("TitleText", WorkspaceTest("crates/gents-session/src/session/title_text.rs")),
         ("EventDelivery", Module("conformance/event_delivery.rs")),
         ("Eval", Module("conformance/eval.rs")),
         (
             "FileInventory",
-            WorkspaceTest("crates/gents/src/file_inventory/snapshot/tests.rs"),
+            WorkspaceTest("crates/gents-observe/src/file_inventory/snapshot/tests.rs"),
         ),
         ("Fleet", Module("conformance/fleet.rs")),
         ("Hooks", Module("conformance/hooks.rs")),
@@ -75,7 +75,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("ManagedExec", Gap("Real process-group/job kill and bounded-drain tests live in src/exec/mod.rs; generated OS/process-tree cases still need those consumers, not fixture-only flags.")),
         ("Mailbox", Module("conformance/mailbox.rs")),
         ("MCPHealth", Module("conformance/mcp_health.rs")),
-        ("NativeSpawn", WorkspaceTest("crates/gents/src/exec/native_spawn.rs")),
+        ("NativeSpawn", WorkspaceTest("crates/gents-session/src/exec/native_spawn.rs")),
         ("Optimization", WorkspaceTest("crates/gents-eval/src/optimization/policy.rs")),
         (
             "PairingReconcile",
@@ -103,19 +103,19 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("Request", Module("conformance/request_lifecycle.rs")),
         (
             "RequestExecutionLease",
-            WorkspaceTest("crates/gents/src/request/lifecycle/execution_lease/tests/generated_policy.rs"),
+            WorkspaceTest("crates/gents-session/src/request/lifecycle/execution_lease/tests/generated_policy.rs"),
         ),
         ("RuntimeReconcile", Module("conformance/client_runtime.rs")),
         (
             "Scheduling",
-            WorkspaceTest("crates/gents/src/triggers/engine/tests/schedule_source.rs"),
+            WorkspaceTest("crates/gents-automation/src/triggers/engine/tests/schedule_source.rs"),
         ),
         ("ScopeTemplates", Module("conformance/scope_templates.rs")),
         ("SelfConfig", Module("conformance/self_config.rs")),
         ("SessionRecovery", WorkspaceTest("crates/gents-desktop-core/src/client/mutations/chat/request/tests.rs")),
         (
             "Skills",
-            WorkspaceTest("crates/gents/src/documents/skills.rs"),
+            WorkspaceTest("crates/gents-documents/src/skills.rs"),
         ),
         ("StorageFailure", Module("storage_failure.rs")),
         (
@@ -124,19 +124,19 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ),
         (
             "StorageWriteGate",
-            WorkspaceTest("crates/gents/src/inference/admission/stream_guard/conformance.rs"),
+            WorkspaceTest("crates/gents-inference/src/admission/stream_guard/conformance.rs"),
         ),
         (
             "NativeCompletion",
-            WorkspaceTest("crates/gents/src/store/config_client/txn_native_completion_conformance.rs"),
+            WorkspaceTest("crates/gents-store/src/config_client/txn_native_completion_conformance.rs"),
         ),
         (
             "NativeClaimLifetime",
-            WorkspaceTest("crates/gents/src/store/config_client/txn_native_claim_lifetime_conformance.rs"),
+            WorkspaceTest("crates/gents-store/src/config_client/txn_native_claim_lifetime_conformance.rs"),
         ),
         (
             "StoreEncryptionUpgrade",
-            WorkspaceTest("crates/gents/src/store/local/store_key/upgrade/tests.rs"),
+            WorkspaceTest("crates/gents-store/src/local/store_key/upgrade/tests.rs"),
         ),
         (
             "StreamingResponse",
@@ -148,14 +148,14 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ),
         (
             "ToolExecution",
-            WorkspaceTest("crates/gents/src/tools/call/lifecycle/admission_fixture.rs"),
+            WorkspaceTest("crates/gents/src/test_support/admission_fixture.rs"),
         ),
         ("ToolPolicy", Module("conformance/tool_policy.rs")),
         ("Lsp", Module("conformance/lsp.rs")),
         ("Transcript", Gap("Native owner coverage exists for ordering, model-scripted parallel completion, pair closure, and ownership abandonment. Full generated coverage still needs transaction fault injection for lost-ack duplicate delivery replay and a native permissive orphan-result publication owner.")),
         (
             "Triggers",
-            WorkspaceTest("crates/gents/src/triggers/engine/tests/dispatch_contract.rs"),
+            WorkspaceTest("crates/gents-automation/src/triggers/engine/tests/dispatch_contract.rs"),
         ),
         ("Workspace", Gap("Canonical binding/admission fixtures await the workspace runtime owner; the removed test-local predicate mirror was not implementation coverage.")),
     ])

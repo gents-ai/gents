@@ -81,6 +81,7 @@ async fn unavailable_provider_parks_and_resumes(fails_on_first_read: bool) {
     );
     let mut daemon = AgentDaemon::new(AgentDaemonInit {
         node: node.clone(),
+        tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
         model: Arc::new(RecoveringProvider {
@@ -287,6 +288,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
     );
     let mut daemon = AgentDaemon::new(AgentDaemonInit {
         node: node.clone(),
+        tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
         model: Arc::new(model.clone()),
@@ -682,6 +684,7 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
     );
     let mut daemon = AgentDaemon::new(AgentDaemonInit {
         node: node.clone(),
+        tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
         model: Arc::new(LeaseLossProvider),
@@ -856,6 +859,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
     );
     let mut daemon = AgentDaemon::new(AgentDaemonInit {
         node: node.clone(),
+        tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
         model: Arc::new(model.clone()),
@@ -1082,6 +1086,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
     );
     let mut daemon = AgentDaemon::new(AgentDaemonInit {
         node: node.clone(),
+        tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
         model: Arc::new(LeaseLossProvider),
@@ -1255,6 +1260,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     );
     let mut daemon = AgentDaemon::new(AgentDaemonInit {
         node: node.clone(),
+        tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
         model: Arc::new(model.clone()),
@@ -1373,6 +1379,7 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
     );
     let mut daemon = AgentDaemon::new(AgentDaemonInit {
         node: node.clone(),
+        tool_config: Arc::new(Default::default()),
         agent_config: agent_config.clone(),
         provider_family: None,
         model: Arc::new(model.clone()),

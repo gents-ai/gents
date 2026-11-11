@@ -697,7 +697,7 @@ async fn background_wake_is_visible_to_the_owning_user_and_selected_agent() {
     std::fs::remove_dir_all(admission.path).unwrap();
 }
 
-pub(crate) struct SelectedBackgroundWake {
+pub struct SelectedBackgroundWake {
     pub admission: PublishedAdmission,
     pub wake: gents_protocol::row::AgentRequest,
     pub notification_text: String,

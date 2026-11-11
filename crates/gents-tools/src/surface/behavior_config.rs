@@ -437,7 +437,7 @@ impl AgentToolSurfaceConfig {
         &self.required_mcp_service_ids
     }
 
-    pub(crate) fn agent_tools(&self) -> &AgentToolConfig {
+    pub fn agent_tools(&self) -> &AgentToolConfig {
         &self.agent_tools
     }
 

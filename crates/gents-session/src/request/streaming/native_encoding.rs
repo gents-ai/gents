@@ -9,7 +9,7 @@ use gents_protocol::output::{
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct EncodedStream {
+pub struct EncodedStream {
     pub declaration: StreamDeclaration,
     pub payload: String,
 }
@@ -86,7 +86,7 @@ pub struct EncodedNativeMessage {
 }
 
 impl EncodedNativeMessage {
-    pub(crate) fn build_blocks(
+    pub fn build_blocks(
         &self,
         close_doc_id: &str,
         tool_doc_ids: &[String],

@@ -647,7 +647,7 @@ impl AgentRequestAdmissionVerifier {
         .await
     }
 
-    pub(crate) async fn verify_folded_for_claim(
+    pub async fn verify_folded_for_claim(
         &self,
         document: &str,
         agent_identity: &dyn NodeIdentity,
@@ -658,8 +658,8 @@ impl AgentRequestAdmissionVerifier {
             .await
     }
 
-    #[cfg(test)]
-    pub(crate) async fn verify_fresh_for_claim_at(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn verify_fresh_for_claim_at(
         &self,
         request: &AgentRequest,
         agent_identity: &dyn NodeIdentity,
@@ -675,8 +675,8 @@ impl AgentRequestAdmissionVerifier {
         .await
     }
 
-    #[cfg(test)]
-    pub(crate) async fn verify_fresh_at(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn verify_fresh_at(
         &self,
         request: &AgentRequest,
         target_agent_did: &str,

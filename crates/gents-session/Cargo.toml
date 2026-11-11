@@ -14,6 +14,7 @@ test-home-guard = ["gents-store/test-home-guard", "gents-documents/test-home-gua
 test-fixtures = ["test-home-guard", "dep:gents-lean-vocab", "gents-store/test-fixtures", "gents-documents/test-fixtures", "gents-inference/test-fixtures", "gents-p2p/test-fixtures"]
 
 [dependencies]
+# Decoder of Lean-generated cases; compiled in only for test-fixtures.
 gents-lean-vocab = { workspace = true, optional = true }
 gents-store.workspace = true
 gents-documents.workspace = true

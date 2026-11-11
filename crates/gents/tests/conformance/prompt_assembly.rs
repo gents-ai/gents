@@ -1790,10 +1790,19 @@ fn repo_root() -> PathBuf {
 fn production_sources() -> Vec<(String, String)> {
     let root = repo_root();
     let mut out = Vec::new();
-    let mut stack = vec![
-        root.join("crates/gents/src"),
-        root.join("crates/gents-loop/src"),
-    ];
+    let mut stack = [
+        "gents",
+        "gents-loop",
+        "gents-inference",
+        "gents-session",
+        "gents-tools",
+        "gents-toolcalls",
+        "gents-automation",
+        "gents-observe",
+    ]
+    .into_iter()
+    .map(|name| root.join("crates").join(name).join("src"))
+    .collect::<Vec<_>>();
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir)
             .unwrap_or_else(|err| panic!("failed to read {}: {err}", dir.display()))
@@ -1841,7 +1850,7 @@ fn files_containing(needles: &[&str]) -> BTreeSet<String> {
 fn provider_invocations_are_confined_to_the_owned_loop_seam() {
     let expected = BTreeSet::from([
         "crates/gents-loop/src/loop_stream.rs".to_string(),
-        "crates/gents/src/inference/llm/rig_compat.rs".to_string(),
+        "crates/gents-inference/src/llm/rig_compat.rs".to_string(),
     ]);
     let found = files_containing(&[".completion_request(", ".completion(", ".stream("]);
     assert_eq!(

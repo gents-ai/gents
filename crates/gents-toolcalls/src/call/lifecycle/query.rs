@@ -157,7 +157,7 @@ impl ToolCallLifecycle {
         .await
     }
 
-    pub(crate) async fn load_by_doc_id_in_txn(
+    pub async fn load_by_doc_id_in_txn(
         txn: &ConfigApplyTxn<'_>,
         node: Arc<EmbeddedNode>,
         doc_id: &str,

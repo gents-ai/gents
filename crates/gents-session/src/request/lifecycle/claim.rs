@@ -1,7 +1,7 @@
 use super::*;
 use anyhow::Context;
 
-pub(crate) struct DurableClaimReceipt {
+pub struct DurableClaimReceipt {
     request: AgentRequest,
     request_commit_cid: String,
     deadline_at: chrono::DateTime<chrono::Utc>,
@@ -536,8 +536,8 @@ impl RequestLifecycle {
         Ok(())
     }
 
-    #[cfg(test)]
-    pub(crate) async fn begin_owned_execution_at_with_access<F>(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn begin_owned_execution_at_with_access<F>(
         access: &gents_store::config_client::ConfigAccess,
         request_doc_id: &str,
         generation: &str,

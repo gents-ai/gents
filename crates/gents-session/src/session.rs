@@ -93,7 +93,7 @@ pub(crate) use output::count_capture_row_queries;
 pub use output::count_request_output_scans;
 #[cfg(test)]
 pub(crate) use output::count_source_output_queries;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use output::reader::load_canonical_payload_from_access;
 pub(crate) use output::reader::load_canonical_payload_in_txn;
 pub(crate) use output::reader::load_canonical_payload_with_access;

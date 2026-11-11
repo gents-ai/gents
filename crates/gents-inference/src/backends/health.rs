@@ -257,8 +257,8 @@ impl BackendHealthMap {
             .retain(|backend_id, _| backend_ids.contains(backend_id));
     }
 
-    #[cfg(test)]
-    pub(crate) async fn set_for_test(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn set_for_test(
         &self,
         backend_id: impl Into<String>,
         state: BackendHealthState,

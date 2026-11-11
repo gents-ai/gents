@@ -9,7 +9,7 @@ use gents_p2p::p2p_reconcile::{
 use gents_store::graphql::escape_graphql_string;
 use serde::Deserialize;
 
-use gents::support::{first_optional_row, test_db, TestDb};
+use crate::support::{first_optional_row, test_db, TestDb};
 
 use super::invariants::ObservedSnapshot;
 use super::scenario::{Action, NodeId, Scenario};
@@ -167,7 +167,7 @@ impl Harness {
 
     async fn wait_for_convergence(&mut self) -> Result<()> {
         let snapshot = self.current_snapshot().await?;
-        if gents::support::pairing_conformance::invariants::check_liveness(&snapshot) {
+        if crate::support::pairing_conformance::invariants::check_liveness(&snapshot) {
             self.history.push(snapshot);
             return Ok(());
         }
@@ -177,7 +177,7 @@ impl Harness {
         self.record_observation().await?;
 
         let snapshot = self.current_snapshot().await?;
-        if gents::support::pairing_conformance::invariants::check_liveness(&snapshot) {
+        if crate::support::pairing_conformance::invariants::check_liveness(&snapshot) {
             Ok(())
         } else {
             bail!(

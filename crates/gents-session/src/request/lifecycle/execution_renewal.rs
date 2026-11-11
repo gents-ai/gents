@@ -118,7 +118,7 @@ async fn renew_once(
     ))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn renew_once_at_with_access(
     access: &gents_store::config_client::ConfigAccess,
     request_doc_id: &str,

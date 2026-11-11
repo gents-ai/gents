@@ -1,8 +1,22 @@
 use std::sync::Arc;
 
-use gents_store::identity::grant_sets::tests::*;
+use gents_store::config_client::{ConfigAccess, ConfigClientError};
+use gents_store::identity::grant_sets::test_support::*;
 use gents_store::identity::grant_sets::*;
 use gents_store::identity::NodeIdentity;
+
+fn recipient_sets(name: &str) -> Vec<GrantSet> {
+    let case = gents_lean_vocab::lean_contract_snapshot()
+        .identity_grant_recipient_cases
+        .iter()
+        .find(|case| case.recipient == name)
+        .unwrap_or_else(|| panic!("Lean recipient {name:?}"));
+    case.direct
+        .iter()
+        .chain(&case.projected)
+        .map(|set| set_named(set))
+        .collect()
+}
 
 pub(crate) async fn agent_step(
     access: &ConfigAccess,

@@ -560,7 +560,6 @@ fn agent_with_binding(
         max_turns: gents_inference::resolved::DEFAULT_MAX_TURNS,
         max_turns_provenance: gents_inference::resolved::MaxTurnsProvenance::Default,
         system_prompt: "system".to_string(),
-        tools: AgentToolSurfaceConfig::meta_only(),
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,

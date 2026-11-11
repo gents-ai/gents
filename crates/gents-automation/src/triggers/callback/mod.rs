@@ -197,7 +197,7 @@ pub fn test_agent_identity() -> Arc<dyn gents_store::identity::NodeIdentity> {
     gents_store::identity::resolve_agent_identity(&root, &binding).unwrap()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn test_agent_did() -> String {
     test_agent_identity().did().to_owned()
 }

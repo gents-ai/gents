@@ -143,7 +143,7 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     let identities = runtime
         .agents()
         .iter()
-        .map(|agent| agent.agent_identity.clone())
+        .map(|agent| agent.agent.agent_identity.clone())
         .collect::<Vec<_>>();
     let agent = spawn_runtime(&db, runtime).await;
 

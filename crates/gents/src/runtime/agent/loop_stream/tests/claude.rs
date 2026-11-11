@@ -435,11 +435,11 @@ fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
             .unwrap();
             let mut behavior = crate::runtime::agent::PendingAgent::new("anthropic-key-turn")
                 .build_with_identity_for_test(identity);
-            behavior.backend_provider_kind = gents_inference::backends::provider::BackendProviderKind::AnthropicApiKey;
+            Arc::make_mut(&mut behavior.agent).backend_provider_kind = gents_inference::backends::provider::BackendProviderKind::AnthropicApiKey;
             let client = build_backend_client(
                 std::sync::Arc::default(),
                 node.clone(),
-                &behavior,
+                &behavior.agent,
                 "placeholder-key",
                 std::time::Duration::from_secs(1),
             )

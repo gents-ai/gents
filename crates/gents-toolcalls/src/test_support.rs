@@ -1,3 +1,5 @@
+pub mod plugin;
+
 #[cfg(any(test, feature = "test-fixtures"))]
 use gents_pack::test_support::fixture_pack_copy;
 

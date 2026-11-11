@@ -112,7 +112,7 @@ pub use session_history::{
 #[cfg(test)]
 pub(crate) use shared::apply_workspace_authority;
 pub use shared::background_command_timeout;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use shared::run_command_for_test;
 pub(crate) use shared::shell_join;
 #[cfg(test)]

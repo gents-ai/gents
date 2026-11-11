@@ -39,18 +39,18 @@ pub mod execution_lease;
 mod execution_renewal;
 #[cfg(test)]
 pub(crate) use execution_renewal::renew_in_transaction;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use execution_renewal::renew_once_at_with_access as renew_execution_lease_once_at_with_access;
 #[cfg(test)]
 pub(crate) use execution_renewal::renew_with_recheck_at;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use execution_renewal::RenewalAttemptOutcome;
 mod terminal_binding;
 pub use terminal_binding::is_exact_invocation_reply;
 pub mod terminal_tools;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use execution_lease::revoke_execution_preserving_output_at_with_access;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use execution_lease::terminalize_owned_at_with_access;
 pub use execution_lease::{
     stage_revoke_execution_preserving_output, stage_supersede_parked_execution,
@@ -69,7 +69,7 @@ pub mod query;
 pub mod queue;
 mod recovery;
 pub mod requested_create;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use recovery::{
     recover_expired_generation_with_access_for_test, RecoveryResult, RecoverySelectionChoice,
     RecoverySelectionRejected,

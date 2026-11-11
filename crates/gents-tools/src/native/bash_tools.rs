@@ -74,7 +74,7 @@ pub(super) struct ReadOnlyBashTool {
 
 impl ReadOnlyBashTool {
     #[cfg(any(test, feature = "test-fixtures"))]
-    pub(super) fn new(
+    pub fn new(
         context: ToolContext,
         default_timeout: Duration,
         allowlist: Vec<String>,
@@ -124,7 +124,7 @@ pub(super) struct UnrestrictedBashTool {
 
 impl UnrestrictedBashTool {
     #[cfg(any(test, feature = "test-fixtures"))]
-    pub(super) fn new(context: ToolContext, default_timeout: Duration) -> Self {
+    pub fn new(context: ToolContext, default_timeout: Duration) -> Self {
         Self {
             context,
             default_timeout,

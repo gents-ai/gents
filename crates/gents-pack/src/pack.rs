@@ -54,7 +54,7 @@ pub(crate) use inference::{
     preview_pack_inference_bindings_with_node_binding,
 };
 pub use installation::declared_collections;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use installation::record_plugin_store_change_as_with_node_binding;
 pub use installation::{
     apply_hosted_document_graph, apply_prepared_dependency_schemas, assemble_document_graph_report,

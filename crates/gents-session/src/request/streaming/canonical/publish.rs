@@ -88,7 +88,7 @@ pub async fn publish_provider_turn_with_signer(
     publish_provider_turn_with_time(node, actor, signer, generation, plan, None).await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn publish_provider_turn_at_with_access(
     access: &ConfigAccess,
     generation: &str,
