@@ -202,33 +202,8 @@ def applyAction (j : Journal) : Action → Journal
   | .restart => restart j
   | .saveUnrelated => saveUnrelated j
 
-def stageString : Stage → String
-  | .commit => "commit" | .parent => "parent" | .executor => "executor"
-
 def statusString : Status → String
   | .fresh => "fresh" | .pending => "pending" | .succeeded => "succeeded" | .failed => "failed"
-
-def journalJson (j : Journal) : Json := Json.mkObj
-  [("client", toJson j.client), ("agent_did", toJson j.agentDid), ("node_did", toJson j.nodeDid),
-   ("agent_doc", toJson j.agentDoc), ("node_doc", toJson j.nodeDoc),
-   ("commit", toJson (statusString j.commit)), ("parent", toJson (statusString j.parent)),
-   ("executor", toJson (statusString j.executor)), ("permit", toJson (j.permit.map stageString))]
-
-def actionJson : Action → Json
-  | .record stage durable => Json.mkObj [("action", toJson "record"),
-      ("stage", toJson (stageString stage)), ("durable", toJson durable)]
-  | .dispatch stage => Json.mkObj [("action", toJson "dispatch"), ("stage", toJson (stageString stage))]
-  | .finish stage success failure => Json.mkObj [("action", toJson "finish"),
-      ("stage", toJson (stageString stage)), ("success", toJson success), ("confirmed_failure", toJson failure)]
-  | .restart => Json.mkObj [("action", toJson "restart")]
-  | .saveUnrelated => Json.mkObj [("action", toJson "save_unrelated")]
-
-def trace : Journal → List Action → List Json
-  | _, [] => []
-  | before, action :: rest =>
-      let after := applyAction before action
-      Json.mkObj [("action", actionJson action), ("before", journalJson before),
-        ("after", journalJson after)] :: trace after rest
 
 def initial : Journal := { client := "client", agentDid := "agent", nodeDid := "node", agentDoc := "agent-doc", nodeDoc := "node-doc" }
 
@@ -288,9 +263,5 @@ def cases : List (String × List Action) :=
       [.record .executor true, .dispatch .executor, .finish .executor false true,
        .record .parent true, .record .executor true, .dispatch .executor, .finish .executor true false]),
    ("unrelated-save-independent", commitSuccess ++ parentSuccess ++ [.saveUnrelated])]
-
-def casesJson : String := (toJson (cases.map fun (name, actions) =>
-  Json.mkObj [("name", toJson name), ("initial", journalJson initial),
-    ("steps", toJson (trace initial actions))])).compress
 
 end Identity.ClientAgentJournal

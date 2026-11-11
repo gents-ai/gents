@@ -146,33 +146,6 @@ def cases : List Case :=
   , ⟨"other-collection", { validInput with agentCollection := false }, .committed, .complete⟩
   , ⟨"ordinary-caller", { validInput with clientIntent := false }, .committed, .complete⟩ ]
 
-def routeString : Route → String
-  | .native => "native" | .signed => "signed" | .refuse => "refuse"
-
-def commitString : CommitObservation → String
-  | .aborted => "aborted" | .unknown => "unknown" | .committed => "committed"
-
-def grantsString : GrantObservation → String
-  | .incomplete => "incomplete" | .complete => "complete" | .unknown => "unknown"
-
-def publicationString : Publication → String
-  | .nativeRoute => "native_route" | .unchanged => "unchanged" | .unknownCommit => "unknown_commit"
-  | .committedIncomplete => "committed_incomplete" | .committedComplete => "committed_complete"
-  | .committedGrantUnknown => "committed_grant_unknown"
-
-def caseJson (c : Case) : Json := Json.mkObj
-  [("name", toJson c.name), ("client_intent", toJson c.input.clientIntent),
-   ("agent_collection", toJson c.input.agentCollection), ("create", toJson c.input.create),
-   ("http", toJson c.input.http), ("signer_available", toJson c.input.signerAvailable),
-   ("supported", toJson c.input.supported), ("signer_matches_bearer", toJson c.input.signerMatchesBearer),
-   ("input_matches_graph", toJson c.input.inputMatchesGraph), ("trusted_schema", toJson c.input.trustedSchema),
-   ("graph_verified", toJson c.input.graphVerified), ("transport_ready", toJson c.input.transportReady),
-   ("native_authorized", toJson c.input.nativeAuthorized), ("commit", toJson (commitString c.commit)),
-   ("grants", toJson (grantsString c.grants)), ("expected_route", toJson (routeString (route c.input))),
-   ("expected_publication", toJson (publicationString (publication c.input c.commit c.grants)))]
-
-def casesJson : String := (toJson (cases.map caseJson)).compress
-
 /-- Arbitrary application collections are signable only with SDL the caller
 explicitly supplied as its own authored input. A remote schema is an observation,
 not authority to choose the bytes signed by the User. -/
@@ -220,17 +193,5 @@ def documentCreateCases : List DocumentCreateCase :=
   , ⟨"schema-mismatch", { validDocumentInput with matchesLive := false }⟩
   , ⟨"no-signer", { validDocumentInput with heldSigner := false }⟩
   , ⟨"non-http", { validDocumentInput with http := false }⟩ ]
-
-def documentCreateCaseJson (c : DocumentCreateCase) : Json := Json.mkObj
-  [("name", toJson c.name),
-   ("source", toJson (if c.input.source == .authored then "authored" else "remote")),
-   ("single_collection", toJson c.input.singleCollection),
-   ("application_collection", toJson c.input.applicationCollection),
-   ("matches_live", toJson c.input.matchesLive),
-   ("held_signer", toJson c.input.heldSigner),
-   ("http", toJson c.input.http),
-   ("expected_route", toJson (routeString (documentCreateRoute c.input)))]
-
-def documentCreateCasesJson : String := (toJson (documentCreateCases.map documentCreateCaseJson)).compress
 
 end Identity.ClientAgentCreation

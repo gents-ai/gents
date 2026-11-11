@@ -683,14 +683,6 @@ pub struct LeanPrivateJournalCheck {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanIdentityClientAgentJournalCase {
-    pub name: String,
-    pub initial: LeanIdentityClientAgentJournalState,
-    pub steps: Vec<LeanIdentityClientAgentJournalStep>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanIdentityClientAgentRecoveryCase {
     pub name: String,
     pub actor_matches: bool,
@@ -712,83 +704,12 @@ pub enum LeanIdentityClientAgentRecoveryDisposition {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanIdentityClientAgentJournalStep {
-    pub action: LeanIdentityClientAgentJournalAction,
-    pub before: LeanIdentityClientAgentJournalState,
-    pub after: LeanIdentityClientAgentJournalState,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanIdentityClientAgentJournalState {
-    pub client: String,
-    pub agent_did: String,
-    pub node_did: String,
-    pub agent_doc: String,
-    pub node_doc: String,
-    pub commit: LeanIdentityClientAgentJournalStatus,
-    pub parent: LeanIdentityClientAgentJournalStatus,
-    pub executor: LeanIdentityClientAgentJournalStatus,
-    pub permit: Option<LeanIdentityClientAgentJournalStage>,
-}
-
-#[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LeanIdentityClientAgentJournalStatus {
     Fresh,
     Pending,
     Succeeded,
     Failed,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LeanIdentityClientAgentJournalStage {
-    Commit,
-    Parent,
-    Executor,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanIdentityClientAgentJournalAction {
-    Record {
-        stage: LeanIdentityClientAgentJournalStage,
-        durable: bool,
-    },
-    Dispatch {
-        stage: LeanIdentityClientAgentJournalStage,
-    },
-    Finish {
-        stage: LeanIdentityClientAgentJournalStage,
-        success: bool,
-        confirmed_failure: bool,
-    },
-    Restart,
-    SaveUnrelated,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanIdentityClientAgentCreationCase {
-    pub name: String,
-    pub client_intent: bool,
-    pub agent_collection: bool,
-    pub create: bool,
-    pub http: bool,
-    pub signer_available: bool,
-    pub supported: bool,
-    pub signer_matches_bearer: bool,
-    pub input_matches_graph: bool,
-    pub trusted_schema: bool,
-    pub graph_verified: bool,
-    pub transport_ready: bool,
-    pub native_authorized: bool,
-    pub commit: String,
-    pub grants: String,
-    pub expected_route: String,
-    pub expected_publication: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
