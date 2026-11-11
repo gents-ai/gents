@@ -1465,6 +1465,12 @@ def caseCoverage : List CoverageEntry :=
       "LifecycleHookGateCases"
       "conformance::hooks::generated_lifecycle_hook_gate_cases_drive_the_claim_gate")
       "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "lifecycle_hook_queue_scope_cases"
+      "LifecycleHookQueueScopeCases"
+      "conformance::hooks::generated_lifecycle_hook_queue_scope_cases_drive_the_queue_partition"
+      "Production gate runs every case and production partition combines the answers through the conformance test's in-memory Host. The DefraDB transaction host, its revision read and the Goals listener (goal::lifecycle_hooks::AssignmentScope) are not driven by these cases.")
+      "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "lifecycle_hook_delivery_cases"
       "LifecycleHookDeliveryCases"

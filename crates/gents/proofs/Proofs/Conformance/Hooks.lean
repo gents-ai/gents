@@ -1,5 +1,6 @@
 import Proofs.Hooks.Claim
 import Proofs.Hooks.MustCommit
+import Proofs.Hooks.QueueScope
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.HooksContracts
@@ -467,6 +468,109 @@ private def gateCaseJson (c : GateCase) : String :=
     ",\"result\":" ++ gateResultJson c.result ++ "}"
 
 def gateCasesJson : String := jsonArray (gateCases.map gateCaseJson)
+
+/-! Queue partitions: `Hooks.QueueScope.scopes` at `request.queue.scope`. -/
+
+abbrev ScopeAnswers := QueueScope.Answers String
+
+/-- A scripted plugin at `request.queue.scope`: its answers are aligned with
+the requests core asked about, whatever they are. -/
+def Script.scopePlugin (script : Script ScopeAnswers) :
+    Plugin String (List String) ScopeAnswers String String String :=
+  { manifest := script.manifest
+  , hook :=
+      { reads := fun _ => script.reads
+      , decide := fun _ rows => script.decision.outcome rows } }
+
+structure QueueScopeCase where
+  name : String
+  world : World
+  plugins : List (Script ScopeAnswers)
+  asked : List String
+
+def QueueScopeCase.result (c : QueueScopeCase) :
+    Except Refusal (List (Except Refusal (List (String × String)))) :=
+  QueueScope.scopes c.world.host (c.plugins.map Script.scopePlugin) c.asked c.world.state
+
+private def keyed (key : String) : QueueScope.Answer String := .keyed key
+
+private def failed (reason : String) : QueueScope.Answer String := .failed reason
+
+private def silent : QueueScope.Answer String := .unanswered
+
+private def goalsScope : Script ScopeAnswers :=
+  { name := "goals", owns := ["Goal"], bound := 0, reads := ["Note"]
+  , decision := .proceed [keyed "goal-a", silent] [] }
+
+private def lanes : Script ScopeAnswers :=
+  { name := "lanes", owns := ["Lane"], bound := 0
+  , decision := .proceed [keyed "lane-1", keyed "lane-1"] [] }
+
+def queueScopeCases : List QueueScopeCase :=
+  [ { name := "no_plugins_leave_every_request_unscoped", world := stageWorld, plugins := []
+    , asked := ["r1", "r2"] }
+  , { name := "a_key_and_the_unscoped_default", world := stageWorld, plugins := [goalsScope]
+    , asked := ["r1", "r2"] }
+  , { name := "a_missing_position_is_unanswered", world := stageWorld
+    , plugins := [goalsScope.deciding (.proceed [keyed "goal-a"] [])]
+    , asked := ["r1", "r2", "r3"] }
+  , { name := "keys_from_shown_rows", world := stageWorld
+    , plugins := [goalsScope.deciding
+        (.byShown 1 ([keyed "one-note", keyed "one-note"], []) ([keyed "other", silent], []))]
+    , asked := ["r1", "r2"] }
+  , { name := "keys_from_other_shown_rows"
+    , world := { stageWorld with rows := row "Note" "n2" 0 "b" :: stageWorld.rows }
+    , plugins := [goalsScope.deciding
+        (.byShown 1 ([keyed "one-note", keyed "one-note"], []) ([keyed "other", silent], []))]
+    , asked := ["r1", "r2"] }
+  , { name := "keys_are_named_in_plugin_order", world := stageWorld
+    , plugins := [goalsScope, lanes], asked := ["r1", "r2"] }
+  , { name := "keys_are_named_in_plugin_order_swapped", world := stageWorld
+    , plugins := [lanes, goalsScope], asked := ["r1", "r2"] }
+  , { name := "a_failure_belongs_to_its_request", world := stageWorld
+    , plugins := [goalsScope.deciding (.proceed [failed "history unavailable", keyed "goal-b"] [])]
+    , asked := ["r1", "r2"] }
+  , { name := "the_first_failure_in_plugin_order_is_reported", world := stageWorld
+    , plugins := [goalsScope.deciding (.proceed [failed "goal history", silent] []),
+                  lanes.deciding (.proceed [failed "lane closed", keyed "lane-1"] [])]
+    , asked := ["r1", "r2"] }
+  , { name := "a_later_failure_overrides_an_earlier_key", world := stageWorld
+    , plugins := [goalsScope, lanes.deciding (.proceed [failed "lane closed", silent] [])]
+    , asked := ["r1", "r2"] }
+  , { name := "refusal_is_reported", world := stageWorld
+    , plugins := [lanes, goalsScope.deciding (.refuse "goal rows unreadable")]
+    , asked := ["r1"] }
+  , { name := "answer_with_effects_is_invalid", world := stageWorld
+    , plugins := [goalsScope.deciding (.proceed [keyed "goal-a"] [create "Goal" "g1" "x"]), lanes]
+    , asked := ["r1"] } ]
+
+private def answerJson : QueueScope.Answer String → String
+  | .unanswered => "{\"kind\":\"unanswered\"}"
+  | .keyed key => "{\"kind\":\"keyed\",\"key\":" ++ jsonString key ++ "}"
+  | .failed reason => "{\"kind\":\"failed\",\"reason\":" ++ jsonString reason ++ "}"
+
+private def answersJson (answers : ScopeAnswers) : String :=
+  jsonArray (answers.map answerJson)
+
+private def partitionJson : Except Refusal (List (String × String)) → String
+  | .ok keys =>
+      "{\"kind\":\"ok\",\"partition\":" ++ jsonArray (keys.map fun entry =>
+        "{\"plugin\":" ++ jsonString entry.1 ++ ",\"key\":" ++ jsonString entry.2 ++ "}") ++ "}"
+  | .error refusal => "{\"kind\":\"error\",\"refusal\":" ++ refusalJson refusal ++ "}"
+
+private def queueScopeResultJson :
+    Except Refusal (List (Except Refusal (List (String × String)))) → String
+  | .ok scopes => "{\"kind\":\"ok\",\"scopes\":" ++ jsonArray (scopes.map partitionJson) ++ "}"
+  | .error refusal => "{\"kind\":\"error\",\"refusal\":" ++ refusalJson refusal ++ "}"
+
+private def queueScopeCaseJson (c : QueueScopeCase) : String :=
+  "{\"name\":" ++ jsonString c.name ++
+    ",\"world\":" ++ worldJson c.world ++
+    ",\"plugins\":" ++ jsonArray (c.plugins.map (scriptJson answersJson)) ++
+    ",\"asked\":" ++ jsonStringArray c.asked ++
+    ",\"result\":" ++ queueScopeResultJson c.result ++ "}"
+
+def queueScopeCasesJson : String := jsonArray (queueScopeCases.map queueScopeCaseJson)
 
 /-! The delivery record: `Hooks.Delivery.publish`, `deliver` and `pending`. -/
 

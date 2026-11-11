@@ -210,6 +210,53 @@ pub struct LeanLifecycleHookGateCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LeanLifecycleHookScopeAnswer {
+    Unanswered,
+    Keyed { key: String },
+    Failed { reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanLifecycleHookScopeKey {
+    pub plugin: String,
+    pub key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LeanLifecycleHookPartition {
+    Ok {
+        partition: Vec<LeanLifecycleHookScopeKey>,
+    },
+    Error {
+        refusal: LeanLifecycleHookRefusal,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LeanLifecycleHookQueueScopeResult {
+    Ok {
+        scopes: Vec<LeanLifecycleHookPartition>,
+    },
+    Error {
+        refusal: LeanLifecycleHookRefusal,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanLifecycleHookQueueScopeCase {
+    pub name: String,
+    pub world: LeanLifecycleHookWorld,
+    pub plugins: Vec<LeanLifecycleHookScript<Vec<LeanLifecycleHookScopeAnswer>>>,
+    pub asked: Vec<String>,
+    pub result: LeanLifecycleHookQueueScopeResult,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanLifecycleHookDeliveryRecord {
     pub terminal: Option<String>,

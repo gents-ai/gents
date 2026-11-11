@@ -3,11 +3,14 @@ use std::sync::{Arc, Mutex};
 use gents_lean_vocab::{
     lean_lifecycle_hook_combine_cases, lean_lifecycle_hook_delivery_cases,
     lean_lifecycle_hook_effect_cases, lean_lifecycle_hook_gate_cases,
-    lean_lifecycle_hook_must_commit_cases, lean_lifecycle_hook_stage_cases,
+    lean_lifecycle_hook_must_commit_cases, lean_lifecycle_hook_queue_scope_cases,
+    lean_lifecycle_hook_stage_cases,
     LeanLifecycleHookAccess, LeanLifecycleHookChoice, LeanLifecycleHookDecision,
     LeanLifecycleHookDeliveryRecord, LeanLifecycleHookDeliveryStep, LeanLifecycleHookEffect,
-    LeanLifecycleHookGateResult, LeanLifecycleHookManifest, LeanLifecycleHookRefusal,
-    LeanLifecycleHookRow, LeanLifecycleHookScript, LeanLifecycleHookStageResult,
+    LeanLifecycleHookGateResult, LeanLifecycleHookManifest, LeanLifecycleHookPartition,
+    LeanLifecycleHookQueueScopeResult, LeanLifecycleHookRefusal, LeanLifecycleHookRow,
+    LeanLifecycleHookScopeAnswer, LeanLifecycleHookScopeKey, LeanLifecycleHookScript,
+    LeanLifecycleHookStageResult,
     LeanLifecycleHookState, LeanLifecycleHookVerdict, LeanLifecycleHookWorld,
 };
 use gents_session::request::hooks::claim::{combine, ClaimVerdict};
@@ -16,6 +19,9 @@ use gents_session::request::hooks::effect::{
     validate, Access, CoreOp, DocRef, Effect, Manifest, OwnedCollection, Row, Write,
 };
 use gents_session::request::hooks::hook::{Hook, Outcome, Query};
+use gents_session::request::hooks::queue_scope::{
+    partition, Partition, ScopeAnswer, ScopeAnswers, ScopeFailure, ScopeRefused,
+};
 use gents_session::request::hooks::stage::{
     gate, owed, stage, stage_dropping, ApplyFailure, HookError, Host, Plugin, Staged,
 };
@@ -570,6 +576,109 @@ async fn generated_lifecycle_hook_gate_cases_drive_the_claim_gate() {
             host.snapshot(),
             initial,
             "{}: a gate writes nothing",
+            case.name
+        );
+    }
+}
+
+/// A Lean key is an opaque string; production keys are
+/// `RequestAssignmentScope` values, compared without interpretation.
+fn opaque_key(key: &str) -> gents_protocol::goal::RequestAssignmentScope {
+    gents_protocol::goal::RequestAssignmentScope::Unresolved {
+        entry_doc_id: key.to_owned(),
+    }
+}
+
+/// A Lean answer list is aligned with the requests asked; production answers
+/// are by physical request.
+fn scope_answers(asked: &[String], lean: &[LeanLifecycleHookScopeAnswer]) -> ScopeAnswers {
+    let mut answers = ScopeAnswers::default();
+    for (doc, answer) in asked.iter().zip(lean) {
+        match answer {
+            LeanLifecycleHookScopeAnswer::Unanswered => {}
+            LeanLifecycleHookScopeAnswer::Keyed { key } => {
+                answers.insert(doc.clone(), ScopeAnswer::Keyed(opaque_key(key)));
+            }
+            LeanLifecycleHookScopeAnswer::Failed { reason } => {
+                answers.insert(
+                    doc.clone(),
+                    ScopeAnswer::Failed(ScopeFailure::of(&anyhow::anyhow!(reason.clone()))),
+                );
+            }
+        }
+    }
+    answers
+}
+
+fn partition_of(scope: anyhow::Result<Partition>) -> LeanLifecycleHookPartition {
+    match scope {
+        Ok(partition) => LeanLifecycleHookPartition::Ok {
+            partition: partition
+                .keys()
+                .iter()
+                .map(|(plugin, key)| LeanLifecycleHookScopeKey {
+                    plugin: (*plugin).to_owned(),
+                    key: match key {
+                        gents_protocol::goal::RequestAssignmentScope::Unresolved {
+                            entry_doc_id,
+                        } => entry_doc_id.clone(),
+                        other => panic!("a generated key is opaque, not {other:?}"),
+                    },
+                })
+                .collect(),
+        },
+        Err(error) => {
+            let refused = error
+                .downcast_ref::<ScopeRefused>()
+                .unwrap_or_else(|| panic!("a request failure is a ScopeRefused: {error:?}"));
+            LeanLifecycleHookPartition::Error {
+                refusal: LeanLifecycleHookRefusal::Refused {
+                    plugin: refused.plugin.to_owned(),
+                    reason: error.to_string(),
+                },
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn generated_lifecycle_hook_queue_scope_cases_drive_the_queue_partition() {
+    let cases = lean_lifecycle_hook_queue_scope_cases();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let host = StoreDouble::of(&case.world);
+        let initial = host.snapshot();
+        let plugins: Vec<Plugin<(), ScopeAnswers>> = case
+            .plugins
+            .iter()
+            .map(|script| plugin(script, |answers| scope_answers(&case.asked, answers)))
+            .collect();
+        let answered = gate(&host, &plugins, &()).await;
+        match (answered, &case.result) {
+            (Ok(answers), LeanLifecycleHookQueueScopeResult::Ok { scopes }) => {
+                let named: Vec<(&'static str, ScopeAnswers)> = plugins
+                    .iter()
+                    .map(|plugin| plugin.manifest().name)
+                    .zip(answers)
+                    .collect();
+                let partitions: Vec<LeanLifecycleHookPartition> = case
+                    .asked
+                    .iter()
+                    .map(|doc| partition_of(partition(&named, doc)))
+                    .collect();
+                assert_eq!(&partitions, scopes, "{}: partitions", case.name);
+            }
+            (Err(error), LeanLifecycleHookQueueScopeResult::Error { refusal }) => {
+                assert_eq!(&host.refusal(&error), refusal, "{}: {error:?}", case.name);
+            }
+            (actual, expected) => {
+                panic!("{}: answered {actual:?}, model {expected:?}", case.name)
+            }
+        }
+        assert_eq!(
+            host.snapshot(),
+            initial,
+            "{}: a returned-value point writes nothing",
             case.name
         );
     }
