@@ -10,7 +10,8 @@ use crate::tools::native::{
     ToolSetBuilder,
 };
 
-use super::modes::{BashMode, FileToolMode, ToolCeiling};
+use super::modes::ToolCeiling;
+use crate::documents::{BashMode, FileToolMode};
 use super::policy::{meet_execution_mode, meet_network_mode, EndpointScope, ToolPolicyBash};
 use super::selection::CommandOutputLimits;
 use super::timeouts::{effective_bash_foreground, effective_cli_timeout_secs, ToolTimeouts};

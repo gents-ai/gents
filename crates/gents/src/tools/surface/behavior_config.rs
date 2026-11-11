@@ -9,7 +9,8 @@ use super::build::{
     build_host_tools, dedupe_agent_targets, dedupe_strings, downgrade_bash, downgrade_file_tools,
     enabled_mcp_service_ids, measured_available_mcp_service_ids,
 };
-use super::modes::{BashMode, FileToolMode, ToolCeiling};
+use super::modes::ToolCeiling;
+use crate::documents::{BashMode, FileToolMode};
 use super::policy::{EndpointScope, RuntimeToolAvailability, ToolPolicySurface};
 use super::selection::{
     AgentToolConfig, BackgroundToolConfig, CustomToolFactory, ResolvedToolSelection,
@@ -51,8 +52,8 @@ pub struct AgentToolSurfaceConfig {
 impl AgentToolSurfaceConfig {
     pub fn meta_only() -> Self {
         let mut agent_policy = ToolPolicySurface::ceiling_with_host_modes(
-            super::FileToolMode::Off,
-            super::BashMode::Off,
+            crate::documents::FileToolMode::Off,
+            crate::documents::BashMode::Off,
         );
         agent_policy.goal_create = false;
         agent_policy.defra_query = false;
@@ -87,8 +88,8 @@ impl AgentToolSurfaceConfig {
             self_config: super::SelfConfigToolConfig::default(),
             agent_policy: agent_policy.clone(),
             ceiling_policy: ToolPolicySurface::ceiling_with_host_modes(
-                super::FileToolMode::Off,
-                super::BashMode::Off,
+                crate::documents::FileToolMode::Off,
+                crate::documents::BashMode::Off,
             ),
             static_policy: agent_policy,
             lsp_config: None,

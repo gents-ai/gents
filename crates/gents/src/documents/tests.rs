@@ -22,7 +22,7 @@ fn tools_document_accepts_empty_string_arrays_and_null_groups() {
     assert!(document.built_ins.is_none());
     assert_eq!(
         document.host.as_ref().unwrap().files.as_ref().unwrap().mode,
-        crate::tools::surface::FileToolMode::ReadOnly
+        crate::documents::FileToolMode::ReadOnly
     );
 }
 

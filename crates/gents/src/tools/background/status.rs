@@ -52,12 +52,6 @@ pub(crate) struct BackgroundToolArgs {
     pub args: serde_json::Map<String, serde_json::Value>,
 }
 
-/// Default wait when neither the call nor the Tools group sets one; the
-/// timeout reports the process as still running without cancelling it.
-pub(crate) const DEFAULT_WAIT_PROCESS_TIMEOUT_SECS: u64 = 30;
-/// Bound one foreground wait even when the background work continues; the
-/// Tools group can set a lower maximum without stopping that work.
-pub(crate) const MAX_WAIT_PROCESS_TIMEOUT_SECS: u64 = 600;
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct WaitToolArgs {

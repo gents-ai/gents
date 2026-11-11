@@ -57,7 +57,7 @@ pub fn classify_tools(
     tools: &crate::documents::Tools,
     merged: &crate::documents::MergedSurfaceTools,
 ) -> anyhow::Result<Option<&'static str>> {
-    use crate::tools::surface::{BashMode, FileToolMode};
+    use crate::documents::{BashMode, FileToolMode};
     let host = tools.host.as_ref();
     let files = host
         .and_then(|h| h.files.as_ref())

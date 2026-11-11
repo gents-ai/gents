@@ -10,7 +10,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::tools::native::{CommandExecutionMode, CommandNetworkMode};
-use crate::tools::surface::{BashMode, FileToolMode};
+use super::{BashMode, FileToolMode};
 pub use gents_protocol::row::RetiredKey;
 
 mod persistence;
@@ -656,7 +656,7 @@ impl Tools {
                 errors,
                 field,
                 value,
-                crate::tools::native::MAX_CONFIGURED_COMMAND_CHARS,
+                crate::documents::tool_limits::MAX_CONFIGURED_COMMAND_CHARS,
             );
         }
         fn bounded(
@@ -705,7 +705,7 @@ impl Tools {
                     &mut errors,
                     "host.files.max_read_chars",
                     files.max_read_chars,
-                    crate::tools::native::MAX_CONFIGURED_FILE_CHARS,
+                    crate::documents::tool_limits::MAX_CONFIGURED_FILE_CHARS,
                 );
                 for (field, value) in [
                     ("host.files.max_list_entries", files.max_list_entries),
@@ -715,7 +715,7 @@ impl Tools {
                         &mut errors,
                         field,
                         value,
-                        crate::tools::native::MAX_CONFIGURED_FILE_RESULTS,
+                        crate::documents::tool_limits::MAX_CONFIGURED_FILE_RESULTS,
                     );
                 }
             }
@@ -725,7 +725,7 @@ impl Tools {
                     "host.bash.timeout_secs",
                     bash.timeout_secs,
                     bash.max_timeout_secs,
-                    crate::tools::native::DEFAULT_COMMAND_TIMEOUT_SECS as i64,
+                    crate::documents::tool_limits::DEFAULT_COMMAND_TIMEOUT_SECS as i64,
                     None,
                 );
                 bounded(
@@ -733,8 +733,8 @@ impl Tools {
                     "host.bash.wait_timeout_secs",
                     bash.wait_timeout_secs,
                     bash.max_wait_timeout_secs,
-                    crate::tools::background::status::DEFAULT_WAIT_PROCESS_TIMEOUT_SECS as i64,
-                    Some(crate::tools::background::status::MAX_WAIT_PROCESS_TIMEOUT_SECS as i64),
+                    crate::documents::tool_limits::DEFAULT_WAIT_PROCESS_TIMEOUT_SECS as i64,
+                    Some(crate::documents::tool_limits::MAX_WAIT_PROCESS_TIMEOUT_SECS as i64),
                 );
                 positive(
                     &mut errors,
@@ -840,8 +840,8 @@ impl Tools {
                     &format!("{field}.wait_timeout_secs"),
                     service.wait_timeout_secs,
                     service.max_wait_timeout_secs,
-                    crate::tools::background::status::DEFAULT_WAIT_PROCESS_TIMEOUT_SECS as i64,
-                    Some(crate::tools::background::status::MAX_WAIT_PROCESS_TIMEOUT_SECS as i64),
+                    crate::documents::tool_limits::DEFAULT_WAIT_PROCESS_TIMEOUT_SECS as i64,
+                    Some(crate::documents::tool_limits::MAX_WAIT_PROCESS_TIMEOUT_SECS as i64),
                 );
             }
         }
@@ -937,8 +937,8 @@ impl Tools {
                     "integrations.lsp.timeout_secs",
                     lsp.timeout_secs,
                     lsp.max_timeout_secs,
-                    crate::tools::native::lsp::DEFAULT_ACTION_TIMEOUT_SECS as i64,
-                    Some(crate::tools::native::lsp::MAX_ACTION_TIMEOUT_SECS as i64),
+                    crate::documents::tool_limits::DEFAULT_ACTION_TIMEOUT_SECS as i64,
+                    Some(crate::documents::tool_limits::MAX_ACTION_TIMEOUT_SECS as i64),
                 );
                 if let Err(error) = crate::tools::native::lsp::LspConfigDocument::parse_operator(
                     lsp.config.as_deref(),

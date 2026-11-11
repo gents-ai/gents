@@ -645,7 +645,7 @@ mod tests {
                 .as_ref()
                 .and_then(|host| host.bash.as_ref())
                 .map(|bash| bash.mode),
-            Some(gents::tools::surface::BashMode::Unrestricted),
+            Some(gents::BashMode::Unrestricted),
         );
 
         let clone_doc = AgentCreateInput {

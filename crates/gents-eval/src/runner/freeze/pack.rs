@@ -10,7 +10,7 @@ use crate::{CellSpec, SubjectRef};
 use gents::documents::PackConfig;
 use gents::pack::{declared_paths, digest_declared_assets, PackInstallOptions, PackManifest};
 use gents::store::config_client::ConfigAccess;
-use gents::tools::surface::BashMode;
+use gents::BashMode;
 
 pub(crate) struct LoadedPack {
     pub(crate) digest: String,

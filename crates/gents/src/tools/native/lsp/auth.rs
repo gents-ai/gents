@@ -1,4 +1,4 @@
-use crate::tools::surface::FileToolMode;
+use crate::documents::FileToolMode;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LspAction {

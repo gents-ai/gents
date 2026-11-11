@@ -158,7 +158,7 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
     let tools_doc_id = view.tools[&tools_id].doc_id.clone();
     let mut tools_doc = view.tools[&tools_id].value.clone();
     tools_doc.host.get_or_insert_with(Default::default).files = Some(crate::documents::FileTools {
-        mode: crate::tools::surface::FileToolMode::ReadOnly,
+        mode: crate::documents::FileToolMode::ReadOnly,
         ..Default::default()
     });
     crate::documents::write_tools_document(&user_access, &tools_doc)
@@ -192,7 +192,7 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
             .as_ref()
             .and_then(|host| host.files.as_ref())
             .map(|files| files.mode),
-        Some(crate::tools::surface::FileToolMode::ReadOnly),
+        Some(crate::documents::FileToolMode::ReadOnly),
         "reloaded view must observe the read-only file-tools patch"
     );
     view = reloaded;

@@ -931,11 +931,11 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
             "canonical enum value {value:?} missing from help"
         );
     }
-    for value in crate::tools::surface::FileToolMode::ALL
+    for value in crate::documents::FileToolMode::ALL
         .into_iter()
         .map(|value| serde_json::to_value(value).unwrap())
         .chain(
-            crate::tools::surface::BashMode::ALL
+            crate::documents::BashMode::ALL
                 .into_iter()
                 .map(|value| serde_json::to_value(value).unwrap()),
         )
@@ -1942,8 +1942,8 @@ async fn effective_config_reports_inherited_workspace_network_as_disabled() {
         fixture
             .core()
             .with_process_ceiling(crate::tools::surface::SelfConfigProcessCeiling {
-                file_mode: crate::tools::surface::FileToolMode::ReadWrite,
-                bash_mode: crate::tools::surface::BashMode::Unrestricted,
+                file_mode: crate::documents::FileToolMode::ReadWrite,
+                bash_mode: crate::documents::BashMode::Unrestricted,
                 root: Some(root.path().into()),
             });
     core.apply(tools_request(
@@ -1998,8 +1998,8 @@ async fn skill_import_previews_without_writes_and_requires_file_authority() {
     .unwrap_err();
     assert!(denied.contains("file read permission"), "{denied}");
     grants.process_ceiling = crate::tools::surface::SelfConfigProcessCeiling {
-        file_mode: crate::tools::surface::FileToolMode::ReadOnly,
-        bash_mode: crate::tools::surface::BashMode::Off,
+        file_mode: crate::documents::FileToolMode::ReadOnly,
+        bash_mode: crate::documents::BashMode::Off,
         root: Some(root.path().into()),
     };
     let core = fixture.core();
@@ -2172,8 +2172,8 @@ async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
     );
 
     grants.process_ceiling = crate::tools::surface::SelfConfigProcessCeiling {
-        file_mode: crate::tools::surface::FileToolMode::ReadOnly,
-        bash_mode: crate::tools::surface::BashMode::Off,
+        file_mode: crate::documents::FileToolMode::ReadOnly,
+        bash_mode: crate::documents::BashMode::Off,
         root: Some(root.path().into()),
     };
     let core = fixture.core();
@@ -2301,8 +2301,8 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
     grants.preview = true;
     grants.agent_did = agent_did.clone();
     grants.process_ceiling = crate::tools::surface::SelfConfigProcessCeiling {
-        file_mode: crate::tools::surface::FileToolMode::ReadOnly,
-        bash_mode: crate::tools::surface::BashMode::Off,
+        file_mode: crate::documents::FileToolMode::ReadOnly,
+        bash_mode: crate::documents::BashMode::Off,
         root: Some(root.path().into()),
     };
     let core = fixture.core();
@@ -4536,8 +4536,8 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
         fixture
             .core()
             .with_process_ceiling(crate::tools::surface::SelfConfigProcessCeiling {
-                file_mode: crate::tools::surface::FileToolMode::ReadOnly,
-                bash_mode: crate::tools::surface::BashMode::Off,
+                file_mode: crate::documents::FileToolMode::ReadOnly,
+                bash_mode: crate::documents::BashMode::Off,
                 root: Some(ceiling.path().to_path_buf()),
             });
     let patch = |root: &std::path::Path| {
@@ -4649,8 +4649,8 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
     let mut tool_config = config(&["node"]);
     tool_config.agent_did = seed_agent.clone();
     tool_config.process_ceiling = crate::tools::surface::SelfConfigProcessCeiling {
-        file_mode: crate::tools::surface::FileToolMode::ReadOnly,
-        bash_mode: crate::tools::surface::BashMode::Off,
+        file_mode: crate::documents::FileToolMode::ReadOnly,
+        bash_mode: crate::documents::BashMode::Off,
         root: Some(operator_root.path().to_path_buf()),
     };
     let agent_tools = fixture.tools_with_config(&tool_config);
@@ -5652,8 +5652,8 @@ async fn a_created_agent_with_host_tools_names_the_users_root_reader_grant() {
     let ceiled =
         core.clone()
             .with_process_ceiling(crate::tools::surface::SelfConfigProcessCeiling {
-                file_mode: crate::tools::surface::FileToolMode::ReadOnly,
-                bash_mode: crate::tools::surface::BashMode::ReadOnly,
+                file_mode: crate::documents::FileToolMode::ReadOnly,
+                bash_mode: crate::documents::BashMode::ReadOnly,
                 root: Some(std::path::PathBuf::from(&root)),
             });
     let inspected: Value =
@@ -7923,7 +7923,7 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
     let mut cfg = config(&["tools", "agent"]);
     cfg.agent_did = fixture.agent_did().to_owned();
     cfg.enable_pack_install = true;
-    cfg.process_ceiling.file_mode = crate::tools::surface::FileToolMode::ReadOnly;
+    cfg.process_ceiling.file_mode = crate::documents::FileToolMode::ReadOnly;
     cfg.process_ceiling.root = Some(workspace.path().to_owned());
     let tools = fixture.tools_with_plugins(&cfg, plugins.clone());
     let tool = tools
@@ -8106,7 +8106,7 @@ async fn native_pack_local_paths_and_approval_fail_closed() {
         .unwrap_err()
         .to_string()
         .contains("effective file read permission"));
-    cfg.process_ceiling.file_mode = crate::tools::surface::FileToolMode::ReadOnly;
+    cfg.process_ceiling.file_mode = crate::documents::FileToolMode::ReadOnly;
     let tools = fixture.tools_with_plugins(&cfg, plugins);
     assert!(config_call(&tools, &["pack", "get", path])
         .await
@@ -8447,7 +8447,7 @@ async fn pack_tool_with_local_read(
     let mut tool_config = config(&["tools"]);
     tool_config.agent_did = fixture.agent_did().to_owned();
     tool_config.enable_pack_install = true;
-    tool_config.process_ceiling.file_mode = crate::tools::surface::FileToolMode::ReadOnly;
+    tool_config.process_ceiling.file_mode = crate::documents::FileToolMode::ReadOnly;
     tool_config.process_ceiling.root = Some(root.to_owned());
     let tools = fixture.tools_with_plugins(&tool_config, plugins);
     let tool = tools

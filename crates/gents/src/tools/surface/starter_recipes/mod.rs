@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::documents::{BashTools, FileTools, HostTools, Tools};
 use crate::tools::native::{CommandExecutionMode, CommandNetworkMode};
-use crate::tools::surface::{BashMode, FileToolMode};
+use crate::documents::{BashMode, FileToolMode};
 
 const MAX_GUIDED_CONCERNS: usize = 8;
 const MAX_CONCERN_BYTES: usize = 1_000;

@@ -208,7 +208,7 @@ fn generated_root_admission_cases_drive_production_root_policy() {
                             host: Some(gents::documents::HostTools {
                                 root: Some(case.authored.clone()),
                                 files: Some(gents::documents::FileTools {
-                                    mode: gents::tools::surface::FileToolMode::ReadOnly,
+                                    mode: gents::FileToolMode::ReadOnly,
                                     ..Default::default()
                                 }),
                                 ..Default::default()

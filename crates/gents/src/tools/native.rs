@@ -6,6 +6,7 @@ use gents_protocol::tool_names::{
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::documents::tool_limits::DEFAULT_COMMAND_TIMEOUT_SECS;
 use crate::inference::llm::tool::ToolDyn;
 use anyhow::Result;
 use rapidhash::RapidHashMap;
@@ -122,18 +123,8 @@ pub fn default_read_only_command_policy() -> CommandExecutionPolicy {
 
 pub(crate) const DEFAULT_MAX_FILE_CHARS: usize = 32_000;
 pub(crate) const DEFAULT_MAX_COMMAND_CHARS: usize = 16_000;
-/// A Tools document can lower the budget for each presented stream, but cannot
-/// exceed this provider-output ceiling. Process capture has a separate owner.
-pub(crate) const MAX_CONFIGURED_COMMAND_CHARS: usize = 1_000_000;
 pub(crate) const DEFAULT_MAX_LIST_ENTRIES: usize = 200;
 pub(crate) const DEFAULT_MAX_MATCHES: usize = 200;
-/// Limit a configured file read so one result cannot consume unbounded model
-/// context or result storage.
-pub(crate) const MAX_CONFIGURED_FILE_CHARS: usize = 1_000_000;
-/// Limit configured list and search results so path collections cannot consume
-/// unbounded model context or result storage.
-pub(crate) const MAX_CONFIGURED_FILE_RESULTS: usize = 5_000;
-pub(crate) const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 120;
 /// Bound detached bash lifetime even if its caller no longer waits. A Tools
 /// document may choose a shorter background timeout; foreground host timeout
 /// flags do not raise this ceiling.

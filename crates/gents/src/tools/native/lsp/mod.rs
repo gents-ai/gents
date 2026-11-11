@@ -32,14 +32,12 @@ use crate::inference::llm::tool::{Tool, ToolDefinition};
 use crate::tools::call::lifecycle::FailureClass;
 use crate::tools::native::shared::{ToolContext, ToolError};
 use crate::tools::native::{lsp_sandbox_for_effective, CommandConstraints, CommandNetworkMode};
-use crate::tools::surface::{FileToolMode, ToolPolicyBash, ToolPolicySurface};
+use crate::documents::FileToolMode;
+use crate::tools::surface::{ToolPolicyBash, ToolPolicySurface};
 
 use actions::ActionRequest;
 use config::apply_overrides;
 
-pub const DEFAULT_ACTION_TIMEOUT_SECS: u64 = 20;
-/// Bound the time one language-server action can hold a runtime resource.
-pub const MAX_ACTION_TIMEOUT_SECS: u64 = 300;
 /// Below this a model-requested action cannot finish indexing retries.
 pub const MIN_REQUESTED_ACTION_TIMEOUT_SECS: u64 = 5;
 

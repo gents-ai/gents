@@ -4,7 +4,7 @@ use crate::documents::{AgentTargetDocument, QueryToolDecl, WriteToolDecl, WriteT
 use crate::tools::builtin::defra_query::CollectionScope;
 use crate::tools::native::{CommandExecutionMode, CommandNetworkMode};
 
-use super::modes::{BashMode, FileToolMode};
+use crate::documents::{BashMode, FileToolMode};
 use super::selection::{AgentToolConfig, ResolvedToolSelection};
 
 pub const TOOL_POLICY_V1: &str = "tool-policy/v1";

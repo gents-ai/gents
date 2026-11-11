@@ -724,6 +724,7 @@ pub use documents::{
     MergedSurfaceTools, QueryToolDecl, SurfaceToolDecl, Tools, WriteToolDecl, WriteToolField,
     WriteToolFieldFill, WriteToolOutputObligation, WriteToolOutputObligationScope,
 };
+pub use documents::{BashMode, FileToolMode};
 pub use documents::{ConcurrencyMode, ScheduleCadence};
 pub use gents_protocol::client_protocol;
 pub use gents_protocol::request_lifecycle::{
@@ -850,9 +851,8 @@ pub use tools::native::{
     ToolSetBuilder,
 };
 pub use tools::surface::{
-    cli_tool, AgentToolSurfaceConfig, BashMode, CustomToolFactory, FileToolMode,
-    ResolvedToolSelection, ToolCeiling, ToolPolicyVersion, ToolRuntimeContext, ToolSurface,
-    TOOL_POLICY_V1,
+    cli_tool, AgentToolSurfaceConfig, CustomToolFactory, ResolvedToolSelection, ToolCeiling,
+    ToolPolicyVersion, ToolRuntimeContext, ToolSurface, TOOL_POLICY_V1,
 };
 pub use triggers::callback::reject_secret_bearing_callback_fields;
 pub use triggers::engine::event_source::EventSource;

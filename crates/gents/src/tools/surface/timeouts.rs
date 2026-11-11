@@ -1,12 +1,11 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use crate::tools::background::status::{
-    DEFAULT_WAIT_PROCESS_TIMEOUT_SECS, MAX_WAIT_PROCESS_TIMEOUT_SECS,
+use crate::documents::tool_limits::{
+    DEFAULT_ACTION_TIMEOUT_SECS, DEFAULT_WAIT_PROCESS_TIMEOUT_SECS, MAX_ACTION_TIMEOUT_SECS,
+    MAX_WAIT_PROCESS_TIMEOUT_SECS,
 };
-use crate::tools::native::lsp::{
-    DEFAULT_ACTION_TIMEOUT_SECS, MAX_ACTION_TIMEOUT_SECS, MIN_REQUESTED_ACTION_TIMEOUT_SECS,
-};
+use crate::tools::native::lsp::MIN_REQUESTED_ACTION_TIMEOUT_SECS;
 use crate::tools::native::BACKGROUND_COMMAND_TIMEOUT_SECS;
 
 fn secs(value: i64) -> Duration {

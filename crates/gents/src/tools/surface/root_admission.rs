@@ -998,7 +998,7 @@ mod tests {
             host: Some(crate::documents::HostTools {
                 root: Some(workspace_root.clone()),
                 files: Some(crate::documents::FileTools {
-                    mode: crate::tools::surface::FileToolMode::ReadOnly,
+                    mode: crate::documents::FileToolMode::ReadOnly,
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -1094,7 +1094,7 @@ mod tests {
         let mut tools = crate::documents::Tools {
             host: Some(crate::documents::HostTools {
                 files: Some(crate::documents::FileTools {
-                    mode: crate::tools::surface::FileToolMode::ReadOnly,
+                    mode: crate::documents::FileToolMode::ReadOnly,
                     ..Default::default()
                 }),
                 ..Default::default()

@@ -134,10 +134,10 @@ impl PackInstaller {
                     let mode = effective
                         .pointer("/runtime_effective/effective/file_mode")
                         .and_then(Value::as_str)
-                        .map(crate::tools::surface::FileToolMode::parse)
+                        .map(crate::documents::FileToolMode::parse)
                         .transpose()?
                         .unwrap_or_default();
-                    anyhow::ensure!(mode != crate::tools::surface::FileToolMode::Off, "local pack inspection requires effective file read permission on the invoking agent");
+                    anyhow::ensure!(mode != crate::documents::FileToolMode::Off, "local pack inspection requires effective file read permission on the invoking agent");
                     let root = effective
                         .pointer("/runtime_effective/effective/root")
                         .and_then(Value::as_str)

@@ -516,13 +516,13 @@ async fn agent_apply_in_txn(
                 tools = Some(Tools {
                     host: Some(HostTools {
                         files: Some(FileTools {
-                            mode: crate::tools::surface::FileToolMode::parse(
+                            mode: crate::documents::FileToolMode::parse(
                                 &fields.file_tools_mode,
                             )?,
                             ..Default::default()
                         }),
                         bash: Some(BashTools {
-                            mode: crate::tools::surface::BashMode::parse(&fields.bash_mode)?,
+                            mode: crate::documents::BashMode::parse(&fields.bash_mode)?,
                             execution_mode: write.then_some(if cfg!(target_os = "macos") {
                                 crate::tools::native::CommandExecutionMode::WorkspaceWrite
                             } else {

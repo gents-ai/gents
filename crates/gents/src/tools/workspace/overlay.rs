@@ -11,7 +11,8 @@ use crate::store::graphql::escape_graphql_string;
 #[cfg(test)]
 use crate::store::graphql::{first_row, graphql_with_transaction_retry, rows};
 use crate::tools::native::{workspace_write_sandbox_enforced, WorkspaceAuthority};
-use crate::tools::surface::{resolve_configured_tool_root, FileToolMode};
+use crate::documents::FileToolMode;
+use crate::tools::surface::resolve_configured_tool_root;
 use gents_protocol::row::AgentRequest;
 
 #[cfg(test)]

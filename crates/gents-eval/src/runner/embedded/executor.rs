@@ -31,8 +31,8 @@ use crate::runner::executor::{
     Capture, Isolation, StageEvidence, TrialEvidence, TrialExecutor, TrialLocator, TrialSpec,
 };
 use gents::tools::native::CommandExecutionMode;
-use gents::tools::surface::{BashMode, FileToolMode, ToolCeiling, ToolPolicySurface};
-use gents::{DocumentRuntimeOptions, RuntimeSnapshotObserver};
+use gents::tools::surface::{ToolCeiling, ToolPolicySurface};
+use gents::{BashMode, DocumentRuntimeOptions, FileToolMode, RuntimeSnapshotObserver};
 
 const POLL: Duration = Duration::from_millis(250);
 const LIVE_EVERY: Duration = Duration::from_secs(5);

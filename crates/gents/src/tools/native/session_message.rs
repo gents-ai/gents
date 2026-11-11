@@ -13,10 +13,10 @@ use crate::session::message::{
     AgentSessionReadArgs,
 };
 use crate::tools::background::status::r4c_args::{ListBackgroundToolsArgs, ReadToolOutputArgs};
-use crate::tools::background::status::{
-    BackgroundToolArgs, CancelToolArgs, WaitToolArgs, DEFAULT_WAIT_PROCESS_TIMEOUT_SECS,
-    MAX_WAIT_PROCESS_TIMEOUT_SECS,
+use crate::documents::tool_limits::{
+    DEFAULT_WAIT_PROCESS_TIMEOUT_SECS, MAX_WAIT_PROCESS_TIMEOUT_SECS,
 };
+use crate::tools::background::status::{BackgroundToolArgs, CancelToolArgs, WaitToolArgs};
 use crate::tools::surface::{AgentToolConfig, BackgroundToolConfig};
 
 use super::shared::ToolError;

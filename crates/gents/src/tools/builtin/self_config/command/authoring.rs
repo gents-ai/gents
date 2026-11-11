@@ -110,11 +110,11 @@ fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall> {
 }
 
 fn ensure_mode(
-    mode: crate::tools::surface::FileToolMode,
+    mode: crate::documents::FileToolMode,
     write: bool,
     operation: &str,
 ) -> Result<()> {
-    use crate::tools::surface::FileToolMode;
+    use crate::documents::FileToolMode;
     match (write, mode) {
         (_, FileToolMode::Off) => bail!(
             "pack {operation} requires effective file permission on the invoking agent; the effective file tools are Off. Grant file tools, or run pack authoring from the operator CLI"
@@ -163,7 +163,7 @@ impl ConfigCommandTool {
         let mode = effective
             .pointer("/runtime_effective/effective/file_mode")
             .and_then(Value::as_str)
-            .map(crate::tools::surface::FileToolMode::parse)
+            .map(crate::documents::FileToolMode::parse)
             .transpose()?
             .unwrap_or_default();
         ensure_mode(mode, write, operation)?;
@@ -286,7 +286,7 @@ mod tests {
 
     #[test]
     fn write_authoring_requires_readwrite_and_verify_only_read() {
-        use crate::tools::surface::FileToolMode;
+        use crate::documents::FileToolMode;
         assert!(ensure_mode(FileToolMode::ReadWrite, true, "scaffold").is_ok());
         for (mode, expected) in [
             (FileToolMode::Off, "file permission"),

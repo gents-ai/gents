@@ -366,7 +366,7 @@ fn request_timeout(req: &ActionRequest) -> std::time::Duration {
     std::time::Duration::from_secs(
         req.timeout
             .map(u64::from)
-            .unwrap_or(super::DEFAULT_ACTION_TIMEOUT_SECS),
+            .unwrap_or(crate::documents::tool_limits::DEFAULT_ACTION_TIMEOUT_SECS),
     )
 }
 

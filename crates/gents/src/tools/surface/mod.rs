@@ -22,7 +22,7 @@ pub use explain::{ToolSurfaceExplanation, ToolSurfaceWarning};
 use gents_protocol::tool_names::{
     CONTEXT_BUDGET_TOOL_NAME, DEFRA_QUERY_TOOL_NAME, SESSION_HISTORY_TOOL_NAME,
 };
-pub use modes::{BashMode, FileToolMode, ToolCeiling};
+pub use modes::ToolCeiling;
 pub(crate) use output_budget::configured_output_budget;
 pub use policy::configured_self_config_category_set;
 pub(crate) use policy::ToolNodeOperationSource;
@@ -85,6 +85,7 @@ pub use timeouts::{BackgroundTimeoutPolicy, BackgroundTimeouts, BoundedTimeout, 
 use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
 use std::path::PathBuf;
 
+use crate::documents::{BashMode, FileToolMode};
 use crate::inference::llm::tool::ToolDyn;
 use anyhow::{Context, Result};
 

@@ -116,21 +116,21 @@ impl SelfConfigCore {
         let requested_file_mode = tools
             .and_then(|tools| tools.pointer("/host/files/mode"))
             .and_then(Value::as_str)
-            .map(crate::tools::surface::FileToolMode::parse)
+            .map(crate::documents::FileToolMode::parse)
             .transpose()?
             .unwrap_or_default();
         let requested_bash_mode = tools
             .and_then(|tools| tools.pointer("/host/bash/mode"))
             .and_then(Value::as_str)
-            .map(crate::tools::surface::BashMode::parse)
+            .map(crate::documents::BashMode::parse)
             .transpose()?
             .unwrap_or_default();
         let process_ceiling = self.process_ceiling();
         let effective_file_mode = requested_file_mode.meet(process_ceiling.file_mode);
         let effective_bash_mode = requested_bash_mode.meet(process_ceiling.bash_mode);
         let mut root_access = Value::Null;
-        let effective_root = if effective_file_mode != crate::tools::surface::FileToolMode::Off
-            || effective_bash_mode != crate::tools::surface::BashMode::Off
+        let effective_root = if effective_file_mode != crate::documents::FileToolMode::Off
+            || effective_bash_mode != crate::documents::BashMode::Off
         {
             let policy = crate::tools::surface::load_workspace_root_policy_in_txn(
                 txn,

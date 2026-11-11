@@ -1607,7 +1607,7 @@ while True:
         "textDocument/documentSymbol",
         serde_json::json!({"textDocument":{"uri": super::uri::path_to_file_uri(&root.path().join("lib.rs"))}}),
         std::time::Duration::from_secs(2),
-        std::time::Duration::from_secs(super::MAX_ACTION_TIMEOUT_SECS),
+        std::time::Duration::from_secs(crate::documents::tool_limits::MAX_ACTION_TIMEOUT_SECS),
         true,
     )
     .await
@@ -1621,7 +1621,7 @@ while True:
             "workspace/symbol",
             serde_json::json!({"query":"missing"}),
             std::time::Duration::from_secs(5),
-            std::time::Duration::from_secs(super::MAX_ACTION_TIMEOUT_SECS),
+            std::time::Duration::from_secs(crate::documents::tool_limits::MAX_ACTION_TIMEOUT_SECS),
             true,
         ),
     )
@@ -1787,7 +1787,7 @@ async fn busy_fixture_symbols(
         "textDocument/documentSymbol",
         serde_json::json!({"textDocument":{"uri": super::uri::path_to_file_uri(&root.path().join("lib.rs"))}}),
         std::time::Duration::from_secs(timeout_secs),
-        std::time::Duration::from_secs(super::MAX_ACTION_TIMEOUT_SECS),
+        std::time::Duration::from_secs(crate::documents::tool_limits::MAX_ACTION_TIMEOUT_SECS),
         true,
     )
     .await;

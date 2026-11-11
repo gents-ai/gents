@@ -33,7 +33,11 @@ mod surface_tool;
 mod task;
 mod task_validation;
 pub mod template;
+mod tool_modes;
 mod tools;
+pub(crate) mod tool_limits;
+
+pub use tool_modes::{BashMode, FileToolMode};
 mod trigger;
 mod unattended_admission;
 mod write_tool;

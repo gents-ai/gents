@@ -1,7 +1,7 @@
 use gents::tools::native::{
     lsp_action_authorized, lsp_advertised, lsp_apply_authorized, LspAction, LspMutationSource,
 };
-use gents::tools::surface::FileToolMode;
+use gents::FileToolMode;
 
 use crate::lean_vocab_test::lean_lsp_action_cases;
 
