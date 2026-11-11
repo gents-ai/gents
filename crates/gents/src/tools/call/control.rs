@@ -498,7 +498,7 @@ mod tests {
                 "failed" => child
                     .fail(
                         "failed",
-                        crate::tools::call::lifecycle::FailureClass::External,
+                        gents_loop::tool_call_lifecycle::FailureClass::External,
                     )
                     .await
                     .unwrap(),

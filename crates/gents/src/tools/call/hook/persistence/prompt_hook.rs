@@ -332,10 +332,10 @@ impl DefraSessionHook {
         tool_call_id: Option<String>,
         internal_call_id: &str,
         args: &str,
-        outcome: &crate::tools::call::lifecycle::ToolOutcome,
+        outcome: &gents_loop::tool_call_lifecycle::ToolOutcome,
     ) -> HookAction {
         let result: anyhow::Result<()> = async {
-            let crate::tools::call::lifecycle::ToolOutcome::Failed {
+            let gents_loop::tool_call_lifecycle::ToolOutcome::Failed {
                 class,
                 denial,
                 text,
@@ -384,9 +384,9 @@ impl DefraSessionHook {
         tool_call_id: Option<String>,
         internal_call_id: &str,
         _args: &str,
-        outcome: &crate::tools::call::lifecycle::ToolOutcome,
+        outcome: &gents_loop::tool_call_lifecycle::ToolOutcome,
     ) -> HookAction {
-        use crate::tools::call::lifecycle::ToolOutcome;
+        use gents_loop::tool_call_lifecycle::ToolOutcome;
 
         let is_plugin_effect = self
             .effect_lifecycles

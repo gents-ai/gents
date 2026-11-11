@@ -10,7 +10,7 @@ use anyhow::{Context as _, Result};
 use serde::Serialize;
 
 use super::shared::ToolError;
-use crate::tools::call::lifecycle::FailureClass;
+use gents_loop::tool_call_lifecycle::FailureClass;
 
 pub(super) fn deny_workspace_file_writes() -> Result<(), ToolError> {
     if crate::tools::runtime_context::current_tool_runtime_context()

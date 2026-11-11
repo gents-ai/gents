@@ -14,7 +14,7 @@ use super::command_validation::policy_denial;
 #[cfg(target_os = "macos")]
 use super::SANDBOX_EXEC;
 use super::{CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode, WorkspaceAuthority};
-use crate::tools::call::lifecycle::FailureClass;
+use gents_loop::tool_call_lifecycle::FailureClass;
 use crate::tools::native::DenialReason;
 
 #[cfg(test)]

@@ -1105,7 +1105,7 @@ impl gents_loop::tool_effects::ToolEffectDispatcher for LiveTools {
     ) -> gents_loop::tool::BoxFuture<
         'a,
         Result<
-            crate::tools::call::lifecycle::ToolOutcome,
+            gents_loop::tool_call_lifecycle::ToolOutcome,
             gents_loop::tool_effects::ToolEffectError,
         >,
     > {

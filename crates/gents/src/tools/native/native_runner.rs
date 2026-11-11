@@ -5,7 +5,7 @@ use anyhow::{anyhow, Context as _};
 use gents_fs_runner::protocol::{NativeFsRunnerRequest, NativeFsRunnerResponse};
 
 use super::shared::{ToolContext, ToolError};
-use crate::tools::call::lifecycle::FailureClass;
+use gents_loop::tool_call_lifecycle::FailureClass;
 use crate::tools::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 use crate::tools::runtime_context::current_tool_runtime_context;
 
@@ -520,10 +520,10 @@ printf '{"ok":true,"output":"sandboxed read","error":null}'"#
         let now = Utc::now();
         let dispatch_error = fs_runner_timed_out_error("grep", None, now).into_dispatch_error();
         let outcome =
-            crate::tools::call::lifecycle::ToolOutcome::from_dispatch("grep", Err(dispatch_error));
+            gents_loop::tool_call_lifecycle::ToolOutcome::from_dispatch("grep", Err(dispatch_error));
         assert!(matches!(
             outcome,
-            crate::tools::call::lifecycle::ToolOutcome::Failed {
+            gents_loop::tool_call_lifecycle::ToolOutcome::Failed {
                 class: FailureClass::External,
                 ..
             }

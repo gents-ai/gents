@@ -75,7 +75,7 @@ impl ToolDyn for CliTool {
 fn admit_argv_policy(config: &CliToolConfig, argv: &[String]) -> Result<(), LocalToolError> {
     validate_argv_policy(config, argv).map_err(|error| {
         LocalToolError::reported_failure(
-            crate::tools::call::lifecycle::FailureClass::PolicyDenied,
+            gents_loop::tool_call_lifecycle::FailureClass::PolicyDenied,
             format!("{error:#}"),
         )
     })
@@ -121,7 +121,7 @@ fn deny_artifact_scope() -> Result<(), LocalToolError> {
         .is_some_and(|scope| scope.workspace_artifact.is_some())
     {
         return Err(LocalToolError::reported_failure(
-            crate::tools::call::lifecycle::FailureClass::PolicyDenied,
+            gents_loop::tool_call_lifecycle::FailureClass::PolicyDenied,
             "direct CLI subprocesses are unavailable in artifact-scoped requests; use the sandboxed Bash path".into(),
         ));
     }
@@ -265,7 +265,7 @@ async fn render_cli_outcome(
     }
     if terminal_cause.is_some() {
         return Err(LocalToolError::reported_failure(
-            crate::tools::call::lifecycle::FailureClass::ToolReturnedError,
+            gents_loop::tool_call_lifecycle::FailureClass::ToolReturnedError,
             rendered,
         ));
     }
@@ -318,14 +318,14 @@ mod tests {
                 let error = run_cli_command(&config, &argv).await.unwrap_err();
                 assert!(error.to_string().contains("artifact-scoped"));
                 let args = serde_json::json!({"argv": argv}).to_string();
-                let outcome = crate::tools::call::lifecycle::ToolOutcome::from_dispatch(
+                let outcome = gents_loop::tool_call_lifecycle::ToolOutcome::from_dispatch(
                     "sh",
                     tool.call(args).await,
                 );
                 assert!(matches!(
                     outcome,
-                    crate::tools::call::lifecycle::ToolOutcome::Failed {
-                        class: crate::tools::call::lifecycle::FailureClass::PolicyDenied,
+                    gents_loop::tool_call_lifecycle::ToolOutcome::Failed {
+                        class: gents_loop::tool_call_lifecycle::FailureClass::PolicyDenied,
                         ..
                     }
                 ));
@@ -394,14 +394,14 @@ mod tests {
         assert!(err.to_string().contains("stderr:\nlast stderr"), "{err}");
         assert!(err.to_string().contains("exit_code: unavailable"), "{err}");
         assert!(matches!(
-            crate::tools::call::lifecycle::ToolOutcome::from_dispatch(
+            gents_loop::tool_call_lifecycle::ToolOutcome::from_dispatch(
                 "cli",
                 Err(err.into_dispatch_error())
             ),
-            crate::tools::call::lifecycle::ToolOutcome::Failed {
+            gents_loop::tool_call_lifecycle::ToolOutcome::Failed {
                 class,
                 ..
-            } if class == crate::tools::call::lifecycle::FailureClass::ToolReturnedError
+            } if class == gents_loop::tool_call_lifecycle::FailureClass::ToolReturnedError
         ));
     }
 
@@ -519,7 +519,7 @@ mod tests {
         assert!(
             matches!(
                 outcome,
-                crate::tools::call::lifecycle::ToolOutcome::TimedOut { .. }
+                gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut { .. }
             ),
             "{outcome:?}"
         );
@@ -541,7 +541,7 @@ mod tests {
 
     #[tokio::test]
     async fn committed_output_reconstructs_completed_and_stopped_results() {
-        use crate::tools::call::lifecycle::ToolOutcome;
+        use gents_loop::tool_call_lifecycle::ToolOutcome;
 
         for (name, timeout_secs, script) in [
             (

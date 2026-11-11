@@ -44,7 +44,7 @@ mod recovery;
 mod session_message_call;
 mod transition;
 
-pub use gents_loop::tool_call_lifecycle::{FailureClass, ToolOutcome};
+use gents_loop::tool_call_lifecycle::FailureClass;
 #[cfg(any(test, feature = "test-fixtures"))]
 #[doc(hidden)]
 #[allow(dead_code)]

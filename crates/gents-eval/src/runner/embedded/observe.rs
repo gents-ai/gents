@@ -646,7 +646,7 @@ mod tests {
         use gents::tools::call::lifecycle::admission_fixture::{
             pending_client_fixture_request, publish_accepted_on_claimed_request,
         };
-        use gents::tools::call::lifecycle::FailureClass;
+        use gents_loop::tool_call_lifecycle::FailureClass;
         use gents::NodeIdentity;
         use gents_protocol::message::{AssistantContent, Message, Text};
         use gents_protocol::output::TerminalOutput;

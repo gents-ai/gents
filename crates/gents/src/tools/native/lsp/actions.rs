@@ -2,7 +2,7 @@ use std::path::Path;
 
 use serde_json::json;
 
-use crate::tools::call::lifecycle::FailureClass;
+use gents_loop::tool_call_lifecycle::FailureClass;
 use crate::tools::native::shared::{ToolContext, ToolError};
 
 use super::auth::LspAction;

@@ -188,7 +188,7 @@ async fn denied_native_file_changes_have_no_effects() {
         assert!(matches!(
             &result,
             Err(ToolError::ReportedFailure {
-                class: crate::tools::call::lifecycle::FailureClass::PolicyDenied,
+                class: gents_loop::tool_call_lifecycle::FailureClass::PolicyDenied,
                 ..
             })
         ));
@@ -358,7 +358,7 @@ async fn full_access_cannot_widen_read_only_workspace_authority() {
     assert!(matches!(
         result,
         Err(ToolError::ReportedFailure {
-            class: crate::tools::call::lifecycle::FailureClass::PolicyDenied,
+            class: gents_loop::tool_call_lifecycle::FailureClass::PolicyDenied,
             ..
         })
     ));

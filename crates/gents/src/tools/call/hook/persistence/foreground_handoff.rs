@@ -72,7 +72,7 @@ impl DefraSessionHook {
         }
         let Some(context) = context else {
             return ForegroundResult::Settled(
-                crate::tools::call::lifecycle::ToolOutcome::from_tool_call_error(
+                gents_loop::tool_call_lifecycle::ToolOutcome::from_tool_call_error(
                     "native process requires an owned execution context",
                 ),
             );
@@ -85,7 +85,7 @@ impl DefraSessionHook {
             .cloned()
         else {
             return ForegroundResult::Settled(
-                crate::tools::call::lifecycle::ToolOutcome::from_tool_call_error(
+                gents_loop::tool_call_lifecycle::ToolOutcome::from_tool_call_error(
                     "native process requires an accepted invocation",
                 ),
             );
@@ -98,7 +98,7 @@ impl DefraSessionHook {
             Err(error) => {
                 tracing::warn!(%error, "foreground handoff observation unavailable");
                 return ForegroundResult::Settled(
-                    crate::tools::call::lifecycle::ToolOutcome::from_tool_call_error(
+                    gents_loop::tool_call_lifecycle::ToolOutcome::from_tool_call_error(
                         "native process observation is unavailable",
                     ),
                 );
@@ -121,7 +121,7 @@ impl DefraSessionHook {
             Ok(reservation) => reservation,
             Err(error) => {
                 return ForegroundResult::Settled(
-                    crate::tools::call::lifecycle::ToolOutcome::from_tool_call_error(
+                    gents_loop::tool_call_lifecycle::ToolOutcome::from_tool_call_error(
                         &error.to_string(),
                     ),
                 );
@@ -133,7 +133,7 @@ impl DefraSessionHook {
             drop(in_flight);
             drop(reservation);
             return ForegroundResult::Settled(
-                crate::tools::call::lifecycle::ToolOutcome::Cancelled,
+                gents_loop::tool_call_lifecycle::ToolOutcome::Cancelled,
             );
         }
         let recorder = hook
@@ -261,7 +261,7 @@ impl DefraSessionHook {
                         }
                         let outcome = execution.await.unwrap_or_else(|_| {
                             if let Some(evidence) = hook.background_executions.live_process_evidence_owner(lifecycle.tool_call_id(), &doc) { evidence.mark_unverified_failure(); }
-                            crate::tools::call::lifecycle::ToolOutcome::tool_returned_error("native command panicked")
+                            gents_loop::tool_call_lifecycle::ToolOutcome::tool_returned_error("native command panicked")
                         });
                         let outcome = hook.background_executions.finalize_pending_failure(lifecycle.tool_call_id(), &doc).unwrap_or(outcome);
                         if crate::tools::exec::ownership::native_terminal_needs_confirmation(Some(&outcome))
@@ -303,7 +303,7 @@ impl DefraSessionHook {
                         } else {
                             let outcome = outcome.unwrap_or_else(|_| {
                                 if let Some(evidence) = hook.background_executions.live_process_evidence_owner(lifecycle.tool_call_id(), &doc) { evidence.mark_unverified_failure(); }
-                                crate::tools::call::lifecycle::ToolOutcome::tool_returned_error("native command panicked")
+                                gents_loop::tool_call_lifecycle::ToolOutcome::tool_returned_error("native command panicked")
                             });
                             let outcome = hook.background_executions.finalize_pending_failure(lifecycle.tool_call_id(), &doc).unwrap_or(outcome);
                             let needs_confirmation = crate::tools::exec::ownership::native_terminal_needs_confirmation(Some(&outcome));
@@ -354,7 +354,7 @@ impl DefraSessionHook {
         }));
         result.await.unwrap_or_else(|_| {
             ForegroundResult::Settled(
-                crate::tools::call::lifecycle::ToolOutcome::tool_returned_error(
+                gents_loop::tool_call_lifecycle::ToolOutcome::tool_returned_error(
                     "native execution owner stopped",
                 ),
             )

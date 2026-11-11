@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, Context, Result};
 
 use crate::pack::rooted_paths::{ensure_within, normalize_for_creation};
-use crate::tools::call::lifecycle::FailureClass;
+use gents_loop::tool_call_lifecycle::FailureClass;
 use crate::tools::native::CommandPolicyDenial;
 
 #[derive(Clone)]

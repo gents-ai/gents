@@ -196,7 +196,7 @@ pub(super) fn prepare_input(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::call::lifecycle::ToolOutcome;
+    use gents_loop::tool_call_lifecycle::ToolOutcome;
     use gents_loop::tool_effects::{ToolEffectDispatcher, ToolEffectError};
 
     struct Tools;

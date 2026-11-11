@@ -522,7 +522,7 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
         outcome
     };
     match &control_outcome {
-        crate::tools::call::lifecycle::ToolOutcome::Completed(text) => {
+        gents_loop::tool_call_lifecycle::ToolOutcome::Completed(text) => {
             assert!(text.contains("first.txt"), "control glob output: {text}");
         }
         other => panic!("control blocker should complete, got {other:?}"),
@@ -559,7 +559,7 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
         assert!(
             matches!(
                 outcome,
-                crate::tools::call::lifecycle::ToolOutcome::TimedOut { .. }
+                gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut { .. }
             ),
             "blocking native tool must resolve to a typed timeout, got {outcome:?}"
         );
@@ -594,7 +594,7 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
         "single-worker queue should advance while the entered blocker cannot return"
     );
     match &second_outcome {
-        crate::tools::call::lifecycle::ToolOutcome::Completed(text) => {
+        gents_loop::tool_call_lifecycle::ToolOutcome::Completed(text) => {
             assert!(text.contains("second request"));
         }
         other => panic!("second read should complete, got {other:?}"),
@@ -1828,10 +1828,10 @@ async fn bash_nonzero_exit_is_a_typed_tool_failure_with_metadata() {
     .await;
 
     match outcome {
-        crate::tools::call::lifecycle::ToolOutcome::Failed { class, text, .. } => {
+        gents_loop::tool_call_lifecycle::ToolOutcome::Failed { class, text, .. } => {
             assert_eq!(
                 class,
-                crate::tools::call::lifecycle::FailureClass::ToolReturnedError
+                gents_loop::tool_call_lifecycle::FailureClass::ToolReturnedError
             );
             let meta = compact_exec_meta(&text);
             assert_eq!(meta["ok"], false);
@@ -1864,8 +1864,8 @@ async fn bash_per_call_timeout_is_a_recoverable_typed_failure_with_metadata() {
     .await;
 
     match outcome {
-        crate::tools::call::lifecycle::ToolOutcome::Failed { class, text, .. } => {
-            assert_eq!(class, crate::tools::call::lifecycle::FailureClass::External);
+        gents_loop::tool_call_lifecycle::ToolOutcome::Failed { class, text, .. } => {
+            assert_eq!(class, gents_loop::tool_call_lifecycle::FailureClass::External);
             let meta = compact_exec_meta(&text);
             assert_eq!(meta["ok"], false);
             assert_eq!(meta["status"], "timeout");
@@ -1904,7 +1904,7 @@ async fn bash_request_deadline_resolves_to_typed_timeout() {
     assert!(
         matches!(
             outcome,
-            crate::tools::call::lifecycle::ToolOutcome::TimedOut { .. }
+            gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut { .. }
         ),
         "bash exceeding the request deadline must resolve to a typed timeout, got {outcome:?}"
     );
@@ -1965,8 +1965,8 @@ async fn unrestricted_bash_timeout_kills_descendants_and_returns_promptly() {
             panic!("bash timeout hung while a descendant held its output pipes open");
         }
     };
-    let crate::tools::call::lifecycle::ToolOutcome::Failed {
-        class: crate::tools::call::lifecycle::FailureClass::External,
+    let gents_loop::tool_call_lifecycle::ToolOutcome::Failed {
+        class: gents_loop::tool_call_lifecycle::FailureClass::External,
         text: output,
         ..
     } = outcome
@@ -2006,8 +2006,8 @@ async fn unrestricted_bash_timeout_keeps_output_printed_before_the_timeout() {
     let outcome = tokio::time::timeout(Duration::from_secs(10), call)
         .await
         .expect("timed-out bash call must return promptly");
-    let crate::tools::call::lifecycle::ToolOutcome::Failed {
-        class: crate::tools::call::lifecycle::FailureClass::External,
+    let gents_loop::tool_call_lifecycle::ToolOutcome::Failed {
+        class: gents_loop::tool_call_lifecycle::FailureClass::External,
         text: output,
         ..
     } = outcome
@@ -2087,8 +2087,8 @@ async fn workspace_write_bash_contains_writes_to_tool_root() {
         .to_string(),
     )
     .await;
-    let crate::tools::call::lifecycle::ToolOutcome::Failed {
-        class: crate::tools::call::lifecycle::FailureClass::ToolReturnedError,
+    let gents_loop::tool_call_lifecycle::ToolOutcome::Failed {
+        class: gents_loop::tool_call_lifecycle::FailureClass::ToolReturnedError,
         text: output,
         ..
     } = outcome

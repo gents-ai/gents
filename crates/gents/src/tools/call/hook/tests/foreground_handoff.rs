@@ -156,8 +156,8 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
                 }).await;
                 match result {
                     crate::tools::exec::ManagedExecOutcome::Exited { stdout, .. } =>
-                        crate::tools::call::lifecycle::ToolOutcome::Completed(String::from_utf8(stdout).unwrap()),
-                    other => crate::tools::call::lifecycle::ToolOutcome::from_tool_call_error(&format!("{other:?}")),
+                        gents_loop::tool_call_lifecycle::ToolOutcome::Completed(String::from_utf8(stdout).unwrap()),
+                    other => gents_loop::tool_call_lifecycle::ToolOutcome::from_tool_call_error(&format!("{other:?}")),
                 }
             }))),
         ).await
@@ -394,7 +394,7 @@ async fn cancellation_winning_handoff_clears_the_request_and_cancels_the_same_ex
                     Box::pin(async move {
                         let _ = started.send(token.clone());
                         token.cancelled().await;
-                        crate::tools::call::lifecycle::ToolOutcome::Cancelled
+                        gents_loop::tool_call_lifecycle::ToolOutcome::Cancelled
                     })
                 }),
             ),
@@ -423,7 +423,7 @@ async fn cancellation_winning_handoff_clears_the_request_and_cancels_the_same_ex
         .unwrap();
     assert!(matches!(
         outcome,
-        ForegroundResult::Settled(crate::tools::call::lifecycle::ToolOutcome::Cancelled)
+        ForegroundResult::Settled(gents_loop::tool_call_lifecycle::ToolOutcome::Cancelled)
     ));
     assert!(execution_token.is_cancelled());
     let doc = crate::store::graphql::escape_graphql_string(&doc);
@@ -477,7 +477,7 @@ async fn refused_foreground_handoff_can_be_retried() {
                     Box::pin(async move {
                         let _ = started.send(());
                         finished.await.unwrap();
-                        crate::tools::call::lifecycle::ToolOutcome::Completed("finished".into())
+                        gents_loop::tool_call_lifecycle::ToolOutcome::Completed("finished".into())
                     })
                 }),
             ),
@@ -693,7 +693,7 @@ async fn interrupted_foreground_with_unverified_exit_remains_background_controll
                         .await;
                         process_tx.send(process).ok().unwrap();
                         token.cancelled().await;
-                        crate::tools::call::lifecycle::ToolOutcome::Cancelled
+                        gents_loop::tool_call_lifecycle::ToolOutcome::Cancelled
                     })
                 }),
             ),

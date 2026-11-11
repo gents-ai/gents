@@ -933,7 +933,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
             Some(model_result_id.to_string()),
             stored_call_id,
             tool_args,
-            &crate::tools::call::lifecycle::ToolOutcome::Completed(tool_result.to_string()),
+            &gents_loop::tool_call_lifecycle::ToolOutcome::Completed(tool_result.to_string()),
         )
         .await,
         HookAction::Continue
@@ -1146,7 +1146,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
             Some("call-1".to_string()),
             "internal-1",
             r#"{"path":"/work/entry.c"}"#,
-            &crate::tools::call::lifecycle::ToolOutcome::Completed("source bytes".to_string()),
+            &gents_loop::tool_call_lifecycle::ToolOutcome::Completed("source bytes".to_string()),
         )
         .await,
         HookAction::Continue
@@ -1296,7 +1296,7 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
                 Some(call_id),
                 &internal_id,
                 &args,
-                &crate::tools::call::lifecycle::ToolOutcome::Completed(format!(
+                &gents_loop::tool_call_lifecycle::ToolOutcome::Completed(format!(
                     "source bytes {index}"
                 )),
             )
@@ -1408,7 +1408,7 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
             None,
             "call-1",
             args,
-            &crate::tools::call::lifecycle::ToolOutcome::Completed(r#"{"hit":1}"#.into())
+            &gents_loop::tool_call_lifecycle::ToolOutcome::Completed(r#"{"hit":1}"#.into())
         )
         .await,
         HookAction::Continue
@@ -1725,7 +1725,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
             Some("call-1".to_string()),
             "internal-1",
             crate::store::test_support::CORRUPT_TOOL_ARGS_589,
-            &crate::tools::call::lifecycle::ToolOutcome::Completed(
+            &gents_loop::tool_call_lifecycle::ToolOutcome::Completed(
                 "described:list_hosts".to_string()
             ),
         )

@@ -112,21 +112,21 @@ impl BackgroundToolRegistry {
 enum RetainedStopReceipt {
     Cancel(CancelCause, String),
     Timeout,
-    Failure(crate::tools::call::lifecycle::ToolOutcome),
+    Failure(gents_loop::tool_call_lifecycle::ToolOutcome),
     FailurePending,
 }
 
 impl RetainedStopReceipt {
-    fn from_outcome(outcome: &crate::tools::call::lifecycle::ToolOutcome) -> Self {
+    fn from_outcome(outcome: &gents_loop::tool_call_lifecycle::ToolOutcome) -> Self {
         match outcome {
-            crate::tools::call::lifecycle::ToolOutcome::Cancelled => {
+            gents_loop::tool_call_lifecycle::ToolOutcome::Cancelled => {
                 Self::Cancel(CancelCause::Interrupted, "request interrupted".to_owned())
             }
-            crate::tools::call::lifecycle::ToolOutcome::TimedOut { .. } => Self::Timeout,
-            crate::tools::call::lifecycle::ToolOutcome::Failed { .. } => {
+            gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut { .. } => Self::Timeout,
+            gents_loop::tool_call_lifecycle::ToolOutcome::Failed { .. } => {
                 Self::Failure(outcome.clone())
             }
-            crate::tools::call::lifecycle::ToolOutcome::Completed(_) => {
+            gents_loop::tool_call_lifecycle::ToolOutcome::Completed(_) => {
                 unreachable!("completion does not abandon a native future")
             }
         }
@@ -462,11 +462,11 @@ impl BackgroundExecutionRegistry {
         &self,
         call: &str,
         doc: &str,
-    ) -> Option<crate::tools::call::lifecycle::ToolOutcome> {
+    ) -> Option<gents_loop::tool_call_lifecycle::ToolOutcome> {
         if !self.has_pending_failure(call, doc) {
             return None;
         }
-        let outcome = crate::tools::call::lifecycle::ToolOutcome::tool_returned_error(
+        let outcome = gents_loop::tool_call_lifecycle::ToolOutcome::tool_returned_error(
             "native process failed during cleanup",
         );
         self.set_stop_receipt(call, doc, RetainedStopReceipt::Failure(outcome.clone()));
@@ -929,7 +929,7 @@ impl BackgroundExecutionRegistry {
             }
             RetainedStopReceipt::Timeout => lifecycle.timeout().await?,
             RetainedStopReceipt::Failure(outcome) => match outcome {
-                crate::tools::call::lifecycle::ToolOutcome::Failed {
+                gents_loop::tool_call_lifecycle::ToolOutcome::Failed {
                     denial: Some(denial),
                     ..
                 } => {
@@ -937,7 +937,7 @@ impl BackgroundExecutionRegistry {
                         .fail_with_command_denial(outcome.model_facing_text(), denial)
                         .await?
                 }
-                crate::tools::call::lifecycle::ToolOutcome::Failed { class, .. } => {
+                gents_loop::tool_call_lifecycle::ToolOutcome::Failed { class, .. } => {
                     let presentation = match self
                         .live_outputs
                         .registry
@@ -2042,7 +2042,7 @@ impl DefraSessionHook {
     pub(crate) async fn fail_in_flight_tool_calls(
         &self,
         result: &str,
-        failure_class: crate::tools::call::lifecycle::FailureClass,
+        failure_class: gents_loop::tool_call_lifecycle::FailureClass,
     ) -> anyhow::Result<usize> {
         let lifecycles = {
             let mut map = self.in_flight_lifecycles.lock().await;

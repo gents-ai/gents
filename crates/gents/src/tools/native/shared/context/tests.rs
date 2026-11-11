@@ -1,5 +1,5 @@
 use super::{ToolContext, ToolError};
-use crate::tools::call::lifecycle::FailureClass;
+use gents_loop::tool_call_lifecycle::FailureClass;
 use crate::tools::native::{
     CommandExecutionMode, CommandNetworkMode, CommandPolicyDenial, DenialReason,
 };

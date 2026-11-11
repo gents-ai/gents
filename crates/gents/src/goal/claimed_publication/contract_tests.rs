@@ -627,7 +627,7 @@ async fn run_generated_wait_observations() {
                         target
                             .fail(
                                 "failed",
-                                crate::tools::call::lifecycle::FailureClass::External,
+                                gents_loop::tool_call_lifecycle::FailureClass::External,
                             )
                             .await
                             .unwrap();

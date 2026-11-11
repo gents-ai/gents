@@ -579,7 +579,7 @@ async fn previews_and_rejected_edits_do_not_publish_file_images() {
 
 #[tokio::test]
 async fn failed_tool_retains_partial_effects_and_rejects_foreign_images() {
-    use crate::tools::call::lifecycle::FailureClass;
+    use gents_loop::tool_call_lifecycle::FailureClass;
     let admission = published_admission(PublishedAdmissionOptions {
         name: "file-change-failed-terminal".into(),
         real_identity: true,

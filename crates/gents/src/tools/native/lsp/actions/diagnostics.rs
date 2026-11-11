@@ -1,7 +1,7 @@
 use anyhow::Context as _;
 use serde_json::{json, Value};
 
-use crate::tools::call::lifecycle::FailureClass;
+use gents_loop::tool_call_lifecycle::FailureClass;
 use crate::tools::native::shared::{ToolContext, ToolError};
 
 use super::super::auth::LspAction;

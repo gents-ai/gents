@@ -1109,7 +1109,7 @@ mod bound {
         };
         let (outcome, ()) = tokio::join!(call, operator);
         assert!(
-            matches!(&outcome, crate::tools::call::lifecycle::ToolOutcome::Completed(text) if text == r#"{"read":true}"#),
+            matches!(&outcome, gents_loop::tool_call_lifecycle::ToolOutcome::Completed(text) if text == r#"{"read":true}"#),
             "{outcome:?}"
         );
     }
@@ -1873,7 +1873,7 @@ mod tool_writes {
             Err(text) => call
                 .fail(
                     text,
-                    crate::tools::call::lifecycle::FailureClass::ToolReturnedError,
+                    gents_loop::tool_call_lifecycle::FailureClass::ToolReturnedError,
                 )
                 .await
                 .unwrap(),

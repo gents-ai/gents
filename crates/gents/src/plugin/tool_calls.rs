@@ -6,7 +6,7 @@ use gents_protocol::plugin_tool_call_limits::{MAX_EFFECTS, MAX_PAYLOAD_BYTES};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-use crate::tools::call::lifecycle::ToolOutcome;
+use gents_loop::tool_call_lifecycle::ToolOutcome;
 
 pub(super) fn available(granted: bool, live_dispatcher: bool) -> bool {
     granted && live_dispatcher
@@ -178,7 +178,7 @@ mod tests {
             arguments: &'a str,
         ) -> gents_loop::tool::BoxFuture<
             'a,
-            Result<crate::tools::call::lifecycle::ToolOutcome, ToolEffectError>,
+            Result<gents_loop::tool_call_lifecycle::ToolOutcome, ToolEffectError>,
         > {
             Box::pin(async move {
                 assert!(
@@ -205,7 +205,7 @@ mod tests {
                         ));
                     }
                 };
-                Ok(crate::tools::call::lifecycle::ToolOutcome::Completed(
+                Ok(gents_loop::tool_call_lifecycle::ToolOutcome::Completed(
                     result.to_string(),
                 ))
             })
@@ -339,7 +339,7 @@ mod tests {
                 _: &'a str,
             ) -> gents_loop::tool::BoxFuture<
                 'a,
-                Result<crate::tools::call::lifecycle::ToolOutcome, ToolEffectError>,
+                Result<gents_loop::tool_call_lifecycle::ToolOutcome, ToolEffectError>,
             > {
                 Box::pin(async {
                     Err(ToolEffectError::Fatal(
@@ -421,7 +421,7 @@ mod tests {
             let outcome = match case["outcome"].as_str().unwrap() {
                 "completed" => Ok(ToolOutcome::Completed("{}".into())),
                 "failed" => Ok(ToolOutcome::Failed {
-                    class: crate::tools::call::lifecycle::FailureClass::External,
+                    class: gents_loop::tool_call_lifecycle::FailureClass::External,
                     denial: None,
                     text: "boom".into(),
                 }),

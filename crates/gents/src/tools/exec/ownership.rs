@@ -40,9 +40,9 @@ pub(crate) const fn may_settle_native(
 }
 
 pub(crate) fn native_terminal_intent(
-    outcome: Option<&crate::tools::call::lifecycle::ToolOutcome>,
+    outcome: Option<&gents_loop::tool_call_lifecycle::ToolOutcome>,
 ) -> NativeTerminalIntent {
-    use crate::tools::call::lifecycle::ToolOutcome;
+    use gents_loop::tool_call_lifecycle::ToolOutcome;
     match outcome {
         Some(ToolOutcome::Completed(_)) => NativeTerminalIntent::Completed,
         Some(ToolOutcome::Cancelled) => NativeTerminalIntent::Cancelled,
@@ -53,7 +53,7 @@ pub(crate) fn native_terminal_intent(
 }
 
 pub(crate) fn native_terminal_needs_confirmation(
-    outcome: Option<&crate::tools::call::lifecycle::ToolOutcome>,
+    outcome: Option<&gents_loop::tool_call_lifecycle::ToolOutcome>,
 ) -> bool {
     !may_settle_native(
         native_terminal_intent(outcome),

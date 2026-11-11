@@ -21,13 +21,13 @@ fn structured_meta_tool_error_becomes_a_typed_dispatch_failure() {
     );
     let dispatch_error = MetaToolError::structured(error).into_dispatch_error();
     let outcome =
-        crate::tools::call::lifecycle::ToolOutcome::from_dispatch("call_tool", Err(dispatch_error));
+        gents_loop::tool_call_lifecycle::ToolOutcome::from_dispatch("call_tool", Err(dispatch_error));
 
     match outcome {
-        crate::tools::call::lifecycle::ToolOutcome::Failed { class, text, .. } => {
+        gents_loop::tool_call_lifecycle::ToolOutcome::Failed { class, text, .. } => {
             assert_eq!(
                 class,
-                crate::tools::call::lifecycle::FailureClass::ArgumentInvalid
+                gents_loop::tool_call_lifecycle::FailureClass::ArgumentInvalid
             );
             let value: serde_json::Value = serde_json::from_str(&text).unwrap();
             assert_eq!(value["ok"], false);
@@ -335,7 +335,7 @@ async fn scoped_discovery_and_flat_dispatch_have_identical_permissions() {
         assert!(matches!(
             denial,
             crate::inference::llm::tool::ToolError::ReportedFailure {
-                class: crate::tools::call::lifecycle::FailureClass::PolicyDenied,
+                class: gents_loop::tool_call_lifecycle::FailureClass::PolicyDenied,
                 ..
             }
         ));
@@ -343,7 +343,7 @@ async fn scoped_discovery_and_flat_dispatch_have_identical_permissions() {
         assert!(matches!(
             admission,
             crate::inference::llm::tool::ToolError::ReportedFailure {
-                class: crate::tools::call::lifecycle::FailureClass::PolicyDenied,
+                class: gents_loop::tool_call_lifecycle::FailureClass::PolicyDenied,
                 ..
             }
         ));

@@ -91,7 +91,7 @@ async fn complete(hook: &DefraSessionHook, call_id: usize, provider_id: &str, pa
             Some(provider_id.into()),
             &internal,
             ARGS,
-            &crate::tools::call::lifecycle::ToolOutcome::Completed(payload.into())
+            &gents_loop::tool_call_lifecycle::ToolOutcome::Completed(payload.into())
         )
         .await,
         HookAction::Continue

@@ -10,7 +10,8 @@ use crate::session::tool_call_state::CancelCause;
 use crate::session::tool_output_rows::BackgroundToolArgs;
 use crate::tools::background::status::{ProcessControlScope, ReadToolOutputOutcome};
 use crate::tools::call::lifecycle::query::load_tool_call_result;
-use crate::tools::call::lifecycle::{FailureClass, ToolCallLifecycle};
+use crate::tools::call::lifecycle::{ToolCallLifecycle};
+use gents_loop::tool_call_lifecycle::FailureClass;
 use crate::tools::native::background_args::{
     CancelToolArgs, ListBackgroundToolsArgs, ReadToolOutputArgs, WaitToolArgs,
 };
