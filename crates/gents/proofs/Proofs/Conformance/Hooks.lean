@@ -803,97 +803,209 @@ private def admitCaseJson (c : AdmitCase) : String :=
 
 def admitCasesJson : String := jsonArray (admitCases.map admitCaseJson)
 
-/-! The owed-delivery record: `Hooks.OwedDelivery.publish`, `redrive` and
-`performs`, over the records of one node. -/
+/-! The owed-delivery record: `Hooks.OwedDelivery.owe`, `publish`, `redrive`
+and `performs` over the records of one node; `deriveHalts`; `prune`. -/
 
 inductive OwedStep where
-  | publish (actor : String) (keys : List OwedDelivery.Key) (commit : Bool)
-  | redrive (key : OwedDelivery.Key) (authorized current : Bool) (attempt : OwedDelivery.Attempt)
+  | owe (point : String) (actor owner : Option String) (signable : List String)
+      (keys : List OwedDelivery.Key) (commit : Bool)
+  | redrive (key : OwedDelivery.Key) (authorized current : Bool)
+      (attempt : OwedDelivery.Attempt) (refused : List OwedDelivery.Write)
 
-def OwedStep.run : OwedStep → List OwedDelivery.Record → List OwedDelivery.Record
-  | .publish actor keys commit, records => OwedDelivery.publish records actor keys commit
-  | .redrive key authorized current attempt, records =>
+def OwedStep.runner : OwedStep → Option String
+  | .owe point actor owner signable _ _ =>
+      OwedDelivery.owe (OwedDelivery.Kind.ofPoint point) actor owner (signable.contains ·)
+  | .redrive .. => none
+
+def OwedStep.run (step : OwedStep) (records : List OwedDelivery.Record) :
+    List OwedDelivery.Record :=
+  match step with
+  | .owe point actor _ _ keys commit =>
+      match step.runner with
+      | some runner =>
+          OwedDelivery.publish records
+            (OwedDelivery.Record.fresh (OwedDelivery.Kind.ofPoint point) actor runner) keys commit
+      | none => records
+  | .redrive key authorized current attempt refused =>
       records.map fun record =>
-        if record.key == key then OwedDelivery.redrive record ⟨authorized, current⟩ attempt
+        if record.key == key then
+          OwedDelivery.redrive record ⟨authorized, current⟩ attempt (!refused.contains ·)
         else record
 
 def OwedStep.performed : OwedStep → List OwedDelivery.Record → Bool
-  | .publish .., _ => false
-  | .redrive key authorized current attempt, records =>
+  | .owe .., _ => false
+  | .redrive key authorized current attempt refused, records =>
       records.any fun record =>
-        record.key == key && OwedDelivery.performs record ⟨authorized, current⟩ attempt
+        record.key == key &&
+          OwedDelivery.performs record ⟨authorized, current⟩ attempt (!refused.contains ·)
 
 structure OwedCase where
   name : String
   steps : List OwedStep
 
-def OwedCase.trace (c : OwedCase) : List (OwedStep × List OwedDelivery.Record × Bool) :=
-  (c.steps.foldl (fun (acc : List OwedDelivery.Record × List (OwedStep × List OwedDelivery.Record × Bool))
-      step =>
+def OwedCase.trace (c : OwedCase) :
+    List (OwedStep × Option String × List OwedDelivery.Record × Bool) :=
+  (c.steps.foldl (fun (acc : List OwedDelivery.Record ×
+      List (OwedStep × Option String × List OwedDelivery.Record × Bool)) step =>
     let next := step.run acc.1
-    (next, acc.2 ++ [(step, next, step.performed acc.1)])) ([], [])).2
+    (next, acc.2 ++ [(step, step.runner, next, step.performed acc.1)])) ([], [])).2
 
 def haltKey : OwedDelivery.Key := ⟨"control.session.halt", "goals", "session-1"⟩
 def terminalKey : OwedDelivery.Key := ⟨"request.terminal.stage", "triggers", "request-1"⟩
+def stopKey : OwedDelivery.Key := ⟨"safety.monitor.stop", "monitor", "request-1"⟩
+def goalWrite : OwedDelivery.Write := ⟨"session-1", "goal-1"⟩
+def fireWrite : OwedDelivery.Write := ⟨"request-1", "fire-1"⟩
 
 def owedCases : List OwedCase :=
   [ { name := "rollback_publishes_nothing"
-    , steps := [.publish "agent" [haltKey] false, .redrive haltKey true true .applied] }
-  , { name := "authorized_delivery_is_performed_once"
-    , steps := [.publish "agent" [haltKey] true, .redrive haltKey true true .applied] }
-  , { name := "revoked_actor_is_dropped_unperformed"
-    , steps := [.publish "agent" [haltKey] true, .redrive haltKey false true .applied] }
+    , steps := [.owe "control.session.halt" (some "user") (some "agent") [] [haltKey] false,
+                .redrive haltKey true true (.applied [goalWrite]) []] }
+  , { name := "user_halt_runs_as_the_owning_agent"
+    , steps := [.owe "control.session.halt" (some "user") (some "agent") [] [haltKey] true,
+                .redrive haltKey true true (.applied [goalWrite]) []] }
+  , { name := "actorless_staging_runs_as_the_owning_agent"
+    , steps := [.owe "request.terminal.stage" none (some "agent") [] [terminalKey] true,
+                .redrive terminalKey true true (.applied [fireWrite]) []] }
+  , { name := "staging_without_an_owning_agent_is_not_recorded"
+    , steps := [.owe "control.session.halt" (some "user") none ["user"] [haltKey] true] }
+  , { name := "unowned_subject_is_dropped_unperformed"
+    , steps := [.owe "control.session.halt" (some "agent") (some "agent") ["agent"] [haltKey] true,
+                .redrive haltKey false true (.applied [goalWrite]) []] }
   , { name := "superseded_transition_is_dropped_unperformed"
-    , steps := [.publish "agent" [haltKey] true, .redrive haltKey true false .applied] }
+    , steps := [.owe "control.session.halt" (some "user") (some "agent") [] [haltKey] true,
+                .redrive haltKey true false (.applied [goalWrite]) []] }
+  , { name := "write_off_the_subject_is_refused_and_stays_owed"
+    , steps := [.owe "control.session.halt" (some "user") (some "agent") [] [haltKey] true,
+                .redrive haltKey true true (.applied [fireWrite]) [],
+                .redrive haltKey true true (.applied [goalWrite]) []] }
+  , { name := "write_the_agent_may_not_make_is_refused_and_stays_owed"
+    , steps := [.owe "control.session.halt" (some "user") (some "agent") [] [haltKey] true,
+                .redrive haltKey true true (.applied [goalWrite]) [goalWrite]] }
   , { name := "failed_attempts_stay_owed_until_delivered"
-    , steps := [.publish "agent" [terminalKey] true, .redrive terminalKey true true (.failed "refused"),
-                .redrive terminalKey true true (.failed "unreadable"),
-                .redrive terminalKey true true .applied] }
-  , { name := "revocation_after_a_failed_attempt_drops"
-    , steps := [.publish "agent" [terminalKey] true, .redrive terminalKey true true (.failed "refused"),
-                .redrive terminalKey false true .applied] }
+    , steps := [.owe "request.terminal.stage" (some "agent") (some "agent") [] [terminalKey] true,
+                .redrive terminalKey true true (.failed "refused") [],
+                .redrive terminalKey true true (.failed "unreadable") [],
+                .redrive terminalKey true true (.applied [fireWrite]) []] }
+  , { name := "on_behalf_runs_under_its_signable_actor"
+    , steps := [.owe "safety.monitor.stop" (some "agent") (some "other") ["agent"] [stopKey] true,
+                .redrive stopKey true true (.applied [fireWrite]) []] }
+  , { name := "on_behalf_for_an_unsignable_actor_is_refused_at_owe"
+    , steps := [.owe "safety.monitor.stop" (some "user") (some "agent") ["agent"] [stopKey] true,
+                .redrive stopKey true true (.applied [fireWrite]) []] }
+  , { name := "revoked_on_behalf_actor_is_dropped"
+    , steps := [.owe "safety.monitor.stop" (some "agent") (some "agent") ["agent"] [stopKey] true,
+                .redrive stopKey false true (.applied [fireWrite]) []] }
   , { name := "redelivery_is_inert"
-    , steps := [.publish "agent" [haltKey] true, .redrive haltKey true true .applied,
-                .redrive haltKey true true .applied, .redrive haltKey false false (.failed "late")] }
+    , steps := [.owe "control.session.halt" (some "user") (some "agent") [] [haltKey] true,
+                .redrive haltKey true true (.applied [goalWrite]) [],
+                .redrive haltKey true true (.applied [goalWrite]) [],
+                .redrive haltKey false false (.failed "late") []] }
   , { name := "publishing_twice_is_inert"
-    , steps := [.publish "agent" [haltKey, terminalKey, haltKey] true,
-                .publish "other" [haltKey] true, .redrive terminalKey true true .applied,
-                .publish "other" [terminalKey] true] } ]
+    , steps := [.owe "control.session.halt" (some "user") (some "agent") [] [haltKey, haltKey] true,
+                .owe "control.session.halt" (some "other") (some "agent") [] [haltKey] true,
+                .redrive haltKey true true (.applied [goalWrite]) [],
+                .owe "control.session.halt" (some "other") (some "agent") [] [haltKey] true] } ]
+
+structure OwedDeriveCase where
+  name : String
+  bound : Nat
+  sessions : List OwedDelivery.HaltedSession
+
+def owedDeriveCases : List OwedDeriveCase :=
+  [ { name := "current_halts_are_derived_within_the_bound", bound := 2
+    , sessions := [⟨"s1", some "agent", some "t1", true⟩, ⟨"s2", some "agent", some "t2", true⟩,
+                   ⟨"s3", some "other", some "t3", true⟩] }
+  , { name := "superseded_unowned_and_unlatched_sessions_are_skipped", bound := 8
+    , sessions := [⟨"resumed", some "agent", some "t1", false⟩, ⟨"orphan", none, some "t2", true⟩,
+                   ⟨"running", some "agent", none, true⟩, ⟨"halted", some "agent", some "t4", true⟩] }
+  , { name := "zero_bound_derives_nothing", bound := 0
+    , sessions := [⟨"s1", some "agent", some "t1", true⟩] } ]
+
+structure OwedPruneCase where
+  name : String
+  retention : Nat
+  records : List (OwedDelivery.Record × Nat)
+
+def settledRecord (key : OwedDelivery.Key) (settled : Option OwedDelivery.Settlement) :
+    OwedDelivery.Record :=
+  { OwedDelivery.Record.fresh .staging (some "user") "agent" key with settled := settled }
+
+def owedPruneCases : List OwedPruneCase :=
+  [ { name := "settled_records_past_retention_are_pruned", retention := 10
+    , records := [(settledRecord haltKey (some .delivered), 11),
+                  (settledRecord terminalKey (some .dropped), 10),
+                  (settledRecord stopKey none, 100)] } ]
 
 private def owedKeyJson (key : OwedDelivery.Key) : String :=
   "{\"point\":" ++ jsonString key.point ++ ",\"plugin\":" ++ jsonString key.plugin ++
     ",\"subject\":" ++ jsonString key.subject ++ "}"
 
+private def optionJson (value : Option String) : String := (value.map jsonString).getD "null"
+
 private def owedRecordJson (record : OwedDelivery.Record) : String :=
   "{\"key\":" ++ owedKeyJson record.key ++
-    ",\"actor\":" ++ jsonString record.actor ++
+    ",\"kind\":" ++ (match record.kind with
+      | .staging => "\"staging\"" | .onBehalf => "\"on_behalf\"") ++
+    ",\"actor\":" ++ optionJson record.actor ++
+    ",\"runner\":" ++ jsonString record.runner ++
     ",\"attempts\":" ++ toString record.attempts ++
-    ",\"last_error\":" ++ ((record.lastError.map jsonString).getD "null") ++
+    ",\"last_error\":" ++ optionJson record.lastError ++
     ",\"settled\":" ++ (match record.settled with
       | none => "null"
       | some .delivered => "\"delivered\""
       | some .dropped => "\"dropped\"") ++ "}"
 
+private def owedWriteJson (write : OwedDelivery.Write) : String :=
+  "{\"subject\":" ++ jsonString write.subject ++ ",\"doc\":" ++ jsonString write.doc ++ "}"
+
 private def owedAttemptJson : OwedDelivery.Attempt → String
-  | .applied => "{\"kind\":\"applied\"}"
+  | .applied writes => "{\"kind\":\"applied\",\"writes\":" ++
+      jsonArray (writes.map owedWriteJson) ++ "}"
   | .failed error => "{\"kind\":\"failed\",\"error\":" ++ jsonString error ++ "}"
 
 private def owedStepJson : OwedStep → String
-  | .publish actor keys commit =>
-      "{\"kind\":\"publish\",\"actor\":" ++ jsonString actor ++
+  | .owe point actor owner signable keys commit =>
+      "{\"kind\":\"owe\",\"point\":" ++ jsonString point ++
+        ",\"actor\":" ++ optionJson actor ++ ",\"owner\":" ++ optionJson owner ++
+        ",\"signable\":" ++ jsonStringArray signable ++
         ",\"keys\":" ++ jsonArray (keys.map owedKeyJson) ++ ",\"commit\":" ++ boolJson commit ++ "}"
-  | .redrive key authorized current attempt =>
+  | .redrive key authorized current attempt refused =>
       "{\"kind\":\"redrive\",\"key\":" ++ owedKeyJson key ++
         ",\"authorized\":" ++ boolJson authorized ++ ",\"current\":" ++ boolJson current ++
-        ",\"attempt\":" ++ owedAttemptJson attempt ++ "}"
+        ",\"attempt\":" ++ owedAttemptJson attempt ++
+        ",\"refused\":" ++ jsonArray (refused.map owedWriteJson) ++ "}"
 
 private def owedCaseJson (c : OwedCase) : String :=
   "{\"name\":" ++ jsonString c.name ++
-    ",\"trace\":" ++ jsonArray (c.trace.map fun (step, records, performed) =>
+    ",\"trace\":" ++ jsonArray (c.trace.map fun (step, runner, records, performed) =>
       "{\"step\":" ++ owedStepJson step ++
+        ",\"runner\":" ++ optionJson runner ++
         ",\"records\":" ++ jsonArray (records.map owedRecordJson) ++
         ",\"performed\":" ++ boolJson performed ++ "}") ++ "}"
 
-def owedCasesJson : String := jsonArray (owedCases.map owedCaseJson)
+private def haltedSessionJson (session : OwedDelivery.HaltedSession) : String :=
+  "{\"session\":" ++ jsonString session.session ++ ",\"owner\":" ++ optionJson session.owner ++
+    ",\"latched_at\":" ++ optionJson session.latchedAt ++
+    ",\"current\":" ++ boolJson session.current ++ "}"
+
+private def owedDeriveCaseJson (c : OwedDeriveCase) : String :=
+  "{\"name\":" ++ jsonString c.name ++ ",\"bound\":" ++ toString c.bound ++
+    ",\"sessions\":" ++ jsonArray (c.sessions.map haltedSessionJson) ++
+    ",\"derived\":" ++ jsonArray ((OwedDelivery.deriveHalts c.bound c.sessions).map
+      fun (session, time, owner) =>
+        "{\"session\":" ++ jsonString session ++ ",\"at\":" ++ jsonString time ++
+          ",\"owner\":" ++ jsonString owner ++ "}") ++ "}"
+
+private def owedPruneCaseJson (c : OwedPruneCase) : String :=
+  "{\"name\":" ++ jsonString c.name ++ ",\"retention\":" ++ toString c.retention ++
+    ",\"records\":" ++ jsonArray (c.records.map fun (record, age) =>
+      "{\"record\":" ++ owedRecordJson record ++ ",\"age\":" ++ toString age ++ "}") ++
+    ",\"kept\":" ++ jsonArray ((OwedDelivery.prune c.records c.retention).map fun (record, age) =>
+      "{\"record\":" ++ owedRecordJson record ++ ",\"age\":" ++ toString age ++ "}") ++ "}"
+
+def owedCasesJson : String :=
+  "{\"traces\":" ++ jsonArray (owedCases.map owedCaseJson) ++
+    ",\"derive\":" ++ jsonArray (owedDeriveCases.map owedDeriveCaseJson) ++
+    ",\"prune\":" ++ jsonArray (owedPruneCases.map owedPruneCaseJson) ++ "}"
 
 end Conformance.HooksContracts

@@ -140,11 +140,14 @@ def taskHookRecordRecoveryCase
 /-- Owed-delivery witness: one redrive of a pending record
 (`Hooks.OwedDelivery.redrive`). A record that stays owed is `running`. -/
 def owedDeliveryRecoveryCase (name : String) (authorized current : Bool)
-    (attempt : Hooks.OwedDelivery.Attempt) : RecoverySweepCase :=
+    (attempt : Hooks.OwedDelivery.Attempt) (refused : List Hooks.OwedDelivery.Write := []) :
+    RecoverySweepCase :=
   let row : OwedDeliveryRow :=
-    { record := Hooks.OwedDelivery.Record.fresh "agent" ⟨"control.session.halt", "goals", "s"⟩
+    { record := Hooks.OwedDelivery.Record.fresh .staging (some "user") "agent"
+        ⟨"control.session.halt", "goals", "s"⟩
     , observed := ⟨authorized, current⟩
-    , attempt := attempt }
+    , attempt := attempt
+    , refused := refused }
   let recovered := owedDeliveryRecover row
   let state := fun (row : OwedDeliveryRow) => match row.record.settled with
     | none => "running"
@@ -316,10 +319,15 @@ def recoverySweepCases : List RecoverySweepCase :=
       "task_hook_record_hidden_request_deferred" .hidden false
   , taskHookRecordRecoveryCase
       "task_hook_record_unavailable_identity_deferred" .unavailable false
-  , owedDeliveryRecoveryCase "owed_delivery_applied_to_delivered" true true .applied
-  , owedDeliveryRecoveryCase "owed_delivery_revoked_actor_to_dropped" false true .applied
-  , owedDeliveryRecoveryCase "owed_delivery_superseded_to_dropped" true false .applied
+  , owedDeliveryRecoveryCase "owed_delivery_applied_to_delivered" true true
+      (.applied [⟨"s", "goal"⟩])
+  , owedDeliveryRecoveryCase "owed_delivery_unowned_subject_to_dropped" false true
+      (.applied [⟨"s", "goal"⟩])
+  , owedDeliveryRecoveryCase "owed_delivery_superseded_to_dropped" true false
+      (.applied [⟨"s", "goal"⟩])
   , owedDeliveryRecoveryCase "owed_delivery_failed_attempt_deferred" true true (.failed "refused")
+  , owedDeliveryRecoveryCase "owed_delivery_refused_write_deferred" true true
+      (.applied [⟨"s", "goal"⟩]) [⟨"s", "goal"⟩]
   ]
 
 def restartDispositionCase
