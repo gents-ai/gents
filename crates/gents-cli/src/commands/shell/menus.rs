@@ -149,15 +149,31 @@ pub(super) async fn act(
             label,
             enabled,
         } => {
+            let state = if *enabled { "on" } else { "off" };
             let target = match doc {
                 Doc::Task => SelfConfigTarget::Task,
-                Doc::Skill => SelfConfigTarget::Skill,
+                Doc::Skill => {
+                    use gents_protocol::operations::document::WriteMode;
+                    use gents_protocol::operations::skill::SkillEdit;
+                    return gents::operations::skill::save(
+                        &access,
+                        &gents::operations::skill::SkillWrite {
+                            owner: node_did,
+                            skill_id: id,
+                            mode: WriteMode::Update,
+                            patch: &SkillEdit::enabled(*enabled).patch(),
+                            node_binding: None,
+                        },
+                    )
+                    .await
+                    .map(|_| format!("{label} is {state}"))
+                    .map_err(|error| format!("Couldn’t turn it {state}: {error}"));
+                }
                 Doc::Trigger => SelfConfigTarget::Trigger,
                 Doc::Schedule | Doc::EventSource | Doc::RemoteTool => {
                     return Err(NOT_WIRED.to_string())
                 }
             };
-            let state = if *enabled { "on" } else { "off" };
             let patch = vec![("enabled".to_string(), Some(json!(enabled)))];
             patch_config_components_on(&access, node_did, &[(target, id.clone(), patch)])
                 .await

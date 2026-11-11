@@ -13,14 +13,9 @@ mod tests;
 impl ClientCore {
     pub async fn delete_skill(&self, skill_id: &str, source_node_did: &str) -> Result<()> {
         let access = self.operator_access(source_node_did)?;
-        let result = async {
-            let deleted = mutations::delete_skill_on(&access, source_node_did, skill_id).await?;
-            if deleted == 0 {
-                bail!("no Skill document with skill_id {skill_id:?} for {source_node_did}");
-            }
-            Ok(())
-        }
-        .await;
+        let result = mutations::delete_skill_on(&access, source_node_did, skill_id)
+            .await
+            .map(|_| ());
 
         match result {
             Ok(()) => {
@@ -201,14 +196,9 @@ impl ClientCore {
 
     pub async fn delete_tools(&self, tools_id: &str, source_node_did: &str) -> Result<()> {
         let access = self.operator_access(source_node_did)?;
-        let result = async {
-            let deleted = mutations::delete_tools_on(&access, source_node_did, tools_id).await?;
-            if deleted == 0 {
-                bail!("no Tools document with tools_id {tools_id:?}");
-            }
-            Ok(())
-        }
-        .await;
+        let result = mutations::delete_tools_on(&access, source_node_did, tools_id)
+            .await
+            .map(|_| ());
         self.finish_automation_delete(
             result,
             "delete tools",
@@ -225,16 +215,10 @@ impl ClientCore {
 
     pub async fn delete_tool_service(&self, service_id: &str, source_node_did: &str) -> Result<()> {
         let access = self.operator_access(source_node_did)?;
-        let result = async {
-            let deleted =
-                mutations::delete_tool_service_registry_on(&access, source_node_did, service_id)
-                    .await?;
-            if deleted == 0 {
-                bail!("no ToolServiceRegistry document with service_id {service_id:?}");
-            }
-            Ok(())
-        }
-        .await;
+        let result =
+            mutations::delete_tool_service_registry_on(&access, source_node_did, service_id)
+                .await
+                .map(|_| ());
         self.finish_automation_delete(
             result,
             "delete tool service",

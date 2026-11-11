@@ -275,8 +275,14 @@ pub(crate) struct SkillAddArgs {
     pub(crate) tool_refs: Vec<String>,
     #[arg(long)]
     pub(crate) display_name: Option<String>,
-    #[arg(long, default_value_t = true)]
-    pub(crate) enabled: bool,
+    /// Enable or disable the skill. Omitted, a new skill starts enabled and
+    /// a stored one keeps its state.
+    #[arg(long, num_args = 0..=1, default_missing_value = "true")]
+    pub(crate) enabled: Option<bool>,
+    /// Clear a stored field (repeatable): name, description, instructions,
+    /// display_name or tool_refs. A field no flag names keeps its value.
+    #[arg(long = "clear", value_name = "FIELD")]
+    pub(crate) clear: Vec<String>,
 }
 
 #[derive(clap::Args)]
@@ -295,6 +301,9 @@ pub(crate) struct SkillImportArgs {
     /// Parse and report what would be imported without writing.
     #[arg(long)]
     pub(crate) dry_run: bool,
+    /// Replace a skill that is already stored under the same ID.
+    #[arg(long)]
+    pub(crate) overwrite: bool,
 }
 
 #[derive(clap::Args)]
@@ -323,6 +332,9 @@ pub(crate) struct SkillShowArgs {
     pub(crate) graphql: String,
     #[arg(long)]
     pub(crate) skill_id: String,
+    /// The owning Node. Needed only when more than one owner holds this ID.
+    #[arg(long)]
+    pub(crate) node_did: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -331,6 +343,9 @@ pub(crate) struct SkillRefArgs {
     pub(crate) graphql: String,
     #[arg(long)]
     pub(crate) skill_id: String,
+    /// The owning Node. Needed only when more than one owner holds this ID.
+    #[arg(long)]
+    pub(crate) node_did: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -527,6 +542,16 @@ pub(crate) struct ToolsSetArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
-    #[arg(long, help = "Canonical Tools JSON document to create or replace")]
+    #[arg(
+        long,
+        help = "Tools JSON naming tools_id and node_did. Each group in the file is set, a null group is cleared, and a group the file omits is kept"
+    )]
     pub(crate) file: PathBuf,
+    /// Groups whose stored settings this save may drop (repeatable or
+    /// comma-separated).
+    #[arg(long = "allow-drop", value_name = "GROUP")]
+    pub(crate) allow_drop: Vec<String>,
+    /// Accept that the save changes every agent that selects these Tools.
+    #[arg(long)]
+    pub(crate) shared_acknowledge: bool,
 }

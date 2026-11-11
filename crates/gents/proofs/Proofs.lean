@@ -98,6 +98,8 @@ import Proofs.Tools.SelfConfig
 import Proofs.Tools.SelfConfig.Selection
 import Proofs.Tools.Identity
 import Proofs.Documents.Skills
+import Proofs.Documents.DocumentOperations
+import Proofs.Tools.SelfConfig.ToolsSave
 import Proofs.Tools.EditMatch
 import Proofs.Automation.EventDelivery
 import Proofs.Conformance.EventDelivery

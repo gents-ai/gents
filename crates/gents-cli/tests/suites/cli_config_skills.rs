@@ -118,6 +118,46 @@ async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
             "research",
         ],
     )?;
+    assert_eq!(
+        show.get("tool_refs")
+            .and_then(Value::as_array)
+            .map(Vec::len),
+        Some(1),
+        "an add that names no --tool-ref keeps the stored ones"
+    );
+    run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "add",
+            "--graphql",
+            &graphql,
+            "--node-did",
+            &node_did,
+            "--skill-id",
+            "research",
+            "--clear",
+            "tool_refs",
+        ],
+    )?;
+    let show = run_cli_json(
+        &home_dir,
+        &[
+            "config",
+            "skill",
+            "show",
+            "--graphql",
+            &graphql,
+            "--skill-id",
+            "research",
+        ],
+    )?;
+    assert_eq!(
+        show.get("instructions").and_then(Value::as_str),
+        Some("Always cite your sources."),
+        "clearing one field keeps the others"
+    );
     let tool_refs_empty = match show.get("tool_refs") {
         None | Some(Value::Null) => true,
         Some(Value::Array(items)) => items.is_empty(),
@@ -125,7 +165,7 @@ async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
     };
     assert!(
         tool_refs_empty,
-        "re-add without --tool-ref must clear tool_refs; got {:?}",
+        "--clear tool_refs must clear tool_refs; got {:?}",
         show.get("tool_refs")
     );
 
@@ -141,7 +181,10 @@ async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
             "research",
         ],
     )?;
-    assert_eq!(disabled.get("updated").and_then(Value::as_u64), Some(1));
+    assert_eq!(
+        disabled.get("node_did").and_then(Value::as_str),
+        Some(node_did.as_str())
+    );
     assert_eq!(
         disabled.get("enabled").and_then(Value::as_bool),
         Some(false)
@@ -256,19 +299,27 @@ async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
     assert!(
         !fs::read_to_string(exported_skill.join("SKILL.md"))?.contains(source.to_str().unwrap())
     );
-    run_cli_json(
-        &home_dir,
-        &[
-            "config",
-            "skill",
-            "import",
-            exported_skill.to_str().unwrap(),
-            "--graphql",
-            &graphql,
-            "--node-did",
-            &node_did,
-        ],
-    )?;
+    let reimport = [
+        "config",
+        "skill",
+        "import",
+        exported_skill.to_str().unwrap(),
+        "--graphql",
+        &graphql,
+        "--node-did",
+        &node_did,
+    ];
+    assert!(
+        run_cli_json(&home_dir, &reimport).is_err(),
+        "an import over a stored skill needs --overwrite"
+    );
+    assert_eq!(
+        show_skill()?["source_directory"].as_str(),
+        source.canonicalize()?.to_str()
+    );
+    let mut overwrite = reimport.to_vec();
+    overwrite.push("--overwrite");
+    run_cli_json(&home_dir, &overwrite)?;
     assert_eq!(
         show_skill()?["source_directory"].as_str(),
         exported_skill.canonicalize()?.to_str()
@@ -398,6 +449,7 @@ async fn config_skill_import_export_roundtrip_hermes() -> Result<()> {
             &graphql,
             "--node-did",
             &node_did,
+            "--overwrite",
         ],
     )?;
     let reimported_count = reimported

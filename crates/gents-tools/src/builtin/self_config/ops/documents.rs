@@ -236,7 +236,11 @@ pub(super) fn safe_diff(
     before: &Map<String, Value>,
     after: &Map<String, Value>,
 ) -> Vec<FieldDelta> {
-    let mut deltas = diff_docs(target, before, after);
+    summarized(target, diff_docs(target, before, after))
+}
+
+/// A receipt's deltas with long values summarized and secrets redacted.
+pub(crate) fn summarized(target: SelfConfigTarget, mut deltas: Vec<FieldDelta>) -> Vec<FieldDelta> {
     for delta in &mut deltas {
         for value in [&mut delta.from, &mut delta.to] {
             if let Some(text) = value

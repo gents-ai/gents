@@ -3,9 +3,13 @@
 //! it needs and its help. Front ends parse into these types and render them.
 
 pub mod agent;
+pub mod document;
 pub mod inference;
+pub mod mcp_service;
 pub mod request;
 pub mod session;
+pub mod skill;
+pub mod tools;
 
 /// The call that lets a caller correct a refused operation. Each front end
 /// renders it in its own syntax.

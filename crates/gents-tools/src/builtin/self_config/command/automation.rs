@@ -18,8 +18,14 @@ impl ConfigCommandTool {
             }
             "preview" | "edit" => {
                 let patch = parse_patch(&argv[2..], SelfConfigTarget::ToolServiceRegistry)?;
-                self.patch(&self.core, verb, mcp_service_request(id.clone(), patch))
-                    .await
+                self.document_write(
+                    SelfConfigTarget::ToolServiceRegistry,
+                    id,
+                    gents_protocol::operations::document::WriteMode::Update,
+                    patch,
+                    verb == "preview",
+                )
+                .await
             }
             other => bail!(
                 "unknown mcp-service command {other:?}; accepted: list, get, create, update, delete, preview, edit; see [\"help\",\"mcp-service\"]"

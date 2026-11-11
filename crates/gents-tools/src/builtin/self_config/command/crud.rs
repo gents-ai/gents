@@ -184,6 +184,22 @@ impl ConfigCommandTool {
             }
             self.resolve_target_agent(&id, &mut patch).await?;
         }
+        if matches!(
+            target,
+            SelfConfigTarget::Skill | SelfConfigTarget::ToolServiceRegistry
+        ) {
+            anyhow::ensure!(agent.is_none(), "{resource} with an exact ID does not accept options.agent; the ID identifies the document");
+            anyhow::ensure!(!shared_ack, "shared applies only to a Context or Tools");
+            let mode = if create {
+                gents_protocol::operations::document::WriteMode::Create
+            } else {
+                gents_protocol::operations::document::WriteMode::Update
+            };
+            return self
+                .document_write(target, &id, mode, patch, preview)
+                .await
+                .map(Some);
+        }
         let mut core = if matches!(
             target,
             SelfConfigTarget::Task
@@ -211,8 +227,10 @@ impl ConfigCommandTool {
             }
         }
         let mut request = match target {
-            SelfConfigTarget::Tools => refuse_uninstalled_plugins(
-                refuse_silent_tools_drops(tools_request(&core, patch), allow_drop),
+            SelfConfigTarget::Tools => refuse_unadmitted_tools_save(
+                tools_request(&core, patch),
+                core.held_grants().clone(),
+                allow_drop,
                 {
                     let plugins = self.plugins.clone();
                     move |plugin: &str| plugins.installed_record(plugin).map(|_| ())
