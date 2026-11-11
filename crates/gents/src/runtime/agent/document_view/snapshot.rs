@@ -571,21 +571,24 @@ mod advertised_context_override_tests {
 
     #[test]
     fn context_override_admission_matches_lean() {
-        let snapshot = gents_lean_vocab::lean_contract_snapshot();
-        let cases = snapshot.configuration_scope_cases["context_bounds"]
-            .as_array()
-            .unwrap();
-        assert_eq!(cases.len(), 8);
-        for case in cases {
+        use gents_lean_vocab::families::configuration_scope_context_bounds as family;
+
+        let limit = |value: &Option<family::ContextLimit>| {
+            value.as_ref().map(|limit| {
+                let magnitude = limit.magnitude as i64;
+                if limit.negative {
+                    -magnitude
+                } else {
+                    magnitude
+                }
+            })
+        };
+        family::replay(|i| {
             let mut selected = profile(1);
-            selected.context_window = case["selected"].as_i64();
-            let model = advertised(case["default"].as_i64(), case["maximum"].as_i64());
-            assert_eq!(
-                validate_advertised_context_override(&selected, &model).is_ok(),
-                case["allowed"].as_bool().unwrap(),
-                "{case}"
-            );
-        }
+            selected.context_window = limit(&i.selected);
+            let model = advertised(limit(&i.model_default), limit(&i.maximum));
+            validate_advertised_context_override(&selected, &model).is_ok()
+        });
     }
 
     fn profile(context_window: i64) -> gents_documents::InferenceProfile {

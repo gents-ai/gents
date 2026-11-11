@@ -4710,10 +4710,6 @@ pub fn lean_request_terminal_selection_cases() -> &'static [serde_json::Value] {
     &lean_contract_snapshot().request_terminal_selection_cases
 }
 
-pub fn lean_claude_platform_cases() -> &'static [serde_json::Value] {
-    &lean_contract_snapshot().claude_platform_cases
-}
-
 pub fn lean_pack_identity_cases() -> &'static [LeanPackIdentityCase] {
     &lean_contract_snapshot().pack_identity_cases
 }
