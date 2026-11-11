@@ -203,7 +203,7 @@ pub(crate) async fn request_admit_verify(
     request: &AgentRequestRow,
     agent: &str,
 ) -> AdmissionResult<()> {
-    let registry = Registry::current().map_err(AgentRequestAdmissionError::unavailable)?;
+    let registry = Registry::for_node(node).map_err(AgentRequestAdmissionError::unavailable)?;
     let claimants = registry
         .request_admit_verify
         .iter()

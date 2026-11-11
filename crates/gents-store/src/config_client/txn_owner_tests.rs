@@ -635,6 +635,7 @@ async fn cancellation_after_embedded_begin_abandons_before_releasing_the_gate() 
                     relationship_grants: std::sync::Mutex::new(Vec::new()),
                     publication_observer: None,
                     pack_approval: None,
+                    loopback_node: None,
                 })
             })
         },

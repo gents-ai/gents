@@ -47,6 +47,8 @@ pub enum BackendProtectionError {
     Schema(#[source] anyhow::Error),
     #[error("backend protection durable sync failed")]
     Join(#[from] tokio::task::JoinError),
+    #[error("the started node could not take its composition root's attachments")]
+    Composition(#[from] crate::node_extension::NodeExtensionError),
 }
 
 type Result<T> = std::result::Result<T, BackendProtectionError>;
