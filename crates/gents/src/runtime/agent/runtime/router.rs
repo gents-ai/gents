@@ -6,7 +6,7 @@ use tokio::sync::{watch, OwnedRwLockReadGuard, RwLock};
 
 use crate::request::lifecycle::{ExecutionOrigin, RequestLifecycle};
 use crate::request::watcher::{DefraWatcher, Watcher};
-use crate::runtime::snapshot::{
+use crate::triggers::runtime_snapshot::{
     effective_agent_admission, ActiveRuntimeSnapshot, EffectiveAgentAdmission,
 };
 use crate::runtime::status::RuntimeStatusHandle;

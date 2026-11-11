@@ -9,7 +9,7 @@ use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 use crate::documents::Agent as AgentDocument;
 use crate::inference::admission::BackendAvailability;
 use crate::inference::resolved::ResolvedAgent;
-use crate::runtime::snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
+use crate::triggers::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
 
 use super::DocumentRuntimeView;
 

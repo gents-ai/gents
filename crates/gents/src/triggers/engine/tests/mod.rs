@@ -22,7 +22,7 @@ use crate::lean_vocab_test::{
     lean_trigger_dispatch_case_count, lean_trigger_dispatch_cases, LeanTriggerDispatchCase,
     LeanVocabulary,
 };
-use crate::runtime::snapshot::{ActiveRuntimeSnapshot, ResolvedRuntimeSnapshot};
+use crate::triggers::runtime_snapshot::{ActiveRuntimeSnapshot, ResolvedRuntimeSnapshot};
 use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::{KeyIdentity, RuntimeNode};
 use crate::tools::surface::AgentToolSurfaceConfig;

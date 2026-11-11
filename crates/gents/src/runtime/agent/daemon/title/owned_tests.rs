@@ -35,7 +35,7 @@ use crate::runtime::agent::daemon::AgentDaemonInit;
 use crate::runtime::agent::runtime::{
     run_router_with_watcher, RouterInputs, RuntimeAdmissionGate, StartupBarrier,
 };
-use crate::runtime::snapshot::ActiveRuntimeSnapshot;
+use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use crate::runtime::status::RuntimeStatusHandle;
 use crate::store::config_client::ConfigAccess;
 use crate::store::identity::{NodeIdentity, RuntimeNode};

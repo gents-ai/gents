@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::Result;
 use tokio::sync::{mpsc, watch};
 
-use crate::runtime::snapshot::ResolvedRuntimeSnapshot;
+use crate::triggers::runtime_snapshot::ResolvedRuntimeSnapshot;
 use crate::runtime::status::RuntimeStatusHandle;
 use crate::tools::surface::ToolRuntimeContext;
 use gents_protocol::node_readiness::ReconcilePhase;

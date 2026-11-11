@@ -7,7 +7,7 @@ use tracing::Instrument;
 use crate::inference::admission::BackendAdmissionConfig;
 use crate::inference::backends::registry;
 use crate::runtime::agent::{DocumentResolveContext, Gents};
-use crate::runtime::snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
+use crate::triggers::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
 use crate::tools::surface::{ToolRuntimeContext, ToolSurface};
 
 pub(super) fn is_degraded_startup_unavailable_reason(

@@ -1,6 +1,7 @@
 pub(crate) mod callback;
 pub(crate) mod engine;
 pub mod event_delivery;
+pub(crate) mod runtime_snapshot;
 pub mod snapshot_observer;
 
 pub use engine::durable::{

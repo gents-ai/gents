@@ -12,7 +12,7 @@ use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
-use crate::runtime::snapshot::ActiveRuntimeSnapshot;
+use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use crate::store::subscription_source::UpdateSubscriptionSource;
 use crate::request::event_delivery::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
 use crate::triggers::snapshot_observer::RuntimeSnapshotObserver;

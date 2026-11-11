@@ -38,8 +38,8 @@ fn routed_snapshot(
     generation: u64,
     agent_did: &str,
     dispatcher: mpsc::Sender<AgentRequest>,
-) -> Arc<crate::runtime::snapshot::ActiveRuntimeSnapshot> {
-    Arc::new(crate::runtime::snapshot::ActiveRuntimeSnapshot {
+) -> Arc<crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot> {
+    Arc::new(crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
         generation,
         node: None,
         local_did: String::new(),
@@ -377,7 +377,7 @@ async fn router_holds_request_during_generation_handoff_and_dispatches_after_ali
     assert!(accept.legal);
 
     let node_did = "did:test:router-latest-snapshot";
-    let initial_snapshot = Arc::new(crate::runtime::snapshot::ActiveRuntimeSnapshot {
+    let initial_snapshot = Arc::new(crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
         generation: 1,
         node: None,
         local_did: String::new(),
@@ -395,7 +395,7 @@ async fn router_holds_request_during_generation_handoff_and_dispatches_after_ali
         agent_executor_capacities: RapidHashMap::new(),
         agent_executor_queue_capacities: RapidHashMap::new(),
     });
-    let updated_snapshot = Arc::new(crate::runtime::snapshot::ActiveRuntimeSnapshot {
+    let updated_snapshot = Arc::new(crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
         generation: 2,
         node: None,
         local_did: String::new(),
@@ -483,7 +483,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
     let node = db.node.clone();
     let node_did = db.node_identity.did().to_owned();
     let agent_did = binding.agent_did;
-    let initial_snapshot = Arc::new(crate::runtime::snapshot::ActiveRuntimeSnapshot {
+    let initial_snapshot = Arc::new(crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
         generation: 1,
         node: None,
         local_did: String::new(),
@@ -493,7 +493,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
         backend_admission_configs: RapidHashMap::new(),
         unavailable_agents: RapidHashMap::from_iter([(
             agent_did.clone(),
-            crate::runtime::snapshot::UnavailableAgent::new(
+            crate::triggers::runtime_snapshot::UnavailableAgent::new(
                 gents_protocol::row::AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
                 "test fixture has no executor",
             ),
@@ -507,7 +507,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
         agent_executor_capacities: RapidHashMap::new(),
         agent_executor_queue_capacities: RapidHashMap::new(),
     });
-    let updated_snapshot = Arc::new(crate::runtime::snapshot::ActiveRuntimeSnapshot {
+    let updated_snapshot = Arc::new(crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
         generation: 2,
         node: None,
         local_did: String::new(),
@@ -517,7 +517,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
         backend_admission_configs: RapidHashMap::new(),
         unavailable_agents: RapidHashMap::from_iter([(
             agent_did.clone(),
-            crate::runtime::snapshot::UnavailableAgent::new(
+            crate::triggers::runtime_snapshot::UnavailableAgent::new(
                 gents_protocol::row::AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
                 "test fixture has no executor",
             ),

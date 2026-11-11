@@ -14,7 +14,7 @@ use crate::documents::{
     load_trigger_next_run_at_batch, update_trigger_runtime_fields, TriggerRuntimeUpdate,
     TRIGGER_CURSOR_BATCH_SIZE,
 };
-use crate::runtime::snapshot::ActiveRuntimeSnapshot;
+use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use crate::store::config_client::{ConfigAccess, ConfigClientError};
 use crate::triggers::engine::{FireIntent, FireResult, TriggerSource};
 

@@ -1,4 +1,4 @@
-use crate::runtime::snapshot::{ActiveRuntimeSnapshot, ResolvedRuntimeSnapshot};
+use crate::triggers::runtime_snapshot::{ActiveRuntimeSnapshot, ResolvedRuntimeSnapshot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct SnapshotDiffCounts {

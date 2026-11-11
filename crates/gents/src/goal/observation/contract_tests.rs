@@ -213,7 +213,7 @@ async fn generated_goal_rescans_recover_lost_notifications() {
             let changes_tx = (!closed_feed).then_some(changes_tx);
             let (ticks_tx, ticks) = futures::channel::mpsc::unbounded();
             let waiting = Arc::new(tokio::sync::Notify::new());
-            let unavailable = crate::runtime::snapshot::UnavailableAgent::new(
+            let unavailable = crate::triggers::runtime_snapshot::UnavailableAgent::new(
                 gents_protocol::node_readiness::AgentReadinessUnavailableReason::BackendNotConfigured,
                 "fixture",
             ).with_watcher_identity(f.agent.clone());

@@ -1090,7 +1090,7 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
 
 #[tokio::test]
 async fn generated_snapshot_demotions_preserve_healthy_agents() {
-    use crate::runtime::snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
+    use crate::triggers::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
     use rapidhash::{RapidHashMap, RapidHashSet};
 
     fn ids(value: &Value) -> Vec<String> {

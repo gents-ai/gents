@@ -4,7 +4,7 @@ use crate::documents::automation::{
     ResolvedSchedule, ResolvedTask,
 };
 use crate::documents::ConcurrencyMode;
-use crate::runtime::snapshot::UnavailableAgent;
+use crate::triggers::runtime_snapshot::UnavailableAgent;
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 
 pub(super) fn resolve_automation(

@@ -838,7 +838,7 @@ pub use runtime::periodic_recovery::{
     periodic_recovery_sweep_metadata, run_periodic_recovery_sweeps_with_identities,
     PeriodicRecoverySweepMetadata, PeriodicRecoverySweepOutcome, PeriodicRecoverySweepRun,
 };
-pub use runtime::snapshot::{ActiveRuntimeSnapshot, DispatcherMap};
+pub use triggers::runtime_snapshot::{ActiveRuntimeSnapshot, DispatcherMap};
 pub use session::load_history;
 pub use session::{ForkError, ForkOutcome, ForkParams};
 pub use store::collection::{Collection, DESIRED_STATE_APPLY_ORDER};

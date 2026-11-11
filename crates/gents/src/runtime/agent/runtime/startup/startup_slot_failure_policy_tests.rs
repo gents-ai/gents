@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::runtime::agent::reconcile::SlotFailurePolicy as _;
 use crate::runtime::node_readiness_publisher::{FatalNodeReadinessWrite, NodeReadinessWriter};
-use crate::runtime::snapshot::ActiveRuntimeSnapshot;
+use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 
 use super::*;
 

@@ -17,7 +17,7 @@ use crate::inference::resolved::{
     ResolvedAgent, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS,
 };
 use crate::runtime::agent::retry::RetryPolicy;
-use crate::runtime::snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
+use crate::triggers::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
 use crate::store::identity::{NodeIdentity, RuntimeNode};
 use crate::store::schema::migration;
 use crate::triggers::snapshot_observer::RuntimeSnapshotObserver;
@@ -200,7 +200,7 @@ pub struct Gents {
     unavailable_agents: RapidHashMap<String, UnavailableAgent>,
     active_snapshot: Arc<
         std::sync::RwLock<
-            Option<watch::Receiver<Arc<crate::runtime::snapshot::ActiveRuntimeSnapshot>>>,
+            Option<watch::Receiver<Arc<crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot>>>,
         >,
     >,
     document_runtime_context: Option<DocumentResolveContext>,

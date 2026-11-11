@@ -33,7 +33,7 @@ async fn agent_for(home: &EmbeddedHome) -> Arc<dyn NodeIdentity> {
 
 async fn active_agents(
     home: &EmbeddedHome,
-) -> tokio::sync::watch::Receiver<Arc<crate::runtime::snapshot::ActiveRuntimeSnapshot>> {
+) -> tokio::sync::watch::Receiver<Arc<crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot>> {
     let agent_identity = agent_for(home).await;
     let node = Arc::new(crate::store::identity::RuntimeNode {
         node_did: home.identity.did().into(),
@@ -77,7 +77,7 @@ async fn active_agents(
         skills: Vec::new(),
         oauth_pool: Vec::new(),
     });
-    let snapshot = crate::runtime::snapshot::ResolvedRuntimeSnapshot::from_parts(
+    let snapshot = crate::triggers::runtime_snapshot::ResolvedRuntimeSnapshot::from_parts(
         agent.agent_did.clone(),
         vec![agent],
         Default::default(),

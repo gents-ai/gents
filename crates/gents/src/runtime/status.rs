@@ -11,7 +11,7 @@ use crate::runtime::agent::ProcessLifecycleState;
 use crate::runtime::node_readiness_publisher::{
     NodeReadinessPublisherHandle, NodeReadinessPublisherOwner,
 };
-use crate::runtime::snapshot::ActiveRuntimeSnapshot;
+use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use crate::store::graphql::escape_graphql_string;
 use gents_protocol::node_readiness::{ReconcilePhase, ReconcileResult};
 

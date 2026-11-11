@@ -12,7 +12,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::runtime::agent::ProcessLifecycleState;
-use crate::runtime::snapshot::ActiveRuntimeSnapshot;
+use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use crate::store::graphql::escape_graphql_string;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
