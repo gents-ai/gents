@@ -775,7 +775,7 @@ async fn serve_foreground(
             .context("reading client route collection versions after migrations")?;
         replicated_schema.set(schema).ok();
         let enrollment_network =
-            crate::http::enrollment::ensure_enrollment_network(&node, identity.as_ref(), &node_name)
+            gents_p2p::p2p_reconcile::ensure_enrollment_network(&node, identity.as_ref(), &node_name)
                 .await
                 .context("ensuring authenticated enrollment network")?;
         *enrollment_decisions.write().await = Some(
@@ -852,7 +852,7 @@ async fn serve_foreground(
                     .await?;
             if let Some(p2p) = gents_store::identity::node_p2p(&node) {
                 *enrollment_offer_issuer.write().await =
-                    Some(crate::http::enrollment::EnrollmentOfferIssuer::new(
+                    Some(gents_p2p::p2p_reconcile::EnrollmentOfferIssuer::new(
                         identity.clone(),
                         p2p,
                         enrollment_network.network_id,

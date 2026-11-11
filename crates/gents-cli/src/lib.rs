@@ -24,11 +24,6 @@ pub mod accounts {
 pub mod jobs {
     pub use crate::commands::job::next_calls;
 }
-pub mod enrollment {
-    pub use crate::http::enrollment::{
-        ensure_enrollment_network, EnrollmentOfferIssuer, EnrollmentOfferStatus,
-    };
-}
 mod caused_sessions;
 mod cli;
 mod commands;
