@@ -1456,222 +1456,6 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
     Ok(())
 }
 
-#[tokio::test]
-async fn output_obligation_accepts_every_count_field_the_runtime_can_parse() -> Result<()> {
-    let node = obligation_node().await?;
-    let access = runtime_access(&node)?;
-    let owner = "did:key:obligation-owner";
-
-    let mut refused = Vec::new();
-    let count_fields = [
-        ("int-count", "total"),
-        ("string-count", "expected_total"),
-        ("float32-count", "ratio"),
-        ("float64-count", "amount"),
-        ("json-count", "payload"),
-        ("blob-count", "attachment"),
-        ("non-null-int-count", "required_total"),
-        ("non-null-string-count", "required_label"),
-    ];
-    for (surface_id, count_field) in count_fields {
-        if let Err(error) = apply(
-            &access,
-            vec![obligation_surface(
-                owner,
-                surface_id,
-                "ObligationOutcome",
-                count_field,
-            )],
-        )
-        .await
-        {
-            refused.push(format!("{count_field}: {error:#}"));
-        }
-    }
-    assert!(refused.is_empty(), "{refused:#?}");
-    apply(
-        &access,
-        vec![obligation_surface(
-            owner,
-            "unregistered",
-            "ObligationOutcomeLater",
-            "total",
-        )],
-    )
-    .await?;
-
-    let surfaces =
-        crate::list_datastore_tool_surfaces(&ConfigAccess::local(node.clone()), owner).await?;
-    assert_eq!(surfaces.len(), count_fields.len() + 1, "{surfaces:?}");
-    node.shutdown().await.expect("node shutdown");
-    Ok(())
-}
-
-fn obligation_surface_payloads(
-    owner: &str,
-    surface_id: &str,
-    add_field: &str,
-    update_field: &str,
-) -> DesiredStateApplyDocument {
-    let add = obligation_surface(owner, surface_id, "ObligationOutcome", add_field).add;
-    let update = obligation_surface(owner, surface_id, "ObligationOutcome", update_field).update;
-    DesiredStateApplyDocument {
-        collection: Collection::DatastoreToolSurface,
-        add,
-        update,
-    }
-}
-
-async fn published_count_field(
-    access: &ConfigAccess,
-    owner: &str,
-    surface_id: &str,
-) -> Result<String> {
-    let surface = crate::list_datastore_tool_surfaces(access, owner)
-        .await?
-        .into_iter()
-        .find(|surface| surface.surface_id == surface_id)
-        .expect("surface is published");
-    let Some(crate::SurfaceToolDecl::Create(decl)) =
-        surface.entries.unwrap_or_default().into_iter().next()
-    else {
-        panic!("surface publishes its create tool");
-    };
-    Ok(decl
-        .output_obligation
-        .and_then(|obligation| obligation.expected_count_field)
-        .expect("obligation keeps its count field"))
-}
-
-#[tokio::test]
-async fn creation_judges_the_count_field_of_the_add_payload() -> Result<()> {
-    let node = obligation_node().await?;
-    let access = runtime_access(&node)?;
-    let owner = "did:key:obligation-owner";
-
-    let refused = apply(
-        &access,
-        vec![obligation_surface_payloads(
-            owner, "created", "flag", "total",
-        )],
-    )
-    .await
-    .expect_err("a creation publishes the add payload, whose count field is a Boolean");
-    assert!(
-        format!("{refused:#}").contains("\"flag\" names a Boolean field"),
-        "{refused:#}"
-    );
-    let plan = DesiredStateApplyPlan::new(vec![obligation_surface_payloads(
-        owner, "created", "flag", "total",
-    )])?;
-    let previewed = access
-        .transact_write("test.obligation.preview.add", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                validate_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
-            })
-        })
-        .await
-        .expect_err("preflight judges the same add payload");
-    assert!(
-        format!("{previewed:#}").contains("\"flag\" names a Boolean field"),
-        "{previewed:#}"
-    );
-    assert!(
-        crate::list_datastore_tool_surfaces(&ConfigAccess::local(node.clone()), owner)
-            .await?
-            .is_empty()
-    );
-
-    apply(
-        &access,
-        vec![obligation_surface_payloads(
-            owner, "created", "total", "flag",
-        )],
-    )
-    .await?;
-    assert_eq!(
-        published_count_field(&access, owner, "created").await?,
-        "total"
-    );
-    node.shutdown().await.expect("node shutdown");
-    Ok(())
-}
-
-#[tokio::test]
-async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()> {
-    let node = obligation_node().await?;
-    let access = runtime_access(&node)?;
-    let owner = "did:key:obligation-owner";
-    apply(
-        &access,
-        vec![obligation_surface(
-            owner,
-            "replaced",
-            "ObligationOutcome",
-            "total",
-        )],
-    )
-    .await?;
-
-    let refused = apply(
-        &access,
-        vec![obligation_surface_payloads(
-            owner, "replaced", "amount", "flag",
-        )],
-    )
-    .await
-    .expect_err("a replacement publishes the update payload, whose count field is a Boolean");
-    assert!(
-        format!("{refused:#}").contains("\"flag\" names a Boolean field"),
-        "{refused:#}"
-    );
-    let plan = DesiredStateApplyPlan::new(vec![obligation_surface_payloads(
-        owner, "replaced", "amount", "flag",
-    )])?;
-    let previewed = access
-        .transact_write("test.obligation.preview.update", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                validate_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
-            })
-        })
-        .await
-        .expect_err("preflight judges the same update payload");
-    assert!(
-        format!("{previewed:#}").contains("\"flag\" names a Boolean field"),
-        "{previewed:#}"
-    );
-    assert_eq!(
-        published_count_field(&access, owner, "replaced").await?,
-        "total"
-    );
-
-    apply(
-        &access,
-        vec![obligation_surface_payloads(
-            owner, "replaced", "flag", "amount",
-        )],
-    )
-    .await?;
-    assert_eq!(
-        published_count_field(&access, owner, "replaced").await?,
-        "amount"
-    );
-    node.shutdown().await.expect("node shutdown");
-    Ok(())
-}
-
 async fn event_source_node() -> Result<Arc<EmbeddedNode>> {
     let node = Arc::new(gents_store::test_support::node_builder().build().await?);
     register_config_schemas(&node).await?;
@@ -1727,7 +1511,7 @@ fn correlated_event_source(
 
 async fn published_event_sources(node: &EmbeddedNode) -> Result<Vec<Value>> {
     let rows = node
-        .execute("{ EventSource { event_source_id correlation_field group } }")
+        .execute("{ EventSource { event_source_id source_collection correlation_field group } }")
         .await;
     assert!(!rows.has_errors());
     Ok(rows.data.expect("EventSource rows")["EventSource"]
@@ -1826,77 +1610,6 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
 }
 
 #[tokio::test]
-async fn event_source_accepts_every_count_field_the_runtime_can_parse() -> Result<()> {
-    let node = event_source_node().await?;
-    let access = runtime_access(&node)?;
-    let owner = "did:key:event-source-owner";
-
-    let mut refused = Vec::new();
-    let count_fields = [
-        ("int-count", "total"),
-        ("non-null-int-count", "expected_total"),
-        ("string-count", "result"),
-        ("non-null-string-count", "required_batch"),
-        ("float32-count", "ratio"),
-        ("float64-count", "amount"),
-        ("json-count", "payload"),
-        ("blob-count", "attachment"),
-    ];
-    for (id, count_field) in count_fields {
-        if let Err(error) = apply(
-            &access,
-            vec![grouped_event_source(
-                owner,
-                id,
-                "EventProbeSource",
-                count_field,
-            )],
-        )
-        .await
-        {
-            refused.push(format!("{count_field}: {error:#}"));
-        }
-    }
-    let correlation_fields = [
-        ("string-correlation", "batch"),
-        ("non-null-correlation", "required_batch"),
-    ];
-    for (id, correlation_field) in correlation_fields {
-        if let Err(error) = apply(
-            &access,
-            vec![correlated_event_source(
-                owner,
-                id,
-                "EventProbeSource",
-                correlation_field,
-            )],
-        )
-        .await
-        {
-            refused.push(format!("{correlation_field}: {error:#}"));
-        }
-    }
-    assert!(refused.is_empty(), "{refused:#?}");
-    apply(
-        &access,
-        vec![grouped_event_source(
-            owner,
-            "unregistered",
-            "EventProbeLater",
-            "total",
-        )],
-    )
-    .await?;
-
-    assert_eq!(
-        published_event_sources(&node).await?.len(),
-        count_fields.len() + correlation_fields.len() + 1
-    );
-    node.shutdown().await.expect("node shutdown");
-    Ok(())
-}
-
-#[tokio::test]
 async fn event_source_correlation_field_must_be_a_string() -> Result<()> {
     let node = event_source_node().await?;
     let access = runtime_access(&node)?;
@@ -1944,172 +1657,189 @@ async fn event_source_correlation_field_must_be_a_string() -> Result<()> {
     Ok(())
 }
 
-fn event_source_payloads(
-    owner: &str,
-    id: &str,
-    collection: &str,
-    add_field: &str,
-    update_field: &str,
-) -> DesiredStateApplyDocument {
-    DesiredStateApplyDocument {
-        collection: Collection::EventSource,
-        add: grouped_event_source(owner, id, collection, add_field).add,
-        update: grouped_event_source(owner, id, collection, update_field).update,
+#[tokio::test]
+async fn schema_obligation_publication_matches_lean() -> Result<()> {
+    use gents_lean_vocab::families::schema_obligations_publication as family;
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum Document {
+        Surface,
+        EventSource,
     }
-}
 
-async fn published_count_field_of(node: &EmbeddedNode, event_source_id: &str) -> Result<String> {
-    let source = published_event_sources(node)
-        .await?
-        .into_iter()
-        .find(|source| source["event_source_id"] == json!(event_source_id))
-        .expect("event source is published");
-    Ok(source["group"]["expected_count"]["source_field"]
-        .as_str()
-        .expect("group keeps its count field")
-        .to_owned())
-}
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum Scalar {
+        Int,
+        Float32,
+        Float64,
+        String,
+        Id,
+        Blob,
+        Json,
+        DateTime,
+        Boolean,
+        StringList,
+    }
 
-#[tokio::test]
-async fn creation_judges_the_count_field_of_the_event_source_add_payload() -> Result<()> {
-    let node = event_source_node().await?;
-    let access = runtime_access(&node)?;
-    let owner = "did:key:event-source-owner";
-
-    let refused = apply(
-        &access,
-        vec![event_source_payloads(
-            owner,
-            "created",
-            "EventProbeSource",
-            "flag",
-            "total",
-        )],
-    )
-    .await
-    .expect_err("a creation publishes the add payload, whose count field is a Boolean");
-    assert!(
-        format!("{refused:#}").contains("\"flag\" names a Boolean field"),
-        "{refused:#}"
-    );
-    let plan = DesiredStateApplyPlan::new(vec![event_source_payloads(
-        owner,
-        "created",
-        "EventProbeSource",
-        "flag",
-        "total",
-    )])?;
-    let previewed = access
-        .transact_write("test.event_source.preview.add", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                validate_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
-                .await
+    fn sdl(name: &str, schema: &[family::FieldDecl<Scalar>]) -> String {
+        let fields: Vec<String> = schema
+            .iter()
+            .map(|declaration| {
+                let scalar = match declaration.r#type.scalar {
+                    Scalar::Int => "Int",
+                    Scalar::Float32 => "Float32",
+                    Scalar::Float64 => "Float64",
+                    Scalar::String => "String",
+                    Scalar::Id => "ID",
+                    Scalar::Blob => "Blob",
+                    Scalar::Json => "JSON",
+                    Scalar::DateTime => "DateTime",
+                    Scalar::Boolean => "Boolean",
+                    Scalar::StringList => "[String]",
+                };
+                let required = if declaration.r#type.required { "!" } else { "" };
+                format!("{}: {scalar}{required}", declaration.name)
             })
-        })
-        .await
-        .expect_err("preflight judges the same add payload");
-    assert!(
-        format!("{previewed:#}").contains("\"flag\" names a Boolean field"),
-        "{previewed:#}"
-    );
-    assert!(published_event_sources(&node).await?.is_empty());
+            .collect();
+        format!("type {name} {{ {} }}", fields.join(" "))
+    }
 
-    apply(
-        &access,
-        vec![event_source_payloads(
-            owner,
-            "created",
-            "EventProbeSource",
-            "total",
-            "flag",
-        )],
-    )
-    .await?;
-    assert_eq!(published_count_field_of(&node, "created").await?, "total");
-    node.shutdown().await.expect("node shutdown");
-    Ok(())
-}
+    fn rendered(
+        document: Document,
+        owner: &str,
+        id: &str,
+        collection: &str,
+        payload: &family::Payload,
+    ) -> DesiredStateApplyDocument {
+        match document {
+            Document::Surface => obligation_surface(
+                owner,
+                id,
+                collection,
+                payload.count.as_deref().expect("a surface names a count"),
+            ),
+            Document::EventSource => event_source_document(
+                owner,
+                id,
+                collection,
+                payload.correlation.as_deref(),
+                payload.count.as_deref(),
+            ),
+        }
+    }
 
-#[tokio::test]
-async fn replacement_judges_the_count_field_of_the_event_source_update_payload() -> Result<()> {
-    let node = event_source_node().await?;
+    async fn live(
+        node: &Arc<EmbeddedNode>,
+        document: Document,
+        owner: &str,
+        id: &str,
+        probe: &str,
+    ) -> Result<Option<family::Payload>> {
+        match document {
+            Document::Surface => {
+                let Some(surface) =
+                    crate::list_datastore_tool_surfaces(&ConfigAccess::local(node.clone()), owner)
+                        .await?
+                        .into_iter()
+                        .find(|surface| surface.surface_id == id)
+                else {
+                    return Ok(None);
+                };
+                let Some(crate::SurfaceToolDecl::Create(decl)) =
+                    surface.entries.unwrap_or_default().into_iter().next()
+                else {
+                    panic!("surface publishes its create tool");
+                };
+                Ok(Some(family::Payload {
+                    registered: decl.collection == probe,
+                    count: decl
+                        .output_obligation
+                        .and_then(|obligation| obligation.expected_count_field),
+                    correlation: None,
+                }))
+            }
+            Document::EventSource => Ok(published_event_sources(node)
+                .await?
+                .into_iter()
+                .find(|source| source["event_source_id"] == json!(id))
+                .map(|source| family::Payload {
+                    registered: source["source_collection"] == json!(probe),
+                    count: source["group"]["expected_count"]["source_field"]
+                        .as_str()
+                        .map(str::to_owned),
+                    correlation: source["correlation_field"].as_str().map(str::to_owned),
+                })),
+        }
+    }
+
+    let node = Arc::new(gents_store::test_support::node_builder().build().await?);
+    register_config_schemas(&node).await?;
     let access = runtime_access(&node)?;
-    let owner = "did:key:event-source-owner";
-    apply(
-        &access,
-        vec![grouped_event_source(
-            owner,
-            "replaced",
-            "EventProbeSource",
-            "total",
-        )],
-    )
-    .await?;
+    let owner = "did:key:obligation-owner";
+    let mut probes: BTreeMap<String, String> = BTreeMap::new();
 
-    let refused = apply(
-        &access,
-        vec![event_source_payloads(
-            owner,
-            "replaced",
-            "EventProbeSource",
-            "amount",
-            "flag",
-        )],
-    )
-    .await
-    .expect_err("a replacement publishes the update payload, whose count field is a Boolean");
-    assert!(
-        format!("{refused:#}").contains("\"flag\" names a Boolean field"),
-        "{refused:#}"
-    );
-    let plan = DesiredStateApplyPlan::new(vec![event_source_payloads(
-        owner,
-        "replaced",
-        "EventProbeSource",
-        "amount",
-        "flag",
-    )])?;
-    let previewed = access
-        .transact_write("test.event_source.preview.update", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                validate_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::test_support::AdmitAllProfiles,
-                )
+    for (index, case) in family::cases::<Document, Scalar>().into_iter().enumerate() {
+        let input = &case.input;
+        let shape = serde_json::to_string(&input.schema)?;
+        if !probes.contains_key(&shape) {
+            let name = format!("ObligationProbe{}", probes.len());
+            node.add_collection(&sdl(&name, &input.schema)).await?;
+            probes.insert(shape.clone(), name);
+        }
+        let probe = probes[&shape].as_str();
+        let unregistered = format!("{probe}Later");
+        let id = format!("case-{index}");
+        let named = |payload: &family::Payload| {
+            let collection = if payload.registered {
+                probe
+            } else {
+                unregistered.as_str()
+            };
+            rendered(input.document, owner, &id, collection, payload)
+        };
+
+        let mut steps = Vec::new();
+        for step in &input.steps {
+            let document = DesiredStateApplyDocument {
+                collection: match input.document {
+                    Document::Surface => Collection::DatastoreToolSurface,
+                    Document::EventSource => Collection::EventSource,
+                },
+                add: named(&step.create).add,
+                update: named(&step.replacement).update,
+            };
+            crate::test_support::desired_state_fixtures::ensure_owner_nodes(
+                &access,
+                std::slice::from_ref(&document),
+            )
+            .await?;
+            let plan = DesiredStateApplyPlan::new(vec![document.clone()])?;
+            let preflight = access
+                .transact_write("test.obligation.preflight", |txn| {
+                    let plan = &plan;
+                    Box::pin(async move {
+                        validate_desired_state_plan(
+                            txn,
+                            plan,
+                            &crate::test_support::AdmitAllProfiles,
+                        )
+                        .await
+                    })
+                })
                 .await
-            })
-        })
-        .await
-        .expect_err("preflight judges the same update payload");
-    assert!(
-        format!("{previewed:#}").contains("\"flag\" names a Boolean field"),
-        "{previewed:#}"
-    );
-    assert_eq!(
-        published_count_field_of(&node, "replaced").await?,
-        "total",
-        "a refused replacement leaves the published source unchanged"
-    );
-
-    apply(
-        &access,
-        vec![event_source_payloads(
-            owner,
-            "replaced",
-            "EventProbeSource",
-            "flag",
-            "amount",
-        )],
-    )
-    .await?;
-    assert_eq!(published_count_field_of(&node, "replaced").await?, "amount");
+                .is_ok();
+            let accepted = apply(&access, vec![document]).await.is_ok();
+            steps.push(family::StepOutput {
+                preflight,
+                accepted,
+                live: live(&node, input.document, owner, &id, probe).await?,
+            });
+        }
+        case.check(family::Output { steps });
+    }
     node.shutdown().await.expect("node shutdown");
     Ok(())
 }
