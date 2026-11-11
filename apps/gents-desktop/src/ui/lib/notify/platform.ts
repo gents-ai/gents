@@ -10,6 +10,12 @@ import { IN_DESKTOP, IS_MAC } from "@/screens/shortcutKeys";
 
 export type NotifyPermission = "granted" | "denied" | "default";
 
+/** What the app says while the system refuses its notifications: where the
+    person allows them again. */
+export const SYSTEM_BLOCKED = IS_MAC
+  ? "Notifications are turned off for Gents. To allow them, open System Settings, choose Notifications, then Gents, and turn on Allow notifications."
+  : "Notifications are turned off for Gents. To allow them, turn them on for Gents in your system's notification settings.";
+
 export type Notice = {
   title: string;
   body?: string;
@@ -130,3 +136,11 @@ export const notifyPlatform: NotifyPlatform = IN_DESKTOP
   : typeof Notification === "function"
     ? browser
     : none;
+
+/** Whether the system refuses the app's notifications: a refusal, not a
+    question never asked. */
+export async function systemBlocks(
+  platform: Pick<NotifyPlatform, "permission"> = notifyPlatform,
+): Promise<boolean> {
+  return (await platform.permission()) === "denied";
+}

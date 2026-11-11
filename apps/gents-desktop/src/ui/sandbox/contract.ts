@@ -136,6 +136,14 @@ export interface UxNotifyRequest {
   target?: string;
 }
 
+/** what became of a notification the app accepted. `sent` went to the
+    system's notifications, which may still hold it back unannounced (Focus),
+    or showed in the app while its window was in front. `blocked` showed
+    nowhere: the system refuses the app's notifications until the person
+    allows them in the system's settings, as Settings, Notifications says. */
+export type UxNotifyOutcome =
+  { status: "sent"; via: "system" | "app" } | { status: "blocked" };
+
 export interface UxContext {
   /** the resolved source tag, `'plugin:<id>'` */
   readonly source: string;
@@ -162,10 +170,11 @@ export interface UxContext {
   /** see UxShell.send */
   send: (content: string) => Promise<void>;
   /** tells the person through the system's notifications, or in the app
-      while its window is in front; rejects with the reason when the kind is
-      undeclared or switched off, the request is malformed or too frequent,
-      or the app doesn't let plugins notify */
-  notify: (request: UxNotifyRequest) => Promise<void>;
+      while its window is in front, and resolves with what became of it;
+      rejects with the reason when the kind is undeclared or switched off,
+      the request is malformed or too frequent, or the app doesn't let
+      plugins notify */
+  notify: (request: UxNotifyRequest) => Promise<UxNotifyOutcome>;
   shell: UxShell;
   storage: UxStorage;
   os: UxOs;

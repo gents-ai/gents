@@ -12,9 +12,13 @@ import { onUxEvent, type UxEventListener } from "./events";
 import { registry } from "./registry";
 import { TRANSCRIPT_DIRECTIVE_AREA, type Contribution } from "./types";
 import type { UxDeclaredContributions } from "./plugins-store";
-import type { UxNotificationKind, UxNotifyRequest } from "@/sandbox/contract";
+import type {
+  UxNotificationKind,
+  UxNotifyOutcome,
+  UxNotifyRequest,
+} from "@/sandbox/contract";
 
-export type { UxNotificationKind, UxNotifyRequest };
+export type { UxNotificationKind, UxNotifyOutcome, UxNotifyRequest };
 
 /** a contribution as an author writes it: provenance and id scoping are the
     host's job, so those fields are off limits */
@@ -117,9 +121,10 @@ export interface UxHost {
     ) => Promise<() => void>;
   };
   os: UxOs;
-  /** raises a plugin's notification, or rejects with why not; the request
-      is the plugin's, unchecked. Absent where the app can't notify. */
-  notify?: (caller: UxNotifyCaller, request: unknown) => Promise<void>;
+  /** raises a plugin's notification and says what became of it, or rejects
+      with why not; the request is the plugin's, unchecked. Absent where the
+      app can't notify. */
+  notify?: (caller: UxNotifyCaller, request: unknown) => Promise<UxNotifyOutcome>;
   /** a change of the route, the selection or the fleet: what a frame's
       mirror of the shell follows */
   onShellChange?: (listener: () => void) => () => void;
@@ -153,7 +158,7 @@ export interface UxContext {
   send: (content: string) => Promise<void>;
   /** a notification of one of the kinds the plugin declared; see the
       frame's contract */
-  notify: (request: UxNotifyRequest) => Promise<void>;
+  notify: (request: UxNotifyRequest) => Promise<UxNotifyOutcome>;
   shell: UxShell;
   storage: UxStorage;
   os: UxOs;

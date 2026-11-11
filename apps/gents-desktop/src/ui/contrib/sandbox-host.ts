@@ -614,8 +614,7 @@ export class SandboxHost {
           await ctx.send(String(args[0]));
           return reply(undefined);
         case "notify":
-          await ctx.notify(args[0] as Parameters<UxContext["notify"]>[0]);
-          return reply(undefined);
+          return reply(await ctx.notify(args[0] as Parameters<UxContext["notify"]>[0]));
         case "navigate":
           ctx.shell.navigate(args[0] as Parameters<UxContext["shell"]["navigate"]>[0]);
           return reply(undefined);
