@@ -385,7 +385,7 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
             && matches!(tool_package, ToolPackageArg::Readonly | ToolPackageArg::Write | ToolPackageArg::Yolo)
         {
             let root = summary.tool_root.as_deref().context("host tools require a workspace root")?;
-            let root = gents::tools::surface::resolve_configured_tool_root(Path::new(root))?;
+            let root = gents::workspace::root_resolution::resolve_configured_tool_root(Path::new(root))?;
             let root = root.to_str().context("workspace root path must be valid UTF-8")?;
             gents::tools::surface::set_workspace_root_with_readers(
                 &access,
@@ -2610,9 +2610,9 @@ mod tests {
         .unwrap();
         let owner = ConfigAccess::local_as(node.clone(), client_did.clone());
         let worker = ConfigAccess::local_as(node.clone(), agent.clone());
-        let expected_root = gents::tools::surface::resolve_configured_tool_root(Path::new(
-            initial["tool_root"].as_str().unwrap(),
-        ))
+        let expected_root = gents::workspace::root_resolution::resolve_configured_tool_root(
+            Path::new(initial["tool_root"].as_str().unwrap()),
+        )
         .unwrap();
         let roots = worker
             .execute("{ WorkspaceRoot { _docID root_path enabled } }")

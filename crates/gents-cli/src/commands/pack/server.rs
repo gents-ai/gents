@@ -49,7 +49,7 @@ pub(super) fn spawn_server_with_args_and_env(
     cmd.env("GENTS_REGISTRY_STALE_MS", "300000");
     cmd.env("GENTS_ENDPOINT_HEARTBEAT_MS", "1000");
     cmd.stdout(file).stderr(errfile).kill_on_drop(true);
-    gents::tools::exec::native_spawn::spawn_tokio(&mut cmd).context("spawning pack server")
+    gents::exec::native_spawn::spawn_tokio(&mut cmd).context("spawning pack server")
 }
 
 pub(super) async fn wait_runtime_ready(

@@ -579,7 +579,7 @@ async fn previews_and_rejected_edits_do_not_publish_file_images() {
 
 #[tokio::test]
 async fn failed_tool_retains_partial_effects_and_rejects_foreign_images() {
-    use crate::tools::call::lifecycle::FailureClass;
+    use gents_loop::tool_call_lifecycle::FailureClass;
     let admission = published_admission(PublishedAdmissionOptions {
         name: "file-change-failed-terminal".into(),
         real_identity: true,
@@ -615,7 +615,7 @@ async fn failed_tool_retains_partial_effects_and_rejects_foreign_images() {
         },
     )
     .await;
-    let foreign = FileChanges(Arc::new(ChangeBatch {
+    let foreign = FileChanges::new(ChangeBatch {
         version: 1,
         tool_call_doc_id: "foreign-tool".into(),
         changes: vec![FileChange {
@@ -624,7 +624,7 @@ async fn failed_tool_retains_partial_effects_and_rejects_foreign_images() {
             before: FileImage::Missing,
             after: read_image(&path),
         }],
-    }));
+    });
     call.stage_deferred_writes(Some(DeferredToolWrites::new(foreign)));
     assert!(call
         .fail("write failed", FailureClass::ToolReturnedError)

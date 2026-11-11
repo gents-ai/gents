@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::{Mutex, Notify};
 
+use crate::exec::{spawn_managed_process, ManagedExecKind, SpawnManagedProcessRequest};
 use crate::store::drop_cleanup::DropCleanup;
-use crate::tools::exec::{spawn_managed_process, ManagedExecKind, SpawnManagedProcessRequest};
 use crate::tools::native::prepare_managed_command;
 
 use super::client::LspClient;
@@ -46,7 +46,7 @@ impl PoolKey {
         if let Some(home) = &self.operator_guard_home {
             crate::plugin::allowed::CommandProtection::capture(
                 home,
-                crate::tools::native::workspace_write_sandbox_enforced(),
+                crate::workspace::sandbox::workspace_write_sandbox_enforced(),
             )
             .map_err(|error| format!("{error:#}"))?;
         }
@@ -678,7 +678,7 @@ impl LspPool {
         let guard_error = operator_guard_home.as_ref().and_then(|home| {
             crate::plugin::allowed::CommandProtection::capture(
                 home,
-                crate::tools::native::workspace_write_sandbox_enforced(),
+                crate::workspace::sandbox::workspace_write_sandbox_enforced(),
             )
             .err()
             .map(|error| format!("{error:#}"))

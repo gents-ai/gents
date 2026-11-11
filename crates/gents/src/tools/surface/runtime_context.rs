@@ -5,6 +5,7 @@ use defra_node::Node as EmbeddedNode;
 use crate::tools::mcp::health::ServiceHealthMap;
 use crate::tools::mcp::pool::McpPool;
 use crate::tools::native::lsp::LspPool;
+use crate::tools::plugin_host::{NoPluginHost, PluginHost};
 use crate::NodeIdentity;
 
 #[derive(Clone)]
@@ -20,7 +21,7 @@ pub struct ToolRuntimeContext {
     pub(super) identity: Option<Arc<dyn NodeIdentity>>,
     pub(super) agent_identity: Option<Arc<dyn NodeIdentity>>,
     pub(super) configuration: crate::inference::resolved::ResolvedConfiguration,
-    pub(super) plugins: Arc<crate::plugin::executor::PluginExecutor>,
+    pub(super) plugins: Arc<dyn PluginHost>,
 }
 
 impl ToolRuntimeContext {
@@ -63,7 +64,7 @@ impl ToolRuntimeContext {
             identity,
             agent_identity: None,
             configuration: crate::inference::resolved::ResolvedConfiguration::Static,
-            plugins: Arc::default(),
+            plugins: Arc::new(NoPluginHost),
         }
     }
 
@@ -84,7 +85,7 @@ impl ToolRuntimeContext {
             identity: None,
             agent_identity: None,
             configuration: crate::inference::resolved::ResolvedConfiguration::Static,
-            plugins: Arc::default(),
+            plugins: Arc::new(NoPluginHost),
         }
     }
 
@@ -118,7 +119,7 @@ impl ToolRuntimeContext {
         self
     }
 
-    pub fn with_plugins(mut self, plugins: Arc<crate::plugin::executor::PluginExecutor>) -> Self {
+    pub fn with_plugins(mut self, plugins: Arc<dyn PluginHost>) -> Self {
         self.plugins = plugins;
         self
     }

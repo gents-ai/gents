@@ -5,9 +5,9 @@ use anyhow::{anyhow, Context as _};
 use gents_fs_runner::protocol::{NativeFsRunnerRequest, NativeFsRunnerResponse};
 
 use super::shared::{ToolContext, ToolError};
-use crate::tools::call::lifecycle::FailureClass;
-use crate::tools::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
+use crate::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 use crate::tools::runtime_context::current_tool_runtime_context;
+use gents_loop::tool_call_lifecycle::FailureClass;
 
 const MAX_NATIVE_RUNNER_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 // The runner truncates its own results; an oversized response fails to decode.
@@ -419,7 +419,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn artifact_native_runner_uses_shared_sandbox_and_rejects_stale_grant() {
-        let mut fixture = crate::tools::workspace::artifact_test_fixture(&[]).await;
+        let mut fixture = crate::workspace::artifact_test_fixture(&[]).await;
         let source = fixture.grant.source_root().to_path_buf();
         let original = std::fs::read(source.join("README.md")).unwrap();
         let context = ToolContext::new(source.clone(), false).unwrap();

@@ -515,9 +515,7 @@ async fn workspace_edit_preflights_every_file_before_writing_any_file() {
         super::edits::PreparedEdit {
             path: std::fs::canonicalize(&first).unwrap(),
             new_bytes: b"fn rewritten() {}\n".to_vec(),
-            expected_hash: Some(crate::tools::native::file_tools::content_hash(
-                b"fn first() {}\n",
-            )),
+            expected_hash: Some(crate::file_contents::content_hash(b"fn first() {}\n")),
             version: None,
             rename_from: None,
             rename_destination: None,
@@ -3094,7 +3092,7 @@ pub(crate) async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispa
         assert_eq!(case["binding"][key], true);
     }
     assert!(case["expected_mode"].is_null());
-    let fixture = crate::tools::workspace::artifact_test_fixture(&[]).await;
+    let fixture = crate::workspace::artifact_test_fixture(&[]).await;
     let source = fixture.grant.source_root().to_path_buf();
     let mut server = rust_analyzer_server(1);
     server.command = "/artifact-denial-must-not-resolve-this-executable".into();

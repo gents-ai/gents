@@ -7,7 +7,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use gents::documents::{FileTools, HostTools, Tools};
-use gents::tools::workspace::{provision_read_only_workspace, WorkspaceProvisioningSelection};
+use gents::workspace::{provision_read_only_workspace, WorkspaceProvisioningSelection};
 use gents::FileToolMode;
 
 use crate::support::agent_requests::{canonical_now, RequestSeed};

@@ -396,8 +396,8 @@ impl super::ToolCallLifecycle {
                 };
                 if !matches!(
                     process,
-                    crate::tools::exec::ProcessStopOutcome::Stopped
-                        | crate::tools::exec::ProcessStopOutcome::AlreadyExited
+                    crate::exec::ProcessStopOutcome::Stopped
+                        | crate::exec::ProcessStopOutcome::AlreadyExited
                 ) {
                     tracing::warn!(doc_id = %row.doc_id, tool_call_id = %row.tool_call_id, process = process.as_str(), "background process was not observed to stop");
                     continue;
@@ -516,8 +516,8 @@ impl super::ToolCallLifecycle {
                 }
             }
             let (before, after) = record.identity.stop().await;
-            if crate::tools::exec::ProcessStopOutcome::from_observations(before, after)
-                == crate::tools::exec::ProcessStopOutcome::StillRunning
+            if crate::exec::ProcessStopOutcome::from_observations(before, after)
+                == crate::exec::ProcessStopOutcome::StillRunning
             {
                 tracing::warn!(
                     tool_call_id = %record.tool_call_id,
@@ -546,8 +546,8 @@ impl super::ToolCallLifecycle {
         executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
         cause: CancelCause,
         completion_reason: &str,
-    ) -> Result<(crate::tools::exec::ProcessStopOutcome, bool, bool)> {
-        use crate::tools::exec::ProcessStopOutcome;
+    ) -> Result<(crate::exec::ProcessStopOutcome, bool, bool)> {
+        use crate::exec::ProcessStopOutcome;
         let doc_id = lifecycle
             .doc_id()
             .context("background cancellation requires physical tool identity")?
@@ -785,7 +785,7 @@ mod tests {
     /// verdict no test host can construct, through the native classifier.
     #[test]
     fn generated_native_process_verdicts_match_orphan_classifier() {
-        use crate::tools::exec::ProcessStopOutcome;
+        use crate::exec::ProcessStopOutcome;
         let verdict = |name: &str| match name {
             "stopped" => ProcessStopOutcome::Stopped,
             "alreadyExited" => ProcessStopOutcome::AlreadyExited,
@@ -1501,12 +1501,12 @@ fn unresolved_parent_warning_due(doc_id: &str) -> bool {
 
 fn classify_orphaned_background_tool(
     row: &RunningToolCallRow,
-    process: crate::tools::exec::ProcessStopOutcome,
+    process: crate::exec::ProcessStopOutcome,
     task_deleted: bool,
     session_stopped: bool,
     now: DateTime<Utc>,
 ) -> Option<RecoveryOutcome> {
-    use crate::tools::exec::ProcessStopOutcome;
+    use crate::exec::ProcessStopOutcome;
     match process {
         ProcessStopOutcome::StillRunning => None,
         ProcessStopOutcome::NotOwned | ProcessStopOutcome::AlreadyExited => {
@@ -1529,9 +1529,9 @@ fn classify_orphaned_background_tool(
 }
 
 fn classify_registered_session_stop(
-    process: crate::tools::exec::ProcessStopOutcome,
+    process: crate::exec::ProcessStopOutcome,
 ) -> Option<RecoveryOutcome> {
-    use crate::tools::exec::ProcessStopOutcome;
+    use crate::exec::ProcessStopOutcome;
     match process {
         ProcessStopOutcome::StillRunning => None,
         ProcessStopOutcome::NotOwned | ProcessStopOutcome::AlreadyExited => {

@@ -14,7 +14,7 @@ use crate::store::graphql::{
     escape_graphql_string, first_row, graphql_with_transaction_retry, rows,
 };
 
-use crate::tools::workspace::{
+use crate::workspace::{
     IsolatedWorkspaceDoc, MemoryWorkspaceDocuments, RepositoryPlacementRef, WorkspaceDocuments,
     WorkspacePlacementDoc,
 };
@@ -1019,7 +1019,7 @@ pub(super) fn create_callback_result_mutation(
             "caused_by_correlation",
             result.caused_by_correlation.as_deref()
         ),
-        route = crate::tools::workspace::handoff_route_fields(&result.route),
+        route = crate::workspace::handoff_route_fields(&result.route),
         created_at = escape_graphql_string(&now),
     )
 }
@@ -1153,7 +1153,7 @@ pub async fn load_memory_workspace_docs(
     Ok(docs)
 }
 
-pub(crate) use crate::tools::workspace::flush_workspace_docs;
+pub(crate) use crate::workspace::flush_workspace_docs;
 
 pub(crate) async fn load_isolated_workspace(
     access: &crate::ConfigAccess,

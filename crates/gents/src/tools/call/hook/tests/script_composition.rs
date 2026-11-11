@@ -374,7 +374,7 @@ async fn a_stopped_invocation_times_out_the_child_it_left_running() {
     ));
     hook.settle_tool_effects(
         "script",
-        &crate::tools::call::lifecycle::ToolOutcome::TimedOut { deadline_at: None },
+        &gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut { deadline_at: None },
     )
     .await
     .unwrap();
@@ -604,7 +604,7 @@ async fn script_with_children(
         None,
         &completed,
         "{}",
-        &crate::tools::call::lifecycle::ToolOutcome::Completed("{\"ordinal\":1}".into()),
+        &gents_loop::tool_call_lifecycle::ToolOutcome::Completed("{\"ordinal\":1}".into()),
     )
     .await;
     hook.finish_tool_effect(&completed, None).await.unwrap();
@@ -630,7 +630,7 @@ async fn script_with_children(
     ));
     hook.finish_tool_effect(
         &cancelled,
-        Some(&crate::tools::call::lifecycle::ToolOutcome::Cancelled),
+        Some(&gents_loop::tool_call_lifecycle::ToolOutcome::Cancelled),
     )
     .await
     .unwrap();
@@ -681,7 +681,7 @@ async fn the_timeline_reads_a_script_child_in_every_state() {
         .hook
         .settle_tool_effects(
             "script",
-            &crate::tools::call::lifecycle::ToolOutcome::Cancelled,
+            &gents_loop::tool_call_lifecycle::ToolOutcome::Cancelled,
         )
         .await
         .unwrap();

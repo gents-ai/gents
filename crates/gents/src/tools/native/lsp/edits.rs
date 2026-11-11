@@ -2,9 +2,10 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-use super::super::file_tools::{content_hash, file_content_hash, file_mutation_lock_for};
-use crate::tools::call::lifecycle::FailureClass;
+use super::super::file_tools::{file_content_hash, file_mutation_lock_for};
+use crate::file_contents::content_hash;
 use crate::tools::native::shared::{ToolContext, ToolError};
+use gents_loop::tool_call_lifecycle::FailureClass;
 
 use super::client::LspClient;
 use super::encoding::{position_to_byte_offset, PositionEncoding};

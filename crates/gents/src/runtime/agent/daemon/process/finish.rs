@@ -75,7 +75,7 @@ where
                 match terminalize_request(lifecycle, stream_writer, terminal, None).await {
                     Ok(true) if skipped_before_work => {
                         record_current_request_outcome("completed");
-                        if let Err(error) = crate::tools::workspace::release_writer_binding(
+                        if let Err(error) = crate::workspace::release_writer_binding(
                             &self.node,
                             self.agent_config.agent_identity.as_ref(),
                             request,
@@ -119,7 +119,7 @@ where
                     }
                 }
                 self.record_request_interruption(request, interruption_source);
-                if let Err(error) = crate::tools::workspace::release_writer_binding(
+                if let Err(error) = crate::workspace::release_writer_binding(
                     &self.node,
                     self.agent_config.agent_identity.as_ref(),
                     request,

@@ -29,3 +29,7 @@ pub(crate) fn home_with_pack_dir(
     )));
     (home, plugins)
 }
+
+pub(crate) fn default_plugin_host() -> std::sync::Arc<dyn crate::tools::plugin_host::PluginHost> {
+    std::sync::Arc::new(crate::plugin::executor::PluginExecutor::default())
+}

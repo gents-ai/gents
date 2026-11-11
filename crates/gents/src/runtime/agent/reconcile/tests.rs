@@ -121,7 +121,7 @@ async fn snapshot_for_agents_with_node(
                 node,
                 node.node_identity_did()
                     .expect("fixture node has an identity"),
-                &Default::default(),
+                &crate::tools::plugin_host::NoPluginHost,
             )
             .await
             .unwrap();
@@ -150,7 +150,7 @@ async fn snapshot_for_agents_with_admission(
                 node,
                 node.node_identity_did()
                     .expect("fixture node has an identity"),
-                &Default::default(),
+                &crate::tools::plugin_host::NoPluginHost,
             )
             .await
             .unwrap();
@@ -419,7 +419,7 @@ async fn slot_panic_restarts_agent() {
                 &node,
                 node.node_identity_did()
                     .expect("fixture node has an identity"),
-                &Default::default(),
+                &crate::tools::plugin_host::NoPluginHost,
             )
             .await
             .unwrap(),
@@ -509,7 +509,7 @@ async fn dropping_agent_slot_aborts_a_held_executor() {
                 &node,
                 node.node_identity_did()
                     .expect("fixture node has an identity"),
-                &Default::default(),
+                &crate::tools::plugin_host::NoPluginHost,
             )
             .await
             .unwrap(),
@@ -2440,7 +2440,7 @@ async fn plugin_resolution_surfaces(
                 node,
                 node.node_identity_did()
                     .expect("fixture node has an identity"),
-                &absent_plugins,
+                &*absent_plugins,
             )
             .await
             .unwrap(),
@@ -2452,7 +2452,7 @@ async fn plugin_resolution_surfaces(
                 node,
                 node.node_identity_did()
                     .expect("fixture node has an identity"),
-                &installed_plugins,
+                &*installed_plugins,
             )
             .await
             .unwrap(),

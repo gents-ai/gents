@@ -168,13 +168,14 @@ impl BackgroundCompletionObserver {
                 tracing::warn!(%error, "mailbox close sweep failed; will retry");
             }
         }
-        for run in crate::runtime::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
-            &self.node,
-            &self.local_did,
-            &identities,
-            &self.background_executions,
-        )
-        .await?
+        for run in
+            crate::tools::call::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
+                &self.node,
+                &self.local_did,
+                &identities,
+                &self.background_executions,
+            )
+            .await?
         {
             if !run.is_noop() {
                 tracing::debug!(

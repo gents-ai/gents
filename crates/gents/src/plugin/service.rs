@@ -10,7 +10,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::sync::Mutex;
 
 use super::store::InstalledPlugin;
-use crate::tools::exec::{
+use crate::exec::{
     spawn_managed_process, ManagedExecKind, ManagedProcess, SpawnManagedProcessRequest,
 };
 

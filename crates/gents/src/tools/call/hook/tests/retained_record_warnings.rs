@@ -43,7 +43,7 @@ where
 #[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
 async fn surviving_group_member_warns_once_until_its_group_exits() {
-    use crate::tools::exec::ownership::{ProcessIdentity, ProcessObservation, ProcessRecord};
+    use crate::exec::ownership::{ProcessIdentity, ProcessObservation, ProcessRecord};
     use std::io::Write as _;
     use std::os::unix::process::CommandExt as _;
     use tracing_subscriber::layer::SubscriberExt as _;

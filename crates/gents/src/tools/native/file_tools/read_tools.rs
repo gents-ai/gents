@@ -11,7 +11,8 @@ use serde::Serialize;
 use super::super::args::{GlobArgs, GrepArgs, ListFilesArgs, ReadFileArgs};
 use super::super::native_runner::NativeFsRunner;
 use super::super::shared::{cap_output, render_file_contents, ToolContext, ToolError};
-use super::{content_hash, render_tool_output};
+use super::render_tool_output;
+use crate::file_contents::content_hash;
 
 #[derive(Clone)]
 pub(in crate::tools::native) struct ListFilesTool {

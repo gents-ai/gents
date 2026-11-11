@@ -132,7 +132,7 @@ where
 
         let sealed = request::prepare_unless_interrupted(
             &mut interrupt_rx,
-            crate::tools::workspace::writer_request_already_sealed_with_identity(
+            crate::workspace::writer_request_already_sealed_with_identity(
                 &self.node,
                 self.agent_config.agent_identity.as_ref(),
                 &request,

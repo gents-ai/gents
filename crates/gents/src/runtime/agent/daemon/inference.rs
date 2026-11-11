@@ -129,7 +129,7 @@ pub(super) fn render_request_context_message(
 ) -> Result<Option<Message>> {
     Ok(assemble_request_context_message(
         frozen_instruction_manifest,
-        crate::tools::workspace::request_workspace_cwd(request).as_deref(),
+        crate::workspace::request_workspace_cwd(request).as_deref(),
         agent_config.tools.host_tools().read_root(),
     ))
 }
@@ -139,7 +139,7 @@ fn assemble_request_context_message(
     live_cwd: Option<&std::path::Path>,
     live_tool_root: Option<&std::path::Path>,
 ) -> Option<Message> {
-    crate::tools::workspace::instruction_body_for_request(
+    crate::workspace::instruction_body_for_request(
         frozen_instruction_manifest,
         live_cwd,
         live_tool_root,

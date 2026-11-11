@@ -30,8 +30,8 @@ use crate::plugin::data::{DataCaller, StampContext};
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::store::PluginData;
 use crate::plugin::PluginVerdict;
-use crate::tools::workspace::journal::advance;
-use crate::tools::workspace::{ActionJournalEntry, ActionJournalState};
+use crate::workspace::journal::advance;
+use crate::workspace::{ActionJournalEntry, ActionJournalState};
 
 /// The documents `output` writes, as `(collection, document)` pairs; several
 /// outputs take an object keyed by output name, and each document gets
@@ -134,7 +134,7 @@ pub(super) async fn execute(
     data_node: Option<&Arc<EmbeddedNode>>,
 ) -> Result<()> {
     let CallbackAccess { node, access } = context;
-    if let Some(journal) = crate::tools::workspace::recover_running(&journal) {
+    if let Some(journal) = crate::workspace::recover_running(&journal) {
         return persist_journal(
             node,
             access,

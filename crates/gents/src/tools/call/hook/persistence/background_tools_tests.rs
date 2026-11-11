@@ -1,11 +1,11 @@
 #![cfg(unix)]
 
 use super::*;
+use crate::exec::ownership::test_support::OwnedTestProcess;
 use crate::tools::call::hook::BackgroundExecutionRegistry;
 use crate::tools::call::lifecycle::admission_fixture::{
     published_admission_with_owner, PublishedAdmissionOptions,
 };
-use crate::tools::exec::ownership::test_support::OwnedTestProcess;
 use tokio_util::sync::CancellationToken;
 
 /// The calling request's Agent, which owns the tool call, its transcript and
@@ -40,15 +40,12 @@ async fn stop_rechecks_a_process_record_created_after_cancellation_began() {
     token.cancelled().await;
     let process = OwnedTestProcess::spawn(Some(recorder)).await;
     let (_, after) = process.identity.stop().await;
-    assert_eq!(
-        after,
-        crate::tools::exec::ownership::ProcessObservation::Exited
-    );
+    assert_eq!(after, crate::exec::ownership::ProcessObservation::Exited);
     process.finish().await;
     drop(reservation);
     assert_eq!(
         stopping.await.unwrap(),
-        crate::tools::exec::ProcessStopOutcome::Stopped
+        crate::exec::ProcessStopOutcome::Stopped
     );
 }
 
@@ -89,10 +86,10 @@ async fn cancelled_worker_keeps_running_row_when_process_exit_is_unverified() {
         registry.live_outputs.clone(),
         registry.clone(),
         reservation,
-        Ok(crate::tools::call::lifecycle::ToolOutcome::Cancelled),
+        Ok(gents_loop::tool_call_lifecycle::ToolOutcome::Cancelled),
     ));
     tokio::task::yield_now().await;
-    tokio::time::advance(crate::tools::exec::ownership::KILL_GRACE).await;
+    tokio::time::advance(crate::exec::ownership::KILL_GRACE).await;
     finishing.await.unwrap();
     tokio::time::resume();
     let row = ToolCallLifecycle::load_by_doc_id_as(
@@ -123,13 +120,13 @@ async fn later_stop_preserves_first_timeout_or_failure_and_projects_completion()
     for (name, outcome, expected, allowed) in [
         (
             "timeout-first",
-            crate::tools::call::lifecycle::ToolOutcome::TimedOut { deadline_at: None },
+            gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut { deadline_at: None },
             "timedOut",
             model.preserve_timeout,
         ),
         (
             "failure-first",
-            crate::tools::call::lifecycle::ToolOutcome::tool_returned_error("failed before stop"),
+            gents_loop::tool_call_lifecycle::ToolOutcome::tool_returned_error("failed before stop"),
             "failed",
             model.preserve_failure,
         ),
@@ -262,7 +259,7 @@ async fn confirmed_background_stop_survives_terminal_write_failure() {
                 registry.live_outputs.clone(),
                 registry.clone(),
                 reservation,
-                Ok(crate::tools::call::lifecycle::ToolOutcome::Cancelled),
+                Ok(gents_loop::tool_call_lifecycle::ToolOutcome::Cancelled),
             ),
         )
         .await;
@@ -367,8 +364,8 @@ async fn live_process_identity_survives_host_record_write_failure() {
         .is_none());
     let (before, after) = owned.identity.stop().await;
     assert_eq!(
-        crate::tools::exec::ProcessStopOutcome::from_observations(before, after),
-        crate::tools::exec::ProcessStopOutcome::Stopped
+        crate::exec::ProcessStopOutcome::from_observations(before, after),
+        crate::exec::ProcessStopOutcome::Stopped
     );
     process.finish().await;
     drop(reservation);
@@ -389,7 +386,7 @@ async fn native_failure_decision_precedes_cancel_during_cleanup() {
         )
         .unwrap();
     let fallback_recorder = fallback_registry.process_recorder("fallback", "fallback-doc");
-    crate::tools::exec::ownership::record_failure_decision(Some(&fallback_recorder));
+    crate::exec::ownership::record_failure_decision(Some(&fallback_recorder));
     fallback_registry.set_cancellation_reason("fallback", "fallback-doc", "later cancel", false);
     assert_eq!(
         fallback_registry.has_pending_failure("fallback", "fallback-doc"),
@@ -397,7 +394,7 @@ async fn native_failure_decision_precedes_cancel_during_cleanup() {
     );
     assert!(matches!(
         fallback_registry.finalize_pending_failure("fallback", "fallback-doc"),
-        Some(crate::tools::call::lifecycle::ToolOutcome::Failed { .. })
+        Some(gents_loop::tool_call_lifecycle::ToolOutcome::Failed { .. })
     ));
     assert_eq!(
         !fallback_registry.has_pending_failure("fallback", "fallback-doc"),
@@ -430,14 +427,14 @@ async fn native_failure_decision_precedes_cancel_during_cleanup() {
     let worker_call = call.clone();
     let worker_doc = doc.clone();
     let worker = tokio::spawn(async move {
-        crate::tools::exec::ownership::record_failure_decision(Some(&recorder));
+        crate::exec::ownership::record_failure_decision(Some(&recorder));
         decided.send(()).unwrap();
         blocked.await.unwrap();
         worker_registry.set_stop_receipt(
             &worker_call,
             &worker_doc,
             crate::tools::call::hook::RetainedStopReceipt::Failure(
-                crate::tools::call::lifecycle::ToolOutcome::tool_returned_error(
+                gents_loop::tool_call_lifecycle::ToolOutcome::tool_returned_error(
                     "native wait failed",
                 ),
             ),
@@ -509,7 +506,7 @@ async fn failed_replay_adopts_competing_durable_terminal() {
         &call,
         &doc,
         crate::tools::call::hook::RetainedStopReceipt::Failure(
-            crate::tools::call::lifecycle::ToolOutcome::tool_returned_error("earlier failure"),
+            gents_loop::tool_call_lifecycle::ToolOutcome::tool_returned_error("earlier failure"),
         ),
     );
     reservation.retain_stopped_worker(stale.clone(), false);
@@ -577,7 +574,7 @@ async fn timeout_decision_is_owned_before_cleanup_and_later_cancel() {
                 &PendingNative,
                 "{}".into(),
                 move |outcome| {
-                    if let Some(crate::tools::call::lifecycle::ToolOutcome::TimedOut { .. }) =
+                    if let Some(gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut { .. }) =
                         outcome
                     {
                         worker_registry.set_stop_receipt(
@@ -603,7 +600,7 @@ async fn timeout_decision_is_owned_before_cleanup_and_later_cancel() {
     tokio::time::advance(std::time::Duration::from_secs(5)).await;
     assert!(matches!(
         worker.await.unwrap(),
-        crate::tools::call::lifecycle::ToolOutcome::TimedOut { .. }
+        gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut { .. }
     ));
     tokio::time::resume();
     let entry = registry
@@ -685,7 +682,7 @@ async fn failed_terminal_write_keeps_prepared_failure_presentation_for_retry() {
                 registry.live_outputs.clone(),
                 registry.clone(),
                 reservation,
-                Ok(crate::tools::call::lifecycle::ToolOutcome::tool_returned_error(result)),
+                Ok(gents_loop::tool_call_lifecycle::ToolOutcome::tool_returned_error(result)),
             ),
         )
         .await;
@@ -778,7 +775,7 @@ async fn completed_background_call_resolves_parent_from_physical_request() {
         registry.live_outputs.clone(),
         registry.clone(),
         reservation,
-        Ok(crate::tools::call::lifecycle::ToolOutcome::Completed(
+        Ok(gents_loop::tool_call_lifecycle::ToolOutcome::Completed(
             "done".into(),
         )),
     )

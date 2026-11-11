@@ -44,7 +44,7 @@ pub struct Support {
 pub fn support() -> Support {
     Support {
         contract_version: CONTRACT_VERSION,
-        workspace_sandbox: crate::tools::native::workspace_write_sandbox_enforced(),
+        workspace_sandbox: crate::workspace::sandbox::workspace_write_sandbox_enforced(),
         remembered_commands: true,
     }
 }

@@ -513,8 +513,8 @@ impl WorkspaceLineage {
         ) {
             (None, None) => Ok(()),
             (Some(requested), Some(granted)) => {
-                let requested = crate::tools::native::WorkspaceAuthority::parse(requested)?;
-                let granted = crate::tools::native::WorkspaceAuthority::parse(granted)?;
+                let requested = gents_loop::tool_policy::WorkspaceAuthority::parse(requested)?;
+                let granted = gents_loop::tool_policy::WorkspaceAuthority::parse(granted)?;
                 anyhow::ensure!(
                     requested.infimum(granted) == requested,
                     "workspace authority exceeds its authenticated source"

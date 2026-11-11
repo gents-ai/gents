@@ -795,14 +795,14 @@ async fn dispatch_tool_types_unparseable_args_as_argument_invalid() {
     for case in cases {
         let result = super::dispatch_tool(&tools, "strict", case.arguments, None, None).await;
         match &result {
-            crate::tools::call::lifecycle::ToolOutcome::Failed {
+            gents_loop::tool_call_lifecycle::ToolOutcome::Failed {
                 class,
                 denial: None,
                 text,
             } => {
                 assert_eq!(
                     *class,
-                    crate::tools::call::lifecycle::FailureClass::ArgumentInvalid
+                    gents_loop::tool_call_lifecycle::FailureClass::ArgumentInvalid
                 );
                 assert!(
                     text.contains(&format!("arguments were rejected ({})", case.kind)),
@@ -1307,7 +1307,7 @@ impl ToolDyn for ComposedChild {
                 tokio::time::timeout(Duration::from_millis(50), std::future::pending::<()>()).await;
             assert!(local.is_err());
             Err(ToolError::ReportedFailure {
-                class: crate::tools::call::lifecycle::FailureClass::External,
+                class: gents_loop::tool_call_lifecycle::FailureClass::External,
                 text: "late timed out after 50ms".into(),
             })
         })
@@ -1436,7 +1436,7 @@ impl ToolDyn for ComposingParent {
                     ),
                     "{name} #{ordinal} ended the parent: {outcome:?}"
                 );
-                if let Ok(crate::tools::call::lifecycle::ToolOutcome::Completed(receipt)) = &outcome
+                if let Ok(gents_loop::tool_call_lifecycle::ToolOutcome::Completed(receipt)) = &outcome
                 {
                     let receipt: serde_json::Value =
                         serde_json::from_str(receipt).unwrap_or_default();
@@ -1449,7 +1449,7 @@ impl ToolDyn for ComposingParent {
                 }
                 let completed = matches!(
                     outcome,
-                    Ok(crate::tools::call::lifecycle::ToolOutcome::Completed(_))
+                    Ok(gents_loop::tool_call_lifecycle::ToolOutcome::Completed(_))
                 );
                 self.completed.lock().unwrap().push((*ordinal, completed));
             }
@@ -1484,7 +1484,7 @@ impl ToolDyn for AdmissionChild {
             return Ok(());
         }
         Err(ToolError::ReportedFailure {
-            class: crate::tools::call::lifecycle::FailureClass::PolicyDenied,
+            class: gents_loop::tool_call_lifecycle::FailureClass::PolicyDenied,
             text: "admission refused".into(),
         })
     }
@@ -1756,7 +1756,7 @@ impl ToolDyn for StoppingParent {
             .await;
             assert!(stopped.is_err(), "the child outlives the script");
             Err(ToolError::ReportedFailure {
-                class: crate::tools::call::lifecycle::FailureClass::External,
+                class: gents_loop::tool_call_lifecycle::FailureClass::External,
                 text: "the plugin exceeded its wall-clock budget".into(),
             })
         })
@@ -1867,7 +1867,7 @@ impl ToolDyn for ParallelReadProbe {
                 self.second_finished.notified().await;
                 if self.fail_first {
                     return Err(ToolError::ReportedFailure {
-                        class: crate::tools::call::lifecycle::FailureClass::External,
+                        class: gents_loop::tool_call_lifecycle::FailureClass::External,
                         text: "first read failed".into(),
                     });
                 }

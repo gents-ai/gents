@@ -2,9 +2,10 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 
 use super::*;
+use crate::file_contents::content_hash;
 use crate::inference::llm::tool::Tool;
 use crate::plugin::approval::{self, workspace, Answer, Request};
-use crate::tools::native::file_tools::{content_hash, file_mutation_lock_for};
+use crate::tools::native::file_tools::file_mutation_lock_for;
 
 struct Fixture {
     home: tempfile::TempDir,
@@ -188,7 +189,7 @@ async fn denied_native_file_changes_have_no_effects() {
         assert!(matches!(
             &result,
             Err(ToolError::ReportedFailure {
-                class: crate::tools::call::lifecycle::FailureClass::PolicyDenied,
+                class: gents_loop::tool_call_lifecycle::FailureClass::PolicyDenied,
                 ..
             })
         ));
@@ -358,7 +359,7 @@ async fn full_access_cannot_widen_read_only_workspace_authority() {
     assert!(matches!(
         result,
         Err(ToolError::ReportedFailure {
-            class: crate::tools::call::lifecycle::FailureClass::PolicyDenied,
+            class: gents_loop::tool_call_lifecycle::FailureClass::PolicyDenied,
             ..
         })
     ));

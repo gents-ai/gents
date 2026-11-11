@@ -65,13 +65,12 @@ pub(crate) fn configured_plugin_refs(
 pub use root_admission::{
     admit_authored_root, canonicalize_tools_root, ensure_configured_root_published,
     ensure_root_published_for_node, load_workspace_root_policy, project_workspace_root_policy,
-    refuse_too_broad_root, resolve_configured_tool_root, TooBroadRoot, WorkspaceRootDocument,
-    WorkspaceRootPolicy,
+    refuse_too_broad_root, TooBroadRoot, WorkspaceRootDocument, WorkspaceRootPolicy,
 };
 pub use root_admission::{agent_tool_root_reader, agents_tool_root_readers, ToolRootReader};
 pub(crate) use root_admission::{
     load_workspace_root_policy_in_txn, published_root_covering_in_txn, reader_grant_step,
-    resolve_admitted_tool_root, tools_root_reader_in_txn, RootExecutionGuard,
+    tools_root_reader_in_txn, RootExecutionGuard,
 };
 pub use root_publication::{
     delete_workspace_root, grant_workspace_root_reader, revoke_workspace_root_reader,
@@ -483,19 +482,21 @@ impl ToolSurface {
             ));
         }
         if !self.application_write_collections.is_empty() {
-            tools.push(Box::new(crate::plugin::application_write::WriteTool::new(
-                crate::store::config_client::ConfigAccess::local_managed_agent(
-                    runtime.node.clone(),
-                    datastore_actor.clone().expect("write actor was validated"),
-                    runtime
-                        .agent_identity
-                        .as_ref()
-                        .context("write tool Agent identity missing")?
-                        .as_ref(),
+            tools.push(
+                runtime.plugins.application_write_tool(
+                    crate::store::config_client::ConfigAccess::local_managed_agent(
+                        runtime.node.clone(),
+                        datastore_actor.clone().expect("write actor was validated"),
+                        runtime
+                            .agent_identity
+                            .as_ref()
+                            .context("write tool Agent identity missing")?
+                            .as_ref(),
+                    )?,
+                    self.application_write_collections.iter().cloned().collect(),
+                    datastore_actor.clone(),
                 )?,
-                self.application_write_collections.iter().cloned().collect(),
-                datastore_actor.clone(),
-            )));
+            );
         }
         if let Some(lsp) = &self.lsp {
             tools.push(Box::new(crate::tools::native::lsp::LspTool::new(
@@ -648,14 +649,11 @@ impl ToolSurface {
             tools.push(Box::new(tool) as Box<dyn ToolDyn>);
         }
         for plugin in &self.plugin_tools {
-            let tool = crate::plugin::tool::PluginTool::resolve(
-                runtime.plugins.clone(),
+            let tool = runtime.plugins.clone().plugin_tool(
                 plugin,
                 self.host_tools
                     .read_root()
                     .map(std::path::Path::to_path_buf),
-            )?
-            .with_agent_data(
                 runtime.node.clone(),
                 &runtime.node_did,
                 runtime
@@ -669,7 +667,7 @@ impl ToolSurface {
                     tool.name()
                 );
             }
-            tools.push(Box::new(tool) as Box<dyn ToolDyn>);
+            tools.push(tool);
         }
         Ok(tools)
     }

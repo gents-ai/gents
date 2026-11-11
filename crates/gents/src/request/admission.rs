@@ -1009,9 +1009,9 @@ async fn verify_request_input(
         .and_then(|tools| tools.host.as_ref())
         .and_then(|host| host.bash.as_ref())
         .and_then(|bash| bash.execution_mode)
-        == Some(crate::tools::native::CommandExecutionMode::ArtifactWrite);
+        == Some(gents_loop::tool_policy::CommandExecutionMode::ArtifactWrite);
     if let Some(agent_identity) = agent_identity {
-        crate::tools::workspace::validate_request_workspace_input_with_identity(
+        crate::workspace::validate_request_workspace_input_with_identity(
             node,
             agent_identity,
             &request,
@@ -1028,11 +1028,8 @@ async fn verify_request_input(
             "workspace admission requires the selected held Agent"
         )));
     } else {
-        crate::tools::workspace::validate_unbound_request_workspace_input(
-            &request,
-            artifact_requested,
-        )
-        .map_err(AgentRequestAdmissionError::denied)?;
+        crate::workspace::validate_unbound_request_workspace_input(&request, artifact_requested)
+            .map_err(AgentRequestAdmissionError::denied)?;
     }
     let runtime_control = admission.kind == AgentRequestAdmissionKind::RuntimeInternal
         && admission.runtime_source_kind == Some(RuntimeInternalSourceKind::LocalControl);

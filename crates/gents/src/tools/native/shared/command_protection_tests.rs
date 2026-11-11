@@ -1,7 +1,7 @@
 use super::super::context::ToolContext;
 use super::command_run::run_command;
 use super::*;
-use crate::tools::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
+use crate::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 use std::time::Duration;
 
 use crate::plugin::approval::workspace;

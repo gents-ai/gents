@@ -212,7 +212,7 @@ async fn terminalize_accepted_tool(
         assert!(tool
             .fail_owned(
                 "write failed",
-                crate::tools::call::lifecycle::FailureClass::External,
+                gents_loop::tool_call_lifecycle::FailureClass::External,
                 None
             )
             .await

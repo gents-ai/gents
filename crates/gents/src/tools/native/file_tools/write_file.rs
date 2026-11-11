@@ -9,10 +9,10 @@ use serde::Serialize;
 use super::super::args::WriteFileArgs;
 use super::super::shared::{ToolContext, ToolError};
 use super::{
-    content_hash, deny_workspace_file_writes, file_mutation_lock_for, merge_optional_notes,
-    render_tool_output,
+    deny_workspace_file_writes, file_mutation_lock_for, merge_optional_notes, render_tool_output,
 };
-use crate::tools::call::lifecycle::FailureClass;
+use crate::file_contents::content_hash;
+use gents_loop::tool_call_lifecycle::FailureClass;
 
 /// Stale-content guard for write_file, checked under the per-path mutation
 /// lock. No refusal discloses the current hash, so a retry cannot replace

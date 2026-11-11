@@ -11,7 +11,7 @@ pub(super) async fn retain_file_changes(
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-    changes: &crate::tools::native::FileChanges,
+    changes: &crate::file_contents::FileChanges,
 ) -> Result<()> {
     anyhow::ensure!(
         changes.belongs_to(tool_call_doc_id),
@@ -79,8 +79,7 @@ pub(super) async fn retain_file_changes(
         let stored: gents_protocol::file_changes::StoredFileChanges =
             serde_json::from_value(stored).context("file observation has unknown changes")?;
         anyhow::ensure!(
-            observed == key
-                && crate::tools::native::file_contents::same_observation(&stored, changes.batch()),
+            observed == key && crate::file_contents::same_observation(&stored, changes.batch()),
             "file changes conflict with an existing observation"
         );
         id.as_str()
@@ -88,9 +87,7 @@ pub(super) async fn retain_file_changes(
             .to_owned()
     } else {
         anyhow::ensure!(rows.is_empty(), "file changes have multiple observations");
-        let stored =
-            crate::tools::native::file_contents::store(txn, &session_scope, changes.batch())
-                .await?;
+        let stored = crate::file_contents::store(txn, &session_scope, changes.batch()).await?;
         let mut input = key;
         input["file_changes"] = serde_json::to_value(stored)?;
         let result = txn.execute_with_variables(

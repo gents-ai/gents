@@ -119,11 +119,14 @@ impl DefraSessionHook {
         let target_tool_name = target_name.to_string();
         let target_args = serde_json::to_string(&parsed.args)?;
         if let Err(error) = target_tool.admit(&target_args) {
-            let crate::tools::call::lifecycle::ToolOutcome::Failed {
+            let gents_loop::tool_call_lifecycle::ToolOutcome::Failed {
                 class,
                 denial,
                 text,
-            } = crate::tools::call::lifecycle::ToolOutcome::from_dispatch(target_name, Err(error))
+            } = gents_loop::tool_call_lifecycle::ToolOutcome::from_dispatch(
+                target_name,
+                Err(error),
+            )
             else {
                 anyhow::bail!("admission rejection must carry a failed outcome");
             };
@@ -305,7 +308,7 @@ impl DefraSessionHook {
         let process_recorder =
             executions.process_recorder(&execution_call_id, &execution_tool_doc_id);
         tokio::spawn(crate::plugin::approval::carry_interactive(async move {
-            let execution = AssertUnwindSafe(crate::tools::exec::ownership::scope_process_recorder(
+            let execution = AssertUnwindSafe(crate::exec::ownership::scope_process_recorder(
                 process_recorder,
                 crate::tools::runtime_context::scope_tool_request_identity(
                     requester_did,
@@ -326,11 +329,11 @@ impl DefraSessionHook {
                                 if process_tool {
                                     crate::tools::runtime_context::call_tool_managed_with_cleanup(
                                         target_tool.as_ref(), target_args, |outcome| {
-                                            if let Some(outcome) = outcome.filter(|outcome| crate::tools::exec::ownership::native_terminal_needs_confirmation(Some(outcome))) {
+                                            if let Some(outcome) = outcome.filter(|outcome| crate::exec::ownership::native_terminal_needs_confirmation(Some(outcome))) {
                                                 executions.set_stop_receipt(&execution_call_id, &execution_tool_doc_id, crate::tools::call::hook::RetainedStopReceipt::from_outcome(outcome));
                                             }
                                             executions.live_process_evidence(&execution_call_id, &execution_tool_doc_id)
-                                                != crate::tools::exec::ownership::LiveProcessEvidence::NeverSpawned
+                                                != crate::exec::ownership::LiveProcessEvidence::NeverSpawned
                                         },
                                     ).await
                                 } else {
@@ -350,7 +353,7 @@ impl DefraSessionHook {
             // in-flight child call, so its row is settled here, before the
             // background owner publishes its own terminal.
             if let Some(children) = stopped_children {
-                let panicked = crate::tools::call::lifecycle::ToolOutcome::Cancelled;
+                let panicked = gents_loop::tool_call_lifecycle::ToolOutcome::Cancelled;
                 let stop = execution.as_ref().unwrap_or(&panicked);
                 if let Err(error) = children.settle_stopped(stop).await {
                     tracing::warn!(%error, tool_call_id = %lifecycle.tool_call_id(),
@@ -401,7 +404,7 @@ impl DefraSessionHook {
         lifecycle: &mut crate::tools::call::lifecycle::ToolCallLifecycle,
         tool_name: &str,
         raw_result: String,
-        failure: crate::tools::call::lifecycle::FailureClass,
+        failure: gents_loop::tool_call_lifecycle::FailureClass,
     ) -> anyhow::Result<ToolCallHookAction> {
         let (bounded, presentation) =
             bounded_tool_result_with_presentation(tool_name, &raw_result, &self.truncation_limits);

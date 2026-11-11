@@ -1,5 +1,5 @@
+use crate::file_contents::FileChanges;
 use crate::store::config_client::ConfigApplyTxn;
-use crate::tools::native::FileChanges;
 use anyhow::{ensure, Context, Result};
 use gents_protocol::session::SessionScope;
 

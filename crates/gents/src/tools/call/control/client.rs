@@ -823,12 +823,12 @@ pub(crate) async fn run(
     node_did: String,
     executions: crate::tools::call::hook::BackgroundExecutionRegistry,
     mut agents: Box<dyn AgentIdentityWatch>,
+    sweep_interval: std::time::Duration,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<()> {
     let mut changes =
         crate::store::subscription_source::subscribe_collections(&node, ["AgentToolControl"])?;
-    let mut interval =
-        tokio::time::interval(crate::runtime::agent::p2p_reconcile::intervals::sweep_interval());
+    let mut interval = tokio::time::interval(sweep_interval);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut failed = rapidhash::RapidHashSet::default();
     loop {

@@ -9,6 +9,9 @@ use std::time::{Duration, Instant};
 
 use crate::store::test_support::EnvVarGuard;
 
+#[cfg(target_os = "macos")]
+mod workspace_artifact_admission;
+mod workspace_command_policy;
 mod workspace_file_permissions;
 #[cfg(unix)]
 mod workspace_permissions;
@@ -522,7 +525,7 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
         outcome
     };
     match &control_outcome {
-        crate::tools::call::lifecycle::ToolOutcome::Completed(text) => {
+        gents_loop::tool_call_lifecycle::ToolOutcome::Completed(text) => {
             assert!(text.contains("first.txt"), "control glob output: {text}");
         }
         other => panic!("control blocker should complete, got {other:?}"),
@@ -559,7 +562,7 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
         assert!(
             matches!(
                 outcome,
-                crate::tools::call::lifecycle::ToolOutcome::TimedOut { .. }
+                gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut { .. }
             ),
             "blocking native tool must resolve to a typed timeout, got {outcome:?}"
         );
@@ -594,7 +597,7 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
         "single-worker queue should advance while the entered blocker cannot return"
     );
     match &second_outcome {
-        crate::tools::call::lifecycle::ToolOutcome::Completed(text) => {
+        gents_loop::tool_call_lifecycle::ToolOutcome::Completed(text) => {
             assert!(text.contains("second request"));
         }
         other => panic!("second read should complete, got {other:?}"),
@@ -896,7 +899,7 @@ async fn read_write_overlay_meets_unrestricted_bash_to_workspace_write() {
             },
         )
         .await;
-    if crate::tools::native::workspace_write_sandbox_enforced() {
+    if crate::workspace::sandbox::workspace_write_sandbox_enforced() {
         let output = result.expect("WorkspaceWrite bash should run when Seatbelt is available");
         let value: serde_json::Value = serde_json::from_str(&output).unwrap_or_else(|_| {
             serde_json::from_str(output.lines().next().unwrap_or(&output))
@@ -1643,10 +1646,10 @@ async fn bash_nonzero_exit_is_a_typed_tool_failure_with_metadata() {
     .await;
 
     match outcome {
-        crate::tools::call::lifecycle::ToolOutcome::Failed { class, text, .. } => {
+        gents_loop::tool_call_lifecycle::ToolOutcome::Failed { class, text, .. } => {
             assert_eq!(
                 class,
-                crate::tools::call::lifecycle::FailureClass::ToolReturnedError
+                gents_loop::tool_call_lifecycle::FailureClass::ToolReturnedError
             );
             let meta = compact_exec_meta(&text);
             assert_eq!(meta["ok"], false);
@@ -1679,8 +1682,11 @@ async fn bash_per_call_timeout_is_a_recoverable_typed_failure_with_metadata() {
     .await;
 
     match outcome {
-        crate::tools::call::lifecycle::ToolOutcome::Failed { class, text, .. } => {
-            assert_eq!(class, crate::tools::call::lifecycle::FailureClass::External);
+        gents_loop::tool_call_lifecycle::ToolOutcome::Failed { class, text, .. } => {
+            assert_eq!(
+                class,
+                gents_loop::tool_call_lifecycle::FailureClass::External
+            );
             let meta = compact_exec_meta(&text);
             assert_eq!(meta["ok"], false);
             assert_eq!(meta["status"], "timeout");
@@ -1719,7 +1725,7 @@ async fn bash_request_deadline_resolves_to_typed_timeout() {
     assert!(
         matches!(
             outcome,
-            crate::tools::call::lifecycle::ToolOutcome::TimedOut { .. }
+            gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut { .. }
         ),
         "bash exceeding the request deadline must resolve to a typed timeout, got {outcome:?}"
     );
@@ -1780,8 +1786,8 @@ async fn unrestricted_bash_timeout_kills_descendants_and_returns_promptly() {
             panic!("bash timeout hung while a descendant held its output pipes open");
         }
     };
-    let crate::tools::call::lifecycle::ToolOutcome::Failed {
-        class: crate::tools::call::lifecycle::FailureClass::External,
+    let gents_loop::tool_call_lifecycle::ToolOutcome::Failed {
+        class: gents_loop::tool_call_lifecycle::FailureClass::External,
         text: output,
         ..
     } = outcome
@@ -1821,8 +1827,8 @@ async fn unrestricted_bash_timeout_keeps_output_printed_before_the_timeout() {
     let outcome = tokio::time::timeout(Duration::from_secs(10), call)
         .await
         .expect("timed-out bash call must return promptly");
-    let crate::tools::call::lifecycle::ToolOutcome::Failed {
-        class: crate::tools::call::lifecycle::FailureClass::External,
+    let gents_loop::tool_call_lifecycle::ToolOutcome::Failed {
+        class: gents_loop::tool_call_lifecycle::FailureClass::External,
         text: output,
         ..
     } = outcome
@@ -1902,8 +1908,8 @@ async fn workspace_write_bash_contains_writes_to_tool_root() {
         .to_string(),
     )
     .await;
-    let crate::tools::call::lifecycle::ToolOutcome::Failed {
-        class: crate::tools::call::lifecycle::FailureClass::ToolReturnedError,
+    let gents_loop::tool_call_lifecycle::ToolOutcome::Failed {
+        class: gents_loop::tool_call_lifecycle::FailureClass::ToolReturnedError,
         text: output,
         ..
     } = outcome
@@ -1998,7 +2004,9 @@ async fn write_file_guards_existing_content_by_hash_or_explicit_overwrite() {
     let stale = stale.to_string();
     assert!(stale.contains("has changed since it was read"), "{stale}");
     assert!(
-        !stale.contains(&super::file_tools::content_hash(b"changed by operator\n")),
+        !stale.contains(&crate::file_contents::content_hash(
+            b"changed by operator\n"
+        )),
         "the stale refusal must not disclose the current hash: {stale}"
     );
     assert_eq!(
@@ -2007,7 +2015,8 @@ async fn write_file_guards_existing_content_by_hash_or_explicit_overwrite() {
     );
 
     let mut current = write_args("notes.txt", "two\n");
-    current.expected_content_hash = Some(super::file_tools::content_hash(b"changed by operator\n"));
+    current.expected_content_hash =
+        Some(crate::file_contents::content_hash(b"changed by operator\n"));
     let current = crate::inference::llm::tool::Tool::call(&writer, current)
         .await
         .expect("the current hash authorizes the replacement");
@@ -2023,7 +2032,7 @@ async fn write_file_guards_existing_content_by_hash_or_explicit_overwrite() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "three\n");
 
     let mut both = write_args("notes.txt", "four\n");
-    both.expected_content_hash = Some(super::file_tools::content_hash(b"three\n"));
+    both.expected_content_hash = Some(crate::file_contents::content_hash(b"three\n"));
     both.overwrite = true;
     let both = crate::inference::llm::tool::Tool::call(&writer, both)
         .await
@@ -2107,7 +2116,7 @@ async fn edit_file_stale_hash_rejects_before_matching_without_disclosing_current
     let text = err.to_string();
     assert!(text.contains("changed since"), "{text}");
     assert!(
-        !text.contains(&super::file_tools::content_hash(b"dup\ndup\n")),
+        !text.contains(&crate::file_contents::content_hash(b"dup\ndup\n")),
         "the stale refusal must not disclose the current hash: {text}"
     );
     assert!(
@@ -2454,7 +2463,7 @@ async fn artifact_command_without_runtime_grant_never_dispatches() {
 #[tokio::test]
 async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_launches() {
     let cases = &gents_lean_vocab::lean_contract_snapshot().artifact_spawn_cases;
-    let fx = crate::tools::workspace::artifact_test_fixture(&[]).await;
+    let fx = crate::workspace::artifact_test_fixture(&[]).await;
     assert_eq!(cases.len(), 5);
     let mut exercised = 0;
     for case in cases {
@@ -2545,8 +2554,7 @@ async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_lau
 async fn artifact_managed_command_enforces_source_inode_and_network_boundaries() {
     use std::os::unix::fs::PermissionsExt;
     let fx =
-        crate::tools::workspace::artifact_test_fixture(&[("protected.txt", "source sentinel\n")])
-            .await;
+        crate::workspace::artifact_test_fixture(&[("protected.txt", "source sentinel\n")]).await;
     let outside = tempfile::tempdir().unwrap();
     let sentinel = outside.path().join("external.txt");
     std::fs::write(&sentinel, "external sentinel\n").unwrap();
@@ -2621,7 +2629,7 @@ with socket.socket() as connection:
                     command.environment["TMPDIR"],
                     fx.grant.root().join("tmp").to_string_lossy()
                 );
-                crate::tools::exec::run_managed_exec(crate::tools::exec::ManagedExecRequest {
+                crate::exec::run_managed_exec(crate::exec::ManagedExecRequest {
                     argv: std::iter::once(command.program.to_string_lossy().into_owned())
                         .chain(command.args)
                         .collect(),
@@ -2639,7 +2647,7 @@ with socket.socket() as connection:
         )
         .await;
     match result {
-        crate::tools::exec::ManagedExecOutcome::Exited { code, stderr, .. } => {
+        crate::exec::ManagedExecOutcome::Exited { code, stderr, .. } => {
             assert_eq!(code, Some(0), "{}", String::from_utf8_lossy(&stderr));
         }
         other => panic!("artifact syscall probe failed: {other:?}"),
@@ -2679,7 +2687,7 @@ async fn run_artifact_compiler_fixture(build_script: Option<&str>) {
     if let Some(build) = build_script {
         files.push(("build.rs", build));
     }
-    let fx = crate::tools::workspace::artifact_test_fixture(&files).await;
+    let fx = crate::workspace::artifact_test_fixture(&files).await;
     let root = fx.grant.source_root().to_path_buf();
     let before: Vec<_> = files
         .iter()

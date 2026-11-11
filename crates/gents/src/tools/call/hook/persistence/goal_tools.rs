@@ -71,7 +71,7 @@ impl DefraSessionHook {
                         &mut lifecycle,
                         CREATE_GOAL_TOOL_NAME,
                         result,
-                        crate::tools::call::lifecycle::FailureClass::ServiceUnavailable,
+                        gents_loop::tool_call_lifecycle::FailureClass::ServiceUnavailable,
                     )
                     .await;
             }
@@ -87,7 +87,7 @@ impl DefraSessionHook {
                     &mut lifecycle,
                     CREATE_GOAL_TOOL_NAME,
                     result,
-                    crate::tools::call::lifecycle::FailureClass::ServiceUnavailable,
+                    gents_loop::tool_call_lifecycle::FailureClass::ServiceUnavailable,
                 )
                 .await;
         }
@@ -244,7 +244,7 @@ impl DefraSessionHook {
                 &mut lifecycle,
                 GET_GOAL_TOOL_NAME,
                 result,
-                crate::tools::call::lifecycle::FailureClass::ServiceUnavailable,
+                gents_loop::tool_call_lifecycle::FailureClass::ServiceUnavailable,
             )
             .await
         } else {
@@ -304,7 +304,7 @@ impl DefraSessionHook {
                         &mut lifecycle,
                         UPDATE_GOAL_TOOL_NAME,
                         result,
-                        crate::tools::call::lifecycle::FailureClass::ServiceUnavailable,
+                        gents_loop::tool_call_lifecycle::FailureClass::ServiceUnavailable,
                     )
                     .await;
             }
@@ -323,7 +323,7 @@ impl DefraSessionHook {
                         &mut lifecycle,
                         UPDATE_GOAL_TOOL_NAME,
                         result,
-                        crate::tools::call::lifecycle::FailureClass::ServiceUnavailable,
+                        gents_loop::tool_call_lifecycle::FailureClass::ServiceUnavailable,
                     )
                     .await;
             }

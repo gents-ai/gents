@@ -668,7 +668,7 @@ mod tests {
             0
         );
         let registry = crate::tools::call::hook::BackgroundExecutionRegistry::default();
-        crate::runtime::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
+        crate::tools::call::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
             &step.job.node,
             node_did(),
             &[crate::tools::background::job::input::tests::managed_agent().clone()],

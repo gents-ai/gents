@@ -249,7 +249,7 @@ async fn schema_publication_matches_executable_lean_contract() {
         .resolve(
             &node,
             node.node_identity_did().unwrap(),
-            &Default::default(),
+            &crate::tools::plugin_host::NoPluginHost,
         )
         .await
         .unwrap();
@@ -637,7 +637,7 @@ async fn schema_recovery_help_and_grant_are_independent_of_config() {
     .resolve(
         &node,
         node.node_identity_did().unwrap(),
-        &Default::default(),
+        &crate::tools::plugin_host::NoPluginHost,
     )
     .await
     .unwrap();

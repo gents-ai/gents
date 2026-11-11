@@ -986,7 +986,7 @@ mod bound {
         };
         let (outcome, ()) = tokio::join!(call, operator);
         assert!(
-            matches!(&outcome, crate::tools::call::lifecycle::ToolOutcome::Completed(text) if text == r#"{"read":true}"#),
+            matches!(&outcome, gents_loop::tool_call_lifecycle::ToolOutcome::Completed(text) if text == r#"{"read":true}"#),
             "{outcome:?}"
         );
     }
@@ -1206,7 +1206,7 @@ async fn receipt_hashes_host_prepared_input_and_actual_http_grant() {
         } else {
             serde_json::json!({"http_calls":true,"value":1})
         };
-        let canonical = crate::tools::workspace::canonical_json_string(&effective).unwrap();
+        let canonical = crate::workspace::canonical_json_string(&effective).unwrap();
         assert_eq!(
             call.receipt.input_digest,
             format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))
@@ -1686,7 +1686,7 @@ mod tool_writes {
             Err(text) => call
                 .fail(
                     text,
-                    crate::tools::call::lifecycle::FailureClass::ToolReturnedError,
+                    gents_loop::tool_call_lifecycle::FailureClass::ToolReturnedError,
                 )
                 .await
                 .unwrap(),

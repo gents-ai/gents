@@ -13,7 +13,7 @@ pub(super) async fn operations_snapshot_response(
     access: &ConfigAccess,
     request: DesktopOperationsSnapshotRequest,
 ) -> Result<DesktopOperationsSnapshot> {
-    let native_executors = gents::tools::exec::status::active_native_executors()
+    let native_executors = gents::exec::status::active_native_executors()
         .into_iter()
         .map(|executor| NativeExecutorStatusView {
             id: executor.id as i64,

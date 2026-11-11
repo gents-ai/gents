@@ -231,7 +231,7 @@ pub(crate) async fn cancel_loaded_background_tool_call(
             .stop_execution(tool_call_id, &doc_id)
             .await
     };
-    if process == crate::tools::exec::ProcessStopOutcome::StillRunning {
+    if process == crate::exec::ProcessStopOutcome::StillRunning {
         if let Some(reloaded) = ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
             lifecycle.actor().clone(),
@@ -253,7 +253,7 @@ pub(crate) async fn cancel_loaded_background_tool_call(
     if background_executions.has_pending_failure(tool_call_id, &doc_id) {
         return Ok(CancelBackgroundToolCallOutcome::Unverified);
     }
-    if process == crate::tools::exec::ProcessStopOutcome::AlreadyExited
+    if process == crate::exec::ProcessStopOutcome::AlreadyExited
         && background_executions
             .settle_retained_stop(&mut lifecycle)
             .await?
@@ -268,7 +268,7 @@ pub(crate) async fn cancel_loaded_background_tool_call(
             })
         };
     }
-    if process != crate::tools::exec::ProcessStopOutcome::Stopped {
+    if process != crate::exec::ProcessStopOutcome::Stopped {
         if let Some(reloaded) = ToolCallLifecycle::load_by_doc_id_as(
             node.clone(),
             lifecycle.actor().clone(),
@@ -318,7 +318,7 @@ pub(crate) async fn cancel_loaded_background_tool_call(
 }
 
 fn outcome_for_settled_process(
-    process: crate::tools::exec::ProcessStopOutcome,
+    process: crate::exec::ProcessStopOutcome,
     lifecycle: &ToolCallLifecycle,
     retained: bool,
 ) -> CancelBackgroundToolCallOutcome {
@@ -332,19 +332,15 @@ fn outcome_for_settled_process(
 }
 
 fn outcome_for_process(
-    process: crate::tools::exec::ProcessStopOutcome,
+    process: crate::exec::ProcessStopOutcome,
     live_execution_cancelled: bool,
 ) -> CancelBackgroundToolCallOutcome {
     match process.cancel_reply() {
-        crate::tools::exec::CancelProcessReply::Cancelled => {
-            CancelBackgroundToolCallOutcome::Cancelled {
-                live_execution_cancelled,
-            }
-        }
-        crate::tools::exec::CancelProcessReply::Lost => CancelBackgroundToolCallOutcome::Lost,
-        crate::tools::exec::CancelProcessReply::Unverified => {
-            CancelBackgroundToolCallOutcome::Unverified
-        }
+        crate::exec::CancelProcessReply::Cancelled => CancelBackgroundToolCallOutcome::Cancelled {
+            live_execution_cancelled,
+        },
+        crate::exec::CancelProcessReply::Lost => CancelBackgroundToolCallOutcome::Lost,
+        crate::exec::CancelProcessReply::Unverified => CancelBackgroundToolCallOutcome::Unverified,
     }
 }
 
@@ -498,7 +494,7 @@ mod tests {
                 "failed" => child
                     .fail(
                         "failed",
-                        crate::tools::call::lifecycle::FailureClass::External,
+                        gents_loop::tool_call_lifecycle::FailureClass::External,
                     )
                     .await
                     .unwrap(),
@@ -742,7 +738,7 @@ mod tests {
         .doc_id()
         .unwrap()
         .to_owned();
-        let process = crate::tools::exec::ownership::test_support::OwnedTestProcess::spawn(Some(
+        let process = crate::exec::ownership::test_support::OwnedTestProcess::spawn(Some(
             registry.process_recorder("cancel-native-tool", &physical),
         ))
         .await;
@@ -869,7 +865,7 @@ mod tests {
             .unwrap();
             let tool_doc = admission.tool.doc_id().unwrap().to_owned();
             let process = if recorded {
-                crate::tools::exec::ownership::test_support::process_for_generated_outcome(
+                crate::tools::call::hook::tests::process_records::process_for_generated_outcome(
                     &registry,
                     admission.tool.tool_call_id(),
                     &tool_doc,
@@ -907,7 +903,7 @@ mod tests {
                     assert!(row.is_cancelled());
                     assert_ne!(
                         process.identity.observe(),
-                        crate::tools::exec::ownership::ProcessObservation::Running
+                        crate::exec::ownership::ProcessObservation::Running
                     );
                     process.finish().await;
                 }

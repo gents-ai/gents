@@ -114,7 +114,7 @@ where
                     tracing::warn!(request_id = %request.request_id, %error, "stopping workspace completion after execution ownership loss");
                     return OwnedWorkOutcome::OwnershipLost;
                 }
-                if let Err(error) = crate::tools::workspace::seal_on_writer_success(
+                if let Err(error) = crate::workspace::seal_on_writer_success(
                     &self.node,
                     self.agent_config.agent_identity.as_ref(),
                     request,
@@ -138,7 +138,7 @@ where
                     tracing::warn!(request_id = %request.request_id, %error, "stopping workspace integration after execution ownership loss");
                     return OwnedWorkOutcome::OwnershipLost;
                 }
-                if let Err(error) = crate::tools::workspace::integrate_on_integrator_success(
+                if let Err(error) = crate::workspace::integrate_on_integrator_success(
                     &self.node,
                     self.agent_config.agent_identity.as_ref(),
                     request,

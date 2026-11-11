@@ -8,7 +8,7 @@ use serde_json::json;
 use tempfile::TempDir;
 
 use crate::ensure_runtime_schemas;
-use crate::tools::workspace::{
+use crate::workspace::{
     action_plan_canonical_json, emit_create_workspace_plan, execute_create_workspace_plan,
     parse_action_plan_json, ActionJournalEntry, ActionJournalState, CreateWorkspaceAction,
     CreationPolicy, HostAction, HostExecutorContext, MemoryWorkspaceDocuments,
@@ -255,19 +255,14 @@ fn generated_recovery_and_denial_match_runtime_owners() {
     assert_eq!(cases.len(), 28, "Lean must emit the whole recovery matrix");
     for case in cases {
         let journal = lean_journal(&case.journal);
-        let (state, recovered) = match crate::tools::workspace::recover_running(&journal) {
+        let (state, recovered) = match crate::workspace::recover_running(&journal) {
             Some(failed) => (LIFECYCLE_FAILED, failed),
             None => (LIFECYCLE_RUNNING, journal.clone()),
         };
         assert_eq!(state, case.post_state, "{}: recovered state", case.name);
         assert_eq!(recovered, lean_journal(&case.post_journal), "{}", case.name);
         assert_eq!(
-            crate::tools::workspace::retry_allowed(
-                state,
-                &recovered,
-                case.attempts,
-                case.max_attempts
-            ),
+            crate::workspace::retry_allowed(state, &recovered, case.attempts, case.max_attempts),
             case.retry_allowed_after,
             "{}: retry after recovery",
             case.name,
@@ -311,7 +306,7 @@ fn generated_recovery_and_denial_match_runtime_owners() {
             case.name
         );
         assert_eq!(
-            crate::tools::workspace::retry_allowed(
+            crate::workspace::retry_allowed(
                 &denied.lifecycle_state,
                 &denied_journal,
                 case.attempts,
@@ -346,8 +341,8 @@ fn callback_result_requires_succeeded_complete_journal_and_docs() {
         0,
         ActionJournalState::ResultDocsWritten,
     )];
-    let workspace = crate::tools::workspace::IsolatedWorkspaceDoc {
-        path_capability: crate::tools::workspace::WorkspacePathCapability::exact_paths(Vec::new())
+    let workspace = crate::workspace::IsolatedWorkspaceDoc {
+        path_capability: crate::workspace::WorkspacePathCapability::exact_paths(Vec::new())
             .unwrap(),
         workspace_id: "ws-1".into(),
         work_unit_id: "unit-1".into(),
@@ -366,7 +361,7 @@ fn callback_result_requires_succeeded_complete_journal_and_docs() {
         caused_by_correlation: "corr-1".into(),
         route: Default::default(),
     };
-    let placement = crate::tools::workspace::WorkspacePlacementDoc {
+    let placement = crate::workspace::WorkspacePlacementDoc {
         workspace_id: "ws-1".into(),
         owner_node_did: "deploy-1".into(),
         host_path: "/tmp/ws".into(),
@@ -583,19 +578,19 @@ fn recovery_reuses_stored_action_plan() {
     });
     let resolved = resolve_action_plan(&invocation, &callback(), &mutated).unwrap();
     match &resolved.actions[0] {
-        crate::tools::workspace::HostAction::CreateWorkspace(action) => {
+        crate::workspace::HostAction::CreateWorkspace(action) => {
             assert_eq!(action.workspace_id, "ws-stored");
             assert_eq!(
                 action.path_capability,
-                crate::tools::workspace::WorkspacePathCapability::exact_paths(Vec::new()).unwrap(),
+                crate::workspace::WorkspacePathCapability::exact_paths(Vec::new()).unwrap(),
                 "recovery cannot expand the stored manifest from changed source content"
             );
             assert_eq!(action.branch, "topic");
         }
-        crate::tools::workspace::HostAction::SealWorkspace(_)
-        | crate::tools::workspace::HostAction::FreezeWorkspaceBase(_)
-        | crate::tools::workspace::HostAction::IntegrateWorkspace(_)
-        | crate::tools::workspace::HostAction::CleanupWorkspace(_) => {
+        crate::workspace::HostAction::SealWorkspace(_)
+        | crate::workspace::HostAction::FreezeWorkspaceBase(_)
+        | crate::workspace::HostAction::IntegrateWorkspace(_)
+        | crate::workspace::HostAction::CleanupWorkspace(_) => {
             panic!("expected create_workspace")
         }
     }
@@ -656,18 +651,18 @@ fn wasm_recovery_reuses_stored_plan_without_reloading_module() {
     let resolved =
         resolve_action_plan_with_module(&invocation, &module_binding, &mutated, None).unwrap();
     match &resolved.actions[0] {
-        crate::tools::workspace::HostAction::CreateWorkspace(action) => {
+        crate::workspace::HostAction::CreateWorkspace(action) => {
             assert_eq!(action.workspace_id, "ws-stored");
             assert_eq!(
                 action.path_capability,
-                crate::tools::workspace::WorkspacePathCapability::exact_paths(Vec::new()).unwrap(),
+                crate::workspace::WorkspacePathCapability::exact_paths(Vec::new()).unwrap(),
                 "recovery cannot expand the stored manifest from changed source content"
             );
         }
-        crate::tools::workspace::HostAction::SealWorkspace(_)
-        | crate::tools::workspace::HostAction::FreezeWorkspaceBase(_)
-        | crate::tools::workspace::HostAction::IntegrateWorkspace(_)
-        | crate::tools::workspace::HostAction::CleanupWorkspace(_) => {
+        crate::workspace::HostAction::SealWorkspace(_)
+        | crate::workspace::HostAction::FreezeWorkspaceBase(_)
+        | crate::workspace::HostAction::IntegrateWorkspace(_)
+        | crate::workspace::HostAction::CleanupWorkspace(_) => {
             panic!("expected create_workspace")
         }
     }
@@ -702,7 +697,7 @@ fn builtin_emitter_accepts_assignment_and_base_revision_aliases() {
     });
     let plan = emit_plan_from_source(&callback(), &source).expect("plan");
     match &plan.actions[0] {
-        crate::tools::workspace::HostAction::CreateWorkspace(action) => {
+        crate::workspace::HostAction::CreateWorkspace(action) => {
             assert_eq!(action.work_unit_id, "cluster:patch");
             assert_eq!(action.base_sha, "abc123");
             assert_eq!(action.branch, "gents/cluster-patch");
@@ -727,14 +722,14 @@ fn builtin_emitter_builds_create_workspace_plan() {
     assert!(!encoded.contains("host_path"));
     assert_eq!(plan.abi, 1);
     match &plan.actions[0] {
-        crate::tools::workspace::HostAction::CreateWorkspace(action) => {
+        crate::workspace::HostAction::CreateWorkspace(action) => {
             assert_eq!(action.workspace_id, "ws-1");
             assert_eq!(action.work_unit_id, "unit-1");
         }
-        crate::tools::workspace::HostAction::SealWorkspace(_)
-        | crate::tools::workspace::HostAction::FreezeWorkspaceBase(_)
-        | crate::tools::workspace::HostAction::IntegrateWorkspace(_)
-        | crate::tools::workspace::HostAction::CleanupWorkspace(_) => {
+        crate::workspace::HostAction::SealWorkspace(_)
+        | crate::workspace::HostAction::FreezeWorkspaceBase(_)
+        | crate::workspace::HostAction::IntegrateWorkspace(_)
+        | crate::workspace::HostAction::CleanupWorkspace(_) => {
             panic!("expected create_workspace")
         }
     }
@@ -795,7 +790,7 @@ fn callback_result_only_after_workspace_docs_are_durable() {
         integrator_agent_did: None,
         integrator_agent_doc_id: None,
         readers: Vec::new(),
-        path_capability: crate::tools::workspace::WorkspacePathCapability::exact_paths(Vec::new())
+        path_capability: crate::workspace::WorkspacePathCapability::exact_paths(Vec::new())
             .unwrap(),
         workspace_id: "ws-result".into(),
         work_unit_id: "unit-1".into(),

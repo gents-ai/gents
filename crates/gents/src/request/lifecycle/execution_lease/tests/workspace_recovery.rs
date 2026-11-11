@@ -99,9 +99,8 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         "existing durable work\n",
     )
     .unwrap();
-    let workspace = crate::tools::workspace::IsolatedWorkspaceDoc {
-        path_capability: crate::tools::workspace::WorkspacePathCapability::exact_paths(vec![])
-            .unwrap(),
+    let workspace = crate::workspace::IsolatedWorkspaceDoc {
+        path_capability: crate::workspace::WorkspacePathCapability::exact_paths(vec![]).unwrap(),
         workspace_id: "recovery-workspace".into(),
         work_unit_id: "work-unit".into(),
         repository_id: "repository".into(),
@@ -119,7 +118,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         caused_by_correlation: "correlation".into(),
         route: Default::default(),
     };
-    let placement = crate::tools::workspace::WorkspacePlacementDoc {
+    let placement = crate::workspace::WorkspacePlacementDoc {
         workspace_id: workspace.workspace_id.clone(),
         owner_node_did: did.into(),
         host_path: workspace_path.to_string_lossy().into_owned(),
@@ -147,9 +146,9 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
             let placement = &placement;
             Box::pin(async move {
                 let response = txn
-                    .execute(
-                        &crate::tools::workspace::isolated_workspace_upsert_mutation(workspace),
-                    )
+                    .execute(&crate::workspace::isolated_workspace_upsert_mutation(
+                        workspace,
+                    ))
                     .await?;
                 let workspace_doc = upserted_doc_id(&response, "upsert_IsolatedWorkspace")?;
                 txn.add_actor_relationship(
@@ -160,12 +159,10 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
                 )
                 .await?;
                 let response = txn
-                    .execute(
-                        &crate::tools::workspace::workspace_placement_upsert_mutation(
-                            placement,
-                            "2026-09-01T00:00:00Z",
-                        ),
-                    )
+                    .execute(&crate::workspace::workspace_placement_upsert_mutation(
+                        placement,
+                        "2026-09-01T00:00:00Z",
+                    ))
                     .await?;
                 let placement_doc = upserted_doc_id(&response, "upsert_WorkspacePlacement")?;
                 txn.add_resource_relationship(
@@ -257,7 +254,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         .await
         .unwrap();
     let parent = owner.request().clone();
-    let parent_overlay = crate::tools::workspace::resolve_request_workspace_overlay_with_identity(
+    let parent_overlay = crate::workspace::resolve_request_workspace_overlay_with_identity(
         &node,
         agent.as_ref(),
         &parent,
@@ -414,7 +411,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         child.caused_by_parent_request_doc_id.as_deref(),
         Some(parent.doc_id.as_str())
     );
-    let overlay = crate::tools::workspace::resolve_request_workspace_overlay_with_identity(
+    let overlay = crate::workspace::resolve_request_workspace_overlay_with_identity(
         &node,
         agent.as_ref(),
         child,

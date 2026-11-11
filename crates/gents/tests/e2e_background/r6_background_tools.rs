@@ -1041,7 +1041,7 @@ async fn periodic_recovery_without_process_record_settles_orphan_lost() {
     ));
     set_parent_state(&turn.agent_access(), &turn.request_id, "completed").await;
 
-    gents::runtime::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
+    gents::tools::call::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
         &turn.db.node,
         turn.db.node_identity.did(),
         std::slice::from_ref(&turn.agent_identity),

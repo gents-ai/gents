@@ -231,7 +231,7 @@ pub(super) fn spawn_callback_engine(startup: StartupTasks<'_>) -> AbortOnDropHan
         .document_runtime_context()
         .and_then(|context| context.tool_ceiling.root())
         .map(std::path::Path::to_path_buf);
-    crate::tools::workspace::install_process_operator_tool_root(callback_ceiling.clone());
+    crate::workspace::install_process_operator_tool_root(callback_ceiling.clone());
     let callback_plugins = agent.plugins().clone();
     let callback_cancel = cancel.child_token();
     let callback_snapshots = active_snapshot_rx.clone();
@@ -467,6 +467,7 @@ pub(super) fn spawn_request_tasks(
                 control_node_did,
                 control_executions,
                 control_agents,
+                crate::runtime::agent::p2p_reconcile::intervals::sweep_interval(),
                 control_cancel,
             )
             .await,

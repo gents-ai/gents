@@ -694,9 +694,9 @@ async fn a_request_bound_to_a_missing_task_fails_closed() {
 
 async fn install_workspace(harness: &Harness, host_path: &Path) {
     let owner = harness.owner().to_string();
-    let workspace = crate::tools::workspace::IsolatedWorkspaceDoc {
-        path_capability: crate::tools::workspace::WorkspacePathCapability::exact_paths(vec![
-            "patch.rs".to_string(),
+    let workspace = crate::workspace::IsolatedWorkspaceDoc {
+        path_capability: crate::workspace::WorkspacePathCapability::exact_paths(vec![
+            "patch.rs".to_string()
         ])
         .unwrap(),
         workspace_id: WORKSPACE_ID.to_string(),
@@ -704,10 +704,10 @@ async fn install_workspace(harness: &Harness, host_path: &Path) {
         repository_id: "hook-repo".to_string(),
         base_sha: "0".repeat(40),
         branch: "gents/hook-task".to_string(),
-        creation_policy: crate::tools::workspace::CreationPolicy::GitWorktreeDiff
+        creation_policy: crate::workspace::CreationPolicy::GitWorktreeDiff
             .as_str()
             .to_string(),
-        adapter: crate::tools::workspace::WorkspaceAdapterKind::GitWorktree
+        adapter: crate::workspace::WorkspaceAdapterKind::GitWorktree
             .as_str()
             .to_string(),
         owner_node_did: owner.clone(),
@@ -720,12 +720,12 @@ async fn install_workspace(harness: &Harness, host_path: &Path) {
         caused_by_correlation: "hook-correlation".to_string(),
         route: Default::default(),
     };
-    let placement = crate::tools::workspace::WorkspacePlacementDoc {
+    let placement = crate::workspace::WorkspacePlacementDoc {
         workspace_id: WORKSPACE_ID.to_string(),
         owner_node_did: owner,
         host_path: host_path.to_str().expect("utf-8 path").to_string(),
         repository_placement_id: "hook-repo".to_string(),
-        adapter: crate::tools::workspace::WorkspaceAdapterKind::GitWorktree
+        adapter: crate::workspace::WorkspaceAdapterKind::GitWorktree
             .as_str()
             .to_string(),
         adapter_version: "gents-workspace-adapter/1".to_string(),
@@ -736,8 +736,8 @@ async fn install_workspace(harness: &Harness, host_path: &Path) {
     };
     let updated_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     for mutation in [
-        crate::tools::workspace::isolated_workspace_upsert_mutation(&workspace),
-        crate::tools::workspace::workspace_placement_upsert_mutation(&placement, &updated_at),
+        crate::workspace::isolated_workspace_upsert_mutation(&workspace),
+        crate::workspace::workspace_placement_upsert_mutation(&placement, &updated_at),
     ] {
         harness
             .agent_access
@@ -747,9 +747,7 @@ async fn install_workspace(harness: &Harness, host_path: &Path) {
     }
 }
 
-async fn workspace_bindings(
-    harness: &Harness,
-) -> Vec<crate::tools::workspace::WorkspaceBindingDoc> {
+async fn workspace_bindings(harness: &Harness) -> Vec<crate::workspace::WorkspaceBindingDoc> {
     let response = harness.agent_access.execute(
         &format!(
             r#"{{ WorkspaceBinding(filter: {{ workspace_id: {{ _eq: "{}" }}, owner_node_did: {{ _eq: "{}" }} }}) {{ binding_id workspace_id request_id request_doc_id authority owner_node_did seal_hash lifecycle_state }} }}"#,
@@ -764,7 +762,7 @@ async fn workspace_bindings(
 }
 
 async fn materialize_writer_binding(harness: &Harness, request: &AgentRequest) {
-    crate::tools::workspace::materialize_workspace_binding(
+    crate::workspace::materialize_workspace_binding(
         &harness.node,
         &request.request_id,
         &request.doc_id,
@@ -856,7 +854,7 @@ async fn a_skipped_gate_releases_the_bound_workspace() {
     assert!(workspace_bindings(&harness)
         .await
         .iter()
-        .any(crate::tools::workspace::WorkspaceBindingDoc::is_active_read_write));
+        .any(crate::workspace::WorkspaceBindingDoc::is_active_read_write));
     let row = harness.run(request, false).await;
     assert_eq!(row["lifecycle_state"], "completed", "{row}");
     assert_eq!(harness.calls(), 0, "{row}");
@@ -881,7 +879,7 @@ async fn a_failing_before_hook_releases_the_bound_workspace() {
     assert!(workspace_bindings(&harness)
         .await
         .iter()
-        .any(crate::tools::workspace::WorkspaceBindingDoc::is_active_read_write));
+        .any(crate::workspace::WorkspaceBindingDoc::is_active_read_write));
     let row = harness.run(request, false).await;
     assert_eq!(harness.calls(), 0, "{row}");
     assert_eq!(row["lifecycle_state"], "failed", "{row}");
@@ -890,7 +888,7 @@ async fn a_failing_before_hook_releases_the_bound_workspace() {
     assert!(
         !bindings
             .iter()
-            .any(crate::tools::workspace::WorkspaceBindingDoc::is_active_read_write),
+            .any(crate::workspace::WorkspaceBindingDoc::is_active_read_write),
         "{bindings:?}"
     );
 }
@@ -1161,7 +1159,7 @@ async fn workspace_seal_completes_before_the_after_phase_is_selected() {
         ]))
         .await;
     let request = harness.create_request(Lineage::Trigger, true).await;
-    crate::tools::workspace::materialize_workspace_binding(
+    crate::workspace::materialize_workspace_binding(
         &harness.node,
         &request.request_id,
         &request.doc_id,

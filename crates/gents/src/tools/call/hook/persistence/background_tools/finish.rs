@@ -45,7 +45,7 @@ struct FinishCtx<'a> {
 }
 
 type BackgroundExecutionResult =
-    Result<crate::tools::call::lifecycle::ToolOutcome, Box<dyn std::any::Any + Send>>;
+    Result<gents_loop::tool_call_lifecycle::ToolOutcome, Box<dyn std::any::Any + Send>>;
 
 fn resolve_execution(
     lifecycle: &ToolCallLifecycle,
@@ -62,13 +62,13 @@ fn resolve_execution(
     };
     if crate::tools::native::is_bash_tool_name(lifecycle.tool_name()) {
         let outcome = execution.as_ref().ok();
-        if crate::tools::exec::ownership::native_terminal_needs_confirmation(outcome) {
+        if crate::exec::ownership::native_terminal_needs_confirmation(outcome) {
             let receipt = match outcome {
                 Some(outcome) => {
                     crate::tools::call::hook::RetainedStopReceipt::from_outcome(outcome)
                 }
                 None => crate::tools::call::hook::RetainedStopReceipt::Failure(
-                    crate::tools::call::lifecycle::ToolOutcome::tool_returned_error(
+                    gents_loop::tool_call_lifecycle::ToolOutcome::tool_returned_error(
                         "native command panicked",
                     ),
                 ),
@@ -99,34 +99,34 @@ async fn settle_native_terminal(
         Some(record) => matches!(
             record
                 .identity
-                .await_signalled_group_exit(crate::tools::exec::ownership::KILL_GRACE)
+                .await_signalled_group_exit(crate::exec::ownership::KILL_GRACE)
                 .await,
-            crate::tools::exec::ownership::ProcessObservation::Exited
+            crate::exec::ownership::ProcessObservation::Exited
         ),
         None => !matches!(
             executions.live_process_evidence(execution_call_id, execution_tool_doc_id),
-            crate::tools::exec::ownership::LiveProcessEvidence::SpawnedUnverified
+            crate::exec::ownership::LiveProcessEvidence::SpawnedUnverified
         ),
     };
     let receipt = match execution.as_ref().ok() {
-        Some(crate::tools::call::lifecycle::ToolOutcome::Cancelled) => {
+        Some(gents_loop::tool_call_lifecycle::ToolOutcome::Cancelled) => {
             crate::tools::call::hook::RetainedStopReceipt::Cancel(
                 crate::session::tool_call_state::CancelCause::Interrupted,
                 executions.cancellation_reason(execution_call_id, execution_tool_doc_id),
             )
         }
-        Some(crate::tools::call::lifecycle::ToolOutcome::TimedOut { .. }) => {
+        Some(gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut { .. }) => {
             crate::tools::call::hook::RetainedStopReceipt::Timeout
         }
-        Some(outcome @ crate::tools::call::lifecycle::ToolOutcome::Failed { .. }) => {
+        Some(outcome @ gents_loop::tool_call_lifecycle::ToolOutcome::Failed { .. }) => {
             crate::tools::call::hook::RetainedStopReceipt::Failure(outcome.clone())
         }
         None => crate::tools::call::hook::RetainedStopReceipt::Failure(
-            crate::tools::call::lifecycle::ToolOutcome::tool_returned_error(
+            gents_loop::tool_call_lifecycle::ToolOutcome::tool_returned_error(
                 "native command panicked",
             ),
         ),
-        Some(crate::tools::call::lifecycle::ToolOutcome::Completed(_)) => {
+        Some(gents_loop::tool_call_lifecycle::ToolOutcome::Completed(_)) => {
             unreachable!("completed execution does not require stop confirmation")
         }
     };
@@ -322,7 +322,7 @@ async fn finish_completed(ctx: FinishCtx<'_>, lifecycle: &mut ToolCallLifecycle,
 async fn finish_failed(
     ctx: FinishCtx<'_>,
     lifecycle: &mut ToolCallLifecycle,
-    failure_class: crate::tools::call::lifecycle::FailureClass,
+    failure_class: gents_loop::tool_call_lifecycle::FailureClass,
     reason: String,
 ) {
     let FinishCtx {
@@ -476,7 +476,7 @@ pub(in crate::tools::call::hook::persistence) async fn finish_background_executi
     live_outputs: crate::tools::call::hook::BackgroundLiveOutputState,
     executions: crate::tools::call::hook::BackgroundExecutionRegistry,
     execution_reservation: crate::tools::call::hook::BackgroundExecutionReservation,
-    execution: Result<crate::tools::call::lifecycle::ToolOutcome, Box<dyn std::any::Any + Send>>,
+    execution: Result<gents_loop::tool_call_lifecycle::ToolOutcome, Box<dyn std::any::Any + Send>>,
 ) {
     let execution = resolve_execution(&lifecycle, &executions, execution);
     let identity = FinishIdentity {
@@ -519,25 +519,23 @@ pub(in crate::tools::call::hook::persistence) async fn finish_background_executi
         ids: &identity,
     };
     if crate::tools::native::is_bash_tool_name(execution_tool_name)
-        && crate::tools::exec::ownership::native_terminal_needs_confirmation(
-            execution.as_ref().ok(),
-        )
+        && crate::exec::ownership::native_terminal_needs_confirmation(execution.as_ref().ok())
     {
         settle_native_terminal(ctx, lifecycle, execution_reservation, execution).await;
         return;
     }
     match execution {
         Ok(outcome) => match outcome {
-            crate::tools::call::lifecycle::ToolOutcome::TimedOut { .. } => {
+            gents_loop::tool_call_lifecycle::ToolOutcome::TimedOut { .. } => {
                 finish_timed_out(ctx, &mut lifecycle).await
             }
-            crate::tools::call::lifecycle::ToolOutcome::Cancelled => {
+            gents_loop::tool_call_lifecycle::ToolOutcome::Cancelled => {
                 finish_cancelled(ctx, &mut lifecycle).await
             }
-            crate::tools::call::lifecycle::ToolOutcome::Completed(output) => {
+            gents_loop::tool_call_lifecycle::ToolOutcome::Completed(output) => {
                 finish_completed(ctx, &mut lifecycle, output).await
             }
-            crate::tools::call::lifecycle::ToolOutcome::Failed {
+            gents_loop::tool_call_lifecycle::ToolOutcome::Failed {
                 class: failure_class,
                 text: reason,
                 ..

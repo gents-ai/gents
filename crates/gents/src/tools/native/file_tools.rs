@@ -1,6 +1,5 @@
 pub(crate) mod change_capture;
 pub(super) mod edit_file;
-pub(crate) mod file_contents;
 pub(super) mod read_tools;
 pub(super) mod write_file;
 
@@ -10,7 +9,7 @@ use anyhow::{Context as _, Result};
 use serde::Serialize;
 
 use super::shared::ToolError;
-use crate::tools::call::lifecycle::FailureClass;
+use gents_loop::tool_call_lifecycle::FailureClass;
 
 pub(super) fn deny_workspace_file_writes() -> Result<(), ToolError> {
     if crate::tools::runtime_context::current_tool_runtime_context()
@@ -32,11 +31,6 @@ pub(super) fn merge_optional_notes(left: Option<String>, right: Option<String>) 
         (None, Some(b)) => Some(b),
         (Some(a), Some(b)) => Some(format!("{a}\n{b}")),
     }
-}
-
-pub(crate) fn content_hash(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
 /// Language-server resource edits can name binary files; snapshot checks

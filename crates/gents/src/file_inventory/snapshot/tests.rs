@@ -286,7 +286,7 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
                 })
                 .collect(),
         };
-        crate::tools::native::FileChanges::decode(&tool_id, serde_json::to_value(&batch).unwrap())
+        crate::file_contents::FileChanges::decode(&tool_id, serde_json::to_value(&batch).unwrap())
             .unwrap();
         for projection in case["source"]["projections"].as_array().unwrap() {
             let observation_input = json!({ "tool_call_doc_id": tool_id, "request_doc_id": request_id,
@@ -518,7 +518,7 @@ async fn retain_fork_fixture_capture(
         tool_call_doc_id: tool.doc_id().unwrap().into(),
         changes: vec![change.clone()],
     };
-    crate::tools::native::FileChanges::decode(
+    crate::file_contents::FileChanges::decode(
         tool.doc_id().unwrap(),
         serde_json::to_value(&changes).unwrap(),
     )

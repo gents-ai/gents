@@ -9,7 +9,7 @@ use serde_json::Value;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::NodeIdentity;
-use crate::tools::workspace::WorkspaceBindingDoc;
+use crate::workspace::WorkspaceBindingDoc;
 
 #[derive(Clone, Copy, Debug)]
 enum RejectionOwner {
@@ -51,8 +51,8 @@ impl Fixture {
         // Claim verification of a ReadWrite request loads the complete
         // workspace and its local placement, as the workspace owner publishes them.
         let workspace_dir = tempfile::tempdir().unwrap();
-        let workspace = crate::tools::workspace::IsolatedWorkspaceDoc {
-            path_capability: crate::tools::workspace::WorkspacePathCapability::exact_paths(vec![])
+        let workspace = crate::workspace::IsolatedWorkspaceDoc {
+            path_capability: crate::workspace::WorkspacePathCapability::exact_paths(vec![])
                 .unwrap(),
             workspace_id: "cleanup-workspace".into(),
             work_unit_id: "cleanup-work-unit".into(),
@@ -71,7 +71,7 @@ impl Fixture {
             caused_by_correlation: "cleanup-correlation".into(),
             route: Default::default(),
         };
-        let placement = crate::tools::workspace::WorkspacePlacementDoc {
+        let placement = crate::workspace::WorkspacePlacementDoc {
             workspace_id: workspace.workspace_id.clone(),
             owner_node_did: identity.did().into(),
             host_path: workspace_dir.path().to_string_lossy().into_owned(),
@@ -89,9 +89,9 @@ impl Fixture {
                 let placement = &placement;
                 Box::pin(async move {
                     let response = txn
-                        .execute(
-                            &crate::tools::workspace::isolated_workspace_upsert_mutation(workspace),
-                        )
+                        .execute(&crate::workspace::isolated_workspace_upsert_mutation(
+                            workspace,
+                        ))
                         .await?;
                     let doc = crate::store::graphql::mutation_documents(
                         &response,
@@ -111,12 +111,10 @@ impl Fixture {
                     )
                     .await?;
                     let response = txn
-                        .execute(
-                            &crate::tools::workspace::workspace_placement_upsert_mutation(
-                                placement,
-                                "2026-09-01T00:00:00Z",
-                            ),
-                        )
+                        .execute(&crate::workspace::workspace_placement_upsert_mutation(
+                            placement,
+                            "2026-09-01T00:00:00Z",
+                        ))
                         .await?;
                     let placement_doc = crate::store::graphql::mutation_documents(
                         &response,
@@ -202,7 +200,7 @@ impl Fixture {
                         .as_deref()
                         .expect("fixture workspace binding");
                     let response = txn
-                        .execute(&crate::tools::workspace::workspace_binding_upsert_mutation(
+                        .execute(&crate::workspace::workspace_binding_upsert_mutation(
                             binding,
                         ))
                         .await?;

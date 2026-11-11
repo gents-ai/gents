@@ -53,7 +53,7 @@ pub(super) async fn spawn_live_node(
     std::fs::create_dir_all(&tool_root)
         .with_context(|| format!("creating live tool root {}", tool_root.display()))?;
     seed_repo_workspace(&tool_root)?;
-    let tool_root = gents::tools::surface::resolve_configured_tool_root(&tool_root)?;
+    let tool_root = gents::workspace::root_resolution::resolve_configured_tool_root(&tool_root)?;
 
     let node_did = home.identity.did().to_string();
     let docs = seed_live_agent_documents(

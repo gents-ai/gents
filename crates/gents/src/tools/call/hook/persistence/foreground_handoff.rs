@@ -72,7 +72,7 @@ impl DefraSessionHook {
         }
         let Some(context) = context else {
             return ForegroundResult::Settled(
-                crate::tools::call::lifecycle::ToolOutcome::from_tool_call_error(
+                gents_loop::tool_call_lifecycle::ToolOutcome::from_tool_call_error(
                     "native process requires an owned execution context",
                 ),
             );
@@ -85,7 +85,7 @@ impl DefraSessionHook {
             .cloned()
         else {
             return ForegroundResult::Settled(
-                crate::tools::call::lifecycle::ToolOutcome::from_tool_call_error(
+                gents_loop::tool_call_lifecycle::ToolOutcome::from_tool_call_error(
                     "native process requires an accepted invocation",
                 ),
             );
@@ -98,7 +98,7 @@ impl DefraSessionHook {
             Err(error) => {
                 tracing::warn!(%error, "foreground handoff observation unavailable");
                 return ForegroundResult::Settled(
-                    crate::tools::call::lifecycle::ToolOutcome::from_tool_call_error(
+                    gents_loop::tool_call_lifecycle::ToolOutcome::from_tool_call_error(
                         "native process observation is unavailable",
                     ),
                 );
@@ -121,7 +121,7 @@ impl DefraSessionHook {
             Ok(reservation) => reservation,
             Err(error) => {
                 return ForegroundResult::Settled(
-                    crate::tools::call::lifecycle::ToolOutcome::from_tool_call_error(
+                    gents_loop::tool_call_lifecycle::ToolOutcome::from_tool_call_error(
                         &error.to_string(),
                     ),
                 );
@@ -133,7 +133,7 @@ impl DefraSessionHook {
             drop(in_flight);
             drop(reservation);
             return ForegroundResult::Settled(
-                crate::tools::call::lifecycle::ToolOutcome::Cancelled,
+                gents_loop::tool_call_lifecycle::ToolOutcome::Cancelled,
             );
         }
         let recorder = hook
@@ -155,7 +155,7 @@ impl DefraSessionHook {
             let check_doc = doc.clone();
             let cleanup: gents_loop::session_hook::NativeCleanupCheck = Arc::new(move |outcome| {
                 if let Some(outcome) = outcome.filter(|outcome| {
-                    crate::tools::exec::ownership::native_terminal_needs_confirmation(Some(outcome))
+                    crate::exec::ownership::native_terminal_needs_confirmation(Some(outcome))
                 }) {
                     check_registry.set_stop_receipt(
                         &check_call,
@@ -164,7 +164,7 @@ impl DefraSessionHook {
                     );
                 }
                 check_registry.live_process_evidence(&check_call, &check_doc)
-                    != crate::tools::exec::ownership::LiveProcessEvidence::NeverSpawned
+                    != crate::exec::ownership::LiveProcessEvidence::NeverSpawned
             });
             let workspace = ToolWorkspaceScope {
                 runtime_home: context.runtime_home,
@@ -173,22 +173,21 @@ impl DefraSessionHook {
                 workspace_authority: context.workspace_authority,
                 workspace_artifact: context.workspace_artifact,
             };
-            let execution =
-                AssertUnwindSafe(crate::tools::exec::ownership::scope_process_recorder(
-                    recorder,
-                    scope_request_tool_execution_with_workspace_overlay(
-                        context.deadline_at,
-                        process_token.clone(),
-                        workspace,
-                        None,
-                        context.session_id,
-                        context.correlation,
-                        context.source_fields,
-                        false,
-                        call(process_token.clone(), Some(cleanup)),
-                    ),
-                ))
-                .catch_unwind();
+            let execution = AssertUnwindSafe(crate::exec::ownership::scope_process_recorder(
+                recorder,
+                scope_request_tool_execution_with_workspace_overlay(
+                    context.deadline_at,
+                    process_token.clone(),
+                    workspace,
+                    None,
+                    context.session_id,
+                    context.correlation,
+                    context.source_fields,
+                    false,
+                    call(process_token.clone(), Some(cleanup)),
+                ),
+            ))
+            .catch_unwind();
             tokio::pin!(execution);
             let mut changes = Some(changes);
             let mut answer = Some(answer);
@@ -261,10 +260,10 @@ impl DefraSessionHook {
                         }
                         let outcome = execution.await.unwrap_or_else(|_| {
                             if let Some(evidence) = hook.background_executions.live_process_evidence_owner(lifecycle.tool_call_id(), &doc) { evidence.mark_unverified_failure(); }
-                            crate::tools::call::lifecycle::ToolOutcome::tool_returned_error("native command panicked")
+                            gents_loop::tool_call_lifecycle::ToolOutcome::tool_returned_error("native command panicked")
                         });
                         let outcome = hook.background_executions.finalize_pending_failure(lifecycle.tool_call_id(), &doc).unwrap_or(outcome);
-                        if crate::tools::exec::ownership::native_terminal_needs_confirmation(Some(&outcome))
+                        if crate::exec::ownership::native_terminal_needs_confirmation(Some(&outcome))
                             && !hook.background_executions.process_exit_confirmed(lifecycle.tool_call_id(), &doc).await {
                             hook.background_executions.set_stop_receipt(lifecycle.tool_call_id(), &doc, crate::tools::call::hook::RetainedStopReceipt::from_outcome(&outcome));
                             match hook.handoff_unverified_process(&mut lifecycle, &internal_id, &doc).await {
@@ -280,7 +279,7 @@ impl DefraSessionHook {
                             }
                             return;
                         }
-                        if crate::tools::exec::ownership::native_terminal_needs_confirmation(Some(&outcome)) {
+                        if crate::exec::ownership::native_terminal_needs_confirmation(Some(&outcome)) {
                             let receipt = crate::tools::call::hook::RetainedStopReceipt::from_outcome(&outcome);
                             hook.background_executions.retain_confirmed_worker(lifecycle, reservation, receipt);
                             if let Some(answer) = answer.take() { let _ = answer.send(ForegroundResult::Settled(outcome)); }
@@ -303,10 +302,10 @@ impl DefraSessionHook {
                         } else {
                             let outcome = outcome.unwrap_or_else(|_| {
                                 if let Some(evidence) = hook.background_executions.live_process_evidence_owner(lifecycle.tool_call_id(), &doc) { evidence.mark_unverified_failure(); }
-                                crate::tools::call::lifecycle::ToolOutcome::tool_returned_error("native command panicked")
+                                gents_loop::tool_call_lifecycle::ToolOutcome::tool_returned_error("native command panicked")
                             });
                             let outcome = hook.background_executions.finalize_pending_failure(lifecycle.tool_call_id(), &doc).unwrap_or(outcome);
-                            let needs_confirmation = crate::tools::exec::ownership::native_terminal_needs_confirmation(Some(&outcome));
+                            let needs_confirmation = crate::exec::ownership::native_terminal_needs_confirmation(Some(&outcome));
                             if needs_confirmation && !hook.background_executions.process_exit_confirmed(lifecycle.tool_call_id(), &doc).await {
                                 hook.background_executions.set_stop_receipt(lifecycle.tool_call_id(), &doc, crate::tools::call::hook::RetainedStopReceipt::from_outcome(&outcome));
                                 match hook.handoff_unverified_process(&mut lifecycle, &internal_id, &doc).await {
@@ -354,7 +353,7 @@ impl DefraSessionHook {
         }));
         result.await.unwrap_or_else(|_| {
             ForegroundResult::Settled(
-                crate::tools::call::lifecycle::ToolOutcome::tool_returned_error(
+                gents_loop::tool_call_lifecycle::ToolOutcome::tool_returned_error(
                     "native execution owner stopped",
                 ),
             )

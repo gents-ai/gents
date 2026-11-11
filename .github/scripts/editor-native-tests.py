@@ -82,8 +82,8 @@ def compile_tests(root, manifest, profile='test'):
 
 
 PROCESS_TESTS = (
-    'tools::exec::tests::managed_exec_deadline_kills_job_object',
-    'tools::exec::tests::managed_exec_cancellation_kills_job_object',
+    'exec::tests::managed_exec_deadline_kills_job_object',
+    'exec::tests::managed_exec_cancellation_kills_job_object',
 )
 
 

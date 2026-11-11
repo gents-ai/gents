@@ -120,7 +120,7 @@ where
         mut self,
         root: Option<PathBuf>,
     ) -> Self {
-        crate::tools::workspace::install_process_operator_tool_root(root.clone());
+        crate::workspace::install_process_operator_tool_root(root.clone());
         self.operator_tool_root = root;
         self
     }

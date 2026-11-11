@@ -29,10 +29,10 @@ use serde_json::json;
 use crate::documents::FileToolMode;
 use crate::documents::{apply_overrides, builtin_catalog, CatalogServer, LspConfigDocument};
 use crate::inference::llm::tool::{Tool, ToolDefinition};
-use crate::tools::call::lifecycle::FailureClass;
 use crate::tools::native::shared::{ToolContext, ToolError};
 use crate::tools::native::{lsp_sandbox_for_effective, CommandConstraints, CommandNetworkMode};
 use crate::tools::surface::{ToolPolicyBash, ToolPolicySurface};
+use gents_loop::tool_call_lifecycle::FailureClass;
 
 use actions::ActionRequest;
 
@@ -162,9 +162,7 @@ impl LspTool {
             .map(|authority| {
                 self.config
                     .file
-                    .meet(crate::tools::workspace::workspace_authority_file_mode(
-                        authority,
-                    ))
+                    .meet(crate::workspace::workspace_authority_file_mode(authority))
             })
             .unwrap_or(self.config.file)
     }

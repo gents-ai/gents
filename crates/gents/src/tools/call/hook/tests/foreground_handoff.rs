@@ -148,16 +148,16 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
         crate::tools::runtime_context::scope_request_tool_execution(
             Some(deadline), parent_for_task,
             task_hook.run_backgroundable_foreground("bash_unrestricted", "handoff-command", Box::new(move |token, _cleanup| Box::pin(async move {
-                let result = crate::tools::exec::run_managed_exec(crate::tools::exec::ManagedExecRequest {
+                let result = crate::exec::run_managed_exec(crate::exec::ManagedExecRequest {
                     argv: vec!["/bin/sh".into(), "-c".into(), "printf '%s' $$ > \"$1\"; read value < \"$2\"; printf 'finished:%s' \"$value\"".into(), "sh".into(), pid_arg, gate_arg],
                     cwd, deadline_at: Some(deadline), cancellation_token: token,
                     max_output_bytes: 4096, stdin: Vec::new(), environment: None,
                     tool_name: Some("handoff-command".into()), live_output: None,
                 }).await;
                 match result {
-                    crate::tools::exec::ManagedExecOutcome::Exited { stdout, .. } =>
-                        crate::tools::call::lifecycle::ToolOutcome::Completed(String::from_utf8(stdout).unwrap()),
-                    other => crate::tools::call::lifecycle::ToolOutcome::from_tool_call_error(&format!("{other:?}")),
+                    crate::exec::ManagedExecOutcome::Exited { stdout, .. } =>
+                        gents_loop::tool_call_lifecycle::ToolOutcome::Completed(String::from_utf8(stdout).unwrap()),
+                    other => gents_loop::tool_call_lifecycle::ToolOutcome::from_tool_call_error(&format!("{other:?}")),
                 }
             }))),
         ).await
@@ -394,7 +394,7 @@ async fn cancellation_winning_handoff_clears_the_request_and_cancels_the_same_ex
                     Box::pin(async move {
                         let _ = started.send(token.clone());
                         token.cancelled().await;
-                        crate::tools::call::lifecycle::ToolOutcome::Cancelled
+                        gents_loop::tool_call_lifecycle::ToolOutcome::Cancelled
                     })
                 }),
             ),
@@ -423,7 +423,7 @@ async fn cancellation_winning_handoff_clears_the_request_and_cancels_the_same_ex
         .unwrap();
     assert!(matches!(
         outcome,
-        ForegroundResult::Settled(crate::tools::call::lifecycle::ToolOutcome::Cancelled)
+        ForegroundResult::Settled(gents_loop::tool_call_lifecycle::ToolOutcome::Cancelled)
     ));
     assert!(execution_token.is_cancelled());
     let doc = crate::store::graphql::escape_graphql_string(&doc);
@@ -477,7 +477,7 @@ async fn refused_foreground_handoff_can_be_retried() {
                     Box::pin(async move {
                         let _ = started.send(());
                         finished.await.unwrap();
-                        crate::tools::call::lifecycle::ToolOutcome::Completed("finished".into())
+                        gents_loop::tool_call_lifecycle::ToolOutcome::Completed("finished".into())
                     })
                 }),
             ),
@@ -627,7 +627,7 @@ async fn concurrent_background_starts_on_one_request_fill_exactly_the_ceiling() 
 #[cfg(unix)]
 #[tokio::test]
 async fn interrupted_foreground_with_unverified_exit_remains_background_controlled() {
-    use crate::tools::exec::ownership::test_support::OwnedTestProcess;
+    use crate::exec::ownership::test_support::OwnedTestProcess;
     let expected = gents_lean_vocab::lean_process_stop_cases()
         .iter()
         .find(|case| case.before == "running" && case.after == "running")
@@ -693,7 +693,7 @@ async fn interrupted_foreground_with_unverified_exit_remains_background_controll
                         .await;
                         process_tx.send(process).ok().unwrap();
                         token.cancelled().await;
-                        crate::tools::call::lifecycle::ToolOutcome::Cancelled
+                        gents_loop::tool_call_lifecycle::ToolOutcome::Cancelled
                     })
                 }),
             ),
@@ -732,8 +732,7 @@ async fn interrupted_foreground_with_unverified_exit_remains_background_controll
         hook.background_executions
             .stop_native_process("unverified-foreground", &doc)
             .await,
-        crate::tools::exec::ProcessStopOutcome::Stopped
-            | crate::tools::exec::ProcessStopOutcome::AlreadyExited
+        crate::exec::ProcessStopOutcome::Stopped | crate::exec::ProcessStopOutcome::AlreadyExited
     ));
     assert!(
         hook.background_executions
@@ -756,7 +755,7 @@ async fn interrupted_foreground_with_unverified_exit_remains_background_controll
 #[cfg(unix)]
 #[tokio::test]
 async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery() {
-    use crate::tools::exec::ownership::test_support::OwnedTestProcess;
+    use crate::exec::ownership::test_support::OwnedTestProcess;
     let modeled = gents_lean_vocab::lean_r6_backgrounding_case("recovery_transfer_at_capacity");
     let home = tempfile::tempdir().unwrap();
     let root = KeyIdentity::load_or_create(home.path().join("node.key"), None).unwrap();
@@ -846,8 +845,7 @@ async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery(
     registry.set_cancellation_reason("failed-handoff", &doc, "operator requested stop", false);
     assert!(matches!(
         registry.stop_native_process("failed-handoff", &doc).await,
-        crate::tools::exec::ProcessStopOutcome::Stopped
-            | crate::tools::exec::ProcessStopOutcome::AlreadyExited
+        crate::exec::ProcessStopOutcome::Stopped | crate::exec::ProcessStopOutcome::AlreadyExited
     ));
     let (failed, count) =
         crate::store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(

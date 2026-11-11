@@ -5,7 +5,7 @@ use crate::store::identity::NodeIdentity;
 #[tokio::test]
 async fn cancelling_while_approval_waits_never_requires_a_process_record() {
     use crate::plugin::approval::workspace;
-    if !crate::tools::native::workspace_write_sandbox_enforced() {
+    if !crate::workspace::sandbox::workspace_write_sandbox_enforced() {
         return;
     }
     let expected = gents_lean_vocab::lean_process_stop_cases()
@@ -185,7 +185,7 @@ async fn background_commands_keep_workspace_consent_after_dispatch() {
         } else {
             &case["expectedRoute"]
         };
-        let supported = crate::tools::native::workspace_write_sandbox_enforced();
+        let supported = crate::workspace::sandbox::workspace_write_sandbox_enforced();
         let guard_case = gents_lean_vocab::lean_contract_snapshot()
             .operator_path_cases
             .iter()

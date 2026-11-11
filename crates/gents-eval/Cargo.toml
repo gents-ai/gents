@@ -33,6 +33,7 @@ tempfile = "3"
 proptest = "1"
 gents = { path = "../gents", features = ["test-fixtures"] }
 acp.workspace = true
+gents-loop.workspace = true
 gents-lean-contract.workspace = true
 gents-lean-vocab.workspace = true
 db.workspace = true

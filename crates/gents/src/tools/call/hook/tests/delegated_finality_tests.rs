@@ -8,7 +8,8 @@ use crate::request::lifecycle::{
 use crate::session::message::{AgentMessageDelivery, Plan, RenderedBody};
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::identity::NodeIdentity;
-use crate::tools::call::lifecycle::{FailureClass, ToolCallLifecycle};
+use crate::tools::call::lifecycle::ToolCallLifecycle;
+use gents_loop::tool_call_lifecycle::FailureClass;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
 use gents_protocol::request_lifecycle::SessionMessageCause;
 use gents_protocol::request_lifecycle::SessionMessageTarget;

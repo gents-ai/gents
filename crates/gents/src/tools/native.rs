@@ -18,8 +18,6 @@ pub mod command_observability;
 mod context_budget;
 pub mod edit_match;
 mod file_tools;
-pub(crate) use file_tools::change_capture::{FileChanges, VerifiedUnchanged};
-pub(crate) use file_tools::file_contents;
 mod goal;
 pub(crate) mod lsp;
 mod native_runner;
@@ -117,8 +115,8 @@ pub(crate) use shared::{
     prepare_managed_command,
 };
 pub use shared::{
-    workspace_write_sandbox_enforced, CommandConstraints, CommandExecutionMode,
-    CommandExecutionPolicy, CommandNetworkMode, WorkspaceAuthority,
+    CommandConstraints, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode,
+    WorkspaceAuthority,
 };
 
 pub fn default_read_only_command_policy() -> CommandExecutionPolicy {

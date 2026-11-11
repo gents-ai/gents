@@ -368,22 +368,22 @@ def vocabularyCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "vocabulary"
       "ManagedExecState"
-      "tools::exec::tests::rust_managed_exec_state_vocabulary_matches_lean_model")
+      "exec::tests::rust_managed_exec_state_vocabulary_matches_lean_model")
       "managed-exec" [Surface.agentFacing]
   , tagged (consumerCoverage
       "vocabulary"
       "ProcessStopOutcome"
-      "tools::exec::tests::rust_process_stop_outcome_vocabulary_matches_lean_model")
+      "exec::tests::rust_process_stop_outcome_vocabulary_matches_lean_model")
       "managed-exec" [Surface.agentFacing]
   , tagged (consumerCoverage
       "vocabulary"
       "CancelProcessReply"
-      "tools::exec::tests::rust_cancel_process_reply_vocabulary_matches_lean_model")
+      "exec::tests::rust_cancel_process_reply_vocabulary_matches_lean_model")
       "managed-exec" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "process_stop_cases"
       "ProcessStopCases"
-      "tools::exec::tests::generated_process_stop_cases_drive_host_owner"
+      "exec::tests::generated_process_stop_cases_drive_host_owner"
       "Each generated verdict is checked against the native mapping, and the reachable observations (a recorded running group, the same group after the owner's stop, a reused start identity) are produced by real test-owned process groups. A group that survives SIGKILL cannot be constructed on a test host, so stillRunning is checked only through the mapping.")
       "managed-exec" [Surface.agentFacing]
   , tagged (consumerCoverage
@@ -496,7 +496,7 @@ def stateMachineCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "state_machine"
       "ManagedExec"
-      "tools::exec::tests::managed_exec_state_machine_contract_is_complete")
+      "exec::tests::managed_exec_state_machine_contract_is_complete")
       "managed-exec" [Surface.agentFacing]
   , tagged (consumerCoverage
       "state_machine"
@@ -1519,7 +1519,7 @@ def caseCoverage : List CoverageEntry :=
       "artifact_admission_cases"
       "ArtifactAdmissionCases"
       boundaryCommandPolicyHostExecutionAssumptionsId
-      "workspace::overlay::overlay_tests::generated_artifact_admission_cases_drive_live_binding_and_launch_policy")
+      "tools::native::tests::workspace_artifact_admission::generated_artifact_admission_cases_drive_live_binding_and_launch_policy")
       "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "artifact_spawn_cases"
@@ -1545,7 +1545,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "workspace_liveness_cases"
       "WorkspaceLivenessCases"
-      "tools::workspace::tests::capability_runtime::invisible_workspace_request_cannot_release_exclusive_binding"
+      "workspace::tests::capability_runtime::invisible_workspace_request_cannot_release_exclusive_binding"
       "Checks native filtered absence before exclusive release; complete workspace relationship publication remains separate.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
@@ -1557,13 +1557,13 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "workspace_child_cases"
       "WorkspaceChildCases"
-      "tools::workspace::tests::capability_runtime::native_workspace_publication_and_exclusive_admission"
+      "workspace::tests::capability_runtime::native_workspace_publication_and_exclusive_admission"
       "Canonical publication attaches the shared parent atomically; ACP1 permits raw admitted writers to create orphan rows.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
       "workspace_quickstart_selection_cases"
       "WorkspaceQuickstartSelectionCases"
-      "tools::workspace::tests::quickstart_base_freeze::quickstart_freezes_base_without_fabricating_requests_or_writer_receipts")
+      "workspace::tests::quickstart_base_freeze::quickstart_freezes_base_without_fabricating_requests_or_writer_receipts")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
       "workspace_callback_selection_cases"
@@ -1599,43 +1599,43 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "workspace_child_revocation_cases"
       "WorkspaceChildRevocationCases"
-      "tools::workspace::tests::capability_runtime::native_workspace_publication_and_exclusive_admission"
+      "workspace::tests::capability_runtime::native_workspace_publication_and_exclusive_admission"
       "Documents the completeness limit after explicitly granting a child owner native relationship deletion.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
       "workspace_admission_cases"
       "WorkspaceAdmissionCases"
-      "tools::workspace::tests::capability_runtime::native_workspace_publication_and_exclusive_admission"
+      "workspace::tests::capability_runtime::native_workspace_publication_and_exclusive_admission"
       "Exercises competing canonical exclusive admissions; native conflict fencing needs central validation.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "workspace_cleanup_cases"
       "WorkspaceCleanupCases"
-      "tools::workspace::tests::capability_runtime::native_workspace_publication_and_exclusive_admission"
+      "workspace::tests::capability_runtime::native_workspace_publication_and_exclusive_admission"
       "Cleanup claims the parent with native update permission after checking the canonical binding inventory.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "workspace_publication_cases"
       "WorkspacePublicationCases"
-      "tools::workspace::tests::capability_runtime::native_workspace_publication_and_exclusive_admission"
+      "workspace::tests::capability_runtime::native_workspace_publication_and_exclusive_admission"
       "Checks duplicate publication after revocation and a stale retry after cleanup has begun.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "workspace_quickstart_cases"
       "WorkspaceQuickstartCases"
-      "tools::workspace::tests::quickstart_base_freeze::quickstart_freezes_base_without_fabricating_requests_or_writer_receipts"
+      "workspace::tests::quickstart_base_freeze::quickstart_freezes_base_without_fabricating_requests_or_writer_receipts"
       "Covers user-signed repository publication, Agent visibility, outsider isolation and revocation; host provisioning follows reservation.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
       "workspace_completion_access_cases"
       "WorkspaceCompletionAccessCases"
-      "tools::workspace::tests::capability_runtime::workspace_completion_reads_keep_selected_agent_visibility"
+      "workspace::tests::capability_runtime::workspace_completion_reads_keep_selected_agent_visibility"
       "Exercises selected-Agent reads using a test-only native binding; product workspace relationships and remaining readers require separate coverage.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "workspace_completion_actor_cases"
       "WorkspaceCompletionActorCases"
-      "tools::workspace::tests::capability_runtime::workspace_completion_requires_selected_managed_agent"
+      "workspace::tests::capability_runtime::workspace_completion_requires_selected_managed_agent"
       "Tests selection of the held completion writer; workspace read isolation and cross-Agent relationship publication remain separate.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp

@@ -4,9 +4,9 @@ use anyhow::anyhow;
 use defra_node::Node as EmbeddedNode;
 use serde::Serialize;
 
-use crate::tools::call::lifecycle::FailureClass;
 use crate::tools::mcp::health::{HealthStatus, ServiceHealth, ServiceHealthMap};
 use crate::tools::mcp::pool::McpPool;
+use gents_loop::tool_call_lifecycle::FailureClass;
 
 #[derive(Clone)]
 pub struct MetaToolContext {

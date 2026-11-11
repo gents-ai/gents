@@ -25,7 +25,7 @@ fn validate_read_only_bash_input(
             )
         {
             ToolError::reported_failure(
-                crate::tools::call::lifecycle::FailureClass::ArgumentInvalid,
+                gents_loop::tool_call_lifecycle::FailureClass::ArgumentInvalid,
                 r#"Invalid bash command argument: this tool accepts one allowed executable name or path in `command`, with separate arguments in `args`; it does not interpret shell command strings. For example, use {"command":"ls","args":["crates"]}. The supplied literal executable was rejected; do not repeat the same unchanged call."#.to_owned(),
             )
         } else {
@@ -369,7 +369,7 @@ mod input_tests {
             crate::inference::llm::tool::ToolError::ReportedFailure { class, text } => {
                 assert_eq!(
                     class,
-                    crate::tools::call::lifecycle::FailureClass::ArgumentInvalid
+                    gents_loop::tool_call_lifecycle::FailureClass::ArgumentInvalid
                 );
                 assert!(text.contains(r#"{"command":"ls","args":["crates"]}"#));
                 assert!(text.contains("does not interpret shell command strings"));

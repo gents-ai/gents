@@ -1,4 +1,4 @@
-use gents::tools::workspace::{action_journal_prefix_legal, retry_allowed, ActionJournalEntry};
+use gents::workspace::{action_journal_prefix_legal, retry_allowed, ActionJournalEntry};
 use gents_lean_vocab::{lean_callback_cases, lean_callback_retry_cases};
 
 fn journal(states: &[String]) -> Vec<ActionJournalEntry> {

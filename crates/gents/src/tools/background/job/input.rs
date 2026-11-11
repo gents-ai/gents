@@ -33,7 +33,7 @@ use crate::tools::background::job::records::{read_pin, read_progress, read_step_
 use crate::tools::background::job::JobBinding;
 use crate::tools::background::status::caused_request_terminals_in_txn;
 use crate::tools::call::lifecycle::{load_tool_call_arguments, CausedRequestTerminal};
-use crate::tools::workspace::request_workspace_cwd;
+use crate::workspace::request_workspace_cwd;
 use gents_protocol::job_settings::effective_ceiling;
 use gents_protocol::row::AgentRequest;
 
