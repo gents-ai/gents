@@ -121,7 +121,10 @@ impl PackInstaller {
                 Box::pin(async move {
                     for profile in bindings.values() {
                         let backend = ops::profile_backend_id(txn, owner, profile).await?;
-                        ops::guard_backend_choice_in_txn(txn, owner, None, &backend).await?;
+                        gents_inference::operations::admit_backend_choice_in_txn(
+                            txn, owner, None, &backend,
+                        )
+                        .await?;
                     }
                     Ok(())
                 })
@@ -204,7 +207,7 @@ impl PackInstaller {
         words: &[String],
         error: PackOperationError,
     ) -> anyhow::Error {
-        use gents_protocol::operations::agent::NextCall;
+        use gents_protocol::operations::NextCall;
         let repeat = |decision: &str| {
             let mut argv = vec!["pack".to_owned()];
             argv.extend(words.iter().cloned());
@@ -226,6 +229,7 @@ impl PackInstaller {
                         json!({"argv": [resource, "preview", verb, package]})
                     }
                     NextCall::List { resource } => json!({"argv": [resource, "list"]}),
+                    NextCall::Verb { resource, verb } => json!({"argv": [resource, verb]}),
                     NextCall::VerbHelp { resource, .. }
                     | NextCall::ResourceHelp { resource }
                     | NextCall::Inspect { resource } => json!({"argv": ["help", resource]}),

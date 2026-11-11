@@ -3,7 +3,40 @@
 //! it needs and its help. Front ends parse into these types and render them.
 
 pub mod agent;
+pub mod inference;
 pub mod pack;
+
+/// The call that lets a caller correct a refused operation. Each front end
+/// renders it in its own syntax.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NextCall {
+    VerbHelp {
+        resource: &'static str,
+        verb: &'static str,
+    },
+    ResourceHelp {
+        resource: &'static str,
+    },
+    /// Read the caller's own document of `resource`, which shows what it holds.
+    Inspect {
+        resource: &'static str,
+    },
+    /// List `resource`, which shows the documents the caller may name.
+    List {
+        resource: &'static str,
+    },
+    /// Preview `verb` on the same target, which reports what the commit
+    /// would do and the values the commit takes.
+    Preview {
+        resource: &'static str,
+        verb: &'static str,
+    },
+    /// Run `verb` of `resource`, which takes no further input.
+    Verb {
+        resource: &'static str,
+        verb: &'static str,
+    },
+}
 
 /// Tri-state for an optional text field. A present JSON null is `Clear`;
 /// the property must be absent to stay `Omitted`.

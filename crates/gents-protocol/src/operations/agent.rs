@@ -2,7 +2,7 @@ use std::error::Error;
 
 use serde::Serialize;
 
-use super::StringUpdate;
+use super::{NextCall, StringUpdate};
 
 /// What the Agent materializer did, as its receipt names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -119,33 +119,6 @@ pub struct AgentReceipt<A> {
     pub host_root_access: Option<serde_json::Value>,
     pub agent: A,
     pub make_default: bool,
-}
-
-/// The call that lets a caller correct a refused operation. Each front end
-/// renders it in its own syntax.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NextCall {
-    VerbHelp {
-        resource: &'static str,
-        verb: &'static str,
-    },
-    ResourceHelp {
-        resource: &'static str,
-    },
-    /// Read the caller's own document of `resource`, which shows what it holds.
-    Inspect {
-        resource: &'static str,
-    },
-    /// List `resource`, which shows the documents the caller may name.
-    List {
-        resource: &'static str,
-    },
-    /// Preview `verb` on the same target, which reports what the commit
-    /// would do and the values the commit takes.
-    Preview {
-        resource: &'static str,
-        verb: &'static str,
-    },
 }
 
 /// Lean `SelfConfig.AgentRefusal`: the admission check that refused.

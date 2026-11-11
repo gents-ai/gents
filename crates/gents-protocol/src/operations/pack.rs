@@ -3,7 +3,7 @@ use std::error::Error;
 
 use serde::{Deserialize, Serialize};
 
-use super::agent::NextCall;
+use super::NextCall;
 
 /// Lean `Pack.Operations.Actor`: who signs a pack operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

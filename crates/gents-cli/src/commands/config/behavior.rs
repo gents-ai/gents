@@ -2,8 +2,9 @@ use anyhow::{Context, Result};
 use gents_documents::Agent;
 use gents_protocol::agent_identity::AgentIdentityBinding;
 use gents_protocol::operations::agent::{
-    AgentCreateInput, AgentCreateOperation, AgentOperationError, NextCall,
+    AgentCreateInput, AgentCreateOperation, AgentOperationError,
 };
+use gents_protocol::operations::NextCall;
 use gents_protocol::operations::StringUpdate;
 use gents_store::collection::Collection;
 use gents_store::graphql::escape_graphql_string;
@@ -139,6 +140,7 @@ impl std::fmt::Display for AgentFailure {
             NextCall::Preview { resource, verb } => {
                 format!("gents config {resource} {verb} --preview")
             }
+            NextCall::Verb { resource, verb } => format!("gents config {resource} {verb}"),
         };
         write!(formatter, "{}\nNext: {next}", self.error)?;
         if matches!(self.error, AgentOperationError::CatalogNotHeld) {

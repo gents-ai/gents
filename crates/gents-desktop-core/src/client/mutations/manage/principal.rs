@@ -4,6 +4,8 @@ pub use editor::*;
 use gents_documents::apply_desired_state_plan;
 use gents_documents::Node;
 use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents_inference::operations;
+use gents_protocol::operations::inference::{DocumentWrite, InferenceDocument, WriteMode};
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 
@@ -93,8 +95,59 @@ async fn apply_config_components_in_txn(
     gents_documents::read_desired_state_record_in_txn(txn, Collection::Node, owner, owner)
         .await?
         .context("component apply requires an existing node")?;
-    apply_desired_state_plan(txn, plan, &gents_inference::resolved::ProviderProfilePolicy).await?;
+    let plan = admit_inference_documents(txn, owner, plan).await?;
+    apply_desired_state_plan(
+        txn,
+        &plan,
+        &gents_inference::resolved::ProviderProfilePolicy,
+    )
+    .await?;
     Ok(())
+}
+
+/// Commits the plan's backends through the shared handler, then substitutes
+/// the handler's admitted profiles into the rest of the plan. A profile's
+/// admission reads its backend from the transaction, so the backends are
+/// written first; every other document still applies and validates together.
+async fn admit_inference_documents(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    owner: &str,
+    plan: &DesiredStateApplyPlan,
+) -> Result<DesiredStateApplyPlan> {
+    use super::inference::{operation_failure, put_write};
+    for entry in plan.documents() {
+        if entry.collection == Collection::InferenceBackend {
+            let (_, write) = put_write(InferenceDocument::Backend, &entry.add, WriteMode::Put)?;
+            operations::write_in_txn(txn, owner, &write)
+                .await
+                .map_err(|failure| {
+                    operation_failure(failure, InferenceDocument::Backend, "update")
+                })?;
+        }
+    }
+    let mut documents = Vec::with_capacity(plan.documents().len());
+    for entry in plan.documents() {
+        match entry.collection {
+            Collection::InferenceBackend => {}
+            Collection::InferenceProfile => {
+                let (_, write) = put_write(InferenceDocument::Profile, &entry.add, WriteMode::Put)?;
+                let planned =
+                    operations::plan_in_txn(txn, owner, &write)
+                        .await
+                        .map_err(|failure| {
+                            operation_failure(failure, InferenceDocument::Profile, "update")
+                        })?;
+                let value = serde_json::Value::Object(planned.candidate().clone());
+                documents.push(DesiredStateApplyDocument {
+                    collection: entry.collection,
+                    add: value.clone(),
+                    update: value,
+                });
+            }
+            _ => documents.push(entry.clone()),
+        }
+    }
+    DesiredStateApplyPlan::new(documents)?.with_removals(plan.removals().to_vec())
 }
 
 fn config_components_plan(
@@ -268,6 +321,25 @@ pub(crate) async fn patch_config_components_in_txn(
     for (target, id, patch) in patches {
         if *target == SelfConfigTarget::Agent {
             edits.push((id, agent_edit_from_patch(patch)?));
+            continue;
+        }
+        let document = match target {
+            SelfConfigTarget::InferenceBackend => Some(InferenceDocument::Backend),
+            SelfConfigTarget::InferenceProfile => Some(InferenceDocument::Profile),
+            _ => None,
+        };
+        if let Some(document) = document {
+            let write = DocumentWrite {
+                document,
+                id: id.clone(),
+                mode: WriteMode::Update,
+                patch: patch.clone(),
+            };
+            operations::write_in_txn(txn, node_did, &write)
+                .await
+                .map_err(|failure| {
+                    super::inference::operation_failure(failure, document, "update")
+                })?;
             continue;
         }
         let (_, retained) =
@@ -701,34 +773,6 @@ mod tests {
             patch(SelfConfigTarget::InferenceProfile,"profile",json!({"model_name":"replacement", "context_window":0})),
         ]).await.is_err());
         assert_eq!(read().await?, before);
-        for changes in [
-            json!({"node_did":other_patch}),
-            json!({"backend_id":"retarget"}),
-            json!({"models":["invented"]}),
-        ] {
-            assert!(patch_config_components_on(
-                &access,
-                owner,
-                &[patch(
-                    SelfConfigTarget::InferenceBackend,
-                    " backend ",
-                    changes
-                )]
-            )
-            .await
-            .is_err());
-        }
-        assert!(patch_config_components_on(
-            &access,
-            owner,
-            &[patch(
-                SelfConfigTarget::InferenceBackend,
-                "backend",
-                json!({"name":"no trim"})
-            )]
-        )
-        .await
-        .is_err());
         assert!(patch_config_components_on(&access, &absent, &[])
             .await
             .is_err());

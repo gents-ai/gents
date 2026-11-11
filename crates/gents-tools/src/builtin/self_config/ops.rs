@@ -8,7 +8,13 @@ use serde_json::{json, Map, Value};
 use crate::surface::SelfConfigProcessCeiling;
 use gents_documents::patch::{apply_patch, ensure_admissible, FieldDelta, SelfConfigTarget};
 use gents_documents::validate_desired_state_plan;
-use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
+use gents_inference::operations::{OperationFailure, PlannedWrite};
+use gents_protocol::operations::inference::{
+    DocumentWrite, InferenceDocument, InferenceOperationError, WriteMode,
+};
+use gents_store::config_client::{
+    ConfigAccess, ConfigApplyTxn, ConfigClientError, TransactionFailure,
+};
 
 mod documents;
 mod grants;
@@ -23,13 +29,56 @@ pub(crate) use documents::{
 };
 pub(crate) use grants::guard_reselection_keeps_grants_in_txn;
 pub use grants::{guard_tools_keep_grants, reselection_keeps_grants, OperatorGrants};
-pub use guards::{
-    guard_agent_keeps_reach, guard_backend_auth, guard_backend_choice, guard_tools_keep_control,
-};
-pub use guards::{
-    guard_backend_choice_in_txn, guard_compaction_choice_in_txn, profile_backend_id,
-};
+pub use guards::{guard_agent_keeps_reach, guard_tools_keep_control};
+pub use guards::{guard_compaction_choice_in_txn, profile_backend_id};
 pub use request::ApplyRequest;
+
+/// A self-config write's failure: an inference operation's own refusal, with
+/// the document it refused, or any other owner's failure.
+#[derive(Debug, thiserror::Error)]
+pub enum ApplyFailure {
+    #[error("{error}")]
+    Inference {
+        document: InferenceDocument,
+        #[source]
+        error: Box<InferenceOperationError>,
+    },
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+impl From<ConfigClientError> for ApplyFailure {
+    fn from(error: ConfigClientError) -> Self {
+        Self::Other(error.into())
+    }
+}
+
+impl TransactionFailure for ApplyFailure {
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        match self {
+            Self::Inference { .. } => None,
+            Self::Other(error) => error.config_client_error(),
+        }
+    }
+}
+
+fn inference_failure(document: InferenceDocument) -> impl Fn(OperationFailure) -> ApplyFailure {
+    move |failure| match failure {
+        OperationFailure::Operation(error) => ApplyFailure::Inference {
+            document,
+            error: Box::new(error),
+        },
+        OperationFailure::Other(error) => ApplyFailure::Other(error),
+    }
+}
+
+fn inference_document(target: SelfConfigTarget) -> Option<InferenceDocument> {
+    match target {
+        SelfConfigTarget::InferenceBackend => Some(InferenceDocument::Backend),
+        SelfConfigTarget::InferenceProfile => Some(InferenceDocument::Profile),
+        _ => None,
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 #[error("no owned {} with ID {id:?}. This is a document ID, not an agent name. List this resource to find its exact IDs; agent get shows a role's selected Context, Tools and profile", target.collection_name())]
@@ -303,10 +352,7 @@ impl SelfConfigCore {
         self
     }
 
-    pub fn with_process_ceiling(
-        mut self,
-        process_ceiling: SelfConfigProcessCeiling,
-    ) -> Self {
+    pub fn with_process_ceiling(mut self, process_ceiling: SelfConfigProcessCeiling) -> Self {
         self.process_ceiling = process_ceiling;
         self
     }
@@ -336,8 +382,8 @@ impl SelfConfigCore {
         load_agent_anchor_for(txn, &self.node_did, &self.agent_did).await
     }
 
-    pub async fn apply(&self, request: ApplyRequest<'_>) -> Result<PatchOutcome> {
-        ensure_admissible(request.target, &request.patch)?;
+    pub async fn apply(&self, request: ApplyRequest<'_>) -> Result<PatchOutcome, ApplyFailure> {
+        ensure_admissible(request.target, &request.patch).map_err(anyhow::Error::from)?;
 
         let this = self;
         let request = &request;
@@ -347,11 +393,12 @@ impl SelfConfigCore {
                 Box::pin(async move { this.apply_in_txn(txn, request).await })
             })
             .await
-            .with_context(|| {
-                format!(
+            .map_err(|failure| match failure {
+                ApplyFailure::Other(error) => ApplyFailure::Other(error.context(format!(
                     "committing {} self-config patch",
                     request.target.collection_name()
-                )
+                ))),
+                refused => refused,
             })?;
         Ok(PatchOutcome {
             committed: true,
@@ -359,35 +406,100 @@ impl SelfConfigCore {
         })
     }
 
+    /// The stored document, the candidate the patch produces and whether it
+    /// is new. A backend or profile is merged and admitted by the inference
+    /// operations' handler, which every client shares; its plan is returned
+    /// for the commit.
+    async fn candidate_in_txn(
+        &self,
+        txn: &ConfigApplyTxn<'_>,
+        request: &ApplyRequest<'_>,
+        unique_value: &str,
+    ) -> Result<
+        (
+            Map<String, Value>,
+            Map<String, Value>,
+            bool,
+            Option<PlannedWrite>,
+        ),
+        ApplyFailure,
+    > {
+        if let Some(document) = inference_document(request.target) {
+            let write = DocumentWrite {
+                document,
+                id: unique_value.to_owned(),
+                mode: if request.require_create {
+                    WriteMode::Create
+                } else if request.allow_create {
+                    WriteMode::Put
+                } else {
+                    WriteMode::Update
+                },
+                patch: request.patch.clone(),
+            };
+            let merged = gents_inference::operations::merge_in_txn(txn, &self.node_did, &write)
+                .await
+                .map_err(inference_failure(document))?;
+            match document {
+                InferenceDocument::Backend => {
+                    decode_merged::<gents_documents::InferenceBackend>(
+                        document.collection_name(),
+                        merged.candidate(),
+                    )?;
+                }
+                InferenceDocument::Profile => {
+                    decode_merged::<gents_documents::InferenceProfile>(
+                        document.collection_name(),
+                        merged.candidate(),
+                    )?;
+                }
+            }
+            let planned = merged
+                .admit_in_txn(txn)
+                .await
+                .map_err(inference_failure(document))?;
+            return Ok((
+                planned.stored().cloned().unwrap_or_default(),
+                planned.candidate().clone(),
+                planned.created(),
+                Some(planned),
+            ));
+        }
+        let stored = read_owned_doc(txn, request.target, &self.node_did, unique_value).await?;
+        let (stored_doc, creating) = match stored {
+            Some(_) if request.require_create => {
+                return Err(anyhow!(
+                    "{} {unique_value:?} already exists; use update with its exact ID",
+                    request.target.collection_name()
+                )
+                .into())
+            }
+            Some((_, doc)) => (doc, false),
+            None if request.allow_create => (Map::new(), true),
+            None => {
+                return Err(anyhow::Error::from(MissingConfigDocument {
+                    target: request.target,
+                    id: unique_value.to_owned(),
+                })
+                .into())
+            }
+        };
+        let mut merged = apply_patch(request.target, &stored_doc, &request.patch);
+        if creating {
+            (request.on_create)(unique_value, &mut merged)?;
+        }
+        Ok((stored_doc, merged, creating, None))
+    }
+
     async fn apply_in_txn(
         &self,
         txn: &ConfigApplyTxn<'_>,
         request: &ApplyRequest<'_>,
-    ) -> Result<PatchOutcome> {
+    ) -> Result<PatchOutcome, ApplyFailure> {
         let anchor = self.load_agent_anchor(txn).await?;
         let unique_value = (request.resolve_unique)(&anchor)?;
-
-        let stored = read_owned_doc(txn, request.target, &self.node_did, &unique_value).await?;
-        let (_doc_id, stored_doc, creating) = match stored {
-            Some(_) if request.require_create => bail!(
-                "{} {unique_value:?} already exists; use update with its exact ID",
-                request.target.collection_name()
-            ),
-            Some((doc_id, doc)) => (Some(doc_id), doc, false),
-            None if request.allow_create => (None, Map::new(), true),
-            None => {
-                return Err(MissingConfigDocument {
-                    target: request.target,
-                    id: unique_value,
-                }
-                .into())
-            }
-        };
-
-        let mut merged = apply_patch(request.target, &stored_doc, &request.patch);
-        if creating {
-            (request.on_create)(&unique_value, &mut merged)?;
-        }
+        let (stored_doc, mut merged, creating, planned) =
+            self.candidate_in_txn(txn, request, &unique_value).await?;
 
         (request.normalize)(txn, &anchor, &stored_doc, &mut merged).await?;
         (request.validate)(txn, &anchor, &stored_doc, &merged).await?;
@@ -411,18 +523,28 @@ impl SelfConfigCore {
         let changed = safe_diff(request.target, &stored_doc, &merged);
         let shared =
             shared_receipt(txn, request.target, &self.node_did, &unique_value, &merged).await?;
-        let plan = replacement_plan(request.target, &merged)?;
-        gents_documents::apply_desired_state_plan_with_node_binding(
-            txn,
-            &plan,
-            self.node_binding(),
-            &gents_inference::resolved::ProviderProfilePolicy,
-        )
-        .await?;
-        let doc_id = read_owned_doc(txn, request.target, &self.node_did, &unique_value)
-            .await?
-            .context("published config is missing")?
-            .0;
+        let doc_id = match (&planned, inference_document(request.target)) {
+            (Some(planned), Some(document)) => planned
+                .commit_in_txn(txn, self.node_binding())
+                .await
+                .map_err(inference_failure(document))?
+                .doc_id
+                .context("published config is missing")?,
+            _ => {
+                let plan = replacement_plan(request.target, &merged)?;
+                gents_documents::apply_desired_state_plan_with_node_binding(
+                    txn,
+                    &plan,
+                    self.node_binding(),
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await?;
+                read_owned_doc(txn, request.target, &self.node_did, &unique_value)
+                    .await?
+                    .context("published config is missing")?
+                    .0
+            }
+        };
 
         Ok(PatchOutcome {
             collection: request.target.collection_name(),
@@ -569,8 +691,8 @@ impl SelfConfigCore {
         read(SelfConfigTarget::Tools, field(&context, "tools_id")?).await
     }
 
-    pub async fn preview(&self, request: ApplyRequest<'_>) -> Result<PatchOutcome> {
-        ensure_admissible(request.target, &request.patch)?;
+    pub async fn preview(&self, request: ApplyRequest<'_>) -> Result<PatchOutcome, ApplyFailure> {
+        ensure_admissible(request.target, &request.patch).map_err(anyhow::Error::from)?;
         let identity = self.identity()?;
         let this = self;
         let request = &request;
@@ -587,29 +709,11 @@ impl SelfConfigCore {
         &self,
         txn: &ConfigApplyTxn<'_>,
         request: &ApplyRequest<'_>,
-    ) -> Result<PatchOutcome> {
+    ) -> Result<PatchOutcome, ApplyFailure> {
         let anchor = self.load_agent_anchor(txn).await?;
         let unique_value = (request.resolve_unique)(&anchor)?;
-        let stored = read_owned_doc(txn, request.target, &self.node_did, &unique_value).await?;
-        let (stored_doc, creating) = match stored {
-            Some(_) if request.require_create => bail!(
-                "{} {unique_value:?} already exists; use update with its exact ID",
-                request.target.collection_name()
-            ),
-            Some((_, doc)) => (doc, false),
-            None if request.allow_create => (Map::new(), true),
-            None => {
-                return Err(MissingConfigDocument {
-                    target: request.target,
-                    id: unique_value,
-                }
-                .into())
-            }
-        };
-        let mut merged = apply_patch(request.target, &stored_doc, &request.patch);
-        if creating {
-            (request.on_create)(&unique_value, &mut merged)?;
-        }
+        let (stored_doc, mut merged, creating, _) =
+            self.candidate_in_txn(txn, request, &unique_value).await?;
         (request.normalize)(txn, &anchor, &stored_doc, &mut merged).await?;
         (request.validate)(txn, &anchor, &stored_doc, &merged).await?;
         guard_reselection_keeps_grants_in_txn(
