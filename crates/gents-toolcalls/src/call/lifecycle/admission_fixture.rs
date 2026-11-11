@@ -1360,6 +1360,7 @@ pub async fn settle(admission: &PublishedAdmission) -> usize {
     crate::background::completion::settle_running_session_message_rows_with_access(
         &admission.node,
         &admission.tool.access().unwrap(),
+        &gents_session::session::message::NoSessionMessageGoals,
         &admission.node_did,
     )
     .await
