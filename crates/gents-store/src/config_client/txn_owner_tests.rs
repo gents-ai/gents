@@ -67,30 +67,6 @@ async fn tracked_transaction_finality_distinguishes_rejection_from_lost_receipt(
     assert!(fired);
     assert_eq!(lost.unwrap_err().unconfirmed, expected(&["unknown_commit"]));
     node.shutdown().await.expect("node shutdown");
-
-    let (endpoint, _state, server) = fake_transaction_server(FirstCommit::Conflict).await;
-    let access = ConfigAccess::graphql(endpoint);
-    let attempts = Arc::new(AtomicUsize::new(0));
-    let observed = attempts.clone();
-    let error = access
-        .transact_write_with_finality("test.finality.retry", move |_txn| {
-            let attempt = observed.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move {
-                if attempt == 0 {
-                    Ok::<(), TestError>(())
-                } else {
-                    Err("second attempt rejected".into())
-                }
-            })
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(attempts.load(Ordering::SeqCst), 2);
-    assert_eq!(
-        error.unconfirmed,
-        expected(&["unknown_commit", "no_commit"])
-    );
-    server.abort();
 }
 
 #[tokio::test]
@@ -2138,13 +2114,33 @@ async fn readonly_transaction_preserves_snapshot_and_rejects_native_mutation() {
     node.shutdown().await.expect("node shutdown");
 }
 
-#[derive(Clone, Copy)]
-enum FirstCommit {
-    Conflict,
-    CanonicalUnconfirmed,
-    ConfirmedConflict,
-    ServerError,
-    Succeed,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Entry {
+    Write,
+    SignedRebuild,
+    Idempotent,
+    Observing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Fault {
+    CommitConflictText,
+    CommitConflictUnreceipted,
+    CommitConflictAborted,
+    CommitServerError,
+    CallbackConflict,
+    CallbackStorageFault,
+    CallbackRejection,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Outcome {
+    Committed,
+    ConflictObserved,
+    Failed,
 }
 
 #[derive(Clone)]
@@ -2156,11 +2152,11 @@ struct FakeTxnState {
     discarded_ids: Arc<Mutex<Vec<String>>>,
     stage_observed: Arc<Notify>,
     discard_observed: Arc<Notify>,
-    first_commit: FirstCommit,
+    faults: Arc<Vec<Fault>>,
 }
 
 impl FakeTxnState {
-    fn new(first_commit: FirstCommit) -> Self {
+    fn new(faults: Vec<Fault>) -> Self {
         Self {
             next_id: Arc::new(AtomicUsize::new(0)),
             active_ids: Arc::new(Mutex::new(RapidHashSet::new())),
@@ -2169,7 +2165,7 @@ impl FakeTxnState {
             discarded_ids: Arc::new(Mutex::new(Vec::new())),
             stage_observed: Arc::new(Notify::new()),
             discard_observed: Arc::new(Notify::new()),
-            first_commit,
+            faults: Arc::new(faults),
         }
     }
 }
@@ -2203,33 +2199,24 @@ async fn commit_transaction(
         return (StatusCode::NOT_FOUND, "transaction not found");
     }
     lock(&state.committed_ids).push(id.clone());
-    if id == "0" {
-        match state.first_commit {
-            FirstCommit::Conflict => {
-                return (
-                    StatusCode::CONFLICT,
-                    "transaction conflict; please retry the transaction",
-                );
-            }
-            FirstCommit::ConfirmedConflict => {
-                return (
-                    StatusCode::CONFLICT,
-                    r#"{"error":"transaction conflict. Please retry","outcome":"transaction_conflict_aborted"}"#,
-                );
-            }
-            FirstCommit::CanonicalUnconfirmed => {
-                return (
-                    StatusCode::CONFLICT,
-                    r#"{"error":"transaction conflict. Please retry"}"#,
-                );
-            }
-            FirstCommit::ServerError => {
-                return (StatusCode::INTERNAL_SERVER_ERROR, "storage unavailable");
-            }
-            FirstCommit::Succeed => {}
+    match id.parse().ok().and_then(|id: usize| state.faults.get(id)) {
+        Some(Fault::CommitConflictText) => (
+            StatusCode::CONFLICT,
+            "transaction conflict; please retry the transaction",
+        ),
+        Some(Fault::CommitConflictAborted) => (
+            StatusCode::CONFLICT,
+            r#"{"error":"transaction conflict. Please retry","outcome":"transaction_conflict_aborted"}"#,
+        ),
+        Some(Fault::CommitConflictUnreceipted) => (
+            StatusCode::CONFLICT,
+            r#"{"error":"transaction conflict. Please retry"}"#,
+        ),
+        Some(Fault::CommitServerError) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "storage unavailable")
         }
+        _ => (StatusCode::OK, ""),
     }
-    (StatusCode::OK, "")
 }
 
 async fn discard_transaction(
@@ -2247,9 +2234,9 @@ async fn discard_transaction(
 }
 
 async fn fake_transaction_server(
-    first_commit: FirstCommit,
+    faults: Vec<Fault>,
 ) -> (String, FakeTxnState, tokio::task::JoinHandle<()>) {
-    let state = FakeTxnState::new(first_commit);
+    let state = FakeTxnState::new(faults);
     let app = Router::new()
         .route("/api/v0/tx", post(begin_transaction))
         .route("/api/v0/graphql", post(stage_transaction))
@@ -2266,59 +2253,6 @@ async fn fake_transaction_server(
     (format!("http://{address}/api/v0/graphql"), state, server)
 }
 
-#[tokio::test]
-async fn http_commit_conflict_replays_callback_under_new_transaction_id() {
-    let (endpoint, state, server) = fake_transaction_server(FirstCommit::Conflict).await;
-    let access = ConfigAccess::graphql(endpoint);
-    let callback_ids = Arc::new(Mutex::new(Vec::new()));
-    let callback_ids_for_attempt = Arc::clone(&callback_ids);
-
-    let committed_id = access
-        .transact_write("test.http_replay", move |txn| {
-            let callback_ids = Arc::clone(&callback_ids_for_attempt);
-            Box::pin(async move {
-                let id = transaction_id(txn);
-                lock(&callback_ids).push(id.clone());
-                txn.execute(
-                    r#"mutation { update_OwnedWriteFact(input: {value: "canonical"}) { _docID } }"#,
-                )
-                .await?;
-                Ok::<_, TestError>(id)
-            })
-        })
-        .await
-        .unwrap();
-
-    assert_eq!(committed_id, "1");
-    assert_eq!(&*lock(&callback_ids), &["0", "1"]);
-    assert_eq!(&*lock(&state.staged_ids), &["0", "1"]);
-    assert_eq!(&*lock(&state.committed_ids), &["0", "1"]);
-    assert!(lock(&state.discarded_ids).is_empty());
-    assert!(lock(&state.active_ids).is_empty());
-    assert_eq!(state.next_id.load(Ordering::SeqCst), 2);
-    server.abort();
-}
-
-#[tokio::test]
-async fn signed_update_commit_conflict_does_not_replay_callback() {
-    let (endpoint, state, server) = fake_transaction_server(FirstCommit::Conflict).await;
-    let access = ConfigAccess::graphql(endpoint);
-    let attempts = Arc::new(AtomicUsize::new(0));
-    let observed = Arc::clone(&attempts);
-    let result = access
-        .transact_write("test.signed_update_no_replay", move |txn| {
-            observed.fetch_add(1, Ordering::SeqCst);
-            txn.client_signed_write_dispatched
-                .store(true, Ordering::Release);
-            Box::pin(async { Ok::<_, TestError>(()) })
-        })
-        .await;
-    assert!(result.is_err());
-    assert_eq!(attempts.load(Ordering::SeqCst), 1);
-    assert_eq!(state.next_id.load(Ordering::SeqCst), 1);
-    server.abort();
-}
-
 async fn held_fake_access(endpoint: String) -> ConfigAccess {
     let identity =
         tokio::task::spawn_blocking(|| crate::test_support::test_identity("signed-conflict"))
@@ -2330,311 +2264,127 @@ async fn held_fake_access(endpoint: String) -> ConfigAccess {
     ConfigAccess::Graphql(endpoint)
 }
 
-#[tokio::test]
-async fn confirmed_signed_conflict_rebuilds_on_a_fresh_transaction() {
-    let (endpoint, state, server) = fake_transaction_server(FirstCommit::ConfirmedConflict).await;
-    let access = held_fake_access(endpoint).await;
-    let attempts = Arc::new(Mutex::new(Vec::new()));
-    let captured = attempts.clone();
-    let result = access
-        .transact_signed_conflict_rebuild("test.signed_confirmed_conflict", move |txn| {
-            lock(&captured).push(transaction_id(txn));
-            txn.client_signed_write_dispatched
-                .store(true, Ordering::Release);
-            Box::pin(async { Ok::<_, TestError>(()) })
-        })
-        .await;
-    result.unwrap();
-    assert_eq!(&*lock(&attempts), &["0", "1"]);
-    assert_eq!(state.next_id.load(Ordering::SeqCst), 2);
-    server.abort();
+fn transaction_ordinals(ids: &Mutex<Vec<String>>) -> Vec<u64> {
+    lock(ids).iter().map(|id| id.parse().unwrap()).collect()
 }
 
-#[tokio::test]
-async fn signed_statement_conflict_rebuilds_only_after_successful_discard() {
-    let (endpoint, state, server) = fake_transaction_server(FirstCommit::Succeed).await;
-    let access = held_fake_access(endpoint).await;
-    let attempts = Arc::new(Mutex::new(Vec::new()));
-    let captured = attempts.clone();
-    access
-        .transact_signed_conflict_rebuild("test.signed_statement_conflict", move |txn| {
-            let id = transaction_id(txn);
-            lock(&captured).push(id.clone());
-            txn.client_signed_write_dispatched
-                .store(true, Ordering::Release);
-            Box::pin(async move {
-                if id == "0" {
-                    Err(super::retry::transaction_conflict(
-                        crate::config_client::write_telemetry::ConflictSource::StructuredCode,
-                    ))
-                } else {
-                    Ok(())
-                }
-            })
-        })
-        .await
-        .unwrap();
-    assert_eq!(&*lock(&attempts), &["0", "1"]);
-    assert_eq!(&*lock(&state.discarded_ids), &["0"]);
-    assert_eq!(&*lock(&state.committed_ids), &["1"]);
-    server.abort();
+fn scripted<'a, F>(callback: F) -> F
+where
+    F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> futures::future::BoxFuture<'txn, Result>,
+{
+    callback
 }
 
-#[tokio::test]
-async fn signed_conflict_without_held_signer_does_not_rebuild() {
-    let (endpoint, state, server) = fake_transaction_server(FirstCommit::ConfirmedConflict).await;
-    let access = ConfigAccess::graphql(endpoint);
-    let attempts = Arc::new(AtomicUsize::new(0));
-    let captured = attempts.clone();
-    let result = access
-        .transact_signed_conflict_rebuild("test.signed_conflict_without_signer", move |txn| {
-            captured.fetch_add(1, Ordering::SeqCst);
+type ReplayObserved = gents_lean_vocab::families::transaction_replay_http::Observed<Outcome>;
+
+async fn replay_http_scenario(
+    scenario: &gents_lean_vocab::families::transaction_replay_http::Scenario<Entry, Fault>,
+) -> ReplayObserved {
+    let (endpoint, state, server) = fake_transaction_server(scenario.faults.clone()).await;
+    let access = if scenario.held_signer {
+        held_fake_access(endpoint).await
+    } else {
+        ConfigAccess::graphql(endpoint)
+    };
+    let callbacks = Arc::new(AtomicUsize::new(0));
+    let ran = Arc::clone(&callbacks);
+    let faults = scenario.faults.clone();
+    let signs = scenario.signs;
+    let callback = scripted(move |txn| {
+        ran.fetch_add(1, Ordering::SeqCst);
+        if signs {
             txn.client_signed_write_dispatched
                 .store(true, Ordering::Release);
-            Box::pin(async { Ok::<_, TestError>(()) })
-        })
-        .await;
-    assert!(result.is_err());
-    assert_eq!(attempts.load(Ordering::SeqCst), 1);
-    assert_eq!(state.next_id.load(Ordering::SeqCst), 1);
+        }
+        let fault = transaction_id(txn)
+            .parse()
+            .ok()
+            .and_then(|id: usize| faults.get(id).copied());
+        let result: Result = match fault {
+            Some(Fault::CallbackConflict) => Err(super::retry::transaction_conflict(
+                crate::config_client::write_telemetry::ConflictSource::StructuredCode,
+            )
+            .into()),
+            Some(Fault::CallbackStorageFault) => Err(super::retry::transaction_storage_failure(
+                crate::config_client::ConfigClientError::InjectedReadStorageFailure,
+            )
+            .into()),
+            Some(Fault::CallbackRejection) => Err("stale domain state".into()),
+            _ => Ok(()),
+        };
+        Box::pin(async move { result })
+    });
+    let failed = |error: &TestError, unconfirmed| {
+        let conflict = crate::config_client::is_classified_transaction_conflict(error);
+        (Outcome::Failed, unconfirmed, Some(conflict))
+    };
+    let (outcome, unconfirmed, conflict) = match scenario.entry {
+        Entry::Write => match access
+            .transact_write_with_finality("test.replay.write", callback)
+            .await
+        {
+            Ok(()) => (Outcome::Committed, None, None),
+            Err(error) => failed(&error.error, Some(error.unconfirmed)),
+        },
+        Entry::SignedRebuild => match access
+            .transact_signed_conflict_rebuild_with_finality("test.replay.signed", callback)
+            .await
+        {
+            Ok(()) => (Outcome::Committed, None, None),
+            Err(error) => failed(&error.error, Some(error.unconfirmed)),
+        },
+        Entry::Idempotent => match access
+            .transact_idempotent(
+                IdempotentTransactionRetry::Standard,
+                "test.replay.idempotent",
+                callback,
+            )
+            .await
+        {
+            Ok(()) => (Outcome::Committed, None, None),
+            Err(error) => failed(&error, None),
+        },
+        Entry::Observing => match access
+            .transact_observing_conflict("test.replay.observing", callback)
+            .await
+        {
+            Ok(TransactionOutcome::Committed(())) => (Outcome::Committed, None, None),
+            Ok(TransactionOutcome::ConflictObserved) => (Outcome::ConflictObserved, None, None),
+            Err(error) => failed(&error, None),
+        },
+    };
+    assert!(lock(&state.active_ids).is_empty());
     server.abort();
-}
-
-#[tokio::test]
-async fn ambiguous_signed_conflict_does_not_rebuild() {
-    for first_commit in [
-        FirstCommit::Conflict,
-        FirstCommit::CanonicalUnconfirmed,
-        FirstCommit::ServerError,
-    ] {
-        let (endpoint, state, server) = fake_transaction_server(first_commit).await;
-        let access = held_fake_access(endpoint).await;
-        let attempts = Arc::new(AtomicUsize::new(0));
-        let captured = attempts.clone();
-        let result = access
-            .transact_signed_conflict_rebuild("test.signed_ambiguous_conflict", move |txn| {
-                captured.fetch_add(1, Ordering::SeqCst);
-                txn.client_signed_write_dispatched
-                    .store(true, Ordering::Release);
-                Box::pin(async { Ok::<_, TestError>(()) })
-            })
-            .await;
-        assert!(result.is_err());
-        assert_eq!(attempts.load(Ordering::SeqCst), 1);
-        assert_eq!(state.next_id.load(Ordering::SeqCst), 1);
-        server.abort();
+    ReplayObserved {
+        outcome,
+        begun: state.next_id.load(Ordering::SeqCst) as u64,
+        callbacks: callbacks.load(Ordering::SeqCst) as u64,
+        discarded: transaction_ordinals(&state.discarded_ids),
+        commits: transaction_ordinals(&state.committed_ids),
+        unconfirmed,
+        conflict,
     }
 }
 
 #[tokio::test]
-async fn canonical_conflict_without_receipt_has_unconfirmed_finality() {
-    let (endpoint, _state, server) =
-        fake_transaction_server(FirstCommit::CanonicalUnconfirmed).await;
-    let access = held_fake_access(endpoint).await;
-    let error = access
-        .transact_write_with_finality("test.signed_unconfirmed_conflict_finality", |txn| {
-            txn.client_signed_write_dispatched
-                .store(true, Ordering::Release);
-            Box::pin(async { Ok::<_, TestError>(()) })
-        })
-        .await
-        .unwrap_err();
-    assert!(error.unconfirmed);
-    assert!(crate::config_client::is_classified_transaction_conflict(
-        &error.error
-    ));
-    server.abort();
-}
-
-#[tokio::test]
-async fn confirmed_signed_commit_conflict_reports_known_finality() {
-    let (endpoint, _state, server) = fake_transaction_server(FirstCommit::ConfirmedConflict).await;
-    let access = held_fake_access(endpoint).await;
-    let error = access
-        .transact_write_with_finality("test.signed_conflict_finality", |txn| {
-            txn.client_signed_write_dispatched
-                .store(true, Ordering::Release);
-            Box::pin(async { Ok::<_, TestError>(()) })
-        })
-        .await
-        .unwrap_err();
-    assert!(!error.unconfirmed);
-    assert!(crate::config_client::is_classified_transaction_conflict(
-        &error.error
-    ));
-    server.abort();
-}
-
-#[tokio::test]
-async fn non_conflict_commit_failure_does_not_replay_callback() {
-    let (endpoint, state, server) = fake_transaction_server(FirstCommit::ServerError).await;
-    let access = ConfigAccess::graphql(endpoint);
-    let callbacks = Arc::new(AtomicUsize::new(0));
-    let callbacks_for_attempt = Arc::clone(&callbacks);
-
-    let error = access
-        .transact_write("test.http_no_replay", move |txn| {
-            callbacks_for_attempt.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move {
-                txn.execute(
-                    r#"mutation { update_OwnedWriteFact(input: {value: "canonical"}) { _docID } }"#,
-                )
-                .await?;
-                Ok::<_, crate::config_client::ConfigClientError>(())
-            })
-        })
-        .await
-        .unwrap_err();
-
-    assert!(
-        error.to_string().contains("HTTP 500"),
-        "{}",
-        ErrorChain(&error)
-    );
-    assert_eq!(callbacks.load(Ordering::SeqCst), 1);
-    assert_eq!(&*lock(&state.committed_ids), &["0"]);
-    assert!(lock(&state.discarded_ids).is_empty());
-    assert!(lock(&state.active_ids).is_empty());
-    assert_eq!(state.next_id.load(Ordering::SeqCst), 1);
-    server.abort();
-}
-
-#[tokio::test]
-async fn idempotent_transaction_replays_non_conflict_commit_failure() {
-    let (endpoint, state, server) = fake_transaction_server(FirstCommit::ServerError).await;
-    let access = ConfigAccess::graphql(endpoint);
-    let callback_ids = Arc::new(Mutex::new(Vec::new()));
-    let callback_ids_for_attempt = Arc::clone(&callback_ids);
-
-    let committed_id = access
-        .transact_idempotent(
-            IdempotentTransactionRetry::Standard,
-            "test.http_idempotent_commit_replay",
-            move |txn| {
-                let callback_ids = Arc::clone(&callback_ids_for_attempt);
-                Box::pin(async move {
-                    let id = transaction_id(txn);
-                    lock(&callback_ids).push(id.clone());
-                    txn.execute(
-                        r#"mutation { update_OwnedWriteFact(input: {value: "canonical"}) { _docID } }"#,
-                    )
-                    .await?;
-                    Ok::<_, TestError>(id)
-                })
-            },
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(committed_id, "1");
-    assert_eq!(&*lock(&callback_ids), &["0", "1"]);
-    assert_eq!(&*lock(&state.staged_ids), &["0", "1"]);
-    assert_eq!(&*lock(&state.committed_ids), &["0", "1"]);
-    assert!(lock(&state.discarded_ids).is_empty());
-    assert!(lock(&state.active_ids).is_empty());
-    server.abort();
-}
-
-#[tokio::test]
-async fn idempotent_transaction_replays_complete_callback_after_callback_error() {
-    let (endpoint, state, server) = fake_transaction_server(FirstCommit::Succeed).await;
-    let access = ConfigAccess::graphql(endpoint);
-    let callbacks = Arc::new(AtomicUsize::new(0));
-    let callbacks_for_attempt = Arc::clone(&callbacks);
-
-    let committed_id = access
-        .transact_idempotent(
-            IdempotentTransactionRetry::Standard,
-            "test.http_idempotent_callback_replay",
-            move |txn| {
-                let attempt = callbacks_for_attempt.fetch_add(1, Ordering::SeqCst);
-                Box::pin(async move {
-                    if attempt == 0 {
-                        return Err(super::retry::transaction_storage_failure(
-                            crate::config_client::ConfigClientError::InjectedReadStorageFailure,
-                        ));
-                    }
-                    let id = transaction_id(txn);
-                    txn.execute(
-                        r#"mutation { update_OwnedWriteFact(input: {value: "canonical"}) { _docID } }"#,
-                    )
-                    .await?;
-                    Ok(id)
-                })
-            },
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(committed_id, "1");
-    assert_eq!(callbacks.load(Ordering::SeqCst), 2);
-    assert_eq!(&*lock(&state.discarded_ids), &["0"]);
-    assert_eq!(&*lock(&state.committed_ids), &["1"]);
-    assert!(lock(&state.active_ids).is_empty());
-    server.abort();
-}
-
-#[tokio::test]
-async fn idempotent_transaction_does_not_replay_domain_rejection() {
-    let (endpoint, state, server) = fake_transaction_server(FirstCommit::Succeed).await;
-    let access = ConfigAccess::graphql(endpoint);
-    let callbacks = Arc::new(AtomicUsize::new(0));
-    let callbacks_for_attempt = Arc::clone(&callbacks);
-
-    let error = access
-        .transact_idempotent(
-            IdempotentTransactionRetry::Standard,
-            "test.http_idempotent_domain_rejection",
-            move |_| {
-                callbacks_for_attempt.fetch_add(1, Ordering::SeqCst);
-                Box::pin(async move { Err::<(), _>(TestError::from("stale domain state")) })
-            },
-        )
-        .await
-        .expect_err("domain rejection is terminal");
-
-    assert!(error.to_string().contains("stale domain state"));
-    assert_eq!(callbacks.load(Ordering::SeqCst), 1);
-    assert_eq!(&*lock(&state.discarded_ids), &["0"]);
-    assert!(lock(&state.committed_ids).is_empty());
-    assert!(lock(&state.active_ids).is_empty());
-    server.abort();
-}
-
-#[tokio::test]
-async fn observing_transaction_reports_conflict_without_replay() {
-    let (endpoint, state, server) = fake_transaction_server(FirstCommit::Conflict).await;
-    let access = ConfigAccess::graphql(endpoint);
-    let callbacks = Arc::new(AtomicUsize::new(0));
-    let callbacks_for_attempt = Arc::clone(&callbacks);
-
-    let outcome = access
-        .transact_observing_conflict("test.http_observe_conflict", move |txn| {
-            callbacks_for_attempt.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async move {
-                txn.execute(
-                    r#"mutation { update_OwnedWriteFact(input: {value: "canonical"}) { _docID } }"#,
-                )
-                .await?;
-                Ok::<_, TestError>(())
-            })
-        })
-        .await
-        .unwrap();
-
-    assert!(matches!(outcome, TransactionOutcome::ConflictObserved));
-    assert_eq!(callbacks.load(Ordering::SeqCst), 1);
-    assert_eq!(&*lock(&state.committed_ids), &["0"]);
-    assert!(lock(&state.discarded_ids).is_empty());
-    assert!(lock(&state.active_ids).is_empty());
-    server.abort();
+async fn http_transaction_replay_matches_the_lean_model() {
+    let cases = tokio::task::spawn_blocking(
+        gents_lean_vocab::families::transaction_replay_http::cases::<Entry, Fault, Outcome>,
+    )
+    .await
+    .unwrap();
+    let observed =
+        futures::future::join_all(cases.iter().map(|case| replay_http_scenario(&case.input))).await;
+    for (case, observed) in cases.iter().zip(observed) {
+        case.check(observed);
+    }
 }
 
 #[tokio::test]
 async fn cancelling_callback_schedules_http_transaction_discard() {
     const OBSERVATION_TIMEOUT: Duration = Duration::from_secs(10);
 
-    let (endpoint, state, server) = fake_transaction_server(FirstCommit::Succeed).await;
+    let (endpoint, state, server) = fake_transaction_server(Vec::new()).await;
     let stage_observed = Arc::clone(&state.stage_observed);
     let access = ConfigAccess::graphql(endpoint);
     let mut transaction = Box::pin(access.transact_write("test.http_cancel", |txn| {
