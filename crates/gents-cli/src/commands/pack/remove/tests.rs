@@ -38,6 +38,7 @@ async fn install(home: &Path, package: String) -> anyhow::Result<Value> {
         explicit: true,
     }))
     .await
+    .map_err(gents::pack::PackChangeError::into_anyhow)
 }
 
 async fn remove_pkg(home: &Path, package: &str) -> anyhow::Result<Value> {
@@ -47,6 +48,7 @@ async fn remove_pkg(home: &Path, package: &str) -> anyhow::Result<Value> {
         drift: PackDriftArgs::default(),
     }))
     .await
+    .map_err(gents::pack::PackChangeError::into_anyhow)
 }
 
 fn assets_fixture_spec() -> String {

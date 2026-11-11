@@ -176,8 +176,8 @@ fn malformed_missing_and_limits_are_explicit() {
                 root: claude,
             },
             DiscoverySourceRoot {
-                source_id: "grok-user".to_owned(),
-                kind: DiscoverySourceKind::Grok,
+                source_id: "codex-user".to_owned(),
+                kind: DiscoverySourceKind::Codex,
                 scope: DiscoveryScope::User,
                 root: missing,
             },
@@ -213,15 +213,14 @@ fn malformed_missing_and_limits_are_explicit() {
 fn provider_formats_preserve_unsupported_and_disabled_semantics() {
     let fixture = tempfile::tempdir().unwrap();
     let claude = fixture.path().join("claude-project");
-    let grok = fixture.path().join("grok-user");
+    let codex = fixture.path().join("codex-user");
     write(
         &claude.join(".claude/settings.json"),
         r#"{"model":"claude-sonnet","permissions":{"deny":["Bash(rm:*)"]},"hooks":{"PreToolUse":[{"hooks":[{"command":"python /tmp/check.py --token SECRET_VALUE"}]}]},"telemetry":false}"#,
     );
     write(
-        &grok.join("config.toml"),
-        r#"[models]
-default = "grok-build"
+        &codex.join("config.toml"),
+        r#"model = "gpt-test"
 [skills]
 disabled = ["draft"]
 [auth]
@@ -229,7 +228,7 @@ api_key = "SECRET_VALUE"
 "#,
     );
     write(
-        &grok.join("skills/draft/SKILL.md"),
+        &codex.join("skills/draft/SKILL.md"),
         "---\nname: draft\ndescription: Draft text\n---\nWrite a draft.\n",
     );
     let inventory = discover_configuration(&DiscoveryRequest {
@@ -241,10 +240,10 @@ api_key = "SECRET_VALUE"
                 root: claude,
             },
             DiscoverySourceRoot {
-                source_id: "grok-user".into(),
-                kind: DiscoverySourceKind::Grok,
+                source_id: "codex-user".into(),
+                kind: DiscoverySourceKind::Codex,
                 scope: DiscoveryScope::User,
-                root: grok,
+                root: codex,
             },
         ],
         limits: DiscoveryLimits::default(),
@@ -470,7 +469,7 @@ fn checked_in_partial_inventory_is_canonical_serializer_output() {
     fs::create_dir_all(&claude).unwrap();
     write(&claude.join("settings.json"), "{bad");
     write(&claude.join("CLAUDE.md"), "0123456789abcdef");
-    let missing = fixture.path().join("missing-grok");
+    let missing = fixture.path().join("missing-codex");
     let mut inventory = discover_configuration(&DiscoveryRequest {
         sources: vec![
             DiscoverySourceRoot {
@@ -480,8 +479,8 @@ fn checked_in_partial_inventory_is_canonical_serializer_output() {
                 root: claude,
             },
             DiscoverySourceRoot {
-                source_id: "grok-user".into(),
-                kind: DiscoverySourceKind::Grok,
+                source_id: "codex-user".into(),
+                kind: DiscoverySourceKind::Codex,
                 scope: DiscoveryScope::User,
                 root: missing,
             },
@@ -495,7 +494,7 @@ fn checked_in_partial_inventory_is_canonical_serializer_output() {
         &mut inventory,
         &[
             ("claude-user", "/synthetic/claude-user"),
-            ("grok-user", "/synthetic/missing-grok"),
+            ("codex-user", "/synthetic/missing-codex"),
         ],
     );
     let expected = include_str!(

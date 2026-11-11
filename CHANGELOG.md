@@ -63,7 +63,7 @@ source consistency checks, not a separate runtime compatibility version.
   | `query`, `write`, `export`, `document`, `schema` | `utils data query`, and so on |
   | `request`, `response`, `trace`, `background`, `fleet` | `utils debug request`, and so on |
   | `eval`, `optimization` | `utils eval`, `utils optimization` |
-  | `codex` | hidden, still works; bare `gents` opens it |
+  | `codex` | removed; bare `gents` opens the built-in shell |
   | `init`, `prepare-runtime` | hidden, still work |
 
   `gents server` and `gents service` also still work, hidden: installed service
@@ -73,48 +73,55 @@ source consistency checks, not a separate runtime compatibility version.
   `--agent DID`, prints only the reply and exits, as `claude -p` does. It brings
   up the runtime as bare `gents` does, needs no terminal on a home that is set
   up, and denies any approval the turn asks for.
-- `gents PROMPT` opens the configured interface, Codex or Grok, with PROMPT as
-  its first message, as `claude "query"` does. A PROMPT that is only a former
-  command's name, such as `reset`, is refused with the command's new name rather
-  than sent. Codex and Grok get the prompt after `--`, so one that names their
-  own subcommand, such as `update`, is sent instead of run; this also covers
-  `gents codex PROMPT`.
+- `gents PROMPT` opens the built-in shell with PROMPT as its first message, as
+  `claude "query"` does. A PROMPT that is only a former command's name, such as
+  `reset` or `codex`, is refused with the command's new name rather than sent.
 - `gents --continue SESSION_ID` picks a session back up with the agent it had:
-  in Codex through `codex resume`, or for one more turn with `-p MESSAGE`, which
-  waits for a turn still running in that session. Grok cannot open a session at
-  launch, so a home set to Grok refuses it and names `-p` or Codex instead.
-  When Codex or Grok closes, `gents` prints the `--continue` command for the
-  session that window last gave a turn to.
+  in the built-in shell's first tab, or for one more turn with `-p MESSAGE`,
+  which waits for a turn still running in that session. The shell takes no
+  PROMPT with it; type the next turn once the session opens. When the shell
+  closes, `gents` prints the `--continue` command for the session its center
+  pane showed.
 - `gents --yolo` opens the yolo agent, and `gents --yolo -p MESSAGE` messages it:
   a general-purpose agent with a copy of the default agent's tools, The
   Engineer's on a home `gents` set up. The first use makes it, later uses reuse
   it.
 - `gents` with no command sets up a home on first run, brings up its runtime
   through the native service without enabling it at login, and opens the
-  configured interface. Setup seeds The Engineer with the desktop's default
-  authority (the `yolo` tool package; commands run as you and the tool root is
-  not a sandbox) and asks for a provider, then its connection method, from the
-  desktop's catalog. After sign-in it lists the provider's models and asks each
+  built-in shell. Setup seeds The
+  Engineer with the desktop's default authority (the `yolo` tool package;
+  commands run as you and the tool root is not a sandbox) and asks for a
+  provider, then its connection method, from the desktop's catalog. After
+  sign-in it lists the provider's models and asks each
   value the desktop offers for the chosen model, showing its default. Without a terminal it prints help and exits 2, as a missing
-  subcommand did. `gents` refuses a Codex endpoint that does not identify
-  itself as this home's, and the shim answers that question at `GET /runtime`.
-- `gents --agent DID` and `gents codex --agent DID` open any runnable agent side by
-  side with no restart, with no saved agent setting. For Codex this needs a local
-  runtime with no pinned agent, and `--agent` is refused for any other endpoint.
-- When `gents` opens Codex from a directory inside the tool root, the thread starts
-  there. From outside it, `gents` prints the directory the thread will use, before
-  Codex opens and again after it exits. Threads default to the tool root.
+  subcommand did.
+- `gents --agent DID` opens any runnable agent in the shell's first tab, in as
+  many terminals side by side as you like, with no restart and no saved agent
+  setting.
 - First-run setup asks which folder agents should work in.
   It refuses the filesystem root and anything above the person's home, as the desktop
   does, and asks for confirmation before using the whole home.
-- `gents config client set codex|grok` chooses the interface a home opens, and
-  `config client show` reads it. A home set to Grok serves the Grok socket. `gents`
-  opens the socket the runtime reports and refuses one its runtime does not hold.
+- The Grok Build interface is removed. The runtime no longer serves the Grok
+  socket, `gents runtime server` no longer takes `--grok-shim`,
+  `--grok-shim-socket-path` or `--grok-shim-agent-id`. Agents' `config
+  discovery scan` no longer reads Grok CLI configuration and refuses a `grok`
+  source. Grok as a model provider, including `accounts login grok`, is
+  unchanged.
+- The Codex interface and the runtime's Codex app-server are removed. Bare
+  `gents`, `gents PROMPT`, `gents --agent DID` and `gents --continue SESSION_ID`
+  open the built-in shell, which reads and writes the runtime over its signed
+  GraphQL endpoint, as the desktop does; `gents` waits for that endpoint and for
+  an agent the runtime reports ready. Removed: `gents codex`, `gents config
+  client set` and `show`, `gents runtime server --no-codex-shim` and its
+  `--codex-shim-bind-addr`, `--codex-shim-port`, `--codex-shim-auth-token-env`,
+  `--codex-shim-public-url`, `--codex-shim-agent-did`, `--codex-shim-timeout-secs`
+  and `--codex-shim-poll-ms`, `gents shell --codex-remote`, the server's
+  `codex_shim` ready output and `/healthz` `checks.codex_shim`. Scripts that pass
+  `--no-codex-shim` must drop it. A `client.json` left in a home, naming Codex or
+  Grok, is named when `gents` opens and otherwise ignored; delete it to stop the
+  notice. Codex as a model provider, including `accounts login codex`, is
+  unchanged.
 - `gents` remembers the home setup chose. This also moves the desktop's default home.
-- The shim answers `config/read` for a directory inside the tool root as trusted, so
-  Codex does not ask about it on every open. Outside the tool root Codex still asks.
-- The shim refuses a WebSocket handshake carrying `Origin`. With a loopback bind and no
-  public URL, `GET /runtime` answers only a loopback `Host`.
 
 ## 1.0.0-rc1 - 2026-11-03
 

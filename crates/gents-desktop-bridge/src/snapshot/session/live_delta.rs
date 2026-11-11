@@ -1,124 +1,5 @@
 use super::*;
-
-fn select_canonical_live_target(
-    store: &gents_desktop_core::client::ClientStore,
-    request_doc_id: &str,
-    execution_generation: &str,
-) -> gents_protocol::output::live::LiveTargetSelection {
-    let records = store
-        .output_segments
-        .iter()
-        .map(
-            |row| gents_protocol::output::reconstruction::ObservedSegment {
-                doc_id: row.doc_id.as_str(),
-                segment: &row.segment,
-            },
-        )
-        .collect::<Vec<_>>();
-    let messages = store
-        .transcript_messages
-        .iter()
-        .map(|row| (row.doc_id.as_str(), &row.message))
-        .collect::<Vec<_>>();
-    gents_protocol::output::live::select_live_target(
-        request_doc_id,
-        execution_generation,
-        &records,
-        &messages,
-    )
-}
-
-pub(super) struct CanonicalLiveText {
-    pub content: String,
-    pub reasoning: String,
-    pub cursor: String,
-}
-
-pub(super) fn canonical_live_text(
-    request_store: &gents_desktop_core::client::ClientStore,
-    canonical_store: &gents_desktop_core::client::ClientStore,
-    session_id: &str,
-    node_did: Option<&str>,
-    request_id: &str,
-) -> Option<CanonicalLiveText> {
-    use gents_protocol::output::live::{LiveView, OwnerLiveness};
-    use gents_protocol::output::StreamPayload;
-
-    let request = request_store.requests.iter().find(|request| {
-        request.request_id == request_id
-            && request.session_id.as_deref() == Some(session_id)
-            && node_did.is_none_or(|node_did| request.node_did.as_deref() == Some(node_did))
-    })?;
-    let request_doc_id = request.doc_id.as_deref()?;
-    let execution_generation = request.execution_generation.as_deref()?;
-    let request_node_did = request.node_did.as_deref()?;
-    let gents_protocol::output::live::LiveTargetSelection::Selected {
-        source,
-        writer,
-        message_id,
-    } = select_canonical_live_target(canonical_store, request_doc_id, execution_generation)
-    else {
-        return None;
-    };
-    let request_terminal = request
-        .lifecycle_state
-        .is_some_and(gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal);
-    let view = gents_desktop_core::client::canonical_output::project_canonical_live(
-        request_doc_id,
-        session_id,
-        request_doc_id,
-        &source,
-        &writer,
-        message_id.as_deref(),
-        request_node_did,
-        request.requester_did.as_deref(),
-        &canonical_store.transcript_messages,
-        &canonical_store.output_segments,
-        &[],
-        &[],
-        &[],
-        OwnerLiveness {
-            current_request: gents_protocol::output::live::observed_request_execution_owner(
-                request,
-            ),
-            live_tools: Vec::new(),
-        },
-        request_terminal,
-        request.observed_terminal_output().cloned(),
-    );
-    let streams = match view {
-        LiveView::Live { streams } | LiveView::Settling { streams } => streams,
-        _ => return None,
-    };
-    let mut content = String::new();
-    let mut reasoning = String::new();
-    for stream in streams {
-        match stream.declaration.payload {
-            StreamPayload::Text => content.push_str(&stream.text),
-            StreamPayload::Reasoning | StreamPayload::ReasoningSummary => {
-                reasoning.push_str(&stream.text);
-            }
-            _ => {}
-        }
-    }
-    let identity = serde_json::to_vec(&(
-        session_id,
-        request_node_did,
-        request.requester_did.as_deref(),
-        request_id,
-        request_doc_id,
-        execution_generation,
-        source,
-        writer,
-        message_id,
-    ))
-    .expect("canonical live identity serializes");
-    Some(CanonicalLiveText {
-        content,
-        reasoning,
-        cursor: blake3::hash(&identity).to_hex().to_string(),
-    })
-}
+use gents_desktop_core::client::canonical_output::canonical_live_text;
 
 fn live_text_hash(value: &str) -> String {
     // FNV-1a: projection-continuity checksum only, not a security primitive.
@@ -179,35 +60,14 @@ pub async fn build_session_live_delta(
         if let Some(reason) = core.session_unreadable_reason(node_did) {
             anyhow::bail!(reason);
         }
-        {
-            let matches = observed
-                .requests
-                .iter()
-                .filter(|row| {
-                    row.request_id == request_id
-                        && row.session_id.as_deref() == Some(session_id)
-                        && row.node_did.as_deref() == Some(node_did)
-                })
-                .collect::<Vec<_>>();
-            if let [request] = matches.as_slice() {
-                let access = core
-                    .operator_observation_graphql(node_did)
-                    .map(gents::store::config_client::ConfigAccess::Graphql)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("Connect to the runtime to read this session.")
-                    })?;
-                let requester = observed
-                    .sessions
-                    .iter()
-                    .find(|row| row.session_id == session_id && row.node_did == node_did)
-                    .and_then(|session| session.requester_did.clone());
-                if request.requester_did == requester {
-                    live_store =
-                        gents_desktop_core::client::load_session_live_store_on(&access, request)
-                            .await?;
-                }
-            }
-        }
+        let access = core
+            .operator_observation_graphql(node_did)
+            .map(ConfigAccess::Graphql)
+            .ok_or_else(|| anyhow::anyhow!("Connect to the runtime to read this session."))?;
+        live_store = gents_desktop_core::client::load_session_request_live_store_on(
+            &access, &observed, session_id, node_did, request_id,
+        )
+        .await?;
     }
     let mut delta = build_session_live_delta_from_store(
         &observed,

@@ -4,7 +4,9 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, ensure, Context, Result};
 use gents::store::config_client::GraphqlEndpoint;
 use gents::store::graphql::escape_graphql_string;
-use gents_protocol::node_readiness::{AgentReadinessEntry, AgentReadinessState};
+use gents_protocol::node_readiness::{
+    AgentReadinessEntry, AgentReadinessState, NodeReadinessSnapshot,
+};
 use gents_protocol::operations::agent::{AgentCreateInput, AgentCreateOperation};
 use gents_protocol::operations::StringUpdate;
 use gents_protocol::row::{decode_node_readiness_snapshot, NodeReadinessRow};
@@ -22,7 +24,7 @@ You have the same tools as The Engineer: commands run as the user, and the tool 
 Do what you are asked, completely and without ceremony. Read before you change anything, keep changes \
 to what was asked, and ask before anything destructive or hard to undo.";
 
-/// Returns the yolo agent's DID and whether this call made it. An agent's DID is derived
+/// Returns the yolo agent's DID. An agent's DID is derived
 /// from a fresh creation nonce, so a later run finds the yolo agent by its display name and
 /// description rather than make another. It clones the node's default agent, The Engineer on
 /// a home that `gents` set up, so it runs with the same Tools, its self-configuration included.
@@ -30,7 +32,7 @@ pub(super) async fn ensure_agent(
     home: &Path,
     config: &StoredInitConfig,
     graphql: &GraphqlEndpoint,
-) -> Result<(String, bool)> {
+) -> Result<String> {
     let access = ConfigAccess::Graphql(graphql.clone());
     let node_did = config.node_did.as_str();
     let source = default_agent(&access, node_did).await?;
@@ -55,7 +57,7 @@ pub(super) async fn ensure_agent(
         ensure_root_reader(&access, node_did, yolo, &source).await?;
         grant_self_configuration(&access, node_did, yolo, &source).await?;
         wait_until_ready(&access, node_did, yolo).await?;
-        return Ok((yolo.to_owned(), false));
+        return Ok(yolo.to_owned());
     }
     if let Some(disabled) = yolos.first().and_then(|row| row["agent_did"].as_str()) {
         bail!(
@@ -100,7 +102,7 @@ pub(super) async fn ensure_agent(
     grant_self_configuration(&access, node_did, &yolo, &source).await?;
     eprintln!("Made the yolo agent {yolo}, with the tools of {source}.");
     wait_until_ready(&access, node_did, &yolo).await?;
-    Ok((yolo, true))
+    Ok(yolo)
 }
 
 /// The node's default agent, as its Node document names it.
@@ -202,6 +204,16 @@ async fn readiness(
     node_did: &str,
     agent_did: &str,
 ) -> Result<Option<AgentReadinessEntry>> {
+    let snapshot = node_readiness(access, node_did).await?;
+    let mut agents = snapshot.into_iter().flat_map(|snapshot| snapshot.agents);
+    Ok(agents.find(|agent| agent.agent_did == agent_did))
+}
+
+/// The node's latest published readiness, once its router has taken on the active generation.
+pub(crate) async fn node_readiness(
+    access: &ConfigAccess,
+    node_did: &str,
+) -> Result<Option<NodeReadinessSnapshot>> {
     let rows = crate::graphql_rows(
         access,
         "NodeReadiness",
@@ -217,11 +229,5 @@ async fn readiness(
     let row: NodeReadinessRow = serde_json::from_value(row).context("reading NodeReadiness")?;
     Ok(decode_node_readiness_snapshot(&row, node_did)
         .ok()
-        .filter(|snapshot| snapshot.router_generation == snapshot.active_generation)
-        .and_then(|snapshot| {
-            snapshot
-                .agents
-                .into_iter()
-                .find(|agent| agent.agent_did == agent_did)
-        }))
+        .filter(|snapshot| snapshot.router_generation == snapshot.active_generation))
 }

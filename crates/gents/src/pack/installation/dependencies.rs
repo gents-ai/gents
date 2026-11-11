@@ -6,7 +6,9 @@ use serde_json::json;
 use crate::store::config_client::ConfigApplyTxn;
 use crate::store::graphql::escape_graphql_string;
 
-use super::{read_record, remove_record_in_txn, DriftPolicy, RemoveReport, RECORD};
+use super::{
+    read_record, remove_record_in_txn, DriftPolicy, PackChangeError, RemoveReport, RECORD,
+};
 
 async fn update_required_by(
     txn: &ConfigApplyTxn<'_>,
@@ -44,7 +46,7 @@ pub(super) async fn claim_in_txn(
     dependent: &str,
     dependencies: &[String],
     policy: DriftPolicy,
-) -> Result<()> {
+) -> Result<(), PackChangeError> {
     for coordinate in dependencies {
         let record = read_record(txn, owner, coordinate).await?;
         let doc_id = record
@@ -117,7 +119,7 @@ pub(super) async fn release_in_txn(
     owner: &str,
     dependent: &str,
     policy: DriftPolicy,
-) -> Result<Vec<RemoveReport>> {
+) -> Result<Vec<RemoveReport>, PackChangeError> {
     let response = {
         use gents_protocol::document_query::{
             fields::pack_installation as fields, Filter, Query, Selection,

@@ -117,7 +117,6 @@ fn grouped_commands_parse() {
         &["utils", "optimization"],
         &["init"],
         &["prepare-runtime"],
-        &["codex"],
     ];
     for path in PATHS {
         let argv = [&["gents"], *path, &["--help"]].concat();
@@ -236,6 +235,7 @@ fn old_names_stop_working() {
         ("auth", "gents accounts"),
         ("query", "gents utils data query"),
         ("chat", "gents -p MESSAGE"),
+        ("codex", "gents shell"),
     ] {
         let refused = Cli::try_parse_from(["gents", former])
             .err()
@@ -277,7 +277,7 @@ fn root_help_lists_every_visible_command_exactly_once() {
         "__native-fs-runner",
         "server",
         "service",
-        "codex",
+        "shell",
     ] {
         assert!(
             !rows.iter().any(|(name, _)| *name == hidden),
@@ -308,4 +308,27 @@ fn root_help_lists_every_visible_command_exactly_once() {
     listed.sort_unstable();
     visible.sort_unstable();
     assert_eq!(listed, visible);
+}
+
+#[test]
+fn gents_shell_parses_its_home() {
+    let cli = Cli::try_parse_from(["gents", "shell", "--home", "/tmp/gents-shell-dev"])
+        .expect("shell should parse");
+    let Some(Command::Shell(args)) = cli.command else {
+        panic!("expected `shell`");
+    };
+    assert_eq!(args.home, Some(PathBuf::from("/tmp/gents-shell-dev")));
+    assert!(
+        Cli::try_parse_from(["gents", "shell", "--codex-remote", "ws://127.0.0.1:39292/"]).is_err()
+    );
+}
+
+#[test]
+fn blank_agent_is_refused() {
+    for arguments in [
+        &["gents", "--agent", ""][..],
+        &["gents", "--agent", "  "][..],
+    ] {
+        assert!(Cli::try_parse_from(arguments).is_err(), "{arguments:?}");
+    }
 }

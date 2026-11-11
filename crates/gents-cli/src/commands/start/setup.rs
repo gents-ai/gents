@@ -1,4 +1,3 @@
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use anyhow::{ensure, Context, Result};
@@ -8,14 +7,10 @@ use gents::tools::surface::refuse_too_broad_root;
 
 use crate::cli::args::{InitArgs, StoreKeyCustodyArg};
 use crate::cli::{Cli, Command};
-use crate::client_settings::InterfaceClient;
-use crate::commands::codex::{interface_bin, CODEX_BIN_ENV};
 use crate::commands::eval::terminal_size;
 use crate::commands::init::init_home;
 use crate::home_state::{read_finished_init_config, resolve_home_dir};
 use crate::interactive_backend::{confirm, prompt_line_default, resolve_backend_interactively};
-
-use super::interface_install_message;
 
 /// The app icon's bars sit exactly on this grid, measured from
 /// `apps/gents-desktop/src-tauri/icons/icon.png`.
@@ -108,13 +103,6 @@ pub(super) fn init_argv(home: &Path, tool_root: &Path) -> Vec<String> {
     .to_vec()
 }
 
-pub(super) fn binary_on_path(bin: &str, path: Option<&OsStr>) -> bool {
-    if bin.contains(std::path::MAIN_SEPARATOR) {
-        return Path::new(bin).is_file();
-    }
-    path.is_some_and(|path| std::env::split_paths(path).any(|dir| dir.join(bin).is_file()))
-}
-
 fn parse_init_args(argv: &[String]) -> Result<InitArgs> {
     let Some(Command::Init(args)) = Cli::try_parse_from(argv)?.command else {
         unreachable!("setup's argv must parse as init")
@@ -131,14 +119,6 @@ pub(super) async fn setup(
 ) -> Result<PathBuf> {
     next_screen();
     eprintln!("Welcome to Gents. A few questions and this machine is ready.\n");
-    let interface = interface_bin(CODEX_BIN_ENV, "codex");
-    if !binary_on_path(&interface, std::env::var_os("PATH").as_deref()) {
-        eprintln!(
-            "{}\n",
-            interface_install_message(InterfaceClient::default())
-        );
-    }
-
     let cwd = std::env::current_dir().context("resolving current directory")?;
     let user_home = std::env::home_dir().context("resolving the user home directory")?;
     let home_fixed = home_given.or_else(|| {
@@ -216,7 +196,7 @@ async fn ask_tool_root(cwd: &Path, user_home: &Path) -> Result<PathBuf> {
             Err(refusal) => eprintln!("{refusal}"),
             Ok(root) if canonical_home.as_deref() == Some(root.as_path()) => {
                 eprintln!(
-                    "{} is your whole home folder. Agents can reach everything in it, and Codex opens every folder under it without asking.",
+                    "{} is your whole home folder. Agents can reach everything in it.",
                     root.display()
                 );
                 if confirm("Use it?", false).await {
@@ -236,7 +216,7 @@ fn next_step_lines(initialized: &serde_json::Value, home: &Path) -> Vec<String> 
         .into_iter()
         .flatten()
         .filter_map(serde_json::Value::as_str)
-        .filter(|step| !matches!(*step, "gents runtime server" | "gents codex"))
+        .filter(|step| !matches!(*step, "gents runtime server" | "gents"))
         .map(|step| {
             if step.starts_with("gents accounts login") {
                 format!(
@@ -296,7 +276,7 @@ mod tests {
                 "gents accounts login codex",
                 "llama-server -hf m",
                 "gents runtime server",
-                "gents codex",
+                "gents",
                 "To change the model's address, do this.",
             ],
         });
@@ -368,20 +348,6 @@ mod tests {
         assert!(check(&base.join("users"))
             .unwrap_err()
             .contains("broader than your home"));
-    }
-
-    #[test]
-    fn a_binary_with_a_separator_is_checked_directly() {
-        let dir = tempfile::tempdir().unwrap();
-        let bin = dir.path().join("tool");
-        std::fs::write(&bin, "").unwrap();
-        let search = std::env::join_paths([dir.path()]).unwrap();
-
-        assert!(binary_on_path("tool", Some(&search)));
-        assert!(!binary_on_path("other", Some(&search)));
-        assert!(!binary_on_path("tool", None));
-        assert!(binary_on_path(bin.to_str().unwrap(), None));
-        assert!(!binary_on_path("/nonexistent/tool", Some(&search)));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

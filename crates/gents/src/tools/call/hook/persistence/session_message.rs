@@ -1,9 +1,15 @@
 use super::*;
 use anyhow::Context;
 
-use crate::session::message::{AgentMessageArgs, AgentNewArgs};
-use crate::store::config_client::TransactionFailure;
+use crate::session::message::{
+    AgentMessageArgs, AgentMessageDelivery, AgentNewArgs, Plan, RenderedBody,
+};
+use crate::store::config_client::{ConfigAccess, TransactionFailure};
+use crate::tools::call::lifecycle::ToolCallLifecycle;
 use crate::tools::native::AGENT_SESSION_LIST_TOOL_NAME;
+use crate::tools::surface::AgentToolConfig;
+use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};
+use gents_protocol::row::AgentRequest;
 
 fn unavailable_agent_payload(tool_name: &str) -> String {
     service_unavailable_payload(tool_name, "/agent", "selected agent is unavailable", false)
@@ -82,6 +88,23 @@ where
         .is_some_and(|error| error.is_permission_denied())
 }
 
+type SessionMessagePhase<T> = anyhow::Result<Result<T, SessionMessageRefusal>>;
+
+struct SessionMessageRefusal {
+    class: FailureClass,
+    payload: String,
+}
+
+macro_rules! refuse {
+    ($class:expr, $payload:expr) => {{
+        let payload = $payload;
+        return Ok(Err(SessionMessageRefusal {
+            class: $class,
+            payload,
+        }));
+    }};
+}
+
 impl DefraSessionHook {
     pub(super) async fn persist_session_message_tool_call(
         &self,
@@ -104,14 +127,66 @@ impl DefraSessionHook {
                 AwaitMode::Background,
             )
             .await?;
-        macro_rules! refuse {
-            ($class:expr, $payload:expr) => {{
-                let payload = $payload;
-                Box::pin(lifecycle.spawn_failed($class, &payload)).await?;
-                return Ok(self.skip_tool_result(tool_name, payload));
-            }};
+        let create = tool_name == AGENT_NEW_TOOL_NAME;
+        let (access, caller, tools) =
+            match self.session_message_caller(&lifecycle, tool_name).await? {
+                Ok(caller) => caller,
+                Err(refusal) => {
+                    return self
+                        .refuse_session_message(&mut lifecycle, tool_name, refusal)
+                        .await
+                }
+            };
+        let decided = match self
+            .session_message_target(tool_name, args, &caller, &tools, &access)
+            .await?
+        {
+            Ok(decided) => decided,
+            Err(refusal) => {
+                return self
+                    .refuse_session_message(&mut lifecycle, tool_name, refusal)
+                    .await
+            }
+        };
+        let (cause, plan) = match self
+            .session_message_plan(&lifecycle, tool_name, create, &caller, decided)
+            .await?
+        {
+            Ok(planned) => planned,
+            Err(refusal) => {
+                return self
+                    .refuse_session_message(&mut lifecycle, tool_name, refusal)
+                    .await
+            }
+        };
+        match self
+            .session_message_commit(&mut lifecycle, tool_name, create, cause, plan)
+            .await?
+        {
+            Ok(action) => Ok(action),
+            Err(refusal) => {
+                self.refuse_session_message(&mut lifecycle, tool_name, refusal)
+                    .await
+            }
         }
+    }
 
+    async fn refuse_session_message(
+        &self,
+        lifecycle: &mut ToolCallLifecycle,
+        tool_name: &str,
+        refusal: SessionMessageRefusal,
+    ) -> anyhow::Result<ToolCallHookAction> {
+        let SessionMessageRefusal { class, payload } = refusal;
+        Box::pin(lifecycle.spawn_failed(class, &payload)).await?;
+        Ok(self.skip_tool_result(tool_name, payload))
+    }
+
+    async fn session_message_caller(
+        &self,
+        lifecycle: &ToolCallLifecycle,
+        tool_name: &str,
+    ) -> SessionMessagePhase<(ConfigAccess, AgentRequest, AgentToolConfig)> {
         let caller_doc_id = lifecycle
             .request_doc_id()
             .context("session-message dispatch lacks its calling request document")?
@@ -141,7 +216,22 @@ impl DefraSessionHook {
                 )
             );
         }
+        Ok(Ok((access, caller, tools)))
+    }
 
+    async fn session_message_target(
+        &self,
+        tool_name: &str,
+        args: &str,
+        caller: &AgentRequest,
+        tools: &AgentToolConfig,
+        access: &ConfigAccess,
+    ) -> SessionMessagePhase<(
+        SessionMessageTarget,
+        RenderedBody,
+        Option<String>,
+        AgentMessageDelivery,
+    )> {
         let create = tool_name == AGENT_NEW_TOOL_NAME;
         let (target, body, title, delivery) = if create {
             let parsed = match serde_json::from_str::<AgentNewArgs>(args) {
@@ -170,7 +260,7 @@ impl DefraSessionHook {
             };
             if target.target_node_did == caller.node_did {
                 match crate::session::message::target_agent_exists(
-                    &access,
+                    access,
                     &target.target_node_did,
                     &target.agent_did,
                 )
@@ -228,14 +318,14 @@ impl DefraSessionHook {
                 &self.node,
                 &caller.node_did,
                 &caller.agent_did,
-                &tools,
+                tools,
                 &target_session,
             )
             .await?
             else {
                 refuse!(
                     FailureClass::ArgumentInvalid,
-                    unreachable_session_payload(tool_name, &target_session, &parsed, &tools)
+                    unreachable_session_payload(tool_name, &target_session, &parsed, tools)
                 );
             };
             let delivery = match parsed.delivery() {
@@ -249,7 +339,7 @@ impl DefraSessionHook {
                 if let Some(reason) = crate::session::message::interrupt_refusal(
                     &self.node,
                     &caller.agent_did,
-                    &gents_protocol::session::SessionScope::of_request(&caller),
+                    &gents_protocol::session::SessionScope::of_request(caller),
                     &crate::session::message::target_scope(&caller.agent_did, &target),
                 )
                 .await?
@@ -272,7 +362,6 @@ impl DefraSessionHook {
                 ),
             };
 
-        let caller_hop = caller.request_hop;
         let rendered = match crate::session::message::render_body(
             &self.node,
             &caller.agent_did,
@@ -289,6 +378,24 @@ impl DefraSessionHook {
                 invalid_tool_arguments_payload(tool_name, "/task", message)
             ),
         };
+        Ok(Ok((target, rendered, title, delivery)))
+    }
+
+    async fn session_message_plan(
+        &self,
+        lifecycle: &ToolCallLifecycle,
+        tool_name: &str,
+        create: bool,
+        caller: &AgentRequest,
+        decided: (
+            SessionMessageTarget,
+            RenderedBody,
+            Option<String>,
+            AgentMessageDelivery,
+        ),
+    ) -> SessionMessagePhase<(SessionMessageCause, Plan)> {
+        let (target, rendered, title, delivery) = decided;
+        let caller_hop = caller.request_hop;
 
         let tool_call_doc_id = lifecycle
             .doc_id()
@@ -388,12 +495,19 @@ impl DefraSessionHook {
                 _ => {}
             }
         }
+        Ok(Ok((cause, plan)))
+    }
+
+    async fn session_message_commit(
+        &self,
+        lifecycle: &mut ToolCallLifecycle,
+        tool_name: &str,
+        create: bool,
+        cause: SessionMessageCause,
+        plan: Plan,
+    ) -> SessionMessagePhase<ToolCallHookAction> {
         let receipt = match crate::session::message::commit(
-            &self.node,
-            &cause,
-            &mut lifecycle,
-            plan,
-            !create,
+            &self.node, &cause, lifecycle, plan, !create,
         )
         .await
         {
@@ -408,9 +522,9 @@ impl DefraSessionHook {
                 );
             }
             Err(error @ crate::session::message::CommitError::ObservedTerminal { .. }) => {
-                return Ok(ToolCallHookAction::Terminate {
+                return Ok(Ok(ToolCallHookAction::Terminate {
                     reason: error.to_string(),
-                });
+                }));
             }
             Err(error) => {
                 if let crate::session::message::CommitError::Other(ref error) = error {
@@ -450,7 +564,7 @@ impl DefraSessionHook {
                 );
             }
         };
-        Ok(self.skip_tool_result(tool_name, receipt))
+        Ok(Ok(self.skip_tool_result(tool_name, receipt)))
     }
 }
 
