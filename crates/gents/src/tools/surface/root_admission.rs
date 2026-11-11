@@ -336,7 +336,7 @@ pub async fn tool_root_reader(
 }
 
 /// Those of `agents` whose Tools select host tools under a published root,
-/// each with its tool root and the root it needs reader on, as `access`'s
+/// each with its Tools id, its tool root and the root it needs reader on, as `access`'s
 /// actor sees them: what the agents a pack ships need before they run. A User
 /// grants each with
 /// [`grant_workspace_root_reader`](super::grant_workspace_root_reader); an
@@ -345,7 +345,7 @@ pub async fn agents_tool_root_readers(
     access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     agents: &[String],
-) -> Result<Vec<(String, String, ToolRootReader)>> {
+) -> Result<Vec<(String, String, String, ToolRootReader)>> {
     access
         .transact_readonly("workspace_root.agents_tool_roots", |txn| {
             Box::pin(async move {
@@ -362,7 +362,9 @@ pub async fn agents_tool_root_readers(
                     };
                     match tools_root_reader_in_txn(txn, node_did, &policy, &tools).await? {
                         ToolRootReader::NotNeeded => {}
-                        reader => readers.push((agent_did.clone(), root, reader)),
+                        reader => {
+                            readers.push((agent_did.clone(), tools.tools_id.clone(), root, reader));
+                        }
                     }
                 }
                 Ok(readers)

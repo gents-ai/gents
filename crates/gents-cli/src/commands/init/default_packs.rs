@@ -722,7 +722,8 @@ async fn install_one(
         }
         // The Engineer installed the pack, so its rootless Tools took the
         // Engineer's root: the one root this approval grants reader on, and
-        // only when the approval listed that folder access (`reads_root`).
+        // only to the agents of those Tools (`host_tools`), which the
+        // approval listed.
         let host_tool_roots = async {
             let supplied =
                 gents::pack::installer_tool_root(&access, &owner, Some(engineer)).await?;
@@ -731,7 +732,8 @@ async fn install_one(
                 &owner,
                 &installing,
                 supplied.as_deref(),
-                approved && reads_root,
+                &host_tools,
+                approved,
             )
             .await?;
             // A status cannot show this (see `installed_as_approved`), so the

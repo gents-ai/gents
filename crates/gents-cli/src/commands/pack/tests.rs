@@ -1122,6 +1122,101 @@ async fn a_repeated_install_grants_the_dependency_agents_a_failed_grant_missed()
     assert!(roots[0]["reader_on"].is_string(), "{report}");
 }
 
+/// Only the Tools that took the installer's root are granted it: Tools in
+/// the same approved install that name a root themselves, through a variable
+/// that renders equal to the installer's root, were not listed by the review
+/// and are not granted; their agent is listed with the command that grants it.
+#[tokio::test]
+async fn a_root_a_pack_names_itself_is_not_granted_even_when_it_equals_the_installers() {
+    let (home, initialized) = engineer_home().await;
+    let engineer_root = initialized["tool_root"].as_str().unwrap().to_owned();
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("manifest.json"),
+        serde_json::to_vec(&json!({
+            "manifest_version": 1, "name": "mixed", "namespace": "fixture", "version": "1.0.0",
+            "description": "Two agents with host tools", "authors": ["tests"], "tags": [],
+            "kind": "documents", "assets": ["README.md", "pack_config.json"],
+            "dependencies": [], "config": "pack_config.json",
+            "inference_slots": [{"name": "worker", "description": "The workers.",
+                "agents": ["mixed-inherits", "mixed-names"]}],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("README.md"), "# fixture").unwrap();
+    let agent = |name: &str| {
+        json!({"agent_slot": format!("mixed-{name}"), "context_id": format!("mixed-{name}-context"),
+            "display_name": format!("mixed {name}"), "description": "Does one task.",
+            "inference_profile_id": "gents:inference-slot:worker"})
+    };
+    let context = |name: &str| {
+        json!({"context_id": format!("mixed-{name}-context"), "system_prompt": "Work.",
+            "tools_id": format!("mixed-{name}-tools")})
+    };
+    std::fs::write(
+        dir.path().join("pack_config.json"),
+        serde_json::to_vec(&json!({
+            "node": {},
+            "agents": [agent("inherits"), agent("names")],
+            "contexts": [context("inherits"), context("names")],
+            "tools": [
+                {"tools_id": "mixed-inherits-tools", "display_name": "Read-only files",
+                    "host": {"files": {"mode": "ReadOnly"}}},
+                {"tools_id": "mixed-names-tools", "display_name": "Read-only files",
+                    "host": {"files": {"mode": "ReadOnly"},
+                        "root": format!("${{GENTS_FIXTURE_UNSET_ROOT:-{engineer_root}}}")}},
+            ],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let mut args = document_install_args(home.path(), dir.path(), Vec::new());
+    args.preview = true;
+    let preview = crate::request_helpers::capture_report(install(args))
+        .await
+        .unwrap();
+    assert_eq!(
+        preview["host_tool_roots"]["tools"],
+        json!(["mixed-inherits-tools"]),
+        "{preview}"
+    );
+    assert_eq!(
+        preview["host_tool_roots"]["agents"],
+        json!(["mixed inherits"]),
+        "{preview}"
+    );
+    let mut args = document_install_args(home.path(), dir.path(), Vec::new());
+    args.grant_authority = true;
+    let report = crate::request_helpers::capture_report(install(args))
+        .await
+        .unwrap();
+    let roots = report["host_tool_roots"].as_array().unwrap();
+    assert_eq!(roots.len(), 2, "{report}");
+    let granted: Vec<_> = roots
+        .iter()
+        .filter(|step| step["reader_on"].is_string())
+        .collect();
+    assert_eq!(granted.len(), 1, "{report}");
+    let listed = roots
+        .iter()
+        .find(|step| step.get("reader_on").is_none())
+        .unwrap();
+    assert_eq!(listed["root"], engineer_root, "{report}");
+    assert!(
+        listed["not_granted"]
+            .as_str()
+            .unwrap()
+            .contains("name that root themselves")
+            && listed["next"]
+                .as_str()
+                .unwrap()
+                .starts_with("gents config workspace-root grant-reader "),
+        "{report}"
+    );
+}
+
 /// An agent binding is an argument of the install it is given to, and its
 /// preview lists it.
 #[tokio::test]

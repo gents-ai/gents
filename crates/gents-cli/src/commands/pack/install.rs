@@ -905,6 +905,13 @@ pub(super) async fn install_documents_report(
                 output["host_tool_roots"] = supplied;
             }
         } else {
+            let inherited: Vec<String> = supplied
+                .as_ref()
+                .and_then(|supplied| supplied["tools"].as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|tools| tools.as_str().map(ToOwned::to_owned))
+                .collect();
             match wire::grant_pack_root_readers(
                 &access,
                 &owner,
@@ -912,6 +919,7 @@ pub(super) async fn install_documents_report(
                 supplied
                     .as_ref()
                     .and_then(|supplied| supplied["root"].as_str()),
+                &inherited,
                 args.grant_authority,
             )
             .await

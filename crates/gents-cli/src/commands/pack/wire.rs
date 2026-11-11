@@ -336,17 +336,20 @@ pub(crate) static FAIL_GRANTS_FOR: std::sync::Mutex<Option<String>> = std::sync:
 /// nothing.
 ///
 /// The grant is the installer's consent to its own root and nothing else: it
-/// is made only when the install was `approved` with that folder access
-/// listed, and only for an agent whose
-/// tool root is `supplied`, the root this install gave the pack's rootless
-/// Tools ([`gents::pack::installer_tool_root`]). An agent under any other
-/// root, one an install variable set or a later edit wrote, is listed with
-/// the User command that grants it. Returns one entry per agent.
+/// is made only when the install was `approved`, and only for an agent whose
+/// Tools are among `inherited`, the rootless Tools the review listed and the
+/// install gave its root `supplied` ([`gents::pack::installer_tool_root`]).
+/// Tools that name their own root are never granted here, even when that
+/// root renders equal to the installer's: the review did not list them. An
+/// agent under any other root, one an install variable set or a later edit
+/// wrote, is listed with the User command that grants it. Returns one entry
+/// per agent.
 pub(crate) async fn grant_pack_root_readers(
     access: &ConfigAccess,
     owner: &str,
     coordinates: &[String],
     supplied: Option<&str>,
+    inherited: &[String],
     approved: bool,
 ) -> Result<Vec<Value>> {
     use gents::tools::surface::ToolRootReader;
@@ -361,11 +364,12 @@ pub(crate) async fn grant_pack_root_readers(
                 .map(|(_, agent)| agent),
         );
     }
-    for (agent, root, reader) in
+    for (agent, tools, root, reader) in
         gents::tools::surface::agents_tool_root_readers(access, owner, &agents).await?
     {
+        let listed = supplied == Some(root.as_str()) && inherited.contains(&tools);
         granted.push(match reader {
-            ToolRootReader::Published(published) if approved && supplied == Some(root.as_str()) => {
+            ToolRootReader::Published(published) if approved && listed => {
                 let grant =
                     gents::tools::surface::grant_workspace_root_reader(access, &published, &agent)
                         .await
@@ -390,8 +394,10 @@ pub(crate) async fn grant_pack_root_readers(
                 }
             }
             ToolRootReader::Published(published) => {
-                let reason = if supplied == Some(root.as_str()) {
+                let reason = if listed {
                     "the install was not approved to grant it"
+                } else if supplied == Some(root.as_str()) {
+                    "its Tools name that root themselves, so the install's review did not list it"
                 } else {
                     "its tool root is not the one this install supplied"
                 };
