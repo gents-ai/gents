@@ -343,7 +343,7 @@ function activityStatusFor(
       return {
         kind: "syncing",
         label: "Syncing turn status…",
-        detail: "Waiting for local and replicated turn records to agree.",
+        detail: "Waiting for the node to report this turn's status.",
         animated: true,
       };
   }

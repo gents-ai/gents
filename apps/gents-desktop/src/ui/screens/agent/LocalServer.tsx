@@ -186,7 +186,9 @@ export function LocalServer() {
           .awaitLocalServerPairing()
           .catch((cause: unknown) => {
             throw cause instanceof ManagedRuntimeUnavailableError
-              ? new Error("The runtime restarted, but background pairing is not ready.")
+              ? new Error(
+                  "The runtime restarted, but this app's enrollment with it isn't ready yet.",
+                )
               : cause;
           });
         if (paired) next = paired;
@@ -279,7 +281,7 @@ export function LocalServer() {
       </Row>
       <Row
         label="Keep running after quit"
-        description="Keep triggers, schedules and sync running after quitting, and start the node when you sign in. Stop node keeps this setting."
+        description="Keep triggers and schedules running after quitting, and start the node when you sign in. Stop node keeps this setting."
       >
         <Switch
           aria-label="Keep running after quit"

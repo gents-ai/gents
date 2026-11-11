@@ -269,8 +269,8 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
     assert!(
         desktop_next_steps.iter().any(|step| step
             .as_str()
-            .is_some_and(|step| step.contains("replication subscriptions armed"))),
-        "desktop init should tell the demo to wait for desktop bootstrap before chat replication: {desktop_init}"
+            .is_some_and(|step| step.contains("show `Connected`"))),
+        "desktop init should tell the demo to wait for the desktop connection before chat: {desktop_init}"
     );
     let peer_directory_path = desktop_home.join("peers.json");
     let peer_directory: Value = serde_json::from_slice(
