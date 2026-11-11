@@ -465,8 +465,8 @@ impl PluginRunner {
         &self.plugin
     }
 
-    #[cfg(test)]
-    pub(crate) fn artifact_digest(&self) -> String {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn artifact_digest(&self) -> String {
         format!(
             "sha256:{:x}",
             <sha2::Sha256 as sha2::Digest>::digest(&self.afb_bytes)
@@ -719,4 +719,5 @@ pub use afterburner_core::manifold::Manifold;
 pub mod http_test_server;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_fixtures;
+#[cfg(any(test, feature = "test-fixtures"))]
 pub mod tests;
