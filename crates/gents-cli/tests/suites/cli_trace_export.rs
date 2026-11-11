@@ -2288,6 +2288,30 @@ struct ProjectionGraphqlAcpState {
 #[derive(Debug, Deserialize)]
 struct ProjectionGraphqlRequest {
     query: String,
+    #[serde(default)]
+    variables: Value,
+}
+
+/// The mock selects rows by matching predicate text, so it reads a request
+/// with its variables written back in as literals and all whitespace removed.
+fn projection_mock_query(request: &ProjectionGraphqlRequest) -> String {
+    let mut query = request.query.clone();
+    if let Some(variables) = request.variables.as_object() {
+        let mut names: Vec<_> = variables.keys().collect();
+        names.sort_by_key(|name| std::cmp::Reverse(name.len()));
+        for name in names {
+            query = query.replace(&format!("${name}"), &variables[name].to_string());
+        }
+    }
+    projection_mock_squash(&query)
+}
+
+fn projection_mock_squash(text: &str) -> String {
+    text.chars().filter(|ch| !ch.is_whitespace()).collect()
+}
+
+fn projection_mock_has(query: &str, predicate: impl AsRef<str>) -> bool {
+    query.contains(&projection_mock_squash(predicate.as_ref()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -2346,14 +2370,15 @@ async fn spawn_projection_graphql_acp_mock() -> Result<ProjectionGraphqlAcpMock>
 async fn projection_graphql_mock(
     Json(body): Json<ProjectionGraphqlRequest>,
 ) -> (StatusCode, Json<Value>) {
-    let query = body.query.as_str();
-    let response = if query.contains("AgentRequest(") {
+    let query = projection_mock_query(&body);
+    let query = query.as_str();
+    let response = if projection_mock_has(query, "AgentRequest(") {
         json!({ "data": { "AgentRequest": projection_mock_agent_requests(query) } })
-    } else if query.contains("ProviderContextReduction(") {
+    } else if projection_mock_has(query, "ProviderContextReduction(") {
         json!({ "data": { "ProviderContextReduction": [] } })
-    } else if query.contains("RenderedRequest(") {
+    } else if projection_mock_has(query, "RenderedRequest(") {
         json!({ "data": { "RenderedRequest": [] } })
-    } else if query.contains("AgentMessage(") {
+    } else if projection_mock_has(query, "AgentMessage(") {
         if let Some((key_selection, sequence_selection)) = query.split_once("sequence_matches:") {
             json!({ "data": {
                 "key_matches": projection_mock_agent_messages(key_selection),
@@ -2362,17 +2387,17 @@ async fn projection_graphql_mock(
         } else {
             json!({ "data": { "AgentMessage": projection_mock_agent_messages(query) } })
         }
-    } else if query.contains("AgentOutputSegment(") {
+    } else if projection_mock_has(query, "AgentOutputSegment(") {
         json!({ "data": { "AgentOutputSegment": projection_mock_output_segments(query) } })
-    } else if query.contains("AgentToolCall(") {
+    } else if projection_mock_has(query, "AgentToolCall(") {
         json!({ "data": { "AgentToolCall": projection_mock_tool_calls(query) } })
-    } else if query.contains("Goal(") {
+    } else if projection_mock_has(query, "Goal(") {
         json!({ "data": { "Goal": [] } })
-    } else if query.contains("AgentSession(") {
+    } else if projection_mock_has(query, "AgentSession(") {
         json!({ "data": { "AgentSession": [projection_mock_session()] } })
-    } else if query.contains("InferenceCall(") {
+    } else if projection_mock_has(query, "InferenceCall(") {
         json!({ "data": { "InferenceCall": [] } })
-    } else if query.contains("CompactionEntry(") {
+    } else if projection_mock_has(query, "CompactionEntry(") {
         json!({ "data": { "CompactionEntry": [] } })
     } else {
         json!({
@@ -2390,7 +2415,7 @@ async fn projection_graphql_mock(
 /// Transaction reads enumerate through DefraDB's `_cursor` page; the mock
 /// serves its whole row set as one final page.
 fn projection_mock_cursor_page(query: &str, mut response: Value) -> Value {
-    if !query.trim_start().starts_with("{ _cursor {") {
+    if !query.starts_with("{_cursor{") {
         return response;
     }
     let Some(Value::Object(mut data)) = response.get_mut("data").map(Value::take) else {
@@ -2425,7 +2450,7 @@ async fn projection_acp_mock(
 }
 
 fn projection_mock_agent_requests(query: &str) -> Value {
-    if query.contains("filter: { caused_by_parent_request_doc_id") {
+    if projection_mock_has(query, "filter: { caused_by_parent_request_doc_id") {
         json!([
             projection_mock_child_request(),
             projection_mock_forged_child_request()
@@ -2653,7 +2678,7 @@ fn filter_projection_mock_headers(query: &str, rows: Vec<Value>) -> Value {
         .clone();
     for node_did in ["did:test:amy", "did:test:reviewer"] {
         let predicate = format!(r#"node_did: {{ _eq: "{node_did}" }}"#);
-        if query.contains(&predicate) {
+        if projection_mock_has(query, &predicate) {
             rows.retain(|row| row["node_did"].as_str() == Some(node_did));
         }
     }
@@ -2662,11 +2687,11 @@ fn filter_projection_mock_headers(query: &str, rows: Vec<Value>) -> Value {
             r#"session_id: {{ _eq: "{}" }}"#,
             gents::store::graphql::escape_graphql_string(session_id)
         );
-        if query.contains(&predicate) {
+        if projection_mock_has(query, &predicate) {
             rows.retain(|row| row["session_id"].as_str() == Some(session_id));
         }
     }
-    if query.contains("requester_did: { _eq: null }") {
+    if projection_mock_has(query, "requester_did: { _eq: null }") {
         rows.retain(|row| row["requester_did"].is_null());
     } else {
         for requester_did in ["did:test:amy", "did:test:reviewer"] {
@@ -2674,29 +2699,29 @@ fn filter_projection_mock_headers(query: &str, rows: Vec<Value>) -> Value {
                 r#"requester_did: {{ _eq: "{}" }}"#,
                 gents::store::graphql::escape_graphql_string(requester_did)
             );
-            if query.contains(&predicate) {
+            if projection_mock_has(query, &predicate) {
                 rows.retain(|row| row["requester_did"].as_str() == Some(requester_did));
             }
         }
     }
-    if query.contains("_or:") {
+    if projection_mock_has(query, "_or:") {
         rows.retain(|row| {
             let key = row["message_key"].as_str().unwrap();
             let sequence = row["sequence"].as_u64().unwrap();
-            query.contains(&format!(r#"message_key: {{ _eq: "{key}" }}"#))
-                || query.contains(&format!(r#"sequence: {{ _eq: {sequence} }}"#))
+            projection_mock_has(query, &format!(r#"message_key: {{ _eq: "{key}" }}"#))
+                || projection_mock_has(query, &format!(r#"sequence: {{ _eq: {sequence} }}"#))
         });
     } else {
-        if query.contains("message_key: { _eq:") {
+        if projection_mock_has(query, "message_key: { _eq:") {
             rows.retain(|row| {
                 let key = row["message_key"].as_str().unwrap();
-                query.contains(&format!(r#"message_key: {{ _eq: "{key}" }}"#))
+                projection_mock_has(query, &format!(r#"message_key: {{ _eq: "{key}" }}"#))
             });
         }
-        if query.contains("sequence: { _eq:") {
+        if projection_mock_has(query, "sequence: { _eq:") {
             rows.retain(|row| {
                 let sequence = row["sequence"].as_u64().unwrap();
-                query.contains(&format!(r#"sequence: {{ _eq: {sequence} }}"#))
+                projection_mock_has(query, &format!(r#"sequence: {{ _eq: {sequence} }}"#))
             });
         }
     }
@@ -2833,7 +2858,7 @@ fn filter_projection_mock_rows(query: &str, rows: Vec<Value>) -> Value {
     let addressed = rows.iter().filter_map(|row| {
         let doc_id = row.get("_docID")?.as_str()?;
         let exact = format!(r#"_docID: {{ _eq: "{doc_id}" }}"#);
-        query.contains(&exact).then(|| doc_id.to_owned())
+        projection_mock_has(query, &exact).then(|| doc_id.to_owned())
     });
     let addressed = addressed.collect::<Vec<_>>();
     if addressed.is_empty() {
@@ -2897,12 +2922,12 @@ fn projection_mock_tool_calls(query: &str) -> Value {
         ("tool_call_id", "call-delegate"),
     ] {
         let predicate = format!(r#"{field}: {{ _eq: "{value}" }}"#);
-        if query.contains(&predicate) {
+        if projection_mock_has(query, &predicate) {
             rows.retain(|row| row[field].as_str() == Some(value));
         }
     }
-    if query.contains(r#"node_did: { _eq: "did:test:reviewer" }"#)
-        || query.contains(r#"request_doc_id: { _eq: "doc-request-child" }"#)
+    if projection_mock_has(query, r#"node_did: { _eq: "did:test:reviewer" }"#)
+        || projection_mock_has(query, r#"request_doc_id: { _eq: "doc-request-child" }"#)
     {
         rows.clear();
     }
