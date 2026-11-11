@@ -293,6 +293,23 @@ pub enum RequestOperationError {
         timeout_secs: u64,
         state: String,
     },
+    #[error("request {request_id} reached its end but its answer is {observation}; read its transcript")]
+    OutputUnavailable {
+        request_id: String,
+        observation: &'static str,
+    },
+    #[error("request {request_id} cannot be followed to its successor: {reason}")]
+    SuccessorInvalid {
+        request_id: String,
+        reason: &'static str,
+    },
+    #[error("the request committed under id {request_id} is not the one this send signed: {reason}")]
+    ReceiptMismatch {
+        request_id: String,
+        reason: &'static str,
+    },
+    #[error("the interrupt of request {request_id} was written but is not on the request")]
+    InterruptNotLatched { request_id: String },
     #[error("the submission of request {request_id} is unconfirmed; send the same request id again")]
     Unconfirmed {
         request_id: String,
@@ -335,6 +352,10 @@ impl RequestOperationError {
             Self::ReissueNotLatest { .. } => "reissue_not_latest",
             Self::InterruptTerminal { .. } => "interrupt_terminal",
             Self::WaitTimedOut { .. } => "wait_timed_out",
+            Self::OutputUnavailable { .. } => "output_unavailable",
+            Self::SuccessorInvalid { .. } => "successor_invalid",
+            Self::ReceiptMismatch { .. } => "receipt_mismatch",
+            Self::InterruptNotLatched { .. } => "interrupt_not_latched",
             Self::Unconfirmed { .. } => "submission_unconfirmed",
             Self::IdentityConflict { .. } => "request_identity_conflict",
             Self::Passthrough(_) => "failed",
@@ -350,6 +371,7 @@ impl RequestOperationError {
             | Self::ReissueDeadlineClosed { .. }
             | Self::Unconfirmed { .. }
             | Self::IdentityConflict { .. }
+            | Self::ReceiptMismatch { .. }
             | Self::Passthrough(_) => NextCall::VerbHelp {
                 resource: "request",
                 verb: "submit",
@@ -372,7 +394,10 @@ impl RequestOperationError {
             Self::ReissueParentState { .. }
             | Self::ReissueNotInteractive { .. }
             | Self::InterruptTerminal { .. }
-            | Self::WaitTimedOut { .. } => NextCall::Inspect {
+            | Self::WaitTimedOut { .. }
+            | Self::OutputUnavailable { .. }
+            | Self::SuccessorInvalid { .. }
+            | Self::InterruptNotLatched { .. } => NextCall::Inspect {
                 resource: "request",
             },
         }
