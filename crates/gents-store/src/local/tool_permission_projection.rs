@@ -70,14 +70,14 @@ async fn apply_source_change(
     Ok(())
 }
 
-pub(super) struct ToolPermissionProjection {
+pub struct ToolPermissionProjection {
     node: identity::Did,
     runtime: Arc<dyn crate::identity::NodeIdentity>,
     policy: Arc<dyn super::ToolSourcePolicy>,
 }
 
 impl ToolPermissionProjection {
-    pub(super) fn new(
+    pub fn new(
         runtime: Arc<dyn crate::identity::NodeIdentity>,
         policy: Arc<dyn super::ToolSourcePolicy>,
     ) -> std::result::Result<Self, identity::Error> {
@@ -90,6 +90,11 @@ impl ToolPermissionProjection {
 
     pub(super) fn node(&self) -> &identity::Did {
         &self.node
+    }
+
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn source_prefix(&self) -> String {
+        self.prefix()
     }
 
     fn prefix(&self) -> String {
@@ -586,6 +591,11 @@ fn field<'a>(value: &'a serde_json::Value, name: &str) -> Option<&'a str> {
         .get(name)
         .and_then(serde_json::Value::as_str)
         .filter(|s| !s.is_empty())
+}
+
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn decode_source_for_tests(object_id: &str) -> Option<String> {
+    decode_source(object_id)
 }
 
 fn decode_source(object_id: &str) -> Option<String> {

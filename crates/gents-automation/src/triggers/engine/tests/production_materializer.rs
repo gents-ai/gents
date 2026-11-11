@@ -6,7 +6,7 @@ async fn signed_trigger_materializer(
     name: &str,
     trigger_ids: &[&str],
 ) -> (
-    crate::support::TestDb,
+    gents_inference::test_support::TestDb,
     Arc<ResolvedAgent>,
     gents_store::config_client::ConfigAccess,
     ProductionMaterializer,
@@ -31,7 +31,7 @@ async fn signed_trigger_materializer(
     let snapshot = Arc::new(
         ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
             agent.agent_did.clone(),
-            vec![agent.clone()],
+            vec![with_default_tools(agent.clone())],
             RapidHashMap::new(),
             RapidHashMap::new(),
             RapidHashMap::new(),
@@ -1352,7 +1352,7 @@ async fn group_marker_is_read_by_selected_held_agent_without_node_visibility() {
     let snapshot = Arc::new(
         ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
             agent.agent_did.clone(),
-            vec![agent.clone(), sibling.clone()],
+            vec![with_default_tools(agent.clone()), with_default_tools(sibling.clone())],
             RapidHashMap::new(),
             RapidHashMap::new(),
             RapidHashMap::new(),
@@ -1474,7 +1474,7 @@ async fn group_marker_is_read_by_selected_held_agent_without_node_visibility() {
     let sibling_snapshot = Arc::new(
         ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
             sibling.agent_did.clone(),
-            vec![sibling.clone()],
+            vec![with_default_tools(sibling.clone())],
             RapidHashMap::new(),
             RapidHashMap::new(),
             RapidHashMap::new(),

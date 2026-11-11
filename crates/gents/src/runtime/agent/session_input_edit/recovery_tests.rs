@@ -71,7 +71,6 @@ async fn active_agents(
         max_turns: 2,
         max_turns_provenance: gents_inference::resolved::MaxTurnsProvenance::Default,
         system_prompt: String::new(),
-        tools: gents_tools::surface::AgentToolSurfaceConfig::meta_only(),
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
@@ -87,7 +86,10 @@ async fn active_agents(
     let snapshot =
         gents_automation::triggers::runtime_snapshot::ResolvedRuntimeSnapshot::from_parts(
             agent.agent_did.clone(),
-            vec![agent],
+            vec![gents_tools::surface::AgentWithTools {
+                agent,
+                tools: Arc::new(gents_tools::surface::AgentToolSurfaceConfig::meta_only()),
+            }],
             Default::default(),
             Default::default(),
         )

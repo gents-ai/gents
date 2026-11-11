@@ -1284,6 +1284,3 @@ mod tests {
         harness.close().await;
     }
 }
-
-#[cfg(test)]
-mod goal_input_tests;

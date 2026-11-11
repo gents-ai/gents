@@ -174,6 +174,7 @@ fn snapshot(local_did: &str, agent_did: &str) -> Arc<ActiveRuntimeSnapshot> {
         node: None,
         local_did: local_did.to_string(),
         default_agent_did: agent_did.to_string(),
+        tool_configs: Default::default(),
         agents: RapidHashMap::new(),
         tool_surfaces: RapidHashMap::new(),
         backend_admission_configs: RapidHashMap::new(),

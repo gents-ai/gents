@@ -219,7 +219,7 @@ mod tests {
                 .unwrap();
             crate::triggers::callback::seed_test_agent(
                 &node,
-                gents_session::request::lifecycle::test_support::PIN_FIXED_DID,
+                gents_store::test_support::PIN_FIXED_DID,
             )
             .await;
             let agent = crate::triggers::callback::test_agent_identity();

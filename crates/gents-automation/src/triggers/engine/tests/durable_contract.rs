@@ -487,7 +487,7 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
         ensure_runtime_schemas(&node).await.unwrap();
         crate::triggers::callback::seed_test_agent(
             &node,
-            gents_session::request::lifecycle::test_support::PIN_FIXED_DID,
+            gents_store::test_support::PIN_FIXED_DID,
         )
         .await;
         let agent = crate::triggers::callback::test_agent_identity();
@@ -1424,7 +1424,7 @@ fn generated_session_key_cases_match_admission_and_config() {
 async fn budget_fixture(
     name: &str,
 ) -> (
-    crate::support::TestDb,
+    gents_inference::test_support::TestDb,
     gents_store::config_client::ConfigAccess,
     gents_store::config_client::ConfigAccess,
     ProductionMaterializer,

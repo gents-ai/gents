@@ -373,7 +373,7 @@ pub fn remove_local_locked<P>(
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub mod tests {
     use super::*;
     use serde_json::json;

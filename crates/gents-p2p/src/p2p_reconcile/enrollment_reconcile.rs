@@ -242,20 +242,20 @@ pub fn enrollment_authority_channel() -> (EnrollmentAuthorityOwner, EnrollmentAu
     )
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 #[derive(Clone)]
-pub(crate) struct TestEnrollmentAuthority {
+pub struct TestEnrollmentAuthority {
     current: Arc<tokio::sync::RwLock<Option<EnrollmentAuthorizationFence>>>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 impl TestEnrollmentAuthority {
-    pub(crate) async fn replace(&self, value: Option<EnrollmentAuthorizationFence>) {
+    pub async fn replace(&self, value: Option<EnrollmentAuthorizationFence>) {
         *self.current.write().await = value;
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn test_enrollment_authority(
     initial: Option<EnrollmentAuthorizationFence>,
 ) -> (TestEnrollmentAuthority, EnrollmentAuthorityHandle) {

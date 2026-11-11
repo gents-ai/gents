@@ -100,7 +100,7 @@ pub(crate) async fn require_request_doc_id(
         .ok_or_else(|| anyhow::anyhow!("AgentRequest request_id={request_id} not found"))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn load_agent_request(
     node: &EmbeddedNode,
     request_id: &str,
@@ -120,7 +120,7 @@ pub async fn load_agent_request(
 
 /// Reads without an actor, which ACP hides Agent-owned requests from; runtime
 /// readers use [`load_agent_request_by_doc_id_with_access`] as the owner.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn load_agent_request_by_doc_id(
     node: &EmbeddedNode,
     request_doc_id: &str,

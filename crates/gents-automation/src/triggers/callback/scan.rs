@@ -1035,7 +1035,7 @@ mod grouped_tests {
         gents_store::schema::ensure_runtime_schemas(&node)
             .await
             .unwrap();
-        let owner = gents_session::request::lifecycle::test_support::PIN_FIXED_DID;
+        let owner = gents_store::test_support::PIN_FIXED_DID;
         crate::triggers::callback::seed_test_agent(&node, owner).await;
 
         node.add_collection("type CallbackMember { batch:String value:String hidden:String }")
@@ -1046,7 +1046,7 @@ mod grouped_tests {
             assert!(!response.has_errors(), "{:?}", response.errors);
         }
         let binding:CallbackBindingDoc=serde_json::from_value(json!({"node_did":owner,"binding_id":"binding","agent_did":crate::triggers::callback::test_agent_did(),"event_source_id":"source","callback_id":"callback","input_fields":["value"]})).unwrap();
-        let source:crate::documents::EventSource=serde_json::from_value(json!({"node_did":owner,"event_source_id":"source","source_collection":"CallbackMember","correlation_field":"batch","group":{"expected_count":2}})).unwrap();
+        let source:gents_documents::EventSource=serde_json::from_value(json!({"node_did":owner,"event_source_id":"source","source_collection":"CallbackMember","correlation_field":"batch","group":{"expected_count":2}})).unwrap();
         crate::triggers::callback::seed_test_configuration(
             &node,
             owner,

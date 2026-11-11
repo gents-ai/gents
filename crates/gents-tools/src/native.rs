@@ -10,13 +10,22 @@ use gents_documents::tool_limits::DEFAULT_COMMAND_TIMEOUT_SECS;
 use gents_loop::tool::ToolDyn;
 use rapidhash::RapidHashMap;
 
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod args;
+#[cfg(not(any(test, feature = "test-fixtures")))]
 mod args;
 pub mod background_args;
 mod bash_tools;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod cli_tool;
+#[cfg(not(any(test, feature = "test-fixtures")))]
 mod cli_tool;
 pub mod command_observability;
 mod context_budget;
 pub mod edit_match;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod file_tools;
+#[cfg(not(any(test, feature = "test-fixtures")))]
 mod file_tools;
 mod goal;
 pub mod lsp;
@@ -31,6 +40,9 @@ pub use title_audit_usage::load_session_goal_usage;
 pub use title_audit_usage::{register_lifecycle_reads, SESSION_TOKEN_USAGE};
 pub use title_audit_usage::{ParentAuditUsage, ParentAuditUsageObservation};
 mod session_message;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod shared;
+#[cfg(not(any(test, feature = "test-fixtures")))]
 mod shared;
 pub mod skills;
 #[cfg(test)]
@@ -50,7 +62,7 @@ use session_message::{
 use crate::surface::BackgroundToolConfig;
 use gents_documents::AgentToolConfig;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn read_only_bash_for_test(
     root: &std::path::Path,
     allowlist: Vec<String>,
@@ -62,7 +74,7 @@ pub fn read_only_bash_for_test(
     ))
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(any(test, feature = "test-fixtures"), unix))]
 pub fn write_capable_bash_for_test(root: &std::path::Path) -> Box<dyn gents_loop::tool::ToolDyn> {
     Box::new(UnrestrictedBashTool::new(
         ToolContext::new(root.to_path_buf(), false).unwrap(),
@@ -70,7 +82,7 @@ pub fn write_capable_bash_for_test(root: &std::path::Path) -> Box<dyn gents_loop
     ))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn cli_tool_for_test(config: CliToolConfig) -> Box<dyn gents_loop::tool::ToolDyn> {
     Box::new(CliTool::new(config))
 }
@@ -100,7 +112,7 @@ pub use session_history::{
 #[cfg(test)]
 pub(crate) use shared::apply_workspace_authority;
 pub use shared::background_command_timeout;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use shared::run_command_for_test;
 pub(crate) use shared::shell_join;
 #[cfg(test)]
@@ -666,7 +678,7 @@ pub(crate) fn build_agent_tools(config: AgentToolConfig) -> Vec<Box<dyn ToolDyn>
     tools
 }
 
-pub(crate) fn background_tool_names(config: &BackgroundToolConfig) -> Vec<String> {
+pub fn background_tool_names(config: &BackgroundToolConfig) -> Vec<String> {
     if !config.tools_enabled() {
         return Vec::new();
     }

@@ -94,7 +94,7 @@ impl DefraSessionHook {
         .await
     }
 
-    pub(in crate::call::hook) async fn await_background_tool_observing<S>(
+    pub async fn await_background_tool_observing<S>(
         &self,
         caller: &ProcessControlScope,
         tool_call_id: &str,

@@ -195,6 +195,3 @@ impl FileChangeCapture {
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-mod plugin_inventory_tests;

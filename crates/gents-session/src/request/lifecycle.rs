@@ -1,5 +1,5 @@
-mod client;
-#[cfg(test)]
+pub mod client;
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use client::stage_request_relationships_in_txn;
 pub use client::{
     bind_client_targets_in_txn, complete_client_request_relationships,
@@ -26,31 +26,31 @@ use crate::session;
 use gents_protocol::row::AgentRequest;
 use gents_store::graphql::{escape_graphql_string, response_has_documents};
 
-mod backend_wait;
+pub mod backend_wait;
 pub(crate) use backend_wait::{fresh_healthy, repark_expired_resume};
 mod background_wake_recovery;
 pub use background_wake_recovery::{background_wake_next_retry_at, background_wake_retry_delay};
 pub mod arrival_order;
-mod claim;
-#[cfg(test)]
+pub mod claim;
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use claim::{claim_gate_in_txn, ClaimGate};
 pub(crate) use claim::supersede_pending_in_txn;
-mod execution_lease;
+pub mod execution_lease;
 mod execution_renewal;
 #[cfg(test)]
 pub(crate) use execution_renewal::renew_in_transaction;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use execution_renewal::renew_once_at_with_access as renew_execution_lease_once_at_with_access;
 #[cfg(test)]
 pub(crate) use execution_renewal::renew_with_recheck_at;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use execution_renewal::RenewalAttemptOutcome;
 mod terminal_binding;
 pub use terminal_binding::is_exact_invocation_reply;
-mod terminal_tools;
-#[cfg(test)]
+pub mod terminal_tools;
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use execution_lease::revoke_execution_preserving_output_at_with_access;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use execution_lease::terminalize_owned_at_with_access;
 pub use execution_lease::{
     stage_revoke_execution_preserving_output, stage_supersede_parked_execution,
@@ -58,24 +58,24 @@ pub use execution_lease::{
 };
 pub use execution_lease::{RequestTerminalOutcome, TerminalizeResult};
 pub(crate) use gents_loop::execution_policy;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use terminal_tools::ToolAccountingRejection;
 pub mod manual;
 pub mod materialize;
 mod session_message_presentation;
 pub use session_message_presentation::session_message_display_body;
 pub(crate) use session_message_presentation::session_message_display_body_with_content;
-mod query;
+pub mod query;
 pub mod queue;
 mod recovery;
 pub mod requested_create;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use recovery::{
     recover_expired_generation_with_access_for_test, RecoveryResult, RecoverySelectionChoice,
     RecoverySelectionRejected,
 };
 mod task_title;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_support;
 mod transition;
 
@@ -83,8 +83,8 @@ pub use manual::{
     write_manual_agent_request, write_manual_agent_request_with_conversation_title,
     ManualRequestTarget,
 };
+pub use materialize::build_session_message_request;
 pub(crate) use materialize::{
-    build_session_message_request,
     write_pending_agent_request_with_lineage_workspace_and_conversation_title,
 };
 pub use materialize::{
@@ -311,7 +311,7 @@ pub fn is_runtime_control_message(
         })
 }
 
-fn extract_single_doc_id(response: &defra_node::QueryResponse, key: &str) -> Option<String> {
+pub fn extract_single_doc_id(response: &defra_node::QueryResponse, key: &str) -> Option<String> {
     // DefraDB's GraphQL surface accepts `create_<Collection>` while the
     // response data may expose the normalized `add_<Collection>` field.
     let normalized_add_key = key
@@ -595,7 +595,7 @@ pub struct RequestLifecycle {
 
 impl RequestLifecycle {
     #[cfg(any(test, feature = "test-fixtures"))]
-    pub(crate) fn managed_agent_signer(&self) -> Option<gents_store::identity::ManagedAgentSigner> {
+    pub fn managed_agent_signer(&self) -> Option<gents_store::identity::ManagedAgentSigner> {
         self.agent_signer.clone()
     }
     pub fn bind_managed_agent(

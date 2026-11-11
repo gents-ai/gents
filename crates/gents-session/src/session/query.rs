@@ -69,7 +69,7 @@ pub fn public_request_filter(scope: &str) -> String {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub(super) async fn load_agent_session_row(
     node: &EmbeddedNode,
     node_did: &str,
@@ -84,7 +84,7 @@ pub(super) async fn load_agent_session_row(
         })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub(super) async fn load_agent_session_rows(
     node: &EmbeddedNode,
     node_did: &str,
@@ -107,8 +107,8 @@ pub(super) async fn load_agent_session_rows(
         .collect()
 }
 
-#[cfg(test)]
-pub(super) async fn load_agent_session(
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn load_agent_session(
     node: &EmbeddedNode,
     node_did: &str,
     session_id: &str,
@@ -215,7 +215,7 @@ pub async fn load_session_agent_selection(
     )
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn load_session_agent_did(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,

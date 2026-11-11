@@ -481,5 +481,5 @@ fn decode_hex(text: &str) -> Result<Vec<u8>> {
         .collect()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub mod tests;

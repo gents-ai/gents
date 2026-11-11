@@ -48,7 +48,7 @@ pub use gents_loop::stream_writer::StreamWriter;
 
 pub struct DefraStreamWriter {
     actor_did: String,
-    agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
+    pub agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
     node: Arc<EmbeddedNode>,
     batch_interval: Duration,
     buffers: Mutex<RapidHashMap<String, StreamBuffer>>,
@@ -131,7 +131,7 @@ impl StreamBufferSnapshot {
 }
 
 impl DefraStreamWriter {
-    pub(crate) async fn publish_authored_message(
+    pub async fn publish_authored_message(
         &self,
         lifecycle: &crate::request::lifecycle::RequestLifecycle,
         key: &str,
@@ -140,7 +140,7 @@ impl DefraStreamWriter {
         Box::pin(self.publish_authored_message_with_time(lifecycle, key, message, None)).await
     }
 
-    pub(crate) async fn publish_authored_message_with_time(
+    pub async fn publish_authored_message_with_time(
         &self,
         lifecycle: &crate::request::lifecycle::RequestLifecycle,
         key: &str,
@@ -223,7 +223,7 @@ impl DefraStreamWriter {
         Ok(published.message_doc_id)
     }
 
-    pub(crate) async fn start_provider_attempt(
+    pub async fn start_provider_attempt(
         &self,
         request_doc_id: &str,
         turn: usize,
@@ -241,7 +241,7 @@ impl DefraStreamWriter {
         );
     }
 
-    pub(crate) async fn flush_native_partial(
+    pub async fn flush_native_partial(
         &self,
         lifecycle: &crate::request::lifecycle::RequestLifecycle,
         message: &gents_protocol::message::Message,
@@ -423,7 +423,7 @@ impl DefraStreamWriter {
         Ok(())
     }
 
-    pub(crate) async fn publish_native_turn(
+    pub async fn publish_native_turn(
         &self,
         lifecycle: &crate::request::lifecycle::RequestLifecycle,
         turn: usize,
@@ -663,10 +663,10 @@ impl DefraStreamWriter {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 impl DefraStreamWriter {
     /// Moves the batch clock as if `elapsed` had passed since the last flush.
-    pub(crate) async fn advance_batch_clock(&self, doc_id: &str, elapsed: Duration) {
+    pub async fn advance_batch_clock(&self, doc_id: &str, elapsed: Duration) {
         if let Some(buffer) = self.buffers.lock().await.get_mut(doc_id) {
             buffer.last_flush_at = buffer
                 .last_flush_at

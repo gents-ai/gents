@@ -5,9 +5,9 @@
 //! and the Google access tokens of Vertex AI and Google Cloud ([`google`]).
 //! Public paths are those of the former single module.
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 use std::collections::VecDeque;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 use std::sync::{Mutex, OnceLock};
 
 use rig::completion::CompletionError;
@@ -119,7 +119,7 @@ impl From<MessagesParseError> for CompletionError {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 fn messages_sse_fixture_queue() -> &'static Mutex<VecDeque<String>> {
     static QUEUE: OnceLock<Mutex<VecDeque<String>>> = OnceLock::new();
     QUEUE.get_or_init(|| Mutex::new(VecDeque::new()))
@@ -128,14 +128,14 @@ fn messages_sse_fixture_queue() -> &'static Mutex<VecDeque<String>> {
 /// Test-only: SSE bodies served instead of the network; cleared by
 /// `lock_fixtures_for_test`. Compiled out of non-test builds so no linking
 /// crate can bypass the network or the write gate.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn install_messages_sse_fixtures(bodies: Vec<String>) {
     *messages_sse_fixture_queue()
         .lock()
         .unwrap_or_else(|poison| poison.into_inner()) = bodies.into_iter().collect();
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 fn take_messages_sse_fixture() -> Option<String> {
     messages_sse_fixture_queue()
         .lock()
@@ -143,11 +143,11 @@ fn take_messages_sse_fixture() -> Option<String> {
         .pop_front()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 static FIXTURE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Async tests hold the guard across awaits, so the lock is a tokio mutex.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn lock_fixtures_for_test() -> tokio::sync::MutexGuard<'static, ()> {
     let guard = FIXTURE_LOCK.lock().await;
     install_messages_sse_fixtures(Vec::new());
@@ -155,15 +155,15 @@ pub async fn lock_fixtures_for_test() -> tokio::sync::MutexGuard<'static, ()> {
 }
 
 /// For synchronous tests; panics if called inside a Tokio runtime.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn blocking_lock_fixtures_for_test() -> tokio::sync::MutexGuard<'static, ()> {
     let guard = FIXTURE_LOCK.blocking_lock();
     install_messages_sse_fixtures(Vec::new());
     guard
 }
 
-#[cfg(test)]
-pub(crate) fn sse_fixture_text(text: &str) -> String {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn sse_fixture_text(text: &str) -> String {
     let text = serde_json::to_string(text).expect("escape");
     format!(
         "event: content_block_start\ndata: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"text\",\"text\":\"\"}}}}\n\n\
@@ -172,8 +172,8 @@ pub(crate) fn sse_fixture_text(text: &str) -> String {
     )
 }
 
-#[cfg(test)]
-pub(crate) fn sse_fixture_tool_use(id: &str, name: &str, partial_json: &str) -> String {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn sse_fixture_tool_use(id: &str, name: &str, partial_json: &str) -> String {
     let partial = serde_json::to_string(partial_json).expect("escape");
     format!(
         "event: content_block_start\ndata: {{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{{\"type\":\"tool_use\",\"id\":\"{id}\",\"name\":\"{name}\",\"input\":{{}}}}}}\n\n\
@@ -184,7 +184,7 @@ pub(crate) fn sse_fixture_tool_use(id: &str, name: &str, partial_json: &str) -> 
     )
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn sse_fixture_final_text(text: &str) -> String {
     format!(
         "{}event: message_delta\ndata: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"end_turn\"}},\"usage\":{{\"input_tokens\":12,\"output_tokens\":3}}}}\n\nevent: message_stop\ndata: {{\"type\":\"message_stop\"}}\n\n",

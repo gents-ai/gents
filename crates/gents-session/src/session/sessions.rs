@@ -1059,7 +1059,7 @@ pub async fn max_sequence_as(
     .await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn max_sequence(
     node: &std::sync::Arc<EmbeddedNode>,
     session_id: &str,

@@ -289,7 +289,7 @@ impl GoalSource {
         .context("decoding Goal rows")
     }
 
-    async fn build_intent(
+    pub async fn build_intent(
         &self,
         actor: &identity::Did,
         mut goal: GoalDocument,
@@ -792,7 +792,7 @@ impl GoalSource {
         }))
     }
 
-    async fn continuation_child_exists(
+    pub async fn continuation_child_exists(
         &self,
         actor: &identity::Did,
         goal: &GoalDocument,
@@ -1238,6 +1238,3 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-#[path = "goal_source/claimed_readiness_tests.rs"]
-mod claimed_readiness_tests;

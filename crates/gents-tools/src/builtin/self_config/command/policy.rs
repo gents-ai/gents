@@ -710,7 +710,3 @@ mod tests {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "policy_tests.rs"]
-mod policy_tests;

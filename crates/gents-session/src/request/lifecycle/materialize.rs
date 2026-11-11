@@ -587,7 +587,7 @@ pub fn session_message_sender_header(cause: &SessionMessageCause, at: &str) -> S
     clippy::too_many_arguments,
     reason = "called from session_message with this shape"
 )]
-pub(crate) async fn build_session_message_request(
+pub async fn build_session_message_request(
     cause: &SessionMessageCause,
     target: &SessionMessageTarget,
     content: &str,
@@ -1494,47 +1494,6 @@ mod session_message_tests {
 mod session_provenance_tests {
     use super::*;
 
-    #[tokio::test]
-    async fn pending_receipt_lookup_uses_the_selected_agent() {
-        use crate::tools::call::lifecycle::admission_fixture::{
-            published_admission_with_owner, PublishedAdmissionOptions,
-        };
-
-        let (admission, parent) = published_admission_with_owner(PublishedAdmissionOptions {
-            name: "pending-receipt-agent".into(),
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-        let access = admission.tool.access().unwrap();
-        let receipt = defra_node::QueryResponse::success(serde_json::json!({
-            "create_AgentRequest": [{}]
-        }));
-        let escaped = escape_graphql_string(&parent.request().request_id);
-        let resolved = resolve_created_agent_request_doc_id(
-            &access,
-            &receipt,
-            "create_AgentRequest",
-            &escaped,
-            "lookup failed",
-            "missing receipt",
-        )
-        .await
-        .unwrap();
-        assert_eq!(resolved, parent.request().doc_id);
-        assert!(resolve_created_agent_request_doc_id(
-            &gents_store::config_client::ConfigAccess::local(admission.node.clone()),
-            &receipt,
-            "create_AgentRequest",
-            &escaped,
-            "lookup failed",
-            "missing receipt",
-        )
-        .await
-        .is_err());
-        admission.node.shutdown().await.unwrap();
-    }
-
     #[test]
     fn task_provenance_matches_generated_opening_cases() {
         let cases = &gents_lean_vocab::lean_contract_snapshot()
@@ -1575,6 +1534,7 @@ mod session_provenance_tests {
             assert_eq!(actual, case["task"].as_u64(), "{}", case["name"]);
         }
     }
+
 }
 
 async fn is_client_request_in_txn(

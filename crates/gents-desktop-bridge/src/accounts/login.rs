@@ -159,7 +159,7 @@ where
             };
             OAuthCredential {
                 label,
-                ..gents::inference::auth::claude::credential_from_login_tokens(
+                ..gents_inference::auth::claude::credential_from_login_tokens(
                     node_did,
                     credential_provider,
                     &tokens,
@@ -208,7 +208,7 @@ where
             })?;
             OAuthCredential {
                 label,
-                ..gents::inference::auth::xai_login::credential_from_login_tokens(
+                ..gents_inference::auth::xai_login::credential_from_login_tokens(
                     node_did,
                     credential_provider,
                     &tokens,

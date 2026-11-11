@@ -14,10 +14,10 @@ use gents_store::{collection::Collection, identity::NodeIdentity};
 use gents_tools::surface::ToolCeiling;
 use serde::Deserialize;
 
-use gents::support::agent_requests::RequestActors;
-use gents::support::interrupt::BootedAgent;
-use gents::support::snapshots::SnapshotReader;
-use gents::support::TestDb;
+use crate::support::agent_requests::RequestActors;
+use crate::support::interrupt::BootedAgent;
+use crate::support::snapshots::SnapshotReader;
+use crate::support::TestDb;
 
 #[path = "inference_target.rs"]
 pub mod inference_target;
@@ -33,8 +33,8 @@ pub fn live_target() -> InferenceTarget {
 /// and the Agent's inference documents. Requests and reads go through the
 /// returned actors.
 pub async fn bind_target(db: &TestDb, target: &InferenceTarget) -> RequestActors {
-    let fixture = gents::support::managed_agent_fixture(db).await;
-    gents::support::grant_household_owner(db, &fixture.user).await;
+    let fixture = crate::support::managed_agent_fixture(db).await;
+    crate::support::grant_household_owner(db, &fixture.user).await;
     let node_did = db.node_identity.did().to_owned();
     let agent_did = fixture.binding.agent_did.clone();
     let profile_id = default_inference_profile_id_for_agent(&agent_did);
@@ -359,8 +359,8 @@ impl LiveUser {
     /// Makes the node's fixture User its household owner, then writes the
     /// Node document and the target's backend as that User.
     pub async fn install(db: &TestDb, target: &InferenceTarget) -> Self {
-        let user = gents::support::managed_fixture_user(db).await;
-        gents::support::grant_household_owner(db, &user).await;
+        let user = crate::support::managed_fixture_user(db).await;
+        crate::support::grant_household_owner(db, &user).await;
         let access = db.client_access(&user);
         let node_did = db.node_identity.did().to_owned();
         let live = Self {
@@ -469,7 +469,7 @@ impl LiveUser {
             inference_profile_id: spec.inference_profile_id.to_string(),
             enabled: true,
             tags: Vec::new(),
-            created_at: Some(gents::support::agent_requests::canonical_now()),
+            created_at: Some(crate::support::agent_requests::canonical_now()),
         };
         let mut documents = vec![
             (
@@ -524,7 +524,7 @@ impl LiveUser {
         session_id: &str,
         content: &str,
     ) -> String {
-        gents::support::agent_requests::submit_user_request_to(
+        crate::support::agent_requests::submit_user_request_to(
             &self.access,
             &self.user,
             &self.node_did,
@@ -574,7 +574,7 @@ impl LiveUser {
             session_id,
             "",
             "interactive",
-            gents::support::agent_requests::canonical_now(),
+            crate::support::agent_requests::canonical_now(),
             AgentRequestAdmissionRecord::client(self.user.did()),
         );
         gents_session::request::lifecycle::reserve_goal_session(&self.access, &request)

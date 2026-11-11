@@ -66,7 +66,7 @@ pub(in crate::session) async fn load_sequenced_messages(
     clippy::too_many_arguments,
     reason = "independent transcript range filters"
 )]
-pub(in crate::session) async fn load_sequenced_messages_using(
+pub async fn load_sequenced_messages_using(
     access: ReadAccess<'_, '_>,
     session_id: &str,
     node_did: &str,

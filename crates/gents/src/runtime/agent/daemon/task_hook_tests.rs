@@ -82,6 +82,7 @@ enum Lineage {
 struct Harness {
     node: Arc<defra_node::Node>,
     agent_config: Arc<ResolvedAgent>,
+    tool_config: Arc<gents_tools::surface::AgentToolSurfaceConfig>,
     calls: Arc<AtomicUsize>,
     marks: tempfile::TempDir,
     _db: crate::support::TestDb,
@@ -121,14 +122,16 @@ impl Harness {
         let agent_access =
             ConfigAccess::local_managed_agent(node.clone(), agent_did, agent_identity.as_ref())
                 .unwrap();
-        let mut agent_config = crate::runtime::agent::PendingAgent::new("task-hooks")
+        let built = crate::runtime::agent::PendingAgent::new("task-hooks")
             .with_identity_binding_for_test(binding)
             .build_with_identity_arc_for_test(db.node_identity.clone());
-        agent_config.deadline_duration = deadline;
-        let agent_config = Arc::new(agent_config);
+        let tool_config = built.tools;
+        let mut agent_config = built.agent;
+        Arc::make_mut(&mut agent_config).deadline_duration = deadline;
         Self {
             node,
             agent_config,
+            tool_config,
             calls: Arc::new(AtomicUsize::new(0)),
             marks: tempfile::tempdir().expect("hook marker directory"),
             _db: db,
@@ -365,6 +368,7 @@ impl Harness {
         );
         AgentDaemon::new(AgentDaemonInit {
             node: self.node.clone(),
+            tool_config: self.tool_config.clone(),
             agent_config: self.agent_config.clone(),
             provider_family: None,
             model: Arc::new(ScriptedModel {

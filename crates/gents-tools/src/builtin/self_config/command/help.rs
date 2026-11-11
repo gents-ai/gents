@@ -460,7 +460,7 @@ fn mailbox_values() -> Value {
     })
 }
 
-pub(crate) fn recipes(resource: &str) -> Vec<(&'static str, Vec<Step>)> {
+pub fn recipes(resource: &str) -> Vec<(&'static str, Vec<Step>)> {
     match resource {
         "page" => vec![(
             "a page that shows a collection's rows, built live on this node",

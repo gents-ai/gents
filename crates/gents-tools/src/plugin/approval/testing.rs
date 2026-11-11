@@ -39,7 +39,7 @@ impl QuestionObservation {
 }
 
 impl Operator {
-    pub(crate) async fn answer(home: &Path, answer: Answer) -> Result<Self> {
+    pub async fn answer(home: &Path, answer: Answer) -> Result<Self> {
         Self::with_wait(home, answer, Duration::from_secs(10))
             .await
             .map(|(operator, _)| operator)

@@ -244,7 +244,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_installed_wasm_plugin_gets_only_explicitly_granted_tool_calls() {
-        use crate::plugin::tests::executor::{asking_plugin_wat, installed_plugin};
+        use gents_pack::plugin::test_fixtures::{asking_plugin_wat, installed_plugin};
         use gents_loop::tool::ToolDyn;
         let request =
             json!({"tool_calls":{"requests":[{"id":"table","tool_name":"query","arguments":{}}]}});
@@ -278,7 +278,7 @@ mod tests {
 
     #[tokio::test]
     async fn receipt_records_effective_tool_service_and_exact_first_guest_input() {
-        use crate::plugin::tests::executor::installed_echo;
+        use gents_pack::plugin::test_fixtures::installed_echo;
         use gents_loop::tool::ToolDyn;
         use sha2::{Digest, Sha256};
 
@@ -457,7 +457,7 @@ mod tests {
     struct RoundClock(Arc<Mutex<std::time::Instant>>);
 
     impl RoundClock {
-        fn new() -> Self {
+        pub fn new() -> Self {
             Self(Arc::new(Mutex::new(std::time::Instant::now())))
         }
 

@@ -20,7 +20,7 @@ fn snapshot_with_active_task(task: ResolvedTask) -> Arc<ActiveRuntimeSnapshot> {
     let agent = spy_test_agent();
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         agent.agent_did.clone(),
-        vec![agent.clone()],
+        vec![with_default_tools(agent.clone())],
         RapidHashMap::new(),
         RapidHashMap::new(),
         RapidHashMap::new(),

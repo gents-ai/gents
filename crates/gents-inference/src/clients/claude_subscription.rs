@@ -292,8 +292,8 @@ impl<S> ClaudeSubscriptionClient<S>
 where
     S: BearerSource,
 {
-    #[cfg(test)]
-    pub(crate) fn with_bearer(bearer: Arc<S>) -> Self {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn with_bearer(bearer: Arc<S>) -> Self {
         Self {
             accounts: Arc::from([ClaudeAccount {
                 credential_id: String::new(),
@@ -639,7 +639,7 @@ impl BearerSource for ApiKeyBearer {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 fn test_credential() -> OAuthCredential {
     OAuthCredential {
         doc_id: None,
@@ -662,16 +662,16 @@ fn test_credential() -> OAuthCredential {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub struct StaticBearer {
     token: std::result::Result<String, String>,
     calls: std::sync::atomic::AtomicUsize,
     invalidations: std::sync::atomic::AtomicUsize,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 impl StaticBearer {
-    pub(crate) fn new(token: &str) -> Self {
+    pub fn new(token: &str) -> Self {
         Self {
             token: Ok(token.to_string()),
             calls: Default::default(),
@@ -679,7 +679,7 @@ impl StaticBearer {
         }
     }
 
-    pub(crate) fn failing(message: &str) -> Self {
+    pub fn failing(message: &str) -> Self {
         Self {
             token: Err(message.to_string()),
             calls: Default::default(),
@@ -687,16 +687,16 @@ impl StaticBearer {
         }
     }
 
-    pub(crate) fn bearer_calls(&self) -> usize {
+    pub fn bearer_calls(&self) -> usize {
         self.calls.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    pub(crate) fn invalidations(&self) -> usize {
+    pub fn invalidations(&self) -> usize {
         self.invalidations.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 impl BearerSource for StaticBearer {
     async fn current_bearer(&self) -> Result<String> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);

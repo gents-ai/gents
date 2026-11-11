@@ -74,7 +74,7 @@ impl BoundedQueryTool {
         self
     }
 
-    pub(crate) fn with_surface_owner(mut self, owner: String) -> Self {
+    pub fn with_surface_owner(mut self, owner: String) -> Self {
         self.surface_scope = Some(gents_documents::DatastoreSurfaceScope::SelectedAgent(owner));
         self
     }

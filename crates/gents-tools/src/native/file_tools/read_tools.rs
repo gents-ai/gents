@@ -32,13 +32,13 @@ impl ListFilesTool {
 }
 
 #[derive(Clone)]
-pub(in crate::native) struct ReadFileTool {
+pub struct ReadFileTool {
     context: ToolContext,
     default_max_chars: usize,
 }
 
 impl ReadFileTool {
-    pub(in crate::native) fn new(context: ToolContext, default_max_chars: usize) -> Self {
+    pub fn new(context: ToolContext, default_max_chars: usize) -> Self {
         Self {
             context,
             default_max_chars,

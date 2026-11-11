@@ -8,7 +8,7 @@ use crate::request::lifecycle::WorkspaceLineage;
 use gents_loop::tool_policy::WorkspaceAuthority;
 use gents_protocol::row::AgentRequest;
 use gents_store::graphql::escape_graphql_string;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 use gents_store::graphql::graphql_with_transaction_retry;
 
 use super::action_plan::{
@@ -360,7 +360,7 @@ pub async fn cleanup_workspace(
     flush_cleanup_outcome(access, &docs, &outcome).await
 }
 
-pub(super) async fn claim_workspace_cleanup(
+pub async fn claim_workspace_cleanup(
     access: &gents_store::config_client::ConfigAccess,
     workspace_id: &str,
     owner: &str,
@@ -449,7 +449,7 @@ pub(super) async fn claim_workspace_cleanup(
         .await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn writer_request_already_sealed(
     node: &std::sync::Arc<EmbeddedNode>,
     request: &AgentRequest,
@@ -865,7 +865,7 @@ where
     Ok(serde_json::from_value(values.clone())?)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 async fn load_receipts(
     node: &EmbeddedNode,
     workspace_id: &str,

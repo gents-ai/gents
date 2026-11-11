@@ -1132,6 +1132,7 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
         .await
         .unwrap();
     let template = baseline.agents.values().next().unwrap();
+    let template_tools = baseline.tool_configs.values().next().unwrap();
     let surface = baseline.tool_surfaces.values().next().unwrap();
     let cases = gents_lean_vocab::lean_snapshot_demotion_cases();
     assert_eq!(cases.len(), 6);
@@ -1144,7 +1145,10 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
                 .map(|id| {
                     let mut configured = template.as_ref().clone();
                     configured.agent_did = id.clone();
-                    Arc::new(configured)
+                    gents_tools::surface::AgentWithTools {
+                        agent: Arc::new(configured),
+                        tools: template_tools.clone(),
+                    }
                 })
                 .collect(),
             runnable

@@ -32,11 +32,11 @@ pub struct TaskHookRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecordedHookAttempt {
-    pub(crate) hook_id: String,
+    pub hook_id: String,
     #[serde(default)]
-    pub(crate) process: Option<ProcessIdentity>,
+    pub process: Option<ProcessIdentity>,
     #[serde(default)]
-    pub(crate) result: Option<HookCommandResult>,
+    pub result: Option<HookCommandResult>,
 }
 
 impl TaskHookRecord {
@@ -89,11 +89,11 @@ impl TaskHookRecordStore {
         }
     }
 
-    pub(crate) fn durable(dir: PathBuf) -> Self {
+    pub fn durable(dir: PathBuf) -> Self {
         Self::with_storage(HostRecordStore::Durable(dir))
     }
 
-    pub(crate) async fn wait_for_recoveries(&self) {
+    pub async fn wait_for_recoveries(&self) {
         loop {
             let pending = std::mem::take(&mut *locked(&self.recoveries));
             if pending.is_empty() {
@@ -120,7 +120,7 @@ impl TaskHookRecordStore {
         self.storage.remove(request_doc_id);
     }
 
-    pub(crate) fn list(&self) -> Vec<TaskHookRecord> {
+    pub fn list(&self) -> Vec<TaskHookRecord> {
         self.storage.list()
     }
 

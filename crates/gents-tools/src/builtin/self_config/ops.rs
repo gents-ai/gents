@@ -26,7 +26,7 @@ pub use grants::{guard_tools_keep_grants, reselection_keeps_grants, OperatorGran
 pub use guards::{
     guard_agent_keeps_reach, guard_backend_auth, guard_backend_choice, guard_tools_keep_control,
 };
-pub(crate) use guards::{
+pub use guards::{
     guard_backend_choice_in_txn, guard_compaction_choice_in_txn, profile_backend_id,
 };
 pub(crate) use request::ApplyRequest;
@@ -93,7 +93,7 @@ pub struct PatchOutcome {
     pub shared: Option<Value>,
 }
 
-pub(super) fn target_destination(document: &Map<String, Value>, owner: &str) -> Value {
+pub fn target_destination(document: &Map<String, Value>, owner: &str) -> Value {
     json!({
         "kind": if document.get("target_node_did").and_then(Value::as_str) == Some(owner) { "local" } else { "remote" },
         "target_node_did": document.get("target_node_did"),
@@ -125,14 +125,14 @@ fn connection_view(
 }
 
 pub(crate) struct AgentAnchor {
-    pub(crate) doc: Map<String, Value>,
-    pub(crate) context: Map<String, Value>,
-    pub(crate) profile: Map<String, Value>,
-    pub(crate) execution: Map<String, Value>,
+    pub doc: Map<String, Value>,
+    pub context: Map<String, Value>,
+    pub profile: Map<String, Value>,
+    pub execution: Map<String, Value>,
 }
 
 impl AgentAnchor {
-    pub(crate) fn ref_id(&self, field: &str) -> Option<String> {
+    pub fn ref_id(&self, field: &str) -> Option<String> {
         self.doc
             .get(field)
             .or_else(|| self.context.get(field))
@@ -166,14 +166,14 @@ impl SelfConfigCore {
         })
     }
 
-    pub(crate) fn inherit_invoker_capabilities(mut self, source: &Self) -> Self {
+    pub fn inherit_invoker_capabilities(mut self, source: &Self) -> Self {
         self.agent_signer = source.agent_signer.clone();
         self.runtime_identity = source.runtime_identity.clone();
         self.node_binding = source.node_binding.clone();
         self
     }
 
-    pub(crate) fn with_agent_signer(
+    pub fn with_agent_signer(
         mut self,
         signer: Option<gents_store::identity::ManagedAgentSigner>,
     ) -> Self {
@@ -186,7 +186,7 @@ impl SelfConfigCore {
     /// as the invoking Agent's own managed signer: without one the command
     /// fails with `ManagedAgentSignerRequired`, and it never falls back to the
     /// Agent identity alone or to the Node.
-    pub(crate) fn access(&self) -> Result<ConfigAccess> {
+    pub fn access(&self) -> Result<ConfigAccess> {
         let signer = self.agent_signer()?;
         let actor = self.identity()?;
         anyhow::ensure!(
@@ -201,14 +201,14 @@ impl SelfConfigCore {
     }
 
     /// The invoking Agent's own managed signer.
-    pub(crate) fn agent_signer(&self) -> Result<gents_store::identity::ManagedAgentSigner> {
+    pub fn agent_signer(&self) -> Result<gents_store::identity::ManagedAgentSigner> {
         Ok(self
             .agent_signer
             .clone()
             .ok_or(gents_store::config_client::ConfigClientError::ManagedAgentSignerRequired)?)
     }
 
-    pub(crate) fn with_runtime_identity(
+    pub fn with_runtime_identity(
         mut self,
         identity: Option<Arc<dyn gents_store::identity::NodeIdentity>>,
     ) -> Self {
@@ -216,7 +216,7 @@ impl SelfConfigCore {
         self
     }
 
-    pub(crate) fn runtime_identity(&self) -> Result<&dyn gents_store::identity::NodeIdentity> {
+    pub fn runtime_identity(&self) -> Result<&dyn gents_store::identity::NodeIdentity> {
         self.runtime_identity
             .as_deref()
             .context("agent creation requires the local runtime identity")
@@ -227,7 +227,7 @@ impl SelfConfigCore {
         self
     }
 
-    pub(crate) fn with_node_binding(
+    pub fn with_node_binding(
         mut self,
         binding: Option<gents_documents::ConfigurationNodeBinding>,
     ) -> Self {
@@ -235,7 +235,7 @@ impl SelfConfigCore {
         self
     }
 
-    pub(crate) async fn refresh_node_binding(
+    pub async fn refresh_node_binding(
         &self,
     ) -> Result<Option<gents_documents::ConfigurationNodeBinding>> {
         let Some(binding) = self.node_binding.as_ref() else {
@@ -280,7 +280,7 @@ impl SelfConfigCore {
         Ok(Some(refreshed))
     }
 
-    pub(crate) fn node_binding(&self) -> Option<&gents_documents::ConfigurationNodeBinding> {
+    pub fn node_binding(&self) -> Option<&gents_documents::ConfigurationNodeBinding> {
         self.node_binding.as_ref()
     }
 
@@ -298,12 +298,12 @@ impl SelfConfigCore {
 
     /// Preserve the invoking agent as the recoverability anchor while a
     /// catalog-authorized command targets a sibling agent.
-    pub(crate) fn with_lockout_agent_did(mut self, agent_did: String) -> Self {
+    pub fn with_lockout_agent_did(mut self, agent_did: String) -> Self {
         self.lockout_agent_did = agent_did;
         self
     }
 
-    pub(crate) fn with_process_ceiling(
+    pub fn with_process_ceiling(
         mut self,
         process_ceiling: SelfConfigProcessCeiling,
     ) -> Self {
@@ -311,7 +311,7 @@ impl SelfConfigCore {
         self
     }
 
-    pub(crate) fn process_ceiling(&self) -> &SelfConfigProcessCeiling {
+    pub fn process_ceiling(&self) -> &SelfConfigProcessCeiling {
         &self.process_ceiling
     }
 
@@ -323,20 +323,20 @@ impl SelfConfigCore {
         &self.agent_did
     }
 
-    pub(crate) fn node_handle(&self) -> Arc<EmbeddedNode> {
+    pub fn node_handle(&self) -> Arc<EmbeddedNode> {
         self.node.clone()
     }
 
-    pub(crate) fn identity(&self) -> Result<Did> {
+    pub fn identity(&self) -> Result<Did> {
         Did::new(self.lockout_agent_did.clone())
             .map_err(|error| anyhow!("selected agent DID is not ACP-addressable: {error}"))
     }
 
-    pub(crate) async fn load_agent_anchor(&self, txn: &ConfigApplyTxn<'_>) -> Result<AgentAnchor> {
+    pub async fn load_agent_anchor(&self, txn: &ConfigApplyTxn<'_>) -> Result<AgentAnchor> {
         load_agent_anchor_for(txn, &self.node_did, &self.agent_did).await
     }
 
-    pub(crate) async fn apply(&self, request: ApplyRequest<'_>) -> Result<PatchOutcome> {
+    pub async fn apply(&self, request: ApplyRequest<'_>) -> Result<PatchOutcome> {
         ensure_admissible(request.target, &request.patch)?;
 
         let this = self;
@@ -569,7 +569,7 @@ impl SelfConfigCore {
         read(SelfConfigTarget::Tools, field(&context, "tools_id")?).await
     }
 
-    pub(crate) async fn preview(&self, request: ApplyRequest<'_>) -> Result<PatchOutcome> {
+    pub async fn preview(&self, request: ApplyRequest<'_>) -> Result<PatchOutcome> {
         ensure_admissible(request.target, &request.patch)?;
         let identity = self.identity()?;
         let this = self;
@@ -652,7 +652,7 @@ impl SelfConfigCore {
 
 /// Load one agent's anchor by exact `agent_did`, for the invoking agent or for
 /// a sibling the write reaches. Fails closed when the row is owned elsewhere.
-pub(crate) async fn load_agent_anchor_for(
+pub async fn load_agent_anchor_for(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
     agent_did: &str,

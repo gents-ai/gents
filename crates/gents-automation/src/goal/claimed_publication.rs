@@ -12,7 +12,7 @@ use gents_store::config_client::ConfigApplyTxn;
 use gents_store::identity::request_receipt::verify_runtime_local_control_receipt;
 use gents_store::identity::NodeIdentity;
 
-pub(crate) async fn publish_claimed_continuation_with_identity(
+pub async fn publish_claimed_continuation_with_identity(
     node: &std::sync::Arc<EmbeddedNode>,
     identity: &dyn NodeIdentity,
     observed: &GoalDocument,
@@ -53,7 +53,7 @@ pub(crate) async fn publish_claimed_continuation_with_identity(
     Ok(receipt)
 }
 
-pub(crate) async fn stop_claimed_continuation_for_unavailable_agent_from_access(
+pub async fn stop_claimed_continuation_for_unavailable_agent_from_access(
     access: &gents_store::config_client::ConfigAccess,
     observed: &GoalDocument,
     parent_request_id: &str,

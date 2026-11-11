@@ -26,7 +26,7 @@ pub struct LoadSkillTool {
 }
 
 impl LoadSkillTool {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub fn new(skills: Vec<Skill>, ceiling: SkillToolCeiling) -> Self {
         Self {
             skills,

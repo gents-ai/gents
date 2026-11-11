@@ -22,13 +22,13 @@ mod folding;
 mod input;
 mod intake;
 mod management;
-mod mutation;
+pub mod mutation;
 mod position;
 mod submission;
 
 pub use atomic_inputs::next_append_sequence_in_transaction;
 pub use atomic_inputs::persist_background_completion_with_message_canonical_with_access;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use atomic_inputs::persist_background_completion_with_message_waking_with_access;
 use atomic_inputs::steering_transaction_attempt;
 #[cfg(test)]
@@ -62,10 +62,11 @@ pub use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, 
 use input::queue_is_automated_wakeup;
 pub use input::row_is_automated_wakeup;
 pub(crate) use input::{background_wake_queue, is_automated_wakeup, row_queue};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use intake::pending_in_txn;
+pub use intake::steer_reachable;
 pub(crate) use intake::{
-    pending_ids_in_txn, pending_with_new_candidate_in_txn, steer_reachable, SteerAdmissionRefusal,
+    pending_ids_in_txn, pending_with_new_candidate_in_txn, SteerAdmissionRefusal,
 };
 #[cfg(test)]
 pub(crate) use intake::{pending_rows_in_txn, steering_compatible};
@@ -93,8 +94,8 @@ pub use submission::prepare_user_message_input;
 #[derive(Debug)]
 pub struct EnqueuedBackgroundCompletionInput {
     pub request: Option<EnqueuedAgentRequest>,
-    #[cfg(test)]
-    pub(crate) message_sequence: u32,
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub message_sequence: u32,
     pub created_request: bool,
 }
 

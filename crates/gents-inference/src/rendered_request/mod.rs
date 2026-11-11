@@ -16,7 +16,7 @@ pub use gents_loop::rendered_request::{
     CAPTURE_VERSION, CONTEXT_ACCOUNTING_VERSION, PROVENANCE_MANIFEST_VERSION,
 };
 pub use sink::defra_rendered_request_capture_factory_for_agent;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use sink::defra_rendered_request_capture_factory_for_signer;
 pub use sink::DefraRenderedRequestSink;
 
@@ -1239,7 +1239,7 @@ where
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn manifest_leaf_entries<R>(
     reader: &R,
     record: encoding::DecodedRecord,

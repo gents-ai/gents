@@ -2,17 +2,26 @@ use super::*;
 use gents_protocol::tool_names::CONFIG_TOOL_NAME;
 use gents_session::session::output_render::{ordered, Ordered};
 
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod agents;
+#[cfg(not(any(test, feature = "test-fixtures")))]
 pub(super) mod agents;
 mod args;
 mod authoring;
 mod automation;
 mod cleanup;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod contracts;
+#[cfg(not(any(test, feature = "test-fixtures")))]
 pub(super) mod contracts;
 mod crud;
 mod datastore;
 mod discovery;
 mod grants;
 mod guidance;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod help;
+#[cfg(not(any(test, feature = "test-fixtures")))]
 pub(super) mod help;
 mod inference;
 mod inventory;

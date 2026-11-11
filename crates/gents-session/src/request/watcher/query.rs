@@ -33,7 +33,7 @@ impl DefraWatcher {
             .find(|request| request.doc_id == doc_id))
     }
 
-    pub(crate) async fn pending_requests(&self) -> anyhow::Result<Vec<AgentRequest>> {
+    pub async fn pending_requests(&self) -> anyhow::Result<Vec<AgentRequest>> {
         let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
         let node_did = gents_store::graphql::escape_graphql_string(&self.node_did);
         let mut rows = Vec::new();

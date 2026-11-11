@@ -102,7 +102,7 @@ mod tests {
     async fn runtime_default_read_shares_agent_transaction_and_preserves_secret_acl(
     ) -> anyhow::Result<()> {
         let (db, user, user_access, binding) =
-            crate::test_support::root::signed_test_node("runtime-default-account").await;
+            crate::test_support::signed_test_node("runtime-default-account").await;
         let runtime = db.node_identity.as_ref();
         let signer = gents_store::identity::resolve_agent_identity(runtime, &binding)?;
         let agent = ConfigAccess::local_managed_agent(

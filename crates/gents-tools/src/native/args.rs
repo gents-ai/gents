@@ -13,7 +13,7 @@ pub(super) struct ListFilesArgs {
 }
 
 #[derive(Debug, Deserialize)]
-pub(super) struct ReadFileArgs {
+pub struct ReadFileArgs {
     pub path: String,
     #[serde(default)]
     pub start_line: Option<usize>,
@@ -50,7 +50,7 @@ pub(super) struct GrepArgs {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub(super) struct WriteFileArgs {
+pub struct WriteFileArgs {
     pub path: String,
     pub content: String,
     #[serde(default)]

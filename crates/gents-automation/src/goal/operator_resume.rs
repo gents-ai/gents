@@ -593,7 +593,7 @@ pub(super) async fn stage_busy_resume(
 
 #[cfg(test)]
 mod contract_tests;
-#[cfg(test)]
-pub(crate) mod support;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod support;
 #[cfg(test)]
 mod tests;

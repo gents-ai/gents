@@ -15,17 +15,17 @@ pub struct InferenceCallRecoveryReport {
 pub struct InferenceCall;
 
 #[derive(Debug, Deserialize)]
-struct StaleInferenceCallRow {
+pub struct StaleInferenceCallRow {
     #[serde(rename = "_docID")]
-    doc_id: String,
-    call_id: String,
-    request_id: String,
-    request_doc_id: String,
-    agent_did: String,
-    call_state: String,
+    pub doc_id: String,
+    pub call_id: String,
+    pub request_id: String,
+    pub request_doc_id: String,
+    pub agent_did: String,
+    pub call_state: String,
 }
 
-enum InferenceRecoveryOutcome {
+pub enum InferenceRecoveryOutcome {
     Cancelled,
     Failed,
 }
@@ -103,7 +103,7 @@ impl InferenceCall {
     }
 }
 
-async fn load_stale_inference_calls(
+pub async fn load_stale_inference_calls(
     access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     agent_did: &str,
@@ -135,7 +135,7 @@ async fn load_stale_inference_calls(
     )?)
 }
 
-async fn lookup_parent_request(
+pub async fn lookup_parent_request(
     access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     row: &StaleInferenceCallRow,
@@ -185,7 +185,7 @@ async fn lookup_parent_request(
     })
 }
 
-fn recovery_outcome(
+pub fn recovery_outcome(
     row: &StaleInferenceCallRow,
     parent: &AgentRequestRow,
 ) -> Option<InferenceRecoveryOutcome> {
@@ -203,7 +203,7 @@ fn recovery_outcome(
     }
 }
 
-async fn recover_inference_call_row(
+pub async fn recover_inference_call_row(
     access: &gents_store::config_client::ConfigAccess,
     row: &StaleInferenceCallRow,
     outcome: InferenceRecoveryOutcome,

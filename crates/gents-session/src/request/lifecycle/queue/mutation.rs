@@ -30,7 +30,7 @@ pub(super) async fn session_request_create_mutation(
     .await
 }
 
-pub(super) async fn session_request_create_mutation_at_hop_with_signer(
+pub async fn session_request_create_mutation_at_hop_with_signer(
     parent: &AgentRequest,
     hop: u32,
     fields: SessionRequestFields<'_>,

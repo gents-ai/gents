@@ -484,7 +484,7 @@ fn principal_and_placement_identity_mismatches_fail_closed() {
 }
 
 /// Source files are authored before sealing; consumers must not mutate source.
-pub(crate) struct ArtifactTestFixture {
+pub struct ArtifactTestFixture {
     pub grant: crate::workspace::ArtifactGrant,
     pub owner: crate::request::lifecycle::RequestLifecycle,
     pub node: std::sync::Arc<defra_node::Node>,
