@@ -211,95 +211,6 @@ pub struct LeanPromptAssemblyClaudeBodyCase {
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct LeanPromptAssemblyClaudeAttributionCase {
-    pub name: String,
-    pub version: String,
-    pub fingerprint: String,
-    pub entrypoint: String,
-    pub provider: String,
-    pub first_party_base_url: bool,
-    pub workload: Option<String>,
-    pub subagent: bool,
-    pub previous_request_id: Option<String>,
-    pub prompt_id: Option<String>,
-    pub turn_origin: Option<String>,
-    pub prompt_index: Option<u64>,
-    pub turn_index: Option<u64>,
-    pub gateway: Option<String>,
-    pub project_id: Option<String>,
-    pub project_source: Option<String>,
-    pub header: String,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClaudeCacheBlock {
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub text: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClaudeCacheContent {
-    pub text: Option<String>,
-    pub blocks: Option<Vec<LeanClaudeCacheBlock>>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClaudeCacheMessage {
-    pub role: String,
-    pub content: LeanClaudeCacheContent,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClaudeCachePlaced {
-    pub role: String,
-    pub text: Option<String>,
-    pub blocks: Option<Vec<LeanClaudeCacheBlock>>,
-    pub marker: Option<usize>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPromptAssemblyClaudeCacheCase {
-    pub name: String,
-    pub caching: bool,
-    pub skip_write: bool,
-    pub subscriber: bool,
-    pub main_thread: bool,
-    pub using_overage: bool,
-    pub messages: Vec<LeanClaudeCacheMessage>,
-    pub placed: Vec<LeanClaudeCachePlaced>,
-    pub ttl: String,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPromptAssemblyClaudeOriginCase {
-    pub name: String,
-    pub cause: String,
-    pub root_client: bool,
-    pub scheduled: bool,
-    pub kind: String,
-    pub appends_system_prompt: bool,
-    pub identity: String,
-    pub entrypoint: String,
-    pub background: bool,
-    pub workload: Option<String>,
-    pub subagent: bool,
-    pub request_class: String,
-    pub main_thread_source: bool,
-    pub agentic: bool,
-    pub turn_origin: Option<String>,
-    pub prompt_index_after_three: Option<u64>,
-    pub turn_index_after_three: Option<u64>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct LeanPromptAssemblyClaudeFieldFacts {
     pub adaptive: bool,
     pub always_thinks: bool,
@@ -357,29 +268,6 @@ pub struct LeanPromptAssemblyClaudeFieldDiagnostics {
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPromptAssemblyClaudeFieldCase {
-    pub name: String,
-    pub facts: LeanPromptAssemblyClaudeFieldFacts,
-    pub request: LeanPromptAssemblyClaudeFieldRequest,
-    pub max_tokens: u64,
-    pub thinking: LeanPromptAssemblyClaudeFieldThinking,
-    pub temperature: Option<u64>,
-    pub context_management: bool,
-    pub effort: Option<String>,
-    pub diagnostics: LeanPromptAssemblyClaudeFieldDiagnostics,
-    pub per_turn_effort: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPromptAssemblyClaudeFieldRowCase {
-    pub name: String,
-    pub is_user: Vec<bool>,
-    pub index: Option<u64>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub struct LeanPromptAssemblyClaudeStreamCase {
     pub name: String,
     pub surface: Vec<String>,
@@ -396,14 +284,6 @@ pub struct LeanPromptAssemblyClaudeThinkingStreamCase {
     pub outcome: String,
     pub steps: Vec<LeanClaudeContentStep>,
     pub content: Vec<LeanClaudeStreamBlock>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-pub struct LeanPromptAssemblyClaudeWireStartCase {
-    pub name: String,
-    pub start: LeanClaudeWireThinkingStart,
-    pub later: Vec<LeanClaudeStreamEvent>,
-    pub expected: LeanClaudeWireExpected,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
@@ -437,22 +317,6 @@ pub struct LeanPromptAssemblyResponsesEffortCase {
     pub requested: Option<String>,
     #[serde(deserialize_with = "required_nullable")]
     pub expected: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-pub struct LeanClaudeWireThinkingStart {
-    pub index: u64,
-    pub thinking: String,
-    pub signature_present: bool,
-    pub signature: serde_json::Value,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-pub struct LeanClaudeWireExpected {
-    pub kind: String,
-    pub error: Option<String>,
-    pub steps: Option<Vec<LeanClaudeContentStep>>,
-    pub content: Option<Vec<LeanClaudeStreamBlock>>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]

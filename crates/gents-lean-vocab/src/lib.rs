@@ -3804,15 +3804,6 @@ pub fn lean_prompt_assembly_claude_body_cases() -> &'static [LeanPromptAssemblyC
     &lean_contract_snapshot().prompt_assembly_claude_body_cases
 }
 
-pub fn lean_prompt_assembly_claude_attribution_cases(
-) -> &'static [LeanPromptAssemblyClaudeAttributionCase] {
-    &lean_contract_snapshot().prompt_assembly_claude_attribution_cases
-}
-
-pub fn lean_prompt_assembly_claude_cache_cases() -> &'static [LeanPromptAssemblyClaudeCacheCase] {
-    &lean_contract_snapshot().prompt_assembly_claude_cache_cases
-}
-
 pub fn lean_prompt_assembly_claude_stream_cases() -> &'static [LeanPromptAssemblyClaudeStreamCase] {
     &lean_contract_snapshot().prompt_assembly_claude_stream_cases
 }
@@ -3820,11 +3811,6 @@ pub fn lean_prompt_assembly_claude_stream_cases() -> &'static [LeanPromptAssembl
 pub fn lean_prompt_assembly_claude_thinking_stream_cases(
 ) -> &'static [LeanPromptAssemblyClaudeThinkingStreamCase] {
     &lean_contract_snapshot().prompt_assembly_claude_thinking_stream_cases
-}
-
-pub fn lean_prompt_assembly_claude_wire_start_cases(
-) -> &'static [LeanPromptAssemblyClaudeWireStartCase] {
-    &lean_contract_snapshot().prompt_assembly_claude_wire_start_cases
 }
 
 pub fn lean_prompt_assembly_responses_storage_cases(
