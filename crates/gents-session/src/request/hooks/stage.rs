@@ -46,6 +46,12 @@ pub enum HookError {
         #[source]
         source: Box<HookError>,
     },
+    /// An earlier attempt of this transaction failed with `PartialStaging`
+    /// for the plugin and ran again without it.
+    #[error(
+        "lifecycle plugin {plugin} failed after part of its staging was applied; the transition ran again without it"
+    )]
+    RanWithout { plugin: &'static str },
     /// Not transparent: the store's conflict and denial classifiers find the
     /// access error by walking `source()`, which a transparent variant skips.
     #[error("a core operation requested by a lifecycle plugin failed")]
@@ -233,23 +239,30 @@ impl Staged {
 /// Lean `Hooks.stageDropping`: staging where a plugin cannot stop the
 /// transition. A plugin whose rows could not be read, that refuses, whose
 /// result is invalid or whose effects miss is skipped whole and owed; the
-/// others still stage. The result aligns with the plugin list.
+/// others still stage. A plugin named in `without` is skipped whole and owed
+/// unread. The result aligns with the plugin list.
 ///
 /// The one error is a host that could not skip a plugin whole
 /// (`ApplyFailure::clean == false`): the model's `applyEffects` leaves the
-/// staged state untouched on a miss, and a host without that property cannot
-/// honour the drop.
+/// staged state untouched on a miss, so the caller runs its transition again
+/// with that plugin in `without`.
 pub async fn stage_dropping<E, V, H>(
     host: &H,
     plugins: &[Plugin<E, V>],
     event: &E,
+    without: &[&str],
 ) -> Result<Vec<Staged>, HookError>
 where
     H: Host,
 {
     let mut shown = Vec::with_capacity(plugins.len());
     for plugin in plugins {
-        shown.push(snapshot(host, plugin, event).await);
+        let name = plugin.manifest().name;
+        shown.push(if without.contains(&name) {
+            Err(HookError::RanWithout { plugin: name })
+        } else {
+            snapshot(host, plugin, event).await
+        });
     }
     let mut staged = Vec::with_capacity(plugins.len());
     for (plugin, rows) in plugins.iter().zip(shown) {

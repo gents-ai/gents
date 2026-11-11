@@ -42,6 +42,7 @@ pub struct ConfigApplyTxn<'a> {
     pub(super) client_signed_write_dispatched: AtomicBool,
     pub(super) relationship_grants: Mutex<Vec<ConfigRelationshipGrant>>,
     pub(super) owed_deliveries: Mutex<Vec<gents_protocol::owed_delivery::OwedDeliveryRow>>,
+    pub(super) rerun_notes: Vec<super::super::RerunNote>,
     pub(super) publication_observer: Option<Arc<dyn AgentPublicationObserver>>,
     pub(super) pack_approval: Option<Arc<super::super::pack_effect::PackInterpreterApproval>>,
     /// The node whose own loopback endpoint carries this HTTP transaction,
@@ -231,6 +232,7 @@ impl<'a> ConfigApplyTxn<'a> {
             client_signed_write_dispatched: AtomicBool::new(false),
             relationship_grants: Mutex::new(Vec::new()),
             owed_deliveries: Mutex::new(Vec::new()),
+            rerun_notes: Vec::new(),
             publication_observer: None,
             pack_approval: None,
             loopback_node: None,
@@ -353,6 +355,7 @@ impl<'a> ConfigApplyTxn<'a> {
                 client_signed_write_dispatched: AtomicBool::new(false),
                 relationship_grants: Mutex::new(Vec::new()),
                 owed_deliveries: Mutex::new(Vec::new()),
+            rerun_notes: Vec::new(),
                 publication_observer: None,
                 pack_approval: None,
                 loopback_node: None,
@@ -378,12 +381,19 @@ impl<'a> ConfigApplyTxn<'a> {
             client_signed_write_dispatched: AtomicBool::new(false),
             relationship_grants: Mutex::new(Vec::new()),
             owed_deliveries: Mutex::new(Vec::new()),
+            rerun_notes: Vec::new(),
             publication_observer: None,
             pack_approval: None,
             loopback_node: None,
             operation: None,
         };
         Ok(txn)
+    }
+
+    /// The notes earlier attempts of this transaction asked to be run again
+    /// with ([`super::ConfigClientError::RerunRequested`]), oldest first.
+    pub fn rerun_notes(&self) -> &[super::super::RerunNote] {
+        &self.rerun_notes
     }
 
     pub fn affected_documents(&self) -> u64 {

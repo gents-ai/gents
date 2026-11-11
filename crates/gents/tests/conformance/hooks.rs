@@ -18,7 +18,7 @@ use gents_lean_vocab::{
     LeanLifecycleHookStale, LeanLifecycleHookState, LeanLifecycleHookSubject,
     LeanLifecycleHookSubjectKind, LeanLifecycleHookVerdict, LeanLifecycleHookWorld,
 };
-use gents_session::request::hooks::claim::{combine, ClaimVerdict};
+use gents_session::request::hooks::claim::{combine, ClaimVerdict, Successor};
 use gents_session::request::hooks::delivery::DeliveryRecord;
 use gents_session::request::hooks::effect::{
     validate, Access, CoreOp, DocRef, Effect, Grant, Grantable, Manifest, Named, OwnedCollection,
@@ -123,9 +123,12 @@ fn verdict(lean: &LeanLifecycleHookVerdict) -> ClaimVerdict {
     match lean {
         LeanLifecycleHookVerdict::Allow => ClaimVerdict::Allow,
         LeanLifecycleHookVerdict::LeaveQueued => ClaimVerdict::LeaveQueued,
-        LeanLifecycleHookVerdict::Retire { reason } => ClaimVerdict::Retire {
+        LeanLifecycleHookVerdict::Retire { reason, successor } => ClaimVerdict::Retire {
             reason: reason.clone(),
-            successor: None,
+            successor: Successor {
+                request_id: successor.request_id.clone(),
+                request_doc_id: successor.request_doc_id.clone(),
+            },
         },
         LeanLifecycleHookVerdict::Reject { reason } => ClaimVerdict::Reject {
             reason: reason.clone(),
@@ -629,7 +632,7 @@ async fn generated_lifecycle_hook_must_commit_cases_drive_dropping_staging() {
         core.push(case.transition.clone());
         let host = StoreDouble::new(&case.world, core, &case.read_failed);
         let plugins = string_plugins(&case.plugins);
-        let staged = stage_dropping(&host, &plugins, &())
+        let staged = stage_dropping(&host, &plugins, &(), &[])
             .await
             .unwrap_or_else(|error| panic!("{}: {error:?}", case.name));
         let dropped: Vec<bool> = staged.iter().map(Staged::is_owed).collect();

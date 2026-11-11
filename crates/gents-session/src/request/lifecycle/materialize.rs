@@ -1000,9 +1000,7 @@ impl RequestLifecycle {
             .claimed_provenance(&self.request)
     }
 
-    pub fn claimed_tool_context(
-        &self,
-    ) -> anyhow::Result<gents_loop::tool::ToolRequestContext> {
+    pub fn claimed_tool_context(&self) -> anyhow::Result<gents_loop::tool::ToolRequestContext> {
         anyhow::ensure!(
             matches!(
                 self.state,
@@ -1534,7 +1532,6 @@ mod session_provenance_tests {
             assert_eq!(actual, case["task"].as_u64(), "{}", case["name"]);
         }
     }
-
 }
 
 async fn is_client_request_in_txn(

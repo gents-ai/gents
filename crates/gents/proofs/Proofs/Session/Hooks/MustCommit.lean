@@ -26,7 +26,19 @@ def attempt (host : Host Core Q Doc Val Op) (actor : Actor) (event : Ev)
 gents-ai/gents#3656: a plugin can refuse work from starting or continuing and
 can ask for work to stop, but can never prevent work from stopping). A plugin
 whose staging fails is skipped, whole, and flagged; the others still stage.
-The flags align with the plugin list. -/
+The flags align with the plugin list.
+
+Premise of the native realisation (decision 2026-11-11, maintainer-approved):
+"skipped whole" leaves the staged state exactly as `applyEffects` does on a
+miss. The native host reads, checks every revision and validates before its
+first write, so most failures skip a plugin with nothing applied. A failure
+after part of a plugin's effects were written (a core operation refusing
+midway) cannot be undone inside the transaction, since DefraDB has no
+savepoint. The transition is then aborted and run again once, from a fresh
+snapshot, with that plugin dropped and owed: every lifecycle transition runs
+in a transaction closure the store already re-runs on a conflict, so it is
+re-runnable, and by `Hooks.retry_is_a_fresh_evaluation` what commits is this
+definition evaluated on the snapshot of the final attempt. -/
 def stageDropping (host : Host Core Q Doc Val Op) (actor : Actor) (event : Ev)
     (snapshot : State Core Doc Val) (readFailed : String → Bool) :
     List (Plugin Q Ev V Doc Val Op) → State Core Doc Val → State Core Doc Val × List Bool

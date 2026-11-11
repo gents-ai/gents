@@ -2,6 +2,18 @@ import Proofs.Session.Hooks.Staging
 
 namespace Hooks
 
+/-- The request that supersedes a retired one, as the plugin that asked for
+the retirement names it: its request id and its document id. Core records it
+on the superseded row with the pending terminal it performs.
+
+Decision 2026-11-11, maintainer-approved: a retirement always names its
+successor. A retired request without one would carry a superseded state with
+no request that superseded it, so the verdict cannot be formed without it. -/
+structure Successor where
+  request : String
+  doc : String
+  deriving DecidableEq, Repr
+
 /-- What a plugin may answer at `request.claim.gate`. The hook catalog
 (gents-ai/gents#3642) found four outcomes at the claim boundary today:
 claim, leave the request queued, retire it (pending to superseded) and reject
@@ -10,14 +22,14 @@ transition. A unit-returning notification cannot express this. -/
 inductive ClaimVerdict where
   | allow
   | leaveQueued
-  | retire (reason : String)
+  | retire (reason : String) (successor : Successor)
   | reject (reason : String)
   deriving DecidableEq, Repr
 
 def ClaimVerdict.severity : ClaimVerdict → Nat
   | .allow => 0
   | .leaveQueued => 1
-  | .retire _ => 2
+  | .retire _ _ => 2
   | .reject _ => 3
 
 def ClaimVerdict.narrow (current next : ClaimVerdict) : ClaimVerdict :=

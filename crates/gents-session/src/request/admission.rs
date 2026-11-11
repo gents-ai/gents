@@ -2046,12 +2046,9 @@ mod tests {
 
         /// Signs `create` as the runtime and writes it through the runtime's access.
         async fn create_signed_request(&self, mut create: AgentRequestCreate) -> String {
-            super::sign_agent_request_create(
-                self.runtime.as_ref(),
-                &mut create,
-            )
-            .await
-            .unwrap();
+            super::sign_agent_request_create(self.runtime.as_ref(), &mut create)
+                .await
+                .unwrap();
             self.insert_signed_request(&create).await
         }
 
@@ -2811,7 +2808,6 @@ mod tests {
             self.clone()
         }
     }
-
 }
 
 #[cfg(test)]

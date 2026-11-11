@@ -13,6 +13,7 @@ use super::{
     embedded_phase_timeout, retry, ConfigApplyTxn, ConfigClientError, Result, TransactionFailure,
     EMBEDDED_TRANSACTION_CALLBACK_TIMEOUT,
 };
+use crate::config_client::RerunNote;
 use crate::config_client::write_telemetry::{
     ConflictSource, RetryOwner, RollbackStatus, WriteAttemptOrdinal, WriteBackend, WriteMode,
     WriteOperation, WriteOutcome,
@@ -78,6 +79,18 @@ impl TransactionMode {
             }
             #[cfg(any(test, feature = "test-fixtures"))]
             Self::ObserveConflict => RetryOwner::GentsTransaction,
+        }
+    }
+
+    /// Whether a callback's request to run again from the start is honoured.
+    /// A single-attempt transaction replays a recorded pack transcript, and an
+    /// observing one reports instead of repeating.
+    const fn reruns(self) -> bool {
+        match self {
+            Self::ConflictRetry | Self::SignedConflictRebuild | Self::Idempotent(_) => true,
+            Self::SingleAttempt => false,
+            #[cfg(test)]
+            Self::ObserveConflict => false,
         }
     }
 
@@ -188,6 +201,7 @@ where
         let operation = WriteOperation::new(operation).map_err(ConfigClientError::from)?;
         let mut max_attempts = mode.max_attempts();
         let mut attempt = 0;
+        let mut rerun_notes: Vec<RerunNote> = Vec::new();
         while attempt < max_attempts {
             attempt += 1;
             let ordinal =
@@ -230,6 +244,7 @@ where
                     return Err(error.into());
                 }
             };
+            txn.rerun_notes = rerun_notes.clone();
             telemetry.cancelled_rollback = match backend {
                 WriteBackend::Embedded => RollbackStatus::NotNeeded,
                 WriteBackend::Http => RollbackStatus::Scheduled,
@@ -355,6 +370,39 @@ where
                     } else {
                         RollbackStatus::Scheduled
                     };
+                    let rerun = error
+                        .config_client_error()
+                        .and_then(ConfigClientError::rerun_requested)
+                        .filter(|note| !rerun_notes.contains(note))
+                        .cloned();
+                    if let Some(note) = rerun {
+                        let discarded = matches!(rollback, RollbackStatus::Succeeded);
+                        // A rerun runs the whole callback again: it needs the
+                        // attempt discarded, and a client-signed write already
+                        // sent may be signed again only where conflict
+                        // rebuilds are authorized.
+                        if mode.reruns()
+                            && discarded
+                            && !txn.embedded_poisoned()
+                            && client_signed_write_may_retry(
+                                txn.client_signed_write_dispatched.load(Ordering::Acquire),
+                                discarded,
+                                matches!(mode, TransactionMode::SignedConflictRebuild),
+                            )
+                        {
+                            telemetry.record(AttemptReport {
+                                outcome: WriteOutcome::Retrying,
+                                conflict_source: ConflictSource::None,
+                                backoff: None,
+                                affected_documents: Some(0),
+                                rollback,
+                            });
+                            rerun_notes.push(note);
+                            max_attempts += 1;
+                            drop(txn);
+                            continue;
+                        }
+                    }
                     Err(TransactionAttemptFailure {
                         conflict_source: retry::classified_transaction_conflict(&error),
                         error,

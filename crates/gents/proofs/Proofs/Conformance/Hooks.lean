@@ -166,7 +166,10 @@ private def scriptJson {V : Type} (valueJson : V → String) (script : Script V)
 private def verdictJson : ClaimVerdict → String
   | .allow => "{\"kind\":\"allow\"}"
   | .leaveQueued => "{\"kind\":\"leave_queued\"}"
-  | .retire reason => "{\"kind\":\"retire\",\"reason\":" ++ jsonString reason ++ "}"
+  | .retire reason successor =>
+      "{\"kind\":\"retire\",\"reason\":" ++ jsonString reason ++
+        ",\"successor\":{\"request_id\":" ++ jsonString successor.request ++
+        ",\"request_doc_id\":" ++ jsonString successor.doc ++ "}}"
   | .reject reason => "{\"kind\":\"reject\",\"reason\":" ++ jsonString reason ++ "}"
 
 /-! Effect validation and application: `Hooks.valid` and `Hooks.commit`. -/
@@ -232,17 +235,21 @@ def effectCases : List EffectCase :=
   , { name := "delete_with_stale_revision_misses"
     , world := { effectWorld with denied := [] }, manifest := notes
     , effects := [delete "Note" "n1" 3] }
-  , { name := "create_then_update_sees_the_created_revision", world := effectWorld
+  , { name := "create_then_update_of_one_document_is_invalid", world := effectWorld
     , manifest := notes, effects := [create "Note" "n2" "a", update "Note" "n2" 0 "b"] }
-  , { name := "update_then_create_misses_in_that_order", world := effectWorld
+  , { name := "update_then_create_of_one_document_is_invalid", world := effectWorld
     , manifest := notes, effects := [update "Note" "n2" 0 "b", create "Note" "n2" "a"] }
-  , { name := "two_updates_chain_revisions", world := effectWorld, manifest := notes
+  , { name := "two_updates_of_one_document_are_invalid", world := effectWorld, manifest := notes
     , effects := [update "Note" "n1" 2 "b", update "Note" "n1" 3 "c"] }
-  , { name := "delete_then_create_restarts_the_revision"
+  , { name := "delete_then_create_of_one_document_is_invalid"
     , world := { effectWorld with denied := [] }, manifest := notes
     , effects := [delete "Note" "n1" 2, create "Note" "n1" "again"] }
   , { name := "core_operations_apply_in_returned_order", world := effectWorld
-    , manifest := notes, effects := [coreOp "second", coreOp "first"] } ]
+    , manifest := notes, effects := [coreOp "second", coreOp "first"] }
+  , { name := "writes_to_distinct_documents_check_against_the_snapshot", world := effectWorld
+    , manifest := notes, effects := [update "Note" "n1" 2 "b", create "Note" "n2" "c"] }
+  , { name := "one_stale_write_among_distinct_documents_misses", world := effectWorld
+    , manifest := notes, effects := [create "Note" "n2" "c", update "Note" "n1" 1 "b"] } ]
 
 private def effectCaseJson (c : EffectCase) : String :=
   "{\"name\":" ++ jsonString c.name ++
@@ -454,9 +461,12 @@ def mustCommitCases : List MustCommitCase :=
   , { name := "failed_core_operation_is_dropped_whole", world := stageWorld
     , plugins := [notesPlugin.deciding
         (.proceed "notes-ok" [update "Note" "n1" 0 "b", coreOp "explode"]), tagsPlugin] }
+  , { name := "repeated_document_is_dropped_and_owed", world := stageWorld
+    , plugins := [notesPlugin.deciding
+        (.proceed "notes-ok" [update "Note" "n1" 0 "b", update "Note" "n1" 1 "c"]), tagsPlugin] }
   , { name := "partial_miss_is_dropped_whole", world := stageWorld
     , plugins := [notesPlugin.deciding
-        (.proceed "notes-ok" [update "Note" "n1" 0 "b", update "Note" "n1" 0 "c"]),
+        (.proceed "notes-ok" [update "Note" "n1" 0 "b", update "Note" "n7" 0 "c"]),
                   auditPlugin] }
   , { name := "every_plugin_failing_still_commits_the_transition", world := stageWorld
     , plugins := [notesPlugin, tagsWith (.refuse "cannot record")], readFailed := ["notes"] }
@@ -479,6 +489,9 @@ def mustCommitCasesJson : String := jsonArray (mustCommitCases.map mustCommitCas
 
 /-! Claim verdicts: `Hooks.combine` and `Hooks.gate`. -/
 
+/-- A successor named by its request id; its document id is derived. -/
+private def successorOf (request : String) : Successor := ⟨request, request ++ "-doc"⟩
+
 structure CombineCase where
   name : String
   verdicts : List ClaimVerdict
@@ -487,13 +500,20 @@ def combineCases : List CombineCase :=
   [ { name := "no_plugins_allow", verdicts := [] }
   , { name := "all_allow", verdicts := [.allow, .allow, .allow] }
   , { name := "leave_queued_over_allow", verdicts := [.allow, .leaveQueued, .allow] }
-  , { name := "retire_over_leave_queued", verdicts := [.leaveQueued, .retire "superseded", .allow] }
-  , { name := "reject_over_retire", verdicts := [.retire "superseded", .reject "denied", .leaveQueued] }
-  , { name := "reject_over_retire_permuted", verdicts := [.leaveQueued, .reject "denied", .retire "superseded"] }
-  , { name := "reject_first_permuted", verdicts := [.reject "denied", .leaveQueued, .retire "superseded"] }
+  , { name := "retire_over_leave_queued"
+    , verdicts := [.leaveQueued, .retire "superseded" (successorOf "r2"), .allow] }
+  , { name := "reject_over_retire"
+    , verdicts := [.retire "superseded" (successorOf "r2"), .reject "denied", .leaveQueued] }
+  , { name := "reject_over_retire_permuted"
+    , verdicts := [.leaveQueued, .reject "denied", .retire "superseded" (successorOf "r2")] }
+  , { name := "reject_first_permuted"
+    , verdicts := [.reject "denied", .leaveQueued, .retire "superseded" (successorOf "r2")] }
   , { name := "equal_rejects_first_reason_wins", verdicts := [.allow, .reject "first", .reject "second"] }
   , { name := "equal_rejects_swapped_first_reason_wins", verdicts := [.reject "second", .allow, .reject "first"] }
-  , { name := "equal_retires_first_reason_wins", verdicts := [.retire "older", .leaveQueued, .retire "newer"] }
+  , { name := "equal_retires_first_reason_and_successor_win"
+    , verdicts := [.retire "older" (successorOf "r2"), .leaveQueued, .retire "newer" (successorOf "r3")] }
+  , { name := "equal_reasons_first_successor_wins"
+    , verdicts := [.retire "superseded" (successorOf "r3"), .retire "superseded" (successorOf "r2")] }
   , { name := "single_leave_queued", verdicts := [.leaveQueued] } ]
 
 private def combineCaseJson (c : CombineCase) : String :=
@@ -513,7 +533,7 @@ def GateCase.result (c : GateCase) : Except Refusal (List ClaimVerdict) :=
 
 private def fence : Script ClaimVerdict :=
   { name := "goal-fence", owns := ["GoalFence"], bound := 1, reads := ["Note"]
-  , decision := .byShown 1 (.retire "goal superseded", []) (.allow, []) }
+  , decision := .byShown 1 (.retire "goal superseded" (successorOf "r2"), []) (.allow, []) }
 
 private def mailbox : Script ClaimVerdict :=
   { name := "mailbox", owns := ["Mailbox"], bound := 1
@@ -533,7 +553,8 @@ def gateCases : List GateCase :=
     , plugins := [fence, mailbox.deciding (.refuse "mailbox closed")] }
   , { name := "verdict_with_effects_is_invalid", world := stageWorld
     , plugins := [fence.deciding
-        (.proceed (.retire "goal superseded") [create "GoalFence" "f1" "retired"]), mailbox] }
+        (.proceed (.retire "goal superseded" (successorOf "r2")) [create "GoalFence" "f1" "retired"]),
+        mailbox] }
   , { name := "effects_rejected_even_when_allowing", world := stageWorld
     , plugins := [mailbox, fence.deciding (.proceed .allow [coreOp "request.supersede"])] } ]
 

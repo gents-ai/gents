@@ -238,13 +238,18 @@ pub enum InvalidEffects {
         collection: String,
         relation: String,
     },
+    #[error("{collection} document {doc_id} is written more than once; merge its writes into one")]
+    RepeatedDocument { collection: String, doc_id: String },
 }
 
 /// Lean `Hooks.valid` and `Hooks.grantsValid`: bounded, every write in a
-/// collection the plugin owns and permitted to the transaction's actor, every
-/// grant declared for its create's collection and naming a subject `named`
-/// admits. A requested core operation is admitted here and authorized by core
-/// when it performs it.
+/// collection the plugin owns and permitted to the transaction's actor, no
+/// document written twice, every grant declared for its create's collection
+/// and naming a subject `named` admits. A requested core operation is
+/// admitted here and authorized by core when it performs it.
+///
+/// A create that names no document ID is given a fresh one by the store, so
+/// it writes a document no other write in the result can name.
 pub fn validate<F>(
     manifest: &Manifest,
     effects: &[Effect],
@@ -260,11 +265,22 @@ where
             bound: manifest.bound,
         });
     }
+    let mut written: Vec<&DocRef> = Vec::new();
     for effect in effects {
         let Effect::Write(write) = effect else {
             continue;
         };
         let doc = write.doc();
+        let assigned = matches!(write, Write::Create { .. }) && doc.doc_id.is_empty();
+        if !assigned {
+            if written.contains(&doc) {
+                return Err(InvalidEffects::RepeatedDocument {
+                    collection: doc.collection.clone(),
+                    doc_id: doc.doc_id.clone(),
+                });
+            }
+            written.push(doc);
+        }
         let Some(owned) = manifest.owned(&doc.collection) else {
             return Err(InvalidEffects::ForeignCollection {
                 collection: doc.collection.clone(),

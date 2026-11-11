@@ -5,16 +5,16 @@ use super::prepared::{admit, inputs_digest, prepare, Binding, Stale};
 use super::queue_scope::{QueueScopes, SessionRequests};
 use super::registry::{
     AdmitShown, ClaimApplied, ClaimCandidate, OperationContext, QueueScopeAsk, Registry,
-    RequestTerminal, SessionHalt, SessionResume,
+    RequestCreated, RequestTerminal, SessionHalt, SessionResume,
 };
-use super::stage::{gate, stage, stage_dropping, stage_naming, HookError, Staged};
+use super::stage::{gate, stage, stage_dropping, stage_naming, HookError, Plugin, Staged};
 use crate::request::admission::{
     load_exact_parent_request, required_row_string, AdmissionResult, AgentRequestAdmissionError,
 };
 use gents_protocol::owed_delivery::OwedSubject;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
-use gents_store::config_client::ConfigApplyTxn;
+use gents_store::config_client::{ConfigApplyTxn, ConfigClientError, RerunNote};
 
 /// A store or core-operation failure reaches the caller as the error it was
 /// before the seam, so its text and its conflict classification are unchanged.
@@ -44,6 +44,46 @@ fn owning_session(
     })
 }
 
+/// The note asking the store to run a transition again without `plugin`'s
+/// staging at `point` for `subject`.
+fn rerun_note(point: &str, plugin: &str, subject: &str) -> RerunNote {
+    RerunNote::new(format!("lifecycle-hooks\n{point}\n{plugin}\n{subject}"))
+}
+
+/// `Hooks.stageDropping` at a must-commit point, inside a transaction the
+/// store re-runs. A plugin whose staging failed after part of it was written
+/// cannot be skipped within the attempt, so the attempt asks the store to run
+/// the whole transition again; the next attempt skips that plugin for this
+/// subject and owes it.
+async fn stage_must_commit<E>(
+    txn: &ConfigApplyTxn<'_>,
+    host: &TxnHost<'_, '_>,
+    plugins: &[Plugin<E, ()>],
+    event: &E,
+    point: &'static str,
+    subject: &str,
+) -> anyhow::Result<Vec<Staged>> {
+    let without = plugins
+        .iter()
+        .map(|plugin| plugin.manifest().name)
+        .filter(|plugin| {
+            txn.rerun_notes()
+                .contains(&rerun_note(point, plugin, subject))
+        })
+        .collect::<Vec<_>>();
+    match stage_dropping(host, plugins, event, &without).await {
+        Ok(staged) => Ok(staged),
+        Err(error @ HookError::PartialStaging { plugin, .. }) => {
+            Err(ConfigClientError::RerunRequested {
+                note: rerun_note(point, plugin, subject),
+                cause: Box::new(error),
+            }
+            .into())
+        }
+        Err(other) => Err(surface(other)),
+    }
+}
+
 /// `request.terminal.stage` (must commit). Called after core's terminal
 /// compare-and-set affected the request's row, in the same transaction.
 pub async fn request_terminal(
@@ -63,9 +103,15 @@ pub async fn request_terminal(
     };
     let registry = Registry::for_transaction(txn)?;
     let host = TxnHost::new(txn, &registry, OperationContext::default());
-    let staged = stage_dropping(&host, &registry.request_terminal, &event)
-        .await
-        .map_err(surface)?;
+    let staged = stage_must_commit(
+        txn,
+        &host,
+        &registry.request_terminal,
+        &event,
+        REQUEST_TERMINAL_STAGE,
+        request_id,
+    )
+    .await?;
     if staged.iter().any(Staged::is_owed) {
         let session = owning_session(request_session_owner(txn, request_id).await);
         owe(
@@ -103,9 +149,15 @@ pub async fn session_halt(
     };
     let registry = Registry::for_transaction(txn)?;
     let host = TxnHost::new(txn, &registry, OperationContext::default());
-    let staged = stage_dropping(&host, &registry.session_halt, &event)
-        .await
-        .map_err(surface)?;
+    let staged = stage_must_commit(
+        txn,
+        &host,
+        &registry.session_halt,
+        &event,
+        CONTROL_SESSION_HALT,
+        session_id,
+    )
+    .await?;
     if staged.iter().any(Staged::is_owed) {
         let session = owning_session(
             gents_store::config_client::agent_session::load_agent_session_owner_in_txn(
@@ -162,6 +214,22 @@ pub async fn session_resume(
         },
     );
     stage(&host, &registry.session_resume, &event)
+        .await
+        .map_err(surface)?;
+    Ok(())
+}
+
+/// `request.create.stage` after creation (may refuse). Called by core's
+/// `request.create` operation once the row exists, in the same transaction; a
+/// refusal fails the creation with the plugin's reason.
+pub async fn request_created(
+    txn: &ConfigApplyTxn<'_>,
+    context: OperationContext<'_>,
+    event: &RequestCreated,
+) -> anyhow::Result<()> {
+    let registry = Registry::for_transaction(txn)?;
+    let host = TxnHost::new(txn, &registry, context);
+    stage(&host, &registry.request_created, event)
         .await
         .map_err(surface)?;
     Ok(())
