@@ -264,9 +264,11 @@ pub fn resolve_graphql_endpoint(
         let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
             identity.private_key_bytes(),
         )?;
-        return Ok(GraphqlEndpoint::as_principal(graphql, identity.did())
-            .with_client_signing_capability(capability)?
-            .with_client_signed_agent_creates());
+        return Ok(gents::runtime::lifecycle_hooks::compose_endpoint(
+            GraphqlEndpoint::as_principal(graphql, identity.did())
+                .with_client_signing_capability(capability)?
+                .with_client_signed_agent_creates(),
+        )?);
     }
 
     if let Some(runtime_state) = read_runtime_state(&home_dir)? {
@@ -307,9 +309,11 @@ fn home_graphql_endpoint_with_paths(
     let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
         identity.private_key_bytes(),
     )?;
-    Ok(GraphqlEndpoint::as_principal(url, identity.did())
-        .with_client_signing_capability(capability)?
-        .with_client_signed_agent_creates())
+    Ok(gents::runtime::lifecycle_hooks::compose_endpoint(
+        GraphqlEndpoint::as_principal(url, identity.did())
+            .with_client_signing_capability(capability)?
+            .with_client_signed_agent_creates(),
+    )?)
 }
 
 /// The CLI is a separate client principal, even when desktop and CLI share a user home.

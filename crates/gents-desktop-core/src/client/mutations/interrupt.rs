@@ -85,7 +85,6 @@ pub async fn interrupt_request_on(
     node_did: &str,
     request_id: &str,
 ) -> Result<RequestInterrupt, String> {
-    gents::runtime::lifecycle_hooks::compose_client();
     let target = resolve(access, request_id, Some(node_did)).await?;
     if let Some(existing) = target.interrupt_requested_at {
         return Ok(RequestInterrupt {

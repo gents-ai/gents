@@ -4,24 +4,74 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 use defra_node::Node as EmbeddedNode;
 use rapidhash::{HashMapExt, RapidHashMap};
 
-/// Values a composition root attaches to one embedded node, at most one per
-/// type, for that node's lifetime. DefraDB's `Node` has no extension field,
-/// so the slots live in a process table keyed by the node's address.
-///
-/// Each entry holds a `Weak` to its node. A live `Weak` keeps the node's
-/// allocation, so no other node can be allocated at that address while the
-/// entry exists; once the node's last strong reference drops, its entry is
-/// dead and is removed, with its values, on the next attachment or lookup of
-/// that address.
-struct Slots {
-    node: Weak<EmbeddedNode>,
-    values: RapidHashMap<TypeId, Arc<dyn Any + Send + Sync>>,
+#[derive(Debug, thiserror::Error)]
+pub enum ExtensionError {
+    #[error("a different {type_name} is already attached")]
+    AlreadyAttached { type_name: &'static str },
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum NodeExtensionError {
-    #[error("this node already has a different {type_name} attached")]
-    AlreadyAttached { type_name: &'static str },
+/// At most one value per type, fixed once attached.
+#[derive(Clone, Default)]
+pub struct Extensions(RapidHashMap<TypeId, Arc<dyn Any + Send + Sync>>);
+
+impl Extensions {
+    pub fn attach<T>(&mut self, value: Arc<T>) -> Result<(), ExtensionError>
+    where
+        T: Any + Send + Sync,
+    {
+        match self.0.get(&TypeId::of::<T>()) {
+            Some(existing) if !std::ptr::addr_eq(Arc::as_ptr(existing), Arc::as_ptr(&value)) => {
+                Err(ExtensionError::AlreadyAttached {
+                    type_name: std::any::type_name::<T>(),
+                })
+            }
+            Some(_) => Ok(()),
+            None => {
+                self.0.insert(TypeId::of::<T>(), value);
+                Ok(())
+            }
+        }
+    }
+
+    pub fn get<T>(&self) -> Option<Arc<T>>
+    where
+        T: Any + Send + Sync,
+    {
+        Arc::clone(self.0.get(&TypeId::of::<T>())?)
+            .downcast::<T>()
+            .ok()
+    }
+}
+
+impl std::fmt::Debug for Extensions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Extensions").field(&self.0.len()).finish()
+    }
+}
+
+impl PartialEq for Extensions {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.len() == other.0.len()
+            && self.0.iter().all(|(key, value)| {
+                other
+                    .0
+                    .get(key)
+                    .is_some_and(|theirs| std::ptr::addr_eq(Arc::as_ptr(value), Arc::as_ptr(theirs)))
+            })
+    }
+}
+
+impl Eq for Extensions {}
+
+/// DefraDB's `Node` has no extension field, so a node's extensions live in a
+/// process table keyed by its address. Each entry holds a `Weak` to its node:
+/// a live `Weak` keeps the node's allocation, so no other node can be
+/// allocated at that address while the entry exists. Once the node's last
+/// strong reference drops, its entry is removed, with its values, on the next
+/// attachment.
+struct Slots {
+    node: Weak<EmbeddedNode>,
+    values: Extensions,
 }
 
 fn table() -> &'static Mutex<RapidHashMap<usize, Slots>> {
@@ -33,57 +83,35 @@ fn key(node: &EmbeddedNode) -> usize {
     node as *const EmbeddedNode as usize
 }
 
-/// Attaches `value` to `node` as its `T`. Attaching the value already
-/// attached is accepted; a different one is refused, since a node's
-/// composition is fixed once it is built.
-pub fn attach<T>(node: &Arc<EmbeddedNode>, value: Arc<T>) -> Result<(), NodeExtensionError>
+pub fn attach<T>(node: &Arc<EmbeddedNode>, value: Arc<T>) -> Result<(), ExtensionError>
 where
     T: Any + Send + Sync,
 {
-    let dead = {
+    let (dead, attached) = {
         let mut table = table().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let dead = take_dead(&mut table);
         let slots = table.entry(key(node)).or_insert_with(|| Slots {
             node: Arc::downgrade(node),
-            values: RapidHashMap::new(),
+            values: Extensions::default(),
         });
-        match slots.values.get(&TypeId::of::<T>()) {
-            Some(existing)
-                if !std::ptr::addr_eq(Arc::as_ptr(existing), Arc::as_ptr(&value)) =>
-            {
-                return Err(NodeExtensionError::AlreadyAttached {
-                    type_name: std::any::type_name::<T>(),
-                });
-            }
-            Some(_) => {}
-            None => {
-                slots.values.insert(TypeId::of::<T>(), value);
-            }
-        }
-        dead
+        (dead, slots.values.attach(value))
     };
     drop(dead);
-    Ok(())
+    attached
 }
 
-/// The `T` attached to `node`, if any.
 pub fn attached<T>(node: &EmbeddedNode) -> Option<Arc<T>>
 where
     T: Any + Send + Sync,
 {
     let table = table().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let slots = table.get(&key(node))?;
-    // The caller holds `node`, so a live entry at its address is its own.
     if slots.node.strong_count() == 0 {
         return None;
     }
-    let value = Arc::clone(slots.values.get(&TypeId::of::<T>())?);
-    drop(table);
-    value.downcast::<T>().ok()
+    slots.values.get::<T>()
 }
 
-/// Removes the entries whose node has dropped; the caller drops them after
-/// releasing the table.
 fn take_dead(table: &mut RapidHashMap<usize, Slots>) -> Vec<Slots> {
     let dead_keys = table
         .iter()
@@ -127,7 +155,7 @@ mod tests {
         attach(&node, Arc::clone(&value)).unwrap();
         assert!(matches!(
             attach(&node, Arc::new(Marker("other"))),
-            Err(NodeExtensionError::AlreadyAttached { .. })
+            Err(ExtensionError::AlreadyAttached { .. })
         ));
         assert_eq!(attached::<Marker>(&node).unwrap().0, "composed");
     }
