@@ -6,7 +6,7 @@ use std::sync::Arc;
 use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};
 use gents_store::config_client::ConfigAccess;
 
-use super::{AgentMessageDelivery, Delivery, RenderedBody};
+use super::{AgentMessageDelivery, Delivery, RenderedBody, SessionMessageGoals};
 
 pub(super) enum PlannedWrite {
     Request {
@@ -68,6 +68,17 @@ impl Plan {
         }
     }
 
+    /// The planned request when the plan is not Goal-backed.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn planned_request(
+        &self,
+    ) -> Option<&gents_protocol::request_admission::AgentRequestCreate> {
+        match &self.write {
+            PlannedWrite::Request { create, .. } => Some(create),
+            PlannedWrite::Goal { .. } => None,
+        }
+    }
+
     pub(crate) fn delivery(&self) -> Delivery {
         match self.write {
             PlannedWrite::Request { delivery, .. } => delivery,
@@ -76,8 +87,9 @@ impl Plan {
     }
 }
 
-pub(super) async fn target_goal_assignment(
+pub async fn target_goal_assignment(
     node: &Arc<EmbeddedNode>,
+    goals: &dyn SessionMessageGoals,
     cause: &SessionMessageCause,
     target: &SessionMessageTarget,
 ) -> Result<Option<gents_protocol::request_input::GoalAssignmentInput>> {
@@ -107,12 +119,9 @@ pub(super) async fn target_goal_assignment(
                     session.session.agent_did == target.agent_did,
                     "session-message target Agent differs from its canonical session"
                 );
-                let goal = crate::goal::load_canonical_goal_in_txn(
-                    txn,
-                    &target.node_did,
-                    &target.session_id,
-                )
-                .await?;
+                let goal = goals
+                    .session_goal_in_txn(txn, &target.node_did, &target.session_id)
+                    .await?;
                 Ok(goal.and_then(|goal| {
                     goal.assignment_root_request_doc_id
                         .map(|root| GoalAssignmentInput {
@@ -127,8 +136,9 @@ pub(super) async fn target_goal_assignment(
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
-pub(crate) async fn plan(
+pub async fn plan(
     node: &Arc<EmbeddedNode>,
+    goals: &dyn SessionMessageGoals,
     cause: &SessionMessageCause,
     target: &SessionMessageTarget,
     rendered: RenderedBody,
@@ -138,6 +148,7 @@ pub(crate) async fn plan(
 ) -> Result<Result<Plan, String>> {
     plan_with_delivery(
         node,
+        goals,
         cause,
         target,
         rendered,
@@ -154,6 +165,7 @@ pub(crate) async fn plan(
 
 pub async fn plan_with_delivery(
     node: &Arc<EmbeddedNode>,
+    goals: &dyn SessionMessageGoals,
     cause: &SessionMessageCause,
     target: &SessionMessageTarget,
     rendered: RenderedBody,
@@ -287,7 +299,7 @@ pub async fn plan_with_delivery(
                     hop,
                     gents_protocol::request_input::RequestInput {
                         queue,
-                        goal_assignment: target_goal_assignment(node, cause, target).await?,
+                        goal_assignment: target_goal_assignment(node, goals, cause, target).await?,
                         ..Default::default()
                     },
                     signer,

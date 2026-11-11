@@ -75,6 +75,7 @@ async fn remote_delivery_waits_for_authenticated_http_transport() {
     };
     let result = super::plan::plan_with_delivery(
         &node,
+        &NoSessionMessageGoals,
         &cause,
         &target,
         RenderedBody {

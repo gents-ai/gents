@@ -16,25 +16,24 @@ mod agent_tools_tests;
 #[cfg(test)]
 mod delivery_conformance;
 #[cfg(test)]
-mod goal_input_tests;
-#[cfg(test)]
 mod hop_tests;
 
 mod body;
 pub mod commit;
 mod discovery;
+mod goals;
 mod inspection;
 mod interrupt;
 pub mod plan;
 mod target;
 
 pub use body::{load_configured_task, render_body, render_task_body};
-pub(crate) use commit::commit;
 pub use commit::{
-    load_receipt, stage_planned_write_in_txn, CommitError, SessionMessageCall,
+    commit, load_receipt, stage_planned_write_in_txn, CommitError, SessionMessageCall,
     SessionMessageReceipt, ToolCallTerminal,
 };
 pub use discovery::{agent_session_list, AgentSessionListArgs};
+pub use goals::{NoSessionMessageGoals, SessionGoal, SessionMessageGoals};
 pub use inspection::{agent_session_read, AgentSessionReadArgs};
 pub use interrupt::{
     agent_interrupt_allowed, interrupt_refusal, interrupt_session, interrupt_session_with_access,
