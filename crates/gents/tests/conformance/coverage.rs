@@ -1846,7 +1846,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "LifecycleHookDeliveryCases",
         ),
         (
-            !snapshot.lifecycle_hook_owed_delivery_cases.is_empty(),
+            !snapshot.lifecycle_hook_owed_delivery_cases.traces.is_empty(),
             "lifecycle_hook_owed_delivery_cases",
             "LifecycleHookOwedDeliveryCases",
         ),

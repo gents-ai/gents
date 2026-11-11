@@ -39,7 +39,7 @@ impl OwedSettlement {
 }
 
 pub const OWED_DELIVERY_FIELDS: &str = "_docID delivery_key node_did node_doc_id parent_linked \
-point plugin subject_kind subject_id subject_node_did actor_did terminal_state reason occurred_at \
+point plugin subject_kind subject_id subject_node_did actor_did runner_did terminal_state reason occurred_at \
 halt_latch attempts last_error settlement created_at updated_at";
 
 /// One owed delivery. `subject_node_did` and the event scalars rebuild the
@@ -59,7 +59,9 @@ pub struct OwedDeliveryRow {
     pub subject_kind: OwedSubject,
     pub subject_id: String,
     pub subject_node_did: String,
-    pub actor_did: String,
+    #[serde(default)]
+    pub actor_did: Option<String>,
+    pub runner_did: String,
     #[serde(default)]
     pub terminal_state: Option<String>,
     #[serde(default)]
