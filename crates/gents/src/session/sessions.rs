@@ -1078,17 +1078,8 @@ pub(super) async fn max_sequence_in_txn(
     node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<u32> {
-    let response = {
-        use gents_protocol::document_query::{
-            fields::agent_message as message, session_scope, Direction, Query, Selection,
-        };
-        let rendered = Query::select(Selection::new().field(message::SEQUENCE))
-            .filter(session_scope(node_did, session_id, requester_did))
-            .order_by(message::SEQUENCE, Direction::Desc)
-            .limit(1)
-            .render();
-        txn.run(&rendered).await?
-    };
+    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
+    let response = txn.execute(&format!(r#"{{ AgentMessage(filter: {{ {scope} }}, order: {{sequence: DESC}}, limit: 1) {{ sequence }} }}"#)).await?;
     let rows = response
         .get("data")
         .and_then(|data| data.get("AgentMessage"))

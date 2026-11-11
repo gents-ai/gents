@@ -123,50 +123,39 @@ async fn claim_request_with_projection<F>(
 where
     F: Fn(&str) -> String + Sync,
 {
-    use gents_protocol::document_query::{
-        fields::{agent_message as messages, agent_request as fields},
-        session_scope, Direction, Filter, Query, QuerySet, Selection,
-    };
     let session_id = request.session_id.as_str();
-    let all_messages = Query::select(Selection::new().field(messages::SEQUENCE))
-        .filter(session_scope(
-            &request.node_did,
-            session_id,
-            request.requester_did.as_deref(),
-        ))
-        .order_by(messages::SEQUENCE, Direction::Desc)
-        .limit(1);
-    let notifications = Query::select(
-        Selection::new()
-            .field(messages::SEQUENCE)
-            .field(messages::MESSAGE_KEY)
-            .field(messages::REQUEST_DOC_ID),
-    )
-    .filter(session_scope(
+    let scope = gents_protocol::session::session_scope_filter(
         &request.node_did,
         session_id,
         request.requester_did.as_deref(),
-    ))
-    .filter(Filter::not_null(messages::REQUEST_DOC_ID))
-    .filter(Filter::like(
-        messages::MESSAGE_KEY,
-        "background-completion-notification:%",
-    ))
-    .order_by(messages::SEQUENCE, Direction::Asc);
-    let snapshot_query = QuerySet::new()
-        .root("all_messages", &all_messages)
-        .root("notifications", &notifications)
-        .render();
+    );
+    let snapshot_query = format!(
+        r#"{{
+            all_messages: AgentMessage(
+                filter: {{ {scope} }},
+                order: {{ sequence: DESC }},
+                limit: 1
+            ) {{ sequence }}
+            notifications: AgentMessage(
+                filter: {{
+                    {scope},
+                    request_doc_id: {{ _ne: null }},
+                    message_key: {{ _like: "background-completion-notification:%" }}
+                }},
+                order: {{ sequence: ASC }}
+            ) {{ sequence message_key request_doc_id }}
+        }}"#
+    );
     let snapshot_query = &snapshot_query;
     let build_mutation = &build_mutation;
     access.transact_write(
         "lifecycle.claim_request",
         move |txn| {
             Box::pin(async move {
-                let claim_identity = txn.run(&Query::select(Selection::new().field(fields::ADMISSION_KIND))
-                    .filter(Filter::eq(fields::DOC_ID, &request.doc_id))
-                    .limit(2)
-                    .render()).await?;
+                let claim_identity = txn.execute(&format!(
+                    r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ admission_kind }} }}"#,
+                    escape_graphql_string(&request.doc_id),
+                )).await?;
                 let rows = claim_identity["data"]["AgentRequest"].as_array()
                     .context("claim admission identity query omitted rows")?;
                 if rows.len() != 1 { return Ok(None); }
@@ -228,7 +217,7 @@ where
                     )
                     .await?;
                     let assignment = assignments.scope(&request.doc_id).await?;
-                    let response = txn.run_local_response(snapshot_query).await?;
+                    let response = txn.execute_local_response(snapshot_query).await?;
                     let through_sequence = response
                         .data
                         .as_ref()
@@ -249,6 +238,9 @@ where
                         crate::store::identity::request_receipt::verify_runtime_local_control_receipt(current,
                             &request.node_did, &parent.request_id,
                             request.requester_did.as_deref().unwrap_or(&request.agent_did))?;
+                        use gents_protocol::document_query::{
+                            fields::agent_request as fields, Filter, Query, Selection,
+                        };
                         let receipt = txn.run(&Query::select(Selection::new()
                             .field(fields::BACKGROUND_COMPLETION_INPUT_THROUGH_SEQUENCE)
                             .field(fields::BACKGROUND_COMPLETION_NOTIFICATION_KEYS_JSON))

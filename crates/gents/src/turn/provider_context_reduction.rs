@@ -422,19 +422,25 @@ pub async fn capture_source_boundary(
     request_doc_id: &str,
     request_commit_cid: &str,
 ) -> Result<SourceBoundary> {
-    use gents_protocol::document_query::{
-        fields::agent_message as message, session_scope, Direction, Query, Selection,
-    };
-    let query = Query::select(Selection::doc_id().field(message::SEQUENCE))
-        .filter(session_scope(node_did, session_id, requester_did))
-        .order_by(message::SEQUENCE, Direction::Desc)
-        .limit(1)
-        .render();
+    let session_scope =
+        gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
+    let query = format!(
+        r#"{{
+            AgentMessage(
+                filter: {{ {session_scope} }},
+                order: {{ sequence: DESC }},
+                limit: 1
+            ) {{
+                _docID
+                sequence
+            }}
+        }}"#,
+    );
     access
         .transact_readonly("provider_context.capture_source_boundary", |txn| {
             let query = &query;
             Box::pin(async move {
-                let response = txn.run(query).await?;
+                let response = txn.execute(query).await?;
                 let rows = response
                     .get("data")
                     .and_then(|data| data.get("AgentMessage"))

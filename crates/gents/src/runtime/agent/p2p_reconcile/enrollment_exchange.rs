@@ -7,9 +7,9 @@ use gents_protocol::enrollment::{RenewalIntent, RenewalOfferResponse};
 use serde::Deserialize;
 
 use crate::store::config_client::ConfigAccess;
-#[cfg(test)]
-use crate::store::graphql::graphql_with_transaction_retry;
-use crate::store::graphql::{escape_graphql_string, read_rendered, rows};
+use crate::store::graphql::{
+    escape_graphql_string, graphql_with_transaction_retry, read_rendered, rows,
+};
 use crate::store::identity::NodeIdentity;
 
 use super::enrollment_candidate::push_enrollment_document;
@@ -58,34 +58,16 @@ pub(super) async fn read_intent_page(
     admin_did: &str,
     cursor: &mut Option<String>,
 ) -> Result<Vec<RenewalIntent>> {
-    use gents_protocol::document_query::{
-        fields::enrollment_renewal_intent as fields, Direction, Filter, Query, Selection,
-    };
+    let admin = escape_graphql_string(admin_did);
     let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let mut filter =
-        Filter::eq(fields::ADMIN_DID, admin_did).and(Filter::gt(fields::EXPIRES_AT, now));
-    if let Some(id) = cursor.as_ref() {
-        filter = filter.and(Filter::gt(fields::INTENT_ID, id));
-    }
-    let query = Query::select(
-        Selection::new()
-            .field(fields::INTENT_ID)
-            .field(fields::NETWORK_ID)
-            .field(fields::ADMIN_DID)
-            .field(fields::SERVER_PEER)
-            .field(fields::MEMBER_DID)
-            .field(fields::MEMBER_PEER)
-            .field(fields::PREDECESSOR_SEQUENCE)
-            .field(fields::ISSUED_AT)
-            .field(fields::EXPIRES_AT)
-            .field(fields::NONCE)
-            .field(fields::MEMBER_SIG),
-    )
-    .filter(filter)
-    .order_by(fields::INTENT_ID, Direction::Asc)
-    .limit(4)
-    .render();
-    let response = read_rendered(node, &query, "read renewal intents").await?;
+    let after = cursor
+        .as_ref()
+        .map(|id| format!(r#", intent_id: {{ _gt: "{}" }}"#, escape_graphql_string(id)))
+        .unwrap_or_default();
+    let query = format!(
+        r#"{{ EnrollmentRenewalIntent(filter: {{ admin_did: {{ _eq: "{admin}" }}, expires_at: {{ _gt: "{now}" }} {after} }}, order: {{ intent_id: ASC }}, limit: 4) {{ intent_id network_id admin_did server_peer member_did member_peer predecessor_sequence issued_at expires_at nonce member_sig }} }}"#
+    );
+    let response = graphql_with_transaction_retry(node, &query, "read renewal intents").await?;
     let raw = rows::<serde_json::Value>(&response, "EnrollmentRenewalIntent")?;
     *cursor = if raw.len() == 4 {
         raw.last()
@@ -130,30 +112,18 @@ pub(super) async fn prune_expired_offers(
     identity: &dyn NodeIdentity,
     cursor: &mut Option<String>,
 ) -> Result<()> {
-    use gents_protocol::document_query::{
-        fields::enrollment_renewal_offer as fields, Delete, Direction, Filter, Query, Selection,
-    };
+    let admin = escape_graphql_string(identity.did());
     let now = Utc::now();
-    let cutoff = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let mut filter =
-        Filter::eq(fields::ADMIN_DID, identity.did()).and(Filter::lt(fields::EXPIRES_AT, &cutoff));
-    if let Some(id) = cursor.as_ref() {
-        filter = filter.and(Filter::gt(fields::INTENT_ID, id));
-    }
-    let query = Query::select(
-        Selection::doc_id()
-            .field(fields::INTENT_ID)
-            .field(fields::MEMBER_DID)
-            .field(fields::OFFER_TOKEN)
-            .field(fields::EXPIRES_AT)
-            .field(fields::ADMIN_DID)
-            .field(fields::ADMIN_SIG),
-    )
-    .filter(filter)
-    .order_by(fields::INTENT_ID, Direction::Asc)
-    .limit(32)
-    .render();
-    let response = read_rendered(node, &query, "read expired renewal offers").await?;
+    let cutoff = escape_graphql_string(&now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    let after = cursor
+        .as_ref()
+        .map(|id| format!(r#", intent_id: {{ _gt: "{}" }}"#, escape_graphql_string(id)))
+        .unwrap_or_default();
+    let query = format!(
+        r#"{{ EnrollmentRenewalOffer(filter: {{ admin_did: {{ _eq: "{admin}" }}, expires_at: {{ _lt: "{cutoff}" }} {after} }}, order: {{ intent_id: ASC }}, limit: 32) {{ _docID intent_id member_did offer_token expires_at admin_did admin_sig }} }}"#
+    );
+    let response =
+        graphql_with_transaction_retry(node, &query, "read expired renewal offers").await?;
     let raw = rows::<serde_json::Value>(&response, "EnrollmentRenewalOffer")?;
     *cursor = if raw.len() == 32 {
         raw.last()
@@ -199,6 +169,9 @@ pub(super) async fn prune_expired_offers(
         if !may_prune_renewal(owned, verified, expires.with_timezone(&Utc), now) {
             continue;
         }
+        use gents_protocol::document_query::{
+            fields::enrollment_renewal_offer as fields, Delete, Filter,
+        };
         let mutation = Delete::matching(
             Filter::eq(fields::DOC_ID, &row.doc_id)
                 .and(Filter::eq(fields::ADMIN_DID, identity.did()))
