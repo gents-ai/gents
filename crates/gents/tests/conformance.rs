@@ -8,11 +8,10 @@ use gents::inference::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
 };
+use gents::request::event_delivery::EventDeliverySourceContract;
 use gents::request::lifecycle::{ClaimOutcome, ExecutionOrigin, TriggerLineage};
 use gents::store::graphql::escape_graphql_string;
-use gents::triggers::event_delivery::{
-    runtime_event_delivery_source_contracts, EventDeliverySourceContract,
-};
+use gents::triggers::event_delivery::runtime_event_delivery_source_contracts;
 use gents::{write_manual_agent_request, InferenceCall, RequestLifecycle};
 use serde::Deserialize;
 use serde_json::{json, Value};
