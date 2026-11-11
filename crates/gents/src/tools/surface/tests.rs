@@ -1000,7 +1000,12 @@ async fn required_mcp_service_needs_agent_scoped_measured_availability() {
         .await
         .unwrap();
     let surface = config
-        .resolve_with_available_agent_targets(&node, node_did, &active, &Default::default())
+        .resolve_with_available_agent_targets(
+            &node,
+            node_did,
+            &active,
+            &crate::tools::plugin_host::NoPluginHost,
+        )
         .await
         .expect("healthy required service makes the agent resolvable");
     assert!(surface.includes_meta_tools());
@@ -1223,7 +1228,7 @@ async fn defra_query_tool_gated_by_selection() {
     .resolve(
         &node,
         node.node_identity_did().unwrap(),
-        &Default::default(),
+        &crate::tools::plugin_host::NoPluginHost,
     )
     .await
     .unwrap();
@@ -1266,7 +1271,7 @@ async fn context_budget_tool_gated_by_selection() {
     .resolve(
         &node,
         node.node_identity_did().unwrap(),
-        &Default::default(),
+        &crate::tools::plugin_host::NoPluginHost,
     )
     .await
     .unwrap();
@@ -1458,7 +1463,11 @@ async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
     ));
 
     let without_grant = AgentToolSurfaceConfig::meta_only()
-        .resolve(&runtime.node, &runtime.node_did, &Default::default())
+        .resolve(
+            &runtime.node,
+            &runtime.node_did,
+            &crate::tools::plugin_host::NoPluginHost,
+        )
         .await
         .unwrap();
     assert!(!without_grant
@@ -1769,7 +1778,7 @@ async fn goal_creation_requires_its_separate_capability() {
     .resolve(
         &node,
         node.node_identity_did().unwrap(),
-        &Default::default(),
+        &crate::tools::plugin_host::NoPluginHost,
     )
     .await
     .unwrap();
@@ -2078,7 +2087,7 @@ async fn session_history_tool_follows_selection() {
     .resolve(
         &node,
         node.node_identity_did().unwrap(),
-        &Default::default(),
+        &crate::tools::plugin_host::NoPluginHost,
     )
     .await
     .unwrap();
@@ -2687,7 +2696,7 @@ async fn defra_query_is_off_by_default() {
         .resolve(
             &node,
             node.node_identity_did().unwrap(),
-            &Default::default(),
+            &crate::tools::plugin_host::NoPluginHost,
         )
         .await
         .unwrap();
