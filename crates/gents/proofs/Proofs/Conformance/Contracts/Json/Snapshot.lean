@@ -85,6 +85,7 @@ import Proofs.Conformance.FileReviewRoutes
 import Proofs.Conformance.FileInventory
 import Proofs.Conformance.TaskHooks
 import Proofs.Conformance.Hooks
+import Proofs.Conformance.HookDecisions
 import Proofs.Conformance.StoreEncryptionUpgrade
 import Proofs.Conformance.Contracts.Json.Core
 import Proofs.Conformance.Contracts.Json.Runtime
@@ -570,6 +571,12 @@ def snapshotRequestCasesJson : String :=
       ++ Conformance.HooksContracts.admitCasesJson ++ ","
     ++ "\"lifecycle_hook_grant_cases\":"
       ++ Conformance.HooksContracts.grantCasesJson ++ ","
+    ++ "\"lifecycle_hook_supersede_cases\":"
+      ++ Conformance.HookDecisions.supersedeCasesJson ++ ","
+    ++ "\"lifecycle_hook_goal_halt_cases\":"
+      ++ Conformance.HookDecisions.goalHaltCasesJson ++ ","
+    ++ "\"lifecycle_hook_history_cases\":"
+      ++ Conformance.HookDecisions.historyCasesJson ++ ","
 
 def snapshotSessionCasesJson : String :=
   ""

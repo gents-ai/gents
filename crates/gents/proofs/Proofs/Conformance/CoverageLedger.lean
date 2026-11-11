@@ -1321,6 +1321,21 @@ def caseCoverage : List CoverageEntry :=
       "Production validate decides every representable case. A native grant rides on its create, so a grant on a document the result does not create cannot be expressed and is checked to be invalid in the model. The DefraDB host's relationship publication and the Goals listener (goal::lifecycle_hooks::TaskGoalAssignment) are not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "lifecycle_hook_supersede_cases"
+      "LifecycleHookSupersedeCases"
+      "Production Selector::stale classifies and renders every case from row facts. The facts' extraction from AgentRequest rows (receipt verification, the parent read by document) and the retirement through the pending-supersede path are not driven by these cases.")
+      "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "lifecycle_hook_goal_halt_cases"
+      "LifecycleHookGoalHaltCases"
+      "Production halt_verdict, with its RFC 3339 parsing, decides every case. The Goal write and outcome settlement PauseOnHalt stages for a pause verdict are not driven by these cases.")
+      "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "lifecycle_hook_history_cases"
+      "LifecycleHookHistoryCases"
+      "Production history_permitted decides every case. The DefraDB host's refusal of an out-of-bound revision read before answering it is not driven by these cases.")
+      "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "fold_queue_cases"
       "FoldQueueCases"
       "Generated scripts drive the native claim transaction with an explicit verified-admission set, publish selected messages through the authored publication owner and finish turns, binding active, pending, selected and terminal rows and supersession pointers. The daemon's admission verification that produces that set is exercised natively, not generated.")

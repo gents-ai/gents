@@ -15,3 +15,4 @@ pub mod queue_scope;
 pub mod registry;
 mod revisions;
 pub mod stage;
+pub mod supersede;

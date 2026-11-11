@@ -1,3 +1,6 @@
+#[path = "hooks/decisions.rs"]
+mod decisions;
+
 use std::sync::{Arc, Mutex};
 
 use gents_lean_vocab::{
@@ -57,6 +60,7 @@ fn manifest(name: &str, owns: &[String], bound: usize) -> Manifest {
             })
             .collect(),
         bound,
+        history: Vec::new(),
     }
 }
 
@@ -305,7 +309,12 @@ impl Host for StoreDouble {
         None
     }
 
-    async fn select(&self, query: &Query) -> Result<Vec<Row>, HookError> {
+    async fn select(
+        &self,
+        _manifest: &Manifest,
+        _named: &[DocRef],
+        query: &Query,
+    ) -> Result<Vec<Row>, HookError> {
         let unreadable = query.filter.iter().any(|(field, value)| {
             field == PLUGIN_FIELD
                 && value
@@ -551,6 +560,7 @@ fn generated_lifecycle_hook_grant_cases_drive_create_grant_validation() {
                 })
                 .collect(),
             bound: effects.len(),
+            history: Vec::new(),
         };
         let named = Named {
             actor: Some(case.actor.clone()),
