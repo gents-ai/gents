@@ -171,6 +171,7 @@ pub async fn save_backend_authentication_on(
                     super::patch_config_components_in_txn(
                         txn,
                         node_did,
+                        None,
                         &[(
                             SelfConfigTarget::InferenceBackend,
                             id.to_owned(),
@@ -241,11 +242,15 @@ pub async fn save_config_editor_on(
         proposed.keys().all(|key| fields.contains(&key.as_str())),
         "Only editable configuration fields are allowed. Authentication belongs in Accounts."
     );
+    let admission =
+        super::observe_agent_patches(access, node_did, &[(target, id.to_owned(), Vec::new())])
+            .await?;
     let approved = stale_on_conflict(
         access
             .transact_write("client.settings.save", |txn| {
                 let proposed = &proposed;
                 let fields = &fields;
+                let admission = admission.as_ref();
                 Box::pin(async move {
                     let (current, retained) = read_in_txn(txn, node_did, target, id).await?;
                     ensure!(
@@ -264,6 +269,7 @@ pub async fn save_config_editor_on(
                     super::patch_config_components_in_txn(
                         txn,
                         node_did,
+                        admission,
                         &[(target, id.to_owned(), patch)],
                     )
                     .await?;
@@ -277,10 +283,21 @@ pub async fn save_config_editor_on(
             .await,
         SETTINGS_CHANGED,
     )?;
+    adopt_saved_editor(access, node_did, target, id, expected, &approved).await
+}
+
+async fn adopt_saved_editor(
+    access: &ConfigAccess,
+    node_did: &str,
+    target: SelfConfigTarget,
+    id: &str,
+    expected: &ConfigEditorRevision,
+    approved: &Map<String, Value>,
+) -> Result<Option<ConfigEditorDocument>> {
     match read_config_editor_on(access, node_did, target, id).await {
         Ok(document) => {
             let content_matches = serde_json::from_str::<Map<String, Value>>(&document.content)
-                .is_ok_and(|observed| observed == approved);
+                .is_ok_and(|observed| &observed == approved);
             Ok(adopt_saved_projection(
                 true,
                 document.revision.document_id == expected.document_id,

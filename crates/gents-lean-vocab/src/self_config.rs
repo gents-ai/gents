@@ -66,6 +66,19 @@ pub struct LeanSelfConfigCase {
 pub struct LeanAgentCatalogEntry {
     pub agent_did: String,
     pub enabled: bool,
+    pub tags: Vec<String>,
+}
+
+/// The acting actor of an agent decision row (Lean `SelfConfig.Actor`) with
+/// the grants native ACP gives it: `catalog` is `nodes manage_agents` on the Node,
+/// `configures` the Agents whose document it may update.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanAgentActor {
+    pub did: String,
+    pub kind: String,
+    pub catalog: bool,
+    pub configures: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -80,9 +93,12 @@ pub struct LeanAgentCreateInput {
 pub struct LeanAgentDecisionInputs {
     pub name: String,
     pub agents: Vec<LeanAgentCatalogEntry>,
-    pub protected_ids: Vec<String>,
     pub default_id: Option<String>,
     pub published_profiles: Vec<String>,
+    pub actor: LeanAgentActor,
+    /// Every front end decides this row alike (Lean
+    /// `SelfConfig.admission_ignores_front_end`).
+    pub front_ends: Vec<String>,
     pub operation: String,
     pub target: String,
     pub make_default: bool,
@@ -95,6 +111,8 @@ pub struct LeanAgentDecisionCase {
     #[serde(flatten)]
     pub inputs: LeanAgentDecisionInputs,
     pub accepted: bool,
+    /// Lean `SelfConfig.AgentRefusal`, snake case; null when accepted.
+    pub refusal: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -196,7 +214,6 @@ pub struct LeanAgentMaterializationCase {
 #[serde(deny_unknown_fields)]
 pub struct LeanSiblingToolsCase {
     pub owner_matches: bool,
-    pub protected: bool,
     pub shared_context: bool,
     pub shared_tools: bool,
     pub requested_network: Option<String>,

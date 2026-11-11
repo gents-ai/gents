@@ -366,9 +366,9 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
         let binding = if fresh_store {
             Some(provision_fresh_home(&init_node, initialized_identity.identity.as_ref(), client_identity.did()).await?)
         } else {
-            let existing = load_node(&init_node, initialized_identity.identity.did()).await?
+            load_node(&init_node, initialized_identity.identity.did()).await?
                 .context("home initialization is incomplete or its Node is unavailable; explicit recovery is required")?;
-            if existing.default_agent_did.as_deref().is_none_or(str::is_empty) {
+            if gents_documents::load_default_agent_did(&init_node, initialized_identity.identity.did()).await?.is_none() {
                 Some(gents_store::identity::provision_agent_identity_authorized(
                     &init_node, initialized_identity.identity.as_ref(), &identity::Did::new(client_identity.did())?,
                 ).await?)
@@ -1156,9 +1156,7 @@ async fn initialize_runtime_home(
             }
         });
     let existing_node = load_node(node, node_did).await?;
-    let existing_default_id = existing_node.as_ref().and_then(|node_document| {
-        normalize_optional_string(node_document.default_agent_did.as_deref())
-    });
+    let existing_default_id = gents_documents::load_default_agent_did(node, node_did).await?;
     let existing_default_agent = match existing_default_id.as_deref() {
         Some(did) => load_agent(node, did).await?,
         None => None,
@@ -1363,7 +1361,9 @@ async fn initialize_runtime_home(
                         node_did,
                         default_agent_did,
                     )
-                    .await
+                    .await?;
+                    gents_documents::grant_node_administration(txn, node_did, default_agent_did)
+                        .await
                 })
             })
             .await?;
@@ -1421,13 +1421,16 @@ async fn publish_home_config(
                             })
                         });
                 node_document["display_name"] = json!(display_name);
-                node_document["default_agent_did"] = json!(default_agent_did);
                 node_document["enabled"] = json!(enabled);
                 documents.push(DesiredStateApplyDocument {
                     collection: Collection::Node,
                     add: node_document.clone(),
                     update: node_document,
                 });
+                documents.push(replacement(
+                    Collection::DefaultAgentSelection,
+                    &gents_documents::DefaultAgentSelection::new(node_did, default_agent_did),
+                )?);
                 let plan = DesiredStateApplyPlan::new(documents)?;
                 apply_desired_state_plan(
                     txn,
@@ -2443,7 +2446,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            node_document().await.unwrap().default_agent_did.as_deref(),
+            gents_documents::load_default_agent_did(&node, owner)
+                .await
+                .unwrap()
+                .as_deref(),
             Some(default)
         );
     }

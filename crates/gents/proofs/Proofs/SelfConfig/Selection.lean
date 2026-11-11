@@ -47,43 +47,40 @@ theorem only_disabled_network_selection_admitted
 
 structure SiblingToolsOperation where
   ownerMatches : Bool
-  isProtected : Bool
   sharedContext : Bool
   sharedTools : Bool
   requestedNetwork : Option CommandPolicy.NetworkMode
   existingNetwork : CommandPolicy.NetworkMode
 
-/-- The focused operation refuses protected or shared targets rather than
-mutating other agents' documents or inventing another materialization owner. -/
-def siblingToolsAllowed (ownerMatches isProtected sharedContext sharedTools : Bool) : Bool :=
-  ownerMatches && !isProtected && !sharedContext && !sharedTools
+/-- The focused operation refuses shared or foreign-owner targets rather than
+mutating other agents' documents or inventing another materialization owner.
+No target is refused for being the Engineer: protection by name or tag is gone
+(decision 2026-11-11, #3656); only lockout is guarded, by `keepsControl`. -/
+def siblingToolsAllowed (ownerMatches sharedContext sharedTools : Bool) : Bool :=
+  ownerMatches && !sharedContext && !sharedTools
 
 def SiblingToolsOperation.admitted (op : SiblingToolsOperation) : Bool :=
-  siblingToolsAllowed op.ownerMatches op.isProtected op.sharedContext op.sharedTools &&
+  siblingToolsAllowed op.ownerMatches op.sharedContext op.sharedTools &&
     networkSelectionAllowed op.requestedNetwork
 
 def SiblingToolsOperation.resultNetwork (op : SiblingToolsOperation) :
     CommandPolicy.NetworkMode :=
   selectedNetworkMode op.requestedNetwork op.existingNetwork
 
-theorem protected_sibling_tools_denied (owner sharedContext sharedTools : Bool) :
-    siblingToolsAllowed owner true sharedContext sharedTools = false := by
-  cases owner <;> simp [siblingToolsAllowed]
-
-theorem foreign_owner_sibling_tools_denied (isProtected sharedContext sharedTools : Bool) :
-    siblingToolsAllowed false isProtected sharedContext sharedTools = false := by
+theorem foreign_owner_sibling_tools_denied (sharedContext sharedTools : Bool) :
+    siblingToolsAllowed false sharedContext sharedTools = false := by
   simp [siblingToolsAllowed]
 
-theorem shared_context_sibling_tools_denied (owner isProtected sharedTools : Bool) :
-    siblingToolsAllowed owner isProtected true sharedTools = false := by
+theorem shared_context_sibling_tools_denied (owner sharedTools : Bool) :
+    siblingToolsAllowed owner true sharedTools = false := by
   cases owner <;> simp [siblingToolsAllowed]
 
-theorem shared_tools_sibling_tools_denied (owner isProtected sharedContext : Bool) :
-    siblingToolsAllowed owner isProtected sharedContext true = false := by
+theorem shared_tools_sibling_tools_denied (owner sharedContext : Bool) :
+    siblingToolsAllowed owner sharedContext true = false := by
   cases owner <;> simp [siblingToolsAllowed]
 
 theorem unshared_owned_sibling_tools_allowed :
-    siblingToolsAllowed true false false false = true := rfl
+    siblingToolsAllowed true false false = true := rfl
 
 theorem sibling_tools_operation_narrows_network (op : SiblingToolsOperation)
     (h : op.admitted = true) :

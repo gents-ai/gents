@@ -111,14 +111,12 @@ pub(super) async fn install(
             .with_context(|| format!("installing pack schema {path:?}"))?;
     }
     // The Agent parent must exist under the evaluator before the pack is installed.
-    let mut trial_node = config.node.clone();
-    trial_node.default_agent_did = None;
     apply(
         &access,
         "eval.trial.create_node",
         &DesiredStateApplyPlan::new(vec![desired(
             Collection::Node,
-            serde_json::to_value(trial_node)?,
+            serde_json::to_value(&config.node)?,
         )])?,
     )
     .await
@@ -176,14 +174,14 @@ pub(super) async fn install(
         })
         .await
         .context("granting the selected trial Agent self-configuration")?;
-    let mut selected = config.node.clone();
-    selected.default_agent_did = Some(agent_did.clone());
     apply(
         &access,
         "eval.trial.select_agent",
         &DesiredStateApplyPlan::new(vec![desired(
-            Collection::Node,
-            serde_json::to_value(selected)?,
+            Collection::DefaultAgentSelection,
+            serde_json::to_value(gents_documents::DefaultAgentSelection::new(
+                &node_did, &agent_did,
+            ))?,
         )])?,
     )
     .await?;

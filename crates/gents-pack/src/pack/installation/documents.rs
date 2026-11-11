@@ -788,18 +788,7 @@ async fn default_host_tool_roots(
             Box::pin(async move {
                 let agent = match installer {
                     Some(agent) => Some(agent.to_owned()),
-                    None => gents_documents::read_desired_state_record_in_txn(
-                        txn,
-                        gents_store::collection::Collection::Node,
-                        owner,
-                        owner,
-                    )
-                    .await?
-                    .and_then(|(_, node)| {
-                        node.get("default_agent_did")
-                            .and_then(serde_json::Value::as_str)
-                            .map(ToOwned::to_owned)
-                    }),
+                    None => gents_documents::load_default_agent_did_in_txn(txn, owner).await?,
                 };
                 let Some(agent) = agent else {
                     return Ok::<_, anyhow::Error>(None);

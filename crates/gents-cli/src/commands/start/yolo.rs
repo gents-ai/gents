@@ -92,7 +92,10 @@ pub(super) async fn ensure_agent(
         },
         &Default::default(),
     )
-    .await?;
+    .await
+    .map_err(|error| {
+        crate::commands::config::behavior::AgentFailure::create(error, AgentCreateOperation::Clone)
+    })?;
     ensure!(
         made.agent_did == yolo,
         "the yolo agent was made as {:?}, not {yolo}",
@@ -105,17 +108,19 @@ pub(super) async fn ensure_agent(
     Ok(yolo)
 }
 
-/// The node's default agent, as its Node document names it.
+/// The node's default agent, as its DefaultAgentSelection document names it.
 pub(crate) async fn default_agent(access: &ConfigAccess, node_did: &str) -> Result<String> {
-    let rows = crate::graphql_rows(
-        access,
-        "Node",
-        &format!(
-            r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}, limit: 1) {{ default_agent_did }} }}"#,
-            escape_graphql_string(node_did)
-        ),
-    )
-    .await?;
+    use gents_protocol::document_query::{
+        fields::default_agent_selection as fields, Filter, Query, Selection,
+    };
+    let rendered = Query::select(Selection::new().field(fields::DEFAULT_AGENT_DID))
+        .filter(Filter::eq(fields::NODE_DID, node_did))
+        .limit(1)
+        .render();
+    let rows = gents_protocol::graphql::graphql_rows_from_response(
+        &access.read(&rendered).await?,
+        "DefaultAgentSelection",
+    );
     rows.first()
         .and_then(|row| row["default_agent_did"].as_str())
         .map(str::trim)

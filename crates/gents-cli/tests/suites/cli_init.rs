@@ -288,7 +288,7 @@ async fn server_apply_root_reports_post_apply_default_readiness() -> Result<()> 
     )?;
     let config_path = pack_root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
-    let original_agent_did = config["node"]
+    let original_agent_did = config["default_agent_selection"]
         .get("default_agent_did")
         .and_then(Value::as_str)
         .context("exported principal missing default agent")?
@@ -307,7 +307,8 @@ async fn server_apply_root_reports_post_apply_default_readiness() -> Result<()> 
         .as_array_mut()
         .context("agents is not an array")?
         .push(applied_agent);
-    config["node"]["default_agent_did"] = Value::String(applied_agent_did.clone());
+    config["default_agent_selection"]["default_agent_did"] =
+        Value::String(applied_agent_did.clone());
     write_json_file(&config_path, &config)?;
 
     let port = allocate_port()?;
@@ -433,7 +434,7 @@ async fn server_apply_root_waits_for_task_only_runtime_generation() -> Result<()
     apply_config_root_through_served_home(&home_dir, &node_did, &pack_root).await?;
     let config_path = pack_root.join("pack_config.json");
     let mut config = read_json_file(&config_path)?;
-    let agent_did = config["node"]
+    let agent_did = config["default_agent_selection"]
         .get("default_agent_did")
         .and_then(Value::as_str)
         .context("exported principal missing default agent")?
@@ -914,9 +915,9 @@ async fn pin_default_tools_root(
         ),
     )
     .await?;
-    let selected = graphql_query(&graphql, &format!("{{ Node(filter: {{ node_did: {{ _eq: \"{}\" }} }}, limit: 1) {{ default_agent_did }} }}", gents_store::graphql::escape_graphql_string(node_did))).await?;
+    let selected = graphql_query(&graphql, &format!("{{ DefaultAgentSelection(filter: {{ node_did: {{ _eq: \"{}\" }} }}, limit: 1) {{ default_agent_did }} }}", gents_store::graphql::escape_graphql_string(node_did))).await?;
     let agent_did = selected
-        .pointer("/data/Node/0/default_agent_did")
+        .pointer("/data/DefaultAgentSelection/0/default_agent_did")
         .and_then(Value::as_str)
         .context("node default agent missing")?;
     for operator_root in operator_roots {

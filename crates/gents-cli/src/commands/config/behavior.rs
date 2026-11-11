@@ -7,22 +7,21 @@ use gents_protocol::operations::agent::{
 use gents_protocol::operations::StringUpdate;
 use gents_store::collection::Collection;
 use gents_store::graphql::escape_graphql_string;
-use gents_tools::builtin::self_config::{configure_agent, ConfigureAgentParams};
 use gents_tools::surface::presets;
 use serde_json::{json, Value};
 
 use crate::cli::output_format::OutputFormat;
 use crate::cli::*;
-use crate::config_writes::{write_agent_document, ConfigAccess};
+use crate::config_writes::ConfigAccess;
 use crate::request_helpers::resolve_dual_id;
 use crate::{graphql_rows, print_json, read_init_config, resolve_config_access, resolve_home_dir};
 
 pub(super) async fn agent_set(args: AgentUpsertArgs) -> Result<()> {
     let endpoint = crate::resolve_graphql_endpoint(Some(&args.graphql), None)?;
     let access = ConfigAccess::Graphql(endpoint.clone());
-    let binding = match args.agent_did.as_deref() {
+    let owner = &args.node_did;
+    let (agent, binding) = match args.agent_did.as_deref() {
         Some(agent_did) => {
-            let owner = &args.node_did;
             let row = access
                 .transact_readonly("cli.agent.identity", |txn| {
                     Box::pin(async move {
@@ -37,39 +36,60 @@ pub(super) async fn agent_set(args: AgentUpsertArgs) -> Result<()> {
                 })
                 .await?
                 .context("Agent DID does not exist; omit --agent-did to provision a new agent")?;
-            serde_json::from_value::<Agent>(row.1)?.identity_binding()
+            let mut agent = serde_json::from_value::<Agent>(row.1)?;
+            if args.display_name.is_some() {
+                agent.display_name = args.display_name.clone();
+            }
+            if args.description.is_some() {
+                agent.description = args.description.clone();
+            }
+            if args.context_id.is_some() {
+                agent.context_id = args.context_id.clone();
+            }
+            agent.inference_profile_id = args.inference_profile_id.clone();
+            agent.enabled = args.enabled;
+            if !args.tags.is_empty() {
+                agent.tags = args.tags.clone();
+            }
+            (agent, None)
         }
-        None => gents_desktop_core::agent_identity::provision(&endpoint, &args.node_did).await?,
+        None => {
+            let binding =
+                gents_desktop_core::agent_identity::provision(&endpoint, &args.node_did).await?;
+            let agent = Agent {
+                agent_did: binding.agent_did.clone(),
+                creation_nonce: binding.creation_nonce.clone(),
+                node_did: args.node_did.clone(),
+                display_name: args.display_name.clone(),
+                description: args.description.clone(),
+                context_id: args.context_id.clone(),
+                inference_profile_id: args.inference_profile_id.clone(),
+                enabled: args.enabled,
+                tags: args.tags.clone(),
+                created_at: Some(chrono::Utc::now().to_rfc3339()),
+            };
+            (agent, Some(binding))
+        }
     };
-    let agent_did = binding.agent_did.clone();
-    let agent = Agent {
-        agent_did: binding.agent_did,
-        creation_nonce: binding.creation_nonce,
-        node_did: args.node_did.clone(),
-        display_name: args.display_name.clone(),
-        description: args.description.clone(),
-        context_id: args.context_id.clone(),
-        inference_profile_id: args.inference_profile_id.clone(),
-        enabled: args.enabled,
-        tags: args.tags.clone(),
-        created_at: Some(chrono::Utc::now().to_rfc3339()),
-    };
-    let doc_id = write_agent_document(
-        &access,
-        &agent,
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await?;
-    let output = json!({
-        "doc_id": doc_id,
-        "agent_did": agent_did,
+    let creating = binding.is_some();
+    let receipt =
+        gents::operations::agent::put(&access, owner, &agent, binding, false, &Default::default())
+            .await
+            .map_err(|error| {
+                if creating {
+                    AgentFailure::create(error, AgentCreateOperation::Create)
+                } else {
+                    AgentFailure::edit(error)
+                }
+            })?;
+    print_json(&json!({
+        "operation": receipt.operation,
+        "agent_did": receipt.agent_did,
         "node_did": args.node_did,
-        "context_id": args.context_id,
-        "inference_profile_id": args.inference_profile_id,
-        "enabled": args.enabled,
-    });
-    print_json(&output)?;
-    Ok(())
+        "context_id": receipt.agent.context_id,
+        "inference_profile_id": receipt.agent.inference_profile_id,
+        "enabled": receipt.agent.enabled,
+    }))
 }
 
 fn local_node_did(home: Option<&std::path::Path>) -> Result<String> {
@@ -78,25 +98,55 @@ fn local_node_did(home: Option<&std::path::Path>) -> Result<String> {
         .context("No runtime configured; pass the target runtime home.")
 }
 
-/// A refused create or clone, shown with the command that explains the
-/// operation. Its causes stay those of the refusal.
+/// A refused agent operation, shown with the command that corrects it. Its
+/// causes stay those of the refusal.
 #[derive(Debug)]
-struct AgentCreateFailure {
+pub(crate) struct AgentFailure {
     error: AgentOperationError,
-    operation: AgentCreateOperation,
+    next: NextCall,
 }
 
-impl std::fmt::Display for AgentCreateFailure {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let next = match self.error.recovery(self.operation) {
-            NextCall::VerbHelp { resource, verb } => format!("gents config {resource} {verb}"),
-            NextCall::ResourceHelp { resource } => format!("gents config {resource}"),
-        };
-        write!(formatter, "{}\nNext: {next} --help", self.error)
+impl AgentFailure {
+    /// A failed create or clone.
+    pub(crate) fn create(error: AgentOperationError, operation: AgentCreateOperation) -> Self {
+        let next = error.recovery(operation);
+        Self { error, next }
+    }
+
+    /// A failed edit, disable or default choice on an existing Agent.
+    pub(crate) fn edit(error: AgentOperationError) -> Self {
+        let next = error.edit_recovery();
+        Self { error, next }
     }
 }
 
-impl std::error::Error for AgentCreateFailure {
+impl std::fmt::Display for AgentFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // An edit is `config agent set`; the operations layer names it `update`.
+        let next = match self.next {
+            NextCall::VerbHelp {
+                resource: "agent",
+                verb: "update",
+            } => "gents config agent set --help".to_owned(),
+            NextCall::VerbHelp { resource, verb } => {
+                format!("gents config {resource} {verb} --help")
+            }
+            NextCall::ResourceHelp { resource } => format!("gents config {resource} --help"),
+            NextCall::Inspect { resource } => format!("gents config {resource} show <AGENT_DID>"),
+            NextCall::List { resource } => format!("gents config {resource} list"),
+        };
+        write!(formatter, "{}\nNext: {next}", self.error)?;
+        if matches!(self.error, AgentOperationError::CatalogNotHeld) {
+            write!(
+                formatter,
+                "\nA Node owner or administrator grants the catalog: gents config agent grant-catalog --graphql <GRAPHQL_URL> --node-did <NODE_DID> <AGENT_DID>"
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for AgentFailure {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.error.source()
     }
@@ -116,10 +166,7 @@ async fn create_agent(
         &Default::default(),
     )
     .await
-    .map_err(|error| AgentCreateFailure {
-        error,
-        operation: input.operation,
-    })?;
+    .map_err(|error| AgentFailure::create(error, input.operation))?;
     Ok(serde_json::to_value(receipt)?)
 }
 
@@ -154,6 +201,30 @@ pub(super) async fn agent_self_config_permission(
         "agent_did": args.agent_did,
         "self_config_granted": grant,
         "independent_document_grants_changed": false,
+    }))
+}
+
+pub(super) async fn agent_catalog_permission(
+    args: AgentCatalogPermissionArgs,
+    grant: bool,
+) -> Result<()> {
+    let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
+    access
+        .transact_write("config.agent.catalog_permission", |txn| {
+            let (node_did, agent_did) = (&args.node_did, &args.agent_did);
+            Box::pin(async move {
+                if grant {
+                    gents_documents::grant_agent_catalog(txn, node_did, agent_did).await
+                } else {
+                    gents_documents::revoke_agent_catalog(txn, node_did, agent_did).await
+                }
+            })
+        })
+        .await?;
+    print_json(&json!({
+        "node_did": args.node_did,
+        "agent_did": args.agent_did,
+        "catalog_granted": grant,
     }))
 }
 
@@ -204,13 +275,20 @@ pub(super) async fn agent_clone(args: AgentCloneArgs) -> Result<()> {
 pub(super) async fn agent_disable(args: AgentDisableArgs) -> Result<()> {
     let owner = local_node_did(args.home.as_deref())?;
     let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
-    let params = ConfigureAgentParams {
-        action: "disable".into(),
-        agent_did: Some(args.agent_did),
-        ..Default::default()
-    };
-    let result = configure_agent(&access, &owner, &params, &Default::default()).await?;
-    print_json(&serde_json::from_str::<Value>(&result)?)
+    let receipt = gents::operations::agent::disable(&access, &owner, &args.agent_did)
+        .await
+        .map_err(AgentFailure::edit)?;
+    print_json(&serde_json::to_value(receipt)?)
+}
+
+pub(super) async fn agent_default(args: AgentDefaultArgs) -> Result<()> {
+    let owner = local_node_did(args.home.as_deref())?;
+    let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
+    let receipt =
+        gents::operations::agent::choose_default(&access, &owner, &args.agent_did, args.enable)
+            .await
+            .map_err(AgentFailure::edit)?;
+    print_json(&serde_json::to_value(receipt)?)
 }
 
 /// Resolve one logical ID to one row, the same way the `config` tool does:

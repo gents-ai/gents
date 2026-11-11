@@ -219,7 +219,7 @@ fn agent_commands() -> &'static [&'static str] {
             DECLARED[1].as_str(),
             "agent [preview] disable  options.id",
             "agent [preview] default AGENT_DID",
-            "agent [preview] edit AGENT_DID  set/clear: agent fields",
+            "agent [preview] update AGENT_DID  set/clear: Agent fields and system_prompt",
             "agent context get|preview|edit  options.agent; set/clear: context fields",
         ]
     });
@@ -337,7 +337,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
         "agent" => Page {
             what: "an agent role. create bundles its Context and Tools; a profile supplies inference settings. get without an ID inspects your current role.",
             commands: agent_commands(),
-            notes: "Create allocates and returns an agent_did; it takes no id. Copy that exact DID from the receipt or agent list when selecting the agent. A change is durable once its transaction commits and runs after the runtime reconciler swaps generations; select the agent in a new session, since existing sessions remain bound to their original agent; canonical documents replicate to authorized paired clients and are reloaded after restart. Change the prompt through context update; set.system_prompt replaces it. A profile or backend pick may keep the current account, use an account-free backend, or move to another provider's default account; it never switches between accounts of one provider.",
+            notes: "Create allocates and returns an agent_did; it takes no id. Copy that exact DID from the receipt or agent list when selecting the agent. A change is durable once its transaction commits and runs after the runtime reconciler swaps generations; select the agent in a new session, since existing sessions remain bound to their original agent; canonical documents replicate to authorized paired clients and are reloaded after restart. Creating, cloning and choosing the default need manage_agents on the Node; changing an Agent needs update on that Agent. A profile or backend pick may keep the current account, use an account-free backend, or move to another provider's default account; it never switches between accounts of one provider.",
             next: "give it tools ([\"help\",\"tools\"]) and test it in a fresh session.",
         },
         "tools" => Page {
@@ -388,7 +388,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
                 "cleanup preview  options.target: RESOURCE=ID or a list of them",
                 "cleanup remove  options.digest from the preview and the same options.target",
             ],
-            notes: "RESOURCE: agent, context, tools, agent-target, profile, sampling, execution, retry-policy, compaction, backend, mcp-service, task, schedule, trigger, event-source, datastore, skill, page, plugin-source. Datastore surfaces and skills are removable once unreferenced. Application collections are emptied and removed with the schema tool (collection empty, collection remove) once nothing here names them. Remove refuses if any target changed since the preview. Agent and context need the agent catalog grant; the Engineer agent cannot be removed.",
+            notes: "RESOURCE: agent, context, tools, agent-target, profile, sampling, execution, retry-policy, compaction, backend, mcp-service, task, schedule, trigger, event-source, datastore, skill, page, plugin-source. Datastore surfaces and skills are removable once unreferenced. Application collections are emptied and removed with the schema tool (collection empty, collection remove) once nothing here names them. Remove refuses if any target changed since the preview. Agent and context need the agent catalog grant.",
             next: "read back to confirm the targets are gone.",
         },
         "policy" => Page {
@@ -812,6 +812,7 @@ fn verb_rule(resource: &str) -> &'static str {
         "task" => "options.agent chooses the owner on create (default: you); it cannot change later.",
         "trigger" => "Create the source and the Task first; the Task decides who handles the event.",
         "event-source" | "schedule" => "A source alone starts no work: add a Task, then a Trigger linking them.",
+        "agent" => "set.system_prompt replaces the selected Context's prompt; set.enabled false disables the agent. The default agent stays enabled and an agent cannot disable itself.",
         "datastore" => "Named surface entries support create and query only. For general query or create/update/delete: {\"argv\":[\"tools\",\"update\",\"--help\",\"datastore\"]}. Select the surface in Tools to grant its tools; they exist from the next request.",
         _ => "",
     }

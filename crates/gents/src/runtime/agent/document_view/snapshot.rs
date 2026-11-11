@@ -88,11 +88,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     }
 
     let default_agent_did = view
-        .node
-        .value
-        .default_agent_did
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
+        .default_agent_did()
         .map(ToOwned::to_owned)
         .unwrap_or_default();
 

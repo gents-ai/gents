@@ -45,6 +45,7 @@ async fn agent_create_and_clone_text_is_pinned() {
     let fixture = SelfConfigFixture::new("agent-operation-text").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_node_reader().await;
+    fixture.grant_agent_catalog().await;
     let root = fixture.admitted_workspace_root().await;
     let sibling = fixture.install_sibling("pinned-sibling").await;
     fixture.grant_sibling_configuration(&sibling).await;
@@ -180,16 +181,35 @@ async fn agent_create_and_clone_text_is_pinned() {
             clone(json!({"from":"did:key:absent","display-name":"Copy","profile":profile})),
         ),
         (
-            "create with --default the Agent's signer may not select",
-            json!({"argv":["agent","create","--default"],"options":{"display-name":"Planner","system-prompt":"Plan.","profile":profile}}),
-        ),
-        (
             "batch stopping at a refused create",
             json!({"argv":["batch"],"options":{"operations":[{"argv":["agent","create"],"options":{"display-name":"Planner","profile":profile}}]}}),
         ),
     ] {
         transcript.record(tool, label, args).await;
     }
+    let chosen = transcript
+        .record(
+            tool,
+            "create with --default",
+            json!({"argv":["agent","create","--default"],"options":{"display-name":"Planner","system-prompt":"Plan.","profile":profile}}),
+        )
+        .await
+        .and_then(|receipt| receipt["agent_did"].as_str().map(str::to_owned))
+        .expect("the catalog holder chooses the default");
+    transcript
+        .record(
+            tool,
+            "disable the default agent",
+            json!({"argv":["agent","disable"],"options":{"id":chosen}}),
+        )
+        .await;
+    transcript
+        .record(
+            tool,
+            "preview disabling the default agent",
+            json!({"argv":["agent","preview","disable"],"options":{"id":chosen}}),
+        )
+        .await;
     transcript
         .record(
             tool,
@@ -227,7 +247,7 @@ agent: an agent role. create bundles its Context and Tools; a profile supplies i
 Verbs: list | get ID | create (options.display-name, system-prompt, preset, profile; allocates ID and Context/Tools) | update ID | delete ID. Preview: agent preview create (same options) | update|delete ID.
 Also: agent clone, disable, default. Use context get/update for its selected Context.
 Fields of Agent: ["display_name","description","context_id","inference_profile_id","enabled","tags"]. Append --help to create/update for shapes.
-Create allocates and returns an agent_did; it takes no id. Copy that exact DID from the receipt or agent list when selecting the agent. A change is durable once its transaction commits and runs after the runtime reconciler swaps generations; select the agent in a new session, since existing sessions remain bound to their original agent; canonical documents replicate to authorized paired clients and are reloaded after restart. Change the prompt through context update; set.system_prompt replaces it. A profile or backend pick may keep the current account, use an account-free backend, or move to another provider's default account; it never switches between accounts of one provider.
+Create allocates and returns an agent_did; it takes no id. Copy that exact DID from the receipt or agent list when selecting the agent. A change is durable once its transaction commits and runs after the runtime reconciler swaps generations; select the agent in a new session, since existing sessions remain bound to their original agent; canonical documents replicate to authorized paired clients and are reloaded after restart. Creating, cloning and choosing the default need manage_agents on the Node; changing an Agent needs update on that Agent. A profile or backend pick may keep the current account, use an account-free backend, or move to another provider's default account; it never switches between accounts of one provider.
 Recipe: a new agent with its own model and run limits
   {"argv":["execution","create"],"target_id":"lead-exec","set":{"deadline_duration_secs":86400,"max_turns":200}}
   {"argv":["profile","create","lead"],"set":{"backend_id":"<BACKEND_ID>","execution_id":"lead-exec","model_name":"<MODEL>"}}
@@ -251,7 +271,9 @@ Next: give it tools (["help","tools"]) and test it in a fresh session.
 {
   "admitted": false,
   "committed": false,
-  "rejection": "fresh agents require system_prompt",
+  "refusal": "invalid_input",
+  "message": "fresh agents require system_prompt",
+  "next_call": {"argv":["agent","create","--help"]},
   "config_execution": {"version":1,"mutation_entered":false}
 }
 ## create without tools (ok)
@@ -315,17 +337,36 @@ tool call error: {"error":"clone inherits its source tools; edit the cloned Tool
 tool call error: {"error":"select a published inference profile","recovery":{"next_call":{"argv":["help","agent"]}},"config_execution":{"version":1,"mutation_entered":true}}
 ## clone from an unknown agent (refused)
 tool call error: {"error":"unknown agent_did \"did:key:absent\"; copy an exact DID from [\"agent\",\"list\"] or an agent create receipt","recovery":{"next_call":{"argv":["agent","list"]}},"config_execution":{"version":1,"mutation_entered":false}}
-## create with --default the Agent's signer may not select (refused)
-tool call error: {"error":"updating Node desired state: configuration mutation did not update Node <NODE>/<NODE>; the document may be unavailable or the actor may lack update permission","recovery":{"next_call":{"argv":["agent","create","--help"]}},"config_execution":{"version":1,"mutation_entered":true}}
 ## batch stopping at a refused create (refused)
 tool call error: {"error":"batch stopped at item 0; earlier items keep their results; 0 later items were not attempted","batch":{"atomic":false,"failed_index":0,"results":[{"config_execution":{"mutation_entered":true,"version":1},"error":"fresh agents require system_prompt","index":0,"ok":false,"recovery":{"next_call":{"argv":["agent","create","--help"]}}}],"unattempted":0},"recovery":{"next_call":{"argv":["help","batch"]}},"config_execution":{"version":1,"mutation_entered":true}}
+## create with --default (ok)
+{
+  "committed": true,
+  "admitted": true,
+  "operation": "create",
+  "agent_did": "<CREATED_12>",
+  "agent": {"agent_did":"<CREATED_12>","creation_nonce":"<NONCE_12>","node_did":"<NODE>","display_name":"Planner","context_id":"<CREATED_12>:context","inference_profile_id":"<SELF>:inference"},
+  "make_default": true,
+  "config_execution": {"version":1,"mutation_entered":true}
+}
+## disable the default agent (refused)
+tool call error: {"error":"agent \"<CREATED_12>\" is or would become the default agent, which must stay enabled; choose another enabled default first, or set enabled true in the same edit","recovery":{"next_call":{"argv":["agent","list"]}},"config_execution":{"version":1,"mutation_entered":true}}
+## preview disabling the default agent (ok)
+{
+  "admitted": false,
+  "committed": false,
+  "refusal": "default_disabled",
+  "message": "agent \"<CREATED_12>\" is or would become the default agent, which must stay enabled; choose another enabled default first, or set enabled true in the same edit",
+  "next_call": {"argv":["agent","list"]},
+  "config_execution": {"version":1,"mutation_entered":false}
+}
 ## disable the clone source (ok)
 {
   "committed": true,
   "admitted": true,
   "operation": "disable",
   "agent_did": "<SIBLING>",
-  "agent": {"agent_did":"<SIBLING>","creation_nonce":"<NONCE_12>","node_did":"<NODE>","display_name":"pinned-sibling","context_id":"<SIBLING>:context","inference_profile_id":"<SIBLING>:inference","enabled":false},
+  "agent": {"agent_did":"<SIBLING>","creation_nonce":"<NONCE_14>","node_did":"<NODE>","display_name":"pinned-sibling","context_id":"<SIBLING>:context","inference_profile_id":"<SIBLING>:inference","enabled":false},
   "make_default": false,
   "config_execution": {"version":1,"mutation_entered":true}
 }

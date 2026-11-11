@@ -1,0 +1,5 @@
+type DefaultAgentSelection @policy(id: "ac7d6625bfe087880ab77635e5da9c48fe1ee5f9152748018a63c0d9a75ceb70", resource: "default_agent_selections") {
+    node_did: String @index(unique: true)
+    default_agent_did: String @index
+    updated_at: DateTime @index(direction: DESC)
+}

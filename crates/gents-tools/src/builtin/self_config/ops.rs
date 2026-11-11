@@ -248,17 +248,24 @@ impl SelfConfigCore {
         );
         let actor = identity::Did::new(runtime.did())?;
         let access = ConfigAccess::local_as(self.node.clone(), actor);
-        let observed = access
+        let node_did = self.node_did.as_str();
+        let (observed, default_agent_did) = access
             .transact_readonly("self_config.pack_node_binding", |txn| {
-                Box::pin(gents_documents::read_desired_state_record_in_txn(
-                    txn,
-                    gents_store::collection::Collection::Node,
-                    &self.node_did,
-                    &self.node_did,
-                ))
+                Box::pin(async move {
+                    let observed = gents_documents::read_desired_state_record_in_txn(
+                        txn,
+                        gents_store::collection::Collection::Node,
+                        node_did,
+                        node_did,
+                    )
+                    .await?;
+                    let default_agent_did =
+                        gents_documents::load_default_agent_did_in_txn(txn, node_did).await?;
+                    Ok::<_, anyhow::Error>((observed, default_agent_did))
+                })
             })
-            .await?
-            .context("runtime cannot observe its Node for pack preparation")?;
+            .await?;
+        let observed = observed.context("runtime cannot observe its Node for pack preparation")?;
         anyhow::ensure!(
             observed.0 == binding.doc_id,
             "Node binding changed before pack preparation"
@@ -269,11 +276,7 @@ impl SelfConfigCore {
             .get("enabled")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        refreshed.default_agent_did = observed
-            .1
-            .get("default_agent_did")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
+        refreshed.default_agent_did = default_agent_did;
         Ok(Some(refreshed))
     }
 
@@ -362,24 +365,6 @@ impl SelfConfigCore {
         request: &ApplyRequest<'_>,
     ) -> Result<PatchOutcome> {
         let anchor = self.load_agent_anchor(txn).await?;
-        if self.agent_did != self.lockout_agent_did
-            && matches!(
-                request.target,
-                SelfConfigTarget::Agent | SelfConfigTarget::AgentContext | SelfConfigTarget::Tools
-            )
-        {
-            anyhow::ensure!(
-                !anchor
-                    .doc
-                    .get("tags")
-                    .and_then(Value::as_array)
-                    .is_some_and(|tags| tags
-                        .iter()
-                        .any(|tag| tag.as_str() == Some(super::ENGINEER_AGENT_TAG))),
-                "protected agent cannot be edited through sibling configuration"
-            );
-        }
-
         let unique_value = (request.resolve_unique)(&anchor)?;
 
         let stored = read_owned_doc(txn, request.target, &self.node_did, &unique_value).await?;
@@ -468,6 +453,20 @@ impl SelfConfigCore {
                 EFFECT_TIMING_NOTE
             },
         })
+    }
+
+    /// The Tools `self_config_no_lockout` reach of the invoking Agent, checked
+    /// against a candidate Agent document an agent edit would publish.
+    pub(super) async fn guard_lockout_chain_in_txn(
+        &self,
+        txn: &ConfigApplyTxn<'_>,
+        candidate_agent: &Map<String, Value>,
+    ) -> Result<()> {
+        if !self.no_lockout {
+            return Ok(());
+        }
+        self.guard_candidate_chain(txn, SelfConfigTarget::Agent, candidate_agent)
+            .await
     }
 
     async fn guard_candidate_chain(
@@ -590,24 +589,6 @@ impl SelfConfigCore {
         request: &ApplyRequest<'_>,
     ) -> Result<PatchOutcome> {
         let anchor = self.load_agent_anchor(txn).await?;
-        if self.agent_did != self.lockout_agent_did
-            && matches!(
-                request.target,
-                SelfConfigTarget::Agent | SelfConfigTarget::AgentContext | SelfConfigTarget::Tools
-            )
-        {
-            anyhow::ensure!(
-                !anchor
-                    .doc
-                    .get("tags")
-                    .and_then(Value::as_array)
-                    .is_some_and(|tags| tags
-                        .iter()
-                        .any(|tag| tag.as_str() == Some(super::ENGINEER_AGENT_TAG))),
-                "protected agent cannot be edited through sibling configuration"
-            );
-        }
-
         let unique_value = (request.resolve_unique)(&anchor)?;
         let stored = read_owned_doc(txn, request.target, &self.node_did, &unique_value).await?;
         let (stored_doc, creating) = match stored {

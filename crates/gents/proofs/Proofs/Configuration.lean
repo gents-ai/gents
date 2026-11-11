@@ -317,7 +317,8 @@ theorem disabled_agent_rejected (reg : Registry) (scope id : String) (agent : Ag
     resolveAgent reg scope id = .error .disabledAgent := by
   simp [resolveAgent, lookupOwned, hb, he, bind, Except.bind]
 
-/-- A node's `default_agent_did` selects the agent for requests that
+/-- A node's default agent selection (`default_agent_did` on its one
+`DefaultAgentSelection` document) selects the agent for requests that
 name none, so a default must be an owned, enabled agent. A disabled default
 would leave every such request to fail with `disabledAgent`; publication
 (`ConfigReferences`) rejects the candidate instead, whichever write disables the

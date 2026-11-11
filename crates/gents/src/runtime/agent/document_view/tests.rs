@@ -116,10 +116,7 @@ async fn load_document_runtime_view_includes_referenced_documents() {
         .expect("document view should load");
 
     assert_eq!(view.node.value.node_did, identity.did());
-    assert_eq!(
-        view.node.value.default_agent_did.as_deref(),
-        Some(default_agent_did.as_str())
-    );
+    assert_eq!(view.default_agent_did(), Some(default_agent_did.as_str()));
     assert!(view.agents.contains_key(&default_agent_did));
     let agent_config = &view.agents[&default_agent_did].value;
     let context_id = agent_config

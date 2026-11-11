@@ -361,15 +361,31 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         })
         .await
         .context("seeding the user-owned Agent configuration")?;
-    user_access.transact_write("test.agent_creator.select_default", |txn| {
-        let node_doc = &node_doc;
-        let creator = &creator;
-        Box::pin(async move {
-            let mutation = format!("mutation($input: NodeMutationInputArg!) {{ update_Node(docID: \"{}\", input: $input) {{ _docID }} }}", gents_store::graphql::escape_graphql_string(node_doc));
-            txn.execute_client_signed_update(&mutation, &json!({"input": {"default_agent_did": creator.agent_did}}), gents_protocol::schemas::NODE).await?;
-            Ok::<_, anyhow::Error>(())
+    user_access
+        .transact_write("test.agent_creator.select_default", |txn| {
+            let creator = &creator;
+            let node_did = runtime.did();
+            Box::pin(async move {
+                let value = serde_json::to_value(gents_documents::DefaultAgentSelection::new(
+                    node_did,
+                    &creator.agent_did,
+                ))?;
+                let plan = gents_documents::DesiredStateApplyPlan::new(vec![
+                    gents_documents::DesiredStateApplyDocument {
+                        collection: gents_store::collection::Collection::DefaultAgentSelection,
+                        add: value.clone(),
+                        update: value,
+                    },
+                ])?;
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
-    }).await?;
+        .await?;
     let signer = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &creator)?;
     let node_binding = ConfigurationNodeBinding {
         node_did: identity::Did::new(runtime.did())?,

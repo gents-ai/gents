@@ -5,8 +5,11 @@ mod agent_management;
 mod agent_queries;
 #[cfg(test)]
 use agent_management::agent_mutate;
-pub use agent_management::create_agent;
 use agent_management::load_agent_catalog;
+pub use agent_management::ObservedAdmission;
+pub use agent_management::{
+    apply_agent, apply_agent_in_txn, create_agent, observe_admission, preview_agent,
+};
 pub use agent_management::{configure_agent, grant_own_self_configuration};
 #[cfg(test)]
 use agent_queries::node_default_agent;
@@ -31,9 +34,9 @@ mod pack_wiring;
 mod read;
 mod requests;
 #[cfg(test)]
-use requests::profile_request;
+use requests::{agent_request, profile_request};
 use requests::{
-    agent_request, anchored_request, automation_request, automation_target, backend_request,
+    anchored_request, automation_request, automation_target, backend_request,
     local_backend_create_request, mcp_service_request, outcome_text, profile_create_request,
     profile_target_request, protect_working_agent, refuse_silent_tools_drops,
     refuse_uninstalled_plugins, tools_request,
@@ -135,12 +138,25 @@ pub struct ConfigureAgentParams {
     pub preset: StringUpdate,
     #[serde(default)]
     pub profile_id: StringUpdate,
+    /// `Clear` selects no Context. On create it selects an existing Context
+    /// instead of generating one.
+    #[serde(default)]
+    pub context_id: StringUpdate,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    /// Replaces the whole list; an empty list clears it.
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
     #[serde(default)]
     pub make_default: bool,
     #[serde(default)]
     pub enable_lsp: Option<bool>,
     #[serde(default)]
     pub network_mode: Option<crate::native::CommandNetworkMode>,
+    /// A whole Agent document to write (`operations::agent::put`): the edit
+    /// of its changed writable fields when it exists, else a create.
+    #[serde(skip)]
+    pub put: Option<Box<gents_documents::Agent>>,
 }
 
 pub fn build_self_config_tools(
@@ -179,20 +195,24 @@ pub(crate) async fn runtime_node_binding(
     );
     let actor = identity::Did::new(runtime_identity.did())?;
     let access = gents_store::config_client::ConfigAccess::local_as(node.clone(), actor.clone());
-    let (doc_id, node_record) = access
+    let (record, default_agent_did) = access
         .transact_readonly("self_config.node_binding", |txn| {
             Box::pin(async move {
-                gents_documents::read_desired_state_record_in_txn(
+                let record = gents_documents::read_desired_state_record_in_txn(
                     txn,
                     gents_store::collection::Collection::Node,
                     node_did,
                     node_did,
                 )
-                .await
+                .await?;
+                let default_agent_did =
+                    gents_documents::load_default_agent_did_in_txn(txn, node_did).await?;
+                Ok::<_, anyhow::Error>((record, default_agent_did))
             })
         })
-        .await?
-        .context("runtime cannot observe its Node for self-configuration")?;
+        .await?;
+    let (doc_id, node_record) =
+        record.context("runtime cannot observe its Node for self-configuration")?;
     Ok(gents_documents::ConfigurationNodeBinding {
         node_did: actor,
         doc_id,
@@ -200,10 +220,7 @@ pub(crate) async fn runtime_node_binding(
             .get("enabled")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false),
-        default_agent_did: node_record
-            .get("default_agent_did")
-            .and_then(serde_json::Value::as_str)
-            .map(ToOwned::to_owned),
+        default_agent_did,
     })
 }
 

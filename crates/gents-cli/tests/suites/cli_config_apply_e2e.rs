@@ -34,7 +34,7 @@ async fn config_apply_reconciles_canonical_event_source_and_trigger() -> Result<
     )?;
     let path = root.join("pack_config.json");
     let mut config = read_json_file(&path)?;
-    let agent_did = config["node"]["default_agent_did"]
+    let agent_did = config["default_agent_selection"]["default_agent_did"]
         .as_str()
         .context("default agent")?
         .to_string();

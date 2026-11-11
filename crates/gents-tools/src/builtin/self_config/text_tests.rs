@@ -435,6 +435,7 @@ async fn help_is_layered_and_its_recipes_run_as_written() {
     let agent = fixture.agent_did();
     let backend = format!("{agent}:backend");
     fixture.grant_agent_schema().await;
+    fixture.grant_agent_catalog().await;
     let root = fixture.admitted_workspace_root().await;
     let index = call_config_tool(&tools, vec!["help".into()]).await.unwrap();
     assert!(index.len() < 2_000, "help index is {} chars", index.len());
@@ -1748,7 +1749,7 @@ async fn config_error_recovery_is_executable_for_single_and_batch_calls() {
         json!({"argv":["tools","preview","update"],"target_id":"absent-tools","set":{"display_name":"Missing"}}),
         json!({"argv":["task","preview","remove","absent-task"]}),
         json!({"argv":["tools","update"],"set":{"bash":{}}}),
-        json!({"argv":["agent","update"],"target_id":agent_did,"set":{"system_prompt":"new instructions"}}),
+        json!({"argv":["agent","update"],"target_id":agent_did,"set":{"creation_nonce":"forged"}}),
     ] {
         let failure = structured_failure(&tools, args.clone()).await;
         let recovery = failure["recovery"]["next_call"].clone();

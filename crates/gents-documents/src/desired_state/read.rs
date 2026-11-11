@@ -85,8 +85,8 @@ async fn read_records_paged(
             !owner.trim().is_empty() && !id.trim().is_empty(),
             "configuration reference requires owner and ID"
         );
-        if collection == Collection::Node {
-            anyhow::ensure!(*id == owner, "node reference must match owner");
+        if collection.keyed_by_owner() {
+            anyhow::ensure!(*id == owner, "{collection} reference must match owner");
         }
         unique_ids.insert(*id);
     }
@@ -103,7 +103,7 @@ async fn read_records_paged(
     let unique_field = collection.unique_field();
     let ordered: Vec<&str> = unique_ids.into_iter().collect();
     for page in ordered.chunks(page_size.max(1)) {
-        let filter = if collection == Collection::Node {
+        let filter = if collection.keyed_by_owner() {
             format!(
                 r#"{{ node_did: {{ _eq: "{}" }} }}"#,
                 escape_graphql_string(owner)
