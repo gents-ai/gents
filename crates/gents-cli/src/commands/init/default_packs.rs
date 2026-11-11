@@ -175,10 +175,16 @@ pub(crate) async fn install(
             Approval::Unattended => "A pack whose plugins request permissions is not installed without your approval; each is listed with the command that approves and installs it.",
         }
     );
+    // Every pack is resolved at once, so an unreachable registry holds a
+    // first run for one resolve bound, not one per pack; they are then
+    // asked about and installed one by one, in order.
+    let resolved =
+        futures_util::future::join_all(packs.iter().map(|pack| resolve(home, pack, registry)))
+            .await;
     let mut installed = Vec::new();
     let mut not_installed = Vec::new();
-    for pack in packs {
-        match install_one(home, engineer, pack, registry, approval, None).await {
+    for (pack, resolved) in packs.iter().zip(resolved) {
+        match install_one(home, engineer, pack, resolved, approval, None).await {
             Ok(Outcome::Installed(report)) => {
                 eprintln!("  installed {pack}");
                 installed.push(report);
@@ -443,14 +449,20 @@ pub(crate) async fn approve(
     release(access).await;
     let engineer = engineer?
         .context("this home's default agent is not the Engineer, so it has no starter packs")?;
+    let resolved = futures_util::future::join_all(
+        approved
+            .iter()
+            .map(|(pack, _)| resolve(home, pack, registry)),
+    )
+    .await;
     let mut installed = Vec::new();
     let mut failed = Vec::new();
-    for (pack, digest) in approved {
+    for ((pack, digest), resolved) in approved.iter().zip(resolved) {
         match install_one(
             home,
             &engineer,
             pack,
-            registry,
+            resolved,
             Approval::Approved,
             digest.as_deref(),
         )
@@ -504,18 +516,23 @@ async fn resolve(home: &Path, pack: &str, registry: Option<&str>) -> Result<Reso
             RESOLVE_BOUND.as_secs()
         )
     })??;
-    let mut dependencies = Vec::new();
-    for coordinate in &source.manifest().metadata.dependencies {
-        dependencies.push(
-            tokio::time::timeout(
-                RESOLVE_BOUND,
-                command::resolve_pack_source(coordinate, registry, home),
-            )
-            .await
-            .map_err(|_| anyhow::anyhow!("its dependency {coordinate} did not resolve in time"))?
-            .with_context(|| format!("resolving its dependency {coordinate}"))?,
-        );
-    }
+    let dependencies =
+        futures_util::future::join_all(source.manifest().metadata.dependencies.iter().map(
+            |coordinate| async move {
+                tokio::time::timeout(
+                    RESOLVE_BOUND,
+                    command::resolve_pack_source(coordinate, registry, home),
+                )
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!("its dependency {coordinate} did not resolve in time")
+                })?
+                .with_context(|| format!("resolving its dependency {coordinate}"))
+            },
+        ))
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
     let requested = command::wire::requested_authority(
         source.manifest(),
         &dependencies
@@ -542,7 +559,7 @@ async fn install_one(
     home: &Path,
     engineer: &str,
     pack: &str,
-    registry: Option<&str>,
+    resolved: Result<Resolved>,
     approval: Approval,
     expect_digest: Option<&str>,
 ) -> Result<Outcome> {
@@ -551,7 +568,7 @@ async fn install_one(
         requested,
         dependencies,
         host_tools,
-    } = resolve(home, pack, registry).await?;
+    } = resolved?;
     command::check_expected_digest(expect_digest, source.digest())?;
     let wire = !source.manifest().metadata.plugins.is_empty();
     let asks = requested.as_array().is_some_and(|asks| !asks.is_empty());
@@ -1604,6 +1621,58 @@ mod tests {
             "the grant is for the Engineer's own root: {report}"
         );
         assert!(granted[0]["reader_on"].is_string(), "{report}");
+    }
+
+    /// A registry that accepts connections and never answers holds init for
+    /// one resolve bound, not one per pack: the packs resolve together.
+    #[tokio::test(start_paused = true)]
+    async fn an_unanswering_registry_holds_init_for_one_pack_not_each() {
+        let home = tempfile::tempdir().unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let registry = format!("http://{}", listener.local_addr().unwrap());
+        let registry = Some(registry.as_str());
+        let started = tokio::time::Instant::now();
+        let one = install(
+            home.path(),
+            "did:key:engineer",
+            &["fixture/one"],
+            registry,
+            Approval::Unattended,
+        )
+        .await;
+        let single = started.elapsed();
+        assert_eq!(one["not_installed"][0]["pack"], "fixture/one", "{one}");
+        assert!(
+            single >= Duration::from_secs(1),
+            "the registry answered, so this measures nothing: {single:?} {one}"
+        );
+        let started = tokio::time::Instant::now();
+        let six = install(
+            home.path(),
+            "did:key:engineer",
+            &[
+                "fixture/a",
+                "fixture/b",
+                "fixture/c",
+                "fixture/d",
+                "fixture/e",
+                "fixture/f",
+            ],
+            registry,
+            Approval::Unattended,
+        )
+        .await;
+        let all = started.elapsed();
+        assert_eq!(
+            six["not_installed"].as_array().map(Vec::len),
+            Some(6),
+            "{six}"
+        );
+        assert!(
+            all < single * 2,
+            "six packs took {all:?}, one took {single:?}: they resolved one after another"
+        );
+        drop(listener);
     }
 
     /// `gents/script` is a default pack, and approving it is what lets its
