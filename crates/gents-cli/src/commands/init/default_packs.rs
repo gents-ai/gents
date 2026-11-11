@@ -290,6 +290,13 @@ async fn engineer_of(access: &gents::ConfigAccess, owner: &str) -> Result<Option
 /// Whether the installed `record` is in the Engineer's Tools and Context the
 /// way an approval leaves it: every plugin selected, with the consents its
 /// pack's approval carries, and every skill attached.
+///
+/// The reader grant its agents take on the Engineer's root is not part of
+/// this: a reader is a DefraDB relationship on the WorkspaceRoot document,
+/// listed only per document to an actor that manages it, and no owner reads
+/// whether one agent holds it. A pack whose grant failed therefore still
+/// lists as installed; the approval that failed names the command that makes
+/// the grant, and approving the pack again makes it.
 async fn installed_as_approved(
     access: &gents::ConfigAccess,
     owner: &str,
@@ -727,8 +734,14 @@ async fn install_one(
                 approved && reads_root,
             )
             .await?;
-            if let Some(failed) = readers.iter().find_map(|reader| reader["failed"].as_str()) {
-                anyhow::bail!("{failed}");
+            // A status cannot show this (see `installed_as_approved`), so the
+            // failure carries the command that makes the grant.
+            if let Some(failed) = readers.iter().find(|reader| reader["failed"].is_string()) {
+                anyhow::bail!(
+                    "{}. Approve {pack} again, or grant it with: {}",
+                    failed["failed"].as_str().unwrap_or_default(),
+                    failed["next"].as_str().unwrap_or_default()
+                );
             }
             Ok(readers)
         }
@@ -2127,6 +2140,15 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("simulated reader grant failure"),
+            "{failed}"
+        );
+        // No status shows an outstanding grant, so its failure names the
+        // command that makes it.
+        assert!(
+            failed["failed"][0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("gents config workspace-root grant-reader "),
             "{failed}"
         );
 
