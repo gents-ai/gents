@@ -307,26 +307,21 @@ mod ownership_tests {
 
     #[test]
     fn document_ownership_matches_executable_model() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().pack_document_ownership_cases;
-        assert_eq!(cases.len(), 12);
-        for case in cases {
-            let coordinate = case["coordinate"].as_str().unwrap();
-            let origin = case["origin"].as_str();
+        use gents_lean_vocab::families::contracts_pack_installation_ownership as family;
+
+        family::replay(|i| {
+            let coordinate = i.coordinate.as_str();
+            let tags: Vec<String> = i
+                .origin
+                .iter()
+                .map(|value| format!("gents:pack:{value}"))
+                .collect();
             let mut desired = json!({ "tags": [format!("gents:pack:{coordinate}")] });
-            let live = json!({ "tags": origin.map(|value| vec![format!("gents:pack:{value}")]).unwrap_or_default() });
-            assert_eq!(
-                merge_tags(&mut desired, &live).is_ok(),
-                case["allowed"].as_bool().unwrap(),
-                "{case}"
-            );
-            let tags: Vec<String> = origin
-                .map(|value| vec![format!("gents:pack:{value}")])
-                .unwrap_or_default();
-            assert_eq!(
-                ensure_origin_owned(&tags, coordinate).is_ok(),
-                case["removal_allowed"].as_bool().unwrap(),
-                "{case}"
-            );
-        }
+            let live = json!({ "tags": tags });
+            family::OwnershipObservation {
+                allowed: merge_tags(&mut desired, &live).is_ok(),
+                removal_allowed: ensure_origin_owned(&tags, coordinate).is_ok(),
+            }
+        });
     }
 }
