@@ -142,7 +142,7 @@ pub async fn pending_user_queue_projection(
                     })
                     .collect::<Result<Vec<_>>>()?;
                 let arrival_order =
-                    crate::triggers::engine::durable::request_arrival_order(txn, observed_doc_ids)
+                    crate::request::lifecycle::arrival_order::request_arrival_order(txn, observed_doc_ids)
                         .await?;
                 Ok(PendingQueueProjection {
                     pending: PendingQueueSnapshot { entries },

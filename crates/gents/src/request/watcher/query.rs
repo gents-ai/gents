@@ -128,7 +128,7 @@ impl DefraWatcher {
                 |txn| {
                     let doc_ids = &doc_ids;
                     Box::pin(async move {
-                        crate::triggers::engine::durable::request_arrival_positions(txn, doc_ids)
+                        crate::request::lifecycle::arrival_order::request_arrival_positions(txn, doc_ids)
                             .await
                     })
                 },

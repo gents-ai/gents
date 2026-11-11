@@ -25,6 +25,7 @@ use gents_protocol::row::AgentRequest;
 
 mod background_wake_recovery;
 pub use background_wake_recovery::{background_wake_next_retry_at, background_wake_retry_delay};
+pub(crate) mod arrival_order;
 mod claim;
 mod execution_lease;
 mod execution_renewal;
@@ -37,7 +38,6 @@ pub(crate) use execution_renewal::{renew_in_transaction, RenewalAttemptOutcome};
 mod terminal_binding;
 pub(crate) use terminal_binding::is_exact_invocation_reply;
 mod terminal_tools;
-pub use crate::triggers::engine::durable::request_arrival_order;
 #[cfg(test)]
 pub(crate) use execution_lease::revoke_execution_preserving_output_at_with_access;
 #[cfg(test)]

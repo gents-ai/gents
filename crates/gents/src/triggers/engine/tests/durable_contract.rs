@@ -192,13 +192,13 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
     }
     for case in cases["queues"].as_array().unwrap() {
         let identity: FireIdentity = decode(&case["identity"]);
-        let rows: Vec<durable::ClaimObservation> = decode(&case["observations"]);
+        let rows: Vec<crate::request::lifecycle::arrival_order::ClaimObservation> = decode(&case["observations"]);
         let candidate = rows
             .iter()
             .find(|row| row.document == identity.fire_key())
             .unwrap();
         assert_eq!(
-            durable::observed_claim_allowed(candidate, &rows),
+            crate::request::lifecycle::arrival_order::observed_claim_allowed(candidate, &rows),
             case["can_claim"].as_bool().unwrap(),
             "{}",
             case["name"]
@@ -1323,12 +1323,12 @@ fn observed_claim_cohorts_match_lean() {
         .as_array()
         .unwrap()
     {
-        let candidate: durable::ClaimObservation =
+        let candidate: crate::request::lifecycle::arrival_order::ClaimObservation =
             serde_json::from_value(case["candidate"].clone()).unwrap();
-        let rows: Vec<durable::ClaimObservation> =
+        let rows: Vec<crate::request::lifecycle::arrival_order::ClaimObservation> =
             serde_json::from_value(case["rows"].clone()).unwrap();
         assert_eq!(
-            durable::observed_claim_allowed(&candidate, &rows),
+            crate::request::lifecycle::arrival_order::observed_claim_allowed(&candidate, &rows),
             case["allowed"].as_bool().unwrap(),
             "{}",
             case["name"]
