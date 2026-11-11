@@ -520,9 +520,9 @@ const SYNC_CAUSE_TEXT: Record<string, SyncCauseText> = {
     detail: "This runtime has no endpoint this app can read. Connect the runtime again.",
   },
   enrollment_authentication: {
-    label: "Enrolled runtime unreachable",
-    shortLabel: "Unreachable",
-    detail: "The enrolled runtime is not answering; it may be stopped. Retrying.",
+    label: "Enrollment failed",
+    shortLabel: "Enroll again",
+    detail: "The enrolled runtime could not be authenticated. Enroll this device again.",
   },
   enrollment_route: {
     label: "Finishing enrollment",

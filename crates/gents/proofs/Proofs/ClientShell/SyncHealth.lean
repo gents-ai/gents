@@ -25,10 +25,7 @@ action the user takes next (`unhealthy_view_names_cause_and_action`).
 Decision (user, connection cleanup): the shown state is the app's connection to
 its runtimes. P2P discovery carries none of the app's data, so it never needs
 the user (`discovery_never_blocks`) and is silent while every configured runtime
-is connected (`discovery_silent_while_connected`). An authentication-stage
-activation failure is the enrolled runtime not answering over P2P (a stopped
-local runtime, an unreachable host); activation retries it on every pass and a
-later success clears it, so it waits rather than asking for a new enrollment.
+is connected (`discovery_silent_while_connected`).
 -/
 
 namespace ClientSyncHealth
@@ -76,9 +73,11 @@ inductive Tone where
 /-- `wait`: the client retries by itself (the runtime source reconnects, the
 supervisor re-dials and re-applies enrollment routes). `restoreAccess`: only
 the runtime's owner can accept this device again. `connectRuntime`: no
-operator endpoint exists to read (`ClientChatReadiness.noEndpoint`). -/
+operator endpoint exists to read (`ClientChatReadiness.noEndpoint`).
+`enrollAgain`: the enrolled server could not be authenticated, so a fresh
+enrollment is the only remedy. -/
 inductive NextAction where
-  | wait | restoreAccess | connectRuntime
+  | wait | restoreAccess | connectRuntime | enrollAgain
   deriving DecidableEq, Repr
 
 def Cause.layer : Cause → Layer
@@ -87,10 +86,11 @@ def Cause.layer : Cause → Layer
   | .discoveryDegraded | .discoveryOffline => .discovery
 
 def Cause.nextAction : Cause → NextAction
-  | .runtimeConnecting | .runtimeDisconnected | .enrollmentAuthentication | .enrollmentRoute
+  | .runtimeConnecting | .runtimeDisconnected | .enrollmentRoute
   | .discoveryDegraded | .discoveryOffline => .wait
   | .runtimeRefused => .restoreAccess
   | .runtimeNoEndpoint => .connectRuntime
+  | .enrollmentAuthentication => .enrollAgain
 
 def Cause.tone (cause : Cause) : Tone :=
   if cause.nextAction = .wait then .waiting else .blocked

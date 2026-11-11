@@ -50,12 +50,12 @@ impl SyncHealthCause {
         match self {
             Self::RuntimeConnecting
             | Self::RuntimeDisconnected
-            | Self::EnrollmentAuthentication
             | Self::EnrollmentRoute
             | Self::DiscoveryDegraded
             | Self::DiscoveryOffline => SyncNextAction::Wait,
             Self::RuntimeRefused => SyncNextAction::RestoreAccess,
             Self::RuntimeNoEndpoint => SyncNextAction::ConnectRuntime,
+            Self::EnrollmentAuthentication => SyncNextAction::EnrollAgain,
         }
     }
 
@@ -78,6 +78,7 @@ pub enum SyncNextAction {
     Wait,
     RestoreAccess,
     ConnectRuntime,
+    EnrollAgain,
 }
 
 impl SyncNextAction {
@@ -86,6 +87,7 @@ impl SyncNextAction {
             Self::Wait => "wait",
             Self::RestoreAccess => "restore_access",
             Self::ConnectRuntime => "connect_runtime",
+            Self::EnrollAgain => "enroll_again",
         }
     }
 }

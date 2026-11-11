@@ -49,17 +49,17 @@ describe("syncHealthDiagnostics", () => {
   it("exposes the cause, next action and the facts' counts", () => {
     const diagnostics = syncHealthDiagnostics(
       health({
-        state: "waiting",
+        state: "blocked",
         cause: "enrollment_authentication",
-        nextAction: "wait",
+        nextAction: "enroll_again",
         connectedRuntimeCount: 0,
         activationErrorCount: 1,
       }),
     );
     expect(diagnostics).toEqual({
-      state: "waiting",
+      state: "blocked",
       cause: "enrollment_authentication",
-      nextAction: "wait",
+      nextAction: "enroll_again",
       lastError: null,
       runtimeCount: 1,
       connectedRuntimeCount: 0,

@@ -270,8 +270,8 @@ describe("deployment operational state", () => {
       null,
       syncHealth({
         state: "blocked",
-        cause: "runtime_refused",
-        nextAction: "restore_access",
+        cause: "enrollment_authentication",
+        nextAction: "enroll_again",
       }),
     );
 
@@ -279,8 +279,8 @@ describe("deployment operational state", () => {
     expect(state.sync).toMatchObject({
       layer: "sync",
       kind: "blocked",
-      reason: "runtime_refused",
-      shortLabel: "Refused",
+      reason: "enrollment_authentication",
+      shortLabel: "Enroll again",
       action: null,
     });
   });
