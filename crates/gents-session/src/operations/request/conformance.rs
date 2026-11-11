@@ -1,3 +1,6 @@
+use gents_lean_vocab::families::session_operations_resolve_delivery::Input as DeliveryInput;
+use gents_protocol::operations::request::DeliveryChoice;
+
 use super::{reissue_decision, request_lookup};
 
 #[test]
@@ -23,7 +26,7 @@ fn reissue_decision_matches_lean() {
 
 #[test]
 fn delivery_resolution_matches_lean() {
-    gents_lean_vocab::families::session_operations_resolve_delivery::replay(|i| {
-        i.choice.resolve()
-    });
+    gents_lean_vocab::families::session_operations_resolve_delivery::replay(
+        |i: &DeliveryInput<DeliveryChoice>| i.choice.resolve(),
+    );
 }

@@ -152,7 +152,7 @@ pub(super) async fn resolve_agent(
     };
     let matching = rows(&response, agent::Doc::NAME)
         .iter()
-        .filter(|row| field(*row, agent::AGENT_DID) == Some(agent_did.as_str()))
+        .filter(|row| field(row, agent::AGENT_DID) == Some(agent_did.as_str()))
         .collect::<Vec<_>>();
     if matching.len() != 1 || field(matching[0], agent::ENABLED) != Some(true) {
         return Err(RequestOperationError::AgentUnavailable {

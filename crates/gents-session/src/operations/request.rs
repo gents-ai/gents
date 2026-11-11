@@ -21,6 +21,8 @@ use crate::request::lifecycle::{
 };
 use crate::session::CanonicalRequestOutput;
 
+#[cfg(test)]
+mod conformance;
 mod follow;
 mod read;
 mod reissue;
