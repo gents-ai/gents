@@ -1860,6 +1860,21 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "lifecycle_hook_grant_cases",
             "LifecycleHookGrantCases",
         ),
+        (
+            !snapshot.lifecycle_hook_supersede_cases.is_empty(),
+            "lifecycle_hook_supersede_cases",
+            "LifecycleHookSupersedeCases",
+        ),
+        (
+            !snapshot.lifecycle_hook_goal_halt_cases.is_empty(),
+            "lifecycle_hook_goal_halt_cases",
+            "LifecycleHookGoalHaltCases",
+        ),
+        (
+            !snapshot.lifecycle_hook_history_cases.is_empty(),
+            "lifecycle_hook_history_cases",
+            "LifecycleHookHistoryCases",
+        ),
     ] {
         assert!(present, "{key} must be emitted by the Lean hooks contract");
         emitted.insert((key.to_string(), domain.to_string()));

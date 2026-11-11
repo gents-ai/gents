@@ -1,3 +1,6 @@
+#[path = "hooks/decisions.rs"]
+mod decisions;
+
 use std::sync::{Arc, Mutex};
 
 use gents_lean_vocab::{

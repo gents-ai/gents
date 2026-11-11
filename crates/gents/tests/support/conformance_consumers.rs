@@ -2219,6 +2219,27 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_lifecycle_hook_grant_cases_drive_create_grant_validation",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::hooks::decisions::generated_lifecycle_hook_supersede_cases_drive_the_retirement_classifier",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/hooks/decisions.rs",
+            module_path: "conformance::hooks::decisions",
+            function: "generated_lifecycle_hook_supersede_cases_drive_the_retirement_classifier",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::hooks::decisions::generated_lifecycle_hook_goal_halt_cases_drive_the_halt_verdict",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/hooks/decisions.rs",
+            module_path: "conformance::hooks::decisions",
+            function: "generated_lifecycle_hook_goal_halt_cases_drive_the_halt_verdict",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::hooks::decisions::generated_lifecycle_hook_history_cases_drive_the_history_bound",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/hooks/decisions.rs",
+            module_path: "conformance::hooks::decisions",
+            function: "generated_lifecycle_hook_history_cases_drive_the_history_bound",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::session_control::generated_session_control_cases_drive_native_interrupt_stop_and_resume",
             package: "gents",
             source_path: "crates/gents/tests/conformance/session_control.rs",

@@ -633,6 +633,9 @@ pub struct LeanContractSnapshot {
     pub lifecycle_hook_owed_delivery_cases: LeanLifecycleHookOwedDeliveryCases,
     pub lifecycle_hook_admit_cases: Vec<LeanLifecycleHookAdmitCase>,
     pub lifecycle_hook_grant_cases: Vec<LeanLifecycleHookGrantCase>,
+    pub lifecycle_hook_supersede_cases: Vec<LeanLifecycleHookSupersedeCase>,
+    pub lifecycle_hook_goal_halt_cases: Vec<LeanLifecycleHookGoalHaltCase>,
+    pub lifecycle_hook_history_cases: Vec<LeanLifecycleHookHistoryCase>,
     pub follow_up_hooks: Vec<String>,
     pub coverage_ledger: Vec<LeanCoverageEntry>,
     pub feature_surface_requirements: Vec<LeanFeatureSurfaceRequirement>,
@@ -2788,6 +2791,7 @@ mod composed_invariants;
 mod durable_reduction;
 mod eval;
 mod event_delivery;
+mod hook_decisions;
 mod hooks;
 mod optimization;
 mod prompt_assembly;
@@ -2818,6 +2822,7 @@ pub use composed_invariants::*;
 pub use durable_reduction::*;
 pub use eval::*;
 pub use event_delivery::*;
+pub use hook_decisions::*;
 pub use hooks::*;
 pub use optimization::*;
 pub use prompt_assembly::*;
@@ -3024,6 +3029,18 @@ pub fn lean_lifecycle_hook_admit_cases() -> &'static [LeanLifecycleHookAdmitCase
 
 pub fn lean_lifecycle_hook_grant_cases() -> &'static [LeanLifecycleHookGrantCase] {
     &lean_contract_snapshot().lifecycle_hook_grant_cases
+}
+
+pub fn lean_lifecycle_hook_supersede_cases() -> &'static [LeanLifecycleHookSupersedeCase] {
+    &lean_contract_snapshot().lifecycle_hook_supersede_cases
+}
+
+pub fn lean_lifecycle_hook_goal_halt_cases() -> &'static [LeanLifecycleHookGoalHaltCase] {
+    &lean_contract_snapshot().lifecycle_hook_goal_halt_cases
+}
+
+pub fn lean_lifecycle_hook_history_cases() -> &'static [LeanLifecycleHookHistoryCase] {
+    &lean_contract_snapshot().lifecycle_hook_history_cases
 }
 
 pub fn lean_request_execution_lease_cases() -> &'static [LeanRequestExecutionLeaseCase] {

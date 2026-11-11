@@ -1496,6 +1496,24 @@ def caseCoverage : List CoverageEntry :=
       "Production validate decides every representable case. A native grant rides on its create, so a grant on a document the result does not create cannot be expressed and is checked to be invalid in the model. The DefraDB host's relationship publication and the Goals listener (goal::lifecycle_hooks::TaskGoalAssignment) are not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "lifecycle_hook_supersede_cases"
+      "LifecycleHookSupersedeCases"
+      "conformance::hooks::decisions::generated_lifecycle_hook_supersede_cases_drive_the_retirement_classifier"
+      "Production Selector::stale classifies and renders every case from row facts. The facts' extraction from AgentRequest rows (receipt verification, the parent read by document) and the retirement through the pending-supersede path are not driven by these cases.")
+      "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "lifecycle_hook_goal_halt_cases"
+      "LifecycleHookGoalHaltCases"
+      "conformance::hooks::decisions::generated_lifecycle_hook_goal_halt_cases_drive_the_halt_verdict"
+      "Production halt_verdict, with its RFC 3339 parsing, decides every case. The Goal write and outcome settlement PauseOnHalt stages for a pause verdict are not driven by these cases.")
+      "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "lifecycle_hook_history_cases"
+      "LifecycleHookHistoryCases"
+      "conformance::hooks::decisions::generated_lifecycle_hook_history_cases_drive_the_history_bound"
+      "Production history_permitted decides every case. The DefraDB host's refusal of an out-of-bound revision read before answering it is not driven by these cases.")
+      "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "fold_queue_cases"
       "FoldQueueCases"
       "lifecycle::queue::tests::folding::generated_fold_queue_cases_bind_to_native_claims"
