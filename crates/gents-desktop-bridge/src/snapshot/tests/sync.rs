@@ -23,9 +23,14 @@ fn sync_health_view_names_the_cause_and_next_action() {
         &sync,
         [Some(RuntimeConnectionStatus::Connected)],
     ));
-    assert_eq!(view.state, "blocked");
+    assert_eq!(view.state, "healthy");
+    assert_eq!(view.cause, None);
+    assert_eq!((view.runtime_count, view.connected_runtime_count), (1, 1));
+
+    let view = to_sync_health_view(&project_sync_health(&sync, []));
+    assert_eq!(view.state, "waiting");
     assert_eq!(view.cause.as_deref(), Some("discovery_offline"));
-    assert_eq!(view.next_action.as_deref(), Some("check_network"));
+    assert_eq!(view.next_action.as_deref(), Some("wait"));
     assert_eq!(view.last_error.as_deref(), Some("probe failed"));
 
     let view = to_sync_health_view(&project_sync_health(

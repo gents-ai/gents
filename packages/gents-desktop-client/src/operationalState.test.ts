@@ -86,7 +86,8 @@ function syncHealth(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
   return {
     state: "healthy",
     lastError: null,
-    connectedPeerCount: 1,
+    runtimeCount: 1,
+    connectedRuntimeCount: 1,
     activationErrorCount: 0,
     cause: null,
     nextAction: null,
@@ -272,8 +273,8 @@ describe("deployment operational state", () => {
       null,
       syncHealth({
         state: "blocked",
-        cause: "enrollment_authentication",
-        nextAction: "enroll_again",
+        cause: "runtime_refused",
+        nextAction: "restore_access",
       }),
     );
 
@@ -281,8 +282,8 @@ describe("deployment operational state", () => {
     expect(state.sync).toMatchObject({
       layer: "sync",
       kind: "blocked",
-      reason: "enrollment_authentication",
-      shortLabel: "Enroll again",
+      reason: "runtime_refused",
+      shortLabel: "Refused",
       action: null,
     });
   });

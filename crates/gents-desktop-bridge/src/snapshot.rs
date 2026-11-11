@@ -38,7 +38,8 @@ pub(crate) fn to_sync_health_view(health: &SyncHealth) -> SyncHealthView {
         cause: health.cause.map(|cause| cause.as_str().to_string()),
         next_action: health.next_action.map(|action| action.as_str().to_string()),
         last_error: health.last_error.clone(),
-        connected_peer_count: health.connected_peer_count,
+        runtime_count: health.runtime_count,
+        connected_runtime_count: health.connected_runtime_count,
         activation_error_count: health.activation_error_count,
     }
 }

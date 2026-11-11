@@ -41,8 +41,6 @@ def nextActionToken : NextAction → String
   | .wait => "wait"
   | .restoreAccess => "restore_access"
   | .connectRuntime => "connect_runtime"
-  | .enrollAgain => "enroll_again"
-  | .checkNetwork => "check_network"
 
 private def caseJson (facts : Facts) : String :=
   let shown := view facts

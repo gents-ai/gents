@@ -267,8 +267,8 @@ test.describe("kit shell", () => {
   }) => {
     await gotoHarness(page);
     await page.getByRole("link", { name: "Nodes" }).first().click();
-    const sync = page.getByRole("button", { name: /Sync healthy/ });
-    const syncDialog = page.getByRole("dialog", { name: "Sync details" });
+    const sync = page.getByRole("button", { name: /^Connected/ });
+    const syncDialog = page.getByRole("dialog", { name: "Connection details" });
 
     await sync.click();
     await expect(syncDialog).toBeVisible();
@@ -286,12 +286,12 @@ test.describe("kit shell", () => {
     await gotoHarness(page);
     const filters = page.getByLabel("Session filters");
     const agent = page.getByRole("dialog", { name: "Filter by agent" });
-    const sync = page.getByRole("dialog", { name: "Sync details" });
+    const sync = page.getByRole("dialog", { name: "Connection details" });
 
     await startDialogObservation(page);
     await filters.getByRole("combobox", { name: "Agent" }).click();
     await expect(agent).toBeVisible();
-    await page.getByRole("button", { name: /Sync healthy/ }).click();
+    await page.getByRole("button", { name: /^Connected/ }).click();
     await expect(sync).toBeVisible();
     await expect(agent).toHaveCount(0);
 
@@ -461,8 +461,10 @@ test.describe("kit shell", () => {
       .getByTestId("context-details")
       .evaluate((element) => getComputedStyle(element).animationDuration);
     expect(closingDuration).toBe("0.6s");
-    await page.getByRole("button", { name: /Sync healthy/ }).click();
-    await expect(page.getByRole("dialog", { name: "Sync details" })).toBeVisible();
+    await page.getByRole("button", { name: /^Connected/ }).click();
+    await expect(
+      page.getByRole("dialog", { name: "Connection details" }),
+    ).toBeVisible();
     await page.waitForTimeout(200);
 
     const observed = await finishDialogObservation(page);
@@ -596,10 +598,13 @@ test.describe("kit shell", () => {
     await expect(page.getByTestId("startup-retry")).toBeVisible();
   });
 
-  test("offline transport keeps the locally cached conversation visible", async ({
+  test("P2P discovery offline leaves the runtime connected and its conversations readable", async ({
     page,
   }) => {
-    await gotoHarness(page, "sync-offline");
+    await gotoHarness(page, "discovery-offline");
+    await expect(
+      page.getByRole("button", { name: /^Connected\./ }).first(),
+    ).toBeVisible();
     await page
       .getByTestId("sessions-screen")
       .getByRole("link", { name: /introduction-and-greetings/ })

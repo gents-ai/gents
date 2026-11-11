@@ -26,7 +26,8 @@ pub struct SyncHealthView {
     pub cause: Option<String>,
     pub next_action: Option<String>,
     pub last_error: Option<String>,
-    pub connected_peer_count: usize,
+    pub runtime_count: usize,
+    pub connected_runtime_count: usize,
     pub activation_error_count: usize,
 }
 

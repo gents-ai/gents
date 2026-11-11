@@ -256,7 +256,8 @@ mod tests {
                     cause: None,
                     next_action: None,
                     last_error: None,
-                    connected_peer_count: 1,
+                    runtime_count: 1,
+                    connected_runtime_count: 1,
                     activation_error_count: 0,
                 },
                 enrollment_requests: Some(vec![EnrollmentRequestView {

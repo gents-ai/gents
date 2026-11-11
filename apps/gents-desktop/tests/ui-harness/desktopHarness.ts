@@ -553,7 +553,7 @@ export type DesktopUiHarnessScenario =
   | "active-turn"
   | "coding"
   | "mobile-performance"
-  | "sync-offline"
+  | "discovery-offline"
   | "storage-recovery"
   | "days"
   | "automated-inputs"
@@ -1013,8 +1013,8 @@ export function createDesktopUiHarness(
     };
   }
   let p2pStatus: "healthy" | "degraded" | "wedged" =
-    scenario === "sync-offline" ? "wedged" : "healthy";
-  let syncHealth: SyncHealthView = initialSyncHealth(scenario);
+    scenario === "discovery-offline" ? "wedged" : "healthy";
+  let syncHealth: SyncHealthView = initialSyncHealth();
   let enrollmentRequests: EnrollmentRequestView[] = [];
   let updateEvents = 0;
   let storeVersion = 1;
@@ -1749,7 +1749,6 @@ export function createDesktopUiHarness(
     const visibleDeployment = {
       ...deployment,
       dialSucceeded: p2pStatus === "healthy",
-      chatSafe: p2pStatus === "healthy",
     };
     const deployments = !provisioned || removed ? [] : [visibleDeployment];
     if (
@@ -4665,22 +4664,12 @@ function upsertBy<T extends Record<K, string>, K extends keyof T>(
   return rows.map((row, i) => (i === index ? next : row));
 }
 
-function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
-  if (scenario === "sync-offline") {
-    return {
-      state: "blocked",
-      lastError: "fixture transport unavailable",
-      connectedPeerCount: 0,
-      activationErrorCount: 0,
-      cause: "discovery_offline",
-      nextAction: "check_network",
-    };
-  }
-
+function initialSyncHealth(): SyncHealthView {
   return {
     state: "healthy",
     lastError: null,
-    connectedPeerCount: 1,
+    runtimeCount: 1,
+    connectedRuntimeCount: 1,
     activationErrorCount: 0,
     cause: null,
     nextAction: null,
@@ -4708,7 +4697,7 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "active-turn":
     case "coding":
     case "mobile-performance":
-    case "sync-offline":
+    case "discovery-offline":
     case "storage-recovery":
     case "startup-port-in-use":
     case "days":

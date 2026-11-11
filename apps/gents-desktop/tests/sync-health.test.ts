@@ -13,7 +13,8 @@ function health(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
     cause: null,
     nextAction: null,
     lastError: null,
-    connectedPeerCount: 1,
+    runtimeCount: 1,
+    connectedRuntimeCount: 1,
     activationErrorCount: 0,
     ...overrides,
   };
@@ -21,8 +22,8 @@ function health(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
 
 describe("projectSyncOperationalStatus", () => {
   it("names unobserved, healthy, and each cause the bridge derives", () => {
-    expect(projectSyncOperationalStatus(null).shortLabel).toBe("Checking sync");
-    expect(projectSyncOperationalStatus(health()).shortLabel).toBe("Sync healthy");
+    expect(projectSyncOperationalStatus(null).shortLabel).toBe("Checking connection");
+    expect(projectSyncOperationalStatus(health()).shortLabel).toBe("Connected");
     const reconnecting = projectSyncOperationalStatus(
       health({ state: "waiting", cause: "runtime_disconnected", nextAction: "wait" }),
     );
@@ -30,13 +31,13 @@ describe("projectSyncOperationalStatus", () => {
     expect(reconnecting.shortLabel).toBe("Reconnecting");
     const offline = projectSyncOperationalStatus(
       health({
-        state: "blocked",
+        state: "waiting",
         cause: "discovery_offline",
-        nextAction: "check_network",
+        nextAction: "wait",
         lastError: "probe failed",
       }),
     );
-    expect(offline.kind).toBe("blocked");
+    expect(offline.kind).toBe("waiting");
     expect(offline.reason).toBe("discovery_offline");
     expect(offline.detail).toBe("probe failed");
     expect(syncHealthState(null)).toBeNull();
@@ -48,18 +49,20 @@ describe("syncHealthDiagnostics", () => {
   it("exposes the cause, next action and the facts' counts", () => {
     const diagnostics = syncHealthDiagnostics(
       health({
-        state: "blocked",
+        state: "waiting",
         cause: "enrollment_authentication",
-        nextAction: "enroll_again",
+        nextAction: "wait",
+        connectedRuntimeCount: 0,
         activationErrorCount: 1,
       }),
     );
     expect(diagnostics).toEqual({
-      state: "blocked",
+      state: "waiting",
       cause: "enrollment_authentication",
-      nextAction: "enroll_again",
+      nextAction: "wait",
       lastError: null,
-      connectedPeerCount: 1,
+      runtimeCount: 1,
+      connectedRuntimeCount: 0,
       activationErrorCount: 1,
     });
   });

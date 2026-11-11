@@ -1,7 +1,8 @@
 import Proofs.ClientShell.ObservationOrdering
 
 /-!
-Client sync health: the one product state the desktop shows for its sync.
+Client sync health: the one product state the desktop shows for its connection
+to its runtimes.
 
 External premises (#3538, discovery-only P2P):
 * The desktop reads and writes its runtime only over authenticated HTTP as the
@@ -20,6 +21,14 @@ the configured peers' dial results). `Facts` has no replication field, so no
 product state can be derived from replication (`project_reads_only_facts`).
 Every state other than healthy names the cause the facts witness and the
 action the user takes next (`unhealthy_view_names_cause_and_action`).
+
+Decision (user, connection cleanup): the shown state is the app's connection to
+its runtimes. P2P discovery carries none of the app's data, so it never needs
+the user (`discovery_never_blocks`) and is silent while every configured runtime
+is connected (`discovery_silent_while_connected`). An authentication-stage
+activation failure is the enrolled runtime not answering over P2P (a stopped
+local runtime, an unreachable host); activation retries it on every pass and a
+later success clears it, so it waits rather than asking for a new enrollment.
 -/
 
 namespace ClientSyncHealth
@@ -67,12 +76,9 @@ inductive Tone where
 /-- `wait`: the client retries by itself (the runtime source reconnects, the
 supervisor re-dials and re-applies enrollment routes). `restoreAccess`: only
 the runtime's owner can accept this device again. `connectRuntime`: no
-operator endpoint exists to read (`ClientChatReadiness.noEndpoint`).
-`enrollAgain`: the enrolled server could not be authenticated, so a fresh
-enrollment is the only remedy. `checkNetwork`: no configured peer can be
-dialed. -/
+operator endpoint exists to read (`ClientChatReadiness.noEndpoint`). -/
 inductive NextAction where
-  | wait | restoreAccess | connectRuntime | enrollAgain | checkNetwork
+  | wait | restoreAccess | connectRuntime
   deriving DecidableEq, Repr
 
 def Cause.layer : Cause → Layer
@@ -81,11 +87,10 @@ def Cause.layer : Cause → Layer
   | .discoveryDegraded | .discoveryOffline => .discovery
 
 def Cause.nextAction : Cause → NextAction
-  | .runtimeConnecting | .runtimeDisconnected | .enrollmentRoute | .discoveryDegraded => .wait
+  | .runtimeConnecting | .runtimeDisconnected | .enrollmentAuthentication | .enrollmentRoute
+  | .discoveryDegraded | .discoveryOffline => .wait
   | .runtimeRefused => .restoreAccess
   | .runtimeNoEndpoint => .connectRuntime
-  | .enrollmentAuthentication => .enrollAgain
-  | .discoveryOffline => .checkNetwork
 
 def Cause.tone (cause : Cause) : Tone :=
   if cause.nextAction = .wait then .waiting else .blocked
@@ -112,10 +117,19 @@ def discoveryCause (discovery : Discovery) : Option Cause :=
     if discovery.dialedPeers = 0 ∧ 0 < discovery.configuredPeers then some .discoveryOffline
     else none
 
+/-- At least one runtime is configured and every configured runtime is
+connected: the app's data path is up whatever P2P discovery reports. -/
+def runtimesConnected (facts : Facts) : Bool :=
+  !facts.runtimes.isEmpty && facts.runtimes.all (· == some .connected)
+
+/-- The discovery cause, unless every configured runtime is connected. -/
+def shownDiscoveryCause (facts : Facts) : Option Cause :=
+  if runtimesConnected facts then none else discoveryCause facts.discovery
+
 /-- Every cause the facts witness, in layer order. -/
 def causes (facts : Facts) : List Cause :=
   facts.runtimes.filterMap runtimeCause ++ facts.enrollment.map enrollmentCause ++
-    (discoveryCause facts.discovery).toList
+    (shownDiscoveryCause facts).toList
 
 /-- The shown cause: the first one needing the user, else the first one. -/
 def project (facts : Facts) : Option Cause :=
@@ -160,6 +174,14 @@ theorem discoveryCause_layer {discovery : Discovery} {cause : Cause}
   cases transport <;> simp only [discoveryCause] at h <;>
     (try split_ifs at h) <;> simp at h <;> subst h <;> rfl
 
+theorem shownDiscoveryCause_some {facts : Facts} {cause : Cause}
+    (h : shownDiscoveryCause facts = some cause) :
+    discoveryCause facts.discovery = some cause := by
+  unfold shownDiscoveryCause at h
+  split at h
+  · simp at h
+  · exact h
+
 /-- Each cause is witnessed by the fact of its own layer. -/
 theorem cause_witnessed (facts : Facts) (cause : Cause) (h : cause ∈ causes facts) :
     (cause.layer = .runtime ∧ ∃ status ∈ facts.runtimes, runtimeCause status = some cause) ∨
@@ -170,7 +192,8 @@ theorem cause_witnessed (facts : Facts) (cause : Cause) (h : cause ∈ causes fa
   · exact Or.inl ⟨runtimeCause_layer eq, status, mem, eq⟩
   · subst eq
     exact Or.inr (Or.inl ⟨enrollmentCause_layer failure, failure, mem, rfl⟩)
-  · exact Or.inr (Or.inr ⟨discoveryCause_layer eq, eq⟩)
+  · have eq := shownDiscoveryCause_some eq
+    exact Or.inr (Or.inr ⟨discoveryCause_layer eq, eq⟩)
 
 theorem project_mem_causes {facts : Facts} {cause : Cause}
     (h : project facts = some cause) : cause ∈ causes facts := by
@@ -223,26 +246,61 @@ theorem healthy_iff_no_cause (facts : Facts) :
   · intro h
     simp [h]
 
+private theorem runtimeCause_none_iff (status : Option Status) :
+    runtimeCause status = none ↔ status = some .connected := by
+  rcases status with _ | status
+  · simp [runtimeCause]
+  · cases status <;> simp [runtimeCause]
+
+theorem runtimesConnected_iff (facts : Facts) :
+    runtimesConnected facts = true ↔
+      facts.runtimes ≠ [] ∧ ∀ status ∈ facts.runtimes, status = some .connected := by
+  simp [runtimesConnected, List.isEmpty_iff]
+
 /-- Healthy is exactly: every configured runtime connected, no enrollment
-activation failure, and discovery reachable. -/
+activation failure, and discovery reachable unless at least one runtime is
+configured (all of them then connected). -/
 theorem healthy_iff (facts : Facts) :
     project facts = none ↔
       (∀ status ∈ facts.runtimes, status = some .connected) ∧
-      facts.enrollment = [] ∧ discoveryCause facts.discovery = none := by
+      facts.enrollment = [] ∧
+      (facts.runtimes ≠ [] ∨ discoveryCause facts.discovery = none) := by
   rw [healthy_iff_no_cause]
   simp only [causes, List.append_eq_nil_iff, List.filterMap_eq_nil_iff, List.map_eq_nil_iff,
-    toList_eq_nil]
+    toList_eq_nil, runtimeCause_none_iff]
+  unfold shownDiscoveryCause
   constructor
   · rintro ⟨⟨runtimes, enrollment⟩, discovery⟩
-    refine ⟨fun status mem => ?_, enrollment, discovery⟩
-    have := runtimes status mem
-    rcases status with _ | status
-    · simp [runtimeCause] at this
-    · cases status <;> simp [runtimeCause] at this ⊢
+    refine ⟨runtimes, enrollment, ?_⟩
+    by_cases empty : facts.runtimes = []
+    · have : runtimesConnected facts = false := by simp [runtimesConnected, empty]
+      simp [this] at discovery
+      exact Or.inr discovery
+    · exact Or.inl empty
   · rintro ⟨runtimes, enrollment, discovery⟩
-    refine ⟨⟨fun status mem => ?_, enrollment⟩, discovery⟩
-    rw [runtimes status mem]
-    rfl
+    refine ⟨⟨runtimes, enrollment⟩, ?_⟩
+    split
+    · rfl
+    · rename_i notConnected
+      rcases discovery with nonempty | discovery
+      · exact absurd ((runtimesConnected_iff facts).mpr ⟨nonempty, runtimes⟩) notConnected
+      · exact discovery
+
+/-- P2P discovery never asks anything of the user: it carries none of the
+app's data. -/
+theorem discovery_never_blocks (cause : Cause) (h : cause.layer = .discovery) :
+    cause.tone = .waiting := by
+  cases cause <;> simp [Cause.layer] at h <;> rfl
+
+/-- While every configured runtime is connected, discovery adds no cause. -/
+theorem discovery_silent_while_connected (facts : Facts)
+    (connected : runtimesConnected facts = true) (cause : Cause)
+    (mem : cause ∈ causes facts) : cause.layer ≠ .discovery := by
+  simp only [causes, shownDiscoveryCause, connected, if_true, Option.toList_none,
+    List.append_nil, List.mem_append, List.mem_filterMap, List.mem_map] at mem
+  rcases mem with ⟨status, _, eq⟩ | ⟨failure, _, eq⟩
+  · rw [runtimeCause_layer eq]; decide
+  · subst eq; rw [enrollmentCause_layer]; decide
 
 /-- A cause that needs the user is never hidden behind one that does not. -/
 theorem blocked_dominates (facts : Facts) (cause : Cause)
