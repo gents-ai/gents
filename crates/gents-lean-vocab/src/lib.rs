@@ -4672,10 +4672,6 @@ pub fn lean_plugin_reference_cases() -> &'static [serde_json::Value] {
     &lean_contract_snapshot().plugin_reference_cases
 }
 
-pub fn lean_catalog_refresh_cases() -> &'static [serde_json::Value] {
-    &lean_contract_snapshot().catalog_refresh_cases
-}
-
 pub fn lean_request_terminal_selection_cases() -> &'static [serde_json::Value] {
     &lean_contract_snapshot().request_terminal_selection_cases
 }
