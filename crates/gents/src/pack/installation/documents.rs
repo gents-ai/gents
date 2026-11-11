@@ -1432,6 +1432,7 @@ pub async fn install_prepared_document_pack(
     grant_authority: bool,
     installed_via: InstalledVia,
     policy: DriftPolicy,
+    profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
 ) -> Result<InstallReport> {
     anyhow::ensure!(
         document_ux_install_allowed(
@@ -1526,6 +1527,7 @@ pub async fn install_prepared_document_pack(
         plugin_home,
         grant_authority,
         true,
+        profile_policy,
     )
     .await
     .map_err(|error| error.into_anyhow())?;
@@ -1656,6 +1658,7 @@ pub async fn install_prepared_document_graph(
     home: Option<&Path>,
     consent: bool,
     explicit: bool,
+    profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
 ) -> Result<(InstallReport, Vec<crate::plugin::store::InstalledPlugin>), PackChangeError> {
     let stages = document_graph_stages(archive, prepared, explicit)?;
     let (reports, plugins) = install_document_graph(
@@ -1666,6 +1669,7 @@ pub async fn install_prepared_document_graph(
         home,
         consent,
         prepared.node_binding.clone(),
+        profile_policy,
     )
     .await?;
     Ok((assemble_document_graph_report(prepared, reports)?, plugins))
@@ -1854,6 +1858,7 @@ pub async fn apply_hosted_document_graph(
     owner: &str,
     graph: &HostedDocumentGraph,
     policy: DriftPolicy,
+    profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
 ) -> Result<Vec<InstallReport>> {
     if !graph.plugin_root {
         return apply_document_graph_in_txn(
@@ -1864,6 +1869,7 @@ pub async fn apply_hosted_document_graph(
             &graph.records,
             policy,
             graph.node_binding.as_ref(),
+            profile_policy,
         )
         .await
         .map_err(PackChangeError::into_anyhow);
@@ -1892,6 +1898,7 @@ pub async fn apply_hosted_document_graph(
         dependency_records,
         policy,
         graph.node_binding.as_ref(),
+        profile_policy,
     )
     .await
     .map_err(PackChangeError::into_anyhow)?;
@@ -1904,8 +1911,15 @@ pub async fn apply_hosted_document_graph(
         root_record.source.as_ref(),
     )
     .await?;
-    super::dependencies::claim_in_txn(txn, owner, &root.coordinate, &root.dependencies, policy)
-        .await?;
+    super::dependencies::claim_in_txn(
+        txn,
+        owner,
+        &root.coordinate,
+        &root.dependencies,
+        policy,
+        profile_policy,
+    )
+    .await?;
     reports.push(super::InstallReport {
         plugins: root.plugins.clone(),
         ..Default::default()
@@ -1961,6 +1975,7 @@ pub(super) async fn apply_document_graph_in_txn(
     records: &[StageRecord],
     policy: DriftPolicy,
     node_binding: Option<&crate::documents::ConfigurationNodeBinding>,
+    profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
 ) -> Result<Vec<InstallReport>, PackChangeError> {
     if records.len() != identities.len() {
         return Err(anyhow::anyhow!("pack stage records do not match the document graph").into());
@@ -1997,6 +2012,7 @@ pub(super) async fn apply_document_graph_in_txn(
                 node_binding,
                 record.source.as_ref(),
                 record.variables.as_ref(),
+                profile_policy,
             )
             .await?,
         );
@@ -2013,6 +2029,7 @@ pub(super) async fn install_document_graph(
     home: Option<&Path>,
     consent: bool,
     node_binding: Option<crate::documents::ConfigurationNodeBinding>,
+    profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
 ) -> Result<
     (
         Vec<InstallReport>,
@@ -2173,7 +2190,7 @@ pub(super) async fn install_document_graph(
                         documents,
                         records,
                         policy,
-                        node_binding.as_ref(),
+                        node_binding.as_ref(), profile_policy,
                     )
                     .await
                 })
@@ -2233,6 +2250,7 @@ pub async fn install_documents_with_plugins(
     bindings: &PackInferenceBindings,
     dependencies: Vec<String>,
     explicit: bool,
+    profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
 ) -> Result<(InstallReport, Vec<crate::plugin::store::InstalledPlugin>)> {
     let stage = DocumentPackStage {
         installation_doc_id: None,
@@ -2250,8 +2268,17 @@ pub async fn install_documents_with_plugins(
         reconfigure: false,
         reuse_plugins: false,
     };
-    let (mut reports, plugins) =
-        install_document_graph(access, owner, vec![stage], policy, home, consent, None).await?;
+    let (mut reports, plugins) = install_document_graph(
+        access,
+        owner,
+        vec![stage],
+        policy,
+        home,
+        consent,
+        None,
+        profile_policy,
+    )
+    .await?;
     Ok((
         reports.pop().context("pack graph has no root report")?,
         plugins,

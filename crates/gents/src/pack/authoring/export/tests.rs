@@ -85,6 +85,7 @@ async fn install_in(
         false,
         InstalledVia::Operator,
         DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
 }
@@ -406,6 +407,7 @@ async fn a_live_app_exports_installs_on_a_second_node_and_is_adopted_where_it_ca
         &owner,
         "fixture/ticket_desk",
         DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();

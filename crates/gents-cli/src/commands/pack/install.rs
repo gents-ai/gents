@@ -539,6 +539,7 @@ async fn install_documents_pack_resolved_inner(
         args.scope.graphql.is_none().then_some(home.as_path()),
         args.grant_authority,
         explicit,
+        &gents::inference::resolved::ProviderProfilePolicy,
     )
     .await?;
     let root_coordinate = format!(
@@ -912,6 +913,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                                 &identity.coordinate,
                                 Some(&identity),
                                 &changes,
+                                &gents::inference::resolved::ProviderProfilePolicy,
                             )
                             .await
                         } else {

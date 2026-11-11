@@ -105,7 +105,13 @@ impl PackInstaller {
             "pack plugins require operator authorization: {blockers:?}"
         );
         let (receipt, effective) = packs
-            .install_documents(distribution, &dependencies, &prepared, edited)
+            .install_documents(
+                distribution,
+                &dependencies,
+                &prepared,
+                edited,
+                &crate::inference::resolved::ProviderProfilePolicy,
+            )
             .await?;
         // Reader on a published root is the User's to grant, so an agent the
         // pack ships with host tools waits for it; the receipt names the step.

@@ -307,7 +307,15 @@ async fn install_owned(
 ) -> Result<InstallReport> {
     let mut pack = identity(version);
     pack.plugins.clear();
-    super::super::install_pack_documents(access, owner, &pack, config, policy).await
+    super::super::install_pack_documents(
+        access,
+        owner,
+        &pack,
+        config,
+        policy,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
 }
 
 #[tokio::test]
@@ -480,9 +488,15 @@ async fn install_then_remove_leaves_no_pack_documents_and_keeps_adopted_ones() {
         None,
         "an uninstalled coordinate resolves to nothing, not an error"
     );
-    let removed = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
-        .await
-        .unwrap();
+    let removed = remove_pack(
+        &access,
+        OWNER,
+        "acme/demo",
+        DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
     assert_eq!(removed.documents.removed, vec!["Tools/alpha"]);
     assert_eq!(
         removed.documents.plugins,
@@ -506,11 +520,15 @@ async fn install_then_remove_leaves_no_pack_documents_and_keeps_adopted_ones() {
         None,
         "removal leaves no installed record behind"
     );
-    assert!(
-        remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
-            .await
-            .is_err()
-    );
+    assert!(remove_pack(
+        &access,
+        OWNER,
+        "acme/demo",
+        DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy
+    )
+    .await
+    .is_err());
 }
 
 async fn installation_explicit(access: &ConfigAccess) -> bool {
@@ -530,9 +548,16 @@ async fn a_non_explicit_documents_install_becomes_explicit_when_installed_explic
         explicit: false,
         ..identity("1")
     };
-    super::super::install_pack_documents(&access, OWNER, &dependency, &config, DriftPolicy::Refuse)
-        .await
-        .unwrap();
+    super::super::install_pack_documents(
+        &access,
+        OWNER,
+        &dependency,
+        &config,
+        DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
     assert!(!installation_explicit(&access).await);
 
     super::super::install_pack_documents(
@@ -541,14 +566,22 @@ async fn a_non_explicit_documents_install_becomes_explicit_when_installed_explic
         &identity("1"),
         &config,
         DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
     assert!(installation_explicit(&access).await);
 
-    super::super::install_pack_documents(&access, OWNER, &dependency, &config, DriftPolicy::Refuse)
-        .await
-        .unwrap();
+    super::super::install_pack_documents(
+        &access,
+        OWNER,
+        &dependency,
+        &config,
+        DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
     assert!(
         installation_explicit(&access).await,
         "an explicit install is sticky"
@@ -607,9 +640,15 @@ async fn an_edited_document_is_a_typed_refusal_on_remove() {
     .unwrap();
     edit_tools(&access, "alpha", "Alpha, edited by the operator").await;
 
-    let error = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
-        .await
-        .unwrap_err();
+    let error = remove_pack(
+        &access,
+        OWNER,
+        "acme/demo",
+        DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap_err();
     let PackChangeError::Edited { coordinate, edited } = &error else {
         panic!("{error:#}")
     };
@@ -655,7 +694,14 @@ async fn plugin_store_notification_lost_commit_receipt_is_unconfirmed() {
     let (result, fired) =
         crate::store::config_client::ConfigApplyTxn::with_post_commit_receipt_loss_for_operation(
             Some("pack.record_plugin_store"),
-            record_plugin_store_change(&access, OWNER, home.path(), &pack.coordinate, Some(&pack)),
+            record_plugin_store_change(
+                &access,
+                OWNER,
+                home.path(),
+                &pack.coordinate,
+                Some(&pack),
+                &crate::inference::resolved::ProviderProfilePolicy,
+            ),
         )
         .await;
     assert!(fired);
@@ -712,6 +758,7 @@ async fn a_plugin_store_record_is_not_a_pack_install() {
         home.path(),
         "acme/demo",
         Some(&identity("1")),
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -726,9 +773,15 @@ async fn a_plugin_store_record_is_not_a_pack_install() {
             .unwrap(),
         None
     );
-    let refused = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
-        .await
-        .unwrap_err();
+    let refused = remove_pack(
+        &access,
+        OWNER,
+        "acme/demo",
+        DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap_err();
     assert!(
         format!("{refused:#}").contains("gents config pack plugin remove"),
         "{refused:#}"
@@ -738,9 +791,16 @@ async fn a_plugin_store_record_is_not_a_pack_install() {
         .execute("{ PackInstallation { _docID installed_at } }")
         .await
         .unwrap();
-    record_plugin_store_change(&access, OWNER, home.path(), "acme/demo", None)
-        .await
-        .unwrap();
+    record_plugin_store_change(
+        &access,
+        OWNER,
+        home.path(),
+        "acme/demo",
+        None,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
     let rows = access
         .execute("{ PackInstallation { _docID installed_at } }")
         .await
@@ -766,9 +826,16 @@ async fn a_plugin_store_record_is_not_a_pack_install() {
     );
 
     // A retirement releases the record a disappearance notice keeps.
-    super::super::record_plugin_retirement_as(&access, OWNER, None, home.path(), "acme/demo")
-        .await
-        .unwrap();
+    super::super::record_plugin_retirement_as(
+        &access,
+        OWNER,
+        None,
+        home.path(),
+        "acme/demo",
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
     let rows = access
         .execute("{ PackInstallation { _docID } }")
         .await
@@ -789,13 +856,26 @@ async fn a_documentless_pack_install_is_not_a_plugin_store_record() {
     install(&access, "1", &config(&[]), DriftPolicy::Refuse)
         .await
         .unwrap();
-    record_plugin_store_change(&access, OWNER, home.path(), "acme/demo", None)
-        .await
-        .unwrap();
+    record_plugin_store_change(
+        &access,
+        OWNER,
+        home.path(),
+        "acme/demo",
+        None,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
     assert_eq!(list_installed_packs(&access, OWNER).await.unwrap().len(), 1);
-    remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
-        .await
-        .unwrap();
+    remove_pack(
+        &access,
+        OWNER,
+        "acme/demo",
+        DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
 }
 
 async fn create_raw_tools(access: &ConfigAccess, id: &str) {
@@ -843,9 +923,15 @@ async fn remove_tolerates_unmanaged_collections() {
         .unwrap();
     record_with_unmanaged_entries(&access).await;
 
-    let report = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
-        .await
-        .unwrap();
+    let report = remove_pack(
+        &access,
+        OWNER,
+        "acme/demo",
+        DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
     assert!(report
         .documents
         .removed
@@ -1196,6 +1282,7 @@ async fn install_dependee(
         None,
         false,
         explicit,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -1290,6 +1377,7 @@ async fn locally_installed_pack_agent_holds_the_projected_baseline() {
         None,
         false,
         true,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -1333,6 +1421,7 @@ async fn a_dependency_is_released_with_its_last_non_explicit_dependent() {
         &demo_identity(vec!["fixture/dependee_fixture".into()]),
         &config_owned(owner, &[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -1342,14 +1431,21 @@ async fn a_dependency_is_released_with_its_last_non_explicit_dependent() {
         owner,
         "fixture/dependee_fixture",
         DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap_err();
     assert!(format!("{error:#}").contains("acme/demo"), "{error:#}");
 
-    let report = remove_pack(&access, owner, "acme/demo", DriftPolicy::Refuse)
-        .await
-        .unwrap();
+    let report = remove_pack(
+        &access,
+        owner,
+        "acme/demo",
+        DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
     assert_eq!(report.dependencies.len(), 1);
     assert_eq!(report.dependencies[0].pack, "fixture/dependee_fixture");
     assert!(report.dependencies[0]
@@ -1377,13 +1473,20 @@ async fn an_explicit_dependency_survives_its_dependent() {
         &demo_identity(vec!["fixture/dependee_fixture".into()]),
         &config_owned(owner, &[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
 
-    let report = remove_pack(&access, owner, "acme/demo", DriftPolicy::Refuse)
-        .await
-        .unwrap();
+    let report = remove_pack(
+        &access,
+        owner,
+        "acme/demo",
+        DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
     assert!(
         report.dependencies.is_empty(),
         "an explicit install is never auto-released"
@@ -1407,6 +1510,7 @@ async fn an_explicit_dependency_survives_its_dependent() {
         owner,
         "fixture/dependee_fixture",
         DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -1424,6 +1528,7 @@ async fn an_upgrade_that_drops_a_dependency_releases_its_claim() {
         &demo_identity(vec!["fixture/dependee_fixture".into()]),
         &config_owned(owner, &[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -1444,6 +1549,7 @@ async fn an_upgrade_that_drops_a_dependency_releases_its_claim() {
         &demo_identity(vec![]),
         &config_owned(owner, &[("alpha", "Alpha 2")]),
         DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -1484,6 +1590,7 @@ async fn an_upgrade_retires_the_unselected_plugin_of_a_dependency_it_drops() {
         &demo_identity(vec!["fixture/dependee_fixture".into()]),
         &config_owned(owner, &[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -1493,6 +1600,7 @@ async fn an_upgrade_retires_the_unselected_plugin_of_a_dependency_it_drops() {
         &demo_identity(vec![]),
         &config_owned(owner, &[("alpha", "Changed")]),
         DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -1553,6 +1661,7 @@ async fn an_upgrade_that_drops_a_documents_dependency_releases_it() {
         },
         &config_owned(owner, &[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -1682,6 +1791,7 @@ async fn a_delayed_plugin_notification_projects_the_current_home_pin() {
         home.path(),
         "acme/demo",
         Some(&identity("1")),
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -1703,9 +1813,16 @@ async fn a_delayed_plugin_notification_projects_the_current_home_pin() {
         .unwrap()["data"]["PackInstallation"][0]["_docID"]
         .clone();
     super::super::forget_home_install(home.path(), "acme/demo").unwrap();
-    record_plugin_store_change(&access, owner, home.path(), "acme/demo", None)
-        .await
-        .unwrap();
+    record_plugin_store_change(
+        &access,
+        owner,
+        home.path(),
+        "acme/demo",
+        None,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
     let response = access
         .execute("{ PackInstallation { _docID } }")
         .await
@@ -1943,6 +2060,7 @@ async fn self_config_install(archive: &crate::pack::archive::PackArchive, home: 
         false,
         crate::pack::InstalledVia::SelfConfig,
         DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -1999,6 +2117,7 @@ async fn operator_installs_document_pack_ux_with_its_data_plugin() {
         true,
         InstalledVia::Operator,
         DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -2457,6 +2576,7 @@ async fn install_prepared_graph(
         plugin_home,
         false,
         true,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await?;
     Ok(report)
@@ -3098,6 +3218,7 @@ async fn remote_install_refuses_unverifiable_plugin_before_writes_and_installs_p
         false,
         crate::pack::InstalledVia::Operator,
         DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -3219,6 +3340,7 @@ async fn generated_plugin_reference_cases_validate_prepared_pack_resources() {
             &pack_identity,
             &config,
             DriftPolicy::Refuse,
+            &crate::inference::resolved::ProviderProfilePolicy,
         )
         .await
         .unwrap();
@@ -3249,6 +3371,7 @@ async fn removing_a_plugin_pack_refuses_surviving_agents_and_rolls_back_document
         &identity("1"),
         &config_owned(owner, &[("owned", "Owned")]),
         DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -3292,9 +3415,15 @@ async fn removing_a_plugin_pack_refuses_surviving_agents_and_rolls_back_document
         .await
         .unwrap();
     let before = tools_ids(&access).await;
-    let error = remove_pack(&access, owner, "acme/demo", DriftPolicy::Refuse)
-        .await
-        .unwrap_err();
+    let error = remove_pack(
+        &access,
+        owner,
+        "acme/demo",
+        DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap_err();
     assert!(error.to_string().contains("acme/echo"), "{error:#}");
     assert!(error.to_string().contains(&binding.agent_did), "{error:#}");
     assert_eq!(tools_ids(&access).await, before);
@@ -3317,9 +3446,15 @@ async fn removing_a_plugin_pack_refuses_surviving_agents_and_rolls_back_document
         .await
         .unwrap();
     // With no agent left selecting the plugin, the removal retires it.
-    remove_pack(&access, owner, "acme/demo", DriftPolicy::Refuse)
-        .await
-        .unwrap();
+    remove_pack(
+        &access,
+        owner,
+        "acme/demo",
+        DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
     assert!(read_installed_pack(&access, owner, "acme/demo")
         .await
         .unwrap()
@@ -3351,15 +3486,22 @@ async fn removing_agents_with_their_plugin_pack_retires_its_plugin() {
         &identity("1"),
         &config,
         DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
     assert_ne!(tools_ids(&access).await, retained_tools);
     // The agent that selects the plugin is removed with the pack, so
     // nothing that survives selects it.
-    remove_pack(&access, owner, "acme/demo", DriftPolicy::Refuse)
-        .await
-        .unwrap();
+    remove_pack(
+        &access,
+        owner,
+        "acme/demo",
+        DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
     assert_eq!(tools_ids(&access).await, retained_tools);
     assert!(read_installed_pack(&access, owner, "acme/demo")
         .await
@@ -3499,6 +3641,7 @@ async fn pinned_plugin_references_match_executable_model_before_install_or_updat
                     &identity,
                     &previous,
                     DriftPolicy::Refuse,
+                    &crate::inference::resolved::ProviderProfilePolicy,
                 )
                 .await
                 .unwrap();
@@ -3568,6 +3711,7 @@ async fn failed_transaction_begin_restores_the_previous_plugin_record() {
         &bindings,
         Vec::new(),
         true,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -3599,6 +3743,7 @@ async fn failed_transaction_begin_restores_the_previous_plugin_record() {
         &bindings,
         Vec::new(),
         true,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap_err();
@@ -3650,6 +3795,7 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
         &bindings,
         Vec::new(),
         true,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -3696,6 +3842,7 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
         &bindings,
         Vec::new(),
         true,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap_err();
@@ -3728,6 +3875,7 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
         &bindings,
         Vec::new(),
         true,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await;
     assert_eq!(accepted.is_ok(), model("installed_match"), "{accepted:?}");
@@ -3780,6 +3928,7 @@ async fn cancelling_pack_install_caller_does_not_cancel_owned_commit() {
             &crate::pack::PackInferenceBindings::new(),
             Vec::new(),
             true,
+            &crate::inference::resolved::ProviderProfilePolicy,
         )
         .await
     });
@@ -3880,6 +4029,7 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
         Some(home.path()),
         false,
         None,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -3901,6 +4051,7 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
         Some(home.path()),
         false,
         None,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -3994,6 +4145,7 @@ async fn installed_plugin_pin_is_rechecked_at_graph_commit() {
         &BTreeMap::new(),
         Vec::new(),
         true,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await;
     assert_eq!(result.is_ok(), expected, "{result:?}");
@@ -4063,6 +4215,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
             &BTreeMap::new(),
             Vec::new(),
             true,
+            &crate::inference::resolved::ProviderProfilePolicy,
         )
         .await
     });
@@ -4097,6 +4250,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
                 &notify_home,
                 &identity.coordinate,
                 Some(&identity),
+                &crate::inference::resolved::ProviderProfilePolicy,
             )
             .await
         },
@@ -4130,6 +4284,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
                 &notify_home,
                 &identity.coordinate,
                 Some(&identity),
+                &crate::inference::resolved::ProviderProfilePolicy,
             )
             .await
         },
@@ -4204,6 +4359,7 @@ async fn standalone_plugin_update_restores_store_and_home_on_pin_conflict() {
                 &notify_home,
                 &identity.coordinate,
                 Some(&identity),
+                &crate::inference::resolved::ProviderProfilePolicy,
             )
             .await
         },
@@ -4332,6 +4488,7 @@ async fn definitive_document_drift_rejection_restores_previously_pinned_plugin()
         &bindings,
         Vec::new(),
         true,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -4351,6 +4508,7 @@ async fn definitive_document_drift_rejection_restores_previously_pinned_plugin()
         &bindings,
         Vec::new(),
         true,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap_err();
@@ -4560,6 +4718,7 @@ async fn client_signs_pack_installation_record_and_dependency_updates() -> Resul
                     "acme/consumer",
                     &["acme/demo".to_owned()],
                     DriftPolicy::Keep,
+                    &crate::inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
@@ -4590,6 +4749,7 @@ async fn hosted_plugin_root_preserves_existing_pack_documents() -> Result<()> {
         &existing,
         &config(&[("retained", "Retained")]),
         DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await?;
     let prepared = prepare_document_pack_archive(
@@ -4609,7 +4769,14 @@ async fn hosted_plugin_root_preserves_existing_pack_documents() -> Result<()> {
         .transact_write("test.hosted_plugin.graph", |txn| {
             let graph = &graph;
             Box::pin(async move {
-                apply_hosted_document_graph(txn, OWNER, graph, DriftPolicy::Refuse).await
+                apply_hosted_document_graph(
+                    txn,
+                    OWNER,
+                    graph,
+                    DriftPolicy::Refuse,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
             })
         })
         .await;
@@ -4706,6 +4873,7 @@ async fn pack_install_applies_exactly_the_declared_placement_readers() {
             None,
             false,
             true,
+            &crate::inference::resolved::ProviderProfilePolicy,
         )
         .await
         .unwrap();
@@ -4790,6 +4958,7 @@ async fn pack_install_applies_exactly_the_declared_placement_readers() {
                     runtime.did(),
                     "fixture/placement_fixture",
                     DriftPolicy::Refuse,
+                    &crate::inference::resolved::ProviderProfilePolicy,
                 )
                 .await
                 .unwrap();

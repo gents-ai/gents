@@ -49,13 +49,21 @@ impl PackInstaller {
             let report = if commit {
                 access
                     .transact_write("self_config.pack_wire", |txn| {
-                        Box::pin(async move { wiring.apply(txn).await })
+                        Box::pin(async move {
+                            wiring
+                                .apply(txn, &crate::inference::resolved::ProviderProfilePolicy)
+                                .await
+                        })
                     })
                     .await?
             } else {
                 access
                     .transact_readonly("self_config.pack_wire.preview", |txn| {
-                        Box::pin(async move { wiring.apply(txn).await })
+                        Box::pin(async move {
+                            wiring
+                                .apply(txn, &crate::inference::resolved::ProviderProfilePolicy)
+                                .await
+                        })
                     })
                     .await?
             };

@@ -41,8 +41,14 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<(), PackChangeError> 
 
     let (access, owner) = super::resolve_scope_owner(&args.scope).await?;
     let result = async {
-        let report =
-            gents::pack::remove_pack(&access, &owner, &coordinate, args.drift.policy()).await?;
+        let report = gents::pack::remove_pack(
+            &access,
+            &owner,
+            &coordinate,
+            args.drift.policy(),
+            &gents::inference::resolved::ProviderProfilePolicy,
+        )
+        .await?;
         if documents_record {
             // Before the archive scan below, which counts every file record.
             gents::pack::forget_home_install(&home, &coordinate)?;

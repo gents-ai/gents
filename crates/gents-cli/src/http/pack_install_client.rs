@@ -477,7 +477,14 @@ pub(crate) async fn install_remote(
         .transact_write("pack.hosted_document_graph.replay", |txn| {
             let graph = &graph;
             Box::pin(async move {
-                gents::pack::apply_hosted_document_graph(txn, owner, graph, policy).await?;
+                gents::pack::apply_hosted_document_graph(
+                    txn,
+                    owner,
+                    graph,
+                    policy,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await?;
                 Ok::<_, anyhow::Error>(())
             })
         })

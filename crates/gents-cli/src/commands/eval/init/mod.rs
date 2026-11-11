@@ -399,6 +399,7 @@ pub(crate) async fn install_pack_slot(
         None,
         false,
         true,
+        &gents::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .map(|(report, _)| report)

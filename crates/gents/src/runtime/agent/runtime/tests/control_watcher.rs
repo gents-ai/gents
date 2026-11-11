@@ -937,6 +937,7 @@ async fn record_plugin_install(
         &identity.coordinate,
         Some(&identity),
         Some(node_binding),
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();

@@ -662,6 +662,7 @@ async fn install_shared_fixture(
         false,
         InstalledVia::Operator,
         DriftPolicy::Refuse,
+        &gents::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();

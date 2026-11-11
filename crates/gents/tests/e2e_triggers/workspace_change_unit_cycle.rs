@@ -1136,6 +1136,7 @@ async fn install_pack(access: &ConfigAccess, owner: &str, repo: &Path) -> PackAg
         false,
         InstalledVia::Operator,
         DriftPolicy::Refuse,
+        &gents::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .expect("canonical pack installer accepts the unit pack");

@@ -606,6 +606,7 @@ impl NodePacks<'_> {
         dependencies: &[Distribution],
         prepared: &PreparedDocumentPackInstall,
         edited: DriftPolicy,
+        profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
     ) -> Result<(InstallReport, Value)> {
         let receipt = super::install_prepared_document_pack(
             self.access,
@@ -620,6 +621,7 @@ impl NodePacks<'_> {
             self.grants_authority,
             InstalledVia::SelfConfig,
             edited,
+            profile_policy,
         )
         .await?;
         let effective = self
@@ -725,6 +727,7 @@ impl NodePacks<'_> {
         bindings: &PackInferenceBindings,
         actor: Option<::identity::Did>,
         node_binding: Option<ConfigurationNodeBinding>,
+        profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
     ) -> Result<plugin_lifecycle::InstalledHomePack> {
         let home = self
             .home
@@ -757,6 +760,7 @@ impl NodePacks<'_> {
                         changes: Some(&changes),
                         retired: false,
                     },
+                    profile_policy,
                 )
                 .await
             },
@@ -860,6 +864,7 @@ impl NodePacks<'_> {
         coordinate: &str,
         record: HomePackInstall,
         actor: Option<::identity::Did>,
+        profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
     ) -> Result<(plugin_lifecycle::LocalPackRemoval, Vec<String>), HomePackRemovalError> {
         let home = self
             .home
@@ -905,9 +910,16 @@ impl NodePacks<'_> {
         .await
         .context("pack removal task did not finish")??;
         if !removal.0.plugins.is_empty() {
-            super::record_plugin_retirement_as(self.access, self.node_did, actor, home, coordinate)
-                .await
-                .map_err(anyhow::Error::from)?;
+            super::record_plugin_retirement_as(
+                self.access,
+                self.node_did,
+                actor,
+                home,
+                coordinate,
+                profile_policy,
+            )
+            .await
+            .map_err(anyhow::Error::from)?;
         }
         Ok(removal)
     }
@@ -919,8 +931,16 @@ impl NodePacks<'_> {
         &self,
         coordinate: &str,
         edited: DriftPolicy,
+        profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
     ) -> Result<RemoveReport> {
-        let report = super::remove_pack(self.access, self.node_did, coordinate, edited).await?;
+        let report = super::remove_pack(
+            self.access,
+            self.node_did,
+            coordinate,
+            edited,
+            profile_policy,
+        )
+        .await?;
         if let Some(home) = self.home {
             super::forget_home_install(home, coordinate)?;
             // The removal transaction retired these plugins (Lean

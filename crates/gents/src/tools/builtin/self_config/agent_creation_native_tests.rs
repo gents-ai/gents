@@ -748,6 +748,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         plugin_home.path(),
         "fixture/native_echo_pack",
         None,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap_err();
@@ -843,6 +844,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         runtime.did(),
         "fixture/hidden-child",
         crate::pack::DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap_err()
@@ -1449,6 +1451,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         runtime.did(),
         "fixture/native_echo_pack",
         crate::pack::DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap_err();
@@ -1504,6 +1507,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         runtime.did(),
         "fixture/native_echo_pack",
         crate::pack::DriftPolicy::Refuse,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await;
     assert!(denied_removal.is_err());
@@ -1533,6 +1537,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         user_home.path(),
         &user_pack.coordinate,
         Some(&user_pack),
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await?;
     let user_record = user_access.execute("{ PackInstallation(filter: {coordinate: {_eq: \"fixture/user_pack\"}}) { _docID agent_bindings version } }").await?;
@@ -1559,6 +1564,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         user_home.path(),
         &user_pack.coordinate,
         Some(&user_pack),
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await?;
     let upgraded = user_access.execute("{ PackInstallation(filter: {coordinate: {_eq: \"fixture/user_pack\"}}) { _docID agent_bindings version } }").await?;
@@ -1601,6 +1607,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         plugin_home.path(),
         "fixture/native_echo_pack",
         None,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await?;
     // The record's parent edge is gone, so its history is read by its owner.
@@ -1648,6 +1655,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         user_home.path(),
         &claimed_fresh.coordinate,
         Some(&claimed_fresh),
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .is_err());
@@ -1726,6 +1734,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         plugin_home.path(),
         "fixture/native_echo_pack",
         None,
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await?;
     assert!(

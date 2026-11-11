@@ -181,7 +181,7 @@ async fn install_definition(ctx: &EvalContext, dir: &std::path::Path) -> Result<
         &identity,
         &config,
         gents::pack::DriftPolicy::Refuse,
-        expected,
+        expected, &gents::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .context(

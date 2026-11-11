@@ -35,8 +35,15 @@ pub(crate) async fn record_plugin_retirement(
         node_did: None,
     })
     .await?;
-    let result =
-        gents::pack::record_plugin_retirement_as(&access, &owner, None, home, coordinate).await;
+    let result = gents::pack::record_plugin_retirement_as(
+        &access,
+        &owner,
+        None,
+        home,
+        coordinate,
+        &gents::inference::resolved::ProviderProfilePolicy,
+    )
+    .await;
     if let Some(node) = access.local_node() {
         if let Err(error) = node.shutdown().await {
             tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");

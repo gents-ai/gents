@@ -358,6 +358,7 @@ async fn live_subject(access: &ConfigAccess, pack: &Path, owner: &str, behavior:
         &identity,
         &config,
         gents::pack::DriftPolicy::Overwrite,
+        &gents::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();

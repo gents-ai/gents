@@ -94,6 +94,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
                     &identity.coordinate,
                     Some(&identity),
                     &changes,
+                    &gents::inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             } else {

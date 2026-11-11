@@ -336,8 +336,18 @@ pub async fn install_pack_documents(
     pack: &super::PackIdentity,
     config: &PackConfig,
     policy: super::DriftPolicy,
+    profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
 ) -> Result<super::InstallReport> {
-    install_pack_documents_with_expectations(access, owner, pack, config, policy, Vec::new()).await
+    install_pack_documents_with_expectations(
+        access,
+        owner,
+        pack,
+        config,
+        policy,
+        Vec::new(),
+        profile_policy,
+    )
+    .await
 }
 
 /// Keep preconditions in the installation transaction; a separate preflight
@@ -349,8 +359,18 @@ pub async fn install_pack_documents_with_expectations(
     config: &PackConfig,
     policy: super::DriftPolicy,
     expected: Vec<crate::documents::DesiredStateExpectation>,
+    profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
 ) -> Result<super::InstallReport> {
-    super::provenance::apply_pack_documents(access, owner, pack, config, policy, expected).await
+    super::provenance::apply_pack_documents(
+        access,
+        owner,
+        pack,
+        config,
+        policy,
+        expected,
+        profile_policy,
+    )
+    .await
 }
 
 pub(super) fn validate_pack_inference_authoring(

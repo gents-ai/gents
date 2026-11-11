@@ -82,6 +82,7 @@ pub(super) async fn apply_pack_documents(
     config: &PackConfig,
     policy: super::installation::DriftPolicy,
     expected: Vec<crate::documents::DesiredStateExpectation>,
+    profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
 ) -> Result<super::installation::InstallReport> {
     let documents = super::installation::installable_documents(config)?;
     let guard =
@@ -93,14 +94,17 @@ pub(super) async fn apply_pack_documents(
             let documents = documents.clone();
             let guard = &guard;
             Box::pin(async move {
-                crate::documents::apply_desired_state_plan(
-                    txn,
-                    guard,
-                    &crate::inference::resolved::ProviderProfilePolicy,
-                )
-                .await?;
+                crate::documents::apply_desired_state_plan(txn, guard, profile_policy).await?;
                 let report = super::installation::install_in_txn(
-                    txn, owner, pack, documents, policy, None, None, None,
+                    txn,
+                    owner,
+                    pack,
+                    documents,
+                    policy,
+                    None,
+                    None,
+                    None,
+                    profile_policy,
                 )
                 .await
                 .map_err(super::PackChangeError::into_anyhow)?;

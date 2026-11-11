@@ -238,7 +238,12 @@ impl PackInstaller {
         let packs = self.packs(&access);
         if let Some(record) = packs.home_pack(&coordinate)? {
             let (removal, plugin_bytes) = packs
-                .remove_home_pack(&coordinate, record, self.core.identity().ok())
+                .remove_home_pack(
+                    &coordinate,
+                    record,
+                    self.core.identity().ok(),
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
                 .await
                 .map_err(|error| match error {
                     HomePackRemovalError::PluginsNotRetired {
@@ -290,7 +295,14 @@ impl PackInstaller {
         };
         self.require_edited_decision(&coordinate, true, edited, words)
             .await?;
-        let report = match packs.remove_documents(&coordinate, edited).await {
+        let report = match packs
+            .remove_documents(
+                &coordinate,
+                edited,
+                &crate::inference::resolved::ProviderProfilePolicy,
+            )
+            .await
+        {
             Ok(report) => report,
             Err(cause) => {
                 return Err(self

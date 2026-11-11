@@ -99,6 +99,7 @@ async fn document_install_records_portable_source_and_history() {
             None,
             false,
             true,
+            &gents::inference::resolved::ProviderProfilePolicy,
         )
         .await
         .unwrap();

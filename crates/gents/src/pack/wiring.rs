@@ -114,7 +114,11 @@ impl PluginWiring {
     }
 
     /// Applies the wiring inside `txn` and reports what changed.
-    pub async fn apply(&self, txn: &ConfigApplyTxn<'_>) -> Result<WireReport> {
+    pub async fn apply(
+        &self,
+        txn: &ConfigApplyTxn<'_>,
+        profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
+    ) -> Result<WireReport> {
         let agent_did = &self.agent;
         let missing = |link: &str| format!("{link}. Next: {}", self.next_step);
         let (context, tools) = load_agent_context_and_tools_in_txn(txn, &self.owner, agent_did)
@@ -160,12 +164,7 @@ impl PluginWiring {
                 document(Collection::Tools, serde_json::to_value(&tools)?),
                 document(Collection::AgentContext, serde_json::to_value(&context)?),
             ])?;
-            apply_desired_state_plan(
-                txn,
-                &plan,
-                &crate::inference::resolved::ProviderProfilePolicy,
-            )
-            .await?;
+            apply_desired_state_plan(txn, &plan, profile_policy).await?;
         }
         Ok(report)
     }

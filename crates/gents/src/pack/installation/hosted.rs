@@ -132,12 +132,21 @@ impl HostedPackStage {
         approver: Arc<dyn PackEffectApprover>,
         policy: DriftPolicy,
         home_publication: Option<HostedHomePublication>,
+        profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
     ) -> std::result::Result<Vec<InstallReport>, HostedPackStageError> {
         let access = access.clone();
         let owner = owner.to_owned();
         tokio::spawn(async move {
-            self.apply_owned(&access, &owner, scope, approver, policy, home_publication)
-                .await
+            self.apply_owned(
+                &access,
+                &owner,
+                scope,
+                approver,
+                policy,
+                home_publication,
+                profile_policy,
+            )
+            .await
         })
         .await
         .map_err(|error| {
@@ -155,6 +164,7 @@ impl HostedPackStage {
         approver: Arc<dyn PackEffectApprover>,
         policy: DriftPolicy,
         home_publication: Option<HostedHomePublication>,
+        profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
     ) -> std::result::Result<Vec<InstallReport>, HostedPackStageError> {
         if !(owner == self.node_did
             && scope.node_did == self.node_did
@@ -201,6 +211,7 @@ impl HostedPackStage {
                             owner,
                             &graph,
                             policy,
+                            profile_policy,
                         )
                         .await?;
                         finish.client_finished(txn.interpreter()).await?;

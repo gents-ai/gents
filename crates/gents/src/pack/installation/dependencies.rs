@@ -46,6 +46,7 @@ pub(super) async fn claim_in_txn(
     dependent: &str,
     dependencies: &[String],
     policy: DriftPolicy,
+    profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
 ) -> Result<(), PackChangeError> {
     for coordinate in dependencies {
         let record = read_record(txn, owner, coordinate).await?;
@@ -97,7 +98,9 @@ pub(super) async fn claim_in_txn(
             .unwrap_or(true);
         if required_by.is_empty() && !explicit {
             let record = read_record(txn, owner, &coordinate).await?;
-            let removed = remove_record_in_txn(txn, owner, &coordinate, &record, policy).await?;
+            let removed =
+                remove_record_in_txn(txn, owner, &coordinate, &record, policy, profile_policy)
+                    .await?;
             let (namespace, _) = crate::pack::registry::split_pack_coordinate(&coordinate);
             let plugins = removed
                 .documents
@@ -119,6 +122,7 @@ pub(super) async fn release_in_txn(
     owner: &str,
     dependent: &str,
     policy: DriftPolicy,
+    profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
 ) -> Result<Vec<RemoveReport>, PackChangeError> {
     let response = {
         use gents_protocol::document_query::{
@@ -158,7 +162,10 @@ pub(super) async fn release_in_txn(
             .unwrap_or(true);
         if required_by.is_empty() && !explicit {
             let record = read_record(txn, owner, &coordinate).await?;
-            released.push(remove_record_in_txn(txn, owner, &coordinate, &record, policy).await?);
+            released.push(
+                remove_record_in_txn(txn, owner, &coordinate, &record, policy, profile_policy)
+                    .await?,
+            );
         } else {
             let doc_id = row["_docID"].as_str().context("record missing _docID")?;
             update_required_by(txn, doc_id, &required_by).await?;

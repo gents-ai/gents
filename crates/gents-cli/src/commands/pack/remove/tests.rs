@@ -742,6 +742,7 @@ async fn wiring_holds_store_lock_through_pin_commit() {
                 &notify_home,
                 &identity.coordinate,
                 Some(&identity),
+                &gents::inference::resolved::ProviderProfilePolicy,
             )
             .await
         },

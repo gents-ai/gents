@@ -579,6 +579,7 @@ async fn run_inner(
             approver,
             policy,
             home_publication,
+            &gents::inference::resolved::ProviderProfilePolicy,
         )
         .await
         .map_err(|error| {

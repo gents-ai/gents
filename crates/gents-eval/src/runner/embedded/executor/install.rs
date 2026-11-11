@@ -156,9 +156,16 @@ pub(super) async fn install(
     )
     .await
     .context("installing the trial inference binding")?;
-    install_pack_documents(&access, &node_did, &identity, &config, DriftPolicy::Refuse)
-        .await
-        .context(TRIAL_PACK_INSTALL)?;
+    install_pack_documents(
+        &access,
+        &node_did,
+        &identity,
+        &config,
+        DriftPolicy::Refuse,
+        &gents::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .context(TRIAL_PACK_INSTALL)?;
     access
         .transact_write("eval.trial.grant_self_configuration", |txn| {
             let node_did = &node_did;

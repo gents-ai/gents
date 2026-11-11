@@ -147,7 +147,10 @@ async fn wire_in_owned(
         access
             .transact_readonly("cli.pack.wire.preview", |txn| {
                 let plan = &plan;
-                Box::pin(async move { plan.apply(txn).await })
+                Box::pin(async move {
+                    plan.apply(txn, &gents::inference::resolved::ProviderProfilePolicy)
+                        .await
+                })
             })
             .await?
     } else if matches!(access, ConfigAccess::Local(_)) {
@@ -169,7 +172,13 @@ async fn wire_in_owned(
         access
             .transact_verified_pack_with_approver("cli.pack.wire", scope, approver, |txn| {
                 let plan = &plan;
-                Box::pin(async move { plan.apply(txn.approved_interpreter()?).await })
+                Box::pin(async move {
+                    plan.apply(
+                        txn.approved_interpreter()?,
+                        &gents::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await
             .map_err(|failure| {
@@ -185,7 +194,10 @@ async fn wire_in_owned(
         access
             .transact_write("cli.pack.wire", |txn| {
                 let plan = &plan;
-                Box::pin(async move { plan.apply(txn).await })
+                Box::pin(async move {
+                    plan.apply(txn, &gents::inference::resolved::ProviderProfilePolicy)
+                        .await
+                })
             })
             .await?
     };

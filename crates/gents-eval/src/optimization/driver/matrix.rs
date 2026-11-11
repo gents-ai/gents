@@ -123,6 +123,7 @@ impl Harness {
             &identity,
             &config,
             gents::pack::DriftPolicy::Overwrite,
+            &gents::inference::resolved::ProviderProfilePolicy,
         )
         .await
         .unwrap();

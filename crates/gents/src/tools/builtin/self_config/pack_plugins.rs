@@ -44,6 +44,7 @@ impl PackInstaller {
                 &inference.bindings,
                 self.core.identity().ok(),
                 node_binding,
+                &crate::inference::resolved::ProviderProfilePolicy,
             )
             .await?;
         let discovery = installed

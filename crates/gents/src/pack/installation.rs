@@ -739,6 +739,7 @@ pub(crate) async fn install_in_txn(
     node_binding: Option<&crate::documents::ConfigurationNodeBinding>,
     source: Option<&PackSource>,
     variables: Option<&BTreeMap<String, Option<String>>>,
+    profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
 ) -> Result<InstallReport, PackChangeError> {
     let mut prior = read_record(txn, owner, &pack.coordinate).await?;
     if let Some(variables) = variables {
@@ -931,17 +932,12 @@ pub(crate) async fn install_in_txn(
     let plan = super::provenance::prepare_pack_plan_in_txn(txn, &applied)
         .await?
         .with_removals(removals)?;
-    crate::documents::validate_desired_state_plan(
-        txn,
-        &plan,
-        &crate::inference::resolved::ProviderProfilePolicy,
-    )
-    .await?;
+    crate::documents::validate_desired_state_plan(txn, &plan, profile_policy).await?;
     report.applied = crate::documents::apply_desired_state_plan_with_node_binding(
         txn,
         &plan,
         node_binding,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        profile_policy,
     )
     .await?;
     report.plugins = pack.plugins.clone();
@@ -979,7 +975,15 @@ pub(crate) async fn install_in_txn(
         source,
     )
     .await?;
-    dependencies::claim_in_txn(txn, owner, &pack.coordinate, &pack.dependencies, policy).await?;
+    dependencies::claim_in_txn(
+        txn,
+        owner,
+        &pack.coordinate,
+        &pack.dependencies,
+        policy,
+        profile_policy,
+    )
+    .await?;
     Ok(report)
 }
 
@@ -1126,8 +1130,18 @@ pub async fn record_plugin_store_change(
     home: &Path,
     coordinate: &str,
     installed: Option<&PackIdentity>,
+    profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
 ) -> std::result::Result<(), PluginStoreChangeError> {
-    record_plugin_store_change_as(access, owner, None, home, coordinate, installed).await
+    record_plugin_store_change_as(
+        access,
+        owner,
+        None,
+        home,
+        coordinate,
+        installed,
+        profile_policy,
+    )
+    .await
 }
 
 /// Model-facing callers pass the invoking DID; `owner` is document scope, not authentication.
@@ -1138,9 +1152,17 @@ pub async fn record_plugin_store_change_as(
     home: &Path,
     coordinate: &str,
     installed: Option<&PackIdentity>,
+    profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
 ) -> std::result::Result<(), PluginStoreChangeError> {
     record_plugin_store_change_as_with_node_binding(
-        access, owner, identity, home, coordinate, installed, None,
+        access,
+        owner,
+        identity,
+        home,
+        coordinate,
+        installed,
+        None,
+        profile_policy,
     )
     .await
 }
@@ -1154,6 +1176,7 @@ pub async fn record_plugin_retirement_as(
     identity: Option<Did>,
     home: &Path,
     coordinate: &str,
+    profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
 ) -> std::result::Result<(), PluginStoreChangeError> {
     record_plugin_store_change_with_stage(
         access,
@@ -1167,6 +1190,7 @@ pub async fn record_plugin_retirement_as(
             changes: None,
             retired: true,
         },
+        profile_policy,
     )
     .await
 }
@@ -1179,6 +1203,7 @@ pub(crate) async fn record_plugin_store_change_as_with_node_binding(
     coordinate: &str,
     installed: Option<&PackIdentity>,
     node_binding: Option<&crate::documents::ConfigurationNodeBinding>,
+    profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
 ) -> std::result::Result<(), PluginStoreChangeError> {
     record_plugin_store_change_with_stage(
         access,
@@ -1192,6 +1217,7 @@ pub(crate) async fn record_plugin_store_change_as_with_node_binding(
             changes: None,
             retired: false,
         },
+        profile_policy,
     )
     .await
 }
@@ -1205,6 +1231,7 @@ pub async fn record_staged_plugin_store_change(
     coordinate: &str,
     installed: Option<&PackIdentity>,
     changes: &crate::pack::plugin_lifecycle::PluginStageChanges,
+    profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
 ) -> std::result::Result<(), PluginStoreChangeError> {
     record_plugin_store_change_with_stage(
         access,
@@ -1218,6 +1245,7 @@ pub async fn record_staged_plugin_store_change(
             changes: Some(changes),
             retired: false,
         },
+        profile_policy,
     )
     .await
 }
@@ -1230,9 +1258,17 @@ pub(crate) async fn record_staged_plugin_store_change_as_with_node_binding(
     coordinate: &str,
     installed: Option<&PackIdentity>,
     stage: PluginStageContext<'_>,
+    profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
 ) -> std::result::Result<(), PluginStoreChangeError> {
     record_plugin_store_change_with_stage(
-        access, owner, identity, home, coordinate, installed, stage,
+        access,
+        owner,
+        identity,
+        home,
+        coordinate,
+        installed,
+        stage,
+        profile_policy,
     )
     .await
 }
@@ -1253,6 +1289,7 @@ async fn record_plugin_store_change_with_stage(
     coordinate: &str,
     installed: Option<&PackIdentity>,
     stage: PluginStageContext<'_>,
+    profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
 ) -> std::result::Result<(), PluginStoreChangeError> {
     let PluginStageContext {
         node_binding,
@@ -1292,6 +1329,7 @@ async fn record_plugin_store_change_with_stage(
                     installed,
                     node_binding,
                     retired,
+                    profile_policy,
                 )
                 .await
             })
@@ -1381,6 +1419,7 @@ async fn write_plugin_record(
     installed: Option<&PackIdentity>,
     node_binding: Option<&crate::documents::ConfigurationNodeBinding>,
     retired: bool,
+    profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
 ) -> std::result::Result<(), PluginStoreChangeError> {
     if let Some(pack) = installed {
         if let Some(conflict) =
@@ -1429,10 +1468,17 @@ async fn write_plugin_record(
         }
         None if prior.doc_id.is_none() => return Ok(()),
         None if own && !retained && (retired || prior.plugins.is_empty()) => {
-            return remove_record_in_txn(txn, owner, coordinate, &prior, DriftPolicy::Refuse)
-                .await
-                .map(|_| ())
-                .map_err(|error| error.into_anyhow().into());
+            return remove_record_in_txn(
+                txn,
+                owner,
+                coordinate,
+                &prior,
+                DriftPolicy::Refuse,
+                profile_policy,
+            )
+            .await
+            .map(|_| ())
+            .map_err(|error| error.into_anyhow().into());
         }
         _ => {}
     }
@@ -1477,6 +1523,7 @@ async fn remove_record_in_txn(
     coordinate: &str,
     record: &Record,
     policy: DriftPolicy,
+    profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
 ) -> Result<RemoveReport, PackChangeError> {
     let doc_id = record
         .doc_id
@@ -1554,18 +1601,9 @@ async fn remove_record_in_txn(
     ensure_removal_origin(txn, owner, coordinate, &removals).await?;
 
     let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(removals)?;
-    crate::documents::validate_desired_state_plan(
-        txn,
-        &plan,
-        &crate::inference::resolved::ProviderProfilePolicy,
-    )
-    .await?;
-    report.documents.applied = crate::documents::apply_desired_state_plan(
-        txn,
-        &plan,
-        &crate::inference::resolved::ProviderProfilePolicy,
-    )
-    .await?;
+    crate::documents::validate_desired_state_plan(txn, &plan, profile_policy).await?;
+    report.documents.applied =
+        crate::documents::apply_desired_state_plan(txn, &plan, profile_policy).await?;
 
     txn.delete_configuration_document(RECORD, &doc_id).await?;
 
@@ -1577,6 +1615,7 @@ pub async fn remove_pack(
     owner: &str,
     coordinate: &str,
     policy: DriftPolicy,
+    profile_policy: &'static dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
 ) -> Result<RemoveReport, PackChangeError> {
     access
         .transact_write("pack.remove", |txn| {
@@ -1605,9 +1644,9 @@ pub async fn remove_pack(
                     .into());
                 }
                 let mut report =
-                    remove_record_in_txn(txn, owner, coordinate, &record, policy).await?;
+                    remove_record_in_txn(txn, owner, coordinate, &record, policy, profile_policy).await?;
                 report.dependencies =
-                    dependencies::release_in_txn(txn, owner, coordinate, policy).await?;
+                    dependencies::release_in_txn(txn, owner, coordinate, policy, profile_policy).await?;
                 let released = std::iter::once(&report)
                     .chain(&report.dependencies)
                     .flat_map(|removed| {

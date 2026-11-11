@@ -191,6 +191,7 @@ pub(crate) async fn install_job_fixture(
         false,
         InstalledVia::Operator,
         DriftPolicy::Refuse,
+        &gents::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .expect("install the job fixture pack");

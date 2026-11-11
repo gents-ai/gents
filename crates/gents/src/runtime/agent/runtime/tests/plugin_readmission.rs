@@ -129,6 +129,7 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
         &pack.coordinate,
         Some(&pack),
         Some(&fixture.node_binding),
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -160,6 +161,7 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
         &pack.coordinate,
         None,
         Some(&fixture.node_binding),
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -188,6 +190,7 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
         &pack.coordinate,
         Some(&pack),
         Some(&fixture.node_binding),
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
