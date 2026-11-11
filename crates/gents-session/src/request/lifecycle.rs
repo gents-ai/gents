@@ -82,8 +82,8 @@ pub use manual::{
     write_manual_agent_request, write_manual_agent_request_with_conversation_title,
     ManualRequestTarget,
 };
+pub use materialize::build_session_message_request;
 pub(crate) use materialize::{
-    build_session_message_request,
     write_pending_agent_request_with_lineage_workspace_and_conversation_title,
 };
 pub use materialize::{

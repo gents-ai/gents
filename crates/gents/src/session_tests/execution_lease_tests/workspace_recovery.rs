@@ -328,7 +328,6 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         max_turns: 2,
         max_turns_provenance: gents_inference::resolved::MaxTurnsProvenance::Default,
         system_prompt: String::new(),
-        tools: gents_tools::surface::AgentToolSurfaceConfig::default(),
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
@@ -348,6 +347,11 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         local_did: did.into(),
         default_agent_did: agent_did.into(),
         agents: std::iter::once((agent_did.to_owned(), resolved_agent)).collect(),
+        tool_configs: std::iter::once((
+            agent_did.to_owned(),
+            Arc::new(gents_tools::surface::AgentToolSurfaceConfig::default()),
+        ))
+        .collect(),
         tool_surfaces: Default::default(),
         backend_admission_configs: Default::default(),
         unavailable_agents: Default::default(),

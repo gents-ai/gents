@@ -46,8 +46,8 @@ impl ToolCallLifecycle {
             .transpose()
     }
 
-    #[cfg(test)]
-    pub(crate) async fn admit_plugin_effect(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn admit_plugin_effect(
         &self,
         ordinal: u32,
         name: &str,

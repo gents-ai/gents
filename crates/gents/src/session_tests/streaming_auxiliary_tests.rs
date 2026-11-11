@@ -798,7 +798,7 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
             LeanOutcome::Partial => gents_protocol::output::OutputOutcome::Partial,
         };
         assert!(
-            matches!(close.segment.close.as_ref(), Some(SourceClose::Closed {
+            matches!(Option::as_ref(&close.segment.close), Some(SourceClose::Closed {
             outcome, segments: actual_segments, stream_bytes: actual_bytes,
         }) if *outcome == expected_outcome && u64::from(*actual_segments) == *segments
             && actual_bytes == stream_bytes),

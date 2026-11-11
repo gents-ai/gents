@@ -170,8 +170,8 @@ pub async fn run_callback_engine(
     result
 }
 
-#[cfg(test)]
-pub(crate) fn test_root_identity() -> gents_store::identity::KeyIdentity {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn test_root_identity() -> gents_store::identity::KeyIdentity {
     let home = tempfile::tempdir().unwrap();
     gents_session::request::lifecycle::test_support::pin_fixed_signing_identity(home.path())
 }
@@ -184,8 +184,8 @@ pub(crate) fn test_node_builder() -> defra_node::NodeBuilder {
         .with_node_acp_enabled()
 }
 
-#[cfg(test)]
-pub(crate) fn test_agent_identity() -> Arc<dyn gents_store::identity::NodeIdentity> {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn test_agent_identity() -> Arc<dyn gents_store::identity::NodeIdentity> {
     let root = test_root_identity();
     let binding = gents_protocol::agent_identity::AgentIdentityBinding {
         creation_nonce: "c".repeat(64),

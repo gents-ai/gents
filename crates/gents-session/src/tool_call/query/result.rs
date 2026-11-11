@@ -13,7 +13,7 @@ use serde_json::Value;
 use crate::session::tool_call_state::ToolCallState;
 
 #[derive(Clone, Copy)]
-enum ReadSource<'a, 'txn> {
+pub enum ReadSource<'a, 'txn> {
     Access(&'a ConfigAccess),
     Txn(&'a ConfigApplyTxn<'txn>),
 }
@@ -936,7 +936,7 @@ async fn load_accepted_tool_call_inner(
     Ok((call, headers, call_id, arguments, accepted_header))
 }
 
-fn is_invocation_reply(header: &TranscriptMessage, tool_call_doc_id: &str) -> bool {
+pub fn is_invocation_reply(header: &TranscriptMessage, tool_call_doc_id: &str) -> bool {
     let named = match &header.publication {
         MessagePublication::ToolDelivery { tool_call_doc_id } => tool_call_doc_id.as_str(),
         _ => return false,
@@ -952,7 +952,7 @@ fn is_invocation_reply(header: &TranscriptMessage, tool_call_doc_id: &str) -> bo
         )
 }
 
-async fn scoped_canonical_headers(
+pub async fn scoped_canonical_headers(
     source: ReadSource<'_, '_>,
     node_did: &str,
     session_id: &str,

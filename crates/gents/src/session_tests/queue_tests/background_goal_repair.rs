@@ -159,3 +159,16 @@ async fn canonical_publication_replay_preserves_one_input_and_one_wake() {
         assert_eq!(queue_rows(&db, &parent.session_id).await.len(), 2);
     }
 }
+
+fn hints(parent: &AgentRequest) -> RequestQueue {
+    RequestQueue {
+        delivery: Default::default(),
+        position: None,
+        source: QueueSource::BackgroundCompletion,
+        policy: QueuePolicy::Coalesce,
+        key: Some(format!("background_completion:{}", parent.session_id)),
+        queued_after_request_id: Some(parent.request_id.clone()),
+        interrupted_request_id: None,
+        background_completion_wake_version: None,
+    }
+}

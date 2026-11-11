@@ -59,7 +59,7 @@ impl std::fmt::Debug for ToolOutputBinding {
 }
 
 impl ToolCallLifecycle {
-    pub(crate) fn tool_output_binding(&self) -> Result<ToolOutputBinding> {
+    pub fn tool_output_binding(&self) -> Result<ToolOutputBinding> {
         anyhow::ensure!(
             self.state == ToolCallState::Running,
             "raw tool output requires a running admitted lifecycle"

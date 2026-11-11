@@ -64,8 +64,9 @@ pub use input::row_is_automated_wakeup;
 pub(crate) use input::{background_wake_queue, is_automated_wakeup, row_queue};
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use intake::pending_in_txn;
+pub use intake::steer_reachable;
 pub(crate) use intake::{
-    pending_ids_in_txn, pending_with_new_candidate_in_txn, steer_reachable, SteerAdmissionRefusal,
+    pending_ids_in_txn, pending_with_new_candidate_in_txn, SteerAdmissionRefusal,
 };
 #[cfg(test)]
 pub(crate) use intake::{pending_rows_in_txn, steering_compatible};
@@ -93,8 +94,8 @@ pub use submission::prepare_user_message_input;
 #[derive(Debug)]
 pub struct EnqueuedBackgroundCompletionInput {
     pub request: Option<EnqueuedAgentRequest>,
-    #[cfg(test)]
-    pub(crate) message_sequence: u32,
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub message_sequence: u32,
     pub created_request: bool,
 }
 

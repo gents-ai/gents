@@ -828,13 +828,13 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "agent_steer_disposition_cases"
       "AgentSteerDispositionCases"
-      "session_message::agent_tools_tests::explicit_steer_checks_the_physical_head_at_publication"
+      "session_tests::message_agent_tools_tests::explicit_steer_checks_the_physical_head_at_publication"
       "Binds refusal of incompatible contexts; signed cross-requester and workspace integration remain to be exercised.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "agent_steer_target_cases"
       "AgentSteerTargetCases"
-      "session_message::agent_tools_tests::explicit_steer_checks_the_physical_head_at_publication")
+      "session_tests::message_agent_tools_tests::explicit_steer_checks_the_physical_head_at_publication")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "agent_steering_boundary_cases"
@@ -845,7 +845,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "agent_steer_reachability_cases"
       "AgentSteerReachabilityCases"
-      "session_message::agent_tools_tests::steer_reachability_matches_lean"
+      "session_tests::message_agent_tools_tests::steer_reachability_matches_lean"
       "Binds admission against the ordered boundary owner, including compatible earlier steers.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
@@ -1605,7 +1605,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "workspace_child_cases"
       "WorkspaceChildCases"
-      "workspace::tests::capability_runtime::native_workspace_publication_and_exclusive_admission"
+      "session_tests::workspace_capability_runtime_tests::native_workspace_publication_and_exclusive_admission"
       "Canonical publication attaches the shared parent atomically; ACP1 permits raw admitted writers to create orphan rows.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
@@ -1647,25 +1647,25 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "workspace_child_revocation_cases"
       "WorkspaceChildRevocationCases"
-      "workspace::tests::capability_runtime::native_workspace_publication_and_exclusive_admission"
+      "session_tests::workspace_capability_runtime_tests::native_workspace_publication_and_exclusive_admission"
       "Documents the completeness limit after explicitly granting a child owner native relationship deletion.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
       "workspace_admission_cases"
       "WorkspaceAdmissionCases"
-      "workspace::tests::capability_runtime::native_workspace_publication_and_exclusive_admission"
+      "session_tests::workspace_capability_runtime_tests::native_workspace_publication_and_exclusive_admission"
       "Exercises competing canonical exclusive admissions; native conflict fencing needs central validation.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "workspace_cleanup_cases"
       "WorkspaceCleanupCases"
-      "workspace::tests::capability_runtime::native_workspace_publication_and_exclusive_admission"
+      "session_tests::workspace_capability_runtime_tests::native_workspace_publication_and_exclusive_admission"
       "Cleanup claims the parent with native update permission after checking the canonical binding inventory.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "workspace_publication_cases"
       "WorkspacePublicationCases"
-      "workspace::tests::capability_runtime::native_workspace_publication_and_exclusive_admission"
+      "session_tests::workspace_capability_runtime_tests::native_workspace_publication_and_exclusive_admission"
       "Checks duplicate publication after revocation and a stale retry after cleanup has begun.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
@@ -1880,12 +1880,12 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "plugin_resource_cases"
       "PluginEffectTerminalCases"
-      "tool_call_lifecycle::query::result::tests::generated_plugin_child_terminal_presentation_matches_execution_owner")
+      "session_tests::query_result_tests::generated_plugin_child_terminal_presentation_matches_execution_owner")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_resource_cases"
       "PluginEffectAccountingCases"
-      "lifecycle::terminal_tools::tests::generated_plugin_child_request_accounting_matches_execution_owner")
+      "session_tests::terminal_tools_tests::generated_plugin_child_request_accounting_matches_execution_owner")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_resource_cases"
@@ -2091,7 +2091,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "client_process_claim_cases"
       "ClientProcessClaimCases"
-      "request::lifecycle::client::tests::claim_tests::client_tool_control_claim_rechecks_native_authority_and_retains_committed_claim")
+      "session_tests::client_tests::claim_tests::client_tool_control_claim_rechecks_native_authority_and_retains_committed_claim")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "client_process_receipt_cases"
@@ -2101,7 +2101,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "client_control_grant_cases"
       "ClientControlGrantCases"
-      "request::lifecycle::client::tests::claim_tests::client_tool_control_claim_rechecks_native_authority_and_retains_committed_claim")
+      "session_tests::client_tests::claim_tests::client_tool_control_claim_rechecks_native_authority_and_retains_committed_claim")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "client_signed_control_cases"
@@ -2470,13 +2470,13 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "auxiliary_output_cases"
       "AuxiliaryOutputCases"
-      "streaming::auxiliary_tests::generated_auxiliary_cases_drive_owned_begin_close_and_publication_guards"
+      "session_tests::streaming_auxiliary_tests::generated_auxiliary_cases_drive_owned_begin_close_and_publication_guards"
       "Generated compaction/fallback cases bind claimed append denial, own begin/append, Complete or Partial exact close, stale-writer close replay denial, and nonempty auxiliary publication denial to native request/output owners. Empty-assistant publication is Lean-only because the native encoder rejects that shape. This does not cover title ownership, recovery after crash, or every provider cancellation path.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "auxiliary_output_cases"
       "AuxiliaryOutputCases"
-      "streaming::auxiliary_tests::generated_auxiliary_cases_drive_non_claude_sink_audit_without_publication"
+      "session_tests::streaming_auxiliary_tests::generated_auxiliary_cases_drive_non_claude_sink_audit_without_publication"
       "Generated compaction/fallback cases drive the non-Claude auxiliary sink with typed reasoning, signature, encrypted and redacted observations, then compare durable bytes, exact closure, private audit reconstruction and absent public live/message output to Lean. This does not cover crash durability before sink acknowledgement, title ownership, recovery after crash, or every provider cancellation path.")
       "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp

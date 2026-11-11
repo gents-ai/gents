@@ -74,7 +74,7 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
-    pub(crate) async fn complete_raw_with_presentation(
+    pub async fn complete_raw_with_presentation(
         &mut self,
         raw: &str,
         rendered: &str,

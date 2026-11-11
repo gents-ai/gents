@@ -150,7 +150,7 @@ impl ManagedAgentSigner {
         &self.node_did
     }
 
-    pub(crate) fn native(&self) -> &defra_node::EmbeddedSigner {
+    pub fn native(&self) -> &defra_node::EmbeddedSigner {
         &self.signer
     }
 }

@@ -12,12 +12,12 @@ use gents_session::request::lifecycle::{ExecutionOrigin, TriggerLineage, Workspa
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GoalContinuationIdentity {
-    pub(crate) request_id: String,
+    pub request_id: String,
     pub(crate) retry_key: String,
     pub(crate) queue_key: String,
 }
 
-pub(crate) fn goal_continuation_identity(
+pub fn goal_continuation_identity(
     goal_id: &str,
     parent_request_id: &str,
     continuation_sequence: i64,

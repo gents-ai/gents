@@ -19,7 +19,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 
-mod background_goal_repair;
 mod folding;
 mod goal_assignment_wakes;
 mod management;

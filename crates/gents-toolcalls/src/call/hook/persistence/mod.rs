@@ -32,7 +32,7 @@ pub mod session_message;
 pub(crate) use helpers::count_live_backgrounded_rows_in;
 pub(crate) use helpers::BackgroundSlotRefusal;
 use helpers::*;
-pub(crate) use helpers::{reserve_background_slot_in_txn, BackgroundSlot};
+pub use helpers::{reserve_background_slot_in_txn, BackgroundSlot};
 pub use prompt_hook::HookOwnedTool;
 
 impl DefraSessionHook {
