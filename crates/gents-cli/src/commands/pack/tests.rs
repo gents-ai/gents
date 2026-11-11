@@ -505,7 +505,13 @@ async fn edit_demo_tools(home: &std::path::Path) {
                     add: tools.clone(),
                     update: tools,
                 }])?;
-                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
             })
         })
         .await

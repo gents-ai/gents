@@ -27,6 +27,7 @@ pub async fn list_inference_profiles_in_txn(
 pub async fn write_inference_profile_document(
     access: &ConfigAccess,
     profile: &InferenceProfile,
+    policy: &dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
 ) -> Result<String> {
     profile.validate()?;
     access
@@ -38,7 +39,7 @@ pub async fn write_inference_profile_document(
                     add: value.clone(),
                     update: value,
                 }])?;
-                crate::documents::apply_desired_state_plan(txn, &plan).await?;
+                crate::documents::apply_desired_state_plan(txn, &plan, policy).await?;
                 crate::documents::read_desired_state_record_in_txn(
                     txn,
                     Collection::InferenceProfile,
@@ -86,9 +87,13 @@ mod tests {
                 .transact_write("test.profile.seed", |txn| {
                     let plan = &plan;
                     Box::pin(async move {
-                        crate::documents::apply_desired_state_plan(txn, plan)
-                            .await
-                            .map(|_| ())
+                        crate::documents::apply_desired_state_plan(
+                            txn,
+                            plan,
+                            &crate::inference::resolved::ProviderProfilePolicy,
+                        )
+                        .await
+                        .map(|_| ())
                     })
                 })
                 .await?;
@@ -97,18 +102,33 @@ mod tests {
             "node_did":"did:key:owner","profile_id":"same","backend_id":"local",
             "model_name":"exact-model","reasoning_effort":"high","max_output_tokens":1234,"tags":["old"]
         }))?;
-        let first_id = write_inference_profile_document(&access, &initial).await?;
+        let first_id = write_inference_profile_document(
+            &access,
+            &initial,
+            &crate::inference::resolved::ProviderProfilePolicy,
+        )
+        .await?;
         let mut foreign = initial.clone();
         foreign.node_did = "did:key:other".to_owned();
         assert_ne!(
-            write_inference_profile_document(&access, &foreign).await?,
+            write_inference_profile_document(
+                &access,
+                &foreign,
+                &crate::inference::resolved::ProviderProfilePolicy
+            )
+            .await?,
             first_id
         );
         initial.reasoning_effort = None;
         initial.max_output_tokens = None;
         initial.tags.clear();
         assert_eq!(
-            write_inference_profile_document(&access, &initial).await?,
+            write_inference_profile_document(
+                &access,
+                &initial,
+                &crate::inference::resolved::ProviderProfilePolicy
+            )
+            .await?,
             first_id
         );
         access

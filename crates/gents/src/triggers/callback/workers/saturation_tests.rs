@@ -289,7 +289,15 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
     config_access
         .transact_write("test.callback_saturation_config", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
+            })
         })
         .await
         .unwrap();

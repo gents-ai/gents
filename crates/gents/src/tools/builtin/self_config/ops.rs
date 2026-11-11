@@ -431,6 +431,7 @@ impl SelfConfigCore {
             txn,
             &plan,
             self.node_binding(),
+            &crate::inference::resolved::ProviderProfilePolicy,
         )
         .await?;
         let doc_id = read_owned_doc(txn, request.target, &self.node_did, &unique_value)
@@ -645,7 +646,12 @@ impl SelfConfigCore {
             self.guard_candidate_chain(txn, request.target, &merged)
                 .await?;
         }
-        validate_desired_state_plan(txn, &replacement_plan(request.target, &merged)?).await?;
+        validate_desired_state_plan(
+            txn,
+            &replacement_plan(request.target, &merged)?,
+            &crate::inference::resolved::ProviderProfilePolicy,
+        )
+        .await?;
         let shared =
             shared_receipt(txn, request.target, &self.node_did, &unique_value, &merged).await?;
         Ok(PatchOutcome {

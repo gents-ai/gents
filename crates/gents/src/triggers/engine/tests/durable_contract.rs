@@ -826,7 +826,15 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
         access
             .transact_write("test.arrival_config", |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                    .map(|_| ())
+                })
             })
             .await
             .unwrap();
@@ -1145,7 +1153,12 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
             .transact_write("test.callback_arrival_config", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    apply_desired_state_plan(txn, plan).await?;
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await?;
                     crate::documents::event_consumer::load_or_seed(txn, owner, &handoff_binding())
                         .await?;
                     Ok::<_, anyhow::Error>(())

@@ -91,7 +91,13 @@ pub async fn bind_target(db: &TestDb, target: &InferenceTarget) -> RequestActors
                     })
                     .collect(),
                 )?;
-                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
             })
         })
         .await
@@ -407,7 +413,15 @@ impl LiveUser {
         self.access
             .transact_write(operation, |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                    .map(|_| ())
+                })
             })
             .await
             .unwrap_or_else(|error| panic!("{operation} as the node's User: {error:#}"));

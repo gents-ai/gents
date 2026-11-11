@@ -1,9 +1,13 @@
 use super::*;
 
 async fn oauth_backend_configuration(access: &crate::ConfigAccess, backend: &InferenceBackend) {
-    crate::documents::write_inference_backend_document(access, backend)
-        .await
-        .unwrap();
+    crate::documents::write_inference_backend_document(
+        access,
+        backend,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
 }
 
 async fn oauth_backend_observation(

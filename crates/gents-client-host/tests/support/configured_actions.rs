@@ -23,7 +23,12 @@ pub async fn seed_editor_settings(
         .transact_write("test.editor.settings.seed", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                apply_desired_state_plan(txn, plan).await?;
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await?;
                 Ok(())
             })
         })

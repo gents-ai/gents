@@ -703,7 +703,12 @@ async fn agent_apply_in_txn(
         documents.push(replacement(crate::Collection::Node, node)?);
     }
     let plan = DesiredStateApplyPlan::new(documents)?;
-    validate_desired_state_plan(txn, &plan).await?;
+    validate_desired_state_plan(
+        txn,
+        &plan,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await?;
     if doc.enabled && !matches!(op, agent::AgentOperation::Disable) {
         let mut merged: BTreeMap<_, _> = refs
             .documents()
@@ -739,8 +744,13 @@ async fn agent_apply_in_txn(
         )?;
     }
     if !preview {
-        crate::documents::apply_desired_state_plan_with_node_binding(txn, &plan, node_binding)
-            .await?;
+        crate::documents::apply_desired_state_plan_with_node_binding(
+            txn,
+            &plan,
+            node_binding,
+            &crate::inference::resolved::ProviderProfilePolicy,
+        )
+        .await?;
     }
     Ok(AgentReceipt {
         committed: !preview,
@@ -786,7 +796,12 @@ pub async fn grant_own_self_configuration(
                         add: value.clone(),
                         update: value,
                     }])?;
-                    crate::documents::apply_desired_state_plan(txn, &plan).await?;
+                    crate::documents::apply_desired_state_plan(
+                        txn,
+                        &plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await?;
                 }
                 crate::documents::grant_selected_self_configuration(txn, node_did, agent_did).await
             })

@@ -38,7 +38,12 @@ pub(crate) async fn upsert_agent_with_publication_on(
         .transact_write_with_agent_publication("desktop.agent.save", observer, |txn| {
             let plan = &plan;
             Box::pin(async move {
-                gents::documents::apply_desired_state_plan(txn, plan).await?;
+                gents::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await?;
                 Ok(())
             })
         })
@@ -96,7 +101,12 @@ mod tests {
             .transact_write("test.context.create", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    apply_desired_state_plan(txn, plan).await?;
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await?;
                     Ok::<_, anyhow::Error>(())
                 })
             })
@@ -130,7 +140,12 @@ mod tests {
                 "node_did":owner, "backend_id":"backend", "name":"Backend",
                 "provider_kind":"OpenAiCompatible", "endpoint":"http://localhost:8000/v1", "auth":{"kind":"unauthenticated"}
             }))?;
-            gents::documents::write_inference_backend_document(&access, &backend).await?;
+            gents::documents::write_inference_backend_document(
+                &access,
+                &backend,
+                &gents::inference::resolved::ProviderProfilePolicy,
+            )
+            .await?;
             let profile = serde_json::from_value(json!({
                 "node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model","reasoning_effort":"high"
             }))?;
@@ -164,7 +179,12 @@ mod tests {
             .transact_write("test.target", |txn| {
                 let plan = &target_plan;
                 Box::pin(async move {
-                    apply_desired_state_plan(txn, plan).await?;
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await?;
                     Ok::<_, anyhow::Error>(())
                 })
             })
@@ -188,7 +208,12 @@ mod tests {
             .transact_write("test.target.remove", |txn| {
                 let plan = &remove_target;
                 Box::pin(async move {
-                    apply_desired_state_plan(txn, plan).await?;
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await?;
                     Ok::<_, anyhow::Error>(())
                 })
             })
@@ -218,7 +243,12 @@ mod tests {
                             add: value.clone(),
                             update: value,
                         }])?;
-                        apply_desired_state_plan(txn, &plan).await?;
+                        apply_desired_state_plan(
+                            txn,
+                            &plan,
+                            &gents::inference::resolved::ProviderProfilePolicy,
+                        )
+                        .await?;
                         Ok::<_, anyhow::Error>(())
                     })
                 })

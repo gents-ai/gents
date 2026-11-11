@@ -1749,7 +1749,12 @@ async fn saved_config_audit_reports_broken_references_without_mutation_and_refus
                     } else {
                         plan
                     };
-                    crate::documents::apply_desired_state_plan(txn, &plan).await
+                    crate::documents::apply_desired_state_plan(
+                        txn,
+                        &plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
                 })
             })
             .await;

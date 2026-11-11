@@ -744,9 +744,13 @@ mod tests {
             "auth": {"kind": "node_oauth"},
         }))
         .unwrap();
-        crate::documents::write_inference_backend_document(&access, &original)
-            .await
-            .unwrap();
+        crate::documents::write_inference_backend_document(
+            &access,
+            &original,
+            &crate::inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
         let sign_in = |who: &str| {
             crate::inference::auth::claude::credential_from_login_tokens(
                 did,

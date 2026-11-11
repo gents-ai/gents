@@ -65,7 +65,14 @@ pub(super) async fn plugin_runtime_fixture(
     user_access
         .transact_write("test.plugin.node", |txn| {
             let plan = &node_plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await?;
     let binding = crate::store::identity::provision_agent_identity_authorized(
@@ -90,7 +97,14 @@ pub(super) async fn plugin_runtime_fixture(
     user_access
         .transact_write("test.plugin.configuration", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await?;
     let runtime_access = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
@@ -118,7 +132,14 @@ pub(super) async fn plugin_runtime_fixture(
     user_access
         .transact_write("test.plugin.default", |txn| {
             let plan = &default_plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await?;
     let agent_access = ConfigAccess::local_managed_agent(
@@ -179,7 +200,12 @@ pub(super) async fn merge_fixture_document(
                         update: document,
                     },
                 ])?;
-                crate::documents::apply_desired_state_plan(txn, &plan).await
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
             })
         })
         .await
@@ -335,7 +361,14 @@ pub(super) async fn held_runtime_fixture_with_status(
     user_access
         .transact_write("test.runtime.inference", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();

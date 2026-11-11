@@ -1369,6 +1369,7 @@ async fn terminal_request_refresh_retains_page_rows_and_quiesces() -> anyhow::Re
             "provider_kind": "OpenAiCompatible", "endpoint": "http://localhost:8000/v1",
             "auth": {"kind": "unauthenticated"}
         }))?,
+        &gents::inference::resolved::ProviderProfilePolicy,
     )
     .await?;
     crate::client::mutations::upsert_inference_profile_on(

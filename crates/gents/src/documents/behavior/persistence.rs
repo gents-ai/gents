@@ -7,7 +7,11 @@ use crate::store::config_client::ConfigAccess;
 use crate::store::config_client::ConfigApplyTxn;
 use crate::Collection;
 
-pub async fn write_agent_document(access: &ConfigAccess, behavior: &Agent) -> Result<String> {
+pub async fn write_agent_document(
+    access: &ConfigAccess,
+    behavior: &Agent,
+    policy: &dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
+) -> Result<String> {
     access
         .transact_write("config.agent.write", |txn| {
             Box::pin(async move {
@@ -17,7 +21,7 @@ pub async fn write_agent_document(access: &ConfigAccess, behavior: &Agent) -> Re
                     add: value.clone(),
                     update: value,
                 }])?;
-                crate::documents::apply_desired_state_plan(txn, &plan).await?;
+                crate::documents::apply_desired_state_plan(txn, &plan, policy).await?;
                 crate::documents::read_desired_state_record_in_txn(
                     txn,
                     Collection::Agent,
@@ -93,31 +97,58 @@ mod tests {
                 .transact_write("test.behavior.seed", |txn| {
                     let plan = &plan;
                     Box::pin(async move {
-                        crate::documents::apply_desired_state_plan(txn, plan)
-                            .await
-                            .map(|_| ())
+                        crate::documents::apply_desired_state_plan(
+                            txn,
+                            plan,
+                            &crate::inference::resolved::ProviderProfilePolicy,
+                        )
+                        .await
+                        .map(|_| ())
                     })
                 })
                 .await?;
             let profile: InferenceProfile = serde_json::from_value(
                 json!({"node_did":owner,"profile_id":"inference","backend_id":"local","model_name":"exact-model"}),
             )?;
-            write_inference_profile_document(&access, &profile).await?;
+            write_inference_profile_document(
+                &access,
+                &profile,
+                &crate::inference::resolved::ProviderProfilePolicy,
+            )
+            .await?;
         }
         let mut behavior: Agent = serde_json::from_value(json!({
             "node_did":"did:key:owner","agent_did":"did:key:agent", "creation_nonce":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","inference_profile_id":"inference",
             "context_id":"context","description":"old","tags":["old"]
         }))?;
-        let original_id = write_agent_document(&access, &behavior).await?;
+        let original_id = write_agent_document(
+            &access,
+            &behavior,
+            &crate::inference::resolved::ProviderProfilePolicy,
+        )
+        .await?;
         let mut foreign = behavior.clone();
         foreign.node_did = "did:key:other".to_owned();
         foreign.agent_did = "did:key:other-agent".to_owned();
-        let foreign_id = write_agent_document(&access, &foreign).await?;
+        let foreign_id = write_agent_document(
+            &access,
+            &foreign,
+            &crate::inference::resolved::ProviderProfilePolicy,
+        )
+        .await?;
         assert_ne!(original_id, foreign_id);
         behavior.context_id = None;
         behavior.description = None;
         behavior.tags.clear();
-        assert_eq!(write_agent_document(&access, &behavior).await?, original_id);
+        assert_eq!(
+            write_agent_document(
+                &access,
+                &behavior,
+                &crate::inference::resolved::ProviderProfilePolicy
+            )
+            .await?,
+            original_id
+        );
         access
             .transact_write("test.behavior.read", |txn| {
                 let behavior = &behavior;
@@ -138,7 +169,13 @@ mod tests {
             .await?;
         let mut invalid = behavior.clone();
         invalid.context_id = Some("missing".to_owned());
-        assert!(write_agent_document(&access, &invalid).await.is_err());
+        assert!(write_agent_document(
+            &access,
+            &invalid,
+            &crate::inference::resolved::ProviderProfilePolicy
+        )
+        .await
+        .is_err());
         access
             .transact_write("test.behavior.rollback", |txn| {
                 let behavior = &behavior;

@@ -222,7 +222,14 @@ mod tests {
         access
             .transact_write("test.workspace_selection.callback", |txn| {
                 let plan = &plan;
-                Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    crate::documents::apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await?;
         let rows = access.execute("{Callback {_docID callback_id}}").await?;
@@ -276,7 +283,14 @@ mod tests {
         access
             .transact_write("test.workspace_selection.repeat", |txn| {
                 let plan = &plan;
-                Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    crate::documents::apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await?;
         for case in cases {
@@ -311,7 +325,12 @@ mod tests {
                 .transact_write("test.workspace_selection.enabled", |txn| {
                     let changed = &changed;
                     Box::pin(async move {
-                        crate::documents::apply_desired_state_plan(txn, changed).await
+                        crate::documents::apply_desired_state_plan(
+                            txn,
+                            changed,
+                            &crate::inference::resolved::ProviderProfilePolicy,
+                        )
+                        .await
                     })
                 })
                 .await?;

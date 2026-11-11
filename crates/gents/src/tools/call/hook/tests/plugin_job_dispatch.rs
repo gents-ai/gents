@@ -280,7 +280,14 @@ async fn step0(output: Value, options: Options) -> Step0 {
     owner
         .transact_write("test.plugin_job_target", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();
@@ -322,9 +329,13 @@ async fn step0(output: Value, options: Options) -> Step0 {
         "agents": {"enabled": true, "target_ids": if options.caller_targets { vec!["t-worker"] } else { Vec::new() }},
         "integrations": {"plugins": [{"plugin": "team/plugin", "job": hook.job_tools.get(TOOL).unwrap().settings}]},
     })).unwrap();
-    crate::documents::write_tools_document(&owner, &tools)
-        .await
-        .unwrap();
+    crate::documents::write_tools_document(
+        &owner,
+        &tools,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
     if options.driver {
         let runtime = JobRuntime::new(
             node.clone(),
@@ -1926,7 +1937,12 @@ impl Step0 {
                                     update: node,
                                 },
                             ])?;
-                            crate::documents::apply_desired_state_plan(txn, &plan).await
+                            crate::documents::apply_desired_state_plan(
+                                txn,
+                                &plan,
+                                &crate::inference::resolved::ProviderProfilePolicy,
+                            )
+                            .await
                         })
                     })
                     .await

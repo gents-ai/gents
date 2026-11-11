@@ -887,7 +887,12 @@ mod tests {
                         add: value.clone(),
                         update: value,
                     }])?;
-                    apply_desired_state_plan(txn, &plan).await?;
+                    apply_desired_state_plan(
+                        txn,
+                        &plan,
+                        &gents::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await?;
                     Ok::<_, anyhow::Error>(())
                 })
             })

@@ -50,7 +50,7 @@ pub async fn prepare_access_review_task_on(
                         add: value.clone(),
                         update: value,
                     }])?;
-                    apply_desired_state_plan(txn, &plan).await?;
+                    apply_desired_state_plan(txn, &plan, &gents::inference::resolved::ProviderProfilePolicy).await?;
                     default.clone()
                 }
                 None => anyhow::bail!("The configured access reviewer is missing. Restore its Task in Runtime Settings."),
@@ -599,7 +599,12 @@ mod tests {
                 |txn| {
                     let plan = &plan;
                     Box::pin(async move {
-                        apply_desired_state_plan(txn, plan).await?;
+                        apply_desired_state_plan(
+                            txn,
+                            plan,
+                            &gents::inference::resolved::ProviderProfilePolicy,
+                        )
+                        .await?;
                         Ok::<_, anyhow::Error>(())
                     })
                 },
@@ -787,7 +792,12 @@ mod tests {
                 .transact_write("desktop.automation.seed", |txn| {
                     let plan = &plan;
                     Box::pin(async move {
-                        apply_desired_state_plan(txn, plan).await?;
+                        apply_desired_state_plan(
+                            txn,
+                            plan,
+                            &gents::inference::resolved::ProviderProfilePolicy,
+                        )
+                        .await?;
                         Ok::<_, anyhow::Error>(())
                     })
                 })

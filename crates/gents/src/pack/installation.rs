@@ -931,10 +931,19 @@ pub(crate) async fn install_in_txn(
     let plan = super::provenance::prepare_pack_plan_in_txn(txn, &applied)
         .await?
         .with_removals(removals)?;
-    crate::documents::validate_desired_state_plan(txn, &plan).await?;
-    report.applied =
-        crate::documents::apply_desired_state_plan_with_node_binding(txn, &plan, node_binding)
-            .await?;
+    crate::documents::validate_desired_state_plan(
+        txn,
+        &plan,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await?;
+    report.applied = crate::documents::apply_desired_state_plan_with_node_binding(
+        txn,
+        &plan,
+        node_binding,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await?;
     report.plugins = pack.plugins.clone();
     let written: Vec<(Collection, &str)> = recorded
         .iter()
@@ -1545,8 +1554,18 @@ async fn remove_record_in_txn(
     ensure_removal_origin(txn, owner, coordinate, &removals).await?;
 
     let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(removals)?;
-    crate::documents::validate_desired_state_plan(txn, &plan).await?;
-    report.documents.applied = crate::documents::apply_desired_state_plan(txn, &plan).await?;
+    crate::documents::validate_desired_state_plan(
+        txn,
+        &plan,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await?;
+    report.documents.applied = crate::documents::apply_desired_state_plan(
+        txn,
+        &plan,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await?;
 
     txn.delete_configuration_document(RECORD, &doc_id).await?;
 

@@ -196,9 +196,12 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
         "provider_kind":"OpenAiCompatible", "endpoint":format!("http://{discovery_address}/v1"),
         "auth":{"kind":"api_key", "key":"first-private-key"}
     }))?;
-    let metadata_doc =
-        crate::documents::inference_backend::write_inference_backend_document(&access, &backend)
-            .await?;
+    let metadata_doc = crate::documents::inference_backend::write_inference_backend_document(
+        &access,
+        &backend,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await?;
     let runtime_access =
         super::ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did())?);
     // Native ACP denies the runtime either by refusing the mutation or by
@@ -274,9 +277,13 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
         .as_bool()
         .unwrap();
     assert_eq!(
-        crate::documents::inference_backend::write_inference_backend_document(&access, &moved)
-            .await
-            .is_ok(),
+        crate::documents::inference_backend::write_inference_backend_document(
+            &access,
+            &moved,
+            &crate::inference::resolved::ProviderProfilePolicy
+        )
+        .await
+        .is_ok(),
         moved_allowed
     );
     assert_eq!(read().await?, initial);
@@ -284,8 +291,12 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
     backend.auth = crate::documents::BackendAuth::ApiKey {
         key: "rotated-private-key".into(),
     };
-    crate::documents::inference_backend::write_inference_backend_document(&access, &backend)
-        .await?;
+    crate::documents::inference_backend::write_inference_backend_document(
+        &access,
+        &backend,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await?;
     let rotated = read().await?;
     assert_ne!(
         rotated["data"]["InferenceBackendMetadata"][0]["credential_version"],
@@ -428,7 +439,8 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
     assert!(
         crate::documents::inference_backend::write_inference_backend_document(
             &agent_access,
-            &backend
+            &backend,
+            &crate::inference::resolved::ProviderProfilePolicy
         )
         .await
         .is_err()
@@ -488,7 +500,14 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
     let denied = agent_access
         .transact_write("test.backend.remove.denied", |txn| {
             let removal = &removal;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, removal).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    removal,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await;
     assert!(denied.is_err());
@@ -514,7 +533,14 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
         Some(1),
         access.transact_write("test.backend.remove.rollback", |txn| {
             let removal = &removal;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, removal).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    removal,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         }),
     )
     .await;
@@ -544,7 +570,14 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
     access
         .transact_write("test.backend.remove", |txn| {
             let removal = &removal;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, removal).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    removal,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await?;
     let removed_case = modeled
@@ -575,9 +608,12 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
             .unwrap()
             .to_owned(),
     };
-    let recreated_doc =
-        crate::documents::inference_backend::write_inference_backend_document(&access, &backend)
-            .await?;
+    let recreated_doc = crate::documents::inference_backend::write_inference_backend_document(
+        &access,
+        &backend,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await?;
     assert_eq!(
         recreated_doc != metadata_doc,
         modeled.backend_genesis_distinct

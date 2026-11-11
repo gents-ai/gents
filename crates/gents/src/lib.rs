@@ -284,7 +284,14 @@ pub mod test_support {
         access
             .transact_write("test.signed_node", |txn| {
                 let plan = &plan;
-                Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    crate::documents::apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await
             .unwrap();
@@ -398,7 +405,12 @@ pub mod test_support {
                             update: node,
                         },
                     ])?;
-                    crate::documents::apply_desired_state_plan(txn, &plan).await
+                    crate::documents::apply_desired_state_plan(
+                        txn,
+                        &plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
                 })
             })
             .await
@@ -433,7 +445,12 @@ pub mod test_support {
                             update: node,
                         },
                     ])?;
-                    crate::documents::apply_desired_state_plan(txn, &plan).await
+                    crate::documents::apply_desired_state_plan(
+                        txn,
+                        &plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
                 })
             })
             .await
@@ -551,7 +568,14 @@ pub mod test_support {
         access
             .transact_write("test.install_agent", |txn| {
                 let plan = &plan;
-                Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    crate::documents::apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await
             .unwrap();

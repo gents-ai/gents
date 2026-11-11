@@ -256,7 +256,12 @@ async fn write_checked(
             gents::inference::auth::credential::enabled_accounts_note(provider, &snapshot.accounts)
         );
     }
-    let doc_id = gents::documents::write_inference_profile_document(access, profile).await?;
+    let doc_id = gents::documents::write_inference_profile_document(
+        access,
+        profile,
+        &gents::inference::resolved::ProviderProfilePolicy,
+    )
+    .await?;
     let mut output = json!({"doc_id":doc_id,"node_did":profile.node_did,"profile_id":profile.profile_id,"backend_id":profile.backend_id,"model_name":profile.model_name});
     if let Some(account) = account {
         output["account"] = serde_json::to_value(account)?;
@@ -476,9 +481,13 @@ mod tests {
             "model_name": "model-x",
         }))
         .unwrap();
-        gents::documents::write_inference_profile_document(access, &profile)
-            .await
-            .unwrap();
+        gents::documents::write_inference_profile_document(
+            access,
+            &profile,
+            &gents::inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
     }
 
     async fn seeded() -> (ConfigAccess, String, String) {
@@ -518,6 +527,7 @@ mod tests {
             gents::documents::write_inference_backend_document(
                 &access,
                 &serde_json::from_value(value).unwrap(),
+                &gents::inference::resolved::ProviderProfilePolicy,
             )
             .await
             .unwrap();
@@ -791,6 +801,7 @@ mod tests {
                 json!({"kind": "node_oauth"}),
             ))
             .unwrap(),
+            &gents::inference::resolved::ProviderProfilePolicy,
         )
         .await
         .unwrap();
@@ -892,9 +903,13 @@ mod tests {
             .transact_write("test.profile.agents", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    gents::documents::apply_desired_state_plan(txn, plan)
-                        .await
-                        .map(|_| ())
+                    gents::documents::apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                    .map(|_| ())
                 })
             })
             .await
@@ -996,6 +1011,7 @@ mod tests {
                 json!({"kind": "node_oauth", "account_ref": "acct-g"}),
             ))
             .unwrap(),
+            &gents::inference::resolved::ProviderProfilePolicy,
         )
         .await
         .unwrap();
@@ -1020,6 +1036,7 @@ mod tests {
                 json!({"kind": "api_key", "key": "key-SECRET"}),
             ))
             .unwrap(),
+            &gents::inference::resolved::ProviderProfilePolicy,
         )
         .await
         .unwrap();

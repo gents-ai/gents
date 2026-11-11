@@ -697,7 +697,14 @@ async fn write_inference(job: &Job) {
     job_owner(job)
         .transact_write("test.driver.inference", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();
@@ -717,9 +724,13 @@ pub(crate) async fn write_step_tools(job: &Job, settings: Option<&PluginJobSetti
         "integrations": {"plugins": [{"plugin": "acme/engine", "job": settings}]},
     }))
     .unwrap();
-    crate::documents::write_tools_document(&job_owner(job), &tools)
-        .await
-        .unwrap();
+    crate::documents::write_tools_document(
+        &job_owner(job),
+        &tools,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
 }
 
 /// Installs `output` as the guest of `acme/engine` under the job's home,

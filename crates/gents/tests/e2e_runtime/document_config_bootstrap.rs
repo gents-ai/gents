@@ -116,7 +116,14 @@ async fn canonical_config_roundtrips_scoped_references_and_preserves_explicit_de
     access
         .transact_write("test.canonical_config.apply", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();

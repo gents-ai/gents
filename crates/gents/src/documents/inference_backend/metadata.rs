@@ -329,6 +329,7 @@ pub(crate) async fn write_backend_metadata_in_txn(
 pub(crate) async fn write_inference_backend_in_txn(
     txn: &ConfigApplyTxn<'_>,
     backend: &InferenceBackend,
+    policy: &dyn super::AdvertisedProfilePolicy,
 ) -> Result<()> {
     backend.validate()?;
     let value = serde_json::to_value(backend)?;
@@ -337,19 +338,20 @@ pub(crate) async fn write_inference_backend_in_txn(
         add: value.clone(),
         update: value,
     }])?;
-    crate::documents::apply_desired_state_plan(txn, &plan).await?;
+    crate::documents::apply_desired_state_plan(txn, &plan, policy).await?;
     Ok(())
 }
 
 pub async fn write_inference_backend_document(
     access: &ConfigAccess,
     backend: &InferenceBackend,
+    policy: &dyn super::AdvertisedProfilePolicy,
 ) -> Result<String> {
     backend.validate()?;
     access
         .transact_write("config.inference_backend.upsert", |txn| {
             Box::pin(async move {
-                write_inference_backend_in_txn(txn, backend).await?;
+                write_inference_backend_in_txn(txn, backend, policy).await?;
                 crate::documents::read_desired_state_record_in_txn(
                     txn,
                     Collection::InferenceBackend,

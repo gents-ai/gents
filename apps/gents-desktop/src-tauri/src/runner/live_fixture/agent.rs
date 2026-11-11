@@ -153,7 +153,14 @@ async fn seed_live_agent_documents(
     access
         .transact_write("desktop.fixture.node", |txn| {
             let initial = &initial;
-            Box::pin(async move { apply_desired_state_plan(txn, initial).await })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    initial,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await?;
     let binding = gents::store::identity::provision_agent_identity_authorized(
@@ -246,7 +253,12 @@ async fn seed_live_agent_documents(
                 config["inference_backends"] = serde_json::to_value(backends)?;
                 let config: PackConfig = serde_json::from_value(config)?;
                 let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
-                apply_desired_state_plan(txn, &plan).await?;
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await?;
                 Ok::<_, anyhow::Error>(())
             })
         })

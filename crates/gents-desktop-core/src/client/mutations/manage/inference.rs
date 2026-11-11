@@ -102,7 +102,12 @@ mod tests {
         let profile: InferenceProfile = serde_json::from_value(json!({
             "node_did":backend.node_did, "profile_id":"profile", "backend_id":"shared", "model_name":"model"
         }))?;
-        gents::documents::write_inference_profile_document(&access, &profile).await?;
+        gents::documents::write_inference_profile_document(
+            &access,
+            &profile,
+            &gents::inference::resolved::ProviderProfilePolicy,
+        )
+        .await?;
         assert!(
             delete_inference_backend_on(&access, &backend.node_did, "shared")
                 .await

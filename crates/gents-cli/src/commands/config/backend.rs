@@ -36,7 +36,12 @@ pub(super) async fn backend_set(args: BackendSetArgs) -> Result<()> {
             let backend = &backend;
             let plan = &plan;
             Box::pin(async move {
-                apply_desired_state_plan(txn, plan).await?;
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await?;
                 Ok::<_, anyhow::Error>(
                     read_desired_state_record_in_txn(
                         txn,
@@ -327,9 +332,13 @@ mod tests {
                 "provider_kind": kind, "endpoint": endpoint, "auth": auth,
             }))
             .unwrap();
-            gents::documents::write_inference_backend_document(&access, &backend)
-                .await
-                .unwrap();
+            gents::documents::write_inference_backend_document(
+                &access,
+                &backend,
+                &gents::inference::resolved::ProviderProfilePolicy,
+            )
+            .await
+            .unwrap();
         }
         access
     }
@@ -395,9 +404,13 @@ mod tests {
             "auth": {"kind": "node_oauth", "account_ref": "pinned"},
         }))
         .unwrap();
-        gents::documents::write_inference_backend_document(&access, &pinned)
-            .await
-            .unwrap();
+        gents::documents::write_inference_backend_document(
+            &access,
+            &pinned,
+            &gents::inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
         pool_output(&access, DID, "claude", BackendRotation::Single)
             .await
             .unwrap();

@@ -107,7 +107,14 @@ impl Fixture {
         user_access
             .transact_write("test.goal_fixture.agent", |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await
             .unwrap();
@@ -477,9 +484,13 @@ impl Fixture {
         let access = self.user_access();
         let preset =
             preset_account_backend(&did, CLAUDE_OAUTH_PROVIDER, None, "Claude".into()).unwrap();
-        write_inference_backend_document(&access, &preset)
-            .await
-            .unwrap();
+        write_inference_backend_document(
+            &access,
+            &preset,
+            &crate::inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
         let mut accounts = Vec::new();
         for who in ["a", "b"] {
             let credential = crate::inference::auth::claude::credential_from_login_tokens(
@@ -541,7 +552,15 @@ impl Fixture {
         access
             .transact_write("test.claude_accounts.profile", |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                    .map(|_| ())
+                })
             })
             .await
             .unwrap();
@@ -584,7 +603,15 @@ impl Fixture {
         access
             .transact_write("test.compacts_on", |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                    .map(|_| ())
+                })
             })
             .await
             .unwrap();

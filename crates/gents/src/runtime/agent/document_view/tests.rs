@@ -161,9 +161,13 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
         mode: crate::documents::FileToolMode::ReadOnly,
         ..Default::default()
     });
-    crate::documents::write_tools_document(&user_access, &tools_doc)
-        .await
-        .expect("write read-only Tools patch");
+    crate::documents::write_tools_document(
+        &user_access,
+        &tools_doc,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .expect("write read-only Tools patch");
 
     let behavior_doc_id = crate::documents::load_agent_record(node.as_ref(), &default_agent_did)
         .await
@@ -691,7 +695,12 @@ async fn patch_desired_document(
                     add: value.clone(),
                     update: value,
                 }])?;
-                apply_desired_state_plan(txn, &plan).await
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
             })
         })
         .await
@@ -1651,7 +1660,7 @@ async fn bind_subscription_backend(
                 value.as_object_mut().unwrap().extend(patch.as_object().unwrap().clone());
                 documents.push(DesiredStateApplyDocument {collection, add:value.clone(), update:value});
             }
-            apply_desired_state_plan(txn, &DesiredStateApplyPlan::new(documents)?).await
+            apply_desired_state_plan(txn, &DesiredStateApplyPlan::new(documents)?, &crate::inference::resolved::ProviderProfilePolicy).await
         })
     }).await.unwrap();
 }

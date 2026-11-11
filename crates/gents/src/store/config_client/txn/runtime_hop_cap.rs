@@ -94,7 +94,12 @@ mod tests {
                         add: node.clone(),
                         update: node,
                     }])?;
-                    apply_desired_state_plan(txn, &plan).await
+                    apply_desired_state_plan(
+                        txn,
+                        &plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
                 })
             })
             .await?;

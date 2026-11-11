@@ -68,7 +68,12 @@ pub async fn set_backend_rotation_in_txn(
             _ => BackendAuth::NodeOAuth { account_ref: None },
         },
     };
-    write_inference_backend_in_txn(txn, &backend).await?;
+    write_inference_backend_in_txn(
+        txn,
+        &backend,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await?;
     Ok(backend)
 }
 

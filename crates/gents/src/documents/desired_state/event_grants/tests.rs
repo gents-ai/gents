@@ -20,7 +20,15 @@ async fn apply(access: &ConfigAccess, documents: Vec<DesiredStateApplyDocument>)
     access
         .transact_write("test.event_grants.apply", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
+            })
         })
         .await
 }

@@ -84,9 +84,13 @@ impl Fixture {
             (XAI_OAUTH_PROVIDER, "Grok"),
         ] {
             let backend = preset_account_backend(did, provider, None, name.to_owned()).unwrap();
-            write_inference_backend_document(&access, &backend)
-                .await
-                .unwrap();
+            write_inference_backend_document(
+                &access,
+                &backend,
+                &crate::inference::resolved::ProviderProfilePolicy,
+            )
+            .await
+            .unwrap();
         }
         let mut credentials = BTreeMap::new();
         let mut backends = BTreeMap::from([("g", XAI_OAUTH_PROVIDER.to_owned())]);
@@ -189,7 +193,15 @@ impl Fixture {
         self.access
             .transact_write("test.switch.apply", |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                    .map(|_| ())
+                })
             })
             .await
             .unwrap();
@@ -639,9 +651,13 @@ async fn a_bound_plugin_slot_counts_and_keeps_serving_after_the_switch() {
             "auth": {"kind": "api_key", "key": "KEY-SENTINEL"},
         }))
         .unwrap();
-        write_inference_backend_document(&fixture.access, &backend)
-            .await
-            .unwrap();
+        write_inference_backend_document(
+            &fixture.access,
+            &backend,
+            &crate::inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
     }
     fixture
         .apply(vec![

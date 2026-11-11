@@ -206,7 +206,14 @@ impl ChatNode {
         let user = ConfigAccess::Graphql(user_endpoint(&graphql));
         user.transact_write("test.chat_node.config", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();
@@ -3856,7 +3863,14 @@ async fn a_trigger_reads_its_own_nodes_schedule() {
     work.access()
         .transact_write("test.other_node", |txn| {
             let plan = &plan;
-            Box::pin(async move { gents::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                gents::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();

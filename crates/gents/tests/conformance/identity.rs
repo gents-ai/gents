@@ -533,7 +533,14 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
     user_access
         .transact_write("test.configuration.selected", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await?;
     let query = |id: &str| {
@@ -639,7 +646,14 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
                     access
                         .transact_write("test.configuration.update", |txn| {
                             let plan = &plan;
-                            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+                            Box::pin(async move {
+                                apply_desired_state_plan(
+                                    txn,
+                                    plan,
+                                    &gents::inference::resolved::ProviderProfilePolicy,
+                                )
+                                .await
+                            })
                         })
                         .await
                         .is_ok()
@@ -684,7 +698,12 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
                 let plan = &plan;
                 let actual_agent = &actual_agent;
                 Box::pin(async move {
-                    apply_desired_state_plan(txn, plan).await?;
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await?;
                     let (doc, _) = gents::documents::read_desired_state_record_in_txn(
                         txn,
                         gents::Collection::Tools,
@@ -950,7 +969,12 @@ async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyh
                         .transact_write("test.self_config.update", |txn| {
                             let plan = &plan;
                             Box::pin(async move {
-                                gents::documents::apply_desired_state_plan(txn, plan).await
+                                gents::documents::apply_desired_state_plan(
+                                    txn,
+                                    plan,
+                                    &gents::inference::resolved::ProviderProfilePolicy,
+                                )
+                                .await
                             })
                         })
                         .await

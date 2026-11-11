@@ -101,7 +101,15 @@ impl Launching {
         access
             .transact_write("freeze.test_fixture", |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                    .map(|_| ())
+                })
             })
             .await
             .unwrap();
@@ -247,7 +255,12 @@ async fn launching_fixture_commits_user_signed_node_and_denies_ungranted_client(
                     add: node.clone(),
                     update: node,
                 }])?;
-                apply_desired_state_plan(txn, &plan).await
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
             })
         })
         .await;

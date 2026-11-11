@@ -6,7 +6,11 @@ use crate::store::config_client::ConfigAccess;
 use crate::Collection;
 
 /// Replace a complete Tools document; omitted groups revoke their capabilities.
-pub async fn write_tools_document(access: &ConfigAccess, tools: &Tools) -> Result<String> {
+pub async fn write_tools_document(
+    access: &ConfigAccess,
+    tools: &Tools,
+    policy: &dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
+) -> Result<String> {
     tools.validate()?;
     access
         .transact_write("config.tools.write", |txn| {
@@ -17,7 +21,7 @@ pub async fn write_tools_document(access: &ConfigAccess, tools: &Tools) -> Resul
                     add: value.clone(),
                     update: value,
                 }])?;
-                crate::documents::apply_desired_state_plan(txn, &plan).await?;
+                crate::documents::apply_desired_state_plan(txn, &plan, policy).await?;
                 crate::documents::read_desired_state_record_in_txn(
                     txn,
                     Collection::Tools,
@@ -58,14 +62,35 @@ mod tests {
             "host":{"files":{"mode":"ReadOnly"}},
             "built_ins":{"enable_goal_tools":true}, "tags":["old"]
         }))?;
-        let first_id = write_tools_document(&access, &tools).await?;
+        let first_id = write_tools_document(
+            &access,
+            &tools,
+            &crate::inference::resolved::ProviderProfilePolicy,
+        )
+        .await?;
         let mut foreign = tools.clone();
         foreign.node_did = "did:key:other".into();
-        assert_ne!(write_tools_document(&access, &foreign).await?, first_id);
+        assert_ne!(
+            write_tools_document(
+                &access,
+                &foreign,
+                &crate::inference::resolved::ProviderProfilePolicy
+            )
+            .await?,
+            first_id
+        );
         tools.host = None;
         tools.built_ins = None;
         tools.tags.clear();
-        assert_eq!(write_tools_document(&access, &tools).await?, first_id);
+        assert_eq!(
+            write_tools_document(
+                &access,
+                &tools,
+                &crate::inference::resolved::ProviderProfilePolicy
+            )
+            .await?,
+            first_id
+        );
         access
             .transact_write("test.tools.read", |txn| {
                 let tools = &tools;

@@ -44,7 +44,7 @@ impl ConfigCommandTool {
                     let plan = DesiredStateApplyPlan::new(references.documents().map(|((collection, _), value)| DesiredStateApplyDocument {
                         collection: *collection, add: value.clone(), update: value.clone(),
                     }).collect())?;
-                    if let Err(error) = validate_desired_state_plan(txn, &plan).await {
+                    if let Err(error) = validate_desired_state_plan(txn, &plan, &crate::inference::resolved::ProviderProfilePolicy).await {
                         if crate::store::config_client::is_transaction_step_unavailable(&error) {
                             return Err(error);
                         }

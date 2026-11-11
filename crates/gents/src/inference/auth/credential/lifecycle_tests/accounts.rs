@@ -125,9 +125,13 @@ async fn a_label_change_is_validated_unique_and_renames_the_backend() {
 
     let mut custom = backend.clone();
     custom.name = "Custom".into();
-    crate::documents::write_inference_backend_document(&access, &custom)
-        .await
-        .unwrap();
+    crate::documents::write_inference_backend_document(
+        &access,
+        &custom,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
     set_account_label(&access, did, id, "Home").await.unwrap();
     assert_eq!(backends(&access, did).await.remove(0).name, "Custom");
 }
@@ -192,9 +196,13 @@ async fn a_sign_in_after_removing_the_only_account_takes_the_original_slot() {
             enabled: true,
             tags: Vec::new(),
         };
-        crate::documents::write_inference_backend_document(&access, &original)
-            .await
-            .unwrap();
+        crate::documents::write_inference_backend_document(
+            &access,
+            &original,
+            &crate::inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
         let profile = serde_json::from_value(json!({
             "node_did": did,
             "profile_id": format!("{product:?}-profile"),
@@ -202,9 +210,13 @@ async fn a_sign_in_after_removing_the_only_account_takes_the_original_slot() {
             "model_name": "model-x",
         }))
         .unwrap();
-        crate::documents::write_inference_profile_document(&access, &profile)
-            .await
-            .unwrap();
+        crate::documents::write_inference_profile_document(
+            &access,
+            &profile,
+            &crate::inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
     }
     let a = store(&access, Product::Claude.sign_in(did, "a", "refresh-a")).await;
     remove(&access, did, &a.credential.credential_id)

@@ -1765,9 +1765,13 @@ pub(crate) mod tests {
             "integrations": {"plugins": [{"plugin": "acme/engine", "job": settings}]},
         }))
         .unwrap();
-        crate::documents::write_tools_document(&owner, &tools)
-            .await
-            .unwrap();
+        crate::documents::write_tools_document(
+            &owner,
+            &tools,
+            &crate::inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
         let agent = agent_access(&node);
         let now = chrono::Utc::now().to_rfc3339();
         let session_doc = insert_as(

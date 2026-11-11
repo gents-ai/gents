@@ -43,7 +43,12 @@ async fn apply(access: &ConfigAccess, plan: &DesiredStateApplyPlan) -> Result<()
     access
         .transact_write("test.mcp.policy.apply", |txn| {
             Box::pin(async move {
-                apply_desired_state_plan(txn, plan).await?;
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await?;
                 Ok::<_, anyhow::Error>(())
             })
         })
@@ -491,6 +496,7 @@ async fn held_client_and_agent_mcp_selection_isolation_rebind_and_rollback() -> 
                     txn,
                     plan,
                     Some(binding),
+                    &crate::inference::resolved::ProviderProfilePolicy,
                 )
                 .await?;
                 Ok::<_, anyhow::Error>(())

@@ -689,7 +689,12 @@ pub(super) async fn apply_user_config(
             let plan = &plan;
             let owner = &owner;
             Box::pin(async move {
-                crate::documents::apply_desired_state_plan(txn, plan).await?;
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await?;
                 let (id, _) = crate::documents::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Trigger,

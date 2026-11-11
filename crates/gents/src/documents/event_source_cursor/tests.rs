@@ -68,7 +68,15 @@ async fn publish(access: &ConfigAccess, docs: Vec<DesiredStateApplyDocument>) ->
     access
         .transact_write("test.cursor.publish", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
+            })
         })
         .await
 }
@@ -442,6 +450,7 @@ async fn held_agent_cursor_seed_uses_runtime_observed_node_binding() -> Result<(
                     txn,
                     plan,
                     Some(binding),
+                    &crate::inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })

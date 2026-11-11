@@ -368,7 +368,14 @@ async fn edit_tools_owned(access: &ConfigAccess, owner: &str, id: &str, name: &s
     access
         .transact_write("test.edit", |txn| {
             let edit = &edit;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, edit).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    edit,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();
@@ -1359,7 +1366,14 @@ async fn locally_installed_pack_agent_holds_the_projected_baseline() {
     user_access
         .transact_write("test.local_pack.profile", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();
@@ -1791,7 +1805,14 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
     access
         .transact_write("test.seed", |txn| {
             let seed = &seed;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, seed).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    seed,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();
@@ -2784,7 +2805,14 @@ async fn write_dependee_tools(access: &ConfigAccess, tools: &Value) {
     access
         .transact_write("test.dependee.edit", |txn| {
             let edit = &edit;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, edit).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    edit,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();
@@ -3607,9 +3635,13 @@ async fn removing_a_plugin_pack_refuses_surviving_agents_and_rolls_back_document
         .transact_write("test.surviving_plugin_user", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::documents::apply_desired_state_plan(txn, plan)
-                    .await
-                    .map(|_| ())
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
             })
         })
         .await
@@ -4986,7 +5018,14 @@ async fn pack_install_applies_exactly_the_declared_placement_readers() {
     user_access
         .transact_write("test.placement_readers.setup", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();

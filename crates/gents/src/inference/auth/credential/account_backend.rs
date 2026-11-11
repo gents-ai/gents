@@ -60,12 +60,16 @@ async fn write_account_backend(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     backend: &crate::InferenceBackend,
 ) -> Result<()> {
-    crate::documents::write_inference_backend_in_txn(txn, backend)
-        .await
-        .context(
-            "the account's backend could not be stored, so the sign-in was not saved; \
+    crate::documents::write_inference_backend_in_txn(
+        txn,
+        backend,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .context(
+        "the account's backend could not be stored, so the sign-in was not saved; \
              fix the node's configuration and sign in again",
-        )
+    )
 }
 
 pub(super) async fn sync_account_backend(

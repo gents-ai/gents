@@ -73,9 +73,14 @@ async fn configure_session_chain(
     access
         .transact_write("test.session_limit.node", |txn| {
             let node_plan = &node_plan;
-            Box::pin(
-                async move { gents::documents::apply_desired_state_plan(txn, node_plan).await },
-            )
+            Box::pin(async move {
+                gents::documents::apply_desired_state_plan(
+                    txn,
+                    node_plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .expect("create user-owned node");
@@ -160,7 +165,14 @@ async fn configure_session_chain(
     access
         .transact_write("test.session_limit.configuration", |txn| {
             let plan = &plan;
-            Box::pin(async move { gents::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                gents::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .expect("create user-owned agent configuration");
@@ -184,7 +196,14 @@ async fn withdraw_child_target(db: &TestDb, owner: &dyn NodeIdentity) {
     db.client_access(owner)
         .transact_write("test.session_limit.withdraw_target", |txn| {
             let plan = &plan;
-            Box::pin(async move { gents::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                gents::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .expect("withdraw the configured agent target");

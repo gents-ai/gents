@@ -970,9 +970,13 @@ fn oauth_backend(
 
 async fn store_backends(access: &ConfigAccess, backends: &[InferenceBackend]) {
     for backend in backends {
-        crate::documents::write_inference_backend_document(access, backend)
-            .await
-            .expect("backend");
+        crate::documents::write_inference_backend_document(
+            access,
+            backend,
+            &crate::inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .expect("backend");
     }
 }
 
@@ -1527,9 +1531,13 @@ async fn default_limits_tool_reads_live_then_uses_cache_without_exposing_credent
     let (url, received) = test_support::one_shot_token_server(200, CODEX_USAGE_BODY).await;
     let mut backend = backend(did, "ChatGptCodex", "runtime", json!({"kind":"node_oauth"}));
     backend.endpoint = origin(&url);
-    crate::documents::write_inference_backend_document(&user_access, &backend)
-        .await
-        .unwrap();
+    crate::documents::write_inference_backend_document(
+        &user_access,
+        &backend,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
     let tool = ProviderLimitsTool {
         node,
         node_did: did.into(),

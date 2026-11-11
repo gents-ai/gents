@@ -1418,7 +1418,13 @@ async fn publish_home_config(
                     update: node_document,
                 });
                 let plan = DesiredStateApplyPlan::new(documents)?;
-                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
             })
         })
         .await

@@ -1630,7 +1630,7 @@ async fn allow_general_agent_target(
     crate::ConfigAccess::local_as(node.clone(), ::identity::Did::new(actor).unwrap())
         .transact_write("test.allow_general_agent_target", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan, &crate::inference::resolved::ProviderProfilePolicy).await })
         })
         .await
         .unwrap();

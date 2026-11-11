@@ -31,9 +31,13 @@ impl CycleFixture {
     }
 
     async fn write(&self, backend: &InferenceBackend) {
-        crate::documents::write_inference_backend_document(&self.user, backend)
-            .await
-            .unwrap();
+        crate::documents::write_inference_backend_document(
+            &self.user,
+            backend,
+            &crate::inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
     }
 
     async fn seed(&self, backend: &InferenceBackend, status: &str) {
@@ -283,7 +287,14 @@ async fn disabled_and_removed_backends_are_probed_again_when_observed_enabled() 
         .user
         .transact_write("test.backend.remove", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();

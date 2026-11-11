@@ -16,6 +16,7 @@ mod workspace_selection;
 use anyhow::{Context, Result};
 use serde_json::Value;
 
+use super::inference_backend::AdvertisedProfilePolicy;
 use super::inference_backend::{
     prepare_backend_metadata_in_txn, remove_backend_metadata_in_txn, write_backend_metadata_in_txn,
 };
@@ -111,16 +112,19 @@ impl PendingEventGrants for event_grants::Capture {
 pub async fn apply_desired_state_plan(
     txn: &ConfigApplyTxn<'_>,
     plan: &DesiredStateApplyPlan,
+    policy: &dyn AdvertisedProfilePolicy,
 ) -> Result<DesiredStateApplyCounts> {
-    apply_desired_state_plan_with_node_binding(txn, plan, None).await
+    apply_desired_state_plan_with_node_binding(txn, plan, None, policy).await
 }
 
 pub(crate) async fn apply_desired_state_plan_with_node_binding(
     txn: &ConfigApplyTxn<'_>,
     plan: &DesiredStateApplyPlan,
     binding: Option<&ConfigurationNodeBinding>,
+    policy: &dyn AdvertisedProfilePolicy,
 ) -> Result<DesiredStateApplyCounts> {
-    apply::apply_desired_state_plan_with_semantics(txn, plan, binding, &DocumentSemantics).await
+    apply::apply_desired_state_plan_with_semantics(txn, plan, binding, &DocumentSemantics, policy)
+        .await
 }
 
 #[cfg(test)]

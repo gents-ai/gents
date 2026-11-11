@@ -704,7 +704,14 @@ async fn apply_documents(
     access
         .transact_write(operation, |txn| {
             let plan = &plan;
-            Box::pin(async move { gents::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                gents::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap_or_else(|error| {
@@ -1058,7 +1065,14 @@ async fn install_inference(access: &ConfigAccess, owner: &str, endpoint: &str) {
     access
         .transact_write("workspace_cycle.install_inference", |txn| {
             let plan = &plan;
-            Box::pin(async move { gents::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                gents::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();
@@ -1244,7 +1258,14 @@ async fn install_failure_inbox_triggers(cycle: &Cycle) -> String {
         .access
         .transact_write("workspace_cycle.install_failure_inbox_triggers", |txn| {
             let plan = &plan;
-            Box::pin(async move { gents::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                gents::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .expect("install test-only failure outcome and inbox triggers");

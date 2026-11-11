@@ -92,7 +92,13 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
                         })
                         .collect(),
                 )?;
-                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
             })
         })
         .await

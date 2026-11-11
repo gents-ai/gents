@@ -22,7 +22,15 @@ async fn publish(access: &ConfigAccess, documents: Vec<(Collection, Value)>) -> 
     access
         .transact_write("test.live_goal_config", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
+            })
         })
         .await?;
     Ok(())

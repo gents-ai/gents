@@ -353,7 +353,14 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     user_access
         .transact_write("test.agent_creator.seed", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .context("seeding the user-owned Agent configuration")?;
@@ -924,7 +931,14 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     user_access
         .transact_write("test.surface.select", |txn| {
             let plan = &initial_surface_plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await?;
     let sibling_tools_query = format!(
@@ -1159,7 +1173,14 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     user_access
         .transact_write("test.surface.change", |txn| {
             let plan = &changed_plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await?;
     assert_eq!(
@@ -1169,7 +1190,14 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     user_access
         .transact_write("test.surface.restore", |txn| {
             let plan = &initial_surface_plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await?;
     let deselected_tools = json!({"node_did":runtime.did(), "tools_id":sibling_tools});
@@ -1181,7 +1209,14 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     user_access
         .transact_write("test.surface.deselect", |txn| {
             let plan = &deselect_plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await?;
     assert_eq!(sibling_writer.execute("{ DatastoreToolSurface(filter: {surface_id: {_eq: \"fixture/surface\"}}) { _docID } }").await?["data"]["DatastoreToolSurface"].as_array().unwrap().len(), 1);
@@ -1195,7 +1230,14 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     user_access
         .transact_write("test.surface.reselect", |txn| {
             let plan = &initial_surface_plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await?;
     assert!(cached_surface_usable(&sibling_writer, runtime.did(), &declaration).await);

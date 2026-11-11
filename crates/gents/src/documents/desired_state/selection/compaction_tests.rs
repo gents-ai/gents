@@ -24,7 +24,15 @@ async fn publish(access: &ConfigAccess, documents: Vec<(Collection, Value)>) -> 
     access
         .transact_write("test.compaction.publish", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
+            })
         })
         .await
 }

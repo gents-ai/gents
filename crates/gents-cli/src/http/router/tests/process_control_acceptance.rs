@@ -371,7 +371,15 @@ async fn configure_background_bash(
     home.access
         .transact_write("test.process_control.projected", |txn| {
             let projected = &projected;
-            Box::pin(async move { apply_desired_state_plan(txn, projected).await.map(|_| ()) })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    projected,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
+            })
         })
         .await
         .unwrap();
@@ -415,7 +423,13 @@ async fn configure_background_bash(
                     (Collection::Agent, agent),
                     (Collection::Node, node),
                 ])?;
-                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
             })
         })
         .await

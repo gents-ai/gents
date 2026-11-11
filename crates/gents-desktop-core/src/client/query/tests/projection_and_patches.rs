@@ -832,7 +832,12 @@ async fn catalog_freshness_reaches_snapshot_operator_and_document_patch_readers(
         "auth":{"kind":"unauthenticated"}
     }))?;
     let access = runtime.user_access();
-    gents::documents::write_inference_backend_document(&access, &backend).await?;
+    gents::documents::write_inference_backend_document(
+        &access,
+        &backend,
+        &gents::inference::resolved::ProviderProfilePolicy,
+    )
+    .await?;
     // Catalog discovery is the runtime's own observation.
     let observer = runtime.runtime_access();
     for observed_at in ["2026-10-28T01:00:00Z", "2026-10-28T02:00:00Z"] {

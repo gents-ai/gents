@@ -535,7 +535,13 @@ async fn configure_live_interrupt(actors: &RequestActors, target: &InferenceTarg
                     })
                     .collect(),
                 )?;
-                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
             })
         })
         .await

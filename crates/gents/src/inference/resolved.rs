@@ -592,8 +592,12 @@ pub fn advertised_model_for_profile(
     Ok(Some(model.clone()))
 }
 
+/// The provider rules for admitting an InferenceProfile on its backend,
+/// handed to configuration publication.
+pub struct ProviderProfilePolicy;
+
 #[async_trait::async_trait]
-impl crate::documents::inference_backend::AdvertisedProfilePolicy for BackendProviderKind {
+impl crate::documents::inference_backend::AdvertisedProfilePolicy for ProviderProfilePolicy {
     async fn validate_advertised_profile(
         &self,
         txn: &crate::store::config_client::ConfigApplyTxn<'_>,

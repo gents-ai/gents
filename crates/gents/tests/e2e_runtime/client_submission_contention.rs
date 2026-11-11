@@ -52,7 +52,13 @@ async fn rename_agent(actors: &RequestActors, name: String) {
                     add: agent.clone(),
                     update: agent,
                 }])?;
-                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
             })
         })
         .await

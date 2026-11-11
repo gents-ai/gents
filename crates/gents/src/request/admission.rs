@@ -2070,7 +2070,12 @@ mod tests {
                             update: record,
                         },
                     ])?;
-                    crate::documents::apply_desired_state_plan(txn, &plan).await
+                    crate::documents::apply_desired_state_plan(
+                        txn,
+                        &plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
                 })
             })
             .await
