@@ -820,12 +820,10 @@ impl DefraSessionHook {
                 })))
             }
             gents_protocol::tool_names::AGENT_STOP_TOOL_NAME => {
-                let receipt = gents_session::session::stop_session_with_access(
+                let receipt = gents_session::operations::session::stop(
                     &self.node,
                     &self.actor_access()?,
-                    &target.node_did,
-                    &target.session_id,
-                    target.requester_did.as_deref(),
+                    &session_ref(&target),
                 )
                 .await?;
                 Ok(json_string(json!({"ok": true, "session_id": session,
@@ -838,12 +836,10 @@ impl DefraSessionHook {
                 let Some(job_driver) = self.job_driver.clone() else {
                     anyhow::bail!("agent_resume cannot verify plugin execution settlement because the runtime job owner is unavailable; retry after runtime recovery")
                 };
-                gents_session::session::resume_session_with_access(
+                gents_session::operations::session::resume(
                     &self.node,
                     &self.actor_access()?,
-                    &target.node_did,
-                    &target.session_id,
-                    target.requester_did.as_deref(),
+                    &session_ref(&target),
                     std::sync::Arc::new(crate::call::hook::RuntimeExecutionWitness {
                         background_executions: self.background_executions.clone(),
                         job_driver,
@@ -856,6 +852,16 @@ impl DefraSessionHook {
             }
             _ => unreachable!(),
         }
+    }
+}
+
+fn session_ref(
+    target: &gents_protocol::session::SessionScope,
+) -> gents_protocol::operations::session::SessionRef {
+    gents_protocol::operations::session::SessionRef {
+        node_did: target.node_did.clone(),
+        session_id: target.session_id.clone(),
+        requester_did: target.requester_did.clone(),
     }
 }
 

@@ -38,7 +38,9 @@ import Proofs.Session.Compaction
 import Proofs.Session.PromptAssembly
 import Proofs.Shared.RenderedCapture
 import Proofs.Session.DurableLineage
+import Proofs.Session.Operations
 import Proofs.Clients.QueuedSteering
+import Proofs.Clients.OperationsDelivery
 import Proofs.Runtime.RuntimeReconcile
 import Proofs.P2P.PairingReconcile
 import Proofs.Documents.ScopeTemplates
