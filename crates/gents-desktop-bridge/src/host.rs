@@ -458,9 +458,7 @@ impl ClientHost {
             ClientCommand::Interrupt { mut request } => {
                 request.node_did = request.node_did.or_else(|| self.windowless_node());
                 encode(
-                    crate::interrupt::interrupt_request(&self.core, &request)
-                        .await
-                        .map_err(BridgeError::untyped)?,
+                    crate::interrupt::interrupt_request(&self.core, &request).await?,
                 )
             }
             ClientCommand::ProcessControl { request } => {
