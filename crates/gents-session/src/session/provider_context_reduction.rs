@@ -54,7 +54,7 @@ pub struct ReplayAssociations {
 }
 
 impl ReplayAssociations {
-    pub(crate) fn from_tagged_split(
+    pub fn from_tagged_split(
         required: Vec<ReplayTag>,
         prefix: &[TaggedMessage],
         suffix: &[TaggedMessage],
@@ -113,12 +113,12 @@ impl ProviderContextReduction {
         decode_checkpoint(&self.checkpoint_messages_json, &suffix, &self.summary)
     }
 
-    pub(crate) fn replay_associations(&self) -> Result<ReplayAssociations> {
+    pub fn replay_associations(&self) -> Result<ReplayAssociations> {
         serde_json::from_str(&self.replay_associations_json)
             .context("decoding ProviderContextReduction replay_associations_json")
     }
 
-    pub(crate) fn checkpoint_tagged_messages(&self) -> Result<Vec<TaggedMessage>> {
+    pub fn checkpoint_tagged_messages(&self) -> Result<Vec<TaggedMessage>> {
         tagged_checkpoint(
             &self.compacted_prefix_json,
             &self.retained_suffix_json,
@@ -163,21 +163,21 @@ pub struct NewProviderContextReduction<'a> {
 }
 
 pub struct NewExactProviderContextReduction<'a> {
-    pub(crate) agent_did: &'a str,
-    pub(crate) node_did: &'a str,
-    pub(crate) requester_did: Option<&'a str>,
-    pub(crate) session_id: &'a str,
-    pub(crate) request_id: &'a str,
-    pub(crate) request_doc_id: &'a str,
-    pub(crate) request_commit_cid: &'a str,
-    pub(crate) reduction_index: usize,
-    pub(crate) turn_index: usize,
-    pub(crate) parent_reduction_key: Option<&'a str>,
-    pub(crate) producer_call: Option<&'a ProducerCallRef>,
-    pub(crate) source_boundary: &'a SourceBoundary,
-    pub(crate) replay_associations: &'a ReplayAssociations,
-    pub(crate) original_tokens: usize,
-    pub(crate) compacted_tokens: usize,
+    pub agent_did: &'a str,
+    pub node_did: &'a str,
+    pub requester_did: Option<&'a str>,
+    pub session_id: &'a str,
+    pub request_id: &'a str,
+    pub request_doc_id: &'a str,
+    pub request_commit_cid: &'a str,
+    pub reduction_index: usize,
+    pub turn_index: usize,
+    pub parent_reduction_key: Option<&'a str>,
+    pub producer_call: Option<&'a ProducerCallRef>,
+    pub source_boundary: &'a SourceBoundary,
+    pub replay_associations: &'a ReplayAssociations,
+    pub original_tokens: usize,
+    pub compacted_tokens: usize,
 }
 
 fn tagged_checkpoint(
@@ -237,7 +237,7 @@ impl StagedProviderContextReduction {
 
     /// The loop's turn outcome for this staged reduction: the checkpoint is
     /// measured in memory and the row is written only by the loop's commit.
-    pub(crate) fn into_turn_outcome(
+    pub fn into_turn_outcome(
         self,
         node: std::sync::Arc<EmbeddedNode>,
         signer: gents_store::identity::ManagedAgentSigner,

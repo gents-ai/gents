@@ -719,7 +719,7 @@ impl ConfigApplyTxn<'_> {
     /// (`Identity.NodeProvisioning.runtimeMayStart`), so it holds nothing then
     /// rather than everything. An observation only: every operation it gates
     /// is still checked natively.
-    pub(crate) async fn actor_holds_node_permission(
+    pub async fn actor_holds_node_permission(
         &self,
         permission: super::super::NodePermission,
     ) -> Result<bool> {

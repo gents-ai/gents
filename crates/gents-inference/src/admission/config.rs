@@ -72,7 +72,7 @@ pub struct BackendAdmissionConfig {
 }
 
 impl BackendAdmissionConfig {
-    pub(crate) fn from_backend(
+    pub fn from_backend(
         backend: &InferenceBackend,
         observation: &gents_documents::InferenceBackendObservation,
     ) -> Result<Self> {
@@ -113,7 +113,7 @@ impl BackendAdmissionConfig {
         })
     }
 
-    pub(crate) fn with_measured_unhealthy(mut self, measured_unhealthy: bool) -> Self {
+    pub fn with_measured_unhealthy(mut self, measured_unhealthy: bool) -> Self {
         self.measured_unhealthy = measured_unhealthy;
         self
     }
@@ -121,7 +121,7 @@ impl BackendAdmissionConfig {
     /// Effective availability: operator/bootstrap intent AND the local
     /// measurement not vetoing — mirrors `Proofs.BackendHealth.effectiveAvailable`
     /// (B6); the single owner of that comparison in the codebase.
-    pub(crate) fn availability(&self) -> BackendAvailability {
+    pub fn availability(&self) -> BackendAvailability {
         if !self.enabled {
             BackendAvailability::Disabled
         } else if self.probe_status != HEALTHY_PROBE_STATUS {
@@ -133,7 +133,7 @@ impl BackendAdmissionConfig {
         }
     }
 
-    pub(crate) fn is_available(&self) -> bool {
+    pub fn is_available(&self) -> bool {
         self.availability() == BackendAvailability::Available
     }
 }

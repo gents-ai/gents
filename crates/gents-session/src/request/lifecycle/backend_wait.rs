@@ -132,7 +132,7 @@ pub(super) enum ParkResult {
 }
 
 impl super::RequestLifecycle {
-    pub(crate) async fn is_waiting_for_backend(&self) -> anyhow::Result<bool> {
+    pub async fn is_waiting_for_backend(&self) -> anyhow::Result<bool> {
         let row = self.request_view().await?;
         Ok(row.is_some_and(|row| {
             row.lifecycle_state
@@ -143,7 +143,7 @@ impl super::RequestLifecycle {
     /// The turn a resumed request continues from, read from its closed
     /// inference sources: history may be compacted, and a rendered capture is
     /// optional, so neither counts the turns already spent.
-    pub(crate) async fn resumed_turn_index(&self) -> anyhow::Result<usize> {
+    pub async fn resumed_turn_index(&self) -> anyhow::Result<usize> {
         use gents_protocol::output::{OutputOutcome, OutputSource, SourceClose};
         use gents_protocol::rendered_request::CaptureScopeKind;
         let request = &self.request;
@@ -179,7 +179,7 @@ impl super::RequestLifecycle {
     }
 
     /// Release local ownership only after the durable parking transaction wins.
-    pub(crate) async fn park_for_backend(&mut self) -> anyhow::Result<bool> {
+    pub async fn park_for_backend(&mut self) -> anyhow::Result<bool> {
         self.ensure_state(&[super::LocalLifecycleState::Streaming], "park_for_backend")?;
         let generation = self.execution_generation()?.to_owned();
         let claim_cid = self
@@ -205,7 +205,7 @@ impl super::RequestLifecycle {
     }
 
     /// Called only after a worker slot and the request's admission are secured.
-    pub(crate) async fn wake_for_backend(
+    pub async fn wake_for_backend(
         &mut self,
         healthy_at: Option<DateTime<Utc>>,
     ) -> anyhow::Result<BackendWake> {
@@ -268,7 +268,7 @@ impl super::RequestLifecycle {
 /// What a wake attempt did to a parked request, for the caller's account of
 /// why it holds no claim.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum BackendWake {
+pub enum BackendWake {
     Resumed,
     NotDue,
     OtherBackend { bound: String },
@@ -276,18 +276,18 @@ pub(crate) enum BackendWake {
 }
 
 impl BackendWake {
-    pub(crate) fn resumed(&self) -> bool {
+    pub fn resumed(&self) -> bool {
         matches!(self, Self::Resumed)
     }
 
-    pub(crate) fn bound_backend(&self) -> Option<&str> {
+    pub fn bound_backend(&self) -> Option<&str> {
         match self {
             Self::OtherBackend { bound } => Some(bound),
             _ => None,
         }
     }
 
-    pub(crate) fn unclaimed_reason(&self) -> &'static str {
+    pub fn unclaimed_reason(&self) -> &'static str {
         match self {
             Self::Resumed => "parked request resumed",
             Self::NotDue => {

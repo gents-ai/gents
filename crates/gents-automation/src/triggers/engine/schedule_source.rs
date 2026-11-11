@@ -58,7 +58,7 @@ pub struct ScheduleSource {
 }
 
 impl ScheduleSource {
-    pub(crate) fn new(
+    pub fn new(
         snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
         node: Arc<EmbeddedNode>,
         cancel: CancellationToken,

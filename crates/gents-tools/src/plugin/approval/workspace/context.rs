@@ -31,7 +31,7 @@ pub struct Context {
 }
 
 impl Context {
-    pub(crate) fn with_reviewer(mut self, reviewer: Reviewer) -> Self {
+    pub fn with_reviewer(mut self, reviewer: Reviewer) -> Self {
         self.reviewer = Some(reviewer);
         self
     }

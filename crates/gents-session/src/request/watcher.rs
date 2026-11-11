@@ -89,7 +89,7 @@ impl DefraWatcher {
         Ok(watcher)
     }
 
-    pub(crate) fn with_backend_health(
+    pub fn with_backend_health(
         mut self,
         health: gents_inference::backends::health::BackendHealthMap,
     ) -> Self {

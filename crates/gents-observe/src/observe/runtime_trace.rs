@@ -2,23 +2,23 @@ use gents_protocol::row::AgentRequest;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestTraceAttrs {
-    pub(crate) request_doc_id: String,
-    pub(crate) request_id: String,
-    pub(crate) node_did: String,
-    pub(crate) session_id: String,
-    pub(crate) requested_agent_did: String,
-    pub(crate) execution_origin: String,
-    pub(crate) deadline_at: String,
-    pub(crate) has_deadline: bool,
-    pub(crate) request_hop: u32,
-    pub(crate) parent_request_id: String,
-    pub(crate) parent_tool_call_id: String,
-    pub(crate) selected_skill_count: usize,
-    pub(crate) workspace_cwd_set: bool,
+    pub request_doc_id: String,
+    pub request_id: String,
+    pub node_did: String,
+    pub session_id: String,
+    pub requested_agent_did: String,
+    pub execution_origin: String,
+    pub deadline_at: String,
+    pub has_deadline: bool,
+    pub request_hop: u32,
+    pub parent_request_id: String,
+    pub parent_tool_call_id: String,
+    pub selected_skill_count: usize,
+    pub workspace_cwd_set: bool,
 }
 
 impl RequestTraceAttrs {
-    pub(crate) fn from_request(request: &AgentRequest) -> Self {
+    pub fn from_request(request: &AgentRequest) -> Self {
         Self {
             request_doc_id: request.doc_id.clone(),
             request_id: request.request_id.clone(),

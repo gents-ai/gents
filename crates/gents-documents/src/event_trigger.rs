@@ -381,7 +381,7 @@ pub enum EventGroupCount {
 }
 
 impl EventSource {
-    pub(crate) fn group_projection(&self) -> (Option<usize>, Option<String>, Option<u64>, usize) {
+    pub fn group_projection(&self) -> (Option<usize>, Option<String>, Option<u64>, usize) {
         let Some(group) = self.group.as_ref() else {
             return (None, None, None, 1);
         };

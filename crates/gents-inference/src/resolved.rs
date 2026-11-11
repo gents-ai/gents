@@ -59,7 +59,7 @@ impl std::fmt::Debug for SelectedConfiguration {
 }
 
 impl SelectedConfiguration {
-    pub(crate) fn new(
+    pub fn new(
         node: Arc<defra_node::Node>,
         actor: identity::Did,
         documents: Vec<SelectedConfigurationDocument>,

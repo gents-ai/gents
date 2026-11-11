@@ -95,7 +95,7 @@ pub enum TaskHookOutcome {
 }
 
 impl TaskHookOutcome {
-    pub(crate) fn terminal_outcome(&self) -> Option<RequestTerminalOutcome> {
+    pub fn terminal_outcome(&self) -> Option<RequestTerminalOutcome> {
         match self {
             Self::Success => Some(RequestTerminalOutcome::Completed),
             Self::Failure(_) => Some(RequestTerminalOutcome::Failed),
@@ -125,7 +125,7 @@ pub struct TaskHookRun {
 }
 
 impl TaskHookRun {
-    pub(crate) fn cleanup_errors(&self) -> Vec<String> {
+    pub fn cleanup_errors(&self) -> Vec<String> {
         self.finally_attempted
             .iter()
             .filter(|attempt| !attempt.result.succeeded())
@@ -133,14 +133,14 @@ impl TaskHookRun {
             .collect()
     }
 
-    pub(crate) fn final_outcome(&self) -> TaskHookOutcome {
+    pub fn final_outcome(&self) -> TaskHookOutcome {
         match &self.outcome {
             TaskHookOutcome::Success => phase_outcome(&self.finally_attempted),
             other => other.clone(),
         }
     }
 
-    pub(crate) fn hook_failure_reason(&self, hook_id: &str) -> String {
+    pub fn hook_failure_reason(&self, hook_id: &str) -> String {
         let attempt = self
             .before_attempted
             .iter()
@@ -331,7 +331,7 @@ impl TaskHookCancellation {
         }
     }
 
-    pub(crate) fn follow(
+    pub fn follow(
         &self,
         mut interrupt: tokio::sync::watch::Receiver<
             Option<gents_session::request::interrupt::InterruptIntent>,
@@ -376,7 +376,7 @@ pub struct ManagedTaskHookExec {
 }
 
 impl ManagedTaskHookExec {
-    pub(crate) fn new(cwd: PathBuf, cancellation: TaskHookCancellation) -> Self {
+    pub fn new(cwd: PathBuf, cancellation: TaskHookCancellation) -> Self {
         Self {
             cwd,
             cancellation,
@@ -385,7 +385,7 @@ impl ManagedTaskHookExec {
         }
     }
 
-    pub(crate) fn with_execution_lease(
+    pub fn with_execution_lease(
         mut self,
         node: std::sync::Arc<EmbeddedNode>,
         request_doc_id: String,
@@ -395,7 +395,7 @@ impl ManagedTaskHookExec {
         self
     }
 
-    pub(crate) fn with_record(mut self, record: Option<TaskHookRecordHandle>) -> Self {
+    pub fn with_record(mut self, record: Option<TaskHookRecordHandle>) -> Self {
         self.record = record;
         self
     }

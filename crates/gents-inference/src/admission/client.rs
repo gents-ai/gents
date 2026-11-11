@@ -128,10 +128,10 @@ impl CallKind {
 /// The identity of the admission call currently in flight on this task:
 /// exactly what `next_call` minted for it.
 #[derive(Clone, Debug)]
-pub(crate) struct CurrentCallJoin {
-    pub(crate) call_id: String,
-    pub(crate) call_seq: i64,
-    pub(crate) call_kind: CallKind,
+pub struct CurrentCallJoin {
+    pub call_id: String,
+    pub call_seq: i64,
+    pub call_kind: CallKind,
 }
 
 #[derive(Clone)]
@@ -156,7 +156,7 @@ pub struct AdmissionCallContext {
 }
 
 impl AdmissionCallContext {
-    pub(crate) fn for_request(
+    pub fn for_request(
         request: &AgentRequest,
         agent_did: impl Into<String>,
         backend_id: impl Into<String>,
@@ -222,7 +222,7 @@ tokio::task_local! {
     static ADMISSION_CALL_CONTEXT: AdmissionCallContext;
 }
 
-pub(crate) async fn scope_request<T>(
+pub async fn scope_request<T>(
     context: AdmissionCallContext,
     future: impl Future<Output = T>,
 ) -> T {
@@ -238,7 +238,7 @@ pub(crate) async fn scope_backend<T>(backend_id: &str, future: impl Future<Outpu
     ADMISSION_CALL_CONTEXT.scope(context, future).await
 }
 
-pub(crate) async fn scope_call<T>(
+pub async fn scope_call<T>(
     call_kind: CallKind,
     attempt: i64,
     future: impl Future<Output = T>,
@@ -247,7 +247,7 @@ pub(crate) async fn scope_call<T>(
     ADMISSION_CALL_CONTEXT.scope(context, future).await
 }
 
-pub(crate) async fn scope_call_with_join<T>(
+pub async fn scope_call_with_join<T>(
     call_kind: CallKind,
     attempt: i64,
     future: impl Future<Output = T>,
@@ -288,11 +288,11 @@ pub(crate) async fn scope_call_with_token<T>(
 
 pub(crate) type TerminalFailureReasonObserver = Arc<Mutex<Option<String>>>;
 
-pub(crate) fn terminal_failure_reason_observer() -> TerminalFailureReasonObserver {
+pub fn terminal_failure_reason_observer() -> TerminalFailureReasonObserver {
     Arc::new(Mutex::new(None))
 }
 
-pub(crate) fn set_terminal_failure_reason(
+pub fn set_terminal_failure_reason(
     observer: &TerminalFailureReasonObserver,
     reason: impl Into<String>,
 ) {
@@ -303,7 +303,7 @@ pub(crate) fn set_terminal_failure_reason(
     }
 }
 
-pub(crate) async fn scope_call_with_token_and_failure_reason<T>(
+pub async fn scope_call_with_token_and_failure_reason<T>(
     call_kind: CallKind,
     attempt: i64,
     token: CancellationToken,

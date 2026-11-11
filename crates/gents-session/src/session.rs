@@ -50,7 +50,7 @@ pub(crate) use compaction_entries::load_prompt_compaction_state;
 pub use compaction_entries::load_prompt_compaction_state_with_access;
 pub use compaction_entries::StaleCompactionGeneration;
 pub use compaction_entries::{compaction_key, load_compaction_entries};
-pub(crate) use compaction_entries::{save_exact_compaction_entry, NewExactSessionCompaction};
+pub use compaction_entries::{save_exact_compaction_entry, NewExactSessionCompaction};
 pub use control::{resume_session_with_access, stop_session_with_access, SessionStopReceipt};
 pub use fork::message_tool_references;
 pub use fork::{
@@ -61,13 +61,14 @@ pub use fork::{
 pub use history::load_history_with_access;
 pub use history::{load_history, sequence_message_key};
 pub use history::{load_sequenced_history_for_request, load_sequenced_history_projection_on};
-pub(crate) use history::{resumed_request_has_published_input, retry_has_published_input};
+pub use history::{resumed_request_has_published_input, retry_has_published_input};
 pub use observations::load_latest_requests_in_txn;
 pub(crate) use observations::load_session_current_hop;
 pub use observations::load_session_current_hop_in_txn;
+pub use observations::load_recent_titles_for_agent;
 pub(crate) use observations::{
     advance_refused_request_observation_in_txn, advance_session_request_observation_in_txn,
-    load_recent_titles_for_agent, load_scoped_request_facts_in_txn,
+    load_scoped_request_facts_in_txn,
 };
 pub use observations::{apply_title_in_txn, rename_session_on};
 pub use observations::{

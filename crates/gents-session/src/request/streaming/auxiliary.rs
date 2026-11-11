@@ -17,7 +17,7 @@ impl DefraStreamWriter {
     /// Auxiliary output never publishes a transcript header. A separate writer
     /// tail prevents nested compaction from replacing the main inference
     /// attempt's uncommitted prefix.
-    pub(crate) fn auxiliary_output_sink(
+    pub fn auxiliary_output_sink(
         &self,
         request: gents_protocol::row::AgentRequest,
         generation: String,

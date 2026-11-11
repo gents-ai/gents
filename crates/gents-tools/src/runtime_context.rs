@@ -18,7 +18,7 @@ pub struct ToolWorkspaceScope {
 }
 
 impl ToolWorkspaceScope {
-    pub(crate) fn cwd_only(workspace_cwd: Option<PathBuf>) -> Self {
+    pub fn cwd_only(workspace_cwd: Option<PathBuf>) -> Self {
         Self {
             runtime_home: None,
             workspace_cwd,

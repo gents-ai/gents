@@ -447,11 +447,11 @@ impl<R> RequestAssignmentScopes<'_, R>
 where
     R: gents_store::config_client::ConfigRead,
 {
-    pub(crate) fn request(&self, doc: &str) -> anyhow::Result<&AgentRequestRow> {
+    pub fn request(&self, doc: &str) -> anyhow::Result<&AgentRequestRow> {
         self.requests.request(doc)
     }
 
-    pub(crate) async fn scope(&mut self, doc: &str) -> anyhow::Result<RequestAssignmentScope> {
+    pub async fn scope(&mut self, doc: &str) -> anyhow::Result<RequestAssignmentScope> {
         if let Some(scope) = self.scopes.get(doc) {
             return Ok(scope.clone());
         }

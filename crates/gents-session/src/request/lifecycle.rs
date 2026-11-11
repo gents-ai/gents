@@ -616,7 +616,7 @@ impl RequestLifecycle {
         Ok(())
     }
 
-    pub(crate) fn access(&self) -> Result<gents_store::config_client::ConfigAccess> {
+    pub fn access(&self) -> Result<gents_store::config_client::ConfigAccess> {
         let actor = self.actor_did()?;
         match &self.agent_signer {
             Some(signer) => Ok(
@@ -632,24 +632,24 @@ impl RequestLifecycle {
             )),
         }
     }
-    pub(crate) fn actor_did(&self) -> Result<identity::Did> {
+    pub fn actor_did(&self) -> Result<identity::Did> {
         identity::Did::new(self.agent_did.clone()).map_err(Into::into)
     }
-    pub(crate) fn resumed_from_backend(&self) -> bool {
+    pub fn resumed_from_backend(&self) -> bool {
         self.resumed_from_backend
     }
 
-    pub(crate) fn allow_natural_finish(&mut self, allowed: bool) {
+    pub fn allow_natural_finish(&mut self, allowed: bool) {
         self.natural_finish_allowed = allowed;
     }
-    pub(crate) fn natural_finish_allowed(&self) -> bool {
+    pub fn natural_finish_allowed(&self) -> bool {
         self.natural_finish_allowed
     }
-    pub(crate) fn natural_finish_completed(&self) -> bool {
+    pub fn natural_finish_completed(&self) -> bool {
         self.natural_finish_allowed && self.state == LocalLifecycleState::Completed
     }
 
-    pub(crate) fn set_client_claim_admission(
+    pub fn set_client_claim_admission(
         &mut self,
         admission: Option<crate::request::admission::ClientClaimAdmission>,
     ) {
@@ -657,7 +657,7 @@ impl RequestLifecycle {
         self.client_claim_admission = admission;
     }
 
-    pub(crate) fn set_steering_admission(
+    pub fn set_steering_admission(
         &mut self,
         verifier: crate::request::admission::AgentRequestAdmissionVerifier,
         agent: Arc<dyn gents_store::identity::NodeIdentity>,
@@ -680,7 +680,7 @@ impl RequestLifecycle {
 
     /// Pending requests whose signed admission the caller verified for this
     /// claim (Lean `SessionQueue.claimFolding`); empty claims only this request.
-    pub(crate) fn set_fold_admitted(&mut self, admitted: Vec<String>) {
+    pub fn set_fold_admitted(&mut self, admitted: Vec<String>) {
         assert_eq!(
             self.state,
             LocalLifecycleState::Pending,
@@ -689,13 +689,13 @@ impl RequestLifecycle {
         self.fold_admitted = admitted;
     }
 
-    pub(crate) fn folded_selection(&self) -> &[queue::FoldedInput] {
+    pub fn folded_selection(&self) -> &[queue::FoldedInput] {
         &self.folded_selection
     }
 
     /// Configuration supplied by the runtime, never by request input; only
     /// the first claim pins it.
-    pub(crate) fn set_configured_max_total_tokens(&mut self, limit: Option<u64>) {
+    pub fn set_configured_max_total_tokens(&mut self, limit: Option<u64>) {
         assert_eq!(
             self.state,
             LocalLifecycleState::Pending,
@@ -711,18 +711,18 @@ impl RequestLifecycle {
         deadline.is_none_or(|deadline| now < deadline)
     }
 
-    pub(crate) fn claimed_deadline_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+    pub fn claimed_deadline_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
         self.claimed_deadline_at
     }
 
-    pub(crate) fn request_commit_cid(&self) -> Option<&str> {
+    pub fn request_commit_cid(&self) -> Option<&str> {
         self.request_commit_cid.as_deref()
     }
 
     /// Last transcript sequence owned by this background-completion attempt
     /// at its atomic claim boundary; messages appended for a successor epoch
     /// must not enter this attempt's provider input.
-    pub(crate) fn background_completion_input_through_sequence(&self) -> Option<u32> {
+    pub fn background_completion_input_through_sequence(&self) -> Option<u32> {
         self.background_completion_input_through_sequence
     }
 }

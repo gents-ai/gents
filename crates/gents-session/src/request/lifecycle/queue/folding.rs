@@ -24,11 +24,11 @@ pub struct FoldedInput {
 }
 
 impl FoldedInput {
-    pub(crate) fn message(&self) -> Result<gents_protocol::message::Message> {
+    pub fn message(&self) -> Result<gents_protocol::message::Message> {
         Ok(self.input.authored_message(&self.content)?)
     }
 
-    pub(crate) fn key(&self) -> String {
+    pub fn key(&self) -> String {
         folded_input_key(&self.request_doc_id)
     }
 }

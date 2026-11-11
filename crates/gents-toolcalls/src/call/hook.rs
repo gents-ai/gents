@@ -80,7 +80,7 @@ impl BackgroundToolRegistry {
         }
     }
 
-    pub(crate) fn from_config(
+    pub fn from_config(
         tools: Vec<Box<dyn ToolDyn>>,
         config: &gents_tools::surface::BackgroundToolConfig,
     ) -> Self {
@@ -207,7 +207,7 @@ impl BackgroundExecutionRegistry {
         self
     }
 
-    pub(crate) fn service_admission(&self) -> &gents_store::service::RuntimeServiceAdmission {
+    pub fn service_admission(&self) -> &gents_store::service::RuntimeServiceAdmission {
         &self.service_admission
     }
 
@@ -224,7 +224,7 @@ impl BackgroundExecutionRegistry {
         self
     }
 
-    pub(crate) fn task_hook_records(&self) -> &crate::call::task_hooks::TaskHookRecordStore {
+    pub fn task_hook_records(&self) -> &crate::call::task_hooks::TaskHookRecordStore {
         &self.task_hook_records
     }
 
@@ -1328,7 +1328,7 @@ impl DefraSessionHook {
         )
     }
 
-    pub(crate) fn with_managed_identity(
+    pub fn with_managed_identity(
         mut self,
         identity: &dyn gents_store::identity::NodeIdentity,
     ) -> anyhow::Result<Self> {
@@ -1345,7 +1345,7 @@ impl DefraSessionHook {
         Ok(self)
     }
 
-    pub(crate) fn with_inference_observation(
+    pub fn with_inference_observation(
         mut self,
         observation: Option<Arc<gents_inference::inference_observation::InferenceObservationGuard>>,
     ) -> Self {
@@ -1353,7 +1353,7 @@ impl DefraSessionHook {
         self
     }
 
-    pub(crate) fn with_steering_inputs(
+    pub fn with_steering_inputs(
         mut self,
         request: gents_protocol::row::AgentRequest,
         verifier: gents_session::request::admission::AgentRequestAdmissionVerifier,
@@ -1656,7 +1656,7 @@ impl DefraSessionHook {
     }
 
     /// Bind the Agent's job tools for their owning dispatch path.
-    pub(crate) fn with_job_tools(
+    pub fn with_job_tools(
         mut self,
         job_tools: RapidHashMap<String, crate::background::job::JobBinding>,
     ) -> Self {
@@ -1665,7 +1665,7 @@ impl DefraSessionHook {
     }
 
     /// Bind the runtime's job driver; a job tool is refused without it.
-    pub(crate) fn with_job_driver(
+    pub fn with_job_driver(
         mut self,
         driver: Arc<crate::background::job::driver::JobDriver>,
     ) -> Self {
@@ -1673,7 +1673,7 @@ impl DefraSessionHook {
         self
     }
 
-    pub(crate) fn with_output_obligation_gate(
+    pub fn with_output_obligation_gate(
         mut self,
         gate: Option<Arc<dyn OutputObligationCheck>>,
     ) -> Self {
@@ -1813,7 +1813,7 @@ impl DefraSessionHook {
         self.state.lock().await.request_deadline_at = deadline_at;
     }
 
-    pub(crate) fn with_remote_tools(mut self, tools: Option<gents_documents::RemoteTools>) -> Self {
+    pub fn with_remote_tools(mut self, tools: Option<gents_documents::RemoteTools>) -> Self {
         self.remote_tools = tools;
         self
     }
@@ -1886,7 +1886,7 @@ impl DefraSessionHook {
         }
     }
 
-    pub(crate) async fn timeout_expired_tool_calls(&self) -> anyhow::Result<usize> {
+    pub async fn timeout_expired_tool_calls(&self) -> anyhow::Result<usize> {
         let lifecycles = {
             let now = Utc::now();
             let mut map = self.in_flight_lifecycles.lock().await;

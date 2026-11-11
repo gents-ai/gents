@@ -719,7 +719,7 @@ pub async fn apply_title_in_txn(
     Ok(())
 }
 
-pub(crate) async fn load_recent_titles_for_agent(
+pub async fn load_recent_titles_for_agent(
     access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     exclude_session_id: &str,

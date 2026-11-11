@@ -11,10 +11,10 @@ use gents_store::identity::NodeIdentity;
 
 #[derive(Clone)]
 pub struct ToolRuntimeContext {
-    pub(crate) usage_cache: Arc<gents_inference::usage_observation::UsageCache>,
+    pub usage_cache: Arc<gents_inference::usage_observation::UsageCache>,
     pub(super) node: Arc<EmbeddedNode>,
     pub(super) mcp_pool: McpPool,
-    pub(crate) lsp_pool: LspPool,
+    pub lsp_pool: LspPool,
     pub(super) health_map: ServiceHealthMap,
     pub(super) local_hostname: String,
     pub(super) local_subnet: Option<String>,
@@ -133,7 +133,7 @@ impl ToolRuntimeContext {
         self
     }
 
-    pub(crate) fn plugin_home(&self) -> Option<&std::path::Path> {
+    pub fn plugin_home(&self) -> Option<&std::path::Path> {
         self.plugins.home()
     }
 

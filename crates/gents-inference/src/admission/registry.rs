@@ -35,7 +35,7 @@ struct BackendAdmission {
 }
 
 impl AdmissionRegistry {
-    pub(crate) fn new(node: Arc<EmbeddedNode>) -> Self {
+    pub fn new(node: Arc<EmbeddedNode>) -> Self {
         Self {
             inner: Arc::new(AdmissionRegistryInner {
                 node,
@@ -52,7 +52,7 @@ impl AdmissionRegistry {
             .expect("AdmissionRegistry state lock poisoned")
     }
 
-    pub(crate) fn reconcile(
+    pub fn reconcile(
         &self,
         generation: u64,
         configs: &RapidHashMap<String, BackendAdmissionConfig>,

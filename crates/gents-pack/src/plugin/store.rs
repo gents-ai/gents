@@ -266,7 +266,7 @@ pub struct StoreGuard {
 }
 
 impl StoreGuard {
-    pub(crate) fn home(&self) -> &Path {
+    pub fn home(&self) -> &Path {
         &self.home
     }
 

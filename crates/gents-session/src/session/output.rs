@@ -33,13 +33,13 @@ pub enum CanonicalOutputReadError {
 /// Its commit CID is a historical request version, not the latest lease write.
 #[derive(Clone, Copy)]
 pub struct CanonicalReplayScope<'a> {
-    pub(crate) node_did: &'a str,
-    pub(crate) requester_did: Option<&'a str>,
-    pub(crate) session_id: &'a str,
-    pub(crate) request_id: &'a str,
-    pub(crate) request_doc_id: &'a str,
-    pub(crate) request_commit_cid: &'a str,
-    pub(crate) expected_scope_kind: gents_protocol::rendered_request::CaptureScopeKind,
+    pub node_did: &'a str,
+    pub requester_did: Option<&'a str>,
+    pub session_id: &'a str,
+    pub request_id: &'a str,
+    pub request_doc_id: &'a str,
+    pub request_commit_cid: &'a str,
+    pub expected_scope_kind: gents_protocol::rendered_request::CaptureScopeKind,
 }
 
 /// One canonical assistant, retaining physical identity even

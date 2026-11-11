@@ -98,7 +98,7 @@ pub struct RequestExecutionLease {
 }
 
 impl RequestExecutionLease {
-    pub(crate) fn new(generation: String, actor: identity::Did) -> Self {
+    pub fn new(generation: String, actor: identity::Did) -> Self {
         Self {
             generation: ExecutionGeneration(generation),
             actor,
@@ -249,7 +249,7 @@ impl RequestLifecycle {
             .await
     }
 
-    pub(crate) async fn validate_owned_execution(&self) -> Result<()> {
+    pub async fn validate_owned_execution(&self) -> Result<()> {
         if !self
             .decide_lease(super::execution_policy::authorize_producer_decision)
             .await?
@@ -260,7 +260,7 @@ impl RequestLifecycle {
         Ok(())
     }
 
-    pub(crate) fn ownership_lost(&self) -> tokio_util::sync::CancellationToken {
+    pub fn ownership_lost(&self) -> tokio_util::sync::CancellationToken {
         self.renewal_task
             .as_ref()
             .map(super::execution_renewal::RenewalTask::ownership_lost)
@@ -270,7 +270,7 @@ impl RequestLifecycle {
     /// Whether this execution's generation still holds a live lease on its
     /// active request. A failure observed after the lease is lost belongs to
     /// the request's current owner, not to this execution.
-    pub(crate) async fn owns_execution(&self) -> Result<bool> {
+    pub async fn owns_execution(&self) -> Result<bool> {
         self.execution_lease
             .as_ref()
             .context("request has no active execution generation")?

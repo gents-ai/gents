@@ -94,7 +94,7 @@ pub async fn load_sequenced_history_for_request(
     .await
 }
 
-pub(crate) async fn resumed_request_has_published_input(
+pub async fn resumed_request_has_published_input(
     node: &std::sync::Arc<EmbeddedNode>,
     request: &gents_protocol::row::AgentRequest,
 ) -> Result<bool> {
@@ -137,7 +137,7 @@ pub(crate) async fn resumed_request_has_published_input(
     Ok(true)
 }
 
-pub(crate) async fn retry_has_published_input(
+pub async fn retry_has_published_input(
     node: &std::sync::Arc<EmbeddedNode>,
     request: &gents_protocol::row::AgentRequest,
 ) -> Result<bool> {

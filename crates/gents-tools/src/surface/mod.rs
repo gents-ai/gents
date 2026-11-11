@@ -169,7 +169,7 @@ pub struct SelfConfigProcessCeiling {
 }
 
 impl ToolSurface {
-    pub(crate) fn root_execution_guard(&self) -> Option<&RootExecutionGuard> {
+    pub fn root_execution_guard(&self) -> Option<&RootExecutionGuard> {
         self.root_execution_guard.as_ref()
     }
 
@@ -207,7 +207,7 @@ impl ToolSurface {
         fields
     }
 
-    pub(crate) fn output_obligations(
+    pub fn output_obligations(
         &self,
     ) -> Vec<(String, gents_documents::WriteToolOutputObligation)> {
         self.write_tools
@@ -240,7 +240,7 @@ impl ToolSurface {
         self.enable_skills
     }
 
-    pub(crate) fn remote_tools(&self) -> Option<&gents_documents::RemoteTools> {
+    pub fn remote_tools(&self) -> Option<&gents_documents::RemoteTools> {
         self.remote_tools.as_ref()
     }
 
@@ -248,7 +248,7 @@ impl ToolSurface {
         &self.allowed_mcp_service_ids
     }
 
-    pub(crate) fn plugin_resolutions(
+    pub fn plugin_resolutions(
         &self,
     ) -> &[(
         gents_documents::PluginToolRef,
@@ -262,7 +262,7 @@ impl ToolSurface {
         &self.agent_tools
     }
 
-    pub(crate) fn agent_targets(&self) -> &[AgentTargetDocument] {
+    pub fn agent_targets(&self) -> &[AgentTargetDocument] {
         if self.agent_tools.enabled {
             &self.agent_tools.targets
         } else {
@@ -270,7 +270,7 @@ impl ToolSurface {
         }
     }
 
-    pub(crate) fn background_tools(&self) -> &BackgroundToolConfig {
+    pub fn background_tools(&self) -> &BackgroundToolConfig {
         &self.background_tools
     }
 

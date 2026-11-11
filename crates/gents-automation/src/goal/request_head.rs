@@ -239,8 +239,8 @@ where
 }
 
 pub struct AuthenticatedGoalRequestMembers<'a> {
-    pub(crate) entry: &'a AgentRequestRow,
-    pub(crate) member_doc_ids: Vec<String>,
+    pub entry: &'a AgentRequestRow,
+    pub member_doc_ids: Vec<String>,
 }
 
 pub fn authenticated_goal_request_members<'a>(

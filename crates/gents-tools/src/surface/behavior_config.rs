@@ -158,7 +158,7 @@ impl AgentToolSurfaceConfig {
         )
     }
 
-    pub(crate) fn from_selection_with_agent_tools(
+    pub fn from_selection_with_agent_tools(
         agent_name: &str,
         selection: ResolvedToolSelection,
         ceiling: &ToolCeiling,
@@ -629,7 +629,7 @@ impl AgentToolSurfaceConfig {
         }
     }
 
-    pub(crate) async fn resolve_with_available_agent_targets(
+    pub async fn resolve_with_available_agent_targets(
         &self,
         node: &std::sync::Arc<EmbeddedNode>,
         own_node_did: &str,
@@ -666,7 +666,7 @@ impl AgentToolSurfaceConfig {
         &self.ceiling_policy
     }
 
-    pub(crate) fn static_policy(&self) -> &ToolPolicySurface {
+    pub fn static_policy(&self) -> &ToolPolicySurface {
         &self.static_policy
     }
 }

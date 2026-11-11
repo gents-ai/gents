@@ -49,7 +49,7 @@ pub struct JobRuntime {
     pub home: PathBuf,
     /// The operator tool root: step 0's working folder when the request names no workspace.
     pub tool_root: Option<PathBuf>,
-    pub(crate) agent_snapshots: Arc<std::sync::RwLock<Option<AgentSnapshots>>>,
+    pub agent_snapshots: Arc<std::sync::RwLock<Option<AgentSnapshots>>>,
 }
 
 impl JobRuntime {
@@ -94,7 +94,7 @@ impl JobRuntime {
             .ok_or_else(|| anyhow::anyhow!("job agent identity unavailable in active snapshot"))
     }
 
-    pub(crate) fn bind_snapshot(&self, snapshots: AgentSnapshots) -> Result<()> {
+    pub fn bind_snapshot(&self, snapshots: AgentSnapshots) -> Result<()> {
         *self
             .agent_snapshots
             .write()
@@ -221,7 +221,7 @@ impl JobDriver {
         Self::with_service_admission(runtime, Default::default())
     }
 
-    pub(crate) fn with_service_admission(
+    pub fn with_service_admission(
         runtime: JobRuntime,
         service_admission: gents_store::service::RuntimeServiceAdmission,
     ) -> Arc<Self> {

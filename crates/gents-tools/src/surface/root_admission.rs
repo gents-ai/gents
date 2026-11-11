@@ -55,7 +55,7 @@ pub struct WorkspaceRootPolicy {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RootExecutionGuard {
     pub agent_did: String,
-    pub(crate) selected_root: Option<PathBuf>,
+    pub selected_root: Option<PathBuf>,
     pub(crate) ceiling_root: Option<PathBuf>,
 }
 

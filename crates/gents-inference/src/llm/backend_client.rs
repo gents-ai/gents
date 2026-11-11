@@ -68,7 +68,7 @@ pub enum BackendClient {
 }
 
 impl BackendClient {
-    pub(crate) fn replay_issuer(
+    pub fn replay_issuer(
         &self,
     ) -> Result<Option<gents_loop::claude_messages_body::ReplayIssuer>> {
         let request = match self {
@@ -96,7 +96,7 @@ impl BackendClient {
     }
 
     /// Other accounts a refused request can be reissued on at once: the pool's size, none for a single account.
-    pub(crate) fn account_hops(&self) -> u32 {
+    pub fn account_hops(&self) -> u32 {
         match self {
             Self::ClaudeSubscription(client) if client.rotation.is_some() => {
                 u32::try_from(client.accounts.len()).unwrap_or(u32::MAX)
@@ -105,7 +105,7 @@ impl BackendClient {
         }
     }
 
-    pub(crate) fn provider_family(&self) -> &'static str {
+    pub fn provider_family(&self) -> &'static str {
         match self {
             Self::OpenAiChatCompletions(_) | Self::OpenAiResponses(_) => {
                 BackendProviderKind::OpenAiCompatible.as_str()

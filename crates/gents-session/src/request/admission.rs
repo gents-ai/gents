@@ -37,7 +37,7 @@ impl AgentRequestAdmissionError {
         Self::Unavailable(error.into())
     }
 
-    pub(crate) const fn is_denied(&self) -> bool {
+    pub const fn is_denied(&self) -> bool {
         matches!(self, Self::Denied(_))
     }
 }
@@ -600,7 +600,7 @@ pub struct AgentRequestAdmissionVerifier {
 }
 
 impl AgentRequestAdmissionVerifier {
-    pub(crate) fn new(
+    pub fn new(
         node: Arc<EmbeddedNode>,
         identity: Arc<dyn NodeIdentity>,
         enrollment: EnrollmentAuthorityHandle,
@@ -632,7 +632,7 @@ impl AgentRequestAdmissionVerifier {
             .await
     }
 
-    pub(crate) async fn verify_fresh_for_claim_with_identity(
+    pub async fn verify_fresh_for_claim_with_identity(
         &self,
         request: &AgentRequest,
         agent_identity: &dyn NodeIdentity,

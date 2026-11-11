@@ -18,16 +18,16 @@ use gents_session::exec::ownership::{
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskHookRecord {
-    pub(crate) request_doc_id: String,
-    pub(crate) request_id: String,
-    pub(crate) node_did: String,
-    pub(crate) agent_did: String,
-    pub(crate) cwd: PathBuf,
+    pub request_doc_id: String,
+    pub request_id: String,
+    pub node_did: String,
+    pub agent_did: String,
+    pub cwd: PathBuf,
     #[serde(default)]
-    pub(crate) root_guard: Option<gents_tools::surface::RootExecutionGuard>,
-    pub(crate) hooks: Vec<TaskHook>,
+    pub root_guard: Option<gents_tools::surface::RootExecutionGuard>,
+    pub hooks: Vec<TaskHook>,
     #[serde(default)]
-    pub(crate) attempts: Vec<RecordedHookAttempt>,
+    pub attempts: Vec<RecordedHookAttempt>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,7 +107,7 @@ impl TaskHookRecordStore {
         }
     }
 
-    pub(crate) async fn shutdown(&self) {
+    pub async fn shutdown(&self) {
         self.shutdown.cancel();
         self.wait_for_recoveries().await;
     }
@@ -136,7 +136,7 @@ impl TaskHookRecordStore {
 
     /// Reuses the journal written before a request parked; a missing or
     /// ambiguous preparation cannot safely be reconstructed by rerunning it.
-    pub(crate) async fn resume(
+    pub async fn resume(
         &self,
         request_doc_id: &str,
         request_id: &str,
@@ -195,7 +195,7 @@ impl TaskHookRecordStore {
         .context("reading parked task hook journal")?
     }
 
-    pub(crate) fn begin(&self, record: TaskHookRecord) -> std::io::Result<TaskHookRecordHandle> {
+    pub fn begin(&self, record: TaskHookRecord) -> std::io::Result<TaskHookRecordHandle> {
         let key = record.request_doc_id.clone();
         self.claim(record).ok_or_else(|| {
             std::io::Error::other(format!("task hook record {key} is already owned"))
@@ -247,7 +247,7 @@ impl TaskHookRecordHandle {
             .map_err(std::io::Error::other)?
     }
 
-    pub(crate) async fn work_started(&self) -> std::io::Result<()> {
+    pub async fn work_started(&self) -> std::io::Result<()> {
         self.update(|_| {}).await
     }
 
@@ -308,7 +308,7 @@ impl TaskHookRecordHandle {
         }
     }
 
-    pub(crate) async fn release(&self) -> bool {
+    pub async fn release(&self) -> bool {
         let handle = self.clone();
         tokio::task::spawn_blocking(move || {
             let record = locked(&handle.0.record);

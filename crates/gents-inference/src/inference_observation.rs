@@ -57,7 +57,7 @@ pub struct InferenceObservationGuard {
 }
 
 impl InferenceObservationRegistry {
-    pub(crate) fn begin(&self, key: InferenceKey) -> Option<InferenceObservationGuard> {
+    pub fn begin(&self, key: InferenceKey) -> Option<InferenceObservationGuard> {
         let mut entries = self.0.lock().unwrap_or_else(|p| p.into_inner());
         if entries.len() >= MAX_ACTIVE_OBSERVATIONS || entries.contains_key(&key) {
             return None;

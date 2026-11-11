@@ -35,7 +35,7 @@ impl LoadSkillTool {
         }
     }
 
-    pub(crate) fn for_agent(
+    pub fn for_agent(
         skills: Vec<Skill>,
         ceiling: SkillToolCeiling,
         configuration: &gents_inference::resolved::ResolvedConfiguration,

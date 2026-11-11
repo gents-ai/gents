@@ -63,7 +63,7 @@ impl BackendHealthState {
         )
     }
 
-    pub(crate) fn readiness_reason(
+    pub fn readiness_reason(
         self,
     ) -> Option<gents_protocol::node_readiness::AgentReadinessUnavailableReason> {
         use gents_protocol::node_readiness::AgentReadinessUnavailableReason as Reason;
@@ -127,7 +127,7 @@ impl BackendHealthSnapshot {
         })
     }
 
-    pub(crate) fn state_for(&self, backend: &InferenceBackend) -> Option<BackendHealthState> {
+    pub fn state_for(&self, backend: &InferenceBackend) -> Option<BackendHealthState> {
         let fingerprint = probe_configuration_fingerprint(backend);
         self.configuration_fingerprint
             .as_ref()

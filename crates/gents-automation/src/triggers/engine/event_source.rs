@@ -281,7 +281,7 @@ impl EventSource {
         }
     }
 
-    pub(crate) fn with_runtime_observer(
+    pub fn with_runtime_observer(
         mut self,
         observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
     ) -> Self {

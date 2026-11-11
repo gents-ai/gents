@@ -103,7 +103,7 @@ impl GoalSource {
         }
     }
 
-    pub(crate) fn with_runtime_status(
+    pub fn with_runtime_status(
         mut self,
         status: impl GoalReconcileSettled + 'static,
     ) -> Self {

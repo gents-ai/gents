@@ -30,7 +30,7 @@ pub struct JobBinding {
 impl JobBinding {
     /// Binds, by tool name, every entry whose resolved installed plugin
     /// declares `job: true`.
-    pub(crate) fn bind_all(
+    pub fn bind_all(
         resolutions: &[(
             PluginToolRef,
             Option<gents_pack::plugin::store::InstalledPlugin>,

@@ -858,7 +858,7 @@ impl RequestLifecycle {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn materialize_pending_with_execution_binding(
+    pub async fn materialize_pending_with_execution_binding(
         node: Arc<EmbeddedNode>,
         agent_did: &str,
         identity: Arc<dyn gents_store::identity::NodeIdentity>,
@@ -1000,7 +1000,7 @@ impl RequestLifecycle {
             .claimed_provenance(&self.request)
     }
 
-    pub(crate) fn claimed_tool_context(
+    pub fn claimed_tool_context(
         &self,
     ) -> anyhow::Result<gents_loop::tool::ToolRequestContext> {
         anyhow::ensure!(
@@ -1029,7 +1029,7 @@ impl RequestLifecycle {
         })
     }
 
-    pub(crate) fn execution_generation(&self) -> anyhow::Result<&str> {
+    pub fn execution_generation(&self) -> anyhow::Result<&str> {
         self.execution_lease
             .as_ref()
             .map(|lease| lease.generation.as_str())

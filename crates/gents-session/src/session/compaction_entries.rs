@@ -357,25 +357,25 @@ pub async fn load_compaction_entries(
     Ok(entries)
 }
 
-pub(crate) struct NewExactSessionCompaction<'a> {
-    pub(crate) agent_did: &'a str,
-    pub(crate) session_id: &'a str,
-    pub(crate) node_did: &'a str,
-    pub(crate) requester_did: Option<&'a str>,
-    pub(crate) request_id: &'a str,
-    pub(crate) request_doc_id: &'a str,
-    pub(crate) files_read: &'a [String],
-    pub(crate) files_modified: &'a [String],
-    pub(crate) compacted_through_sequence: u32,
-    pub(crate) original_tokens: usize,
-    pub(crate) compacted_tokens: usize,
-    pub(crate) expected_generation: &'a str,
+pub struct NewExactSessionCompaction<'a> {
+    pub agent_did: &'a str,
+    pub session_id: &'a str,
+    pub node_did: &'a str,
+    pub requester_did: Option<&'a str>,
+    pub request_id: &'a str,
+    pub request_doc_id: &'a str,
+    pub files_read: &'a [String],
+    pub files_modified: &'a [String],
+    pub compacted_through_sequence: u32,
+    pub original_tokens: usize,
+    pub compacted_tokens: usize,
+    pub expected_generation: &'a str,
 }
 
 /// Commit the shared exact reduction as one session-prefix fact. The summary
 /// and compacted count are derived from the artifact, so callers cannot pair a
 /// cursor with a different split or checkpoint.
-pub(crate) async fn save_exact_compaction_entry(
+pub async fn save_exact_compaction_entry(
     access: &gents_store::config_client::ConfigAccess,
     input: NewExactSessionCompaction<'_>,
     reduction: gents_inference::compaction::ExactReduction<'_>,

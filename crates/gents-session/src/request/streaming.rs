@@ -526,7 +526,7 @@ impl DefraStreamWriter {
         Ok(published)
     }
 
-    pub(crate) async fn terminal_output(
+    pub async fn terminal_output(
         &self,
         request_doc_id: &str,
     ) -> gents_protocol::output::TerminalOutput {
