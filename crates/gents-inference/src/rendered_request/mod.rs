@@ -846,9 +846,9 @@ impl CaptureBaseReader for defra_node::Node {
 
 type CaptureBaseCache = std::collections::BTreeMap<String, (Value, String)>;
 
-struct CachedCaptureBlock {
-    content_key: String,
-    bytes: Vec<u8>,
+pub struct CachedCaptureBlock {
+    pub content_key: String,
+    pub bytes: Vec<u8>,
     field_commit_cid: String,
 }
 
@@ -1018,7 +1018,7 @@ where
     read_manifest_blocks(reader, &leaves, cache).await
 }
 
-async fn manifest_tree_leaves<R>(
+pub async fn manifest_tree_leaves<R>(
     reader: &R,
     tree: &encoding::ManifestTree,
     cache: &mut std::collections::BTreeMap<String, CachedCaptureBlock>,

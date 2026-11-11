@@ -43,8 +43,12 @@ mod tests;
 pub use history_fixture::import_history_observation;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use history_fixture::import_history_observation_as;
-#[cfg(test)]
-pub use tests::publish_signed_history;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use history_fixture::publish_signed_history;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use history_fixture::{
+    signed_claimed_authored_request, signed_claimed_authored_request_with_retry,
+};
 
 pub use crate::tool_call::query::result::{
     load_tool_call_arguments, load_tool_call_presentation, load_tool_call_result,
@@ -74,7 +78,7 @@ pub use history::{load_sequenced_history_for_request, load_sequenced_history_pro
 pub use history::{resumed_request_has_published_input, retry_has_published_input};
 pub use observations::load_latest_requests_in_txn;
 pub use observations::load_recent_titles_for_agent;
-pub(crate) use observations::load_session_current_hop;
+pub use observations::load_session_current_hop;
 pub use observations::load_session_current_hop_in_txn;
 pub(crate) use observations::{
     advance_refused_request_observation_in_txn, advance_session_request_observation_in_txn,

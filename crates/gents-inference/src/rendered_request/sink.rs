@@ -52,6 +52,17 @@ impl DefraRenderedRequestSink {
         }
     }
 
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn with_signer(
+        node: Arc<EmbeddedNode>,
+        agent_signer: gents_store::identity::ManagedAgentSigner,
+    ) -> Self {
+        Self {
+            node,
+            agent_signer: Some(agent_signer),
+        }
+    }
+
     pub fn new_managed(
         node: Arc<EmbeddedNode>,
         identity: &dyn gents_store::identity::NodeIdentity,
@@ -91,7 +102,7 @@ impl DefraRenderedRequestSink {
         }
     }
 
-    async fn stored_fact(&self, rendered: &RenderedCompletionRequest) -> Result<Option<Value>> {
+    pub async fn stored_fact(&self, rendered: &RenderedCompletionRequest) -> Result<Option<Value>> {
         let capture_key = &rendered.capture_key;
         let response = self
             .access_for_capture(rendered)?
@@ -564,9 +575,9 @@ fn canonical_capture_fact(rendered: &RenderedCompletionRequest) -> Result<Value>
     })))
 }
 
-const RENDERED_REQUEST_COLLECTION: &str = gents_protocol::schemas::RENDERED_REQUEST_NAME;
+pub const RENDERED_REQUEST_COLLECTION: &str = gents_protocol::schemas::RENDERED_REQUEST_NAME;
 
-const RENDERED_REQUEST_BLOCK_COLLECTION: &str =
+pub const RENDERED_REQUEST_BLOCK_COLLECTION: &str =
     gents_protocol::schemas::RENDERED_REQUEST_BLOCK_NAME;
 
 fn unique_blocks<'a>(
@@ -590,7 +601,7 @@ struct BlockPin {
 const CREATE_RENDERED_REQUEST_BLOCKS_MUTATION: &str = "mutation($input: \
 [RenderedRequestBlockMutationInputArg!]!) { create_RenderedRequestBlock(input: $input) { _docID content_key } }";
 
-const CAPTURE_BLOCK_CREATE_BATCH: usize = 32;
+pub const CAPTURE_BLOCK_CREATE_BATCH: usize = 32;
 
 pub struct BlockScope {
     pub session_doc_id: String,
@@ -598,7 +609,7 @@ pub struct BlockScope {
 }
 
 impl BlockScope {
-    fn key<'a>(&'a self, content_key: &'a str) -> (&'a str, &'a str) {
+    pub fn key<'a>(&'a self, content_key: &'a str) -> (&'a str, &'a str) {
         (&self.session_doc_id, content_key)
     }
 }
