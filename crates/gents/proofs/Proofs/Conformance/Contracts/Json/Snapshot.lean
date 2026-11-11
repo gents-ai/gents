@@ -47,6 +47,7 @@ import Proofs.Store.Identity.ClientAgentCreation
 import Proofs.Store.Identity.AgentBlockSigning
 import Proofs.ToolCalls.Identity.ClientAgentJournal
 import Proofs.Conformance.Identity.NodeFileRequests
+import Proofs.Conformance.PairingOwnedDiff
 import Proofs.Store.Identity.MailboxAccess
 import Proofs.Store.Identity.WorkspaceAndFileRequests
 import Proofs.Store.Identity.PackPlacementReaders
