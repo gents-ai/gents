@@ -103,9 +103,7 @@ impl ConfigAccess {
     ) -> Result<Vec<acp::nac::PermissionProvenance>, ConfigClientError> {
         match self {
             Self::Local(local) => {
-                local
-                    .agent_signer()
-                    .ok_or(ConfigClientError::ManagedAgentSignerRequired)?;
+                local.require_actor_signer()?;
                 let actor = local
                     .identity()
                     .cloned()

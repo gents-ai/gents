@@ -126,12 +126,22 @@ async fn node_requested_enrollment_is_approved_by_the_offering_node() {
     }
     let mut approve = approve;
     approve["lease_seconds"] = json!(7_776_000);
-    let approved = call(&server_tool, approve).await;
-    assert_eq!(approved["outcome"]["request_id"], request_id);
-    assert_eq!(
-        approved["next_call"],
-        json!({"action":"enrollment_history"})
-    );
+    let refused = Tool::call(&server_tool, serde_json::from_value(approve).unwrap())
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(refused.contains("no Agent identity"), "{refused}");
+    gents_p2p::p2p_reconcile::GraphqlEnrollmentStore::new(
+        server.node.clone(),
+        server.node_identity.clone(),
+    )
+    .decide_request_with_lease(
+        &request_id,
+        gents_protocol::enrollment::EnrollmentDecisionKind::Approved,
+        std::time::Duration::from_secs(7_776_000),
+    )
+    .await
+    .unwrap();
     let history = call(&server_readonly, json!({"action":"enrollment_history"})).await;
     let entry = &history["outcome"]["history"][0];
     assert_eq!(entry["request_id"], request_id, "{history}");

@@ -142,3 +142,10 @@ fn withdrawal_plan_retires_only_the_live_receipt_for_its_request() {
         "b still accounts for every tuple"
     );
 }
+
+#[test]
+fn approval_step_matches_lean() {
+    gents_lean_vocab::families::identity_enrollment_grant_after_grant::replay(|i| {
+        crate::identity::ApprovalStep::after_grant(i.grant_committed)
+    });
+}

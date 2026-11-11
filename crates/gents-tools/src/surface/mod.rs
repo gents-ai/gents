@@ -435,11 +435,25 @@ impl ToolSurface {
             ));
         }
         if self.enable_p2p_tool {
-            tools.push(Box::new(crate::builtin::p2p::P2pTool::new(
+            let mut tool = crate::builtin::p2p::P2pTool::new(
                 runtime.node.clone(),
                 runtime.identity.clone(),
                 self.enable_p2p_mutations,
-            )));
+            );
+            if let Some(agent) = runtime
+                .agent_identity
+                .as_ref()
+                .filter(|agent| agent.did() != runtime.node_did)
+            {
+                tool = tool.with_approver(
+                    gents_store::config_client::ConfigAccess::local_managed_agent(
+                        runtime.node.clone(),
+                        identity::Did::new(agent.did())?,
+                        agent.as_ref(),
+                    )?,
+                );
+            }
+            tools.push(Box::new(tool));
         }
         if self.enable_session_history_tool {
             tools.push(build_session_history_tool(

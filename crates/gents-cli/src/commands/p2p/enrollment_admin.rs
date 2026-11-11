@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use gents_protocol::enrollment::EnrollmentOperatorAction;
 use gents_service::enrollment_admin::{
-    grant_verified_client, load_pending_enrollments, submit_enrollment_decision,
+    approve_verified_client, grant_verified_client, load_pending_enrollments,
+    submit_enrollment_decision,
 };
 use gents_service::home_state::{resolve_graphql_endpoint, resolve_home_dir};
 
@@ -16,18 +17,15 @@ pub(super) async fn decide_enrollment(
     anyhow::ensure!(!request_id.is_empty(), "request_id must not be empty");
     let home = resolve_home_dir(args.home.as_deref());
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let body = submit_enrollment_decision(
-        &home,
-        graphql.url(),
-        request_id,
-        action.clone(),
-        if action == EnrollmentOperatorAction::Approve {
-            args.lease_seconds
-        } else {
-            0
-        },
-    )
-    .await?;
+    let body = if action == EnrollmentOperatorAction::Approve {
+        approve_verified_client(&home, graphql, request_id, args.lease_seconds, None)
+            .await?
+            .with_context(|| {
+                format!("enrollment request {request_id} is not pending; nothing was granted or approved")
+            })?
+    } else {
+        submit_enrollment_decision(&home, graphql.url(), request_id, action, 0).await?
+    };
     print_json(&body)
 }
 

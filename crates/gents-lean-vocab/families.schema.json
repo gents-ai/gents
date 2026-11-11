@@ -369,6 +369,24 @@
       },
       "output": "bool"
     },
+    "identity_enrollment_grant_after_grant": {
+      "input": {
+        "fields": [
+          [
+            "grant_committed",
+            "bool"
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": {
+        "enum": "ApprovalStep",
+        "values": [
+          "approve",
+          "refuse"
+        ]
+      }
+    },
     "identity_grant_sets_grant_set_native_admin": {
       "input": {
         "fields": [

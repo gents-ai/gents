@@ -97,6 +97,16 @@ impl LocalConfigAccess {
         self.agent_signer.clone()
     }
 
+    /// The node's own identity acts unsigned; any other local actor acts
+    /// only under its validated managed signer.
+    pub(crate) fn require_actor_signer(&self) -> Result<()> {
+        require_mutation_signer(
+            &self.node,
+            self.identity.as_ref(),
+            self.agent_signer.as_ref(),
+        )
+    }
+
     pub(crate) fn require_mutation_signer(&self) -> Result<()> {
         if self.client_signed_writes {
             return Err(ConfigClientError::EmbeddedClientSigningUnavailable);

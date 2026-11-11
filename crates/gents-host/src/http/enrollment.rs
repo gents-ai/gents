@@ -4,8 +4,7 @@ use anyhow::Result;
 use chrono::Utc;
 use gents::defra_node::Node as EmbeddedNode;
 use gents_protocol::enrollment::{
-    EnrollmentOfferRecord, EnrollmentOperatorAction, EnrollmentOperatorDecisionCommand,
-    EnrollmentOperatorQueryCommand,
+    EnrollmentOfferRecord, EnrollmentOperatorDecisionCommand, EnrollmentOperatorQueryCommand,
 };
 use gents_store::identity::NodeIdentity;
 use serde::Serialize;
@@ -38,42 +37,13 @@ impl EnrollmentDecisionService {
         &self,
         command: &EnrollmentOperatorDecisionCommand,
     ) -> Result<gents_p2p::p2p_reconcile::EnrollmentDecisionOutcome> {
-        let now = Utc::now();
-        gents_p2p::p2p_reconcile::authenticate_operator_command(
+        gents_p2p::p2p_reconcile::decide_operator_command(
             self.identity.as_ref(),
-            command,
-            now,
-        )
-        .await?;
-        gents_p2p::p2p_reconcile::consume_operator_nonce(
             &self.node,
-            &command.admin_did,
-            &command.nonce,
-            now,
+            &self.store,
+            command,
         )
-        .await?;
-        match command.action {
-            EnrollmentOperatorAction::Approve => {
-                self.store
-                    .decide_request_with_lease(
-                        command.request_id.trim(),
-                        gents_protocol::enrollment::EnrollmentDecisionKind::Approved,
-                        std::time::Duration::from_secs(command.lease_seconds),
-                    )
-                    .await
-            }
-            EnrollmentOperatorAction::Deny => {
-                self.store
-                    .decide_request(
-                        command.request_id.trim(),
-                        gents_protocol::enrollment::EnrollmentDecisionKind::Denied,
-                    )
-                    .await
-            }
-            EnrollmentOperatorAction::Revoke => {
-                self.store.revoke_request(command.request_id.trim()).await
-            }
-        }
+        .await
     }
 
     pub async fn query(

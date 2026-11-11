@@ -148,123 +148,137 @@ pub async fn load_enrollment_query(
     Ok(body)
 }
 
-/// `expected` binds managed pairing to the target runtime and held desktop User.
+/// The signed pending request and the two accesses one approval runs with:
+/// the home's User, which ACP checks for the Node `administrator` grant, and
+/// the runtime principal, which records the receipt and node permissions.
+struct PendingApproval {
+    runtime: std::sync::Arc<dyn gents_store::identity::NodeIdentity>,
+    approver: gents_store::config_client::ConfigAccess,
+    runtime_access: gents_store::config_client::ConfigAccess,
+    request: gents_protocol::enrollment::EnrollmentRequestRecord,
+}
+
+impl PendingApproval {
+    async fn load(
+        home: &std::path::Path,
+        endpoint: gents_store::config_client::GraphqlEndpoint,
+        request_id: &str,
+    ) -> Result<Option<Self>> {
+        use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
+        let runtime = resolve_home_identity(Some(home))?;
+        let pending = load_pending_enrollments(home, endpoint.url()).await?;
+        let matches: Vec<_> = pending["pending"]
+            .as_array()
+            .context("invalid pending enrollment response")?
+            .iter()
+            .filter(|row| row["request_id"].as_str() == Some(request_id))
+            .collect();
+        let [row] = matches.as_slice() else {
+            anyhow::ensure!(
+                matches.is_empty(),
+                "expected one verified pending enrollment for {request_id}"
+            );
+            return Ok(None);
+        };
+        let request: gents_protocol::enrollment::EnrollmentRequestRecord =
+            serde_json::from_value(row["signed_request"].clone())
+                .context("pending enrollment has no signed request")?;
+        anyhow::ensure!(
+            request.request_id == request_id,
+            "signed enrollment request does not match the requested ID"
+        );
+        let runtime_access = ConfigAccess::Graphql(
+            GraphqlEndpoint::as_principal(endpoint.url(), runtime.did())
+                .with_client_signing_capability(runtime.client_signing_capability()?)?,
+        );
+        Ok(Some(Self {
+            runtime,
+            approver: ConfigAccess::Graphql(endpoint),
+            runtime_access,
+            request,
+        }))
+    }
+
+    fn approval<'a>(
+        &'a self,
+        expected: Option<(&'a str, &'a str)>,
+    ) -> gents_store::identity::EnrollmentApproval<'a> {
+        gents_store::identity::EnrollmentApproval {
+            approver: &self.approver,
+            runtime: &self.runtime_access,
+            node: self.runtime.as_ref(),
+            request: &self.request,
+            expected,
+        }
+    }
+}
+
+fn granted_json(
+    request_id: &str,
+    candidate: &str,
+    node_did: &str,
+    outcome: &gents_store::identity::EnrollmentGrantOutcome,
+) -> serde_json::Value {
+    let recorded: Vec<_> = outcome.recorded.iter().map(|tuple| tuple.name()).collect();
+    serde_json::json!({"request_id": request_id, "candidate_did": candidate, "node_did": node_did, "node_administrator_granted": true, "recorded": recorded, "reissued": outcome.reissued})
+}
+
+/// Grant a pending client enrollment's Node administration without approving
+/// it, to finish a grant whose approval did not commit. `expected` binds
+/// managed pairing to the target runtime and held desktop User.
 pub async fn grant_verified_client(
     home: &std::path::Path,
     endpoint: gents_store::config_client::GraphqlEndpoint,
     request_id: &str,
     expected: Option<(&str, &str)>,
 ) -> Result<Option<serde_json::Value>> {
-    use gents_store::config_client::ConfigAccess;
     let request_id = request_id.trim();
     anyhow::ensure!(!request_id.is_empty(), "request_id must not be empty");
-    let runtime = resolve_home_identity(Some(home))?;
-    if let Some((node_did, _)) = expected {
-        anyhow::ensure!(
-            runtime.did() == node_did,
-            "managed Node identity does not match the initialized runtime"
-        );
-    }
-    let pending = load_pending_enrollments(home, endpoint.url()).await?;
-    let matches: Vec<_> = pending["pending"]
-        .as_array()
-        .context("invalid pending enrollment response")?
-        .iter()
-        .filter(|row| row["request_id"].as_str() == Some(request_id))
-        .collect();
-    if matches.is_empty() {
+    let Some(pending) = PendingApproval::load(home, endpoint, request_id).await? else {
         return Ok(None);
-    }
-    anyhow::ensure!(
-        matches.len() == 1,
-        "expected one verified pending enrollment for {request_id}"
-    );
-    let request: gents_protocol::enrollment::EnrollmentRequestRecord =
-        serde_json::from_value(matches[0]["signed_request"].clone())
-            .context("pending enrollment has no signed request")?;
-    let offer = gents_protocol::enrollment::decode_offer(&request.offer_token)?;
-    request.validate_against_offer(&offer)?;
-    anyhow::ensure!(
-        request.request_id == request_id,
-        "signed enrollment request does not match the requested ID"
-    );
-    anyhow::ensure!(
-        offer.admin_did == runtime.did(),
-        "enrollment offer has a different administrator"
-    );
-    anyhow::ensure!(
-        request.profile == "client",
-        "only client enrollment can receive Node administration"
-    );
-    anyhow::ensure!(
-        runtime
-            .verify(&offer.admin_did, &offer.signing_payload(), &offer.admin_sig)
-            .await?,
-        "enrollment offer signature is invalid"
-    );
-    anyhow::ensure!(
-        runtime
-            .verify(
-                &request.candidate_did,
-                &request.signing_payload(),
-                &request.candidate_sig
-            )
-            .await?,
-        "enrollment candidate signature is invalid"
-    );
-    let now = Utc::now();
-    anyhow::ensure!(
-        chrono::DateTime::parse_from_rfc3339(&request.issued_at)? <= now
-            && now <= chrono::DateTime::parse_from_rfc3339(&request.expires_at)?,
-        "enrollment request is not current"
-    );
-    anyhow::ensure!(
-        request.owner_node_did == runtime.did(),
-        "enrollment belongs to another runtime"
-    );
-    if let Some((node_did, client_did)) = expected {
-        anyhow::ensure!(
-            request.owner_node_did == node_did && request.candidate_did == client_did,
-            "managed enrollment request does not match the selected Node and desktop User"
-        );
-    }
-    let candidate = identity::Did::new(&request.candidate_did)?;
-    let owner = ConfigAccess::Graphql(endpoint.clone());
-    let rendered = {
-        use gents_protocol::document_query::{fields::node as fields, Filter, Query, Selection};
-        Query::select(Selection::doc_id())
-            .filter(Filter::eq(fields::NODE_DID, runtime.did()))
-            .render()
     };
-    let response = owner
-        .read(&rendered)
-        .await
-        .context("reading Node as the client owner")?;
-    let rows = response["data"]["Node"]
-        .as_array()
-        .context("Node query returned no rows")?;
-    anyhow::ensure!(
-        rows.len() == 1,
-        "expected one Node visible to the client owner"
-    );
-    let doc_id = rows[0]["_docID"]
-        .as_str()
-        .context("Node has no document ID")?;
-    let runtime_access = ConfigAccess::Graphql(
-        gents_store::config_client::GraphqlEndpoint::as_principal(endpoint.url(), runtime.did())
-            .with_client_signing_capability(runtime.client_signing_capability()?)?,
-    );
-    let outcome = gents_store::identity::grant_enrollment_authority(
-        &owner,
-        &runtime_access,
-        doc_id,
+    let outcome = gents_store::identity::grant_as_approver(&pending.approval(expected)).await?;
+    Ok(Some(granted_json(
         request_id,
-        &candidate,
-    )
-    .await
-    .context("granting the enrollment's Node administration")?;
-    let recorded: Vec<_> = outcome.recorded.iter().map(|tuple| tuple.name()).collect();
-    Ok(Some(
-        serde_json::json!({"request_id": request_id, "candidate_did": candidate.as_str(), "node_did": runtime.did(), "node_administrator_granted": true, "recorded": recorded, "reissued": outcome.reissued}),
-    ))
+        &pending.request.candidate_did,
+        pending.runtime.did(),
+        &outcome,
+    )))
+}
+
+/// Approve a pending client enrollment as the home's User through the one
+/// approval handler every surface runs (`approve_enrollment`): its Node
+/// administration is granted under the User's identity, then the runtime
+/// approves the signed operator command. `None` when it is not pending.
+pub async fn approve_verified_client(
+    home: &std::path::Path,
+    endpoint: gents_store::config_client::GraphqlEndpoint,
+    request_id: &str,
+    lease_seconds: u64,
+    expected: Option<(&str, &str)>,
+) -> Result<Option<serde_json::Value>> {
+    let request_id = request_id.trim();
+    anyhow::ensure!(!request_id.is_empty(), "request_id must not be empty");
+    let graphql = endpoint.url().to_owned();
+    let Some(pending) = PendingApproval::load(home, endpoint, request_id).await? else {
+        return Ok(None);
+    };
+    let (outcome, mut decided) =
+        gents_store::identity::approve_enrollment(pending.approval(expected), || {
+            submit_enrollment_decision(
+                home,
+                &graphql,
+                request_id,
+                EnrollmentOperatorAction::Approve,
+                lease_seconds,
+            )
+        })
+        .await?;
+    decided["granted"] = granted_json(
+        request_id,
+        &pending.request.candidate_did,
+        pending.runtime.did(),
+        &outcome,
+    );
+    Ok(Some(decided))
 }
