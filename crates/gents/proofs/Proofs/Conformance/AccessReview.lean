@@ -1,3 +1,4 @@
+import Proofs.Conformance.Family
 import Proofs.Tools.ToolPolicy.AccessReview
 import Proofs.Conformance.Contracts.Json.ToolPolicy
 import Proofs.Runtime.CanonicalOutput.Execution.Examples
@@ -10,11 +11,10 @@ private def reply (action decision reason : String) : String :=
   (Json.mkObj [("actionId", toJson action), ("decision", toJson decision),
     ("reason", toJson reason)]).compress
 
-private def replyCases : List Json :=
+private def replyRaws : List String :=
   let action := "action-1"
   let base := reply action "allow" ""
-  let rawValues := [
-    reply action "allow" "Within the requested change.",
+  [ reply action "allow" "Within the requested change.",
     reply action "deny" "Outside the requested work.",
     reply action "ask" "The intended destination is unclear.",
     reply "another-action" "allow" "Wrong invocation.",
@@ -27,9 +27,23 @@ private def replyCases : List Json :=
     reply action "allow" (String.mk (List.replicate (8192 - base.utf8ByteSize) 'a')),
     reply action "allow" (String.mk (List.replicate (8193 - base.utf8ByteSize) 'a')),
     reply action "allow" (String.mk (List.replicate 4097 'λ'))]
-  rawValues.map fun raw => Json.mkObj [
-    ("kind", toJson "reply"), ("action", toJson action), ("raw", toJson raw),
-    ("expected", toJson (ToolPolicy.AccessReview.decodeReply action raw).wireName)]
+
+private def reviewOf (wire : String) : Review :=
+  (([.allow, .ask, .deny, .unavailable] : List Review).find? (·.wireName == wire)).getD .unavailable
+
+private def modeOf (wire : String) : ToolPolicy.WorkspacePermissions.Mode :=
+  (([.ask, .autoReview, .fullAccess] : List ToolPolicy.WorkspacePermissions.Mode).find?
+    (·.wireName == wire)).getD .ask
+
+structure ReplyInput where
+  action : String
+  raw : String
+  deriving ToJson
+
+@[conformance_family]
+def replyDecision : Conformance.Family ReplyInput String where
+  inputs := replyRaws.map fun raw => { action := "action-1", raw }
+  model := fun i => (ToolPolicy.AccessReview.decodeReply i.action i.raw).wireName
 
 private def histories : List (List Review) := [
   [], [.deny, .deny, .deny], [.deny, .deny, .allow, .deny, .deny],
@@ -41,55 +55,131 @@ private def histories : List (List Review) := [
   List.replicate 10 .deny ++ List.replicate 50 .allow,
   List.replicate 2 .deny ++ [.allow] ++ List.replicate 2 .deny]
 
-private def steps : List Review → List Review → List Json
+structure TraceInput where
+  verdicts : List String
+  deriving ToJson
+
+structure TraceStep where
+  history : List String
+  blocked : Bool
+  deriving ToJson
+
+private def steps : List Review → List Review → List TraceStep
   | _, [] => []
   | history, verdict :: rest =>
       let next := ToolPolicy.AccessReview.record history verdict
-      Json.mkObj [
-        ("verdict", toJson verdict.wireName),
-        ("history", toJson (next.map Review.wireName)),
-        ("blocked", toJson (ToolPolicy.AccessReview.blocked next))] :: steps next rest
+      ({ history := next.map Review.wireName
+         blocked := ToolPolicy.AccessReview.blocked next } : TraceStep) :: steps next rest
 
-private def traceCases : List Json := histories.map fun history => Json.mkObj [
-  ("kind", toJson "trace"), ("steps", toJson (steps [] history))]
+@[conformance_family]
+def denialTrace : Conformance.Family TraceInput (List TraceStep) where
+  inputs := histories.map fun history => { verdicts := history.map Review.wireName }
+  model := fun i => steps [] (i.verdicts.map reviewOf)
 
-private def routeCases : List Json :=
-  histories.flatMap fun history =>
-  let history := history.foldl ToolPolicy.AccessReview.record []
-  ToolPolicy.WorkspacePermissions.cases.map fun case => Json.mkObj [
-    ("kind", toJson "route"),
-    ("input", Contracts.permissionInputJson case.input),
-    ("history", toJson (history.map Review.wireName)),
-    ("verdict", toJson case.review.wireName),
-    ("grant", Contracts.permissionGrantJson case.reviewedGrant),
-    ("expected", toJson (ToolPolicy.AccessReview.evaluate
-      case.input history case.review case.reviewedGrant).wireName),
-    ("expectedHistory", toJson ((ToolPolicy.AccessReview.apply
-      case.input history case.review case.reviewedGrant).2.map Review.wireName))]
+structure WireScope where
+  workspace : Nat
+  revision : Nat
+  deriving ToJson
 
-private def completionCases : List Json :=
-  ([.normal, .titleAudit, .accessReview] : List RequestPurpose).flatMap fun purpose =>
-  [false, true].map fun hasTools =>
+structure WireGrant where
+  scope : WireScope
+  action : Nat
+  deriving ToJson
+
+structure WireInput where
+  current : WireScope
+  configuredWorkspace : Nat
+  mode : String
+  action : Nat
+  ceilingAllows : Bool
+  crossesBoundary : Bool
+  grant : Option WireGrant
+  deriving ToJson
+
+structure RouteInput where
+  input : WireInput
+  history : List String
+  verdict : String
+  grant : WireGrant
+  deriving ToJson
+
+structure RouteOutput where
+  evaluated : String
+  applied : String
+  history : List String
+  deriving ToJson
+
+private def wireScope (scope : ToolPolicy.WorkspacePermissions.Scope) : WireScope :=
+  ⟨scope.workspace, scope.revision⟩
+
+private def wireGrant (grant : ToolPolicy.WorkspacePermissions.Grant) : WireGrant :=
+  ⟨wireScope grant.scope, grant.action⟩
+
+private def wireInput (input : ToolPolicy.WorkspacePermissions.Input) : WireInput :=
+  ⟨wireScope input.current, input.configuredWorkspace, input.mode.wireName, input.action,
+    input.ceilingAllows, input.crossesBoundary, input.grant.map wireGrant⟩
+
+private def scopeOf (scope : WireScope) : ToolPolicy.WorkspacePermissions.Scope :=
+  ⟨scope.workspace, scope.revision⟩
+
+private def grantOf (grant : WireGrant) : ToolPolicy.WorkspacePermissions.Grant :=
+  ⟨scopeOf grant.scope, grant.action⟩
+
+private def inputOf (input : WireInput) : ToolPolicy.WorkspacePermissions.Input :=
+  ⟨scopeOf input.current, input.configuredWorkspace, modeOf input.mode, input.action,
+    input.ceilingAllows, input.crossesBoundary, input.grant.map grantOf⟩
+
+@[conformance_family]
+def reviewRoute : Conformance.Family RouteInput RouteOutput where
+  inputs :=
+    histories.flatMap fun history =>
+    let history := history.foldl ToolPolicy.AccessReview.record []
+    ToolPolicy.WorkspacePermissions.cases.map fun case =>
+      { input := wireInput case.input, history := history.map Review.wireName
+        verdict := case.review.wireName, grant := wireGrant case.reviewedGrant }
+  model := fun i =>
+    let input := inputOf i.input
+    let history := i.history.map reviewOf
+    let verdict := reviewOf i.verdict
+    let grant := grantOf i.grant
+    { evaluated := (ToolPolicy.AccessReview.evaluate input history verdict grant).wireName
+      applied := (ToolPolicy.AccessReview.apply input history verdict grant).1.wireName
+      history := (ToolPolicy.AccessReview.apply input history verdict grant).2.map
+        Review.wireName }
+
+structure CompletionInput where
+  purpose : String
+  hasTools : Bool
+  deriving ToJson
+
+@[conformance_family]
+def completionAcceptance : Conformance.Family CompletionInput Bool where
+  inputs :=
+    ([.normal, .titleAudit, .accessReview] : List RequestPurpose).flatMap fun purpose =>
+    [false, true].map fun hasTools => { purpose := purpose.toWire, hasTools }
+  model := fun i =>
+    let purpose := (RequestPurpose.fromWire? i.purpose).getD .normal
     let world := { CanonicalOutput.Execution.Examples.world 5 with purpose }
     let permitsIntent := CanonicalOutput.Execution.Gate.purposeAllows world
       (.dispatch 7 ⟨1, true, true⟩)
-    Json.mkObj [
-      ("kind", toJson "completion"), ("purpose", toJson purpose.toWire),
-      ("hasTools", toJson hasTools), ("expected", toJson (!hasTools || permitsIntent))]
+    !i.hasTools || permitsIntent
 
-private def contextCases : List Json :=
-  let maxWord := 2^64 - 1
-  ([0, 32, 65500, 65536, 65537, maxWord] : List Nat).flatMap fun required =>
-  ([0, 64, 65536, maxWord] : List Nat).flatMap fun limit =>
-  ([[], [0], [1], [32, 32], [33, 32, 1], [65536], [65537],
-    [maxWord, 1], [1, maxWord], [maxWord, 0], [65500, 32],
-    [4, 4, 4, 4, 4]] : List (List Nat)).map fun costs => Json.mkObj [
-      ("kind", toJson "context"), ("required", toJson required),
-      ("limit", toJson limit), ("costs", toJson costs),
-      ("expected", toJson (ToolPolicy.AccessReview.selectContext required limit costs))]
+structure ContextInput where
+  required : Nat
+  limit : Nat
+  costs : List Nat
+  deriving ToJson
 
-def casesJson : Json := toJson
-  (replyCases ++ traceCases ++ routeCases ++ completionCases ++ contextCases)
+@[conformance_family]
+def contextSelection : Conformance.Family ContextInput (Option Nat) where
+  inputs :=
+    let maxWord := 2^64 - 1
+    ([0, 32, 65500, 65536, 65537, maxWord] : List Nat).flatMap fun required =>
+    ([0, 64, 65536, maxWord] : List Nat).flatMap fun limit =>
+    ([[], [0], [1], [32, 32], [33, 32, 1], [65536], [65537],
+      [maxWord, 1], [1, maxWord], [maxWord, 0], [65500, 32],
+      [4, 4, 4, 4, 4]] : List (List Nat)).map fun costs => { required, limit, costs }
+  model := fun i => ToolPolicy.AccessReview.selectContext i.required i.limit i.costs
 
 private def taskCaseJson (policy : ToolPolicy.AccessReview.TaskPolicy)
     (budgetOnly : Bool := false) (approvedPrompt : Option String := none) : Json :=
