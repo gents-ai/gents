@@ -485,6 +485,37 @@ async fn a_rebuild_moves_the_pins_of_the_tools_that_select_the_plugin() {
     let again = ok(&tools, json!({"argv":["plugin","build","probe"]})).await;
     assert_eq!(again["digest"], second["digest"], "{again}");
     assert_eq!(again["selections_moved"], Value::Null, "{again}");
+    // An interrupted request drops the call between a pin move and the
+    // install. The owned task still finishes both, so the pin names the
+    // build that is installed rather than one that never was.
+    write_artifact(br#"{"build":3}"#);
+    let pause = std::sync::Arc::new(super::super::command::RebuildTestPause {
+        moved: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+        finished: tokio::sync::Notify::new(),
+    });
+    *super::super::command::REBUILD_TEST_PAUSE.lock().unwrap() = Some(pause.clone());
+    {
+        let interrupted = call(&tools, json!({"argv":["plugin","build","probe"]}));
+        tokio::pin!(interrupted);
+        tokio::select! {
+            outcome = &mut interrupted => panic!("the rebuild ended before its pin moved: {outcome:?}"),
+            () = pause.moved.notified() => {}
+        }
+    }
+    pause.release.notify_one();
+    pause.finished.notified().await;
+    *super::super::command::REBUILD_TEST_PAUSE.lock().unwrap() = None;
+    let after = ok(&tools, json!({"argv":["tools","get"]})).await;
+    let pinned = after["document"]["integrations"]["plugins"][0]["digest"].clone();
+    assert_ne!(pinned, second["digest"], "{after}");
+    let third = ok(&tools, json!({"argv":["plugin","build","probe"]})).await;
+    assert_eq!(
+        third["digest"], pinned,
+        "the moved pin names the installed build: {third}"
+    );
+    assert_eq!(third["selections_moved"], Value::Null, "{third}");
+    let second = third;
     // Deselecting the plugin is still a drop.
     let dropped = call(
         &tools,

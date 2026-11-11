@@ -26,6 +26,21 @@ pub struct PluginStageChanges {
     pub(crate) installed: Vec<store::InstalledPlugin>,
 }
 
+/// The install failed after its publication became final: the plugins are
+/// installed in the home at the new digests, and only the node's record of
+/// them was not confirmed. A caller that staged anything for the new digests
+/// keeps it; every other install error means the publication was rolled back
+/// or never made.
+#[derive(Debug, thiserror::Error)]
+#[error("the pack was installed locally, but its node notification was not confirmed; retry the pack operation to reconcile the node record")]
+pub struct PublicationRetained(#[source] Box<dyn std::error::Error + Send + Sync>);
+
+/// Whether `error` is an install failure that left the publication
+/// installed ([`PublicationRetained`]).
+pub fn publication_retained(error: &anyhow::Error) -> bool {
+    gents_protocol::error_chain::find_source::<PublicationRetained>(error.as_ref()).is_some()
+}
+
 /// A local publication and its node notification share one owned task.
 #[allow(clippy::too_many_arguments)]
 pub async fn install<F>(
@@ -124,18 +139,42 @@ where
     let bindings = bindings.clone();
     tokio::spawn(async move {
         let _cache_lease = cache_lease;
-        let stage = install::stage_pack_graph(&home, vec![install::PluginStageInput {
-            manifest: manifest.clone(), digest: digest.clone(), assets, bindings,
-        }], consent, &owner).await?;
+        let stage = install::stage_pack_graph(
+            &home,
+            vec![install::PluginStageInput {
+                manifest: manifest.clone(),
+                digest: digest.clone(),
+                assets,
+                bindings,
+            }],
+            consent,
+            &owner,
+        )
+        .await?;
         let plugins = stage.installed.clone();
-        let changes = PluginStageChanges { previous: stage.previous_plugins(), installed: plugins.clone() };
+        let changes = PluginStageChanges {
+            previous: stage.previous_plugins(),
+            installed: plugins.clone(),
+        };
         let record = HomePackInstall {
-            coordinate: coordinate.clone(), version: manifest.version.clone(), digest: digest.clone(),
-            kind: manifest.metadata.kind.clone(), assets: relative_root, dependency_assets: Vec::new(),
-            plugins: plugins.iter().map(|plugin| InstalledPackPlugin { name: plugin.name.clone(), digest: plugin.digest.clone() }).collect(),
+            coordinate: coordinate.clone(),
+            version: manifest.version.clone(),
+            digest: digest.clone(),
+            kind: manifest.metadata.kind.clone(),
+            assets: relative_root,
+            dependency_assets: Vec::new(),
+            plugins: plugins
+                .iter()
+                .map(|plugin| InstalledPackPlugin {
+                    name: plugin.name.clone(),
+                    digest: plugin.digest.clone(),
+                })
+                .collect(),
             installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            ux: manifest.metadata.ux.clone(), installed_via: Some(installed_via),
-            source: Some(source), source_history: Vec::new(),
+            ux: manifest.metadata.ux.clone(),
+            installed_via: Some(installed_via),
+            source: Some(source),
+            source_history: Vec::new(),
             created_collections: Vec::new(),
         };
         let publish_home = home.clone();
@@ -143,7 +182,12 @@ where
         let previous = tokio::task::spawn_blocking(move || -> Result<_> {
             let previous = super::read_home_install(&publish_home, &publish_record.coordinate)?;
             super::home_install::record_source(&mut publish_record, previous.as_ref())?;
-            let result = super::record_after_install(&publish_home, publish_record.clone(), installed_via, true);
+            let result = super::record_after_install(
+                &publish_home,
+                publish_record.clone(),
+                installed_via,
+                true,
+            );
             if let Err(error) = result {
                 match &previous {
                     Some(previous) => super::write_home_install(&publish_home, previous)?,
@@ -152,29 +196,54 @@ where
                 return Err(error);
             }
             Ok((previous, publish_record))
-        }).await.map_err(anyhow::Error::from)?;
+        })
+        .await
+        .map_err(anyhow::Error::from)?;
         let (previous, record) = match previous {
             Ok(previous) => previous,
-            Err(error) => { stage.finish(false).await?; return Err(error.context("publishing the local pack install record").into()); }
+            Err(error) => {
+                stage.finish(false).await?;
+                return Err(error
+                    .context("publishing the local pack install record")
+                    .into());
+            }
         };
-        let notification = if record.plugins.is_empty() { Ok(()) } else {
-            notify(PackIdentity::new(&manifest, &digest, record.plugins.clone()), changes).await
+        let notification = if record.plugins.is_empty() {
+            Ok(())
+        } else {
+            notify(
+                PackIdentity::new(&manifest, &digest, record.plugins.clone()),
+                changes,
+            )
+            .await
         };
-        if matches!(&notification, Err(super::PluginStoreChangeError::PinConflict(_) | super::PluginStoreChangeError::Rejected(_))) {
+        if matches!(
+            &notification,
+            Err(super::PluginStoreChangeError::PinConflict(_)
+                | super::PluginStoreChangeError::Rejected(_))
+        ) {
             let restore_home = home.clone();
             let restore_coordinate = coordinate.clone();
             let restored = tokio::task::spawn_blocking(move || match previous {
                 Some(previous) => super::write_home_install(&restore_home, &previous),
                 None => super::forget_home_install(&restore_home, &restore_coordinate),
-            }).await.map_err(anyhow::Error::from)?;
+            })
+            .await
+            .map_err(anyhow::Error::from)?;
             stage.finish(false).await?;
             restored?;
-            return notification.map(|_| (record, plugins)).map_err(|error| anyhow::Error::from(error).into());
+            return notification
+                .map(|_| (record, plugins))
+                .map_err(|error| anyhow::Error::from(error).into());
         }
         stage.finish(true).await?;
-        notification.context("the pack was installed locally, but its node notification was not confirmed; retry the pack operation to reconcile the node record")?;
+        notification.map_err(|error| {
+            anyhow::Error::new(PublicationRetained(anyhow::Error::from(error).into()))
+        })?;
         Ok((record, plugins))
-    }).await.context("owned plugin installation task failed")?
+    })
+    .await
+    .context("owned plugin installation task failed")?
 }
 
 /// A plugins or assets pack as installed: its home record and the plugin
@@ -527,6 +596,37 @@ pub(crate) mod tests {
         .await
         .unwrap_err();
         assert!(format!("{error:#}").contains("installed locally"));
+        assert!(
+            publication_retained(&error.into_anyhow()),
+            "an unconfirmed notification is the typed retained publication"
+        );
+        let (_refused_dir, _, refused) = fixture("3.0.0", false);
+        let rolled_back = install(
+            home.path(),
+            &refused,
+            false,
+            None,
+            &BTreeMap::new(),
+            InstalledVia::Operator,
+            super::super::PackSource::Local { file_name: None },
+            |_, _| async {
+                Err(super::super::PluginStoreChangeError::PinConflict(
+                    "pin conflict".into(),
+                ))
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            !publication_retained(&rolled_back.into_anyhow()),
+            "a refused notification rolls the publication back"
+        );
+        assert_eq!(
+            store::read_record(home.path(), "fixture", "native_echo")
+                .unwrap()
+                .version,
+            "1.0.0"
+        );
         let first = super::super::read_home_install(home.path(), coordinate)
             .unwrap()
             .expect("local pin survives a failed notification");

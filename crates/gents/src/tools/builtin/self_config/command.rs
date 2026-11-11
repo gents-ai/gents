@@ -3,6 +3,8 @@ use super::*;
 pub(super) mod agents;
 mod args;
 mod authoring;
+#[cfg(test)]
+pub(super) use authoring::{RebuildTestPause, REBUILD_TEST_PAUSE};
 mod automation;
 mod cleanup;
 pub(super) mod contracts;

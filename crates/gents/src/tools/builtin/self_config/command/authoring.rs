@@ -8,6 +8,8 @@ use crate::pack::authoring::{
 };
 
 mod plugin_source;
+#[cfg(test)]
+pub(in super::super) use plugin_source::{RebuildTestPause, REBUILD_TEST_PAUSE};
 
 const PACK_PARTS: &str = "agent, task, trigger, schema, skill, plugin, page";
 
