@@ -348,7 +348,7 @@ fn cannot_open(
     };
     let home = crate::shell_word(home);
     Some(format!(
-        "{what}. Check `gents status --home {home}`. If its model cannot be reached, start the model, or change its address with `gents config backend set --file <backend.json> --home {home}` (`gents config backend list --home {home}` names the backend to `show`)."
+        "{what}. Check `gents status --home {home}`. If its model cannot be reached, start the model, or change its address with `gents config backend set --file <backend.json> --home {home}` (`gents config backend list --home {home}` names the backend to `show`). If no model is selected yet, choose one with `gents config profile set --file <profile.json> --home {home}`."
     ))
 }
 
@@ -446,6 +446,10 @@ mod tests {
                     .find("gents config backend set --file <backend.json> --home /srv/home")
                     .expect(&error);
                 assert!(status < backend, "{error}");
+                let profile = error
+                    .find("gents config profile set --file <profile.json> --home /srv/home")
+                    .expect(&error);
+                assert!(backend < profile, "{error}");
             }
         }
     }
