@@ -15,8 +15,9 @@ pub use client::{
 };
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;
+use gents_protocol::background_completion::is_background_completion_notification_message_key;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 use crate::session;
@@ -137,6 +138,21 @@ pub fn is_background_completion_request(
     input: &gents_protocol::request_input::RequestInput,
 ) -> bool {
     queue::is_automated_wakeup(input)
+}
+
+pub fn notification_receipt_keys(encoded: &str) -> Result<Vec<String>> {
+    let keys: Vec<String> =
+        serde_json::from_str(encoded).context("invalid wake notification receipt")?;
+    anyhow::ensure!(
+        keys.iter()
+            .all(|key| is_background_completion_notification_message_key(key)),
+        "wake receipt names a non-notification message"
+    );
+    anyhow::ensure!(
+        keys.iter().collect::<std::collections::BTreeSet<_>>().len() == keys.len(),
+        "wake receipt contains duplicate notification keys"
+    );
+    Ok(keys)
 }
 
 pub fn request_content_owns_user_projection(
