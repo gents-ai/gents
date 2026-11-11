@@ -9,7 +9,7 @@ use gents_protocol::session_input_edit::{
 
 #[cfg(test)]
 use super::session_commands::run_session_command_reconciler_with_agents;
-use super::session_commands::{CommandRow, FIELDS};
+use gents_protocol::session_command_row::{CommandRow, FIELDS};
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
 #[cfg(test)]
 use crate::store::graphql::escape_graphql_string;

@@ -7,7 +7,7 @@ use gents_protocol::goal_control::{
     GoalControlOutcome, SessionGoalControl, SessionGoalControlReceipt, SESSION_GOAL_CONTROL_VERSION,
 };
 
-use super::session_commands::CommandRow;
+use gents_protocol::session_command_row::CommandRow;
 use crate::store::config_client::{ConfigAccess, IdempotentTransactionRetry};
 use crate::store::identity::NodeIdentity;
 

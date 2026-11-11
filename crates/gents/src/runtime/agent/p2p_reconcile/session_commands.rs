@@ -13,25 +13,6 @@ pub use crate::runtime::snapshot::ActiveRuntimeSnapshot as SessionCommandAgentSn
 use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::NodeIdentity;
 
-#[derive(Deserialize)]
-pub(super) struct CommandRow {
-    #[serde(rename = "_docID")]
-    pub(super) doc_id: String,
-    pub(super) command_id: String,
-    pub(super) requester_did: String,
-    pub(super) requester_peer_id: Option<String>,
-    pub(super) node_did: String,
-    #[serde(default)]
-    pub(super) agent_did: Option<String>,
-    pub(super) session_id: String,
-    #[serde(default)]
-    pub(super) session_doc_id: Option<String>,
-    pub(super) intent_json: String,
-    pub(super) receipt_json: Option<String>,
-}
-
-pub(super) const FIELDS: &str = "_docID command_id requester_did requester_peer_id node_did session_id intent_json receipt_json";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) enum CommandKind {
     InputEdit,

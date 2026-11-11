@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::Node as EmbeddedNode;
+use gents_protocol::goal_status::GoalStatus;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
 
@@ -115,7 +116,7 @@ pub use load::{load_canonical_goal, load_canonical_goal_in_txn, load_goals_for_s
 pub use question_wait::awaiting_goal_question_ids;
 pub use state::{
     apply_operator_status_transition, decide_goal_continuation, next_blocked_audit, GoalAction,
-    GoalAuditObservation, GoalDecision, GoalRequestTerminal, GoalState, GoalStatus,
+    GoalAuditObservation, GoalDecision, GoalRequestTerminal, GoalState,
 };
 pub(crate) use task_fire::{apply_claimed_task_goal_in_txn, task_goal_fire_key};
 pub use task_fire::{
@@ -133,7 +134,7 @@ pub use transition::{
 #[cfg(test)]
 pub(crate) use usage::session_token_usage_breakdown_in_txn;
 use usage::session_token_usage_in_txn;
-pub use usage::{refresh_goal_usage_from_access, session_token_usage, SessionTokenUsage};
+pub use usage::{refresh_goal_usage_from_access, session_token_usage};
 pub(crate) use write::pause_goal_for_interrupt_in_txn;
 use write::set_goal_in_txn;
 pub use write::{

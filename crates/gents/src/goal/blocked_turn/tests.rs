@@ -763,7 +763,7 @@ async fn wrappers_read_the_stored_turn() {
         node_did,
         "session-1",
         Some("ship it"),
-        Some(crate::goal::GoalStatus::UsageLimited),
+        Some(gents_protocol::goal_status::GoalStatus::UsageLimited),
         None,
         None,
     )

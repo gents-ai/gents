@@ -1577,7 +1577,7 @@ mod tests {
                     &test_node_did(),
                     session,
                     Some("finish original work"),
-                    Some(crate::goal::GoalStatus::Active),
+                    Some(gents_protocol::goal_status::GoalStatus::Active),
                     Some(Some(100)),
                     None,
                 )
@@ -1678,7 +1678,7 @@ mod tests {
                         &test_node_did(),
                         session,
                         None,
-                        Some(crate::goal::GoalStatus::Complete),
+                        Some(gents_protocol::goal_status::GoalStatus::Complete),
                         None,
                         None,
                     )
@@ -1699,7 +1699,7 @@ mod tests {
                 assert_eq!(assigned.token_budget, task_budget);
                 assert_eq!(
                     assigned.parsed_status(),
-                    Some(crate::goal::GoalStatus::Active)
+                    Some(gents_protocol::goal_status::GoalStatus::Active)
                 );
                 assert_eq!(
                     assigned.continuation_sequence(),
@@ -1718,7 +1718,7 @@ mod tests {
                 assert!(!crate::goal::update_goal_fields_if_status_from_access(
                     &agent_access(&node),
                     &original,
-                    crate::goal::GoalStatus::Active,
+                    gents_protocol::goal_status::GoalStatus::Active,
                     "objective: \"stale controller\""
                 )
                 .await

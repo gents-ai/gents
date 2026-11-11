@@ -23,10 +23,10 @@
 //! network, no provider.
 
 use gents::documents::{InferenceExecution, Task};
+use gents_protocol::goal_status::GoalStatus;
 use gents::goal::{
     decide_goal_continuation, validate_task_goal_declaration, GoalDecision, GoalDocument,
-    GoalRequestTerminal, GoalStatus,
-};
+    GoalRequestTerminal, };
 use gents::{GOAL_SCHEMA, TASK_SCHEMA};
 
 const UNCAPPED_GOAL_JSON: &str = r#"{

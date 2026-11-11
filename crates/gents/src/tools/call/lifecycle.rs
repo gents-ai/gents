@@ -271,7 +271,7 @@ impl PluginEffectBinding {
             (None, None) => Ok(None),
             (Some(parent), Some(ordinal))
                 if !parent.is_empty()
-                    && (1..=crate::plugin::tool_calls::MAX_EFFECTS).contains(&ordinal)
+                    && (1..=gents_protocol::plugin_tool_call_limits::MAX_EFFECTS).contains(&ordinal)
                     && !spawned
                     && tool_call_id == Self::internal_id(parent, ordinal) =>
             {

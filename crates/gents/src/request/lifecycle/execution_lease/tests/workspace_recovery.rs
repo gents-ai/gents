@@ -277,7 +277,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         did,
         &parent.session_id,
         Some("Finish existing work"),
-        Some(crate::goal::GoalStatus::Active),
+        Some(gents_protocol::goal_status::GoalStatus::Active),
         None,
         None,
     )

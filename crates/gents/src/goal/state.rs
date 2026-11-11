@@ -1,17 +1,5 @@
 use super::*;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum GoalStatus {
-    Active,
-    Paused,
-    Blocked,
-    UsageLimited,
-    BudgetLimited,
-    Complete,
-    Stopped,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GoalRequestTerminal {
     Completed,
@@ -267,37 +255,6 @@ pub fn decide_goal_continuation(
         | GoalStatus::UsageLimited
         | GoalStatus::Complete
         | GoalStatus::Stopped => GoalDecision::None,
-    }
-}
-
-impl GoalStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Active => "active",
-            Self::Paused => "paused",
-            Self::Blocked => "blocked",
-            Self::UsageLimited => "usage_limited",
-            Self::BudgetLimited => "budget_limited",
-            Self::Complete => "complete",
-            Self::Stopped => "stopped",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        match value.trim() {
-            "active" => Some(Self::Active),
-            "paused" => Some(Self::Paused),
-            "blocked" => Some(Self::Blocked),
-            "usage_limited" | "usageLimited" => Some(Self::UsageLimited),
-            "budget_limited" | "budgetLimited" => Some(Self::BudgetLimited),
-            "complete" => Some(Self::Complete),
-            "stopped" => Some(Self::Stopped),
-            _ => None,
-        }
-    }
-
-    pub fn accrues_active_time(self) -> bool {
-        self == Self::Active
     }
 }
 

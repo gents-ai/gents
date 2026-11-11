@@ -32,7 +32,7 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
         identity.did(),
         "resumed-event-session",
         Some("Emit the remaining correlated result"),
-        Some(crate::goal::GoalStatus::Paused),
+        Some(gents_protocol::goal_status::GoalStatus::Paused),
         Some(Some(1000)),
         None,
     )

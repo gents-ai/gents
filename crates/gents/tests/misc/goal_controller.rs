@@ -3,10 +3,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::Node as EmbeddedNode;
+use gents_protocol::goal_status::GoalStatus;
 use gents::goal::{
     session_token_usage, set_goal_from_access, CreateGoalForSessionError,
-    CreateGoalForSessionOutcome, GoalStatus,
-};
+    CreateGoalForSessionOutcome, };
 use gents::store::graphql::escape_graphql_string;
 use gents::{
     ActiveRuntimeSnapshot, ConfigAccess, GoalSource, NodeIdentity, TriggerSource,

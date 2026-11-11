@@ -226,7 +226,7 @@ async fn interrupt_delivery_latches_only_the_prepublication_head() {
             &caused.node_did,
             &caused.session_id,
             Some("interrupt goal"),
-            Some(crate::goal::GoalStatus::Active),
+            Some(gents_protocol::goal_status::GoalStatus::Active),
             None,
             None,
         )
@@ -336,7 +336,7 @@ async fn interrupt_delivery_latches_only_the_prepublication_head() {
             .await
             .unwrap();
         assert_eq!(
-            goal.parsed_status() == Some(crate::goal::GoalStatus::Paused),
+            goal.parsed_status() == Some(gents_protocol::goal_status::GoalStatus::Paused),
             case.goal_paused,
             "{case:?}"
         );
@@ -798,7 +798,7 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
         &caused.node_did,
         &caused.session_id,
         Some("pause after operator interrupt"),
-        Some(crate::goal::GoalStatus::Active),
+        Some(gents_protocol::goal_status::GoalStatus::Active),
         None,
         None,
     )
@@ -815,7 +815,7 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
             .await
             .unwrap()
             .parsed_status(),
-        Some(crate::goal::GoalStatus::Paused),
+        Some(gents_protocol::goal_status::GoalStatus::Paused),
         "an idle same-node interrupt pauses autonomous Goal work"
     );
     set_state(
@@ -897,7 +897,7 @@ async fn explicit_stop_drains_pending_work_and_rejects_late_admission() {
         &caused.node_did,
         &caused.session_id,
         Some("stop this session"),
-        Some(crate::goal::GoalStatus::Active),
+        Some(gents_protocol::goal_status::GoalStatus::Active),
         None,
         None,
     )
@@ -929,7 +929,7 @@ async fn explicit_stop_drains_pending_work_and_rejects_late_admission() {
             .await
             .unwrap()
             .parsed_status(),
-        Some(crate::goal::GoalStatus::Paused)
+        Some(gents_protocol::goal_status::GoalStatus::Paused)
     );
 
     let error = plan(

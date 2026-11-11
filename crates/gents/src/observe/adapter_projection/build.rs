@@ -4,11 +4,13 @@ use crate::observe::run_timeline::{
     RunTimeline, RunTimelineEvent, TimelineMessageEvent, TimelineRequestEvent,
 };
 
+use gents_protocol::adapter_projection_kind::AdapterProjectionKind;
+
 use super::langgraph::build_langgraph_state_history;
 use super::redaction::{redact_json_value, redact_option, redact_str};
 use super::{
     atif, rendered_capture_events, AdapterProjection, AdapterProjectionEnvelope,
-    AdapterProjectionKind, MultiAgentDelegation, MultiAgentMessage, MultiAgentParticipant,
+    MultiAgentDelegation, MultiAgentMessage, MultiAgentParticipant,
     MultiAgentTaskProjection, MultiAgentToolEvent, OpenAiCodexRunTraceProjection,
     OpenAiCodexTraceItem, ProjectionContext, ProjectionProvenance, ProjectionRedactionMode,
     ProjectionSourceVersionStatus, RenderedRequestProvenanceRef, ADAPTER_PROJECTION_VERSION,

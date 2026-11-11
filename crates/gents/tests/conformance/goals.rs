@@ -1,3 +1,4 @@
+use gents_protocol::goal_status::GoalStatus;
 use gents::goal::{
     decide_goal_continuation, decide_model_goal_create, gate_goal_continuation,
     goal_continuation_materialization_step, goal_creation_fingerprint, goal_submission_step,
@@ -5,7 +6,7 @@ use gents::goal::{
     GoalAgentObservation, GoalAgentReadiness, GoalAuditObservation, GoalContinuationAction,
     GoalContinuationFacts, GoalContinuationPhase, GoalCreateDisposition, GoalCreateRequest,
     GoalCreationFingerprint, GoalDecision, GoalFailureCause, GoalGatedDecision,
-    GoalRequestTerminal, GoalState, GoalStatus, GoalSubmissionAction, GoalSubmissionState,
+    GoalRequestTerminal, GoalState, GoalSubmissionAction, GoalSubmissionState,
 };
 
 use crate::lean_vocab_test::{

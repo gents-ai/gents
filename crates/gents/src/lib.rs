@@ -764,7 +764,7 @@ pub use observe::adapter_projection::{
     adapter_projection_native_json_schema, build_adapter_projection,
     validate_adapter_projection_contract, AdapterProjection, AdapterProjectionContractError,
     AdapterProjectionEnvelope, AdapterProjectionEvalJsonlRecord, AdapterProjectionJsonlRecord,
-    AdapterProjectionKind, AtifAgent, AtifFinalMetrics, AtifObservation, AtifObservationResult,
+    AtifAgent, AtifFinalMetrics, AtifObservation, AtifObservationResult,
     AtifStep, AtifStepSource, AtifToolCall, AtifTrajectory, ProjectionContext,
     ProjectionRedactionMode, ATIF_SCHEMA_VERSION,
 };

@@ -174,7 +174,7 @@ impl Fixture {
             &owner,
             "session",
             None,
-            Some(gents::goal::GoalStatus::UsageLimited),
+            Some(gents_protocol::goal_status::GoalStatus::UsageLimited),
             None,
             None,
         )

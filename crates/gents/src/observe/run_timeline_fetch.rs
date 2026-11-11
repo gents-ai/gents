@@ -939,7 +939,7 @@ mod tests {
             root.did(),
             "session-goal-history",
             Some("ship the timeline"),
-            Some(crate::goal::GoalStatus::Active),
+            Some(gents_protocol::goal_status::GoalStatus::Active),
             None,
             None,
         )
@@ -953,7 +953,7 @@ mod tests {
             root.did(),
             "session-goal-history",
             None,
-            Some(crate::goal::GoalStatus::Paused),
+            Some(gents_protocol::goal_status::GoalStatus::Paused),
             None,
             None,
         )

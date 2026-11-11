@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::observe::adapter_projection::AdapterProjectionKind;
+use gents_protocol::adapter_projection_kind::AdapterProjectionKind;
 use gents::observe::run_timeline::{
     RunTimeline, RunTimelineEvent, RunTimelineRows, TimelineRequestEvent, TimelineRequestRow,
     TimelineToolCallEvent,

@@ -47,7 +47,7 @@ impl ProjectionAcpBinding {
             self.binding_id
         );
         if let Some(projection) = optional(&self.projection_id) {
-            serde_json::from_value::<crate::observe::adapter_projection::AdapterProjectionKind>(
+            serde_json::from_value::<gents_protocol::adapter_projection_kind::AdapterProjectionKind>(
                 projection.into(),
             )
             .with_context(|| {

@@ -208,7 +208,7 @@ struct ParentUsageCatalog {
 fn project_goal_catalog(
     request_ids: &BTreeMap<String, String>,
     calls: Vec<CallRow>,
-) -> Result<crate::goal::SessionTokenUsage> {
+) -> Result<gents_protocol::session_token_usage::SessionTokenUsage> {
     let calls = coherent_calls(request_ids, calls)?;
     let parts = || {
         calls
@@ -219,7 +219,7 @@ fn project_goal_catalog(
     let (input, output, _) = crate::provider_usage::sum_persisted_usage_columns(
         parts().map(|(prompt, completion)| (prompt, completion, None)),
     );
-    Ok(crate::goal::SessionTokenUsage {
+    Ok(gents_protocol::session_token_usage::SessionTokenUsage {
         input: input.unwrap_or_default(),
         output: output.unwrap_or_default(),
         total,
@@ -232,7 +232,7 @@ pub(crate) async fn load_session_goal_usage(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
-) -> Result<crate::goal::SessionTokenUsage> {
+) -> Result<gents_protocol::session_token_usage::SessionTokenUsage> {
     let rendered = {
         use gents_protocol::document_query::{
             fields::agent_request as fields, Filter, Query, Selection,
@@ -281,7 +281,7 @@ pub(crate) async fn load_session_goal_usage(
         );
     }
     if request_ids.is_empty() {
-        return Ok(crate::goal::SessionTokenUsage {
+        return Ok(gents_protocol::session_token_usage::SessionTokenUsage {
             input: 0,
             output: 0,
             total: 0,

@@ -7,10 +7,11 @@ use gents::observe::adapter_projection::{
     adapter_projection_json_schema, adapter_projection_jsonl_record_schema,
     adapter_projection_jsonl_records, adapter_projection_native_json,
     adapter_projection_native_json_schema, build_adapter_projection,
-    validate_adapter_projection_contract, AdapterProjectionKind, ProjectionContext,
+    validate_adapter_projection_contract, ProjectionContext,
     ProjectionRedactionMode,
 };
 use gents::observe::run_timeline::{build_run_timeline, RunTimelineRows, TimelineToolCallRow};
+use gents_protocol::adapter_projection_kind::AdapterProjectionKind;
 use gents::observe::run_timeline_fetch::{
     load_run_timeline, load_settled_run_timeline_rows, RUN_TIMELINE_SETTLE_BOUND,
 };

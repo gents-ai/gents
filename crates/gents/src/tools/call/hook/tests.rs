@@ -404,7 +404,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
             .unwrap()
             .unwrap()
             .parsed_status(),
-        Some(crate::goal::GoalStatus::Active)
+        Some(gents_protocol::goal_status::GoalStatus::Active)
     );
 
     for (id, args) in [
@@ -447,7 +447,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
         assert_eq!(updated.token_budget, Some(200), "{id}");
         assert_eq!(
             updated.parsed_status(),
-            Some(crate::goal::GoalStatus::Active),
+            Some(gents_protocol::goal_status::GoalStatus::Active),
             "{id}"
         );
         assert_eq!(updated.goal_id, goal.goal_id, "{id}");
@@ -502,7 +502,7 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
             .unwrap()
             .unwrap()
             .parsed_status(),
-        Some(crate::goal::GoalStatus::Complete)
+        Some(gents_protocol::goal_status::GoalStatus::Complete)
     );
 
     node.shutdown().await.expect("shut down test node");
@@ -2015,7 +2015,7 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
         identity.did(),
         &session_id,
         Some("Do not resurrect after budget exhaustion"),
-        Some(crate::goal::GoalStatus::Active),
+        Some(gents_protocol::goal_status::GoalStatus::Active),
         Some(Some(1)),
         None,
     )
@@ -2026,7 +2026,7 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
         identity.did(),
         &session_id,
         None,
-        Some(crate::goal::GoalStatus::BudgetLimited),
+        Some(gents_protocol::goal_status::GoalStatus::BudgetLimited),
         None,
         None,
     )
@@ -2078,7 +2078,7 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
         .expect("goal exists");
     assert_eq!(
         goal.parsed_status(),
-        Some(crate::goal::GoalStatus::BudgetLimited)
+        Some(gents_protocol::goal_status::GoalStatus::BudgetLimited)
     );
     assert_eq!(goal.consecutive_blocked_audits, Some(0));
     assert_eq!(goal.wrapup_requested, Some(true));
@@ -2126,7 +2126,7 @@ async fn set_goal_as_session_owner(
     owner: &KeyIdentity,
     session_id: &str,
     objective: Option<&str>,
-    status: Option<crate::goal::GoalStatus>,
+    status: Option<gents_protocol::goal_status::GoalStatus>,
     token_budget: Option<Option<i64>>,
 ) -> anyhow::Result<crate::goal::GoalDocument> {
     let access = ensure_runtime_session(node, owner, session_id).await?;
@@ -2181,7 +2181,7 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
             &identity,
             &session_id,
             Some("blocked-edit semantics"),
-            Some(crate::goal::GoalStatus::Active),
+            Some(gents_protocol::goal_status::GoalStatus::Active),
             None,
         )
         .await
@@ -2235,23 +2235,23 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
 
     for (status, expected_hint) in [
         (
-            crate::goal::GoalStatus::Blocked,
+            gents_protocol::goal_status::GoalStatus::Blocked,
             "gents automation goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)",
         ),
         (
-            crate::goal::GoalStatus::Paused,
+            gents_protocol::goal_status::GoalStatus::Paused,
             "gents automation goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)",
         ),
         (
-            crate::goal::GoalStatus::UsageLimited,
+            gents_protocol::goal_status::GoalStatus::UsageLimited,
             "gents automation goal resume-request --session SESSION --from REQUEST_ID` (REQUEST_ID is the terminal latest predecessor request)",
         ),
         (
-            crate::goal::GoalStatus::Complete,
+            gents_protocol::goal_status::GoalStatus::Complete,
             "a complete goal is terminal and has no resume path",
         ),
         (
-            crate::goal::GoalStatus::BudgetLimited,
+            gents_protocol::goal_status::GoalStatus::BudgetLimited,
             "a budget_limited goal cannot be reactivated and has no resume path",
         ),
     ] {
@@ -2260,7 +2260,7 @@ async fn update_goal_edit_from_non_active_reports_status_and_resume_path() {
             &identity,
             &session_id,
             Some("blocked-edit semantics"),
-            Some(crate::goal::GoalStatus::Active),
+            Some(gents_protocol::goal_status::GoalStatus::Active),
             None,
         )
         .await
@@ -4161,7 +4161,8 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     let identity =
         KeyIdentity::load_or_create(identity_dir.path().join("owner.key"), None).unwrap();
     use crate::documents::{WriteToolOutputObligation, WriteToolOutputObligationScope};
-    use crate::goal::{load_canonical_goal, GoalStatus};
+    use gents_protocol::goal_status::GoalStatus;
+    use crate::goal::{load_canonical_goal};
     use crate::runtime::agent::output_obligation::{ActiveOutputObligation, OutputObligationGate};
 
     // The hook's session is signed by the runtime it runs as.

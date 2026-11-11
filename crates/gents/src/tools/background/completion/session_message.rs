@@ -138,7 +138,7 @@ pub(crate) enum AssignmentObservation {
     /// Native history contains no assignment bound to the caused request.
     None,
     /// The Goal's durable status is the authoritative assignment state.
-    Assigned(crate::goal::GoalStatus),
+    Assigned(gents_protocol::goal_status::GoalStatus),
     /// The Goal is unreadable or carries an unknown status; the handoff must
     /// not claim assignment success.
     Unknown,
@@ -174,21 +174,21 @@ impl TurnAssignmentHandoff {
         match self.assignment {
             AssignmentObservation::None => Some("assignment_absent"),
             AssignmentObservation::Unknown => Some("assignment_unknown"),
-            AssignmentObservation::Assigned(crate::goal::GoalStatus::Complete) => None,
+            AssignmentObservation::Assigned(gents_protocol::goal_status::GoalStatus::Complete) => None,
             AssignmentObservation::Assigned(status) => Some(assignment_status_reason(status)),
         }
     }
 }
 
-fn assignment_status_reason(status: crate::goal::GoalStatus) -> &'static str {
+fn assignment_status_reason(status: gents_protocol::goal_status::GoalStatus) -> &'static str {
     match status {
-        crate::goal::GoalStatus::Active => "assignment_active",
-        crate::goal::GoalStatus::Paused => "assignment_paused",
-        crate::goal::GoalStatus::Blocked => "assignment_blocked",
-        crate::goal::GoalStatus::UsageLimited => "assignment_usage_limited",
-        crate::goal::GoalStatus::BudgetLimited => "assignment_budget_limited",
-        crate::goal::GoalStatus::Complete => "assignment_complete",
-        crate::goal::GoalStatus::Stopped => "assignment_stopped",
+        gents_protocol::goal_status::GoalStatus::Active => "assignment_active",
+        gents_protocol::goal_status::GoalStatus::Paused => "assignment_paused",
+        gents_protocol::goal_status::GoalStatus::Blocked => "assignment_blocked",
+        gents_protocol::goal_status::GoalStatus::UsageLimited => "assignment_usage_limited",
+        gents_protocol::goal_status::GoalStatus::BudgetLimited => "assignment_budget_limited",
+        gents_protocol::goal_status::GoalStatus::Complete => "assignment_complete",
+        gents_protocol::goal_status::GoalStatus::Stopped => "assignment_stopped",
     }
 }
 
@@ -399,11 +399,11 @@ mod turn_assignment_tests {
     #[test]
     fn a_completed_turn_with_a_live_assignment_does_not_report_assignment_success() {
         for status in [
-            crate::goal::GoalStatus::Active,
-            crate::goal::GoalStatus::Blocked,
-            crate::goal::GoalStatus::Paused,
-            crate::goal::GoalStatus::UsageLimited,
-            crate::goal::GoalStatus::BudgetLimited,
+            gents_protocol::goal_status::GoalStatus::Active,
+            gents_protocol::goal_status::GoalStatus::Blocked,
+            gents_protocol::goal_status::GoalStatus::Paused,
+            gents_protocol::goal_status::GoalStatus::UsageLimited,
+            gents_protocol::goal_status::GoalStatus::BudgetLimited,
         ] {
             let handoff = handoff(true, AssignmentObservation::Assigned(status), None);
             assert_eq!(
@@ -419,7 +419,7 @@ mod turn_assignment_tests {
     fn a_completed_turn_with_a_complete_assignment_is_a_clean_success() {
         let handoff = handoff(
             true,
-            AssignmentObservation::Assigned(crate::goal::GoalStatus::Complete),
+            AssignmentObservation::Assigned(gents_protocol::goal_status::GoalStatus::Complete),
             None,
         );
         assert_eq!(handoff.reason(), None);
@@ -463,7 +463,7 @@ mod turn_assignment_tests {
             // session carries a live Goal: the terminal reason decides.
             let handoff = handoff(
                 false,
-                AssignmentObservation::Assigned(crate::goal::GoalStatus::Active),
+                AssignmentObservation::Assigned(gents_protocol::goal_status::GoalStatus::Active),
                 reason,
             );
             assert_eq!(handoff.reason(), reason, "{terminal:?}");
@@ -924,7 +924,7 @@ mod turn_assignment_tests {
             did,
             &caused_session_id(&admission.tool.access().unwrap(), &caused_request_doc_id).await,
             Some("hold"),
-            Some(crate::goal::GoalStatus::Active),
+            Some(gents_protocol::goal_status::GoalStatus::Active),
             None,
             None,
         )
@@ -1094,7 +1094,7 @@ mod turn_assignment_tests {
             did,
             &caused_session_id(&admission.tool.access().unwrap(), &caused_request_doc_id).await,
             Some("done"),
-            Some(crate::goal::GoalStatus::Complete),
+            Some(gents_protocol::goal_status::GoalStatus::Complete),
             None,
             None,
         )
@@ -1185,7 +1185,7 @@ mod turn_assignment_tests {
             did,
             &goal_session_id,
             Some("hold"),
-            Some(crate::goal::GoalStatus::Active),
+            Some(gents_protocol::goal_status::GoalStatus::Active),
             None,
             None,
         )
@@ -1303,7 +1303,7 @@ mod turn_assignment_tests {
             did,
             &goal_session_id,
             Some("hold"),
-            Some(crate::goal::GoalStatus::Complete),
+            Some(gents_protocol::goal_status::GoalStatus::Complete),
             None,
             None,
         )

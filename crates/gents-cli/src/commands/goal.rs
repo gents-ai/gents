@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
-use gents::goal::{set_goal_from_access, GoalDocument, GoalStatus};
+use gents_protocol::goal_status::GoalStatus;
+use gents::goal::{set_goal_from_access, GoalDocument};
 use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::escape_graphql_string;
 use gents_protocol::goal::GOAL_FIELDS;

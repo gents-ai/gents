@@ -127,7 +127,7 @@ async fn goal_task_waits_for_claim_and_emits_only_after_model_completion() -> Re
         &owner,
         SESSION,
         Some(OLD_OBJECTIVE),
-        Some(gents::goal::GoalStatus::Active),
+        Some(gents_protocol::goal_status::GoalStatus::Active),
         None,
         None,
     )

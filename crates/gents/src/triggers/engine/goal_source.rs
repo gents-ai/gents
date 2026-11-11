@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 use crate::documents::automation::ResolvedTask;
 use crate::documents::ConcurrencyMode;
 use crate::goal::blocked_turn::last_failed_call_in_txn;
+use gents_protocol::goal_status::GoalStatus;
 use crate::goal::{
     claim_continuation_from_access, claim_retry_continuation_from_access,
     gate_claimed_goal_continuation, gate_goal_continuation, goal_continuation_materialization_step,
@@ -19,8 +20,8 @@ use crate::goal::{
     refresh_goal_usage_from_access, stop_claimed_continuation_for_unavailable_agent_from_access,
     update_goal_fields_if_status_from_access, GoalAction, GoalClaimedDecision,
     GoalContinuationAction, GoalContinuationFacts, GoalContinuationPhase, GoalDecision,
-    GoalDocument, GoalFailureCause, GoalGatedDecision, GoalRequestTerminal, GoalStatus,
-    ObservedGoalAgent, GOAL_READINESS_WAIT_PREFIX, MAX_INFRASTRUCTURE_RETRIES,
+    GoalDocument, GoalFailureCause, GoalGatedDecision, GoalRequestTerminal, ObservedGoalAgent,
+    GOAL_READINESS_WAIT_PREFIX, MAX_INFRASTRUCTURE_RETRIES,
 };
 use crate::goal::{publish_claimed_continuation_with_identity, resume_at_reset};
 use gents_protocol::goal_names::GOAL_TRIGGER_KIND;

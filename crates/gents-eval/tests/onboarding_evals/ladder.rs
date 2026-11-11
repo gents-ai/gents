@@ -618,7 +618,7 @@ fn delegation_execution_allows_inspection_but_rejects_config_mutations() {
 
 #[test]
 fn automation_outcomes_accept_request_and_goal_success_but_reject_other_states() {
-    use gents::goal::GoalStatus;
+    use gents_protocol::goal_status::GoalStatus;
     use gents_protocol::request_lifecycle::RequestLifecycleState;
     use serde_json::json;
 

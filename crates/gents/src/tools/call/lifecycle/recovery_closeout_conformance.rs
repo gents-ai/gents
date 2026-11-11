@@ -323,7 +323,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                             &admission.node_did,
                             &caused_session_id,
                             Some("done"),
-                            Some(crate::goal::GoalStatus::Complete),
+                            Some(gents_protocol::goal_status::GoalStatus::Complete),
                             None,
                             None,
                         )
@@ -341,7 +341,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                             &admission.node_did,
                             &caused_session_id,
                             Some("hold"),
-                            Some(crate::goal::GoalStatus::Active),
+                            Some(gents_protocol::goal_status::GoalStatus::Active),
                             None,
                             None,
                         )
@@ -360,7 +360,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                             &admission.node_did,
                             &caused_session_id,
                             Some("hold"),
-                            Some(crate::goal::GoalStatus::Active),
+                            Some(gents_protocol::goal_status::GoalStatus::Active),
                             None,
                             None,
                         )
@@ -378,9 +378,9 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                                 if name
                                     == "session_message_request_completed_stopped_goal_to_completed"
                                 {
-                                    crate::goal::GoalStatus::Stopped
+                                    gents_protocol::goal_status::GoalStatus::Stopped
                                 } else {
-                                    crate::goal::GoalStatus::Blocked
+                                    gents_protocol::goal_status::GoalStatus::Blocked
                                 },
                             ),
                             None,

@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+use gents_protocol::adapter_projection_kind::AdapterProjectionKind;
 use serde_json::Value;
 
 use crate::observe::run_timeline::{RunTimeline, RunTimelineEvent, TimelineRenderedRequestEvent};
@@ -31,37 +32,6 @@ pub use validate::validate_adapter_projection_contract;
 pub const ADAPTER_PROJECTION_VERSION: &str = "v1";
 pub const RUN_TIMELINE_PROJECTION_ID: &str = "run_timeline";
 pub const EXTERNAL_ADAPTER_CAPTURE_PROJECTION_ID: &str = "external_adapter_capture";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AdapterProjectionKind {
-    AtifTrajectory,
-    #[serde(rename = "openai_codex_run_trace")]
-    OpenAiCodexRunTrace,
-    #[serde(rename = "langgraph_state_history")]
-    LangGraphStateHistory,
-    MultiAgentTask,
-}
-
-impl AdapterProjectionKind {
-    pub fn id(self) -> &'static str {
-        match self {
-            Self::AtifTrajectory => "atif_trajectory",
-            Self::OpenAiCodexRunTrace => "openai_codex_run_trace",
-            Self::LangGraphStateHistory => "langgraph_state_history",
-            Self::MultiAgentTask => "multi_agent_task",
-        }
-    }
-
-    pub fn title(self) -> &'static str {
-        match self {
-            Self::AtifTrajectory => "Agent Trajectory Interchange Format (ATIF) v1.7",
-            Self::OpenAiCodexRunTrace => "OpenAI/Codex Run Trace Projection",
-            Self::LangGraphStateHistory => "LangGraph State History Projection",
-            Self::MultiAgentTask => "Multi-Agent Task Projection",
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

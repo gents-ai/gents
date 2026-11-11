@@ -162,7 +162,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
         node_did,
         &interrupted_session,
         Some("pause on session interrupt"),
-        Some(gents::goal::GoalStatus::Active),
+        Some(gents_protocol::goal_status::GoalStatus::Active),
         None,
         None,
     )
@@ -224,7 +224,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
         node_did,
         &stopped_session,
         Some("stop and later resume"),
-        Some(gents::goal::GoalStatus::Active),
+        Some(gents_protocol::goal_status::GoalStatus::Active),
         None,
         None,
     )
@@ -284,7 +284,7 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
         node_did,
         &stopped_session,
         None,
-        Some(gents::goal::GoalStatus::Complete),
+        Some(gents_protocol::goal_status::GoalStatus::Complete),
         None,
         None,
     )
@@ -357,7 +357,7 @@ async fn generated_resume_after_settlement_stages_the_paused_goal_continuation()
         node_did,
         &session_id,
         Some("resume after the stopped turn settles"),
-        Some(gents::goal::GoalStatus::Active),
+        Some(gents_protocol::goal_status::GoalStatus::Active),
         None,
         None,
     )

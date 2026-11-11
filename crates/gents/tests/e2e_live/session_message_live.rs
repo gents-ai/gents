@@ -10,7 +10,8 @@ use std::time::Duration;
 
 use anyhow::Result;
 use gents::documents::{AgentTools, BashTools, HostTools, Tools};
-use gents::goal::{set_goal_from_access, GoalStatus};
+use gents_protocol::goal_status::GoalStatus;
+use gents::goal::{set_goal_from_access};
 use gents::observe::run_timeline_fetch::load_run_timeline_rows;
 use gents::store::graphql::escape_graphql_string;
 use gents::{

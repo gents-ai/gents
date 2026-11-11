@@ -46,7 +46,7 @@ async fn canonical_publication_wakes_whatever_goal_owns_the_session() {
     assert!(cases.iter().any(|(_, status)| *status == "paused"));
     assert!(cases.iter().any(|(_, status)| *status == "complete"));
     for (case, status) in cases {
-        let status: crate::goal::GoalStatus =
+        let status: gents_protocol::goal_status::GoalStatus =
             serde_json::from_value(serde_json::json!(status)).unwrap();
         let (db, mut fixture) = fixture(&format!("goal-publication-{}", case.name)).await;
         let parent = fixture.parent.clone();

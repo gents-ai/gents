@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::session_token_usage::SessionTokenUsage;
 
 #[tokio::test]
 async fn session_token_usage_breakdown_sums_to_the_total() {
