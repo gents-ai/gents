@@ -269,6 +269,21 @@ impl ActionConsent {
     }
 }
 
+impl crate::plugin::InvocationConsent for ActionConsent {
+    fn validate(&self) -> Result<()> {
+        ActionConsent::validate(self)
+    }
+
+    fn validate_plugin(
+        &self,
+        plugin: &str,
+        artifact_digest: &str,
+        input_digest: &str,
+    ) -> Result<()> {
+        ActionConsent::validate_plugin(self, plugin, artifact_digest, input_digest)
+    }
+}
+
 pub(crate) fn action_consent(home: &Path, binding: Binding) -> ActionConsent {
     ActionConsent {
         home: home.to_owned(),

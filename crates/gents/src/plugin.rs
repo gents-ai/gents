@@ -695,7 +695,7 @@ pub mod application_write;
 pub mod approval;
 pub mod authority;
 mod bound;
-pub use bound::BoundDir;
+pub use bound::{BoundDir, InvocationConsent};
 
 pub fn attempts_allowed(max_attempts: Option<u32>) -> u32 {
     max_attempts.unwrap_or(1).max(1)
