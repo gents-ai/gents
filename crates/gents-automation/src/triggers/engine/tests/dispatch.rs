@@ -195,7 +195,7 @@ async fn dispatch_parallel_group_materializes_once_for_the_same_correlation() {
     let snapshot = Arc::new(
         ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
             agent.agent_did.clone(),
-            vec![agent.clone()],
+            vec![with_default_tools(agent.clone())],
             RapidHashMap::new(),
             RapidHashMap::new(),
             RapidHashMap::new(),
@@ -273,7 +273,7 @@ async fn dispatch_serial_per_document_is_trigger_wide_despite_correlation() {
     let snapshot = Arc::new(
         ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
             agent.agent_did.clone(),
-            vec![agent.clone()],
+            vec![with_default_tools(agent.clone())],
             RapidHashMap::new(),
             RapidHashMap::new(),
             RapidHashMap::new(),
@@ -333,7 +333,7 @@ async fn dispatch_serial_per_group_separates_correlation_and_membership_generati
     let snapshot = Arc::new(
         ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
             agent.agent_did.clone(),
-            vec![agent.clone()],
+            vec![with_default_tools(agent.clone())],
             RapidHashMap::new(),
             RapidHashMap::new(),
             RapidHashMap::new(),

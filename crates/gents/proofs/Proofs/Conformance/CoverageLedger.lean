@@ -673,7 +673,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "goal_claimed_readiness_cases"
       "GoalClaimedReadinessCases"
-      "triggers::engine::goal_source::claimed_readiness_tests::generated_claimed_readiness_cases_drive_goal_source")
+      "automation_tests::claimed_readiness_tests::generated_claimed_readiness_cases_drive_goal_source")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_transition_cases"
@@ -2156,7 +2156,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "goal_observation_cases"
       "GoalObservationCases"
-      "goal::observation::contract_tests::generated_goal_rescans_recover_lost_notifications")
+      "automation_tests::goal_observation_rescan_tests::generated_goal_rescans_recover_lost_notifications")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_session_observation_cases"

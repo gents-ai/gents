@@ -1680,10 +1680,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_goal_observations_drive_signature_and_scope_validation",
         },
         ConformanceConsumer::RustTest {
-            id: "goal::observation::contract_tests::generated_goal_rescans_recover_lost_notifications",
+            id: "automation_tests::goal_observation_rescan_tests::generated_goal_rescans_recover_lost_notifications",
             package: "gents",
-            source_path: "crates/gents/src/goal/observation/contract_tests.rs",
-            module_path: "goal::observation::contract_tests",
+            source_path: "crates/gents/src/automation_tests/goal_observation_rescan_tests.rs",
+            module_path: "automation_tests::goal_observation_rescan_tests",
             function: "generated_goal_rescans_recover_lost_notifications",
         },
         ConformanceConsumer::RustTest {
@@ -1848,10 +1848,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_goal_readiness_gate_cases_fence_retry_accounting",
         },
         ConformanceConsumer::RustTest {
-            id: "triggers::engine::goal_source::claimed_readiness_tests::generated_claimed_readiness_cases_drive_goal_source",
+            id: "automation_tests::claimed_readiness_tests::generated_claimed_readiness_cases_drive_goal_source",
             package: "gents",
-            source_path: "crates/gents/src/triggers/engine/goal_source/claimed_readiness_tests.rs",
-            module_path: "triggers::engine::goal_source::claimed_readiness_tests",
+            source_path: "crates/gents/src/automation_tests/claimed_readiness_tests.rs",
+            module_path: "automation_tests::claimed_readiness_tests",
             function: "generated_claimed_readiness_cases_drive_goal_source",
         },
         ConformanceConsumer::RustTest {

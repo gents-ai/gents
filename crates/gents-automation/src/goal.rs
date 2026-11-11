@@ -22,10 +22,10 @@ mod history;
 pub mod lifecycle_hooks;
 mod load;
 mod observation;
-mod operator_resume;
+pub mod operator_resume;
 #[cfg(test)]
 pub(crate) use operator_resume::support as operator_resume_test_support;
-mod readiness_gate;
+pub mod readiness_gate;
 mod request_assignment;
 mod request_head;
 mod reset_resume;
@@ -37,7 +37,7 @@ mod tool_context;
 mod transition;
 mod usage;
 mod write;
-pub(crate) use claimed_publication::{
+pub use claimed_publication::{
     publish_claimed_continuation_with_identity,
     stop_claimed_continuation_for_unavailable_agent_from_access,
 };

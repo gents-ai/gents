@@ -11,8 +11,8 @@ mod start_tests;
 use gents_store::config_client::ConfigApplyTxn;
 use gents_store::identity::NodeIdentity;
 
-#[cfg(test)]
-pub(crate) async fn agent_document_for_test(
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn agent_document_for_test(
     access: &gents_store::config_client::ConfigAccess,
     node: &str,
     agent: &str,
