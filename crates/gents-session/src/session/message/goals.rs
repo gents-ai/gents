@@ -6,9 +6,12 @@
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 
+use gents_protocol::goal_status::GoalStatus;
 use gents_protocol::request_admission::AgentRequestCreate;
+use gents_protocol::request_input::RequestInput;
 use gents_protocol::request_lifecycle::EnqueuedAgentRequest;
-use gents_store::config_client::ConfigApplyTxn;
+use gents_protocol::row::AgentRequestRow;
+use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 
 /// The canonical Goal of a session, as session-message planning and
 /// inspection read it.
@@ -21,6 +24,16 @@ pub struct SessionGoal {
     pub token_budget: Option<i64>,
     pub active_time_seconds: Option<i64>,
     pub assignment_root_request_doc_id: Option<String>,
+}
+
+/// The Goal a request's signed physical assignment binds it to, as a
+/// session-message handoff reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestGoalAssignment {
+    None,
+    /// The assignment or its Goal's status cannot be determined.
+    Unknown,
+    Assigned(GoalStatus),
 }
 
 #[async_trait]
@@ -45,10 +58,29 @@ pub trait SessionMessageGoals: Send + Sync {
         token_budget: Option<i64>,
         request: &AgentRequestCreate,
     ) -> Result<EnqueuedAgentRequest>;
+
+    /// `input` with the Goal assignment of the destination session bound,
+    /// read in `txn` as `requester_did`, unless `input` already carries one.
+    async fn prepare_goal_input_in_txn(
+        &self,
+        txn: &ConfigApplyTxn<'_>,
+        node_did: &str,
+        session_id: &str,
+        agent_did: &str,
+        requester_did: Option<&str>,
+        input: RequestInput,
+    ) -> Result<RequestInput>;
+
+    /// The Goal assignment of `request`.
+    async fn request_assignment(
+        &self,
+        access: &ConfigAccess,
+        request: &AgentRequestRow,
+    ) -> Result<RequestGoalAssignment>;
 }
 
-/// The Goals of a context that has no Goals plugin attached: no session has a
-/// Goal, and a Goal-backed request fails.
+/// The Goals of a context that has no Goals plugin attached: no session or
+/// request has a Goal, and a Goal-backed request fails.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NoSessionMessageGoals;
 
@@ -73,5 +105,25 @@ impl SessionMessageGoals for NoSessionMessageGoals {
         _request: &AgentRequestCreate,
     ) -> Result<EnqueuedAgentRequest> {
         Err(anyhow!("no Goals plugin is attached"))
+    }
+
+    async fn prepare_goal_input_in_txn(
+        &self,
+        _txn: &ConfigApplyTxn<'_>,
+        _node_did: &str,
+        _session_id: &str,
+        _agent_did: &str,
+        _requester_did: Option<&str>,
+        input: RequestInput,
+    ) -> Result<RequestInput> {
+        Ok(input)
+    }
+
+    async fn request_assignment(
+        &self,
+        _access: &ConfigAccess,
+        _request: &AgentRequestRow,
+    ) -> Result<RequestGoalAssignment> {
+        Ok(RequestGoalAssignment::None)
     }
 }

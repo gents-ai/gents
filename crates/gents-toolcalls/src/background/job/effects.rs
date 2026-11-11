@@ -137,6 +137,7 @@ pub(crate) struct JobContext<'a> {
     pub(crate) ctx: &'a StepContext,
     pub(crate) row: &'a StepRow,
     pub(crate) cause: &'a SessionMessageCause,
+    pub(crate) goals: &'a dyn gents_session::session::message::SessionMessageGoals,
 }
 
 pub(crate) async fn stage_effects_in_txn(
@@ -182,6 +183,7 @@ pub(crate) async fn stage_recorded_effects_in_txn(
         staged.push(
             stage_request(
                 txn,
+                job.goals,
                 job.cause,
                 &target.0,
                 &target.1,
@@ -286,6 +288,7 @@ async fn stage_spawn(
     let cwd = spawn_cwd(base, spawn.cwd.as_deref());
     stage_request(
         txn,
+        job.goals,
         job.cause,
         &node_did,
         &agent_did,
@@ -322,6 +325,7 @@ async fn message_hop(
 )]
 async fn stage_request(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    goals: &dyn gents_session::session::message::SessionMessageGoals,
     cause: &SessionMessageCause,
     node_did: &str,
     agent_did: &str,
@@ -352,15 +356,16 @@ async fn stage_request(
     } else if existing_destination {
         // The staged request is requested by the job's Agent, so the
         // destination session is scoped by that Agent, not the caller node.
-        input = crate::goal::prepare_goal_input_in_txn(
-            txn,
-            node_did,
-            &session_id,
-            agent_did,
-            Some(&cause.caller_agent_did),
-            input,
-        )
-        .await?;
+        input = goals
+            .prepare_goal_input_in_txn(
+                txn,
+                node_did,
+                &session_id,
+                agent_did,
+                Some(&cause.caller_agent_did),
+                input,
+            )
+            .await?;
     }
     let request_id = uuid::Uuid::new_v4().to_string();
     let signer = txn
@@ -390,7 +395,7 @@ async fn stage_request(
         bail!("job staging integrity error: retry key {retry_key} does not match the admitted request");
     }
     let plan = gents_session::session::message::Plan::request(session_id, hop, create.clone());
-    gents_session::session::message::stage_planned_write_in_txn(txn, cause, &plan).await?;
+    gents_session::session::message::stage_planned_write_in_txn(txn, goals, cause, &plan).await?;
     Ok(create)
 }
 
@@ -840,6 +845,7 @@ mod tests {
             ctx: &harness.ctx,
             row,
             cause: &harness.cause,
+            goals: &gents_session::session::message::NoSessionMessageGoals,
         };
         let job = &job;
         let fresh_refs = &fresh_refs;
@@ -1064,6 +1070,7 @@ mod tests {
             ctx: &harness.ctx,
             row: &harness.row,
             cause: &harness.cause,
+            goals: &gents_session::session::message::NoSessionMessageGoals,
         };
         let (job, fresh, effects) = (&job, &fresh, &effects);
         let staged = harness

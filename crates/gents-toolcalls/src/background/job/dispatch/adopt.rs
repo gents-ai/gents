@@ -280,6 +280,7 @@ async fn stage_in_txn(
     recorded: Recorded,
 ) -> Result<Adopted> {
     let StepZero {
+        runtime,
         input,
         effects,
         cause,
@@ -304,6 +305,7 @@ async fn stage_in_txn(
         ctx: &ctx,
         row: &staged_row,
         cause,
+        goals: runtime.session_goals.as_ref(),
     };
     stage_effects_in_txn(txn, &job, &fresh, effects).await?;
     // (g) the answer-first background receipt

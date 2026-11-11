@@ -153,7 +153,11 @@ async fn managed_terminal_tool_result_terminates_loop() {
 #[tokio::test]
 async fn unavailable_goal_attribution_stops_the_provider_before_another_turn() {
     let (_node, hook, writer, mut lifecycle) = owned_test_hook_with_unattributable_request().await;
-    let hook = hook.with_goal_tool_authority(true, true);
+    let hook = hook
+        .with_goal_tool_authority(true, true)
+        .with_goal_tools(std::sync::Arc::new(
+            gents_automation::goal::goal_tools::GoalToolAnswers,
+        ));
     let model = ScriptedModel::new_turns(vec![
         vec![
             RawStreamingChoice::ToolCall(RawStreamingToolCall::new(

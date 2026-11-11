@@ -259,6 +259,7 @@ async fn generated_wait_observer_interrupt_preserves_background_process() {
     crate::call::control::cancel_background_tool_call(
         &hook.actor_access().unwrap(),
         &executions,
+        &gents_session::session::message::NoSessionMessageGoals,
         &session_id,
         tool_call_id,
     )
@@ -962,6 +963,7 @@ mod job_control {
         let outcome = cancel_background_tool_call(
             &hook.access(),
             &hook.executions,
+            &gents_session::session::message::NoSessionMessageGoals,
             &hook.session_id,
             "job-operator",
         )
@@ -992,6 +994,7 @@ mod job_control {
         let outcome = cancel_background_tool_call(
             &hook.access(),
             &hook.executions,
+            &gents_session::session::message::NoSessionMessageGoals,
             &hook.session_id,
             "job-late",
         )

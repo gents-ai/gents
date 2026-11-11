@@ -337,6 +337,7 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
             crate::background::completion::settle_running_session_message_rows_with_access(
                 &node,
                 &hook.actor_access().unwrap(),
+                &gents_session::session::message::NoSessionMessageGoals,
                 &did
             )
             .await

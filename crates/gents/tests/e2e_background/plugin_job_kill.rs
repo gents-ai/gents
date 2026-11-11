@@ -351,6 +351,7 @@ async fn operator_cancel_and_non_job_stop_each_end_the_row_cancelled() {
     let outcome = cancel_background_tool_call(
         &agent_access(&job),
         &BackgroundExecutionRegistry::default(),
+        &gents_automation::goal::session_message::SessionGoals,
         &job.session_id,
         TOOL_CALL,
     )
