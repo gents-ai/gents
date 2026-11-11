@@ -9,7 +9,6 @@ pub mod support;
 pub mod claude_gateway_login;
 mod claude_request_context;
 pub mod documents;
-pub mod drop_cleanup;
 pub mod error;
 pub mod eval;
 pub mod file_inventory;
@@ -859,9 +858,6 @@ pub use tools::surface::{
 pub use triggers::callback::reject_secret_bearing_callback_fields;
 pub use triggers::engine::event_source::EventSource;
 pub use triggers::engine::goal_source::GoalSource;
-pub use triggers::engine::subscription_source::{
-    collection_ids, subscribe_collections, UpdateSubscriptionSource,
-};
 pub use triggers::engine::{
     run_trigger_engine, FireIntent, FireResult, TriggerKind, TriggerSource,
 };

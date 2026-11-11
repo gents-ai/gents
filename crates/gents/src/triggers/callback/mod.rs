@@ -6,7 +6,7 @@ use anyhow::Result;
 use defra_node::Node as EmbeddedNode;
 use tokio_util::sync::CancellationToken;
 
-use crate::UpdateSubscriptionSource;
+use crate::store::subscription_source::UpdateSubscriptionSource;
 
 mod claim;
 mod documents;

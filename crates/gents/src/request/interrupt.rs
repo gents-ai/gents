@@ -365,7 +365,7 @@ pub fn spawn_request_interrupt_observer(
     interrupt_tx: watch::Sender<Option<InterruptIntent>>,
     mut shutdown: watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
-    let changes = crate::subscribe_collections(&node, ["AgentRequest"])
+    let changes = crate::store::subscription_source::subscribe_collections(&node, ["AgentRequest"])
         .inspect_err(|error| {
             tracing::warn!(doc_id = %request_doc_id, %error, "interrupt observer polling only");
         })

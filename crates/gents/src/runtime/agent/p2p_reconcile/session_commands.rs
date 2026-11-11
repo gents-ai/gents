@@ -217,7 +217,7 @@ pub(crate) async fn run_session_command_reconciler_with_agents(
         .into_iter()
         .map(CommandKind::collection)
         .chain(crate::goal::GOAL_OBSERVATION_SOURCES.iter().copied());
-    let changes = crate::subscribe_collections(&node, watched)?;
+    let changes = crate::store::subscription_source::subscribe_collections(&node, watched)?;
     let changes = futures::stream::unfold(changes, |mut changes| async move {
         changes.recv().await.map(|batch| (batch, changes))
     });

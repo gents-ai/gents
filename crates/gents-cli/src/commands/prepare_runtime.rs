@@ -127,7 +127,7 @@ async fn prepare_inner(
     );
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let home = tokio::task::spawn_blocking(move || std::fs::canonicalize(home)).await??;
-    let build = gents::runtime::service::executable_build_id().await?;
+    let build = gents::store::service::executable_build_id().await?;
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         let check_home = home.clone();
@@ -546,7 +546,7 @@ pub(crate) async fn control(
         bytes.extend_from_slice(&chunk);
     }
     let receipt = serde_json::from_slice(&bytes)?;
-    gents::runtime::service::verify_control_receipt(&command, &receipt).map_err(|error| {
+    gents::store::service::verify_control_receipt(&command, &receipt).map_err(|error| {
         refusal(
             RuntimePreparationRefusal::InvalidHome,
             format!("The live runtime could not authenticate this node: {error:#}"),

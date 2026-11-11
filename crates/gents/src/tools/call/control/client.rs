@@ -7,7 +7,7 @@ use serde::Deserialize;
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::NodeIdentity;
-use crate::tools::background::agent_identity_watch::AgentIdentityWatch;
+use crate::store::agent_identity_watch::AgentIdentityWatch;
 
 pub mod send;
 
@@ -825,7 +825,7 @@ pub(crate) async fn run(
     mut agents: Box<dyn AgentIdentityWatch>,
     cancel: tokio_util::sync::CancellationToken,
 ) -> Result<()> {
-    let mut changes = crate::subscribe_collections(&node, ["AgentToolControl"])?;
+    let mut changes = crate::store::subscription_source::subscribe_collections(&node, ["AgentToolControl"])?;
     let mut interval =
         tokio::time::interval(crate::runtime::agent::p2p_reconcile::intervals::sweep_interval());
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);

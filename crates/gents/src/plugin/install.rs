@@ -350,7 +350,7 @@ struct StagedPluginRecords {
 /// and the configuration write.
 pub(crate) struct StagedPluginInstall {
     records: Option<StagedPluginRecords>,
-    cleanup: crate::drop_cleanup::DropCleanup,
+    cleanup: crate::store::drop_cleanup::DropCleanup,
     pub(crate) installed: Vec<InstalledPlugin>,
 }
 
@@ -425,7 +425,7 @@ pub(crate) async fn stage_pack_graph(
     if owner.is_empty() && inputs.iter().any(|input| !input.bindings.is_empty()) {
         return Err(anyhow::anyhow!("plugin slot bindings require an owner").into());
     }
-    let cleanup = crate::drop_cleanup::DropCleanup::current();
+    let cleanup = crate::store::drop_cleanup::DropCleanup::current();
     let home = home.to_owned();
     let owner = owner.to_owned();
     tokio::task::spawn_blocking(move || {

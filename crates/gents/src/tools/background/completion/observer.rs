@@ -1,5 +1,5 @@
 use super::*;
-use crate::tools::background::agent_identity_watch::AgentIdentityWatch;
+use crate::store::agent_identity_watch::AgentIdentityWatch;
 
 pub(crate) async fn run_background_completion_observer(
     node: Arc<EmbeddedNode>,
@@ -40,7 +40,7 @@ impl BackgroundCompletionObserver {
         agents: Box<dyn AgentIdentityWatch>,
         cancel: CancellationToken,
     ) -> Result<Self> {
-        let subscription = crate::subscribe_collections(&node, [AGENT_REQUEST_COLLECTION])?;
+        let subscription = crate::store::subscription_source::subscribe_collections(&node, [AGENT_REQUEST_COLLECTION])?;
         Ok(Self {
             node,
             local_did,

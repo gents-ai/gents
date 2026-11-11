@@ -13,7 +13,6 @@ pub(crate) mod event_source;
 pub(crate) mod goal_source;
 pub(crate) mod production_materializer;
 pub(crate) mod schedule_source;
-pub mod subscription_source;
 
 mod dispatch;
 

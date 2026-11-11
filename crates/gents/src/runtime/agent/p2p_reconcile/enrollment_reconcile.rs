@@ -355,7 +355,7 @@ pub async fn run_enrollment_reconciler(
     let mut member_renewal = super::enrollment_member_renewal::MemberRenewalState::default();
     let renewal_offer_id = super::resolve_embedded_collection_id(&node, "EnrollmentRenewalOffer")?
         .context("renewal offer collection is unavailable")?;
-    let mut subscription = crate::subscribe_collections(&node, ENROLLMENT_SWEEP_COLLECTIONS)?;
+    let mut subscription = crate::store::subscription_source::subscribe_collections(&node, ENROLLMENT_SWEEP_COLLECTIONS)?;
     let mut subscription_open = true;
     let mut interval = tokio::time::interval(super::intervals::sweep_interval());
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);

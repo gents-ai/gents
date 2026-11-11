@@ -18,7 +18,7 @@ use crate::plugin::store;
 use crate::plugin::tests::executor::{asking_plugin_wat, installed_plugin};
 use crate::store::config_client::ConfigAccess;
 use crate::triggers::callback::documents::{load_callback, load_invocation, CallbackInvocationDoc};
-use crate::UpdateSubscriptionSource;
+use crate::store::subscription_source::UpdateSubscriptionSource;
 
 const OWNER: &str = crate::request::lifecycle::test_support::PIN_FIXED_DID;
 const CALLBACK: &str = "saturation";

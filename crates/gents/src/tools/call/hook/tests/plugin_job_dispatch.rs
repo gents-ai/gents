@@ -359,7 +359,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
         runtime
             .bind_snapshot(crate::runtime::snapshot::ActiveSnapshotAgentIdentities::boxed(receiver))
             .unwrap();
-        let admission = crate::runtime::service::RuntimeServiceAdmission::default();
+        let admission = crate::store::service::RuntimeServiceAdmission::default();
         if !options.kicks {
             admission
                 .retire(

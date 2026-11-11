@@ -13,7 +13,7 @@ use crate::documents::automation::{
 use crate::inference::admission::BackendAdmissionConfig;
 use crate::inference::resolved::ResolvedAgent;
 use crate::store::identity::RuntimeNode;
-use crate::tools::background::agent_identity_watch::{
+use crate::store::agent_identity_watch::{
     AgentIdentityWatch, AgentIdentityWatchClosed, WatchedAndActiveAgents,
 };
 use crate::tools::surface::ToolSurface;

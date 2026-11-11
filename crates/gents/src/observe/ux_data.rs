@@ -337,7 +337,7 @@ pub async fn watch_local(
     );
     let access = ConfigAccess::local_as(node.clone(), identity::Did::new(node_did)?);
     let declaration = watch_declaration(home, &access, &request).await?;
-    let changes = crate::subscribe_collections(
+    let changes = crate::store::subscription_source::subscribe_collections(
         &node,
         [declaration.collection.as_str(), "DatastoreToolSurface"],
     )?;

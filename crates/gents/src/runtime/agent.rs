@@ -463,7 +463,7 @@ impl Gents {
         self.background_execution_registry.clone()
     }
 
-    pub fn service_admission(&self) -> crate::runtime::service::RuntimeServiceAdmission {
+    pub fn service_admission(&self) -> crate::store::service::RuntimeServiceAdmission {
         self.background_execution_registry
             .service_admission()
             .clone()

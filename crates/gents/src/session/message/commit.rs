@@ -131,7 +131,7 @@ where
     };
     let mut changes = new_child
         .as_ref()
-        .map(|_| crate::subscribe_collections(node, ["AgentToolCall"]))
+        .map(|_| crate::store::subscription_source::subscribe_collections(node, ["AgentToolCall"]))
         .transpose()?;
     let error = match Box::pin(commit_once(node, cause, lifecycle, plan, report_delivery)).await {
         Ok(receipt) => {
@@ -344,7 +344,7 @@ where
             }
         }
         if let Err(error) = crate::request::watcher::wait_for_change_or_resubscribe(changes, || {
-            crate::subscribe_collections(node, ["AgentToolCall"])
+            crate::store::subscription_source::subscribe_collections(node, ["AgentToolCall"])
         })
         .await
         {

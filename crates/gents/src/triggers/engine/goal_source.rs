@@ -28,7 +28,7 @@ use gents_protocol::goal_names::GOAL_TRIGGER_KIND;
 use crate::runtime::snapshot::ActiveRuntimeSnapshot;
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::escape_graphql_string;
-use crate::UpdateSubscriptionSource;
+use crate::store::subscription_source::UpdateSubscriptionSource;
 use gents_protocol::row::AgentRequest;
 
 use super::{FireIntent, FireResult, TriggerKind, TriggerSource};
@@ -124,7 +124,7 @@ impl GoalSource {
     fn ensure_subscription(&mut self) {
         if self.subscription.is_none() {
             let collection_ids =
-                crate::collection_ids(&self.node, GOAL_OBSERVED_COLLECTIONS.iter().copied())
+                crate::store::subscription_source::collection_ids(&self.node, GOAL_OBSERVED_COLLECTIONS.iter().copied())
                     .unwrap_or_else(|error| {
                         tracing::warn!(%error, "goal source rescans on its interval only");
                         Vec::new()

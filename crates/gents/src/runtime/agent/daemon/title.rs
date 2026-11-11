@@ -43,7 +43,7 @@ where
     model: Arc<M>,
     verifier: crate::request::admission::AgentRequestAdmissionVerifier,
     capture_factory: Option<crate::inference::rendered_request::RenderedRequestCaptureFactory>,
-    service_admission: crate::runtime::service::RuntimeServiceAdmission,
+    service_admission: crate::store::service::RuntimeServiceAdmission,
 }
 
 enum AuxiliaryResult {

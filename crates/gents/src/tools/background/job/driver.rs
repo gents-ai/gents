@@ -24,7 +24,7 @@ use super::control::{
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::PluginVerdict;
 use crate::store::config_client::ConfigAccess;
-use crate::tools::background::agent_identity_watch::AgentIdentityWatch;
+use crate::store::agent_identity_watch::AgentIdentityWatch;
 
 pub(super) use context::step_context_for;
 pub(super) use output::{guest_state_of, progress_of, scratch_of, settlement_of, writes_of};
@@ -206,7 +206,7 @@ struct RowFailures {
 /// one re-run, and at most four steps at once.
 pub struct JobDriver {
     runtime: JobRuntime,
-    service_admission: crate::runtime::service::RuntimeServiceAdmission,
+    service_admission: crate::store::service::RuntimeServiceAdmission,
     this: Weak<JobDriver>,
     in_flight: Mutex<RapidHashMap<String, Dirty>>,
     permits: Semaphore,
@@ -223,7 +223,7 @@ impl JobDriver {
 
     pub(crate) fn with_service_admission(
         runtime: JobRuntime,
-        service_admission: crate::runtime::service::RuntimeServiceAdmission,
+        service_admission: crate::store::service::RuntimeServiceAdmission,
     ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
             runtime,
@@ -385,7 +385,7 @@ impl JobDriver {
         &self,
         row_doc_id: &str,
         actor: &identity::Did,
-        _work: crate::runtime::service::RuntimeServiceWork,
+        _work: crate::store::service::RuntimeServiceWork,
     ) {
         loop {
             let (again, _) = self.step_once(row_doc_id, actor).await;

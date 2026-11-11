@@ -275,7 +275,7 @@ impl ControlRuntime {
                 agent.as_ref(),
             )
             .unwrap();
-            let mut changes = gents::subscribe_collections(&runtime, ["AgentToolControl"]).unwrap();
+            let mut changes = gents::store::subscription_source::subscribe_collections(&runtime, ["AgentToolControl"]).unwrap();
             // The working_agent grant follows the intent's creation, so a
             // creation event can precede the Agent's visibility.
             let mut sweep = tokio::time::interval(std::time::Duration::from_millis(50));

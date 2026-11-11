@@ -91,7 +91,7 @@ async fn submit_while_runtime_answers(
     command: &SessionGoalControl,
 ) -> (String, SessionGoalControlReceipt) {
     let mut changes =
-        crate::subscribe_collections(&fixture.node, ["AgentSessionGoalControl"]).unwrap();
+        crate::store::subscription_source::subscribe_collections(&fixture.node, ["AgentSessionGoalControl"]).unwrap();
     let submission = submit_prepared_session_goal_control(access, requester, command);
     tokio::pin!(submission);
     let doc_id = tokio::select! {

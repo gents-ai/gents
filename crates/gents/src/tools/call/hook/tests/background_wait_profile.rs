@@ -32,7 +32,7 @@ async fn background_wait_read_profile() {
             requester_did: hook.active_requester_did().await,
         };
         let collections =
-            crate::collection_ids(&db.node, ["AgentToolCall", "AgentRequest"]).unwrap();
+            crate::store::subscription_source::collection_ids(&db.node, ["AgentToolCall", "AgentRequest"]).unwrap();
         let mut interval = tokio::time::interval(Duration::from_millis(100));
         let changes = futures::stream::poll_fn(move |context| {
             if !noisy {

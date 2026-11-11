@@ -85,7 +85,7 @@ async fn control(
         );
     }
     let signer = runtime.runtime_node().identity.clone();
-    let build = match gents::runtime::service::executable_build_id().await {
+    let build = match gents::store::service::executable_build_id().await {
         Ok(build) => build,
         Err(error) => {
             tracing::warn!(%error, "runtime build observation unavailable");
@@ -125,8 +125,8 @@ async fn control(
                     retiring = true;
                     Disposition::Retiring
                 }
-                Err(gents::runtime::service::RetirementError::Busy) => Disposition::Busy,
-                Err(gents::runtime::service::RetirementError::Stopping) => {
+                Err(gents::store::service::RetirementError::Busy) => Disposition::Busy,
+                Err(gents::store::service::RetirementError::Stopping) => {
                     retiring = true;
                     Disposition::Stopping
                 }
@@ -156,7 +156,7 @@ async fn control(
         signature: Vec::new(),
     };
     if let Err(error) =
-        gents::runtime::service::sign_control_receipt(signer.as_ref(), &mut receipt).await
+        gents::store::service::sign_control_receipt(signer.as_ref(), &mut receipt).await
     {
         tracing::warn!(%error, "runtime control receipt unavailable");
         return failure(

@@ -2804,7 +2804,6 @@ fn layer_edges_count_upward_and_peer_references_outside_tests() {
 /// reason) for root utilities that leave with it; the list only shrinks.
 #[rustfmt::skip]
 const STORE_CRATE_ROOT_ALLOWLIST: &[(&str, usize, &str)] = &[
-    ("drop_cleanup", 2, "runtime-bound drop cleanup owner; names no other module of this crate"),
 ];
 
 fn store_outward_references(syntax: &syn::File) -> BTreeMap<String, usize> {

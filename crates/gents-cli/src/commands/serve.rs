@@ -369,7 +369,7 @@ async fn serve_with_startup(
     let _keychain_prompt_guard =
         crate::process_resources::prevent_keychain_prompts(args.no_keychain_prompts)?;
     crate::process_resources::prepare()?;
-    gents::runtime::service::executable_build_id().await?;
+    gents::store::service::executable_build_id().await?;
     let mut store_lifetime = None;
     let outcome = serve_foreground(args, runtime, startup, &mut store_lifetime).await;
     drop(store_lifetime);
@@ -1041,7 +1041,7 @@ async fn serve_foreground(
                     home: home_dir.to_string_lossy().into_owned(),
                     node_did: identity.did().to_owned(),
                     graphql: graphql_url.clone(),
-                    build: gents::runtime::service::executable_build_id().await?,
+                    build: gents::store::service::executable_build_id().await?,
                 };
                 if let Err(error) = super::prepare_runtime::emit(report).await {
                     tracing::warn!(%error, "runtime preparation channel closed after readiness; native work remains owned");

@@ -6,7 +6,6 @@ pub mod node_start;
 pub mod oneshot;
 pub mod p2p;
 pub mod periodic_recovery;
-pub mod service;
 pub(crate) mod snapshot;
 pub mod startup_readiness;
 pub mod startup_recovery;

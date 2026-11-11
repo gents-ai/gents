@@ -75,7 +75,7 @@ impl DefraSessionHook {
         caller_deadline_at: chrono::DateTime<chrono::Utc>,
         wait_deadline_at: chrono::DateTime<chrono::Utc>,
     ) -> anyhow::Result<String> {
-        let changes = crate::subscribe_collections(&self.node, ["AgentToolCall", "AgentRequest"])?;
+        let changes = crate::store::subscription_source::subscribe_collections(&self.node, ["AgentToolCall", "AgentRequest"])?;
         let changes = futures::stream::unfold(changes, |mut changes| async move {
             changes.recv().await.map(|batch| (batch, changes))
         });
@@ -101,7 +101,7 @@ impl DefraSessionHook {
     where
         S: futures::Stream<Item = events::DocumentChangeBatch> + Unpin,
     {
-        let collections = crate::collection_ids(&self.node, ["AgentToolCall", "AgentRequest"])?;
+        let collections = crate::store::subscription_source::collection_ids(&self.node, ["AgentToolCall", "AgentRequest"])?;
         let mut observation = observation::Observation::new(
             tokio::time::Instant::now() + BACKGROUND_TOOL_RESCAN_INTERVAL,
             true,

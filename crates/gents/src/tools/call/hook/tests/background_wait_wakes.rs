@@ -38,7 +38,7 @@ async fn background_wait_ignores_unrelated_changes(resync_required: bool) {
         node_did: db.node_identity.did().to_owned(),
         requester_did: hook.active_requester_did().await,
     };
-    let collections = crate::collection_ids(&db.node, ["AgentToolCall", "AgentRequest"]).unwrap();
+    let collections = crate::store::subscription_source::collection_ids(&db.node, ["AgentToolCall", "AgentRequest"]).unwrap();
     let waiting = Arc::new(tokio::sync::Notify::new());
     let (sender, changes) = futures::channel::mpsc::unbounded();
     let changes = ObservedChanges {

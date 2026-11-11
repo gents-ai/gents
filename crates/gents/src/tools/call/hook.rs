@@ -146,7 +146,7 @@ struct BackgroundExecution {
     handoff_pending: Arc<std::sync::atomic::AtomicBool>,
     requested_stop: Arc<std::sync::Mutex<Option<RetainedStopReceipt>>>,
     confirmed_stop: Arc<std::sync::Mutex<Option<RetainedStopReceipt>>>,
-    _service_work: Arc<crate::runtime::service::RuntimeServiceWork>,
+    _service_work: Arc<crate::store::service::RuntimeServiceWork>,
 }
 
 #[derive(Clone, Default)]
@@ -190,7 +190,7 @@ pub struct BackgroundExecutionRegistry {
         std::sync::Mutex<RapidHashMap<String, (String, Arc<crate::tools::exec::FailedJobOwner>)>>,
     >,
     task_hook_records: crate::request::task_hooks::TaskHookRecordStore,
-    service_admission: crate::runtime::service::RuntimeServiceAdmission,
+    service_admission: crate::store::service::RuntimeServiceAdmission,
     #[cfg(test)]
     stop_release_observer: Option<Arc<tokio::sync::Notify>>,
 }
@@ -204,7 +204,7 @@ impl BackgroundExecutionRegistry {
         self
     }
 
-    pub(crate) fn service_admission(&self) -> &crate::runtime::service::RuntimeServiceAdmission {
+    pub(crate) fn service_admission(&self) -> &crate::store::service::RuntimeServiceAdmission {
         &self.service_admission
     }
 
@@ -1151,7 +1151,7 @@ pub(crate) struct BackgroundExecutionReservation {
     registry: BackgroundExecutionRegistry,
     tool_call_doc_id: String,
     armed: bool,
-    _service_work: Arc<crate::runtime::service::RuntimeServiceWork>,
+    _service_work: Arc<crate::store::service::RuntimeServiceWork>,
 }
 
 impl BackgroundExecutionReservation {

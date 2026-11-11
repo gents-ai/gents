@@ -3855,7 +3855,7 @@ async fn remote_presentations_persist_the_same_selected_identity() {
 
 #[tokio::test]
 async fn background_ownership_blocks_retirement_and_stopping_refuses_new_reservations() {
-    use crate::runtime::service::RetirementError;
+    use crate::store::service::RetirementError;
     use gents_protocol::serve_lifecycle::replacement::RetirementAuthority;
 
     let registry = BackgroundExecutionRegistry::default();
@@ -3889,7 +3889,7 @@ async fn background_ownership_blocks_retirement_and_stopping_refuses_new_reserva
 
 #[tokio::test]
 async fn replacing_a_registry_entry_does_not_release_the_original_workers_retirement_guard() {
-    use crate::runtime::service::RetirementError;
+    use crate::store::service::RetirementError;
     use gents_protocol::serve_lifecycle::replacement::RetirementAuthority;
 
     let registry = BackgroundExecutionRegistry::default();

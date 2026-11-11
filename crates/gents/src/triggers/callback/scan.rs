@@ -10,7 +10,7 @@ use tokio::time::MissedTickBehavior;
 
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::{document_composite_version, escape_graphql_string};
-use crate::UpdateSubscriptionSource;
+use crate::store::subscription_source::UpdateSubscriptionSource;
 
 use super::claim::invocation_is_claimable;
 use super::documents::{

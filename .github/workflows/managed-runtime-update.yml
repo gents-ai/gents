@@ -20,7 +20,7 @@ on:
       - 'crates/gents-cli/tests/suites/cli_onboarding_live.rs'
       - 'crates/gents-cli/tests/suites/cli_onboarding_live/**'
       - 'crates/gents-cli/src/http/runtime_control.rs'
-      - 'crates/gents/src/runtime/service.rs'
+      - 'crates/gents/src/store/service.rs'
       - 'crates/gents/src/runtime/agent/runtime/startup.rs'
       - 'crates/gents/src/runtime/agent/runtime/startup/**'
       - 'crates/gents-desktop-bridge/**'

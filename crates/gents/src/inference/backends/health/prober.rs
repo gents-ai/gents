@@ -108,7 +108,7 @@ pub fn spawn_backend_prober(
     cancel: CancellationToken,
     node_did: String,
 ) -> tokio::task::JoinHandle<()> {
-    let backend_collection = crate::collection_ids(&node, ["InferenceBackendMetadata"])
+    let backend_collection = crate::store::subscription_source::collection_ids(&node, ["InferenceBackendMetadata"])
         .unwrap_or_else(|error| {
             tracing::warn!(%error, "backend prober: probing on the interval only");
             Vec::new()

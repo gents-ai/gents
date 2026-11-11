@@ -46,7 +46,7 @@ pub(super) struct ControlSubscription {
 
 pub(super) fn subscribe_control_changes(node: &defra_node::Node) -> Result<ControlSubscription> {
     let names = document_view::control_collection_names().collect::<Vec<_>>();
-    let ids = crate::collection_ids(node, names.iter().copied())?;
+    let ids = crate::store::subscription_source::collection_ids(node, names.iter().copied())?;
     Ok(ControlSubscription {
         changes: node.subscribe_collection_changes(ids.clone()),
         names_by_id: ids.into_iter().zip(names).collect(),

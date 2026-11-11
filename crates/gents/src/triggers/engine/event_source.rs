@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::runtime::snapshot::ActiveRuntimeSnapshot;
 use crate::triggers::event_delivery::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
-use crate::UpdateSubscriptionSource;
+use crate::store::subscription_source::UpdateSubscriptionSource;
 
 use super::{FireIntent, TriggerKind, TriggerSource};
 
@@ -1554,7 +1554,7 @@ impl EventSource {
     /// `on_result` writer of its own, so its park would otherwise leave no
     /// durable reason and a seed wait would spend its whole deadline on it.
     fn spawn_unacknowledged_field_write(
-        runtime: &crate::drop_cleanup::DropCleanup,
+        runtime: &crate::store::drop_cleanup::DropCleanup,
         node: Arc<EmbeddedNode>,
         node_did: String,
         trigger_id: String,
@@ -1895,7 +1895,7 @@ pub(super) struct UnacknowledgedGuard {
     node_did: String,
     trigger_id: String,
     source_doc_id: String,
-    runtime: crate::drop_cleanup::DropCleanup,
+    runtime: crate::store::drop_cleanup::DropCleanup,
     armed: std::cell::Cell<bool>,
 }
 
@@ -1911,7 +1911,7 @@ impl UnacknowledgedGuard {
             node_did,
             trigger_id,
             source_doc_id,
-            runtime: crate::drop_cleanup::DropCleanup::current(),
+            runtime: crate::store::drop_cleanup::DropCleanup::current(),
             armed: std::cell::Cell::new(true),
         }
     }

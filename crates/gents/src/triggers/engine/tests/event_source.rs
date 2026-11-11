@@ -125,7 +125,7 @@ impl FakeUpdateSubscriptionSource {
     }
 }
 
-impl crate::UpdateSubscriptionSource for FakeUpdateSubscriptionSource {
+impl crate::store::subscription_source::UpdateSubscriptionSource for FakeUpdateSubscriptionSource {
     fn subscribe_updates(&self) -> Subscription {
         self.0.subscribe(&[EventName::Update])
     }

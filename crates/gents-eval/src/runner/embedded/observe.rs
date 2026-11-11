@@ -119,7 +119,7 @@ async fn await_terminal_inner(
     hook: &dyn ObservationHook,
     mut must_be_visible: bool,
 ) -> Result<TerminalObservation> {
-    let mut changes = gents::subscribe_collections(node, ["AgentRequest"])?;
+    let mut changes = gents::store::subscription_source::subscribe_collections(node, ["AgentRequest"])?;
     let started = std::time::Instant::now();
     let mut interrupted_on_deadline = false;
     let mut session_id = None;

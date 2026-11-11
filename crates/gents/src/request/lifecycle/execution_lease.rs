@@ -93,7 +93,7 @@ impl ExecutionGeneration {
 pub(crate) struct RequestExecutionLease {
     pub(crate) generation: ExecutionGeneration,
     actor: identity::Did,
-    runtime: crate::drop_cleanup::DropCleanup,
+    runtime: crate::store::drop_cleanup::DropCleanup,
 }
 
 impl RequestExecutionLease {
@@ -101,7 +101,7 @@ impl RequestExecutionLease {
         Self {
             generation: ExecutionGeneration(generation),
             actor,
-            runtime: crate::drop_cleanup::DropCleanup::current(),
+            runtime: crate::store::drop_cleanup::DropCleanup::current(),
         }
     }
 }

@@ -9,7 +9,7 @@ use super::client::AdmissionError;
 use super::controller::{InferenceCallRecord, PoolPermit};
 use super::persistence::{persist_existing_call_terminal, ProviderCallUsage};
 use super::stream_guard::StreamGuardLifecycle;
-use crate::drop_cleanup::DropCleanup;
+use crate::store::drop_cleanup::DropCleanup;
 
 pub(crate) struct AdmissionPermit {
     node: Arc<EmbeddedNode>,

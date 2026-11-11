@@ -6,7 +6,7 @@ use anyhow::Result;
 use defra_node::Node as EmbeddedNode;
 
 use crate::triggers::event_delivery::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
-use crate::UpdateSubscriptionSource;
+use crate::store::subscription_source::UpdateSubscriptionSource;
 use gents_protocol::row::AgentRequest;
 
 mod cooldown;
@@ -57,7 +57,7 @@ impl DefraWatcher {
         node_did: &str,
     ) -> Result<Self> {
         let subscription =
-            subs.subscribe_collection_changes(crate::collection_ids(&node, ["AgentRequest"])?);
+            subs.subscribe_collection_changes(crate::store::subscription_source::collection_ids(&node, ["AgentRequest"])?);
         Ok(Self {
             node,
             node_did: node_did.to_string(),
