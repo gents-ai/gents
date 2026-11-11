@@ -1013,7 +1013,12 @@ async fn required_mcp_service_needs_agent_scoped_measured_availability() {
 
     access.write("test.mcp.change_endpoint", r#"mutation { update_ToolServiceRegistry(filter: { service_id: { _eq: "research" } }, input: { mcp_port: 9214 }) { _docID } }"#).await.unwrap();
     let error = config
-        .resolve_with_available_agent_targets(&node, node_did, &active, &Default::default())
+        .resolve_with_available_agent_targets(
+            &node,
+            node_did,
+            &active,
+            &crate::tools::plugin_host::NoPluginHost,
+        )
         .await
         .expect_err("health for an old endpoint must not satisfy current registry config");
     assert!(error.to_string().contains("not measured available"));
