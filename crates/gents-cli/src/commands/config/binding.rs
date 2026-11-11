@@ -143,7 +143,7 @@ pub(crate) async fn resolve_target_node_did(
     }
 
     let Some(bind_node_did) = bind_node_did else {
-        return crate::resolve_node_did(home, None);
+        return gents_service::home_state::resolve_node_did(home, None);
     };
 
     resolve_bound_node_did(
@@ -204,8 +204,8 @@ async fn resolve_bound_node_did(
 }
 
 fn resolve_home_binding_node_did(home: Option<&Path>) -> Result<String> {
-    let home_dir = crate::resolve_home_dir(home);
-    let init_config = crate::read_init_config(&home_dir)?.ok_or_else(|| {
+    let home_dir = gents_service::home_state::resolve_home_dir(home);
+    let init_config = gents_service::home_state::read_init_config(&home_dir)?.ok_or_else(|| {
         anyhow::anyhow!(
             "initialized home metadata is required for --bind-node-did home; run `gents init --identity-only --home {}` first",
             home_dir.display()

@@ -21,6 +21,7 @@ members = [
     "crates/gents-claude",
     "crates/gents-claude-login",
     "crates/gents-cli",
+    "crates/gents-service",
     "crates/gents-client-host",
     "crates/gents-media-host",
     "crates/gents-desktop",
@@ -63,6 +64,7 @@ default-members = [
     "crates/gents-claude",
     "crates/gents-claude-login",
     "crates/gents-cli",
+    "crates/gents-service",
     "crates/gents-client-host",
     "crates/gents-media-host",
     "crates/gents-desktop",
@@ -123,6 +125,7 @@ gents-claude = { path = "crates/gents-claude" }
 gents-claude-login = { path = "crates/gents-claude-login" }
 gents-schemas = { path = "crates/gents-schemas" }
 gents-desktop-core = { path = "crates/gents-desktop-core" }
+gents-service = { path = "crates/gents-service" }
 gents-desktop-bridge = { path = "crates/gents-desktop-bridge" }
 gents-lean-contract = { path = "crates/gents-lean-contract" }
 gents-lean-vocab = { path = "crates/gents-lean-vocab" }

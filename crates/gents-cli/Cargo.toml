@@ -21,7 +21,7 @@ path = "src/main.rs"
 # full gents+defradb+iroh link to execute nothing.
 live-e2e = []
 # Debug native desktop acceptance must never address the user's daily service.
-native-e2e = []
+native-e2e = ["gents-service/native-e2e"]
 heap-profiling = ["dep:tikv-jemallocator"]
 typescript = ["dep:ts-rs"]
 
@@ -49,6 +49,7 @@ clap.workspace = true
 gents-chatgpt-login.workspace = true
 gents-claude-login.workspace = true
 gents-desktop-core.workspace = true
+gents-service.workspace = true
 gents = { path = "../gents" }
 gents-store = { workspace = true }
 gents-documents = { workspace = true }
@@ -159,6 +160,8 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Syste
 
 [dev-dependencies]
 gents = { path = "../gents", features = ["test-home-guard"] }
+gents-service = { workspace = true, features = ["test-home-guard"] }
+ctor = "0.2"
 acp.workspace = true
 crypto.workspace = true
 db.workspace = true

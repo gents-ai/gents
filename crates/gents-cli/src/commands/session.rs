@@ -9,9 +9,8 @@ use crate::cli::args::{ConfigListArgs, ConfigShowArgs, SessionCommand, SessionFo
 use crate::cli::output_format::OutputFormat;
 use crate::config_writes::ConfigAccess;
 use crate::request_helpers::resolve_dual_id;
-use crate::{
-    graphql_rows, graphql_string_list_literal, print_json, resolve_config_access, resolve_node_did,
-};
+use crate::{graphql_rows, graphql_string_list_literal, print_json, resolve_config_access};
+use gents_service::home_state::resolve_node_did;
 
 const SESSION_FIELDS: &str = "session_id node_did requester_did agent_did created_at closed_at \
 title tags provenance observation";

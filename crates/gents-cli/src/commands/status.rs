@@ -12,10 +12,11 @@ use serde_json::{json, Value};
 
 use crate::cli::args::StatusArgs;
 use crate::config_writes::ConfigAccess;
-use crate::{
-    post_graphql, print_json, read_runtime_state, resolve_graphql_endpoint, resolve_home_dir,
-    resolve_node_did,
-};
+use crate::{post_graphql, print_json};
+use gents_service::home_state::read_runtime_state;
+use gents_service::home_state::resolve_graphql_endpoint;
+use gents_service::home_state::resolve_home_dir;
+use gents_service::home_state::resolve_node_did;
 
 pub(crate) async fn status(args: StatusArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;

@@ -1,4 +1,4 @@
-use crate::cli::args::P2pRelayModeArg;
+use gents_service::args::P2pRelayModeArg;
 
 pub(crate) fn default_relay_urls() -> Vec<String> {
     iroh::RelayMode::Default

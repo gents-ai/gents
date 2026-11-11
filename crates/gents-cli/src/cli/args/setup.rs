@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use clap::ValueEnum;
 use gents_documents::inference_defaults::DEFAULT_MAX_QUEUE_DEPTH;
 
-use super::{BackendPresetArg, OpenAiWireApiArg, ToolPackageArg};
+use gents_service::args::ToolPackageArg;
+
+use super::{BackendPresetArg, OpenAiWireApiArg};
 
 #[derive(clap::Args)]
 pub(crate) struct ProvisionArgs {

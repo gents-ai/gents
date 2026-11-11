@@ -91,7 +91,7 @@ pub(crate) async fn seed(args: PackSeedArgs) -> Result<()> {
     let manifest = load_manifest(&pack, &distribution)?;
 
     let port = args.http_port;
-    let graphql = crate::resolve_graphql_endpoint(
+    let graphql = gents_service::home_state::resolve_graphql_endpoint(
         Some(&format!("http://127.0.0.1:{port}/api/v0/graphql")),
         None,
     )?;
@@ -246,7 +246,7 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
     }
 
     let port = args.http_port;
-    let graphql = crate::resolve_graphql_endpoint(
+    let graphql = gents_service::home_state::resolve_graphql_endpoint(
         Some(&format!("http://127.0.0.1:{port}/api/v0/graphql")),
         Some(&home),
     )?;

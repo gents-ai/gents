@@ -13,7 +13,7 @@ use crate::http::prometheus::{
     load_metrics_query_data, render_prometheus_metrics, sample_process_memory,
     with_local_native_executors, P2pMetricsSnapshot, ProcessMetricsSnapshot,
 };
-use crate::shared::P2pAdmissionState;
+use gents_service::state::P2pAdmissionState;
 
 const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
 pub(super) const P2P_METRICS_FETCH_BUDGET: Duration = Duration::from_millis(750);

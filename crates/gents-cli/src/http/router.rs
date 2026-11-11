@@ -16,7 +16,7 @@ use tokio::sync::{watch, OnceCell};
 use crate::http::enrollment::{EnrollmentDecisionServiceHandle, EnrollmentOfferIssuerHandle};
 use crate::http::prometheus::{P2pMetricsSnapshot, StoreSizeCache};
 use crate::http::version::version_response;
-use crate::shared::P2pAdmissionState;
+use gents_service::state::P2pAdmissionState;
 use accounts::{
     account_usage_read_handler, enrollment_decision_handler, enrollment_pending_handler,
 };

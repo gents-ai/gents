@@ -9,7 +9,8 @@ use serde_json::Value;
 use crate::cli::args::RequestShowArgs;
 use crate::cli::output_format::OutputFormat;
 use crate::request_helpers::{observe_canonical_request_output, request_output_envelope};
-use crate::{post_graphql, print_json, resolve_graphql_endpoint, resolve_request_id};
+use crate::{post_graphql, print_json, resolve_request_id};
+use gents_service::home_state::resolve_graphql_endpoint;
 
 use super::show_text::render_request_show_text;
 use super::show_tools::{

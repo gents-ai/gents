@@ -1,7 +1,7 @@
 //! Constrained, independently supervised native-service replacement. Durable
 //! receipts survive runtime retirement; they never stand in for store locks or
 //! the runtime's authenticated admission fence.
-use crate::cli::{ServiceAction, ServiceUpdateArgs};
+use crate::args::{ServiceAction, ServiceUpdateArgs};
 use crate::home_state::{read_init_config, read_runtime_state, resolve_home_dir};
 use crate::native_service::{NativeServiceConfig, NativeServiceManager};
 use crate::network_settings::NetworkSettings;
@@ -138,7 +138,7 @@ async fn emit(value: &impl Serialize) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn submit(args: ServiceUpdateArgs) -> Result<()> {
+pub async fn submit(args: ServiceUpdateArgs) -> Result<()> {
     let home = tokio::fs::canonicalize(resolve_home_dir(args.home.as_deref())).await?;
     let id = args.operation_id.unwrap_or_else(uuid::Uuid::new_v4);
     let (plan, mut receipt, _submission_lock) =
@@ -259,7 +259,7 @@ fn register_unless_helper_runs(
     Ok(true)
 }
 
-pub(crate) async fn status(home: Option<PathBuf>, id: uuid::Uuid) -> Result<()> {
+pub async fn status(home: Option<PathBuf>, id: uuid::Uuid) -> Result<()> {
     let home = resolve_home_dir(home.as_deref());
     let receipt = tokio::task::spawn_blocking(move || -> Result<Receipt> {
         let directory = operation_dir(&home, id);
@@ -283,13 +283,13 @@ pub(crate) async fn status(home: Option<PathBuf>, id: uuid::Uuid) -> Result<()> 
     emit(&receipt).await
 }
 
-pub(crate) use notices::watch_notices;
+pub use notices::watch_notices;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-pub(crate) fn executable_digest(path: &Path) -> Result<String> {
+pub fn executable_digest(path: &Path) -> Result<String> {
     files::digest(path)
 }
 
-pub(crate) async fn check(home: Option<PathBuf>) -> Result<()> {
+pub async fn check(home: Option<PathBuf>) -> Result<()> {
     let Some(home) = home else {
         return emit(&metadata(false)).await;
     };
@@ -336,7 +336,7 @@ fn metadata(schema_checked: bool) -> serde_json::Value {
         "systemd_unit":crate::native_service::SYSTEMD_UNIT})
 }
 
-pub(crate) async fn run(home: PathBuf, id: uuid::Uuid) -> Result<()> {
+pub async fn run(home: PathBuf, id: uuid::Uuid) -> Result<()> {
     let guarded_home = home.clone();
     tokio::task::spawn_blocking(move || {
         refuse_self_disruption(&guarded_home, &ServiceAction::Restart)
@@ -415,7 +415,7 @@ async fn cleanup_helper(plan: &Plan) -> Result<()> {
     .await?
 }
 
-pub(crate) fn refuse_self_disruption(home: &Path, action: &ServiceAction) -> Result<()> {
+pub fn refuse_self_disruption(home: &Path, action: &ServiceAction) -> Result<()> {
     refuse_origin_disruption(
         home,
         std::env::var_os("GENTS_CALLER_RUNTIME_HOME")

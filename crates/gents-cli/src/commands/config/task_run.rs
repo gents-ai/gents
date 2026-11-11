@@ -22,7 +22,8 @@ use serde_json::Value;
 use crate::cli::ConfigTaskRunArgs;
 use crate::config_writes::ConfigAccess;
 use crate::request_helpers::wait_for_terminal_response;
-use crate::{print_json, resolve_config_access, resolve_graphql_endpoint};
+use crate::{print_json, resolve_config_access};
+use gents_service::home_state::resolve_graphql_endpoint;
 
 pub(crate) async fn config_task_run(args: ConfigTaskRunArgs) -> Result<()> {
     let output = enqueue_task_run(&args).await?;
@@ -81,7 +82,7 @@ pub(crate) async fn enqueue_task_run_on(
     session_id: Option<&str>,
     continue_session: Option<&str>,
 ) -> Result<TaskRunOutput> {
-    let node_did = crate::resolve_node_did(home, None)?;
+    let node_did = gents_service::home_state::resolve_node_did(home, None)?;
     let actor_did = access
         .actor_did()
         .context("Task invocation requires an authenticated client identity")?;
@@ -276,9 +277,9 @@ mod tests {
     async fn run_now_uses_the_access_it_is_given() -> Result<()> {
         let home = tempfile::tempdir()?;
         let did = crate::caused_sessions::fixtures::FIXTURE_DID.to_string();
-        crate::home_state::write_init_config(
+        gents_service::home_state::write_init_config(
             home.path(),
-            &crate::shared::StoredInitConfig {
+            &gents_service::state::StoredInitConfig {
                 home: home.path().to_string_lossy().into_owned(),
                 node_name: "fixture".into(),
                 node_did: did.clone(),
@@ -287,7 +288,7 @@ mod tests {
                 keychain_label: None,
                 secure_enclave_label: None,
                 tool_package: None,
-                tool_ceiling: crate::cli::args::ToolCeilingArg::MetaOnly,
+                tool_ceiling: gents_service::args::ToolCeilingArg::MetaOnly,
                 tool_root: None,
                 store_encryption: None,
             },
@@ -341,7 +342,7 @@ mod tests {
         );
         assert_eq!(output.status, "pending");
         assert!(
-            !crate::home_state::default_data_dir(home.path()).exists(),
+            !gents_service::home_state::default_data_dir(home.path()).exists(),
             "the home's store is never opened"
         );
         served.node.shutdown().await.expect("node shutdown");

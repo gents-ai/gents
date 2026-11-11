@@ -8,7 +8,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
     let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(&args.name);
     let base_url = resolve_registry_url(args.registry.as_deref());
     let client = RegistryClient::new(base_url.clone());
-    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
 
     let pack = fetch_pack(
         &client,

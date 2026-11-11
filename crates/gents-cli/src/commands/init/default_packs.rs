@@ -645,7 +645,7 @@ async fn install_one(
 /// has them, or with `--approve` the named ones installed with what they
 /// request approved.
 pub(crate) async fn starter(args: crate::cli::PackStarterArgs) -> Result<()> {
-    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
     let registry = args.registry.as_deref();
     if args.approve.is_empty() {
         return crate::print_json(&json!({
@@ -724,8 +724,8 @@ async fn engineer_config(
         .local_node()
         .context("a runtime is serving this home; ask its Engineer to install the pack")?
         .clone();
-    let stored = crate::home_state::read_init_config(home)?.context("home is not initialized")?;
-    let runtime = crate::home_state::load_initialized_home_identity(home, &stored)?;
+    let stored = gents_service::home_state::read_init_config(home)?.context("home is not initialized")?;
+    let runtime = gents_service::home_state::load_initialized_home_identity(home, &stored)?;
     let binding = agent_identity_binding(access, owner, engineer).await?;
     let agent = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding)?;
     let held = access
@@ -1272,11 +1272,11 @@ mod tests {
         assert_eq!(granted.as_array().map(Vec::len), Some(1), "{report}");
         let worker = granted[0]["agent"].as_str().unwrap().to_owned();
         let node = access.local_node().unwrap().clone();
-        let stored = crate::home_state::read_init_config(home.path())
+        let stored = gents_service::home_state::read_init_config(home.path())
             .unwrap()
             .unwrap();
         let runtime =
-            crate::home_state::load_initialized_home_identity(home.path(), &stored).unwrap();
+            gents_service::home_state::load_initialized_home_identity(home.path(), &stored).unwrap();
         let binding = agent_identity_binding(&access, &owner, &worker)
             .await
             .unwrap();

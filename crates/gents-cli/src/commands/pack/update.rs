@@ -10,7 +10,7 @@ pub(crate) async fn outdated_packs(
     scope: &crate::cli::ScopeArgs,
     registry: Option<&str>,
 ) -> Result<Vec<Value>> {
-    let home = crate::home_state::resolve_home_dir(scope.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(scope.home.as_deref());
     let node =
         if scope.graphql.is_some() || gents_store::local::home::init_config_path(&home).is_file() {
             Some(super::resolve_scope_owner(scope).await?)
@@ -326,7 +326,7 @@ mod tests {
         crate::commands::init::init(init_args)
             .await
             .expect("identity-only init");
-        let node_did = crate::home_state::resolve_node_did(Some(home.path()), None).unwrap();
+        let node_did = gents_service::home_state::resolve_node_did(Some(home.path()), None).unwrap();
         let profile_id = format!("{node_did}:default-profile");
         // An identity-only init publishes no inference profile; the home's
         // client configures the one the worker slot names.

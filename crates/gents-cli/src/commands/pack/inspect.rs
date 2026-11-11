@@ -4,7 +4,7 @@ use serde_json::json;
 use crate::cli::{PackDiffArgs, PackShowArgs, PackVerifyArgs};
 
 pub(super) async fn show(args: PackShowArgs) -> Result<()> {
-    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
     let pack = super::resolve_pack_source(&args.package, args.registry.as_deref(), &home).await?;
     if args.config {
         return show_config(&pack);
@@ -53,7 +53,7 @@ fn show_config(pack: &super::PackSource) -> Result<()> {
 
 pub(super) fn verify(args: PackVerifyArgs) -> Result<()> {
     let header = if args.target.starts_with("sha256:") {
-        let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+        let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
         gents_pack::pack::store::PackStore::new(&home).verify(&args.target)?
     } else {
         let path = std::path::Path::new(&args.target);
@@ -65,7 +65,7 @@ pub(super) fn verify(args: PackVerifyArgs) -> Result<()> {
 const COMPARED_OWNER: &str = "did:key:zPackDiffPlaceholderOwner";
 
 pub(super) async fn diff(args: PackDiffArgs) -> Result<()> {
-    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
     let a = super::resolve_pack_source(&args.a, args.registry.as_deref(), &home).await?;
     let b = super::resolve_pack_source(&args.b, args.registry.as_deref(), &home).await?;
     crate::print_json(&pack_diff(&a, &b)?)

@@ -27,7 +27,7 @@ async fn reply(args: MailboxReplyArgs) -> Result<()> {
         .output
         .ensure_supported("automation mailbox reply", &[OutputFormat::Json])?;
     let home = args.item.access.home.as_deref();
-    let graphql = crate::resolve_graphql_endpoint(args.item.access.graphql.as_deref(), home)?;
+    let graphql = gents_service::home_state::resolve_graphql_endpoint(args.item.access.graphql.as_deref(), home)?;
     let access = ConfigAccess::Graphql(graphql.clone());
     let item = load_item(&access, &args.item.doc_id)
         .await?

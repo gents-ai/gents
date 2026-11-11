@@ -226,13 +226,13 @@ fn a_runtime_still_migrating_keeps_the_crash_loop_evidence() {
 
 #[test]
 fn a_refused_start_of_an_unregistered_item_is_reported_as_awaiting_approval() {
-    let native = gents_server::native_service::NativeServiceStatus {
+    let native = gents_service::native_service::NativeServiceStatus {
         installed: true,
         running: false,
         job_loaded: false,
         enabled: false,
         requires_approval: false,
-        background_item: gents_server::native_service::BackgroundItemStatus::NotRegistered,
+        background_item: gents_service::native_service::BackgroundItemStatus::NotRegistered,
         failed: false,
         detail: None,
     };
@@ -407,7 +407,7 @@ async fn a_booting_runtime_is_adopted_without_holding_the_lifecycle_lock() {
 
 #[test]
 fn a_crash_looping_job_is_reported_failed_with_its_exit_reason() {
-    let native = gents_server::native_service::NativeServiceStatus {
+    let native = gents_service::native_service::NativeServiceStatus {
         installed: true,
         running: false,
         job_loaded: true,
@@ -431,7 +431,7 @@ fn a_crash_looping_job_is_reported_failed_with_its_exit_reason() {
     assert!(error.contains("exited with code 78"));
     assert!(error.contains("restarted 2 times in a row"));
 
-    let blocked = gents_server::native_service::NativeServiceStatus {
+    let blocked = gents_service::native_service::NativeServiceStatus {
         requires_approval: true,
         ..native
     };
@@ -480,7 +480,7 @@ async fn background_approval_wait_is_bounded_and_names_login_items() {
 
 #[test]
 fn native_approval_state_is_part_of_the_managed_status() {
-    let native = gents_server::native_service::NativeServiceStatus {
+    let native = gents_service::native_service::NativeServiceStatus {
         installed: true,
         running: false,
         job_loaded: false,

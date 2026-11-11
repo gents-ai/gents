@@ -220,7 +220,7 @@ fn replaceable_out(
     let contains =
         |path: &Path| std::fs::canonicalize(path).is_ok_and(|path| path.starts_with(&resolved));
     anyhow::ensure!(
-        !contains(gents_home) && crate::home_state::read_init_config(&resolved)?.is_none(),
+        !contains(gents_home) && gents_service::home_state::read_init_config(&resolved)?.is_none(),
         "refusing to replace --out {}: it is or contains a Gents home",
         out.display()
     );
@@ -586,7 +586,7 @@ async fn install_and_read_back(
     // The scratch home's runtime admits the operator's client as an operator;
     // the client then installs through the home's client-signed endpoint, as
     // every User write does.
-    let caller = std::sync::Arc::new(crate::load_client_identity().await?);
+    let caller = std::sync::Arc::new(gents_service::home_state::load_client_identity().await?);
     let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
         caller.private_key_bytes(),
     )?;

@@ -12,11 +12,14 @@ use crate::cli::args::{ShellArgs, StoreKeyCustodyArg};
 use crate::cli::Cli;
 use crate::config_writes::ConfigAccess;
 use crate::graphql_access::graphql_endpoint_available;
-use crate::home_state::{read_finished_init_config, read_runtime_state, resolve_home_dir};
-use crate::native_service::{
-    NativeServiceConfig, NativeServiceManager, NativeServicePlatform, ServiceExit,
-};
-use crate::shared::StoredInitConfig;
+use gents_service::home_state::read_finished_init_config;
+use gents_service::home_state::read_runtime_state;
+use gents_service::home_state::resolve_home_dir;
+use gents_service::native_service::NativeServiceConfig;
+use gents_service::native_service::NativeServiceManager;
+use gents_service::native_service::NativeServicePlatform;
+use gents_service::native_service::ServiceExit;
+use gents_service::state::StoredInitConfig;
 use gents_protocol::node_readiness::{AgentReadinessState, NodeReadinessSnapshot};
 
 mod setup;
@@ -93,7 +96,7 @@ pub(crate) async fn run(mut args: StartArgs, runtime: Handle) -> Result<()> {
 /// else the node's default.
 async fn chosen_agent(
     home: &Path,
-    config: &crate::shared::StoredInitConfig,
+    config: &gents_service::state::StoredInitConfig,
     args: &StartArgs,
 ) -> Result<Option<String>> {
     if args.continue_session.is_none() && !args.yolo {
@@ -274,7 +277,7 @@ async fn wait_for_graphql(home: &Path) -> Result<GraphqlEndpoint> {
 async fn answering_graphql(home: &Path) -> Result<Option<GraphqlEndpoint>> {
     match read_runtime_state(home)? {
         Some(state) if graphql_endpoint_available(&state.graphql).await => Ok(Some(
-            crate::resolve_graphql_endpoint(Some(&state.graphql), Some(home))?,
+            gents_service::home_state::resolve_graphql_endpoint(Some(&state.graphql), Some(home))?,
         )),
         _ => Ok(None),
     }
@@ -394,7 +397,7 @@ mod tests {
 
         let older = store_refusal(
             home,
-            &exit(crate::native_service::INCOMPATIBLE_STORE_EXIT_CODE),
+            &exit(gents_service::native_service::INCOMPATIBLE_STORE_EXIT_CODE),
         )
         .expect("an older home");
         assert_eq!(older.kind, IncompatibleStoreKind::UnknownLineage);
@@ -408,7 +411,7 @@ mod tests {
             Some(older)
         );
 
-        let key = store_refusal(home, &exit(crate::native_service::INSECURE_KEY_EXIT_CODE))
+        let key = store_refusal(home, &exit(gents_service::native_service::INSECURE_KEY_EXIT_CODE))
             .expect("an unsafe key");
         assert_eq!(key.kind, IncompatibleStoreKind::InsecureKey);
         assert_eq!(key.data_path, home.join("keys"));

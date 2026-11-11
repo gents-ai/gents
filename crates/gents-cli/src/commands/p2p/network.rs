@@ -35,7 +35,7 @@ struct PeerRegistryRow {
 }
 
 pub(super) async fn p2p_network_register(args: P2pNetworkRegisterArgs) -> Result<()> {
-    let graphql = crate::resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let graphql = gents_service::home_state::resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
@@ -69,7 +69,7 @@ pub(super) async fn p2p_network_register(args: P2pNetworkRegisterArgs) -> Result
         .unwrap_or_default();
 
     let node_did =
-        crate::resolve_node_did(args.home.as_deref(), None).context("resolving local node DID")?;
+        gents_service::home_state::resolve_node_did(args.home.as_deref(), None).context("resolving local node DID")?;
 
     let templates = validate_offered_templates(args.templates.iter().map(String::as_str))?;
     let network_id = args.network_id.as_deref().unwrap_or("default").to_string();
@@ -162,7 +162,7 @@ pub(super) async fn p2p_network_list(args: P2pNetworkListArgs) -> Result<()> {
 }
 
 pub(super) async fn p2p_network_rm(args: P2pAccessArgs) -> Result<()> {
-    let graphql = crate::resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let graphql = gents_service::home_state::resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 

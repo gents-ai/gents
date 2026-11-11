@@ -26,7 +26,7 @@ pub async fn prepare_runtime_after_unlock(
         unreachable!("the explicit entry point selects runtime preparation");
     };
     args.serve.keychain_startup_approval = true;
-    let telemetry = crate::telemetry::init(crate::DEFAULT_LOG_FILTER)?;
+    let telemetry = gents_service::telemetry::init(crate::DEFAULT_LOG_FILTER)?;
     let result = super::prepare(args, runtime).await;
     telemetry.shutdown();
     result
@@ -52,7 +52,7 @@ pub async fn unlock_runtime_keys(home: &Path) -> Result<()> {
             &gents_store::local::home::default_data_dir(&home),
         )?);
     }
-    let identity = crate::home_state::load_initialized_home_identity(&home, &config)?;
+    let identity = gents_service::home_state::load_initialized_home_identity(&home, &config)?;
     drop(identity.sign(b"gents.runtime-key-unlock.v1").await?);
     Ok(())
 }

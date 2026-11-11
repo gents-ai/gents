@@ -8,12 +8,12 @@ where
     R: CommandRunner,
 {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    pub(crate) fn installed_executable_path(&self) -> Result<PathBuf> {
+    pub fn installed_executable_path(&self) -> Result<PathBuf> {
         self.definition_executable(&fs::read(self.config.definition_path(self.platform))?)
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    pub(crate) fn definition_owned_by_home(&self) -> Result<bool> {
+    pub fn definition_owned_by_home(&self) -> Result<bool> {
         let path = self.config.definition_path(self.platform);
         if !path.is_file() {
             return Ok(false);
@@ -103,16 +103,16 @@ where
         Ok(None)
     }
 
-    pub(crate) fn definition_executable(&self, bytes: &[u8]) -> Result<PathBuf> {
+    pub fn definition_executable(&self, bytes: &[u8]) -> Result<PathBuf> {
         self.ensure_owned_definition(bytes)?;
         executable(self.platform, bytes)
     }
 
-    pub(crate) fn restore_unstarted_definition(&self, expected: &[u8], prior: &[u8]) -> Result<()> {
+    pub fn restore_unstarted_definition(&self, expected: &[u8], prior: &[u8]) -> Result<()> {
         self.install_update_definition(expected, prior)
     }
 
-    pub(crate) fn update_snapshot(&self) -> Result<(Vec<u8>, PathBuf, bool)> {
+    pub fn update_snapshot(&self) -> Result<(Vec<u8>, PathBuf, bool)> {
         let bytes = fs::read(self.config.definition_path(self.platform))?;
         self.ensure_owned_definition(&bytes)?;
         let executable = executable(self.platform, &bytes)?;
@@ -124,7 +124,7 @@ where
         Ok((bytes, executable, status.enabled))
     }
 
-    pub(crate) fn update_definition(
+    pub fn update_definition(
         &self,
         before: &[u8],
         replacement: Option<&BTreeMap<String, String>>,
@@ -194,7 +194,7 @@ where
         Ok(definition.into_bytes())
     }
 
-    pub(crate) fn install_update_definition(
+    pub fn install_update_definition(
         &self,
         expected: &[u8],
         replacement: &[u8],
@@ -220,7 +220,7 @@ where
 
     /// Remove only this operation's fixed helper registration after its terminal
     /// receipt is durable. Unloading our own job may terminate this process.
-    pub(crate) fn unregister_updater(&self, directory: &Path, id: uuid::Uuid) -> Result<()> {
+    pub fn unregister_updater(&self, directory: &Path, id: uuid::Uuid) -> Result<()> {
         let label = format!("{SERVICE_LABEL}.update-{id}");
         match self.platform {
             NativeServicePlatform::Macos => {
@@ -252,7 +252,7 @@ where
         Ok(())
     }
 
-    pub(crate) fn register_updater(&self, directory: &Path, id: uuid::Uuid) -> Result<()> {
+    pub fn register_updater(&self, directory: &Path, id: uuid::Uuid) -> Result<()> {
         let label = format!("{SERVICE_LABEL}.update-{id}");
         let helper = directory.join("helper");
         let home = self.config.home.to_str().context("home UTF-8")?;

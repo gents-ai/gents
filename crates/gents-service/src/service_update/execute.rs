@@ -1,5 +1,5 @@
 use super::*;
-use crate::commands::prepare_runtime::control;
+use crate::runtime_control::control;
 use gents_protocol::serve_lifecycle::{
     control::{RuntimeControlDisposition, RuntimeOperation},
     ServeLifecycle,
@@ -20,7 +20,7 @@ pub(super) fn endpoint(raw: &str, settings: &NetworkSettings) -> Result<reqwest:
         endpoint.scheme() == "http"
             && address == expected
             && endpoint.port_or_known_default()
-                == Some(settings.http_port.unwrap_or(crate::DEFAULT_HTTP_PORT))
+                == Some(settings.http_port.unwrap_or(crate::state::DEFAULT_HTTP_PORT))
             && endpoint.username().is_empty()
             && endpoint.password().is_none()
             && endpoint.path() == "/api/v0/graphql"
@@ -281,7 +281,7 @@ pub(super) async fn apply(
             .intent
             .network
             .http_port
-            .unwrap_or(crate::DEFAULT_HTTP_PORT);
+            .unwrap_or(crate::state::DEFAULT_HTTP_PORT);
         let addr = std::net::SocketAddr::new(address, port);
         reqwest::Url::parse(&format!("http://{addr}/api/v0/graphql"))?
     };
@@ -342,7 +342,7 @@ pub(super) async fn apply(
         enabled == plan.enabled,
         "service login enablement changed during update; current operator setting retained"
     );
-    let state: crate::shared::StoredRuntimeState = files::read_json_async(
+    let state: crate::state::StoredRuntimeState = files::read_json_async(
         &plan
             .home
             .join(gents_store::local::home::RUNTIME_STATE_FILE_NAME),

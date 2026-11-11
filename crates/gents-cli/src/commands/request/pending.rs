@@ -6,7 +6,9 @@ use crate::cli::args::{
     RequestRemovePendingArgs, RequestReorderPendingArgs,
 };
 use crate::cli::output_format::OutputFormat;
-use crate::{print_json, resolve_graphql_endpoint, resolve_node_did, resolve_request_content};
+use crate::{print_json, resolve_request_content};
+use gents_service::home_state::resolve_graphql_endpoint;
+use gents_service::home_state::resolve_node_did;
 
 async fn pending_scope(
     args: &RequestPendingArgs,
@@ -25,7 +27,7 @@ async fn pending_scope(
     let actor = access
         .actor_did()
         .context("Pending messages require an authenticated client identity")?;
-    let signer = crate::home_state::held_client_identity(&actor)?;
+    let signer = gents_service::home_state::held_client_identity(&actor)?;
     Ok((access, node, signer))
 }
 

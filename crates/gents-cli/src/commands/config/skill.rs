@@ -75,7 +75,7 @@ pub(super) async fn skill_add(args: SkillAddArgs) -> Result<()> {
         ),
         None => args.instructions.clone(),
     };
-    let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
+    let access = ConfigAccess::Graphql(gents_service::home_state::resolve_graphql_endpoint(Some(&args.graphql), None)?);
     let skill = SkillDocument {
         skill_id: args.skill_id.clone(),
         node_did: args.node_did.clone(),
@@ -110,7 +110,7 @@ fn skill_rows(response: &Value) -> Vec<Value> {
 }
 
 pub(super) async fn skill_list(args: SkillListArgs) -> Result<()> {
-    let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
+    let access = ConfigAccess::Graphql(gents_service::home_state::resolve_graphql_endpoint(Some(&args.graphql), None)?);
     let node_did = escape_graphql_string(&args.node_did);
     let query = format!(
         r#"{{ Skill(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{ {SKILL_FIELDS} }} }}"#
@@ -132,7 +132,7 @@ pub(super) async fn skill_list(args: SkillListArgs) -> Result<()> {
 }
 
 pub(super) async fn skill_show(args: SkillShowArgs) -> Result<()> {
-    let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
+    let access = ConfigAccess::Graphql(gents_service::home_state::resolve_graphql_endpoint(Some(&args.graphql), None)?);
     let skill_id = escape_graphql_string(&args.skill_id);
     let query = format!(
         r#"{{ Skill(filter: {{ skill_id: {{ _eq: "{skill_id}" }} }}, limit: 1) {{ {SKILL_FIELDS} }} }}"#
@@ -146,7 +146,7 @@ pub(super) async fn skill_show(args: SkillShowArgs) -> Result<()> {
 }
 
 pub(super) async fn skill_rm(args: SkillRefArgs) -> Result<()> {
-    let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
+    let access = ConfigAccess::Graphql(gents_service::home_state::resolve_graphql_endpoint(Some(&args.graphql), None)?);
     let mut deleted = 0;
     for skill in find_skills(&access, &args.skill_id).await? {
         let node_did = skill["node_did"]
@@ -177,7 +177,7 @@ pub(super) async fn skill_rm(args: SkillRefArgs) -> Result<()> {
 }
 
 pub(super) async fn skill_set_enabled(args: SkillRefArgs, enabled: bool) -> Result<()> {
-    let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
+    let access = ConfigAccess::Graphql(gents_service::home_state::resolve_graphql_endpoint(Some(&args.graphql), None)?);
     let mut updated = 0;
     for row in find_skills(&access, &args.skill_id).await? {
         let mut skill: SkillDocument =
@@ -241,7 +241,7 @@ fn find_skill_dirs(root: &std::path::Path, max_depth: usize) -> Vec<std::path::P
 pub(super) async fn skill_import(args: SkillImportArgs) -> Result<()> {
     let source = std::fs::canonicalize(&args.dir)
         .with_context(|| format!("resolving {}", args.dir.display()))?;
-    let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
+    let access = ConfigAccess::Graphql(gents_service::home_state::resolve_graphql_endpoint(Some(&args.graphql), None)?);
 
     let mut imported = Vec::new();
     let mut errors = Vec::new();
@@ -399,7 +399,7 @@ fn render_openai_yaml(skill: &Value) -> Result<Option<String>> {
 }
 
 pub(super) async fn skill_export(args: SkillExportArgs) -> Result<()> {
-    let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
+    let access = ConfigAccess::Graphql(gents_service::home_state::resolve_graphql_endpoint(Some(&args.graphql), None)?);
     let node_did = escape_graphql_string(&args.node_did);
     let query = format!(
         r#"{{ Skill(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{ {SKILL_FIELDS} }} }}"#

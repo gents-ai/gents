@@ -8,7 +8,7 @@ use anyhow::{bail, Context, Result};
 
 mod environment;
 mod systemd_status;
-pub(crate) mod update;
+pub mod update;
 pub use environment::read_environment_file;
 
 #[cfg(not(all(feature = "native-e2e", debug_assertions)))]
@@ -1077,7 +1077,7 @@ fn normalize_absolute(path: &Path) -> Result<PathBuf> {
     Ok(normalized)
 }
 
-pub(crate) fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
+pub fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
     let parent = path.parent().context("path has no parent")?;
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
     use std::io::Write as _;

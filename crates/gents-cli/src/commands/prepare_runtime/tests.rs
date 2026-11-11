@@ -360,8 +360,8 @@ async fn changed_root_does_not_retire_a_runtime_with_stricter_live_access() {
     let root = tempfile::tempdir().unwrap();
     let home = home.path().canonicalize().unwrap();
     let mut config = record_home(&node, &home);
-    config.tool_ceiling = crate::cli::ToolCeilingArg::Readwrite;
-    crate::home_state::write_init_config(&home, &config).unwrap();
+    config.tool_ceiling = gents_service::args::ToolCeilingArg::Readwrite;
+    gents_service::home_state::write_init_config(&home, &config).unwrap();
     let before = std::fs::read(home.join("init.json")).unwrap();
     let cli = crate::cli::Cli::try_parse_from([
         "gents",
@@ -419,7 +419,7 @@ async fn changing_root_without_the_store_key_preserves_the_initialized_home() {
         version: gents_store::local::store_key::STORE_ENCRYPTION_VERSION,
         custody: gents_store::local::store_key::StoreKeyCustody::File,
     });
-    crate::home_state::write_init_config(&home, &config).unwrap();
+    gents_service::home_state::write_init_config(&home, &config).unwrap();
     std::fs::remove_file(home.join("runtime.json")).unwrap();
     let before = std::fs::read(home.join("init.json")).unwrap();
     let cli = crate::cli::Cli::try_parse_from([
@@ -455,7 +455,7 @@ async fn changed_home_configuration_is_not_overwritten_at_readiness() {
     requested.tool_root = Some("/workspace".into());
     let mut concurrent = original.clone();
     concurrent.node_name = "updated by operator".into();
-    crate::home_state::write_init_config(home.path(), &concurrent).unwrap();
+    gents_service::home_state::write_init_config(home.path(), &concurrent).unwrap();
     let before = std::fs::read(home.path().join("init.json")).unwrap();
     assert!(commit_root_change(home.path(), &original, &requested).is_err());
     assert_eq!(
@@ -475,12 +475,12 @@ fn record_home(node: &ControlNode, home: &Path) -> StoredInitConfig {
         keychain_label: None,
         secure_enclave_label: None,
         tool_package: None,
-        tool_ceiling: crate::cli::ToolCeilingArg::MetaOnly,
+        tool_ceiling: gents_service::args::ToolCeilingArg::MetaOnly,
         tool_root: None,
         store_encryption: None,
     };
-    crate::home_state::write_init_config(home, &config).unwrap();
-    crate::home_state::write_runtime_state(
+    gents_service::home_state::write_init_config(home, &config).unwrap();
+    gents_service::home_state::write_runtime_state(
         home,
         &StoredRuntimeState {
             home: config.home.clone(),
@@ -508,7 +508,7 @@ async fn preparation_missing_store_key_refuses_before_requesting_retirement() {
         version: gents_store::local::store_key::STORE_ENCRYPTION_VERSION,
         custody: gents_store::local::store_key::StoreKeyCustody::File,
     });
-    crate::home_state::write_init_config(&home, &config).unwrap();
+    gents_service::home_state::write_init_config(&home, &config).unwrap();
     let init_before = std::fs::read(home.join("init.json")).unwrap();
     let state_before = std::fs::read(home.join("runtime.json")).unwrap();
     let cli = crate::cli::Cli::try_parse_from([

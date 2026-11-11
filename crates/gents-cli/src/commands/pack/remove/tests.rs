@@ -934,7 +934,7 @@ async fn remote_wire_refuses_new_pin_before_http_access_but_allows_preview_and_r
 #[tokio::test]
 async fn wire_refuses_even_the_initialized_homes_served_endpoint() {
     let home = initialized_home().await;
-    let init = crate::home_state::read_init_config(home.path())
+    let init = gents_service::home_state::read_init_config(home.path())
         .unwrap()
         .unwrap();
     let (local, owner) = super::super::resolve_scope_owner(&scope(home.path()))
@@ -945,9 +945,9 @@ async fn wire_refuses_even_the_initialized_homes_served_endpoint() {
         node.shutdown().await.expect("node shutdown");
     }
     let url = "http://127.0.0.1:56789/api/v0/graphql";
-    crate::home_state::write_runtime_state(
+    gents_service::home_state::write_runtime_state(
         home.path(),
-        &crate::shared::StoredRuntimeState {
+        &gents_service::state::StoredRuntimeState {
             home: home.path().to_string_lossy().into_owned(),
             graphql: url.into(),
             node_name: init.node_name.clone(),

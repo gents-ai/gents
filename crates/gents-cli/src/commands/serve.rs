@@ -1,3 +1,8 @@
+use gents_service::args::P2pDiscoveryArg;
+use gents_service::args::P2pRelayModeArg;
+use gents_service::args::ToolCeilingArg;
+use gents_service::state::StoredInitConfig;
+use gents_service::state::StoredRuntimeState;
 use std::collections::BTreeSet;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -18,12 +23,14 @@ use uuid::Uuid;
 use crate::cli::*;
 use crate::http::router::{RuntimeActivationObservation, ServeLifecycleHandle};
 use crate::http::runtime_contract_router;
-use crate::shared::{P2pAdmissionState, *};
-use crate::{
-    default_data_dir, default_key_path, display_host, format_tool_ceiling, host_tool_ceiling,
-    parse_cli_tool_arg, print_json, read_init_config, resolve_home_dir, server_start_failure_hint,
-    write_runtime_state, DEFAULT_NODE_NAME,
-};
+use gents_service::state::P2pAdmissionState;
+use crate::{format_tool_ceiling, host_tool_ceiling, parse_cli_tool_arg, print_json, server_start_failure_hint, DEFAULT_NODE_NAME};
+use gents_service::home_state::default_data_dir;
+use gents_service::home_state::default_key_path;
+use gents_service::home_state::display_host;
+use gents_service::home_state::read_init_config;
+use gents_service::home_state::resolve_home_dir;
+use gents_service::home_state::write_runtime_state;
 use gents_protocol::row::{
     project_node_readiness_summary, AgentReadinessState, NodeReadinessSummary,
     ProjectedNodeReadinessSummary,
@@ -235,7 +242,7 @@ async fn apply_pack_after_ready(
         "--apply-root is not a directory: {}",
         root.display()
     );
-    let owner = crate::read_init_config(home_dir)?
+    let owner = gents_service::home_state::read_init_config(home_dir)?
         .context("initialized home required for pack apply")?
         .node_did;
     let executable = std::env::current_exe().context("locating the gents client executable")?;
@@ -368,8 +375,8 @@ async fn serve_with_startup(
     startup: Option<super::prepare_runtime::PreparedStartup>,
 ) -> Result<()> {
     let _keychain_prompt_guard =
-        crate::process_resources::prevent_keychain_prompts(args.no_keychain_prompts)?;
-    crate::process_resources::prepare()?;
+        gents_service::process_resources::prevent_keychain_prompts(args.no_keychain_prompts)?;
+    gents_service::process_resources::prepare()?;
     gents_store::service::executable_build_id().await?;
     let mut store_lifetime = None;
     let outcome = serve_foreground(args, runtime, startup, &mut store_lifetime).await;
@@ -520,13 +527,13 @@ async fn serve_foreground(
         &store_lock,
     )
     .await?;
-    crate::network_settings::NetworkSettings::read(&home_dir)?.fill_unset(&mut args);
+    args.fill_unset_network(&gents_service::network_settings::NetworkSettings::read(&home_dir)?);
     let http_ip = args
         .http_addr
-        .unwrap_or(crate::network_settings::DEFAULT_HTTP_ADDR);
-    crate::network_settings::validate_http_bind(http_ip)?;
-    let http_port = args.http_port.unwrap_or(crate::DEFAULT_HTTP_PORT);
-    if args.http_port.is_none() && !crate::home_state::is_default_home(&home_dir) {
+        .unwrap_or(gents_service::network_settings::DEFAULT_HTTP_ADDR);
+    gents_service::network_settings::validate_http_bind(http_ip)?;
+    let http_port = args.http_port.unwrap_or(gents_service::state::DEFAULT_HTTP_PORT);
+    if args.http_port.is_none() && !gents_service::home_state::is_default_home(&home_dir) {
         tracing::warn!(
             home = %home_dir.display(),
             port = http_port,
@@ -575,7 +582,7 @@ async fn serve_foreground(
         drop(identity.sign(b"gents.runtime-key-unlock.v1").await?);
     }
     let _post_open_keychain_prompt_guard =
-        crate::process_resources::prevent_keychain_prompts(args.keychain_startup_approval)?;
+        gents_service::process_resources::prevent_keychain_prompts(args.keychain_startup_approval)?;
     let protected_backend = protected_backend
         .preflight(&backend_store_key, Some(identity.did()))
         .await?;
@@ -616,7 +623,7 @@ async fn serve_foreground(
     if let Some(config) = p2p_config.as_ref() {
         crate::p2p_relay::log_relay_mode_diagnostics(
             args.p2p_relay_mode
-                .unwrap_or(crate::network_settings::DEFAULT_P2P_RELAY_MODE),
+                .unwrap_or(gents_service::network_settings::DEFAULT_P2P_RELAY_MODE),
         );
         log_p2p_admission_config(config);
     }
@@ -1084,7 +1091,7 @@ async fn serve_foreground(
                 tracing::info!("gents server is running local-only. Press Ctrl-C to stop.");
             }
 
-            let notices = crate::service_update::watch_notices(runtime_configuration_probe.clone(), home_dir.clone());
+            let notices = gents_service::service_update::watch_notices(runtime_configuration_probe.clone(), home_dir.clone());
             tokio::select! {
                 result = runtime.join() => result,
                 _ = notices => unreachable!("the notice observer remains scoped to the serving runtime"),
@@ -1263,7 +1270,7 @@ fn resolve_no_key_server_identity(
     config: &StoredInitConfig,
     home_dir: &Path,
 ) -> Result<ServerIdentity> {
-    let identity = crate::load_initialized_home_identity(home_dir, config)?;
+    let identity = gents_service::home_state::load_initialized_home_identity(home_dir, config)?;
     Ok(ServerIdentity {
         node_identity_did: Some(identity.did().to_string()),
         identity,
@@ -1387,14 +1394,14 @@ fn resolve_server_p2p_config(
         ),
         relay_mode: match args
             .p2p_relay_mode
-            .unwrap_or(crate::network_settings::DEFAULT_P2P_RELAY_MODE)
+            .unwrap_or(gents_service::network_settings::DEFAULT_P2P_RELAY_MODE)
         {
             P2pRelayModeArg::Default => p2p::iroh::IrohRelayModeConfig::Default,
             P2pRelayModeArg::Disabled => p2p::iroh::IrohRelayModeConfig::Disabled,
         },
         discovery: match args
             .p2p_discovery
-            .unwrap_or(crate::network_settings::DEFAULT_P2P_DISCOVERY)
+            .unwrap_or(gents_service::network_settings::DEFAULT_P2P_DISCOVERY)
         {
             P2pDiscoveryArg::N0 => p2p::iroh::IrohDiscoveryConfig::N0,
             P2pDiscoveryArg::Disabled => p2p::iroh::IrohDiscoveryConfig::Disabled,
@@ -1596,8 +1603,8 @@ mod server_key_tests {
             gents_store::local::storage_backend::IncompatibleStoreKind::InsecureKey
         );
         assert_eq!(
-            crate::native_service::incompatible_store_exit_code(store.kind),
-            crate::native_service::INSECURE_KEY_EXIT_CODE
+            gents_service::native_service::incompatible_store_exit_code(store.kind),
+            gents_service::native_service::INSECURE_KEY_EXIT_CODE
         );
         assert_eq!(
             fs::metadata(&key).unwrap().permissions().mode() & 0o777,

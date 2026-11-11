@@ -35,7 +35,7 @@ async fn publish(args: PluginPublishArgs) -> Result<()> {
     let (pack, header) = plugin_pack(dir.path(), &afb, &bytes)?;
 
     let registry = crate::commands::pack::registry::resolve_registry_url(args.registry.as_deref());
-    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
     let token_flag =
         crate::commands::pack::registry::resolve_token_flag(args.token, args.token_stdin)?;
     let token = crate::commands::pack::account::resolve_publish_token(
@@ -99,14 +99,14 @@ fn plugin_pack(
 }
 
 fn list(args: PluginListArgs) -> Result<()> {
-    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
     let records = store::list_records(&home)?;
     crate::print_json(&json!({ "plugins": records }))
 }
 
 async fn remove(args: PluginRemoveArgs) -> Result<()> {
     let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(&args.name);
-    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
     let lock_home = home.clone();
     let guard = tokio::task::spawn_blocking(move || store::try_lock_store(&lock_home)).await??;
     // A pack's home record lists its plugins: release both through the pack

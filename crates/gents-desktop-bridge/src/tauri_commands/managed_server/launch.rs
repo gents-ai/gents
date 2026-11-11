@@ -58,7 +58,7 @@ where
                 Ok(()) => Ok(Launched::Started),
                 Err(error) => {
                     match error
-                        .downcast::<gents_server::native_service::BackgroundApprovalPending>()
+                        .downcast::<gents_service::native_service::BackgroundApprovalPending>()
                     {
                         Ok(pending) => Ok(Launched::ApprovalPending(pending.detail)),
                         Err(error) => Err(error),
@@ -125,7 +125,7 @@ where
                     start_when_approved(state, token, &mut lifecycle, launch).await?;
                 }
                 Readiness::ApprovalRequired => {
-                    anyhow::bail!(gents_server::native_service::BACKGROUND_APPROVAL_REQUIRED)
+                    anyhow::bail!(gents_service::native_service::BACKGROUND_APPROVAL_REQUIRED)
                 }
             }
         }
@@ -173,9 +173,9 @@ where
             match refusal {
                 Some(detail) => anyhow::bail!(
                     "{} (launchctl: {detail})",
-                    gents_server::native_service::BACKGROUND_APPROVAL_REQUIRED
+                    gents_service::native_service::BACKGROUND_APPROVAL_REQUIRED
                 ),
-                None => anyhow::bail!(gents_server::native_service::BACKGROUND_APPROVAL_REQUIRED),
+                None => anyhow::bail!(gents_service::native_service::BACKGROUND_APPROVAL_REQUIRED),
             }
         }
         *lifecycle = None;
@@ -365,7 +365,7 @@ where
         if started.elapsed() >= timeout {
             anyhow::bail!(
                 "{} Gents waited {} minutes for approval.",
-                gents_server::native_service::BACKGROUND_APPROVAL_REQUIRED,
+                gents_service::native_service::BACKGROUND_APPROVAL_REQUIRED,
                 timeout.as_secs() / 60
             );
         }

@@ -50,7 +50,7 @@ pub(super) async fn resolve_scenario_dir(
         let distribution = read_distribution_manifest(&direct)?;
         return Ok((direct, None, distribution));
     }
-    let home = crate::home_state::resolve_home_dir(None);
+    let home = gents_service::home_state::resolve_home_dir(None);
     let pack = super::super::resolve_pack_source(target, registry, &home).await?;
     anyhow::ensure!(
         gents_pack::pack::declared_paths(pack.manifest())

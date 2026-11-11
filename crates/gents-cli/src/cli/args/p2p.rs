@@ -19,21 +19,6 @@ impl P2pTransportArg {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum P2pRelayModeArg {
-    Default,
-    Disabled,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum P2pDiscoveryArg {
-    #[value(name = "n0")]
-    N0,
-    Disabled,
-}
-
 #[derive(Subcommand)]
 pub(crate) enum P2pCommand {
     #[command(about = "Show live P2P connectivity for the running runtime")]

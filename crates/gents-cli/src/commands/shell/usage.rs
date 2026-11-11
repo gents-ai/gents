@@ -29,7 +29,7 @@ pub(super) async fn read(
     let home = work.home.clone();
     let reads = async {
         let identity = blocking(move || {
-            crate::commands::p2p::enrollment_admin::resolve_home_identity(Some(&home))
+            gents_service::enrollment_admin::resolve_home_identity(Some(&home))
         })
         .await?;
         crate::commands::accounts::request_usage_reads(

@@ -4498,6 +4498,7 @@ dependencies = [
  "ciborium",
  "clap",
  "crypto",
+ "ctor",
  "db",
  "defra-core",
  "defra-http",
@@ -4522,6 +4523,7 @@ dependencies = [
  "gents-p2p",
  "gents-pack",
  "gents-protocol",
+ "gents-service",
  "gents-session",
  "gents-shell",
  "gents-store",
@@ -4664,6 +4666,7 @@ dependencies = [
  "gents-loop",
  "gents-pack",
  "gents-protocol",
+ "gents-service",
  "gents-session",
  "gents-store",
  "gents-toolcalls",
@@ -5222,6 +5225,44 @@ dependencies = [
 [[package]]
 name = "gents-schemas"
 version = "1.0.0-rc2"
+
+[[package]]
+name = "gents-service"
+version = "1.0.0-rc2"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "gents",
+ "gents-desktop-core",
+ "gents-protocol",
+ "gents-session",
+ "gents-store",
+ "hostname",
+ "identity",
+ "libc",
+ "notify",
+ "objc2",
+ "objc2-foundation",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
+ "plist",
+ "reqwest 0.12.28",
+ "security-framework",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "wait-timeout",
+]
 
 [[package]]
 name = "gents-session"

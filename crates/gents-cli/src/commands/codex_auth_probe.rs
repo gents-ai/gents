@@ -2,7 +2,8 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
 use crate::cli::args::CodexAuthProbeArgs;
-use crate::{resolve_config_access, resolve_node_did};
+use crate::{resolve_config_access};
+use gents_service::home_state::resolve_node_did;
 
 #[derive(Deserialize)]
 struct ModelsResponse {

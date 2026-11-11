@@ -85,7 +85,7 @@ pub(crate) async fn interview(
                     staged,
                     &ctx.out,
                     ctx.force,
-                    &crate::home_state::resolve_home_dir(ctx.scope.home.as_deref()),
+                    &gents_service::home_state::resolve_home_dir(ctx.scope.home.as_deref()),
                 )?;
                 print_written(ctx, &assembled, &written, out)?;
                 return Ok(InitOutcome {
@@ -208,7 +208,7 @@ pub(crate) async fn preflight(args: &EvalInitArgs) -> Result<()> {
         "{} already exists; pass --force to replace it",
         args.out.display()
     );
-    let home_dir = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+    let home_dir = gents_service::home_state::resolve_home_dir(args.scope.home.as_deref());
     let graphql = match args
         .scope
         .graphql
@@ -217,7 +217,7 @@ pub(crate) async fn preflight(args: &EvalInitArgs) -> Result<()> {
         .filter(|graphql| !graphql.is_empty())
     {
         Some(graphql) => Some(graphql.to_owned()),
-        None => crate::read_runtime_state(&home_dir)?.map(|state| state.graphql),
+        None => gents_service::home_state::read_runtime_state(&home_dir)?.map(|state| state.graphql),
     };
     let served = match graphql {
         Some(graphql) => crate::graphql_access::graphql_endpoint_available(&graphql).await,
@@ -665,11 +665,11 @@ mod tests {
             std::env::var("GENTS_EVAL_INIT_HOME")
                 .expect("GENTS_EVAL_INIT_HOME names a home gents server already serves"),
         );
-        let state = crate::home_state::read_runtime_state(&home_dir)
+        let state = gents_service::home_state::read_runtime_state(&home_dir)
             .unwrap()
             .expect("a runtime state written by `gents runtime server`");
-        crate::load_client_identity().await.unwrap();
-        let graphql = crate::home_graphql_endpoint(&home_dir, state.graphql.clone()).unwrap();
+        gents_service::home_state::load_client_identity().await.unwrap();
+        let graphql = gents_service::home_state::home_graphql_endpoint(&home_dir, state.graphql.clone()).unwrap();
         let access = gents_store::config_client::ConfigAccess::Graphql(graphql.clone());
         let owner = state.node_did.clone();
 

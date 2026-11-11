@@ -1,3 +1,13 @@
+use gents_service::args::ServiceAction;
+use gents_service::home_state::default_data_dir;
+use gents_service::home_state::home_graphql_endpoint;
+use gents_service::home_state::init_config_path;
+use gents_service::home_state::load_client_identity;
+use gents_service::home_state::load_initialized_home_identity;
+use gents_service::home_state::read_init_config;
+use gents_service::home_state::read_runtime_state;
+use gents_service::home_state::resolve_graphql_endpoint;
+use gents_service::home_state::resolve_home_dir;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -27,20 +37,14 @@ mod config_import;
 mod config_writes;
 mod desired_state;
 mod graphql_access;
-mod home_state;
 mod http;
 mod interactive_backend;
-pub mod native_service;
-mod network_settings;
 mod p2p_relay;
 pub mod packs;
-mod process_resources;
 mod request_helpers;
 mod resolve_helpers;
 pub mod server_host;
-mod service_update;
 mod shared;
-mod telemetry;
 
 use cli::*;
 
@@ -48,9 +52,14 @@ use config_bundle::*;
 use config_import::*;
 use config_writes::ConfigAccess;
 use graphql_access::*;
-use home_state::*;
 use request_helpers::*;
 use resolve_helpers::*;
+
+#[cfg(test)]
+#[ctor::ctor]
+fn select_unit_test_homes() {
+    gents_service::home_state::use_unit_test_homes();
+}
 
 const DEFAULT_NODE_NAME: &str = "default";
 const DEFAULT_INIT_ENDPOINT: &str = "http://127.0.0.1:8080/v1";
@@ -59,10 +68,6 @@ const DEFAULT_OLLAMA_ENDPOINT: &str = "http://localhost:11434/v1";
 const DEFAULT_OLLAMA_MODEL_NAME: &str = "hf.co/google/gemma-4-12B-it-qat-q4_0-gguf";
 const DEFAULT_CHATGPT_CODEX_MODEL_NAME: &str = "gpt-6-astra";
 const DEFAULT_XAI_GROK_OAUTH_MODEL_NAME: &str = "grok-4.7";
-#[cfg(not(all(debug_assertions, feature = "native-e2e")))]
-const DEFAULT_HTTP_PORT: u16 = 9191;
-#[cfg(all(debug_assertions, feature = "native-e2e"))]
-const DEFAULT_HTTP_PORT: u16 = 21919;
 const DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS: u64 = 86_400;
 const TOKIO_WORKER_STACK_SIZE: usize = 16 * 1024 * 1024;
 const DEFAULT_P2P_MAX_CONCURRENT_DAG_FETCHES: usize = p2p::sync::DEFAULT_MAX_CONCURRENT_DAG_FETCHES;
@@ -85,8 +90,6 @@ const DEFAULT_LOG_FILTER: &str = concat!(
     "gents::request::streaming=info,",
     "gents::triggers::engine=info"
 );
-const INIT_CONFIG_FILE_NAME: &str = "init.json";
-const RUNTIME_STATE_FILE_NAME: &str = gents_store::local::home::RUNTIME_STATE_FILE_NAME;
 const ROOT_HELP_TEMPLATE: &str = "\
 {about-with-newline}
 {usage-heading} {usage}
@@ -328,7 +331,7 @@ pub fn run_cli_without_keychain_prompts() -> Result<()> {
 /// The platform interaction prohibition is process-wide and retains any inherited
 /// prohibition. Native startup uses it when creating fresh credential custody.
 pub fn without_keychain_prompts<T>(operation: impl FnOnce() -> Result<T>) -> Result<T> {
-    let _interaction = process_resources::prevent_keychain_prompts(true)?;
+    let _interaction = gents_service::process_resources::prevent_keychain_prompts(true)?;
     operation()
 }
 
@@ -400,7 +403,7 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     ) {
         load_client_identity().await?;
     }
-    let telemetry = telemetry::init(DEFAULT_LOG_FILTER)?;
+    let telemetry = gents_service::telemetry::init(DEFAULT_LOG_FILTER)?;
     let result = match command {
         Command::Init(args) => commands::init::init(args).await,
         Command::Server(args) => commands::serve::serve(args, runtime).await,
@@ -483,17 +486,17 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
 
 async fn service_command(command: ServiceCommand) -> Result<()> {
     let command = match command {
-        ServiceCommand::Update(args) => return service_update::submit(args).await,
+        ServiceCommand::Update(args) => return gents_service::service_update::submit(args).await,
         ServiceCommand::UpdateStatus { home, operation_id } => {
-            return service_update::status(home, operation_id).await
+            return gents_service::service_update::status(home, operation_id).await
         }
         ServiceCommand::UpdateRun { home, operation_id } => {
-            return service_update::run(home, operation_id).await
+            return gents_service::service_update::run(home, operation_id).await
         }
-        ServiceCommand::UpdateCheck { home } => return service_update::check(home).await,
+        ServiceCommand::UpdateCheck { home } => return gents_service::service_update::check(home).await,
         command => command,
     };
-    use native_service::{NativeServiceConfig, NativeServiceManager};
+    use gents_service::native_service::{NativeServiceConfig, NativeServiceManager};
 
     tokio::task::spawn_blocking(move || -> Result<()> {
         let (home, executable, action) = command.into_parts();
@@ -505,7 +508,7 @@ async fn service_command(command: ServiceCommand) -> Result<()> {
         let config = NativeServiceConfig::new(home, executable)?;
         let home = config.home.clone();
         let manager = NativeServiceManager::new(config)?;
-        service_update::refuse_self_disruption(&home, &action)?;
+        gents_service::service_update::refuse_self_disruption(&home, &action)?;
         match action {
             ServiceAction::Install {
                 network,
@@ -513,9 +516,9 @@ async fn service_command(command: ServiceCommand) -> Result<()> {
             } => {
                 let environment = environment_file
                     .as_deref()
-                    .map(native_service::read_environment_file)
+                    .map(gents_service::native_service::read_environment_file)
                     .transpose()?;
-                network_settings::install_service(&manager, &home, &network, environment.as_ref())
+                gents_service::network_settings::install_service(&manager, &home, &network, environment.as_ref())
                     .map(drop)
             }
             ServiceAction::Start { enable } => manager.start(enable),
@@ -527,7 +530,7 @@ async fn service_command(command: ServiceCommand) -> Result<()> {
                 print!(
                     "{}\n{}\n",
                     manager.status()?.summary(),
-                    network_settings::NetworkSettings::read(&home)?.summary()
+                    gents_service::network_settings::NetworkSettings::read(&home)?.summary()
                 );
                 Ok(())
             }
@@ -876,7 +879,7 @@ pub(crate) fn server_start_failure_hint(home_dir: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::StoredInitConfig;
+    use gents_service::state::StoredInitConfig;
     use gents_store::identity::NodeIdentity as _;
 
     #[tokio::test]

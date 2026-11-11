@@ -4,7 +4,7 @@ use anyhow::Result;
 /// The CLI owns this guard from before credential loading until server exit;
 /// an inherited prohibition must remain in force when the guard is dropped.
 #[cfg(target_os = "macos")]
-pub(crate) fn prevent_keychain_prompts(
+pub fn prevent_keychain_prompts(
     prevent: bool,
 ) -> Result<Option<security_framework::os::macos::keychain::KeychainUserInteractionLock>> {
     use anyhow::Context;
@@ -23,7 +23,7 @@ pub(crate) fn prevent_keychain_prompts(
 /// Other platforms have no process Keychain policy; the empty guard keeps every
 /// call site holding the same binding as on macOS.
 #[cfg(not(target_os = "macos"))]
-pub(crate) fn prevent_keychain_prompts(_prevent: bool) -> Result<Option<std::convert::Infallible>> {
+pub fn prevent_keychain_prompts(_prevent: bool) -> Result<Option<std::convert::Infallible>> {
     Ok(None)
 }
 
@@ -31,7 +31,7 @@ pub(crate) fn prevent_keychain_prompts(_prevent: bool) -> Result<Option<std::con
 /// from GUI terminals with a low inherited soft limit. Raise only this process
 /// limit, retaining the hard limit and system policy.
 #[cfg(unix)]
-pub(crate) fn prepare() -> Result<()> {
+pub fn prepare() -> Result<()> {
     use anyhow::Context;
     let mut limits = libc::rlimit {
         rlim_cur: 0,
@@ -60,34 +60,12 @@ pub(crate) fn prepare() -> Result<()> {
 }
 
 #[cfg(not(unix))]
-pub(crate) fn prepare() -> Result<()> {
+pub fn prepare() -> Result<()> {
     Ok(())
 }
 
 #[cfg(all(test, unix))]
 mod tests {
-    #[test]
-    fn server_keychain_dialog_prevention_is_opt_in() {
-        use crate::cli::{Cli, Command};
-        use clap::Parser;
-
-        for (arguments, expected) in [
-            (vec!["gents", "server"], false),
-            (vec!["gents", "server", "--no-keychain-prompts"], true),
-        ] {
-            let cli = Cli::try_parse_from(arguments).unwrap();
-            let Some(Command::Server(args)) = cli.command else {
-                panic!("expected server command");
-            };
-            assert_eq!(args.no_keychain_prompts, expected);
-            assert!(!args.keychain_startup_approval);
-        }
-        assert!(
-            Cli::try_parse_from(["gents", "prepare-runtime", "--keychain-startup-approval"])
-                .is_err()
-        );
-    }
-
     #[cfg(target_os = "macos")]
     #[test]
     fn server_keychain_prompt_guard_restores_only_its_process_policy() {

@@ -6,7 +6,8 @@ use serde_json::Value;
 
 use crate::desired_state;
 
-use crate::cli::args::{ToolCeilingArg, ToolPackageArg};
+use gents_service::args::ToolCeilingArg;
+use gents_service::args::ToolPackageArg;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedBackendConfig {
@@ -39,51 +40,6 @@ pub(crate) struct InitSummary {
     pub(crate) defra_query_collections: Vec<String>,
     pub(crate) created_node: bool,
     pub(crate) created_default_agent: bool,
-}
-
-pub(crate) type StoredInitConfig =
-    gents_store::local::home::StoredInitConfig<ToolPackageArg, ToolCeilingArg>;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub(crate) struct P2pAdmissionState {
-    pub(crate) max_pending_dags: usize,
-    pub(crate) max_concurrent_push_tasks: usize,
-    pub(crate) max_concurrent_dag_fetches: usize,
-    pub(crate) rate_limit_burst: u32,
-    pub(crate) rate_limit_rate: f64,
-}
-
-impl P2pAdmissionState {
-    pub(crate) fn to_json(&self) -> Value {
-        serde_json::json!({
-            "max_pending_dags": self.max_pending_dags,
-            "max_concurrent_push_tasks": self.max_concurrent_push_tasks,
-            "max_concurrent_dag_fetches": self.max_concurrent_dag_fetches,
-            "rate_limit_burst": self.rate_limit_burst,
-            "rate_limit_rate": self.rate_limit_rate,
-        })
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct StoredRuntimeState {
-    pub(crate) home: String,
-    pub(crate) graphql: String,
-    pub(crate) node_name: String,
-    pub(crate) node_did: String,
-    pub(crate) default_agent_did: String,
-    #[serde(default = "default_p2p_transport")]
-    pub(crate) p2p_transport: String,
-    #[serde(default)]
-    pub(crate) p2p_peer_id: Option<String>,
-    #[serde(default)]
-    pub(crate) p2p_listen_addresses: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) p2p_admission: Option<P2pAdmissionState>,
-}
-
-fn default_p2p_transport() -> String {
-    "iroh".to_string()
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

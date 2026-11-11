@@ -12,7 +12,8 @@ use tokio::time::Instant;
 use crate::cli::args::RequestInterruptArgs;
 use crate::cli::output_format::OutputFormat;
 use crate::request_helpers::parse_duration_suffix;
-use crate::{post_graphql, print_json, resolve_graphql_endpoint, resolve_request_id};
+use crate::{post_graphql, print_json, resolve_request_id};
+use gents_service::home_state::resolve_graphql_endpoint;
 
 pub(super) async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;

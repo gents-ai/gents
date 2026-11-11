@@ -23,7 +23,7 @@ use crate::cli::args::{
 };
 use crate::cli::output_format::OutputFormat;
 use crate::commands::chat::streaming::sanitize_summary_text;
-use crate::home_state::resolve_node_did;
+use gents_service::home_state::resolve_node_did;
 use crate::request_helpers::print_ndjson;
 use crate::shared::wire;
 use crate::{print_json, resolve_config_access};

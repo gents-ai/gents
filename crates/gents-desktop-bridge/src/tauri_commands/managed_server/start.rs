@@ -158,7 +158,7 @@ where
         if replace_loaded_job {
             run_native(native_service(app, state)?, |service| service.stop(false)).await?;
         }
-        if gents_server::server_host::initialized_home(&node_home) {
+        if gents_service::server_host::initialized_home(&node_home) {
             ensure_default_port_identity(
                 &node_home,
                 user_status_signer(state, &node_home).await.as_ref(),

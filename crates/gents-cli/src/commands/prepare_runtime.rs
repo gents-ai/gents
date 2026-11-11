@@ -3,11 +3,12 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+#[cfg(test)]
+use gents_protocol::serve_lifecycle::control::{
+    RuntimeControlCommand, RuntimeControlReceipt, RUNTIME_CONTROL_PATH, RUNTIME_CONTROL_VERSION,
+};
 use gents_protocol::serve_lifecycle::{
-    control::{
-        current_capabilities, RuntimeControlCommand, RuntimeControlDisposition,
-        RuntimeControlReceipt, RuntimeOperation, RUNTIME_CONTROL_PATH, RUNTIME_CONTROL_VERSION,
-    },
+    control::{current_capabilities, RuntimeControlDisposition, RuntimeOperation},
     preparation::{
         RuntimePreparationOutcome, RuntimePreparationRefusal, RuntimePreparationReport,
         RuntimePreparationResult, RUNTIME_PREPARATION_VERSION,
@@ -18,43 +19,24 @@ use gents_store::config_client::GraphqlEndpoint;
 use tokio::io::AsyncWriteExt as _;
 
 use crate::cli::{P2pTransportArg, PrepareRuntimeArgs};
-use crate::home_state::{load_initialized_home_identity, read_init_config, read_runtime_state};
-use crate::shared::{StoredInitConfig, StoredRuntimeState};
+use gents_service::home_state::load_initialized_home_identity;
+use gents_service::home_state::read_init_config;
+use gents_service::home_state::read_runtime_state;
+use gents_service::state::StoredInitConfig;
+use gents_service::runtime_control::{control, refusal, PreparationFailure};
+use gents_service::state::StoredRuntimeState;
 
 /// Preparation must eventually report a busy home if its startup reservation
 /// or the prior runtime's store release does not arrive.
 const STARTUP_WAIT: Duration = Duration::from_secs(60);
 /// A recorded runtime endpoint may be stale or unresponsive during preparation.
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
-/// Bound the receipt read from a recorded runtime before decoding it.
-const MAX_CONTROL_RECEIPT: usize = 64 * 1024;
 
 mod unlock;
 pub use unlock::{prepare_runtime_after_unlock, unlock_runtime_keys};
 
 #[cfg(test)]
 mod tests;
-
-#[derive(Debug)]
-struct PreparationFailure {
-    reason: RuntimePreparationRefusal,
-    message: String,
-}
-
-impl std::fmt::Display for PreparationFailure {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for PreparationFailure {}
-
-fn refusal(reason: RuntimePreparationRefusal, message: impl Into<String>) -> anyhow::Error {
-    anyhow::Error::new(PreparationFailure {
-        reason,
-        message: message.into(),
-    })
-}
 
 fn refusal_reason(error: &anyhow::Error) -> RuntimePreparationRefusal {
     if gents_store::local::store_key::store_key_unavailable(error.as_ref()).is_some()
@@ -119,13 +101,13 @@ async fn prepare_inner(
         .map(validate_requested_root)
         .transpose()?;
     let _keychain_prompt_guard =
-        crate::process_resources::prevent_keychain_prompts(!args.keychain_startup_approval)?;
-    crate::process_resources::prepare()?;
+        gents_service::process_resources::prevent_keychain_prompts(!args.keychain_startup_approval)?;
+    gents_service::process_resources::prepare()?;
     anyhow::ensure!(
         args.data_dir.is_none(),
         "runtime preparation requires the home's default data directory"
     );
-    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
     let home = tokio::task::spawn_blocking(move || std::fs::canonicalize(home)).await??;
     let build = gents_store::service::executable_build_id().await?;
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -133,13 +115,13 @@ async fn prepare_inner(
         let check_home = home.clone();
         let check_build = build.clone();
         tokio::task::spawn_blocking(move || -> Result<()> {
-            let manager = crate::native_service::NativeServiceManager::new(crate::native_service::NativeServiceConfig::new(check_home.clone(), std::env::current_exe()?)?)?;
+            let manager = gents_service::native_service::NativeServiceManager::new(gents_service::native_service::NativeServiceConfig::new(check_home.clone(), std::env::current_exe()?)?)?;
             if let Some(id) = manager.pending_update()? {
                 return Err(refusal(RuntimePreparationRefusal::StartupBusy, format!("Managed update {id} is pending; inspect service update-status --home {} {id} before selecting another package.", check_home.display())));
             }
             if manager.definition_owned_by_home()? && manager.has_managed_executable()? {
                 let selected = manager.installed_executable_path()?;
-                if crate::service_update::executable_digest(&selected)? != check_build {
+                if gents_service::service_update::executable_digest(&selected)? != check_build {
                     return Err(refusal(RuntimePreparationRefusal::Unsupported, "The node has an explicitly selected managed-update executable. Use that package or an explicit managed update; this package will not replace it automatically."));
                 }
             }
@@ -380,7 +362,7 @@ async fn ensure_requested_root_published(
     config: &StoredInitConfig,
     root: &Path,
 ) -> Result<()> {
-    if matches!(config.tool_ceiling, crate::cli::ToolCeilingArg::MetaOnly) {
+    if matches!(config.tool_ceiling, gents_service::args::ToolCeilingArg::MetaOnly) {
         return Ok(());
     }
     let access = gents_store::config_client::ConfigAccess::Graphql(authorization.clone());
@@ -427,7 +409,7 @@ pub(crate) fn commit_root_change(
         read_init_config(home)?.as_ref() == Some(expected),
         "Runtime configuration changed during startup; retry the workspace access change"
     );
-    crate::home_state::write_init_config(home, updated)
+    gents_service::home_state::write_init_config(home, updated)
 }
 
 fn read_home(home: &Path) -> Result<(StoredInitConfig, Option<StoredRuntimeState>)> {
@@ -477,80 +459,3 @@ fn local_endpoint(raw: &str) -> Result<reqwest::Url> {
     Ok(endpoint)
 }
 
-pub(crate) async fn control(
-    client: &reqwest::Client,
-    endpoint: &reqwest::Url,
-    node_did: &str,
-    operation: RuntimeOperation,
-    authorization: Option<&GraphqlEndpoint>,
-) -> Result<Option<RuntimeControlReceipt>> {
-    let command = RuntimeControlCommand {
-        version: RUNTIME_CONTROL_VERSION,
-        node_did: node_did.to_owned(),
-        nonce: uuid::Uuid::new_v4().to_string(),
-        issued_at: chrono::Utc::now().to_rfc3339(),
-        operation,
-    };
-    let mut url = endpoint.clone();
-    url.set_path(RUNTIME_CONTROL_PATH);
-    let mut request = client.post(url).json(&command);
-    if let Some(authorization) = authorization {
-        request = authorization.authorize(request)?;
-    }
-    let mut response = match request.send().await {
-        Ok(response) => response,
-        Err(error)
-            if error.is_connect() && matches!(command.operation, RuntimeOperation::Observe) =>
-        {
-            return Ok(None)
-        }
-        Err(error) => {
-            return Err(refusal(
-                RuntimePreparationRefusal::Unavailable,
-                format!("Runtime control did not complete. Retry to inspect its state: {error}"),
-            ))
-        }
-    };
-    if response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE
-        && matches!(command.operation, RuntimeOperation::Observe)
-    {
-        return Ok(None);
-    }
-    if matches!(
-        response.status(),
-        reqwest::StatusCode::NOT_FOUND | reqwest::StatusCode::NOT_IMPLEMENTED
-    ) {
-        return Err(refusal(RuntimePreparationRefusal::Unsupported, "The running runtime does not support authenticated updates. Stop it explicitly before preparing this package."));
-    }
-    if !response.status().is_success() {
-        if matches!(
-            response.status(),
-            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
-        ) {
-            return Err(refusal(RuntimePreparationRefusal::Credentials, "The runtime did not authorize its recorded operator. Restore operator access before retrying."));
-        }
-        return Err(refusal(
-            RuntimePreparationRefusal::Unavailable,
-            format!(
-                "Runtime control is unavailable (HTTP {}). Retry after the runtime is ready.",
-                response.status().as_u16()
-            ),
-        ));
-    }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await? {
-        anyhow::ensure!(
-            bytes.len() + chunk.len() <= MAX_CONTROL_RECEIPT,
-            "runtime control receipt is too large"
-        );
-        bytes.extend_from_slice(&chunk);
-    }
-    let receipt = serde_json::from_slice(&bytes)?;
-    gents_store::service::verify_control_receipt(&command, &receipt).map_err(|error| {
-        refusal(
-            RuntimePreparationRefusal::InvalidHome,
-            format!("The live runtime could not authenticate this node: {error:#}"),
-        )
-    })?;
-    Ok(Some(receipt))
-}

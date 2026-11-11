@@ -70,7 +70,7 @@ pub(crate) fn bound_slots(
         return Ok(Vec::new());
     }
     gents_pack::plugin::store::bound_to_profile(
-        &crate::home_state::resolve_home_dir(home),
+        &gents_service::home_state::resolve_home_dir(home),
         node_did,
         profile_id,
     )
@@ -83,7 +83,7 @@ async fn list_candidates(
     plugin_slots: &[String],
 ) -> Result<Value> {
     let observations = if let ConfigAccess::Graphql(graphql) = access {
-        let identity = crate::load_client_identity().await?;
+        let identity = gents_service::home_state::load_client_identity().await?;
         crate::commands::accounts::request_usage_reads(
             &identity,
             graphql,

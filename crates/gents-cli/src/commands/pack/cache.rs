@@ -86,7 +86,7 @@ pub(super) fn prepare_recorded_cache(
 }
 
 pub(super) async fn prune(args: PackPruneArgs) -> Result<()> {
-    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
     let pack = super::resolve_pack_source(&args.package, None, &home).await?;
     anyhow::ensure!(
         pack.manifest().metadata.kind == PackKind::Assets

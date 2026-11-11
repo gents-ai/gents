@@ -30,7 +30,6 @@ mod work;
 
 pub(crate) use accounts::*;
 pub(crate) use backend::*;
-pub use config::ToolCeilingArg;
 pub(crate) use config::*;
 pub(crate) use config_documents::*;
 pub(crate) use docs::*;
@@ -329,5 +328,7 @@ pub(crate) enum DesktopCommand {
     },
 }
 
+#[cfg(test)]
+mod service_network_tests;
 #[cfg(test)]
 mod tests;

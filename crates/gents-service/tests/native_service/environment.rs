@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 
 use anyhow::Result;
-use gents_server::native_service::read_environment_file;
+use gents_service::native_service::read_environment_file;
 
 use super::{config, manager, ok, output, NativeServicePlatform, ScriptedRunner};
 

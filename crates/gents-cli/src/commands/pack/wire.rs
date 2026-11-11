@@ -53,7 +53,7 @@ pub(super) static WIRE_TEST_PAUSE: std::sync::Mutex<Option<std::sync::Arc<WireTe
 
 pub(crate) async fn wire(args: PackWireArgs) -> Result<()> {
     let (access, owner) = super::resolve_scope_owner(&args.scope).await?;
-    let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.scope.home.as_deref());
     let request = WireRequest {
         plugin: args.plugin,
         agent: args.agent,
@@ -155,7 +155,7 @@ async fn wire_in_owned(
             .await?
     } else if matches!(access, ConfigAccess::Local(_)) {
         use gents_store::identity::NodeIdentity as _;
-        let client = crate::home_state::load_client_identity().await?;
+        let client = gents_service::home_state::load_client_identity().await?;
         anyhow::ensure!(
             access.actor_did().as_deref() == Some(client.did()),
             "pack wire requires the held User identity selected by the local transaction"
@@ -285,7 +285,7 @@ pub(crate) async fn attach_pack_skills(
     };
     if matches!(access, ConfigAccess::Local(_)) {
         use gents_store::identity::NodeIdentity as _;
-        let client = crate::home_state::load_client_identity().await?;
+        let client = gents_service::home_state::load_client_identity().await?;
         anyhow::ensure!(
             access.actor_did().as_deref() == Some(client.did()),
             "attaching pack skills requires the held User identity selected by the local transaction"

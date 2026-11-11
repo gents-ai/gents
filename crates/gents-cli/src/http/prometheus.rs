@@ -170,7 +170,7 @@ pub(crate) struct P2pMetricsSnapshot {
     pub(crate) enabled: bool,
     pub(crate) connected_peers: usize,
     pub(crate) replicators: usize,
-    pub(crate) admission: Option<crate::shared::P2pAdmissionState>,
+    pub(crate) admission: Option<gents_service::state::P2pAdmissionState>,
     pub(crate) sync_status: Option<gents_p2p::p2p::observability::P2pSyncStatusSnapshot>,
     pub(crate) stale: bool,
     pub(crate) peer_id: Option<String>,
@@ -2051,7 +2051,7 @@ mod tests {
                 enabled: true,
                 connected_peers: 3,
                 replicators: 2,
-                admission: Some(crate::shared::P2pAdmissionState {
+                admission: Some(gents_service::state::P2pAdmissionState {
                     max_pending_dags: 1000,
                     max_concurrent_push_tasks: 8,
                     max_concurrent_dag_fetches: 4,

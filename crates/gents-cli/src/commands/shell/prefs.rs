@@ -22,6 +22,6 @@ pub(super) fn read_keys(home: &Path) -> KeySet {
 
 pub(super) fn save_keys(home: &Path, keys: KeySet) -> std::io::Result<()> {
     let contents = json!({ "keys": keys.name() }).to_string();
-    crate::native_service::atomic_write(&keys_path(home), contents.as_bytes())
+    gents_service::native_service::atomic_write(&keys_path(home), contents.as_bytes())
         .map_err(|error| std::io::Error::other(format!("{error:#}")))
 }

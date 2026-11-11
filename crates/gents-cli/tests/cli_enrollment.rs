@@ -256,7 +256,7 @@ async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node(
                 "a resend never authors another request"
             );
             wait_for_runtime_enrollment_request(&graphql, &pending.request_id).await?;
-            let requests = gents_server::server_host::pending_managed_enrollments(&home_dir, &graphql)
+            let requests = gents_service::server_host::pending_managed_enrollments(&home_dir, &graphql)
                 .await
                 .context("listing managed pending enrollments")?;
             let client_did = core.node_identity().did();
@@ -302,11 +302,11 @@ async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node(
             assert_eq!(granted["node_did"], node_did);
             assert_eq!(granted["candidate_did"], client_did);
             assert_eq!(granted["node_administrator_granted"], true);
-            let outcome = gents_server::server_host::decide_managed_enrollment(
+            let outcome = gents_service::server_host::decide_managed_enrollment(
                 &home_dir,
                 &graphql,
                 &pending.request_id,
-                gents_server::server_host::ManagedEnrollmentDecision::Approve {
+                gents_service::server_host::ManagedEnrollmentDecision::Approve {
                     lease_seconds: 3600,
                 },
             )
@@ -314,7 +314,7 @@ async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node(
             .context("approving managed enrollment request")?;
             assert_eq!(outcome.request_id, pending.request_id);
             assert_eq!(outcome.state, "approved");
-            assert!(!gents_server::server_host::pending_managed_enrollments(&home_dir, &graphql)
+            assert!(!gents_service::server_host::pending_managed_enrollments(&home_dir, &graphql)
                 .await?
                 .iter()
                 .any(|item| item.request_id == pending.request_id));

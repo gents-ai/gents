@@ -256,7 +256,7 @@ fn initialize_fixture_identity(plan: &mut Plan) {
     plan.node_did = identity.did().to_owned();
     crate::home_state::write_init_config(
         &plan.home,
-        &crate::shared::StoredInitConfig {
+        &crate::state::StoredInitConfig {
             home: plan.home.to_string_lossy().into_owned(),
             node_name: "fixture".into(),
             node_did: plan.node_did.clone(),
@@ -265,7 +265,7 @@ fn initialize_fixture_identity(plan: &mut Plan) {
             keychain_label: None,
             secure_enclave_label: None,
             tool_package: None,
-            tool_ceiling: crate::cli::args::ToolCeilingArg::Readwrite,
+            tool_ceiling: crate::args::ToolCeilingArg::Readwrite,
             tool_root: Some(plan.home.to_string_lossy().into_owned()),
             store_encryption: None,
         },

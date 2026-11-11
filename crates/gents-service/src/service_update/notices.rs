@@ -5,7 +5,7 @@ use super::*;
 /// Failure recovery rearms the native watcher with bounded backoff. Healthy
 /// observation waits only on file events. Mailbox reconciliation is idempotent;
 /// ConfigAccess still owns transaction-conflict retry, not this observer.
-pub(crate) async fn watch_notices(runtime: gents::Gents, home: PathBuf) {
+pub async fn watch_notices(runtime: gents::Gents, home: PathBuf) {
     let mut backoff = Duration::from_secs(1);
     loop {
         if let Err(error) = observe(&runtime, &home).await {

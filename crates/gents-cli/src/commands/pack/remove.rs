@@ -11,7 +11,7 @@ use crate::cli::PackRemoveArgs;
 pub(crate) async fn remove(args: PackRemoveArgs) -> Result<(), PackChangeError> {
     let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(&args.package);
     let coordinate = format!("{namespace}/{name}");
-    let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.scope.home.as_deref());
 
     // A documents pack's record has no assets or node-free removal: it goes
     // through `remove_pack` below and the record is forgotten after.

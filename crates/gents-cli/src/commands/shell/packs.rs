@@ -89,7 +89,7 @@ pub(super) async fn read(
 
 async fn runtime_answers(home: &Path) -> bool {
     let home = home.to_path_buf();
-    match blocking(move || crate::home_state::read_runtime_state(&home)).await {
+    match blocking(move || gents_service::home_state::read_runtime_state(&home)).await {
         Ok(Some(state)) => crate::graphql_access::graphql_endpoint_available(&state.graphql).await,
         Ok(None) | Err(_) => false,
     }

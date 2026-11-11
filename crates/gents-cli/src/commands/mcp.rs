@@ -64,7 +64,7 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
     if args.version.trim() != "unversioned" {
         anyhow::bail!("--version is not supported by the MCP service configuration");
     }
-    let node_did = crate::resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
+    let node_did = gents_service::home_state::resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
     let send_node_did = args.send_node_did;
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     if matches!(&access, ConfigAccess::Local(_)) {
@@ -131,7 +131,7 @@ async fn mcp_probe(args: McpProbeArgs) -> Result<()> {
     }
 
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let node_did = crate::resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
+    let node_did = gents_service::home_state::resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
     let services = load_mcp_services(&access, &node_did, target.service_id()).await?;
     if matches!(target, ProbeTarget::Single(_)) && services.is_empty() {
         anyhow::bail!(

@@ -1,3 +1,6 @@
+use gents_service::args::ToolCeilingArg;
+use gents_service::args::ToolPackageArg;
+use gents_service::state::StoredInitConfig;
 use std::fs;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -30,12 +33,15 @@ use serde_json::{json, Value};
 use crate::cli::*;
 use crate::config_writes::ConfigAccess;
 use crate::shared::*;
-use crate::{
-    clear_init_pending, clear_runtime_state, dangerously_overwrite_home, default_data_dir,
-    default_key_path, format_tool_ceiling, format_tool_package, mark_init_pending,
-    normalize_optional_string, print_json, read_init_config, resolve_home_dir, write_init_config,
-    BackendResolutionMode,
-};
+use crate::{dangerously_overwrite_home, format_tool_ceiling, format_tool_package, normalize_optional_string, print_json, BackendResolutionMode};
+use gents_service::home_state::clear_init_pending;
+use gents_service::home_state::clear_runtime_state;
+use gents_service::home_state::default_data_dir;
+use gents_service::home_state::default_key_path;
+use gents_service::home_state::mark_init_pending;
+use gents_service::home_state::read_init_config;
+use gents_service::home_state::resolve_home_dir;
+use gents_service::home_state::write_init_config;
 
 pub(crate) mod default_packs;
 mod model_choice;
@@ -199,7 +205,7 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
                 .clone()
                 .unwrap_or_else(|| default_key_path(&home_dir, &args.node_name))
         });
-        let owner = crate::home_state::load_client_identity().await?;
+        let owner = gents_service::home_state::load_client_identity().await?;
         let summary = write_identity_only_home_metadata(IdentityOnlyHomeOptions {
             home: &home_dir,
             node_name: &args.node_name,
@@ -261,7 +267,7 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
         .await?;
         let existing =
             read_init_config(&home_dir)?.context("existing home has no initialized identity")?;
-        let identity = crate::home_state::load_initialized_home_identity(&home_dir, &existing)?;
+        let identity = gents_service::home_state::load_initialized_home_identity(&home_dir, &existing)?;
         provenance.preflight(&key, Some(identity.did())).await?;
         None
     };
@@ -336,7 +342,7 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
             .await
             .context("building embedded DefraDB node for init")?,
     );
-    let client_paths = crate::home_state::cli_identity_paths()?;
+    let client_paths = gents_service::home_state::cli_identity_paths()?;
     client_paths.ensure_root_dirs().await?;
     let client_identity =
         gents_desktop_core::client::PrincipalIdentity::load_or_create(&client_paths).await?;
@@ -1023,7 +1029,7 @@ async fn initialize_home_store(
 
 fn load_or_create_home_identity(options: HomeIdentityOptions<'_>) -> Result<HomeIdentity> {
     if let Some(stored) = read_init_config(options.home)? {
-        let identity = crate::home_state::load_initialized_home_identity(options.home, &stored)?;
+        let identity = gents_service::home_state::load_initialized_home_identity(options.home, &stored)?;
         let node_identity_did = identity.did().to_string();
         return Ok(HomeIdentity {
             identity,
@@ -1912,7 +1918,7 @@ mod tests {
             .await
             .unwrap();
         let config = read_init_config(&home).unwrap().unwrap();
-        let runtime = crate::home_state::load_initialized_home_identity(&home, &config).unwrap();
+        let runtime = gents_service::home_state::load_initialized_home_identity(&home, &config).unwrap();
         let preflight =
             gents_store::local::backend_protection::ProtectedBackendStore::open(&data, &key, &lock)
                 .await
@@ -2473,7 +2479,7 @@ mod tests {
         initialize_disposable_home(&home, false).await?;
 
         let stored = read_init_config(&home)?.context("initialized home missing configuration")?;
-        let identity = crate::home_state::load_initialized_home_identity(&home, &stored)?;
+        let identity = gents_service::home_state::load_initialized_home_identity(&home, &stored)?;
         let data = default_data_dir(&home);
         let lock_home = home.clone();
         let lock_data = data.clone();
@@ -2608,9 +2614,9 @@ mod tests {
         let home = temp.path().join("home");
         let initial = initialize_disposable_home(&home, false).await.unwrap();
         let stored = read_init_config(&home).unwrap().unwrap();
-        let identity = crate::home_state::load_initialized_home_identity(&home, &stored).unwrap();
+        let identity = gents_service::home_state::load_initialized_home_identity(&home, &stored).unwrap();
         let client = gents_desktop_core::client::PrincipalIdentity::load_or_create(
-            &crate::home_state::cli_identity_paths().unwrap(),
+            &gents_service::home_state::cli_identity_paths().unwrap(),
         )
         .await
         .unwrap();
@@ -2827,7 +2833,7 @@ mod tests {
         let home = temp.path().join("home");
         let initial = initialize_disposable_home(&home, false).await.unwrap();
         let stored = read_init_config(&home).unwrap().unwrap();
-        let identity = crate::home_state::load_initialized_home_identity(&home, &stored).unwrap();
+        let identity = gents_service::home_state::load_initialized_home_identity(&home, &stored).unwrap();
         let agent = identity::Did::new(initial["default_agent_did"].as_str().unwrap()).unwrap();
         let data = default_data_dir(&home);
         let _claim = lock_init_store(&home, &data, false).unwrap();

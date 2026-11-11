@@ -13,7 +13,7 @@ use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;
 
 use crate::config_writes::ConfigAccess;
-use crate::shared::StoredInitConfig;
+use gents_service::state::StoredInitConfig;
 
 const DISPLAY_NAME: &str = "Yolo";
 const ASSIGN_WAIT: Duration = Duration::from_secs(30);

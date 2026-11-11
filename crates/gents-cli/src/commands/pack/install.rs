@@ -236,7 +236,7 @@ async fn install_documents_pack_inner(
     explicit: bool,
     local: Option<&LocalPackAccess>,
 ) -> Result<serde_json::Value, PackChangeError> {
-    let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.scope.home.as_deref());
     let dependencies: Vec<PackSource> =
         futures_util::stream::iter(pack.manifest().metadata.dependencies.iter())
             .map(|coordinate| resolve_pack_source(coordinate, args.registry.as_deref(), &home))
@@ -320,7 +320,7 @@ async fn install_documents_pack_resolved_inner(
     dependencies: Vec<PackSource>,
     local: Option<&LocalPackAccess>,
 ) -> Result<serde_json::Value, PackChangeError> {
-    let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.scope.home.as_deref());
     let requested = parse_inference_slot_bindings(&args.inference_slots)?;
     let temp = tempfile::tempdir().map_err(anyhow::Error::from)?;
     gents_pack::pack::materialize::materialize(pack.archive(), temp.path())?;
@@ -721,7 +721,7 @@ pub(super) async fn install_documents_command_with_local(
 ) -> Result<(), PackChangeError> {
     let result = async {
         let (home, owner, local) = async {
-            let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+            let home = gents_service::home_state::resolve_home_dir(args.scope.home.as_deref());
             let bind_mode = if args.scope.graphql.is_some() {
                 Some(ManifestNodeDidBindingArg::Live)
             } else {
@@ -740,9 +740,9 @@ pub(super) async fn install_documents_command_with_local(
             )
             .await?;
             let local = if let Some(endpoint) = local_endpoint {
-                let config = crate::home_state::read_init_config(&home)?
+                let config = gents_service::home_state::read_init_config(&home)?
                     .context("home is not initialized")?;
-                let runtime = crate::home_state::load_initialized_home_identity(&home, &config)?;
+                let runtime = gents_service::home_state::load_initialized_home_identity(&home, &config)?;
                 anyhow::ensure!(
                     runtime.did() == owner,
                     "selected Node does not match the held runtime"
@@ -806,7 +806,7 @@ pub(super) async fn install_documents_command_with_local(
 }
 
 pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError> {
-    let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.scope.home.as_deref());
     let pack = resolve_pack_source(&args.package, args.registry.as_deref(), &home).await?;
     tracing::info!(package = %args.package, source = %pack.describe(), "resolved pack");
     check_expected_digest(args.expect_digest.as_deref(), pack.digest())?;

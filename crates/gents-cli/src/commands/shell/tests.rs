@@ -2220,9 +2220,9 @@ pub(super) fn home_serving(
         Some(key) => {
             let identity = gents_store::identity::KeyIdentity::load_or_create(key, None).unwrap();
             let did = gents_store::identity::NodeIdentity::did(&identity).to_string();
-            crate::home_state::write_init_config(
+            gents_service::home_state::write_init_config(
                 home.path(),
-                &crate::shared::StoredInitConfig {
+                &gents_service::state::StoredInitConfig {
                     home: path.clone(),
                     node_name: "fixture".into(),
                     node_did: did.clone(),
@@ -2231,7 +2231,7 @@ pub(super) fn home_serving(
                     keychain_label: None,
                     secure_enclave_label: None,
                     tool_package: None,
-                    tool_ceiling: crate::cli::args::ToolCeilingArg::MetaOnly,
+                    tool_ceiling: gents_service::args::ToolCeilingArg::MetaOnly,
                     tool_root: None,
                     store_encryption: None,
                 },
@@ -2241,9 +2241,9 @@ pub(super) fn home_serving(
         }
         None => OWNER.to_string(),
     };
-    crate::home_state::write_runtime_state(
+    gents_service::home_state::write_runtime_state(
         home.path(),
-        &crate::shared::StoredRuntimeState {
+        &gents_service::state::StoredRuntimeState {
             home: path,
             graphql: graphql.to_string(),
             node_name: "fixture".into(),
@@ -5086,7 +5086,7 @@ async fn packs_wait_for_the_runtime() {
     let rows = super::packs::read(&work, home.path(), &did, &runtime, "", 1).await;
     let off_rows = super::packs::read(&off, home.path(), &did, &runtime, "", 1).await;
 
-    let data = crate::home_state::default_data_dir(home.path());
+    let data = gents_service::home_state::default_data_dir(home.path());
     assert!(!data.exists(), "a pack call opened the store");
     assert!(
         !data.with_extension("lock").exists(),

@@ -10,10 +10,11 @@ use gents_store::identity::{
 };
 use gents_store::local::home::INIT_PENDING_FILE_NAME;
 
-use crate::shared::{StoredInitConfig, StoredRuntimeState};
-use crate::{DEFAULT_HTTP_PORT, RUNTIME_STATE_FILE_NAME};
+use crate::state::{
+    StoredInitConfig, StoredRuntimeState, DEFAULT_HTTP_PORT, RUNTIME_STATE_FILE_NAME,
+};
 
-pub(crate) fn resolve_home_dir(explicit: Option<&Path>) -> PathBuf {
+pub fn resolve_home_dir(explicit: Option<&Path>) -> PathBuf {
     explicit
         .map(Path::to_path_buf)
         .unwrap_or_else(default_home_dir)
@@ -21,10 +22,13 @@ pub(crate) fn resolve_home_dir(explicit: Option<&Path>) -> PathBuf {
 
 /// Exits on any failure but an unresolved user home: `resolve_home_dir`'s many
 /// callers hold no `Result`, and falling back would open the wrong data.
-#[cfg(not(test))]
 fn default_home_dir() -> PathBuf {
     use gents_protocol::error_chain::ErrorChain;
     use gents_store::local::home::HomeError;
+    #[cfg(any(test, feature = "test-home-guard"))]
+    if let Some(homes) = unit_test_homes() {
+        return homes.path().join("runtime");
+    }
     match gents_store::local::home::default_home_dir() {
         Ok(home) => home,
         Err(HomeError::HomeDirUnresolved) => PathBuf::from(".gents"),
@@ -35,65 +39,73 @@ fn default_home_dir() -> PathBuf {
     }
 }
 
+#[cfg(any(test, feature = "test-home-guard"))]
+static UNIT_TEST_PROCESS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(cfg!(test));
+
 /// Unit tests share the operator's process environment, so they cannot select
 /// a runtime home through it; a command they run without `--home` resolves
-/// this throwaway home.
-#[cfg(test)]
-fn default_home_dir() -> PathBuf {
-    unit_test_homes().path().join("runtime")
+/// a throwaway home. A dependent crate's unit-test binary selects this before
+/// its tests run; its spawned binaries and integration tests do not.
+#[cfg(any(test, feature = "test-home-guard"))]
+pub fn use_unit_test_homes() {
+    UNIT_TEST_PROCESS.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
-#[cfg(test)]
-fn unit_test_homes() -> &'static tempfile::TempDir {
+#[cfg(any(test, feature = "test-home-guard"))]
+fn unit_test_homes() -> Option<&'static tempfile::TempDir> {
     static ROOT: std::sync::LazyLock<tempfile::TempDir> = std::sync::LazyLock::new(|| {
         tempfile::tempdir().expect("creating the unit tests' throwaway homes")
     });
-    &ROOT
+    UNIT_TEST_PROCESS
+        .load(std::sync::atomic::Ordering::Relaxed)
+        .then(|| &*ROOT)
 }
 
 /// Never exits: a service started with `--home` must not depend on the
 /// remembered file.
-pub(crate) fn is_default_home(home_dir: &Path) -> bool {
+pub fn is_default_home(home_dir: &Path) -> bool {
     let canonical = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    #[cfg(test)]
-    let default = Ok::<_, gents_store::local::home::HomeError>(default_home_dir());
-    #[cfg(not(test))]
+    #[cfg(any(test, feature = "test-home-guard"))]
+    if unit_test_homes().is_some() {
+        return canonical(home_dir) == canonical(&default_home_dir());
+    }
     let default = gents_store::local::home::default_home_dir();
     default.is_ok_and(|default| canonical(home_dir) == canonical(&default))
 }
 
-pub(crate) fn default_data_dir(home_dir: &Path) -> PathBuf {
+pub fn default_data_dir(home_dir: &Path) -> PathBuf {
     gents_store::local::home::default_data_dir(home_dir)
 }
 
-pub(crate) fn default_key_path(home_dir: &Path, node_name: &str) -> PathBuf {
+pub fn default_key_path(home_dir: &Path, node_name: &str) -> PathBuf {
     gents_store::local::home::default_key_path(home_dir, node_name)
 }
 
-pub(crate) fn init_config_path(home_dir: &Path) -> PathBuf {
+pub fn init_config_path(home_dir: &Path) -> PathBuf {
     gents_store::local::home::init_config_path(home_dir)
 }
 
-pub(crate) fn runtime_state_path(home_dir: &Path) -> PathBuf {
+pub fn runtime_state_path(home_dir: &Path) -> PathBuf {
     home_dir.join(RUNTIME_STATE_FILE_NAME)
 }
 
-pub(crate) fn write_init_config(home_dir: &Path, state: &StoredInitConfig) -> Result<()> {
+pub fn write_init_config(home_dir: &Path, state: &StoredInitConfig) -> Result<()> {
     Ok(gents_store::local::home::write_init_config(
         home_dir, state,
     )?)
 }
 
-pub(crate) fn read_init_config(home_dir: &Path) -> Result<Option<StoredInitConfig>> {
+pub fn read_init_config(home_dir: &Path) -> Result<Option<StoredInitConfig>> {
     Ok(gents_store::local::home::read_init_config(home_dir)?)
 }
 
-pub(crate) fn mark_init_pending(home_dir: &Path) -> Result<()> {
+pub fn mark_init_pending(home_dir: &Path) -> Result<()> {
     let path = home_dir.join(INIT_PENDING_FILE_NAME);
     fs::write(&path, b"").with_context(|| format!("writing {}", path.display()))
 }
 
-pub(crate) fn clear_init_pending(home_dir: &Path) -> Result<()> {
+pub fn clear_init_pending(home_dir: &Path) -> Result<()> {
     let path = home_dir.join(INIT_PENDING_FILE_NAME);
     match fs::remove_file(&path) {
         Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
@@ -104,7 +116,7 @@ pub(crate) fn clear_init_pending(home_dir: &Path) -> Result<()> {
 }
 
 /// `None` also for a home `init` has not finished, which `init` can resume.
-pub(crate) fn read_finished_init_config(home_dir: &Path) -> Result<Option<StoredInitConfig>> {
+pub fn read_finished_init_config(home_dir: &Path) -> Result<Option<StoredInitConfig>> {
     if home_dir.join(INIT_PENDING_FILE_NAME).exists() {
         return Ok(None);
     }
@@ -114,7 +126,7 @@ pub(crate) fn read_finished_init_config(home_dir: &Path) -> Result<Option<Stored
 /// Load and register the signer recorded by an initialized home; every
 /// embedded-node entry point uses this same loader so opening the data
 /// directory outside `gents runtime server` never silently produces unsigned commits.
-pub(crate) fn load_initialized_home_identity(
+pub fn load_initialized_home_identity(
     home_dir: &Path,
     config: &StoredInitConfig,
 ) -> Result<Arc<dyn NodeIdentity>> {
@@ -198,7 +210,7 @@ pub(crate) fn load_initialized_home_identity(
     Ok(identity)
 }
 
-pub(crate) fn write_runtime_state(home_dir: &Path, state: &StoredRuntimeState) -> Result<()> {
+pub fn write_runtime_state(home_dir: &Path, state: &StoredRuntimeState) -> Result<()> {
     fs::create_dir_all(home_dir)
         .with_context(|| format!("creating home directory {}", home_dir.display()))?;
     let path = runtime_state_path(home_dir);
@@ -209,7 +221,7 @@ pub(crate) fn write_runtime_state(home_dir: &Path, state: &StoredRuntimeState) -
         .with_context(|| format!("writing runtime state {}", path.display()))
 }
 
-pub(crate) fn read_runtime_state(home_dir: &Path) -> Result<Option<StoredRuntimeState>> {
+pub fn read_runtime_state(home_dir: &Path) -> Result<Option<StoredRuntimeState>> {
     let path = runtime_state_path(home_dir);
     if !path.exists() {
         return Ok(None);
@@ -221,7 +233,7 @@ pub(crate) fn read_runtime_state(home_dir: &Path) -> Result<Option<StoredRuntime
     Ok(Some(state))
 }
 
-pub(crate) fn clear_runtime_state(home_dir: &Path) -> Result<bool> {
+pub fn clear_runtime_state(home_dir: &Path) -> Result<bool> {
     let path = runtime_state_path(home_dir);
     if path.exists() {
         fs::remove_file(&path)
@@ -231,7 +243,7 @@ pub(crate) fn clear_runtime_state(home_dir: &Path) -> Result<bool> {
     Ok(false)
 }
 
-pub(crate) fn resolve_graphql_endpoint(
+pub fn resolve_graphql_endpoint(
     explicit: Option<&str>,
     home: Option<&Path>,
 ) -> Result<GraphqlEndpoint> {
@@ -276,7 +288,7 @@ pub(crate) fn resolve_graphql_endpoint(
 
 /// Client document access retains the user's identity. Credentials remain bound to
 /// this home's endpoint or loopback; loading a runtime key never grants client access.
-pub(crate) fn home_graphql_endpoint(
+pub fn home_graphql_endpoint(
     home_dir: &Path,
     url: impl Into<String>,
 ) -> Result<GraphqlEndpoint> {
@@ -304,21 +316,19 @@ fn home_graphql_endpoint_with_paths(
 }
 
 /// The CLI is a separate client principal, even when desktop and CLI share a user home.
-pub(crate) fn cli_identity_paths() -> Result<gents_desktop_core::client::DesktopPaths> {
+pub fn cli_identity_paths() -> Result<gents_desktop_core::client::DesktopPaths> {
     Ok(cli_identity_paths_under(&desktop_paths()?))
 }
 
-#[cfg(not(test))]
+/// Unit tests share one throwaway CLI client home; see [`use_unit_test_homes`].
 fn desktop_paths() -> Result<gents_desktop_core::client::DesktopPaths> {
+    #[cfg(any(test, feature = "test-home-guard"))]
+    if let Some(homes) = unit_test_homes() {
+        return Ok(gents_desktop_core::client::DesktopPaths::from_root(
+            homes.path().join("desktop"),
+        ));
+    }
     gents_desktop_core::client::DesktopPaths::discover()
-}
-
-/// Unit tests share one throwaway CLI client home; see [`default_home_dir`].
-#[cfg(test)]
-fn desktop_paths() -> Result<gents_desktop_core::client::DesktopPaths> {
-    Ok(gents_desktop_core::client::DesktopPaths::from_root(
-        unit_test_homes().path().join("desktop"),
-    ))
 }
 
 fn cli_identity_paths_under(
@@ -329,7 +339,7 @@ fn cli_identity_paths_under(
 
 /// The CLI's held User key signs every client-authored command; a registry
 /// lookup by DID cannot present the key to owners that need its capability.
-pub(crate) fn held_client_identity(
+pub fn held_client_identity(
     actor_did: &str,
 ) -> Result<std::sync::Arc<dyn gents_store::identity::NodeIdentity>> {
     let identity =
@@ -342,7 +352,7 @@ pub(crate) fn held_client_identity(
     Ok(std::sync::Arc::new(identity))
 }
 
-pub(crate) async fn load_client_identity() -> Result<gents_desktop_core::client::PrincipalIdentity>
+pub async fn load_client_identity() -> Result<gents_desktop_core::client::PrincipalIdentity>
 {
     let paths = cli_identity_paths()?;
     paths.ensure_root_dirs().await?;
@@ -366,7 +376,7 @@ fn endpoint_serves_home(home_dir: &Path, url: &str) -> bool {
     })
 }
 
-pub(crate) fn resolve_node_did(home: Option<&Path>, explicit: Option<&str>) -> Result<String> {
+pub fn resolve_node_did(home: Option<&Path>, explicit: Option<&str>) -> Result<String> {
     if let Some(node_did) = explicit.map(str::trim).filter(|value| !value.is_empty()) {
         return Ok(node_did.to_string());
     }
@@ -384,7 +394,7 @@ pub(crate) fn resolve_node_did(home: Option<&Path>, explicit: Option<&str>) -> R
     )
 }
 
-pub(crate) fn display_host(host: IpAddr) -> String {
+pub fn display_host(host: IpAddr) -> String {
     match host {
         IpAddr::V4(addr) if addr == Ipv4Addr::UNSPECIFIED => "127.0.0.1".to_string(),
         _ => host.to_string(),
@@ -464,7 +474,7 @@ mod tests {
         ));
 
         std::fs::write(
-            home.path().join(crate::RUNTIME_STATE_FILE_NAME),
+            home.path().join(crate::state::RUNTIME_STATE_FILE_NAME),
             serde_json::to_vec(&serde_json::json!({
                 "home": home.path(),
                 "graphql": "http://100.69.4.79:9191/api/v0/graphql",

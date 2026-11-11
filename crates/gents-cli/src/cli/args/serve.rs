@@ -1,10 +1,9 @@
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
-use super::{
-    parse_env_var_name, P2pDiscoveryArg, P2pRelayModeArg, P2pTransportArg, StoreKeyCustodyArg,
-    ToolCeilingArg,
-};
+use gents_service::args::{P2pDiscoveryArg, P2pRelayModeArg, ToolCeilingArg};
+
+use super::{parse_env_var_name, P2pTransportArg, StoreKeyCustodyArg};
 
 #[derive(clap::Args)]
 pub(crate) struct PrepareRuntimeArgs {
@@ -198,4 +197,19 @@ pub(crate) struct ShellArgs {
     /// As on `init`: tests pass `file` so they never write login-keychain items.
     #[arg(long, value_enum, hide = true)]
     pub(crate) store_key_custody: Option<StoreKeyCustodyArg>,
+}
+
+impl ServeArgs {
+    /// Explicit `gents runtime server` flags win over persisted settings.
+    pub(crate) fn fill_unset_network(
+        &mut self,
+        settings: &gents_service::network_settings::NetworkSettings,
+    ) {
+        self.http_addr = self.http_addr.or(settings.http_addr);
+        self.http_port = self.http_port.or(settings.http_port);
+        self.p2p_bind_addr = self.p2p_bind_addr.or(settings.p2p_bind_addr);
+        self.p2p_port = self.p2p_port.or(settings.p2p_port);
+        self.p2p_relay_mode = self.p2p_relay_mode.or(settings.p2p_relay_mode);
+        self.p2p_discovery = self.p2p_discovery.or(settings.p2p_discovery);
+    }
 }

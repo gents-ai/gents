@@ -1,6 +1,7 @@
 use crate::cli::*;
 use crate::shared::ResolvedBackendConfig;
-use crate::{resolve_node_did, BackendResolutionMode};
+use crate::{BackendResolutionMode};
+use gents_service::home_state::resolve_node_did;
 use anyhow::{Context, Result};
 use gents_documents::apply_desired_state_plan;
 use gents_documents::{

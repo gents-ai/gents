@@ -5,7 +5,9 @@ use gents_inference::backends::provider::BackendProviderKind;
 use gents_loop::openai_wire::OpenAiWireApi;
 use gents_tools::surface::cli_tool;
 
-use crate::cli::args::{BackendPresetArg, OpenAiWireApiArg, ToolCeilingArg, ToolPackageArg};
+use crate::cli::args::{BackendPresetArg, OpenAiWireApiArg};
+use gents_service::args::ToolCeilingArg;
+use gents_service::args::ToolPackageArg;
 use crate::shared::ResolvedBackendConfig;
 use crate::{normalize_optional_string, DEFAULT_INIT_ENDPOINT};
 

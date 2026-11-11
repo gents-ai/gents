@@ -161,7 +161,7 @@ where
     ensure_allowed(&state)?;
     let (opened, result) = tokio::sync::oneshot::channel();
     app.run_on_main_thread(move || {
-        let _ = opened.send(gents_server::native_service::open_background_approval_settings());
+        let _ = opened.send(gents_service::native_service::open_background_approval_settings());
     })
     .map_err(|error| BridgeError::untyped(format!("opening Login Items settings: {error}")))?;
     result
@@ -275,7 +275,7 @@ where
 }
 
 fn should_stop_managed_service_on_exit(
-    native: &gents_server::native_service::NativeServiceStatus,
+    native: &gents_service::native_service::NativeServiceStatus,
 ) -> bool {
     !native.enabled && (native.job_loaded || native.running || native.is_active_or_transitioning())
 }

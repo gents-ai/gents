@@ -2248,7 +2248,7 @@ mod tests {
             !reread_asked(source, watched).await,
             "a failure reads nothing"
         );
-        let data = crate::home_state::default_data_dir(home.path());
+        let data = gents_service::home_state::default_data_dir(home.path());
         assert!(!data.exists(), "a pack call opened the store");
     }
 

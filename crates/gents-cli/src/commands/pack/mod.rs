@@ -180,7 +180,7 @@ pub(crate) mod test_support {
 }
 
 async fn list(args: PackListArgs) -> Result<()> {
-    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
     crate::print_json(&list_packs(&home)?)
 }
 

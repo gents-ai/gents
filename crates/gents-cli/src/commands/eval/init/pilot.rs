@@ -414,7 +414,7 @@ async fn revise(
                 staged,
                 &written.out,
                 true,
-                &crate::home_state::resolve_home_dir(init.scope.home.as_deref()),
+                &gents_service::home_state::resolve_home_dir(init.scope.home.as_deref()),
             )?;
             writeln!(out, "the author revised the draft after the pilot")?;
             print_written(init, &assembled, &written, out)?;

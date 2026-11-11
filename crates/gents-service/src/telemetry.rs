@@ -12,7 +12,7 @@ const DEFAULT_SERVICE_NAME: &str = "gents";
 const DEFAULT_HOSTNAME: &str = "unknown";
 const TRACER_NAME: &str = "gents";
 
-pub(crate) struct TelemetryGuard {
+pub struct TelemetryGuard {
     tracer_provider: Option<SdkTracerProvider>,
 }
 
@@ -37,7 +37,7 @@ fn with_default_transport_noise_filters(filter: EnvFilter) -> EnvFilter {
 }
 
 impl TelemetryGuard {
-    pub(crate) fn shutdown(self) {
+    pub fn shutdown(self) {
         let Some(provider) = self.tracer_provider else {
             return;
         };
@@ -57,7 +57,7 @@ fn log_rate_ceiling() -> gents_session::log_rate::RateLimitFilter {
     )
 }
 
-pub(crate) fn init(default_log_filter: &str) -> Result<TelemetryGuard> {
+pub fn init(default_log_filter: &str) -> Result<TelemetryGuard> {
     install_trace_context_propagator();
 
     let env_filter = with_default_transport_noise_filters(

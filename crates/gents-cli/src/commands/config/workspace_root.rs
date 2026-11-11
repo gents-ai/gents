@@ -94,7 +94,7 @@ pub(super) async fn workspace_root_set(args: WorkspaceRootUpsertArgs) -> Result<
         .to_owned();
     let enabled = !args.disabled;
     let access = ConfigAccess::Graphql(
-        crate::resolve_graphql_endpoint(Some(&args.graphql), None)?
+        gents_service::home_state::resolve_graphql_endpoint(Some(&args.graphql), None)?
             .with_client_signed_agent_creates(),
     );
     let doc_id = gents_tools::surface::set_workspace_root_with_readers(
@@ -121,7 +121,7 @@ pub(super) async fn workspace_root_grant_reader(args: WorkspaceRootReaderArgs) -
         .to_str()
         .context("workspace root path must be valid UTF-8")?;
     let access = ConfigAccess::Graphql(
-        crate::resolve_graphql_endpoint(Some(&args.graphql), None)?
+        gents_service::home_state::resolve_graphql_endpoint(Some(&args.graphql), None)?
             .with_client_signed_agent_creates(),
     );
     gents_tools::surface::grant_workspace_root_reader(&access, root_path, &args.agent_did).await?;
@@ -134,7 +134,7 @@ pub(super) async fn workspace_root_revoke_reader(args: WorkspaceRootReaderArgs) 
         .to_str()
         .context("workspace root path must be valid UTF-8")?;
     let access = ConfigAccess::Graphql(
-        crate::resolve_graphql_endpoint(Some(&args.graphql), None)?
+        gents_service::home_state::resolve_graphql_endpoint(Some(&args.graphql), None)?
             .with_client_signed_agent_creates(),
     );
     gents_tools::surface::revoke_workspace_root_reader(&access, root_path, &args.agent_did).await?;

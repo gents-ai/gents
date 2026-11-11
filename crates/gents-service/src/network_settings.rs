@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::cli::args::{P2pDiscoveryArg, P2pRelayModeArg, ServeArgs, ServiceNetworkArgs};
+use crate::args::{P2pDiscoveryArg, P2pRelayModeArg, ServiceNetworkArgs};
 use crate::native_service::{CommandRunner, NativeServiceManager};
 
 /// Listen settings `gents runtime server` applies for each flag it is not given. The
@@ -12,27 +12,27 @@ use crate::native_service::{CommandRunner, NativeServiceManager};
 /// desktop's own installs and updates of that definition keep these.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct NetworkSettings {
+pub struct NetworkSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) http_addr: Option<IpAddr>,
+    pub http_addr: Option<IpAddr>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) http_port: Option<u16>,
+    pub http_port: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) p2p_bind_addr: Option<IpAddr>,
+    pub p2p_bind_addr: Option<IpAddr>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) p2p_port: Option<u16>,
+    pub p2p_port: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) p2p_relay_mode: Option<P2pRelayModeArg>,
+    pub p2p_relay_mode: Option<P2pRelayModeArg>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) p2p_discovery: Option<P2pDiscoveryArg>,
+    pub p2p_discovery: Option<P2pDiscoveryArg>,
 }
 
-pub(crate) fn network_settings_path(home: &Path) -> PathBuf {
+pub fn network_settings_path(home: &Path) -> PathBuf {
     home.join(gents_store::local::home::NETWORK_CONFIG_FILE_NAME)
 }
 
 impl NetworkSettings {
-    pub(crate) fn read(home: &Path) -> Result<Self> {
+    pub fn read(home: &Path) -> Result<Self> {
         let path = network_settings_path(home);
         let bytes = match std::fs::read(&path) {
             Ok(bytes) => bytes,
@@ -54,7 +54,7 @@ impl NetworkSettings {
 
     /// Writes the settings, or removes the file when none remain. Returns
     /// whether the persisted settings changed.
-    pub(crate) fn persist(&self, home: &Path) -> Result<bool> {
+    pub fn persist(&self, home: &Path) -> Result<bool> {
         self.validate()?;
         if *self == Self::read(home)? {
             return Ok(false);
@@ -75,7 +75,7 @@ impl NetworkSettings {
 
     /// The public identity/enrollment surface also binds one interface rather
     /// than every interface; operator views require the owning DID bearer.
-    pub(crate) fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         if let Some(addr) = self.http_addr {
             validate_http_bind(addr)?;
         }
@@ -85,7 +85,7 @@ impl NetworkSettings {
         Ok(())
     }
 
-    pub(crate) fn apply(&self, args: &ServiceNetworkArgs) -> Self {
+    pub fn apply(&self, args: &ServiceNetworkArgs) -> Self {
         let base = if args.reset_network {
             Self::default()
         } else {
@@ -101,20 +101,10 @@ impl NetworkSettings {
         }
     }
 
-    /// Explicit `gents runtime server` flags win over persisted settings.
-    pub(crate) fn fill_unset(&self, args: &mut ServeArgs) {
-        args.http_addr = args.http_addr.or(self.http_addr);
-        args.http_port = args.http_port.or(self.http_port);
-        args.p2p_bind_addr = args.p2p_bind_addr.or(self.p2p_bind_addr);
-        args.p2p_port = args.p2p_port.or(self.p2p_port);
-        args.p2p_relay_mode = args.p2p_relay_mode.or(self.p2p_relay_mode);
-        args.p2p_discovery = args.p2p_discovery.or(self.p2p_discovery);
-    }
-
-    pub(crate) fn summary(&self) -> String {
+    pub fn summary(&self) -> String {
         let http = SocketAddr::new(
             self.http_addr.unwrap_or(DEFAULT_HTTP_ADDR),
-            self.http_port.unwrap_or(crate::DEFAULT_HTTP_PORT),
+            self.http_port.unwrap_or(crate::state::DEFAULT_HTTP_PORT),
         );
         let p2p_addr = self.p2p_bind_addr.unwrap_or(DEFAULT_HTTP_ADDR);
         let p2p = match self.p2p_port.filter(|port| *port != 0) {
@@ -132,9 +122,9 @@ impl NetworkSettings {
     }
 }
 
-pub(crate) const DEFAULT_HTTP_ADDR: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
-pub(crate) const DEFAULT_P2P_RELAY_MODE: P2pRelayModeArg = P2pRelayModeArg::Disabled;
-pub(crate) const DEFAULT_P2P_DISCOVERY: P2pDiscoveryArg = P2pDiscoveryArg::Disabled;
+pub const DEFAULT_HTTP_ADDR: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
+pub const DEFAULT_P2P_RELAY_MODE: P2pRelayModeArg = P2pRelayModeArg::Disabled;
+pub const DEFAULT_P2P_DISCOVERY: P2pDiscoveryArg = P2pDiscoveryArg::Disabled;
 
 fn relay_mode_name(mode: P2pRelayModeArg) -> &'static str {
     match mode {
@@ -152,7 +142,7 @@ fn discovery_name(discovery: P2pDiscoveryArg) -> &'static str {
 
 /// Installs the definition before persisting settings so a refused install
 /// leaves the home untouched.
-pub(crate) fn install_service<R>(
+pub fn install_service<R>(
     manager: &NativeServiceManager<R>,
     home: &Path,
     network: &ServiceNetworkArgs,
@@ -178,7 +168,7 @@ where
 }
 
 /// Persisted settings and explicit server flags have the same listener boundary.
-pub(crate) fn validate_http_bind(addr: IpAddr) -> Result<()> {
+pub fn validate_http_bind(addr: IpAddr) -> Result<()> {
     if addr.is_unspecified() {
         bail!("refusing to bind the service HTTP listener on unspecified address {addr}; bind loopback or a specific interface, such as this host's tailnet address, instead");
     }
@@ -194,7 +184,6 @@ mod tests {
     use clap::Parser as _;
 
     use super::*;
-    use crate::cli::{Cli, Command, RuntimeCommand, ServiceAction};
     use crate::native_service::{
         CommandOutput, NativeServiceConfig, NativeServicePlatform, SERVICE_LABEL, SYSTEMD_UNIT,
     };
@@ -250,30 +239,18 @@ mod tests {
         }
     }
 
-    fn install_network(argv: &[&str]) -> ServiceNetworkArgs {
-        let mut full = vec!["gents", "runtime", "service", "install"];
-        full.extend_from_slice(argv);
-        match Cli::try_parse_from(full)
-            .expect("service install parses")
-            .command
-        {
-            Some(Command::Runtime {
-                command: RuntimeCommand::Service { command },
-            }) => match command.into_parts().2 {
-                ServiceAction::Install { network, .. } => network,
-                _ => panic!("expected install"),
-            },
-            _ => panic!("expected service"),
-        }
+    #[derive(clap::Parser)]
+    struct InstallFlags {
+        #[command(flatten)]
+        network: ServiceNetworkArgs,
     }
 
-    fn serve_args(argv: &[&str]) -> ServeArgs {
-        let mut full = vec!["gents", "server"];
+    fn install_network(argv: &[&str]) -> ServiceNetworkArgs {
+        let mut full = vec!["install"];
         full.extend_from_slice(argv);
-        match Cli::try_parse_from(full).expect("server parses").command {
-            Some(Command::Server(args)) => args,
-            _ => panic!("expected server"),
-        }
+        InstallFlags::try_parse_from(full)
+            .expect("service install network flags parse")
+            .network
     }
 
     const TAILNET: &[&str] = &[
@@ -300,40 +277,6 @@ mod tests {
             p2p_relay_mode: Some(P2pRelayModeArg::Default),
             p2p_discovery: Some(P2pDiscoveryArg::N0),
         }
-    }
-
-    #[test]
-    fn service_install_parses_every_network_flag() {
-        let network = install_network(TAILNET);
-        assert_eq!(
-            NetworkSettings::default().apply(&network),
-            tailnet_settings()
-        );
-        assert!(!network.reset_network);
-        assert!(install_network(&["--reset-network"]).reset_network);
-    }
-
-    #[test]
-    fn server_network_flags_default_to_unset_so_persisted_settings_can_fill_them() {
-        let args = serve_args(&[]);
-        assert_eq!(args.http_addr, None);
-        assert_eq!(args.http_port, None);
-        assert_eq!(args.p2p_bind_addr, None);
-        assert_eq!(args.p2p_port, None);
-        assert_eq!(args.p2p_relay_mode, None);
-        assert_eq!(args.p2p_discovery, None);
-    }
-
-    #[test]
-    fn explicit_server_flags_win_over_persisted_settings() {
-        let mut args = serve_args(&["--http-addr", "127.0.0.1", "--p2p-port", "5000"]);
-        tailnet_settings().fill_unset(&mut args);
-        assert_eq!(args.http_addr, Some(DEFAULT_HTTP_ADDR));
-        assert_eq!(args.http_port, Some(9393));
-        assert_eq!(args.p2p_bind_addr, Some("0.0.0.0".parse().unwrap()));
-        assert_eq!(args.p2p_port, Some(5000));
-        assert_eq!(args.p2p_relay_mode, Some(P2pRelayModeArg::Default));
-        assert_eq!(args.p2p_discovery, Some(P2pDiscoveryArg::N0));
     }
 
     #[test]
@@ -492,34 +435,5 @@ mod tests {
             .exists());
         assert!(!network_settings_path(&config.home).exists());
         assert!(runner.calls.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn install_accepts_an_explicit_environment_file() {
-        let cli = Cli::try_parse_from([
-            "gents",
-            "runtime",
-            "service",
-            "install",
-            "--environment-file",
-            "operator.json",
-        ])
-        .unwrap();
-        let Some(Command::Runtime {
-            command: RuntimeCommand::Service { command },
-        }) = cli.command
-        else {
-            panic!("service command");
-        };
-        let ServiceAction::Install {
-            environment_file, ..
-        } = command.into_parts().2
-        else {
-            panic!("service install");
-        };
-        assert_eq!(
-            environment_file.as_deref(),
-            Some(Path::new("operator.json"))
-        );
     }
 }

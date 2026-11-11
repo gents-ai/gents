@@ -2,7 +2,9 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
 use crate::cli::args::{P2pAccessArgs, P2pConnectArgs};
-use crate::{http_send, print_json, resolve_graphql_endpoint, resolve_home_dir};
+use crate::{http_send, print_json};
+use gents_service::home_state::resolve_graphql_endpoint;
+use gents_service::home_state::resolve_home_dir;
 
 use super::output::{fetch_live_http_p2p_status, flatten_p2p_fields, load_live_http_p2p_status};
 use super::p2p_probe_get;

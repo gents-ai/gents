@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Result};
-use gents_server::native_service::{
+use gents_service::native_service::{
     CommandOutput, CommandRunner, NativeServiceConfig, NativeServiceManager, NativeServicePlatform,
     SYSTEMD_UNIT,
 };

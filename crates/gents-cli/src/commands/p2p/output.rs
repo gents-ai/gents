@@ -6,9 +6,12 @@ use gents_store::config_client::GraphqlEndpoint;
 use serde_json::{json, Value};
 
 use crate::cli::args::P2pTransportArg;
-use crate::shared::{P2pReplicatorOutputRow, P2pReplicatorRow, StoredRuntimeState};
+use crate::shared::{P2pReplicatorOutputRow, P2pReplicatorRow};
+use gents_service::state::StoredRuntimeState;
 
-use crate::{http_get_json, normalize_optional_string, read_runtime_state, resolve_home_dir};
+use crate::{http_get_json, normalize_optional_string};
+use gents_service::home_state::read_runtime_state;
+use gents_service::home_state::resolve_home_dir;
 
 fn p2p_collection_names(
     collection_ids: &[String],

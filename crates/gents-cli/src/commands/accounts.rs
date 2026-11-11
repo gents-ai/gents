@@ -15,7 +15,8 @@ use serde_json::{json, Value};
 use crate::cli::args::{AccountsCommand, AccountsTargetArgs};
 use crate::cli::output_format::OutputFormat;
 use crate::config_writes::ConfigAccess;
-use crate::{print_json, resolve_config_access, resolve_node_did};
+use crate::{print_json, resolve_config_access};
+use gents_service::home_state::resolve_node_did;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(crate) struct AccountRow {
@@ -458,7 +459,7 @@ pub(crate) async fn list_with_usage(
                 UsageTrigger::Open
             };
             let requested = async {
-                let identity = crate::load_client_identity().await?;
+                let identity = gents_service::home_state::load_client_identity().await?;
                 request_usage_reads(&identity, graphql, trigger, provider).await
             }
             .await;
