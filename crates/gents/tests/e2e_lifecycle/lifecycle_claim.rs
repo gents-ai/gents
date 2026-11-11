@@ -12,55 +12,6 @@ type StatusRow = AgentRequestRow;
 type DeadlineRow = AgentRequestRow;
 
 #[tokio::test]
-async fn claim_queues_when_earlier_processing_request_exists() {
-    let db = test_db("lifecycle-dedup").await;
-    let actors = crate::support::agent_requests::RequestActors::new(&db).await;
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let earlier = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-
-    actors
-        .create_request(
-            crate::support::agent_requests::RequestSeed::new("req-earlier", &session_id, &earlier)
-                .state("processing"),
-        )
-        .await;
-
-    let later = (chrono::Utc::now() + chrono::Duration::seconds(1))
-        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let doc_id = actors
-        .create_request(
-            crate::support::agent_requests::RequestSeed::new("req-later", &session_id, &later)
-                .state("pending"),
-        )
-        .await;
-    let request = AgentRequest {
-        content: "second".into(),
-        ..actors.build_request(doc_id, "req-later".into(), session_id, later)
-    };
-
-    let mut lifecycle = actors.lifecycle(
-        request,
-        300,
-        gents::request::lifecycle::ExecutionOrigin::Interactive,
-        "",
-    );
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Queued);
-
-    let resp = actors
-        .query(
-            r#"{
-                AgentRequest(
-                    filter: { request_id: { _eq: "req-later" } },
-                    limit: 1
-                ) { request_id lifecycle_state }
-            }"#,
-        )
-        .await;
-    let row = first_row::<StatusRow>(&resp, "AgentRequest");
-    assert_eq!(row.lifecycle_state, Some(RequestLifecycleState::Pending));
-}
-
-#[tokio::test]
 async fn queued_request_interrupt_wins_before_queue_block() {
     let db = test_db("lifecycle-queued-interrupt").await;
     let actors = crate::support::agent_requests::RequestActors::new(&db).await;

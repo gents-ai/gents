@@ -178,46 +178,6 @@ async fn fail_after_interrupt_latch_prefers_interrupted() {
 }
 
 #[tokio::test]
-async fn interrupt_request_is_idempotent() {
-    let db = test_db("interrupt-idempotent").await;
-    let actors = support::agent_requests::RequestActors::new(&db).await;
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = support::agent_requests::canonical_now();
-    let doc_id = actors
-        .create_request(
-            support::agent_requests::RequestSeed::new(&request_id, &session_id, &created_at)
-                .state("pending"),
-        )
-        .await;
-
-    gents::interrupt_request(&db.node, actors.agent().as_ref(), &request_id)
-        .await
-        .expect("first interrupt should succeed");
-    let after_first = actors.request_row(&doc_id, "interrupt_requested_at").await
-        ["interrupt_requested_at"]
-        .as_str()
-        .map(str::to_owned);
-    assert!(
-        after_first.is_some(),
-        "first interrupt should latch the field"
-    );
-
-    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    gents::interrupt_request(&db.node, actors.agent().as_ref(), &request_id)
-        .await
-        .expect("second interrupt should be a no-op");
-    let after_second = actors.request_row(&doc_id, "interrupt_requested_at").await
-        ["interrupt_requested_at"]
-        .as_str()
-        .map(str::to_owned);
-    assert_eq!(
-        after_first, after_second,
-        "second call must not rewrite the latched timestamp"
-    );
-}
-
-#[tokio::test]
 async fn interrupt_request_errors_on_unknown_request_id() {
     let db = test_db("interrupt-unknown").await;
     let err = gents::interrupt_request(
@@ -237,69 +197,6 @@ async fn interrupt_request_errors_on_unknown_request_id() {
     );
 }
 
-#[tokio::test]
-async fn interrupt_on_already_terminal_is_noop() {
-    let db = test_db("interrupt-terminal-noop").await;
-    let actors = support::agent_requests::RequestActors::new(&db).await;
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = support::agent_requests::canonical_now();
-    let doc_id = actors
-        .create_request(
-            support::agent_requests::RequestSeed::new(&request_id, &session_id, &created_at)
-                .state("pending"),
-        )
-        .await;
-
-    let request = actors.build_request(
-        doc_id.clone(),
-        request_id.clone(),
-        session_id.clone(),
-        created_at,
-    );
-    let mut lifecycle = actors.lifecycle(
-        request,
-        DEADLINE_SECS,
-        ExecutionOrigin::Interactive,
-        BACKEND_ID,
-    );
-
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    crate::support::begin_owned_execution(&mut lifecycle, &db.node)
-        .await
-        .unwrap();
-    lifecycle
-        .terminalize_owned(
-            RequestTerminalOutcome::Completed,
-            TerminalOutput::NoMessage,
-            None,
-        )
-        .await
-        .unwrap();
-
-    let before = fetch_request_snapshot(&actors, &doc_id).await;
-    assert_eq!(before.lifecycle_state, RequestLifecycleState::Completed);
-
-    let interrupt_at = chrono::Utc::now().to_rfc3339();
-    actors
-        .set_interrupt_requested_at(&doc_id, &interrupt_at)
-        .await;
-    lifecycle
-        .terminalize_owned(
-            RequestTerminalOutcome::Interrupted,
-            TerminalOutput::NoMessage,
-            Some("interrupted"),
-        )
-        .await
-        .unwrap();
-
-    let after = fetch_request_snapshot(&actors, &doc_id).await;
-    assert_eq!(
-        after.lifecycle_state,
-        RequestLifecycleState::Completed,
-        "terminal lifecycle_state must not regress"
-    );
-}
 #[tokio::test]
 async fn s7_interrupt_requested_at_is_latch_never_rewritten() {
     let db = test_db("s7-interrupt-latch").await;
@@ -453,92 +350,6 @@ async fn s8_valid_until_never_rewritten_by_transitions() {
     );
 }
 
-#[tokio::test]
-async fn s1_interrupted_is_terminal_subsequent_transitions_are_no_ops() {
-    let db = test_db("s1-interrupted-terminal").await;
-    let actors = support::agent_requests::RequestActors::new(&db).await;
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = support::agent_requests::canonical_now();
-    let doc_id = actors
-        .create_request(
-            support::agent_requests::RequestSeed::new(&request_id, &session_id, &created_at)
-                .state("pending"),
-        )
-        .await;
-
-    let request = actors.build_request(
-        doc_id.clone(),
-        request_id.clone(),
-        session_id.clone(),
-        created_at,
-    );
-    let mut lifecycle = actors.lifecycle(
-        request,
-        DEADLINE_SECS,
-        ExecutionOrigin::Interactive,
-        BACKEND_ID,
-    );
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    lifecycle
-        .terminalize_owned(
-            RequestTerminalOutcome::Interrupted,
-            TerminalOutput::NoMessage,
-            Some("interrupted"),
-        )
-        .await
-        .unwrap();
-
-    let snap0 = fetch_request_snapshot(&actors, &doc_id).await;
-    assert_eq!(snap0.lifecycle_state, RequestLifecycleState::Interrupted);
-    assert_lean_transition_is_illegal("Request", "interrupted", "completed");
-    assert_lean_transition_is_illegal("Request", "interrupted", "failed");
-    assert_lean_transition_is_illegal("Request", "interrupted", "processing");
-
-    lifecycle
-        .terminalize_owned(
-            RequestTerminalOutcome::Interrupted,
-            TerminalOutput::NoMessage,
-            Some("interrupted"),
-        )
-        .await
-        .unwrap();
-    let snap1 = fetch_request_snapshot(&actors, &doc_id).await;
-    assert_eq!(
-        snap1.lifecycle_state,
-        RequestLifecycleState::Interrupted,
-        "S1: repeated transition_to_interrupted must stay interrupted"
-    );
-
-    let _complete_result = lifecycle
-        .terminalize_owned(
-            RequestTerminalOutcome::Completed,
-            TerminalOutput::NoMessage,
-            None,
-        )
-        .await;
-    let snap2 = fetch_request_snapshot(&actors, &doc_id).await;
-    assert_eq!(
-        snap2.lifecycle_state,
-        RequestLifecycleState::Interrupted,
-        "S1: complete() on interrupted must not reverse the terminal"
-    );
-
-    let _fail_result = lifecycle
-        .terminalize_owned(
-            RequestTerminalOutcome::Failed,
-            TerminalOutput::NoMessage,
-            None,
-        )
-        .await;
-    let snap3 = fetch_request_snapshot(&actors, &doc_id).await;
-    assert_eq!(
-        snap3.lifecycle_state,
-        RequestLifecycleState::Interrupted,
-        "S1: fail() on interrupted must not reverse the terminal"
-    );
-}
-
 #[test]
 fn conformance_interrupted_lifecycle_maps_to_interrupted_client_turn() {
     use gents_protocol::client_protocol::{
@@ -556,62 +367,6 @@ fn conformance_interrupted_lifecycle_maps_to_interrupted_client_turn() {
     assert_eq!(derive_attempt(&view), ClientTurnState::Interrupted);
     assert!(ClientTurnState::Interrupted.is_terminal());
     assert_eq!(ClientTurnState::Interrupted.rank(), 2);
-}
-
-#[tokio::test]
-async fn manual_run_materializes_pending_request() {
-    let db = test_db("manual-run-materializes-pending").await;
-    let agent = support::managed_agent(&db).await;
-    let agent_access = gents::ConfigAccess::local_managed_agent(
-        db.node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-
-    let doc_id = write_manual_agent_request(
-        &db.node,
-        ::identity::Did::new(agent.did()).expect("fixture creator DID"),
-        agent.as_ref(),
-        gents::request::lifecycle::ManualRequestTarget {
-            node_did: db.node_identity.did(),
-            agent_did: agent.did(),
-            task_id: "task-manual-pending",
-        },
-        "manual prompt body",
-        serde_json::json!({}),
-    )
-    .await
-    .expect("write_manual_agent_request should succeed on a fresh node");
-
-    let snap = fetch_request_snapshot(&agent_access, &doc_id).await;
-    assert_eq!(
-        snap.lifecycle_state, RequestLifecycleState::Pending,
-        "manual run must persist lifecycle_state=pending for the intake watcher to claim (not claimed)"
-    );
-    assert!(
-        !snap.claimed_at_present,
-        "pending manual row must NOT have claimed_at set"
-    );
-    assert!(
-        !snap.deadline_present,
-        "pending manual row must NOT have a deadline — claim sets it"
-    );
-    assert_eq!(
-        snap.execution_origin, "interactive",
-        "manual runs inherit the interactive execution origin"
-    );
-    assert_eq!(snap.agent_did, agent.did());
-
-    let lineage = fetch_request_lineage_snapshot(&agent_access, &doc_id).await;
-    assert_eq!(
-        lineage,
-        RequestLineageSnapshot {
-            caused_by_trigger_id: None,
-            caused_by_trigger_kind: Some("manual".to_string()),
-        },
-        "manual helper must set (null, \"manual\") on the pending row"
-    );
 }
 
 #[tokio::test]

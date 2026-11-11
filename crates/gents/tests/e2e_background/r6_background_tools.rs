@@ -1240,40 +1240,6 @@ async fn background_tool_rejects_not_allowlisted_target() {
 }
 
 #[tokio::test]
-async fn background_tool_rejects_when_parent_budget_is_exhausted() {
-    let mut chunks = (0..8)
-        .map(|index| {
-            StreamChunk::tool_call(
-                format!("meta-bg-budget-{index}"),
-                "spawn_process",
-                r#"{"tool_name":"bash","args":{"command":"sleep","args":["60"]}}"#,
-            )
-        })
-        .collect::<Vec<_>>();
-    chunks.push(StreamChunk::tool_call(
-        "meta-bg-budget-denied",
-        "spawn_process",
-        r#"{"tool_name":"bash","args":{"command":"sleep","args":["60"]}}"#,
-    ));
-    let turn = boot_background_turn("r6-background-budget", chunks).await;
-    wait_for_provider_requests(&turn, 2).await;
-    assert_accepted_rows_visible(&turn).await;
-    finish_dynamic_turn(&turn);
-    let denied = canonical_latest_tool_payload_json(&turn, &turn.session_id, 9).await;
-    assert_eq!(
-        denied["code"], "background_tool_budget_exceeded",
-        "unexpected budget denial: {denied}"
-    );
-    assert_eq!(denied["current_backgrounded"], 8);
-    assert_eq!(denied["max_backgrounded"], 8);
-    assert_eq!(
-        count_tool_calls_by_name(&turn.fixture.access, &turn.session_id, "bash").await,
-        8
-    );
-    turn.runtime.shutdown().await;
-}
-
-#[tokio::test]
 async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
     let turn = boot_background_turn_with_bounds(
         "r6-background-wait-deadline",

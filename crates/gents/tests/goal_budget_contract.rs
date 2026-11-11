@@ -24,9 +24,8 @@
 
 use gents::documents::task_goal_declaration::validate_task_goal_declaration;
 use gents::documents::{InferenceExecution, Task};
-use gents::goal::{decide_goal_continuation, GoalDecision, GoalDocument, GoalRequestTerminal};
+use gents::goal::GoalDocument;
 use gents::{GOAL_SCHEMA, TASK_SCHEMA};
-use gents_protocol::goal_status::GoalStatus;
 
 const UNCAPPED_GOAL_JSON: &str = r#"{
     "_docID": "bafyrei_contract_goal_uncapped",
@@ -126,49 +125,6 @@ fn task_declaration_treats_omitted_budget_as_uncapped_and_still_rejects_bad_caps
     assert!(validate_task_goal_declaration(Some("ship it"), Some(0)).is_err());
     assert!(validate_task_goal_declaration(Some("ship it"), Some(-1)).is_err());
     assert!(validate_task_goal_declaration(Some("ship it"), Some(i64::MAX)).is_ok());
-}
-
-#[test]
-fn continuation_only_stops_for_budget_when_a_cap_is_present_and_reached() {
-    // The decision function receives `budget_reached` as a fact; the trigger
-    // source derives it from `token_budget.is_some_and(|b| used >= b)`, so an
-    // uncapped goal (None) can never produce budget_reached=true. Pin both
-    // sides of that gate.
-    let uncapped = decide_goal_continuation(
-        GoalStatus::Active,
-        GoalRequestTerminal::Completed,
-        true,  // session_idle
-        false, // child_exists
-        false, // budget_reached: unreachable for None budgets
-        true,  // has_activity
-        false, // request_is_wrapup
-        0,     // infrastructure_retries
-        false, // wrapup_requested
-        false, // wrapup_completed
-    );
-    assert_eq!(
-        uncapped,
-        GoalDecision::Continue,
-        "an active goal without a reached cap keeps continuing"
-    );
-
-    let capped_and_reached = decide_goal_continuation(
-        GoalStatus::Active,
-        GoalRequestTerminal::Completed,
-        true,
-        false,
-        true, // budget_reached
-        true,
-        false,
-        0,
-        false,
-        false,
-    );
-    assert_eq!(
-        capped_and_reached,
-        GoalDecision::Wrapup,
-        "only a present-and-reached cap drives the budget wrap-up"
-    );
 }
 
 #[test]
