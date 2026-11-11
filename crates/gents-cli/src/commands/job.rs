@@ -6,8 +6,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use gents_protocol::job::{
-    JobChildState, JobControlKind, JobControlOutcome, JobOrigin, JobPauseReason, JobPhaseState,
-    JobReadError, JobState, JobView,
+    JobControlKind, JobControlOutcome, JobOrigin, JobPauseReason, JobPhaseState, JobReadError,
+    JobState, JobView,
 };
 use gents_store::config_client::ConfigAccess;
 use gents_toolcalls::background::job::dispatch::split_address;
