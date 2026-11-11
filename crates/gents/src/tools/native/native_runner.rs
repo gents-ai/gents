@@ -5,7 +5,7 @@ use anyhow::{anyhow, Context as _};
 use gents_fs_runner::protocol::{NativeFsRunnerRequest, NativeFsRunnerResponse};
 
 use super::shared::{ToolContext, ToolError};
-use crate::tools::call::lifecycle::runtime::current_tool_runtime_context;
+use crate::tools::runtime_context::current_tool_runtime_context;
 use crate::tools::call::lifecycle::FailureClass;
 use crate::tools::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 
@@ -424,7 +424,7 @@ mod tests {
         let original = std::fs::read(source.join("README.md")).unwrap();
         let context = ToolContext::new(source.clone(), false).unwrap();
         let runner = NativeFsRunner::new(&context);
-        let scope = crate::tools::call::lifecycle::runtime::ToolWorkspaceScope {
+        let scope = crate::tools::runtime_context::ToolWorkspaceScope {
             runtime_home: None,
             workspace_cwd: Some(source.clone()),
             workspace_root: Some(source.clone()),
@@ -452,7 +452,7 @@ printf '{"ok":true,"output":"sandboxed read","error":null}'"#
             ],
             cwd: source.clone(),
         };
-        let output = crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+        let output = crate::tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
             None, tokio_util::sync::CancellationToken::new(), scope.clone(),
             None, None, None, Default::default(), false,
             runner.run_resolved(request(), "glob", command()),
@@ -473,7 +473,7 @@ printf '{"ok":true,"output":"sandboxed read","error":null}'"#
             )
             .await
             .unwrap();
-        let error = crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+        let error = crate::tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
             None, tokio_util::sync::CancellationToken::new(), scope,
             None, None, None, Default::default(), false,
             runner.run_resolved(request(), "glob", command()),

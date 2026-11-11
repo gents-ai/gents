@@ -138,7 +138,7 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
             output_obligation: None,
         },
     );
-    crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+    crate::tools::runtime_context::scope_request_tool_execution_with_trigger_context(
         None,
         CancellationToken::new(),
         None,

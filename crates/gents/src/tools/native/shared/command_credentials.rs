@@ -31,7 +31,7 @@ pub(super) struct CredentialProtection {
 }
 
 pub(super) async fn capture() -> Result<CredentialProtection> {
-    let context = crate::tools::call::lifecycle::runtime::current_tool_runtime_context();
+    let context = crate::tools::runtime_context::current_tool_runtime_context();
     let runtime_home = context
         .as_ref()
         .and_then(|context| context.runtime_home.clone());

@@ -13,7 +13,7 @@ use super::shared::ToolError;
 use crate::tools::call::lifecycle::FailureClass;
 
 pub(super) fn deny_workspace_file_writes() -> Result<(), ToolError> {
-    if crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
+    if crate::tools::runtime_context::current_tool_runtime_context()
         .and_then(|scope| scope.workspace_authority)
         .is_some_and(|authority| !authority.allows_file_writes())
     {

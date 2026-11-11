@@ -197,7 +197,7 @@ where
         request_token: &tokio_util::sync::CancellationToken,
         aggregate_token_budget: Option<crate::runtime::agent::loop_stream::AggregateTokenBudget>,
         effective_seed: Option<i64>,
-        mut workspace: crate::tools::call::lifecycle::runtime::ToolWorkspaceScope,
+        mut workspace: crate::tools::runtime_context::ToolWorkspaceScope,
         request_context_message: Option<crate::inference::llm::message::Message>,
         resume_from_history: bool,
         consumed_prompts: Vec<crate::runtime::agent::loop_stream::FoldedPrompt>,
@@ -383,12 +383,12 @@ where
                 retry_attempt = false,
             )));
 
-        let outcome = crate::tools::call::lifecycle::runtime::scope_tool_request_identity(
+        let outcome = crate::tools::runtime_context::scope_tool_request_identity(
             request.requester_did.clone(),
             Some(request.node_did.clone()),
             Some(agent_did.to_string()),
             Some(request.request_id.clone()),
-            crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+            crate::tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
                 request_deadline,
                 request_token.clone(),
                 workspace,

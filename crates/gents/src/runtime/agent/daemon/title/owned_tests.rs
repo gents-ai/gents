@@ -821,7 +821,7 @@ async fn a_lost_review_worker_cancels_the_caller_and_retains_the_fatal_error() {
     .with_reviewer(reviewer.callback.clone());
     let result = workspace::scope(
         Some(context),
-        crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
+        crate::tools::runtime_context::scope_request_tool_execution(
             None,
             cancellation.clone(),
             workspace::authorize_command(

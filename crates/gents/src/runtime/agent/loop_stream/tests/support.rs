@@ -575,7 +575,7 @@ where
     let agent_did = request.agent_did.clone();
     let request_id = request.request_id.clone();
     let inherited =
-        crate::tools::call::lifecycle::runtime::current_tool_runtime_context().is_some();
+        crate::tools::runtime_context::current_tool_runtime_context().is_some();
     let collection = crate::inference::rendered_request::scope::scope_request(scope, async move {
         futures::pin_mut!(stream);
         let doc_id = lifecycle.request().doc_id.clone();
@@ -620,12 +620,12 @@ where
     if inherited {
         collection.await
     } else {
-        crate::tools::call::lifecycle::runtime::scope_tool_request_identity(
+        crate::tools::runtime_context::scope_tool_request_identity(
             requester_did,
             Some(node_did),
             Some(agent_did),
             Some(request_id),
-            crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_session(
+            crate::tools::runtime_context::scope_request_tool_execution_with_session(
                 deadline,
                 tokio_util::sync::CancellationToken::new(),
                 None,

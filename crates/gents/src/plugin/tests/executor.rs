@@ -333,7 +333,7 @@ mod bound {
     use crate::plugin::executor::BindContext;
     use crate::plugin::tests::{create_file_wat, open_and_copy_wat};
     use crate::plugin::{allowed, approval};
-    use crate::tools::call::lifecycle::runtime::{
+    use crate::tools::runtime_context::{
         scope_request_tool_execution_with_workspace_overlay, ToolWorkspaceScope,
     };
 
@@ -1084,7 +1084,7 @@ mod bound {
                         Default::default(),
                         false,
                         async move {
-                            crate::tools::call::lifecycle::runtime::call_tool_managed(
+                            crate::tools::runtime_context::call_tool_managed(
                                 tool.as_ref(),
                                 args(&target),
                             )

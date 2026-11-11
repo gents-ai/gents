@@ -298,7 +298,7 @@ fn write_identity_config(home: &Path, custom_key: &Path) {
 
 #[tokio::test]
 async fn changed_identity_configuration_invalidates_waiting_command_exclusions() {
-    use crate::tools::call::lifecycle::runtime::{
+    use crate::tools::runtime_context::{
         scope_request_tool_execution_with_workspace_overlay, ToolWorkspaceScope,
     };
     let folder = tempfile::tempdir().unwrap();

@@ -3,7 +3,7 @@ use rapidhash::RapidHashMap;
 use crate::inference::llm::tool::BoxFuture;
 use crate::inference::llm::tool::ToolDefinition;
 use crate::inference::llm::tool::{ToolDyn, ToolError};
-use crate::tools::call::lifecycle::runtime::tool_execution_bounds;
+use crate::tools::runtime_context::tool_execution_bounds;
 use crate::tools::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 use anyhow::{bail, Context, Result};
 
@@ -117,7 +117,7 @@ fn cli_tool_environment(config: &CliToolConfig) -> RapidHashMap<String, String> 
 }
 
 fn deny_artifact_scope() -> Result<(), LocalToolError> {
-    if crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
+    if crate::tools::runtime_context::current_tool_runtime_context()
         .is_some_and(|scope| scope.workspace_artifact.is_some())
     {
         return Err(LocalToolError::reported_failure(
@@ -298,10 +298,10 @@ mod tests {
         let mut config = config(5);
         config.working_dir = Some(source.clone());
         let tool = CliTool::new(config.clone());
-        crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+        crate::tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
             None,
             tokio_util::sync::CancellationToken::new(),
-            crate::tools::call::lifecycle::runtime::ToolWorkspaceScope {
+            crate::tools::runtime_context::ToolWorkspaceScope {
                 runtime_home: None,
                 workspace_cwd: Some(source.clone()),
                 workspace_root: Some(source),
@@ -407,7 +407,7 @@ mod tests {
 
     #[tokio::test]
     async fn request_cancellation_stops_the_command() {
-        use crate::tools::call::lifecycle::runtime::scope_request_tool_execution;
+        use crate::tools::runtime_context::scope_request_tool_execution;
 
         let token = tokio_util::sync::CancellationToken::new();
         let cancel = token.clone();

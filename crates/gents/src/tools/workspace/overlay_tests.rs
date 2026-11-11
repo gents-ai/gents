@@ -843,7 +843,7 @@ async fn artifact_grant_rejects_source_drift_and_allocates_disjoint_outputs() {
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy() {
-    use crate::tools::call::lifecycle::runtime::{
+    use crate::tools::runtime_context::{
         scope_request_tool_execution_with_workspace_overlay, ToolWorkspaceScope,
     };
     use crate::tools::native::{CommandConstraints, CommandNetworkMode};

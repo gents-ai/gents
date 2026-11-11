@@ -123,7 +123,7 @@ async fn managed_terminal_tool_result_terminates_loop() {
         owned_config(4),
     );
 
-    let collected = crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
+    let collected = crate::tools::runtime_context::scope_request_tool_execution(
         Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
         tokio_util::sync::CancellationToken::new(),
         Box::pin(collect_owned_scripted_stream(

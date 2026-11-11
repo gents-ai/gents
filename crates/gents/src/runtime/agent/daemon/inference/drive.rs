@@ -162,7 +162,7 @@ where
                 let stream = &mut stream;
                 let (flushed, item) = box_stream_branch(move || async move {
                     let progress = async {
-                        crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+                        crate::tools::runtime_context::scope_request_tool_execution_with_trigger_context(
                             request_deadline,
                             request_token.clone(),
                             None,
@@ -189,7 +189,7 @@ where
             }
             result = await_with_request_deadline(
                 request_deadline,
-                crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+                crate::tools::runtime_context::scope_request_tool_execution_with_trigger_context(
                     request_deadline,
                     request_token.clone(),
                     None,

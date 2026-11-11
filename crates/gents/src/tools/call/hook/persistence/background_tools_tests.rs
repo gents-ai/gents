@@ -570,10 +570,10 @@ async fn timeout_decision_is_owned_before_cleanup_and_later_cancel() {
     let deadline = chrono::Utc::now() + chrono::Duration::seconds(1);
     tokio::time::pause();
     let worker = tokio::spawn(async move {
-        crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
+        crate::tools::runtime_context::scope_request_tool_execution(
             Some(deadline),
             worker_token,
-            crate::tools::call::lifecycle::runtime::call_tool_managed_with_cleanup(
+            crate::tools::runtime_context::call_tool_managed_with_cleanup(
                 &PendingNative,
                 "{}".into(),
                 move |outcome| {

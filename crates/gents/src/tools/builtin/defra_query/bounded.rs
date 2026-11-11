@@ -751,7 +751,7 @@ mod tests {
             .unwrap()
             .to_owned();
         let tool = BoundedQueryTool::new(ConfigAccess::local(node.clone()), decl());
-        crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+        crate::tools::runtime_context::scope_request_tool_execution_with_trigger_context(
             None, tokio_util::sync::CancellationToken::new(), None, None, None,
             Some("run-42".into()), Default::default(), false, async {
                 let initial: Value = serde_json::from_str(&Tool::call(&tool, BoundedQueryParams(json!({"fields":["title"]}).as_object().unwrap().clone())).await.unwrap()).unwrap();
@@ -816,7 +816,7 @@ mod tests {
         let node = node_with_findings().await;
         let tool = BoundedQueryTool::new(ConfigAccess::local(Arc::clone(&node)), decl());
         let out =
-            crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+            crate::tools::runtime_context::scope_request_tool_execution_with_trigger_context(
                 None,
                 tokio_util::sync::CancellationToken::new(),
                 None,
@@ -861,7 +861,7 @@ mod tests {
         let tool = BoundedQueryTool::new(ConfigAccess::local(node), decl());
         let mut args = Map::new();
         args.insert("fields".into(), json!(["_docID"]));
-        crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+        crate::tools::runtime_context::scope_request_tool_execution_with_trigger_context(
             None,
             tokio_util::sync::CancellationToken::new(),
             None,
@@ -1073,7 +1073,7 @@ mod tests {
         let mut args = Map::new();
         args.insert("limit".into(), json!(0));
         let err =
-            crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+            crate::tools::runtime_context::scope_request_tool_execution_with_trigger_context(
                 None,
                 tokio_util::sync::CancellationToken::new(),
                 None,

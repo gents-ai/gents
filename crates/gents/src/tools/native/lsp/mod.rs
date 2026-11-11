@@ -130,7 +130,7 @@ pub fn constraints_from_effective_bash(
 // Persistent clients are shared across request lifetimes. Until they support
 // per-request artifact authority, neither starting nor borrowing one is legal.
 fn artifact_scope_denied() -> bool {
-    crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
+    crate::tools::runtime_context::current_tool_runtime_context()
         .is_some_and(|scope| scope.workspace_artifact.is_some())
 }
 const ARTIFACT_SCOPE_DENIAL: &str = "persistent LSP and supplementary linters are unavailable in artifact-scoped requests; use the sandboxed Bash compiler path";
@@ -157,7 +157,7 @@ impl LspTool {
     }
 
     fn effective_file_mode(&self) -> FileToolMode {
-        crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
+        crate::tools::runtime_context::current_tool_runtime_context()
             .and_then(|scope| scope.workspace_authority)
             .map(|authority| {
                 self.config
@@ -351,13 +351,13 @@ impl Tool for LspTool {
             };
             if let Some(server) = server {
                 let session_id =
-                    crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
+                    crate::tools::runtime_context::current_tool_runtime_context()
                         .and_then(|scope| scope.session_id)
                         .filter(|id| !id.is_empty())
                         .unwrap_or_else(|| self.config.session_id.clone());
                 let key = PoolKey {
                     runtime_home:
-                        crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
+                        crate::tools::runtime_context::current_tool_runtime_context()
                             .and_then(|context| context.runtime_home),
                     session_id,
                     agent_did: self.config.agent_did.clone(),
@@ -430,13 +430,13 @@ impl Tool for LspTool {
 }
 
 pub(crate) fn overlay_workspace_or(fallback: &Path) -> PathBuf {
-    crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
+    crate::tools::runtime_context::current_tool_runtime_context()
         .and_then(|scope| scope.workspace_root)
         .unwrap_or_else(|| fallback.to_path_buf())
 }
 
 pub(crate) fn overlay_lsp_constraints(base: &CommandConstraints) -> CommandConstraints {
-    let Some(authority) = crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
+    let Some(authority) = crate::tools::runtime_context::current_tool_runtime_context()
         .and_then(|scope| scope.workspace_authority)
     else {
         return base.clone();

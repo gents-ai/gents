@@ -249,7 +249,7 @@ pub(super) async fn run(
     if action == "help" {
         return Ok(json!({"help":action_help(args.topic.as_deref())?}));
     }
-    let current = crate::tools::call::lifecycle::runtime::current_tool_runtime_context();
+    let current = crate::tools::runtime_context::current_tool_runtime_context();
     if let Some(context) = &current {
         anyhow::ensure!(
             context.node_did.as_deref() == Some(tool.node_did.as_str()),

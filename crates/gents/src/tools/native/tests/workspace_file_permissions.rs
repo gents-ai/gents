@@ -332,7 +332,7 @@ async fn full_access_file_changes_still_obey_the_configured_tool_root() {
 
 #[tokio::test]
 async fn full_access_cannot_widen_read_only_workspace_authority() {
-    use crate::tools::call::lifecycle::runtime::{
+    use crate::tools::runtime_context::{
         scope_request_tool_execution_with_workspace_overlay, ToolWorkspaceScope,
     };
     let fixture = Fixture::new(Some(workspace::Mode::FullAccess));

@@ -1073,7 +1073,7 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "tool_call_lifecycle::runtime::tests::invocation_correlation_matches_lean",
             package: "gents",
-            source_path: "crates/gents/src/tools/call/lifecycle/runtime.rs",
+            source_path: "crates/gents/src/tools/runtime_context.rs",
             module_path: "tool_call_lifecycle::runtime::tests",
             function: "invocation_correlation_matches_lean",
         },

@@ -381,12 +381,12 @@ where
             "provider stream ended without an explicit terminal response"
         ))
     };
-    let scoped_inference = crate::tools::call::lifecycle::runtime::scope_tool_request_identity(
+    let scoped_inference = crate::tools::runtime_context::scope_tool_request_identity(
         request.requester_did.clone(),
         Some(request.node_did.clone()),
         Some(request.agent_did.clone()),
         Some(request.request_id.clone()),
-        crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+        crate::tools::runtime_context::scope_request_tool_execution_with_trigger_context(
             deadline,
             tokio_util::sync::CancellationToken::new(),
             None,

@@ -222,8 +222,8 @@ impl DefraSessionHook {
             .canonical_writer_for(lifecycle.tool_output_binding()?)
             .await;
         let runtime_context =
-            crate::tools::call::lifecycle::runtime::current_tool_runtime_context();
-        let workspace = crate::tools::call::lifecycle::runtime::ToolWorkspaceScope {
+            crate::tools::runtime_context::current_tool_runtime_context();
+        let workspace = crate::tools::runtime_context::ToolWorkspaceScope {
             runtime_home: runtime_context
                 .as_ref()
                 .and_then(|runtime| runtime.runtime_home.clone()),
@@ -262,13 +262,13 @@ impl DefraSessionHook {
         tokio::spawn(crate::plugin::approval::carry_interactive(async move {
             let execution = AssertUnwindSafe(crate::tools::exec::ownership::scope_process_recorder(
                 process_recorder,
-                crate::tools::call::lifecycle::runtime::scope_tool_request_identity(
+                crate::tools::runtime_context::scope_tool_request_identity(
                     requester_did,
                     request_node_did,
                     request_agent_did,
                     Some(execution_request_id.clone()),
                     async {
-                        crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+                        crate::tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
                             Some(background_deadline_at),
                             cancellation_token.clone(),
                             workspace,
@@ -279,7 +279,7 @@ impl DefraSessionHook {
                             true,
                             async {
                                 if process_tool {
-                                    crate::tools::call::lifecycle::runtime::call_tool_managed_with_cleanup(
+                                    crate::tools::runtime_context::call_tool_managed_with_cleanup(
                                         target_tool.as_ref(), target_args, |outcome| {
                                             if let Some(outcome) = outcome.filter(|outcome| crate::tools::exec::ownership::native_terminal_needs_confirmation(Some(outcome))) {
                                                 executions.set_stop_receipt(&execution_call_id, &execution_tool_doc_id, crate::tools::call::hook::RetainedStopReceipt::from_outcome(outcome));
@@ -289,7 +289,7 @@ impl DefraSessionHook {
                                         },
                                     ).await
                                 } else {
-                                    crate::tools::call::lifecycle::runtime::call_tool_managed(target_tool.as_ref(), target_args).await
+                                    crate::tools::runtime_context::call_tool_managed(target_tool.as_ref(), target_args).await
                                 }
                             },
                         )

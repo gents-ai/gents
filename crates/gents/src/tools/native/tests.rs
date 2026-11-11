@@ -498,10 +498,10 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
         let _entered = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_ENTERED", &control_entered);
         let _gate = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_GATE", &control_gate);
         let _released = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_RELEASED", &control_released);
-        let call = crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
+        let call = crate::tools::runtime_context::scope_request_tool_execution(
             None,
             tokio_util::sync::CancellationToken::new(),
-            crate::tools::call::lifecycle::runtime::call_tool_managed(
+            crate::tools::runtime_context::call_tool_managed(
                 blocking_tool.as_ref(),
                 r#"{"pattern":"*.txt"}"#.to_string(),
             ),
@@ -545,10 +545,10 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
         let deadline = chrono::Utc::now() + chrono::Duration::milliseconds(deadline_ms);
         let outcome = tokio::time::timeout(
             NATIVE_BLOCKER_HANG_BOUND,
-            crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
+            crate::tools::runtime_context::scope_request_tool_execution(
                 Some(deadline),
                 tokio_util::sync::CancellationToken::new(),
-                crate::tools::call::lifecycle::runtime::call_tool_managed(
+                crate::tools::runtime_context::call_tool_managed(
                     blocking_tool.as_ref(),
                     r#"{"pattern":"*.txt"}"#.to_string(),
                 ),
@@ -576,10 +576,10 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
     };
 
     let second_deadline = chrono::Utc::now() + chrono::Duration::seconds(30);
-    let second_outcome = crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
+    let second_outcome = crate::tools::runtime_context::scope_request_tool_execution(
         Some(second_deadline),
         tokio_util::sync::CancellationToken::new(),
-        crate::tools::call::lifecycle::runtime::call_tool_managed(
+        crate::tools::runtime_context::call_tool_managed(
             second_tool.as_ref(),
             r#"{"path":"second.txt"}"#.to_string(),
         ),
@@ -765,10 +765,10 @@ async fn read_only_workspace_authority_denies_file_writes() {
     std::fs::write(root.join("file.txt"), "hello").unwrap();
     let writer = WriteFileTool::new(ToolContext::new(root.clone(), true).unwrap());
     let error =
-        crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+        crate::tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
             None,
             tokio_util::sync::CancellationToken::new(),
-            crate::tools::call::lifecycle::runtime::ToolWorkspaceScope {
+            crate::tools::runtime_context::ToolWorkspaceScope {
                 runtime_home: None,
                 workspace_cwd: Some(root.clone()),
                 workspace_root: Some(std::fs::canonicalize(&root).unwrap()),
@@ -818,10 +818,10 @@ async fn command_definition_uses_the_current_workspace_policy() {
     );
     let describe = || crate::inference::llm::tool::Tool::definition(&tool, String::new());
     assert!(describe().await.description.contains("unrestricted policy"));
-    let description = crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+    let description = crate::tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
         None,
         tokio_util::sync::CancellationToken::new(),
-        crate::tools::call::lifecycle::runtime::ToolWorkspaceScope {
+        crate::tools::runtime_context::ToolWorkspaceScope {
             runtime_home: None,
             workspace_cwd: Some(root.clone()),
             workspace_root: Some(std::fs::canonicalize(&root).unwrap()),
@@ -859,10 +859,10 @@ async fn read_write_overlay_meets_unrestricted_bash_to_workspace_write() {
         policy.clone(),
     );
     let result =
-        crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+        crate::tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
             None,
             tokio_util::sync::CancellationToken::new(),
-            crate::tools::call::lifecycle::runtime::ToolWorkspaceScope {
+            crate::tools::runtime_context::ToolWorkspaceScope {
                 runtime_home: None,
                 workspace_cwd: Some(root.clone()),
                 workspace_root: Some(std::fs::canonicalize(&root).unwrap()),
@@ -1816,7 +1816,7 @@ async fn bash_nonzero_exit_is_a_typed_tool_failure_with_metadata() {
     );
     let boxed: Box<dyn crate::inference::llm::tool::ToolDyn> = Box::new(tool);
 
-    let outcome = crate::tools::call::lifecycle::runtime::call_tool_managed(
+    let outcome = crate::tools::runtime_context::call_tool_managed(
         boxed.as_ref(),
         serde_json::json!({ "command": "false" }).to_string(),
     )
@@ -1847,7 +1847,7 @@ async fn bash_per_call_timeout_is_a_recoverable_typed_failure_with_metadata() {
     );
 
     let boxed: Box<dyn crate::inference::llm::tool::ToolDyn> = Box::new(tool);
-    let outcome = crate::tools::call::lifecycle::runtime::call_tool_managed(
+    let outcome = crate::tools::runtime_context::call_tool_managed(
         boxed.as_ref(),
         serde_json::json!({
             "command": "sleep",
@@ -1889,10 +1889,10 @@ async fn bash_request_deadline_resolves_to_typed_timeout() {
         "timeout_secs": 5,
     }))
     .unwrap();
-    let outcome = crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
+    let outcome = crate::tools::runtime_context::scope_request_tool_execution(
         Some(deadline),
         tokio_util::sync::CancellationToken::new(),
-        crate::tools::call::lifecycle::runtime::call_tool_managed(boxed.as_ref(), args),
+        crate::tools::runtime_context::call_tool_managed(boxed.as_ref(), args),
     )
     .await;
 
@@ -1920,7 +1920,7 @@ async fn unrestricted_bash_timeout_kills_descendants_and_returns_promptly() {
     let command = "sleep 2; trap '' TERM; while :; do sleep 1; done & child=$!; printf '%s' \"$child\" > descendant.pid; wait";
 
     let boxed: Box<dyn crate::inference::llm::tool::ToolDyn> = Box::new(tool);
-    let call = crate::tools::call::lifecycle::runtime::call_tool_managed(
+    let call = crate::tools::runtime_context::call_tool_managed(
         boxed.as_ref(),
         serde_json::json!({
             "command": command,
@@ -1990,7 +1990,7 @@ async fn unrestricted_bash_timeout_keeps_output_printed_before_the_timeout() {
     let command = "printf '%s' \"$$\" > shell.pid; echo compiled-pkg-one; echo compiled-pkg-two; echo warn-from-stderr >&2; sleep 30";
 
     let boxed: Box<dyn crate::inference::llm::tool::ToolDyn> = Box::new(tool);
-    let call = crate::tools::call::lifecycle::runtime::call_tool_managed(
+    let call = crate::tools::runtime_context::call_tool_managed(
         boxed.as_ref(),
         serde_json::json!({
             "command": command,
@@ -2073,7 +2073,7 @@ async fn workspace_write_bash_contains_writes_to_tool_root() {
     );
 
     let boxed: Box<dyn crate::inference::llm::tool::ToolDyn> = Box::new(tool);
-    let outcome = crate::tools::call::lifecycle::runtime::call_tool_managed(
+    let outcome = crate::tools::runtime_context::call_tool_managed(
         boxed.as_ref(),
         serde_json::json!({
             "command": shell,
@@ -2632,7 +2632,7 @@ async fn backgrounded_bash_is_exempt_from_foreground_ceiling() {
     );
 
     let deadline = chrono::Utc::now() + chrono::Duration::seconds(30);
-    let output = crate::tools::call::lifecycle::runtime::scope_background_tool_execution(
+    let output = crate::tools::runtime_context::scope_background_tool_execution(
         Some(deadline),
         tokio_util::sync::CancellationToken::new(),
         None,
@@ -2734,9 +2734,9 @@ async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_lau
             "printf artifact > \"$CARGO_TARGET_DIR/{name}\"; printf temporary > \"$TMPDIR/{name}\""
         );
         let operation = async move {
-            crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+            crate::tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
                 None, tokio_util::sync::CancellationToken::new(),
-                crate::tools::call::lifecycle::runtime::ToolWorkspaceScope {
+                crate::tools::runtime_context::ToolWorkspaceScope {
                     runtime_home: None,
                     workspace_cwd: Some(root.clone()), workspace_root: Some(root.clone()),
                     workspace_authority: Some(WorkspaceAuthority::ReadOnly), workspace_artifact: grant,
@@ -2802,10 +2802,10 @@ with socket.socket() as connection:
 "#;
     let root = fx.grant.source_root().to_path_buf();
     let result =
-        crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+        crate::tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
             None,
             tokio_util::sync::CancellationToken::new(),
-            crate::tools::call::lifecycle::runtime::ToolWorkspaceScope {
+            crate::tools::runtime_context::ToolWorkspaceScope {
                 runtime_home: None,
                 workspace_cwd: Some(root.clone()),
                 workspace_root: Some(root.clone()),
@@ -2936,9 +2936,9 @@ async fn run_artifact_compiler_fixture(build_script: Option<&str>) {
     );
     let mut outputs = Vec::new();
     for subcommand in ["check", "test"] {
-        let result = crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+        let result = crate::tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
             None, tokio_util::sync::CancellationToken::new(),
-            crate::tools::call::lifecycle::runtime::ToolWorkspaceScope {
+            crate::tools::runtime_context::ToolWorkspaceScope {
                 runtime_home: None,
                 workspace_cwd: Some(root.clone()), workspace_root: Some(root.clone()),
                 workspace_authority: Some(WorkspaceAuthority::ReadOnly), workspace_artifact: Some(fx.grant.clone()),

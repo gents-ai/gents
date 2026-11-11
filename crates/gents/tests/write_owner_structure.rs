@@ -1653,7 +1653,7 @@ const AMBIENT_CONTEXT_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents/src/tools/exec/ownership.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents/src/plugin/approval.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents/src/plugin/approval/workspace/context.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
-    ("crates/gents/src/tools/call/lifecycle/runtime.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
+    ("crates/gents/src/tools/runtime_context.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
 ];
 
 #[derive(Default)]

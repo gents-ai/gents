@@ -1,5 +1,5 @@
 use super::*;
-use crate::tools::call::lifecycle::runtime::{
+use crate::tools::runtime_context::{
     current_tool_runtime_context, scope_request_tool_execution_with_workspace_overlay,
     ToolWorkspaceScope,
 };

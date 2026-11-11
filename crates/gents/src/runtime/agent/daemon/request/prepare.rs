@@ -9,7 +9,7 @@ use crate::inference::llm::message::Message;
 use crate::observe::runtime_trace::RequestTraceAttrs;
 use crate::runtime::agent::loop_stream::{AggregateTokenBudget, FoldedPrompt};
 use crate::session;
-use crate::tools::call::lifecycle::runtime::ToolWorkspaceScope;
+use crate::tools::runtime_context::ToolWorkspaceScope;
 use crate::turn::prompt::{BuiltPrompt, PromptBuilder};
 use crate::turn::provider_input::budget::ContextCalibration;
 use crate::turn::provider_input::ProviderInputProfile;
@@ -198,14 +198,14 @@ where
                 .collect::<Result<Vec<_>>>()?,
         );
         let workspace = match overlay {
-            Some(overlay) => crate::tools::call::lifecycle::runtime::ToolWorkspaceScope {
+            Some(overlay) => crate::tools::runtime_context::ToolWorkspaceScope {
                 runtime_home: None,
                 workspace_cwd: Some(overlay.cwd),
                 workspace_root: Some(overlay.root),
                 workspace_authority: Some(overlay.authority),
                 workspace_artifact: overlay.workspace_artifact,
             },
-            None => crate::tools::call::lifecycle::runtime::ToolWorkspaceScope::cwd_only(
+            None => crate::tools::runtime_context::ToolWorkspaceScope::cwd_only(
                 crate::tools::workspace::request_workspace_cwd(request),
             ),
         };

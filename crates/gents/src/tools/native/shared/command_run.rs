@@ -11,7 +11,7 @@ use super::command_output::{
 };
 use super::command_validation::validate_command_policy;
 use super::{effective_command_policy, CommandExecutionPolicy};
-use crate::tools::call::lifecycle::runtime::tool_execution_bounds;
+use crate::tools::runtime_context::tool_execution_bounds;
 use crate::tools::call::lifecycle::FailureClass;
 use crate::tools::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 
@@ -152,7 +152,7 @@ pub(crate) async fn run_command(
         stdout_truncation: stdout.metadata,
         stderr_truncation: stderr.metadata,
         hint: (timed_out
-            && !crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
+            && !crate::tools::runtime_context::current_tool_runtime_context()
                 .is_some_and(|context| context.background))
         .then(|| foreground_timeout_hint(duration_ms)),
     };

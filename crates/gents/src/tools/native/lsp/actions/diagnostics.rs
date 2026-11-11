@@ -116,7 +116,7 @@ pub(crate) async fn run_linter_diagnostics(
     // Best-effort supplementary probe; deliberately does not thread
     // live_output, which would interleave per-file linter noise into the
     // enclosing tool call's live output.
-    let bounds = crate::tools::call::lifecycle::runtime::tool_execution_bounds(timeout);
+    let bounds = crate::tools::runtime_context::tool_execution_bounds(timeout);
     let outcome = crate::tools::exec::run_managed_exec(crate::tools::exec::ManagedExecRequest {
         argv: full,
         cwd: workspace,

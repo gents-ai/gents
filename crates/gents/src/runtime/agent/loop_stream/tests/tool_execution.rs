@@ -1395,7 +1395,7 @@ async fn composed_children_outlast_the_guest_clock_and_fail_without_ending_the_p
         Arc::new(tools),
         owned_config(4),
     );
-    let collected = crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
+    let collected = crate::tools::runtime_context::scope_request_tool_execution(
         Some(chrono::Utc::now() + chrono::Duration::seconds(60)),
         tokio_util::sync::CancellationToken::new(),
         Box::pin(collect_owned_scripted_stream(
@@ -1566,7 +1566,7 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
             Arc::new(tools),
             owned_config(4),
         );
-        let collected = crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
+        let collected = crate::tools::runtime_context::scope_request_tool_execution(
             Some(chrono::Utc::now() + chrono::Duration::seconds(60)),
             tokio_util::sync::CancellationToken::new(),
             Box::pin(collect_owned_scripted_stream(

@@ -95,7 +95,7 @@ pub(super) async fn prepare_command_launch(
     let mut environment = build_shell_env();
     // Diagnostic provenance only, never authorization. Unrestricted commands
     // can remove it; supported service commands use it to avoid self-stop.
-    if let Some(scope) = crate::tools::call::lifecycle::runtime::current_tool_runtime_context() {
+    if let Some(scope) = crate::tools::runtime_context::current_tool_runtime_context() {
         for (key, value) in [
             (
                 "GENTS_CALLER_RUNTIME_HOME",
@@ -112,7 +112,7 @@ pub(super) async fn prepare_command_launch(
         }
     }
     let artifact = if policy.mode == CommandExecutionMode::ArtifactWrite {
-        let scope = crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
+        let scope = crate::tools::runtime_context::current_tool_runtime_context()
             .ok_or_else(|| {
                 artifact_policy_denial("artifact_write requires a live sealed workspace request")
             })?;

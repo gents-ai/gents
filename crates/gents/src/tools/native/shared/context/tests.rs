@@ -115,7 +115,7 @@ async fn request_runtime_workspace_overrides_static_base() {
 
     let context = ToolContext::new_with_base(root.clone(), Some(root.clone()), false).unwrap();
     let (resolved, display) =
-        crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_workspace(
+        crate::tools::runtime_context::scope_request_tool_execution_with_workspace(
             None,
             tokio_util::sync::CancellationToken::new(),
             Some(workspace.clone()),
@@ -152,10 +152,10 @@ async fn request_runtime_workspace_root_replaces_static_root() {
 
     let context = ToolContext::new(baked.clone(), false).unwrap();
     let (inside, denied) =
-        crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+        crate::tools::runtime_context::scope_request_tool_execution_with_workspace_overlay(
             None,
             tokio_util::sync::CancellationToken::new(),
-            crate::tools::call::lifecycle::runtime::ToolWorkspaceScope {
+            crate::tools::runtime_context::ToolWorkspaceScope {
                 runtime_home: None,
                 workspace_cwd: Some(placement.clone()),
                 workspace_root: Some(std::fs::canonicalize(&placement).unwrap()),

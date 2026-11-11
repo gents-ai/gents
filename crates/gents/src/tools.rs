@@ -6,5 +6,6 @@ pub mod mcp;
 pub mod native;
 pub(crate) mod output;
 mod rendering;
+pub(crate) mod runtime_context;
 pub mod surface;
 pub mod workspace;

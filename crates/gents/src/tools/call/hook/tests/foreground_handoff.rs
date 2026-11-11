@@ -140,7 +140,7 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
     let pid_arg = pid_file.to_string_lossy().into_owned();
     let gate_arg = gate.to_string_lossy().into_owned();
     let running = tokio::spawn(async move {
-        crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
+        crate::tools::runtime_context::scope_request_tool_execution(
             Some(deadline), parent_for_task,
             task_hook.run_backgroundable_foreground("bash_unrestricted", "handoff-command", Box::new(move |token, _cleanup| Box::pin(async move {
                 let result = crate::tools::exec::run_managed_exec(crate::tools::exec::ManagedExecRequest {
@@ -374,7 +374,7 @@ async fn cancellation_winning_handoff_clears_the_request_and_cancels_the_same_ex
     let (started, observed) = tokio::sync::oneshot::channel();
     let runner = hook.clone();
     let running = tokio::spawn(async move {
-        crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
+        crate::tools::runtime_context::scope_request_tool_execution(
             Some(deadline),
             parent,
             runner.run_backgroundable_foreground(
@@ -452,7 +452,7 @@ async fn refused_foreground_handoff_can_be_retried() {
     let (finish, finished) = tokio::sync::oneshot::channel();
     let runner = hook.clone();
     let running = tokio::spawn(async move {
-        crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
+        crate::tools::runtime_context::scope_request_tool_execution(
             Some(deadline),
             CancellationToken::new(),
             runner.run_backgroundable_foreground(
@@ -655,7 +655,7 @@ async fn interrupted_foreground_with_unverified_exit_remains_background_controll
     let task_parent = parent.clone();
     let task_doc = doc.clone();
     let running = tokio::spawn(async move {
-        crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
+        crate::tools::runtime_context::scope_request_tool_execution(
             Some(deadline),
             task_parent,
             task_hook.run_backgroundable_foreground(

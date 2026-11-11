@@ -68,7 +68,7 @@ pub async fn dispatch(
 ) -> Result<String, ToolError> {
     match req.action {
         LspAction::Status => {
-            let session_id = crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
+            let session_id = crate::tools::runtime_context::current_tool_runtime_context()
                 .and_then(|scope| scope.session_id)
                 .filter(|id| !id.is_empty())
                 .unwrap_or_else(|| config.session_id.clone());
@@ -79,7 +79,7 @@ pub async fn dispatch(
             Ok(status_text(states, &config.servers, workspace))
         }
         LspAction::Reload => {
-            let session_id = crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
+            let session_id = crate::tools::runtime_context::current_tool_runtime_context()
                 .and_then(|scope| scope.session_id)
                 .filter(|id| !id.is_empty())
                 .unwrap_or_else(|| config.session_id.clone());
