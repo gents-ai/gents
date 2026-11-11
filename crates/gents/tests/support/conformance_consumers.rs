@@ -2170,6 +2170,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_lifecycle_hook_must_commit_cases_drive_dropping_staging",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::hooks::generated_lifecycle_hook_rerun_cases_drive_the_transaction_classifier",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/hooks.rs",
+            module_path: "conformance::hooks",
+            function: "generated_lifecycle_hook_rerun_cases_drive_the_transaction_classifier",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::hooks::generated_lifecycle_hook_combine_cases_drive_verdict_combination",
             package: "gents",
             source_path: "crates/gents/tests/conformance/hooks.rs",

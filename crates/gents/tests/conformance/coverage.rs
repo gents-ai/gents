@@ -1826,6 +1826,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "LifecycleHookMustCommitCases",
         ),
         (
+            !snapshot.lifecycle_hook_rerun_cases.is_empty(),
+            "lifecycle_hook_rerun_cases",
+            "LifecycleHookRerunCases",
+        ),
+        (
             !snapshot.lifecycle_hook_combine_cases.is_empty(),
             "lifecycle_hook_combine_cases",
             "LifecycleHookCombineCases",

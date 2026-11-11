@@ -235,6 +235,23 @@ pub struct LeanLifecycleHookMustCommitted {
     pub dropped: Vec<bool>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LeanLifecycleHookCarrier {
+    Context,
+    Sourced,
+    Transparent,
+    Stringified,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanLifecycleHookRerunCase {
+    pub name: String,
+    pub path: Vec<LeanLifecycleHookCarrier>,
+    pub rerun: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanLifecycleHookMustCommitCase {

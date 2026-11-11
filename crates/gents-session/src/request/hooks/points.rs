@@ -74,11 +74,7 @@ async fn stage_must_commit<E>(
     match stage_dropping(host, plugins, event, &without).await {
         Ok(staged) => Ok(staged),
         Err(error @ HookError::PartialStaging { plugin, .. }) => {
-            Err(ConfigClientError::RerunRequested {
-                note: rerun_note(point, plugin, subject),
-                cause: Box::new(error),
-            }
-            .into())
+            Err(ConfigClientError::rerun(rerun_note(point, plugin, subject), Box::new(error)).into())
         }
         Err(other) => Err(surface(other)),
     }

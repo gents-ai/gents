@@ -371,8 +371,7 @@ where
                         RollbackStatus::Scheduled
                     };
                     let rerun = error
-                        .config_client_error()
-                        .and_then(ConfigClientError::rerun_requested)
+                        .rerun_requested()
                         .filter(|note| !rerun_notes.contains(note))
                         .cloned();
                     if let Some(note) = rerun {

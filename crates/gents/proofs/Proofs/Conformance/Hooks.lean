@@ -487,6 +487,31 @@ private def mustCommitCaseJson (c : MustCommitCase) : String :=
 
 def mustCommitCasesJson : String := jsonArray (mustCommitCases.map mustCommitCaseJson)
 
+/-! Re-run requests through owner wrappers: `Hooks.rerunSurvives`. -/
+
+private def carriers : List Carrier := [.context, .sourced, .transparent, .stringified]
+
+/-- Every path of at most three carriers. -/
+def rerunPaths : List (List Carrier) :=
+  [[]] ++ carriers.map (fun first => [first]) ++
+    carriers.flatMap (fun first => carriers.map fun second => [first, second]) ++
+    carriers.flatMap (fun first => carriers.flatMap fun second =>
+      carriers.map fun third => [first, second, third])
+
+private def carrierString : Carrier → String
+  | .context => "context"
+  | .sourced => "sourced"
+  | .transparent => "transparent"
+  | .stringified => "stringified"
+
+private def rerunCaseJson (path : List Carrier) : String :=
+  "{\"name\":" ++ jsonString ("direct" :: path.map carrierString |>.foldl
+      (fun acc part => if acc.isEmpty then part else acc ++ "_" ++ part) "") ++
+    ",\"path\":" ++ jsonStringArray (path.map carrierString) ++
+    ",\"rerun\":" ++ boolJson (rerunSurvives path) ++ "}"
+
+def rerunCasesJson : String := jsonArray (rerunPaths.map rerunCaseJson)
+
 /-! Claim verdicts: `Hooks.combine` and `Hooks.gate`. -/
 
 /-- A successor named by its request id; its document id is derived. -/
