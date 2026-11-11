@@ -4,11 +4,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use gents::documents::apply_desired_state_plan;
+use gents::documents::pack_spec::is_valid_pack_name;
 use gents::documents::{read_desired_state_record_in_txn, DesiredStateApplyPlan};
 use gents::documents::{EvalDefinition, EvalSplit};
-use gents::pack::{
-    interpolate, is_valid_pack_name, load_pack_config, PackInstallOptions, PackManifest,
-};
+use gents::pack::{interpolate, load_pack_config, PackInstallOptions, PackManifest};
 use gents::runtime::embedded::EmbeddedHome;
 use gents::{Collection, ConfigAccess};
 use serde_json::json;
@@ -603,7 +602,15 @@ async fn install_and_read_back(
     access
         .transact_write("eval.init.round_trip", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
+            })
         })
         .await
         .context("installing the definition pack into a scratch home")?;

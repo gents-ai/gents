@@ -409,7 +409,7 @@ async fn cancelled_and_timed_out_streaming_tools_preserve_raw_prefixes() {
             stored.data.as_ref().unwrap()["AgentToolCall"][0]["lifecycle_state"],
             if timeout { "timedOut" } else { "cancelled" }
         );
-        let raw = crate::tools::background::status::observe_canonical_tool_output_with_access(
+        let raw = crate::session::tool_output_rows::observe_canonical_tool_output_with_access(
             &tool.access().unwrap(),
             &tool_doc_id,
             &request_doc_id,
@@ -531,7 +531,14 @@ async fn configure_bash_output_budget(
     author
         .transact_write("test.output_budget", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();
@@ -806,7 +813,7 @@ async fn spawned_background_replays_parent_provenance_and_never_authors_a_child_
         "child raw source closes durably under its own physical identity"
     );
     assert_eq!(
-        crate::tools::background::status::observe_canonical_tool_output_with_access(
+        crate::session::tool_output_rows::observe_canonical_tool_output_with_access(
             &child.access().unwrap(),
             &child_doc_id,
             child.request_doc_id.as_deref().unwrap(),

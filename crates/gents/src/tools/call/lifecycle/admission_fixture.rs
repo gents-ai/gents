@@ -692,7 +692,8 @@ pub async fn published_admission_with_owner(
         .tool_name
         .clone()
         .unwrap_or_else(|| gents_protocol::tool_names::SPAWN_PROCESS_TOOL_NAME.into());
-    let (native_id, arguments) = if crate::tools::native::is_session_message_tool(&tool_name) {
+    let (native_id, arguments) = if gents_protocol::tool_names::is_session_message_tool(&tool_name)
+    {
         (
             "bridge-native-tool",
             serde_json::json!({"agent": request.request().agent_did, "prompt": "work"}),

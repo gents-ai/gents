@@ -101,7 +101,7 @@ pub enum ToolRowKind {
 
 impl ToolRowKind {
     pub(crate) fn of(tool_name: &str) -> Self {
-        if crate::tools::native::is_session_message_tool(tool_name) {
+        if gents_protocol::tool_names::is_session_message_tool(tool_name) {
             Self::SessionMessage
         } else {
             Self::Native

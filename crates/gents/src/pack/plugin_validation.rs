@@ -2,9 +2,10 @@ use anyhow::{Context, Result};
 use std::collections::BTreeSet;
 
 use super::{
-    is_distributable_asset_path, is_valid_pack_name, BindAccess, PackPlugin,
-    PLUGIN_ARTIFACT_PREFIX, SUPPORTED_PLUGIN_LANGUAGES,
+    is_distributable_asset_path, BindAccess, PackPlugin, PLUGIN_ARTIFACT_PREFIX,
+    SUPPORTED_PLUGIN_LANGUAGES,
 };
+use crate::documents::pack_spec::is_valid_pack_name;
 
 impl PackPlugin {
     pub fn validate(&self) -> Result<()> {

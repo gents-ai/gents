@@ -70,7 +70,7 @@ pub fn wire_plugin(
     skill_ids: &[String],
     targets_from: &[(String, Vec<String>, crate::pack::InstalledVia)],
 ) -> anyhow::Result<(Tools, AgentContext, WireReport)> {
-    use crate::tools::background::job::settings;
+    use crate::documents::plugin_job_settings;
     use gents_protocol::job::{JobPolicy, PluginJobSettings};
 
     let coordinate = format!("{}/{}", plugin.namespace, plugin.name);
@@ -144,7 +144,7 @@ pub fn wire_plugin(
                 }
             }
             union_into(&mut agents.target_ids, &block.agent_targets);
-            let problems = settings::validate(&block);
+            let problems = plugin_job_settings::validate(&block);
             anyhow::ensure!(
                 problems.is_empty(),
                 "job block for {coordinate} is not valid: {}",
@@ -164,7 +164,7 @@ pub fn wire_plugin(
     {
         warnings.push(format!(
             "dynamic_check: {}",
-            settings::dynamic_check_notice(&coordinate)
+            plugin_job_settings::dynamic_check_notice(&coordinate)
         ));
     }
 
@@ -268,7 +268,7 @@ pub fn unwire_plugin(
     skill_ids: &[String],
     targets_from: &[(String, Vec<String>, crate::pack::InstalledVia)],
 ) -> anyhow::Result<(Tools, AgentContext, WireReport)> {
-    use crate::tools::background::job::settings;
+    use crate::documents::plugin_job_settings;
 
     let coordinate = format!("{}/{}", plugin.namespace, plugin.name);
     let mut tools = tools.clone();
@@ -356,7 +356,7 @@ pub fn unwire_plugin(
                 "{coordinate} now serves non-job verbs only; to run jobs again: gents config pack wire {coordinate} --agent <agent> --targets-from <pack>"
             ));
         } else {
-            let problems = settings::validate(block);
+            let problems = plugin_job_settings::validate(block);
             anyhow::ensure!(
                 problems.is_empty(),
                 "job block for {coordinate} is not valid: {}",

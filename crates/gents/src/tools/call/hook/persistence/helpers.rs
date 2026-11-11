@@ -269,7 +269,7 @@ pub(super) fn bounded_tool_result_with_presentation(
 }
 
 pub(super) fn json_string(value: serde_json::Value) -> String {
-    crate::tools::output::render(
+    crate::session::output_render::render(
         &value,
         &[
             "output",

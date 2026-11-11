@@ -4,7 +4,7 @@ use super::schema_fields::{
     validate_output_obligation_count_fields, IntrospectedFields,
 };
 use super::ConfigApplyTxn;
-use crate::documents::inference_backend::AdvertisedProfilePolicy as _;
+use crate::documents::inference_backend::AdvertisedProfilePolicy;
 use crate::store::config_client::schema_introspection::{is_aggregate_pseudo_field, SchemaField};
 use crate::Collection;
 use anyhow::Result;
@@ -32,6 +32,7 @@ pub(super) fn changed_configuration_keys(
 pub(crate) async fn validate_desired_state_plan(
     txn: &ConfigApplyTxn<'_>,
     plan: &DesiredStateApplyPlan,
+    policy: &dyn AdvertisedProfilePolicy,
 ) -> Result<()> {
     let mut owners = BTreeSet::new();
     for document in plan.documents() {
@@ -85,7 +86,7 @@ pub(crate) async fn validate_desired_state_plan(
         )?;
         references.validate_affected(&changed_configuration_keys(plan, owner)?)?;
         validate_outcome_source_fields(txn, plan, owner, &references, &mut introspected).await?;
-        validate_advertised_profiles(txn, plan, owner, &references).await?;
+        validate_advertised_profiles(txn, plan, owner, &references, policy).await?;
         validate_trigger_document_fields(txn, plan, owner, &references, &mut introspected).await?;
     }
     Ok(())
@@ -288,6 +289,7 @@ pub(super) async fn validate_advertised_profiles(
     plan: &DesiredStateApplyPlan,
     owner: &str,
     references: &crate::ConfigReferences,
+    policy: &dyn AdvertisedProfilePolicy,
 ) -> Result<()> {
     let mut profiles = BTreeSet::new();
     for document in plan.documents() {
@@ -309,8 +311,7 @@ pub(super) async fn validate_advertised_profiles(
         let Some((profile, backend)) = references.profile_with_backend(&profile_id)? else {
             continue;
         };
-        backend
-            .provider_kind
+        policy
             .validate_advertised_profile(txn, owner, &backend, &profile)
             .await?;
     }

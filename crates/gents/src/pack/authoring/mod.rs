@@ -7,9 +7,6 @@ pub mod names;
 pub mod scaffold;
 pub mod source;
 pub mod template;
-pub mod test;
-
-use crate::tools::native::ToolContext;
 
 pub use build::{
     build_all, build_pack, build_plugin, built_pack_path, pack_built, plugin_entry,
@@ -29,4 +26,3 @@ pub use source::{
     plugin_source_build_root, prepare_plugin_source, PreparedPluginSource,
 };
 pub use template::{Kind, Template};
-pub use test::{run_plugin_cases, PluginCase, PluginCases};

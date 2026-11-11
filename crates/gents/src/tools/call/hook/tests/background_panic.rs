@@ -105,7 +105,7 @@ async fn accepted_background_panic_terminalizes_and_notifies_before_release() {
     let response = agent_access.execute(&format!(r#"{{ AgentToolCall(filter: {{ tool_call_id: {{_eq: "{escaped}"}}}}, limit: 1) {{_docID request_doc_id session_id node_did requester_did lifecycle_state}} }}"#)).await.unwrap();
     let row = &response["data"]["AgentToolCall"][0];
     assert_eq!(row["lifecycle_state"], "failed");
-    let output = crate::tools::background::status::observe_canonical_tool_output_with_access(
+    let output = crate::session::tool_output_rows::observe_canonical_tool_output_with_access(
         &agent_access,
         row["_docID"].as_str().unwrap(),
         row["request_doc_id"].as_str().unwrap(),

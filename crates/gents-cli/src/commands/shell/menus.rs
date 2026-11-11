@@ -1,12 +1,13 @@
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
+use gents::documents::mailbox_write_decl::MailboxKind;
 use gents::documents::patch::SelfConfigTarget;
 use gents::documents::InferenceProfile;
 use gents::pack::BindAccess;
 use gents::plugin::store::{list_records, InstalledPlugin};
 use gents::plugin::{allowed, ux};
-use gents::session::mailbox::{MailboxItem, MailboxKind};
+use gents::session::mailbox::MailboxItem;
 use gents::store::config_client::ConfigAccess;
 use gents::tools::background::job::promote::{list_promotions, PromotionRecord};
 use gents_desktop_core::client::{

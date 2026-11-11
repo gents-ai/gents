@@ -181,7 +181,7 @@ async fn install_review_skill(db: &TestDb, fixture: &support::ManagedAgentFixtur
             let plan = DesiredStateApplyPlan::new(documents.into_iter().map(|(collection, value)| {
                 DesiredStateApplyDocument { collection, add: value.clone(), update: value }
             }).collect())?;
-            apply_desired_state_plan(txn, &plan).await
+            apply_desired_state_plan(txn, &plan, &gents::inference::resolved::ProviderProfilePolicy).await
         })
     }).await.expect("install User-authored review skill");
 }

@@ -17,6 +17,7 @@ use crate::tools::background::status::LiveToolOutputRegistry;
 use crate::tools::call::lifecycle::{InterruptDisposition, ToolCallLifecycle};
 use crate::tools::mcp::meta::selected_remote_identity;
 use crate::truncation::TruncationLimits;
+use gents_loop::output_obligation::OutputObligationCheck;
 use gents_protocol::tool_call::AwaitMode;
 
 pub(crate) mod persistence;
@@ -998,7 +999,7 @@ impl BackgroundExecutionRegistry {
                                     "settled tool invocation lacks its physical request"
                                 )
                             })?;
-                            let raw = crate::tools::background::status::observe_canonical_tool_output_with_access(
+                            let raw = crate::session::tool_output_rows::observe_canonical_tool_output_with_access(
                                 &lifecycle.access()?,
                                 &doc,
                                 request_doc,
@@ -1292,7 +1293,7 @@ pub struct DefraSessionHook {
     job_tools: RapidHashMap<String, crate::tools::background::job::JobBinding>,
     /// The runtime's job driver, whose handles step 0 of a job tool runs on.
     pub(crate) job_driver: Option<Arc<crate::tools::background::job::driver::JobDriver>>,
-    output_obligation_gate: Option<crate::runtime::agent::output_obligation::OutputObligationGate>,
+    output_obligation_gate: Option<Arc<dyn OutputObligationCheck>>,
     steering_input_source: Option<Arc<SteeringInputSource>>,
     inference_observation:
         Option<std::sync::Weak<crate::inference::inference_observation::InferenceObservationGuard>>,
@@ -1657,7 +1658,7 @@ impl DefraSessionHook {
 
     pub(crate) fn with_output_obligation_gate(
         mut self,
-        gate: Option<crate::runtime::agent::output_obligation::OutputObligationGate>,
+        gate: Option<Arc<dyn OutputObligationCheck>>,
     ) -> Self {
         self.output_obligation_gate = gate;
         self
@@ -2116,7 +2117,7 @@ impl gents_loop::session_hook::CanonicalSessionHook<crate::request::streaming::A
 
 #[async_trait::async_trait]
 impl gents_loop::session_hook::SessionHook for DefraSessionHook {
-    type Error = crate::runtime::agent::stream_processor::RuntimeSeamError;
+    type Error = crate::request::seam_error::RuntimeSeamError;
     async fn bind_tool_surface(&self, tools: SharedLoopTools) {
         *self.selected_loop_tools.lock().await = Some(tools);
     }

@@ -11,13 +11,26 @@ const PRIVATE_ROOT: &str = ".gents-bind";
 
 const STALE: Duration = Duration::from_secs(24 * 60 * 60);
 
+/// The approval a bound directory was shared under, rechecked before each
+/// use because it can outlive an approval wait or a plugin host round.
+pub trait InvocationConsent: std::fmt::Debug + Send + Sync {
+    fn validate(&self) -> Result<()>;
+
+    fn validate_plugin(
+        &self,
+        plugin: &str,
+        artifact_digest: &str,
+        input_digest: &str,
+    ) -> Result<()>;
+}
+
 #[derive(Debug, Clone)]
 pub struct BoundDir {
     dir: PathBuf,
     target: PathBuf,
     original: PathBuf,
     access: BindAccess,
-    consent: Option<super::approval::workspace::ActionConsent>,
+    consent: Option<Arc<dyn InvocationConsent>>,
     _private: Option<Arc<tempfile::TempDir>>,
 }
 
@@ -140,10 +153,7 @@ impl BoundDir {
         Ok(())
     }
 
-    pub(crate) fn with_consent(
-        mut self,
-        consent: Option<super::approval::workspace::ActionConsent>,
-    ) -> Self {
+    pub fn with_consent(mut self, consent: Option<Arc<dyn InvocationConsent>>) -> Self {
         self.consent = consent;
         self
     }

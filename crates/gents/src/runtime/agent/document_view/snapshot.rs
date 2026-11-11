@@ -9,7 +9,7 @@ use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 use crate::documents::Agent as AgentDocument;
 use crate::inference::admission::BackendAvailability;
 use crate::inference::resolved::ResolvedAgent;
-use crate::runtime::snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
+use crate::triggers::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
 
 use super::DocumentRuntimeView;
 
@@ -331,7 +331,7 @@ fn ensure_inference_available(
                 ));
             }
         };
-        let pick = backend.auth.account_pick().unwrap_or(
+        let pick = crate::inference::auth::credential::account_pick(&backend.auth).unwrap_or(
             crate::inference::auth::credential::AccountPick::Reference(None),
         );
         if !view.resolves_oauth_credential(provider, pick) {

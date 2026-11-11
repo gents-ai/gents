@@ -35,7 +35,6 @@ use crate::runtime::agent::daemon::AgentDaemonInit;
 use crate::runtime::agent::runtime::{
     run_router_with_watcher, RouterInputs, RuntimeAdmissionGate, StartupBarrier,
 };
-use crate::runtime::snapshot::ActiveRuntimeSnapshot;
 use crate::runtime::status::RuntimeStatusHandle;
 use crate::store::config_client::ConfigAccess;
 use crate::store::identity::{NodeIdentity, RuntimeNode};
@@ -43,6 +42,7 @@ use crate::tools::call::hook::{
     BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
 };
 use crate::tools::surface::AgentToolSurfaceConfig;
+use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use crate::turn::prompt::LayeredPromptBuilder;
 use gents_protocol::output::rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
 use gents_protocol::row::AgentRequest;
@@ -303,7 +303,14 @@ async fn install_review_policy(
         .user_access
         .transact_write("test.review_policy", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();

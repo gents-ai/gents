@@ -2040,6 +2040,41 @@ async fn session_history_tool_follows_selection() {
         .contains(&gents_protocol::tool_names::SESSION_HISTORY_TOOL_NAME.to_string()));
 }
 
+#[test]
+fn tools_document_and_resolved_selection_agree_on_needing_a_filesystem_root() {
+    for (groups, expected) in [
+        (serde_json::json!({}), false),
+        (serde_json::json!({"host": {}}), false),
+        (
+            serde_json::json!({"host": {"files": {"mode": "Off"}, "bash": {"mode": "Off"}}}),
+            false,
+        ),
+        (
+            serde_json::json!({"host": {"files": {"mode": "ReadOnly"}}}),
+            true,
+        ),
+        (
+            serde_json::json!({"host": {"bash": {"mode": "ReadOnly"}}}),
+            true,
+        ),
+        (
+            serde_json::json!({"host": {"cli": [{"name": "git"}]}}),
+            true,
+        ),
+        (serde_json::json!({"integrations": {"lsp": {}}}), true),
+    ] {
+        let tools = tools_document(groups.clone());
+        assert_eq!(tools.requires_filesystem_root(), expected, "{groups}");
+        assert_eq!(
+            ResolvedToolSelection::from_document(&tools)
+                .unwrap()
+                .requires_filesystem_root(),
+            expected,
+            "{groups}"
+        );
+    }
+}
+
 fn tools_document(mut value: serde_json::Value) -> crate::documents::Tools {
     let fields = value.as_object_mut().unwrap();
     fields

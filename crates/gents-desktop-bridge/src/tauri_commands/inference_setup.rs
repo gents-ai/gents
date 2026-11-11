@@ -1461,9 +1461,13 @@ mod provider_account_tests {
                 }),
             ),
         ] {
-            gents::documents::write_inference_backend_document(&access, &backend)
-                .await
-                .expect("store backend");
+            gents::documents::write_inference_backend_document(
+                &access,
+                &backend,
+                &gents::inference::resolved::ProviderProfilePolicy,
+            )
+            .await
+            .expect("store backend");
         }
         // The runtime reads the stored connection, whose key the save moved
         // into a node credential.
@@ -1578,9 +1582,13 @@ mod provider_account_tests {
             .transact_write("test.remove_unbound_backend", |txn| {
                 let removal = &removal;
                 Box::pin(async move {
-                    gents::documents::apply_desired_state_plan(txn, removal)
-                        .await
-                        .map(|_| ())
+                    gents::documents::apply_desired_state_plan(
+                        txn,
+                        removal,
+                        &gents::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                    .map(|_| ())
                 })
             })
             .await

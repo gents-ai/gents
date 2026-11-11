@@ -13,7 +13,8 @@ use sha2::{Digest, Sha256};
 use super::data::{self, DataCaller};
 use super::http_calls;
 use super::job_calls::{self, JobCaller};
-use super::model_calls::{self, ModelResolver};
+use super::model_binding::ModelResolver;
+use super::model_calls;
 use super::rounds::{self, HostCalls};
 use super::store::{self, InstalledPlugin};
 use super::{allowed, approval};
@@ -392,7 +393,11 @@ impl PluginExecutor {
                 .granted(resolved.folder())
                 .is_some();
         allowed::bind(&resolved, access, folder_allowed)
-            .map(|bound| bound.with_consent(consent))
+            .map(|bound| {
+                bound.with_consent(
+                    consent.map(|consent| Arc::new(consent) as Arc<dyn super::InvocationConsent>),
+                )
+            })
             .map(Some)
             .map_err(refuse)
     }
@@ -571,7 +576,7 @@ impl PluginExecutor {
 
     /// The record of `coordinate` as the plugin home holds it, staged or not.
     pub fn installed_record(&self, coordinate: &str) -> Result<InstalledPlugin> {
-        let (namespace, name) = store::parse_coordinate(coordinate)?;
+        let (namespace, name) = crate::documents::plugin_coordinate::parse_coordinate(coordinate)?;
         store::read_record(
             self.home
                 .as_deref()
@@ -582,7 +587,7 @@ impl PluginExecutor {
     }
 
     pub fn resolve(&self, coordinate: &str, pinned: Option<&str>) -> Result<InstalledPlugin> {
-        let (namespace, name) = store::parse_coordinate(coordinate)?;
+        let (namespace, name) = crate::documents::plugin_coordinate::parse_coordinate(coordinate)?;
         let home = self.home.as_deref().with_context(|| {
             format!("plugin {coordinate} is not installed: this runtime has no plugin directory")
         })?;
@@ -842,6 +847,48 @@ impl PluginExecutor {
     #[cfg(test)]
     pub(crate) fn admitted_len(&self) -> usize {
         self.admitted.len()
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::tools::plugin_host::PluginHost for PluginExecutor {
+    fn home(&self) -> Option<&Path> {
+        PluginExecutor::home(self)
+    }
+
+    fn installed(&self) -> Result<Vec<InstalledPlugin>> {
+        PluginExecutor::installed(self)
+    }
+
+    fn installed_record(&self, coordinate: &str) -> Result<InstalledPlugin> {
+        PluginExecutor::installed_record(self, coordinate)
+    }
+
+    fn resolve(&self, coordinate: &str, pinned: Option<&str>) -> Result<InstalledPlugin> {
+        PluginExecutor::resolve(self, coordinate, pinned)
+    }
+
+    async fn call_outcome(
+        &self,
+        record: &InstalledPlugin,
+        input: serde_json::Value,
+    ) -> Result<PluginOutcome> {
+        Ok(PluginExecutor::call(self, record, input).await?.outcome)
+    }
+
+    async fn run_plugin_once(
+        self: Arc<Self>,
+        coordinate: &str,
+        selected: &[crate::documents::PluginToolRef],
+        node: Arc<defra_node::Node>,
+        node_did: &str,
+        agent_did: Option<&str>,
+        input: serde_json::Value,
+    ) -> Result<(serde_json::Value, Option<String>, Option<String>)> {
+        super::tool::PluginTool::for_run(self, coordinate, selected)?
+            .with_agent_data(node, node_did, agent_did)?
+            .run_once(input)
+            .await
     }
 }
 

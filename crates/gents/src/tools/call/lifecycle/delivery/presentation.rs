@@ -1,8 +1,8 @@
 use super::TerminalFields;
+use crate::session::output_render::terminal_output_tail;
 use crate::session::tool_call_state::{CancelCause, ToolCallState};
 use crate::session::tool_presentation::render_presentation;
 use crate::tools::call::lifecycle::FailureClass;
-use crate::tools::output::terminal_output_tail;
 use anyhow::{Context, Result};
 use gents_protocol::output::PayloadPresentation;
 

@@ -3550,7 +3550,7 @@ async fn canonical_tool_output_uses_modeled_physical_source_facts() {
                 .unwrap();
             native.insert_replicated_segment(&segment).await.unwrap();
         }
-        let actual = crate::tools::background::status::observe_canonical_tool_output_with_access(
+        let actual = crate::session::tool_output_rows::observe_canonical_tool_output_with_access(
             &native.access,
             &physical_tool,
             &native.request_doc_id,

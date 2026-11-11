@@ -93,13 +93,13 @@ impl ConfigCommandTool {
                     |namespace, name| async move {
                         let coordinate = format!("{namespace}/{name}");
                         let record = self.plugins.resolve(&coordinate, None)?;
-                        let call = self.plugins.call(&record, producer_input()).await?;
+                        let outcome = self.plugins.call_outcome(&record, producer_input()).await?;
                         anyhow::ensure!(
-                            matches!(call.outcome.verdict, PluginVerdict::Success),
+                            matches!(outcome.verdict, PluginVerdict::Success),
                             "the ux producer {coordinate} did not succeed: {}",
-                            call.outcome.diagnostics
+                            outcome.diagnostics
                         );
-                        Ok(call.outcome.output)
+                        Ok(outcome.output)
                     },
                 )
                 .await?

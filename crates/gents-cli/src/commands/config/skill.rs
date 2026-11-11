@@ -39,7 +39,12 @@ async fn upsert_skill(access: &ConfigAccess, skill: &SkillDocument) -> Result<St
         .transact_write("cli.config.skill.upsert", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                apply_desired_state_plan(txn, plan).await?;
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await?;
                 let (doc_id, _) =
                     read_desired_state_record_in_txn(txn, Collection::Skill, node_did, skill_id)
                         .await?

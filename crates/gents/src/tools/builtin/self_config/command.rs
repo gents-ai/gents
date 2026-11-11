@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::output_render::{ordered, Ordered};
 use gents_protocol::tool_names::CONFIG_TOOL_NAME;
 
 pub(super) mod agents;
@@ -361,7 +362,7 @@ pub struct ConfigCommandTool {
     pub(super) preview: bool,
     pub(super) process_ceiling: crate::tools::surface::SelfConfigProcessCeiling,
     pub(super) execution: Arc<super::execution::ExecutionObservation>,
-    pub(super) plugins: Arc<crate::plugin::executor::PluginExecutor>,
+    pub(super) plugins: Arc<dyn crate::tools::plugin_host::PluginHost>,
     /// The plugins the calling agent's Tools select for this request.
     pub(super) selected_plugins: Vec<crate::documents::PluginToolRef>,
     /// The plugin tool names the process ceiling admits; `None` is all.

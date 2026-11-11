@@ -12,17 +12,19 @@ use crate::documents::inference_defaults::{
 };
 use crate::documents::AgentToolConfig;
 use crate::inference::backends::health::{BackendHealthMap, BackendProberOptions};
+use crate::inference::backends::registry::backend_fields;
 use crate::inference::resolved::{
     ResolvedAgent, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS,
 };
 use crate::runtime::agent::retry::RetryPolicy;
-use crate::runtime::snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
 use crate::store::identity::{NodeIdentity, RuntimeNode};
 use crate::store::schema::migration;
 use crate::tools::call::hook::{BackgroundExecutionRegistry, FailurePolicy};
 use crate::tools::mcp::health::HealthCheckerOptions;
 use crate::tools::mcp::pool::McpPool;
 use crate::tools::surface::{AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling};
+use crate::triggers::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
+use crate::triggers::snapshot_observer::RuntimeSnapshotObserver;
 
 mod builder;
 pub mod completion_retry;
@@ -140,28 +142,6 @@ pub trait ProcessLifecycleObserver: Send + Sync {
     fn on_process_state_change(&self, state: ProcessLifecycleState);
 }
 
-pub trait RuntimeSnapshotObserver: Send + Sync {
-    fn on_generation_published(
-        &self,
-        generation: u64,
-        configuration_fingerprint: &str,
-        runnable_agent_dids: &[String],
-    );
-
-    /// Success is not a group-recovery/drain guarantee; errors do not authorize
-    /// reseeding.
-    fn on_event_sources_reconciled(
-        &self,
-        generation: u64,
-        configuration_fingerprint: &str,
-        result: Result<(), &str>,
-    );
-
-    /// The request router has durably acknowledged this generation; callers
-    /// that submit work need the router, not merely a resolved snapshot.
-    fn on_router_generation_activated(&self, _generation: u64, _configuration_fingerprint: &str) {}
-}
-
 #[derive(Clone, Default)]
 pub struct DocumentRuntimeOptions {
     pub backend_admission: Option<crate::store::local::backend_protection::BackendAdmission>,
@@ -220,7 +200,7 @@ pub struct Gents {
     unavailable_agents: RapidHashMap<String, UnavailableAgent>,
     active_snapshot: Arc<
         std::sync::RwLock<
-            Option<watch::Receiver<Arc<crate::runtime::snapshot::ActiveRuntimeSnapshot>>>,
+            Option<watch::Receiver<Arc<crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot>>>,
         >,
     >,
     document_runtime_context: Option<DocumentResolveContext>,
@@ -251,7 +231,7 @@ pub struct Gents {
 
 pub(crate) fn plugin_executor(
     home: Option<PathBuf>,
-    models: crate::plugin::model_calls::AccessModels<crate::store::config_client::ConfigAccess>,
+    models: crate::plugin::model_binding::AccessModels<crate::store::config_client::ConfigAccess>,
 ) -> crate::plugin::executor::PluginExecutor {
     crate::plugin::executor::PluginExecutor::new(home).with_models(Arc::new(models))
 }
@@ -281,7 +261,7 @@ impl Gents {
         backend_admission.validate(&node).await?;
         migration::ensure_all_runtime_migrations(node.clone()).await?;
         let backend_health = options.backend_health.clone().unwrap_or_default();
-        let plugin_models = crate::plugin::model_calls::AccessModels(
+        let plugin_models = crate::plugin::model_binding::AccessModels(
             crate::store::config_client::ConfigAccess::local(node.clone()),
         );
         let plugins = Arc::new(plugin_executor(options.plugin_home, plugin_models));
@@ -619,7 +599,7 @@ pub(crate) fn agent_config_from_documents(
     if let Some(config) = &compaction {
         config.validate()?;
     }
-    let backend = inference.backend.backend_fields();
+    let backend = backend_fields(&inference.backend);
     let resolved_max_turns = inference.max_turns()?;
     anyhow::ensure!(
         agent_config.node_did == principal.node_did,

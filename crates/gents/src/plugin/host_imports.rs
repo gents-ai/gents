@@ -51,7 +51,7 @@ pub(super) struct ImportSession {
     /// `ENGINE_FAILED`, so a guest that then exits non-zero reports the
     /// engine's failure, not the exit.
     pub failure: Option<(PluginVerdict, String)>,
-    pub host: Option<super::host_calls::Bridge>,
+    pub host: Option<super::host_bridge::Bridge>,
 }
 
 /// The call's `script`: a non-empty string. Whitespace is source.
@@ -191,7 +191,7 @@ fn host_call(
     let (Ok(start), Ok(length)) = (usize::try_from(ptr), usize::try_from(len)) else {
         return BAD_INPUT;
     };
-    if length > crate::session::plugin_effect_rows::MAX_PAYLOAD_BYTES {
+    if length > gents_protocol::plugin_tool_call_limits::MAX_PAYLOAD_BYTES {
         return TOO_LARGE;
     }
     let Some(memory) = memory_of(caller) else {

@@ -101,7 +101,12 @@ async fn publish_repository_and_resolve_agents(
                     &repository.repository_id,
                 )
                 .await?;
-                apply_desired_state_plan(txn, plan).await?;
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await?;
                 let (doc, _) = read_desired_state_record_in_txn(
                     txn,
                     Collection::RepositoryPlacement,

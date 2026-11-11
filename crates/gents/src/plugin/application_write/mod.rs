@@ -416,7 +416,7 @@ impl Tool for WriteTool {
     async fn call(&self, args: WriteParams) -> std::result::Result<String, WriteError> {
         match self.execute(&args).await {
             Ok(value) => {
-                serde_json::to_string(&crate::tools::builtin::self_config::Ordered::reading_order(
+                serde_json::to_string(&crate::session::output_render::Ordered::reading_order(
                     value,
                     &["effect", "next_call", "metadata", "committed"],
                 ))

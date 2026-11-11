@@ -271,10 +271,11 @@ fn status_test_request(request_id: &str) -> gents_protocol::row::AgentRequest {
     }
 }
 
-fn unavailable_general() -> RapidHashMap<String, crate::runtime::snapshot::UnavailableAgent> {
+fn unavailable_general() -> RapidHashMap<String, crate::triggers::runtime_snapshot::UnavailableAgent>
+{
     RapidHashMap::from_iter([(
         "general".to_string(),
-        crate::runtime::snapshot::UnavailableAgent::new(
+        crate::triggers::runtime_snapshot::UnavailableAgent::new(
             AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
             "test runtime is not configured",
         ),

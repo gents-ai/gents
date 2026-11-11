@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
 use gents_protocol::output::{
-    reconstruction::{reconstruct_stream, ObservedSegment},
     OutputOutcome, OutputSegment, OutputSource, OutputWriter, PayloadRef, SegmentRun, SourceClose,
     StreamDeclaration, StreamPayload,
 };
@@ -11,16 +10,16 @@ use crate::store::config_client::session_children::output_segment_bound_variable
 use crate::store::config_client::{ConfigApplyTxn, IdempotentTransactionRetry};
 use crate::store::graphql::{created_doc_id, escape_graphql_string};
 use gents_protocol::output::rows::{
-    decode_scoped_request_output_segments, request_output_segments_filter,
-    AGENT_OUTPUT_SEGMENT_FIELDS, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    request_output_segments_filter, AGENT_OUTPUT_SEGMENT_FIELDS,
+    CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
 
 use super::ToolCallLifecycle;
 use crate::session::plugin_effect_rows::{
-    arguments_from_rows, PluginEffectBinding, MAX_PAYLOAD_BYTES,
+    arguments_from_rows, receipt_from_rows, receipt_source, PluginEffectBinding,
 };
 use crate::session::tool_call_state::ToolCallState;
-use gents_protocol::plugin_tool_call_limits::MAX_EFFECTS;
+use gents_protocol::plugin_tool_call_limits::{MAX_EFFECTS, MAX_PAYLOAD_BYTES};
 
 #[derive(Clone)]
 pub(super) struct PluginEffectTerminal {
@@ -478,65 +477,6 @@ pub(super) async fn arguments_in_txn(
         internal_id,
         name,
     )
-}
-
-pub(super) fn receipt_source(session: &str, tool: &str) -> OutputSource {
-    OutputSource::Authored {
-        key: format!("{session}:background-receipt:{tool}"),
-    }
-}
-
-pub(super) fn receipt_from_rows(
-    rows: &[serde_json::Value],
-    node: &str,
-    session: &str,
-    requester: Option<&str>,
-    request: &str,
-    tool: &str,
-) -> Result<Option<String>> {
-    let records = decode_scoped_request_output_segments(rows, node, Some(session), requester)?;
-    let source = receipt_source(session, tool);
-    let matching = records
-        .iter()
-        .filter(|row| row.segment.source == source)
-        .collect::<Vec<_>>();
-    anyhow::ensure!(matching.len() <= 1, "ambiguous plugin receipt");
-    let Some(row) = matching.first() else {
-        return Ok(None);
-    };
-    anyhow::ensure!(
-        row.segment.request_doc_id == request
-            && row.segment.writer
-                == OutputWriter::ToolExecution {
-                    tool_call_doc_id: tool.to_owned()
-                }
-            && matches!(
-                row.segment.close,
-                Some(SourceClose::Closed {
-                    outcome: OutputOutcome::Complete,
-                    ..
-                })
-            ),
-        "plugin receipt has invalid ownership or closure"
-    );
-    let observed = [ObservedSegment {
-        doc_id: &row.doc_id,
-        segment: &row.segment,
-    }];
-    let reconstructed = reconstruct_stream(
-        &observed,
-        &[],
-        &[],
-        &PayloadRef {
-            close_doc_id: row.doc_id.clone(),
-            stream: 0,
-        },
-    )?;
-    anyhow::ensure!(
-        matches!(reconstructed.declaration.payload, StreamPayload::ToolOutput),
-        "plugin receipt is not tool output"
-    );
-    Ok(Some(reconstructed.text))
 }
 
 pub(super) async fn publish_receipt_in_txn(

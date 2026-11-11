@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use gents::documents::Tools;
 use gents::pack::authoring::check_dir;
-use gents::pack::authoring::test::run_plugin_cases;
+use gents::plugin::authoring_test::run_plugin_cases;
 use gents::store::config_client::ConfigAccess;
 use gents::tools::background::job::promote::{
     generate_pack, load_dynamic_run, validate_name, write_promotion, PromoteRefusal,
@@ -98,7 +98,7 @@ pub fn refusal_code(error: &PromotionError) -> Option<&'static str> {
 
 /// The run's handle as the tool name, when it is a pack name.
 pub fn default_name(handle: &str) -> Option<String> {
-    gents::pack::is_valid_pack_name(handle).then(|| handle.to_owned())
+    gents::documents::pack_spec::is_valid_pack_name(handle).then(|| handle.to_owned())
 }
 
 /// Refuses an agent with no Tools document: wiring into it would fail after

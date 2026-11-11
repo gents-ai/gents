@@ -19,7 +19,7 @@ pub fn validate_handler(
     correlation_field: Option<&str>,
     outputs: &[PortSpec],
 ) -> Result<()> {
-    crate::plugin::store::parse_coordinate(plugin)?;
+    crate::documents::plugin_coordinate::parse_coordinate(plugin)?;
     let hex = digest.strip_prefix("sha256:").unwrap_or_default();
     anyhow::ensure!(
         hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit()),

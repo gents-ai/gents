@@ -91,7 +91,12 @@ async fn apply_selected_plan(
         }
     }
     // Enumeration order is deterministic; it does not establish reference safety.
-    let applied = apply_desired_state_plan(txn, plan).await?;
+    let applied = apply_desired_state_plan(
+        txn,
+        plan,
+        &gents::inference::resolved::ProviderProfilePolicy,
+    )
+    .await?;
     for collection in Collection::ALL {
         counts.add(collection, applied.get(collection));
     }

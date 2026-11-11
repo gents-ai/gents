@@ -76,7 +76,7 @@ impl GrepTool {
 }
 
 impl Tool for ListFilesTool {
-    const NAME: &'static str = "list_files";
+    const NAME: &'static str = gents_protocol::tool_names::LIST_FILES_TOOL_NAME;
 
     type Error = ToolError;
     type Args = ListFilesArgs;
@@ -142,7 +142,7 @@ impl Tool for ListFilesTool {
             )
             .await?;
         if args.raw_json {
-            crate::tools::output::render_json_text(output, &["entries", "matches"])
+            crate::session::output_render::render_json_text(output, &["entries", "matches"])
                 .map_err(Into::into)
         } else {
             Ok(output)
@@ -162,7 +162,7 @@ impl Tool for ListFilesTool {
 }
 
 impl Tool for ReadFileTool {
-    const NAME: &'static str = "read_file";
+    const NAME: &'static str = gents_protocol::tool_names::READ_FILE_TOOL_NAME;
 
     type Error = ToolError;
     type Args = ReadFileArgs;
@@ -264,7 +264,7 @@ impl Tool for ReadFileTool {
 }
 
 impl Tool for GlobTool {
-    const NAME: &'static str = "glob";
+    const NAME: &'static str = gents_protocol::tool_names::GLOB_TOOL_NAME;
 
     type Error = ToolError;
     type Args = GlobArgs;
@@ -327,7 +327,7 @@ impl Tool for GlobTool {
             )
             .await?;
         if args.raw_json {
-            crate::tools::output::render_json_text(output, &["entries", "matches"])
+            crate::session::output_render::render_json_text(output, &["entries", "matches"])
                 .map_err(Into::into)
         } else {
             Ok(output)
@@ -347,7 +347,7 @@ impl Tool for GlobTool {
 }
 
 impl Tool for GrepTool {
-    const NAME: &'static str = "grep";
+    const NAME: &'static str = gents_protocol::tool_names::GREP_TOOL_NAME;
 
     type Error = ToolError;
     type Args = GrepArgs;
@@ -417,7 +417,7 @@ impl Tool for GrepTool {
             )
             .await?;
         if args.raw_json {
-            crate::tools::output::render_json_text(output, &["entries", "matches"])
+            crate::session::output_render::render_json_text(output, &["entries", "matches"])
                 .map_err(Into::into)
         } else {
             Ok(output)

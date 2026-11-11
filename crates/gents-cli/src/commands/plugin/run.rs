@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use gents::plugin::executor::PluginExecutor;
-use gents::plugin::model_calls::AccessModels;
+use gents::plugin::model_binding::AccessModels;
 use gents::plugin::BoundDir;
 
 use crate::cli::args::PluginRunArgs;

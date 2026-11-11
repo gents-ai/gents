@@ -114,7 +114,7 @@ pub async fn configure(access: &ConfigAccess, node: &str, agent: &str) -> Result
             tools.agents = Some(AgentTools { enabled: Some(true), target_ids: targets });
             documents.push((Collection::Tools, serde_json::to_value(tools)?));
             let plan = DesiredStateApplyPlan::new(documents.into_iter().map(|(collection, value)| DesiredStateApplyDocument {collection, add:value.clone(), update:value}).collect())?;
-            apply_desired_state_plan(txn, &plan).await?;
+            apply_desired_state_plan(txn, &plan, &gents::inference::resolved::ProviderProfilePolicy).await?;
             Ok(())
         })
     }).await

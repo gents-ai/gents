@@ -12,9 +12,10 @@ use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
-use crate::runtime::snapshot::ActiveRuntimeSnapshot;
+use crate::request::event_delivery::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
 use crate::store::subscription_source::UpdateSubscriptionSource;
-use crate::triggers::event_delivery::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
+use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
+use crate::triggers::snapshot_observer::RuntimeSnapshotObserver;
 
 use super::{FireIntent, TriggerSource};
 use crate::documents::task_delivery::TriggerKind;
@@ -111,7 +112,7 @@ pub struct EventSource {
     parked_arrivals: RapidHashMap<String, durable::ParkedArrival>,
     last_refusal_scan: Option<Instant>,
     durable_after_trigger: Option<String>,
-    runtime_observer: Option<Arc<dyn crate::runtime::agent::RuntimeSnapshotObserver>>,
+    runtime_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     node: Arc<EmbeddedNode>,
     subscription_source: Arc<dyn UpdateSubscriptionSource>,
@@ -280,7 +281,7 @@ impl EventSource {
 
     pub(crate) fn with_runtime_observer(
         mut self,
-        observer: Option<Arc<dyn crate::runtime::agent::RuntimeSnapshotObserver>>,
+        observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
     ) -> Self {
         self.runtime_observer = observer;
         self

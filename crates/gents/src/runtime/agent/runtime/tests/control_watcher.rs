@@ -148,7 +148,14 @@ async fn write_documents(
     access
         .transact_write(operation, |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();
@@ -215,7 +222,14 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     user_access
         .transact_write("test.context.update", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();
@@ -684,9 +698,13 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
         "host": {"files": {"mode": "ReadOnly"}, "root": root_text}
     }))
     .unwrap();
-    crate::documents::write_tools_document(&user_access, &tools)
-        .await
-        .unwrap();
+    crate::documents::write_tools_document(
+        &user_access,
+        &tools,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
 
     tokio::task::yield_now().await;
     tokio::time::sleep(TEST_CONTROL_WATCHER_TIMING.debounce + Duration::from_millis(10)).await;
@@ -935,9 +953,13 @@ async fn write_tools_naming_plugin(
         "integrations": {"plugins": [{"plugin": "fixture/list_files"}]},
     }))
     .unwrap();
-    crate::documents::write_tools_document(access, &tools)
-        .await
-        .unwrap();
+    crate::documents::write_tools_document(
+        access,
+        &tools,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
 }
 
 fn installed_record() -> crate::plugin::store::InstalledPlugin {

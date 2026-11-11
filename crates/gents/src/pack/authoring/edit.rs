@@ -5,7 +5,7 @@ use serde_json::{json, Map, Value};
 
 use super::names::Names;
 use super::scaffold::{tool_markdown, ux_plugin, write_plugin_source};
-use super::ToolContext;
+use crate::pack::rooted_paths::RootedPaths;
 
 const CONFIG: &str = "pack_config.json";
 
@@ -13,7 +13,7 @@ const CONFIG: &str = "pack_config.json";
 /// the rooted path owner and must stay inside the pack, so a manifest naming
 /// `../` or a symlink in the tree cannot reach beyond it.
 pub struct PackEdit {
-    context: ToolContext,
+    context: RootedPaths,
     pub dir: PathBuf,
     pub manifest: Value,
     config: Option<Value>,
@@ -64,7 +64,7 @@ pub enum PackPart {
 
 impl PackEdit {
     pub fn load(dir: &Path) -> Result<Self> {
-        let context = ToolContext::new(dir.to_path_buf(), false)
+        let context = RootedPaths::new(dir)
             .with_context(|| format!("opening the pack directory {}", dir.display()))?;
         let dir = std::fs::canonicalize(dir)
             .with_context(|| format!("opening the pack directory {}", dir.display()))?;

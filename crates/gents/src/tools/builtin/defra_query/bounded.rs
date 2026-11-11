@@ -595,7 +595,7 @@ impl Tool for BoundedQueryTool {
                 offset + count as u32
             ));
         }
-        crate::tools::output::render(
+        crate::session::output_render::render(
             &payload,
             &[
                 "results",

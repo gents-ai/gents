@@ -447,7 +447,7 @@ mod tests {
                 panic!("building the promotion pack must succeed: {error:#}")
             });
         }
-        let cases = gents::pack::authoring::test::run_plugin_cases(&dir)
+        let cases = gents::plugin::authoring_test::run_plugin_cases(&dir)
             .await
             .unwrap();
         assert_eq!(cases.len(), 1);
@@ -482,7 +482,7 @@ mod tests {
             crate::commands::pack::build::build_pack(&pack, None)
                 .unwrap_or_else(|error| panic!("building the js workflow must succeed: {error:#}"));
         }
-        let cases = gents::pack::authoring::test::run_plugin_cases(&pack)
+        let cases = gents::plugin::authoring_test::run_plugin_cases(&pack)
             .await
             .unwrap();
         assert_eq!(cases.len(), 1);

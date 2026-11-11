@@ -72,7 +72,14 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
     evaluator
         .transact_write("test.checkpoint.config", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();

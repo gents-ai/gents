@@ -46,7 +46,12 @@ pub(super) async fn tools_set(args: ToolsSetArgs) -> Result<()> {
     let doc_id = access
         .transact_write("cli.tools.set", move |txn| {
             Box::pin(async move {
-                apply_desired_state_plan(txn, plan).await?;
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await?;
                 let (doc_id, _) =
                     read_desired_state_record_in_txn(txn, Collection::Tools, owner, id)
                         .await?

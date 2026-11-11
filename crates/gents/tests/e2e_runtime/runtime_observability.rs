@@ -1,9 +1,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use gents::triggers::snapshot_observer::RuntimeSnapshotObserver;
 use gents::{
     ConfigAccess, DocumentRuntimeOptions, Gents, ProcessLifecycleObserver, ProcessLifecycleState,
-    RuntimeSnapshotObserver, ToolCeiling,
+    ToolCeiling,
 };
 use tokio::sync::watch;
 
@@ -212,7 +213,12 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
                     })
                     .collect(),
                 )?;
-                gents::documents::apply_desired_state_plan(txn, &plan).await
+                gents::documents::apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
             })
         })
         .await

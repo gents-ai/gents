@@ -5,6 +5,8 @@ use defra_node::Node as EmbeddedNode;
 use gents_loop::account_usage::{UsageReport, UsageSource, UsageWindow};
 use serde_json::{json, Value};
 
+use crate::inference::backends::registry::backend_fields;
+
 use super::*;
 use crate::inference::auth::credential::{
     oauth_credential_id, resolve_oauth_credential, test_support, upsert_oauth_credential,
@@ -968,9 +970,13 @@ fn oauth_backend(
 
 async fn store_backends(access: &ConfigAccess, backends: &[InferenceBackend]) {
     for backend in backends {
-        crate::documents::write_inference_backend_document(access, backend)
-            .await
-            .expect("backend");
+        crate::documents::write_inference_backend_document(
+            access,
+            backend,
+            &crate::inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .expect("backend");
     }
 }
 
@@ -1233,7 +1239,7 @@ fn usage_account_for_backend_follows_node_oauth() {
             provider: "XaiGrokOAuth".to_string(),
             backend_id: "backend-usage-a".to_string(),
             connection: crate::inference::admission::backend_connection_fingerprint(
-                &api_key.backend_fields()
+                &backend_fields(&api_key)
             ),
         }
     );
@@ -1525,9 +1531,13 @@ async fn default_limits_tool_reads_live_then_uses_cache_without_exposing_credent
     let (url, received) = test_support::one_shot_token_server(200, CODEX_USAGE_BODY).await;
     let mut backend = backend(did, "ChatGptCodex", "runtime", json!({"kind":"node_oauth"}));
     backend.endpoint = origin(&url);
-    crate::documents::write_inference_backend_document(&user_access, &backend)
-        .await
-        .unwrap();
+    crate::documents::write_inference_backend_document(
+        &user_access,
+        &backend,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
     let tool = ProviderLimitsTool {
         node,
         node_did: did.into(),

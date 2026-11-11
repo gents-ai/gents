@@ -4,10 +4,10 @@ use super::super::router::configuration_admission::{
 };
 use super::support::request;
 use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use crate::inference::resolved::visibility::ConfigurationVisibilityError;
 use crate::inference::resolved::{ResolvedConfiguration, SelectedConfiguration};
 use crate::runtime::agent::{resolve_document_runtime_snapshot, DocumentResolveContext};
 use crate::store::identity::NodeIdentity;
-use crate::turn::provider_input::configuration::ConfigurationVisibilityError;
 use crate::Collection;
 use serde_json::json;
 
@@ -117,7 +117,14 @@ async fn client_rebinding_defers_the_superseded_generation_and_scopes_the_new_se
     access
         .transact_write("test.client_rebinding", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();

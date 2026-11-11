@@ -316,9 +316,13 @@ pub async fn configure_agent_tools_as(
                         })
                         .collect(),
                 )?;
-                gents::documents::apply_desired_state_plan(txn, &plan)
-                    .await
-                    .map(|_| ())
+                gents::documents::apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
             })
         })
         .await
@@ -511,7 +515,12 @@ pub async fn bind_selected_managed_agent_backend(
                     })
                     .collect(),
                 )?;
-                apply_desired_state_plan(txn, &plan).await
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
             })
         })
         .await
@@ -593,7 +602,14 @@ async fn bind_agent_backend_chain(
         access
             .transact_write("test.bind_backend.node", |txn| {
                 let plan = &plan;
-                Box::pin(async move { gents::documents::apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    gents::documents::apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await
             .expect("install fixture Node as its User");
@@ -713,7 +729,13 @@ pub async fn set_backend_auth_as(
                     add: backend.clone(),
                     update: backend,
                 }])?;
-                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
             })
         })
         .await

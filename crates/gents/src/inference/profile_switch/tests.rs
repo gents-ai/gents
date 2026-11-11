@@ -7,6 +7,8 @@ use gents_loop::account_usage::{UsageReport, UsageSource, UsageWindow};
 use gents_protocol::agent_identity::AgentIdentityBinding;
 use serde_json::{json, Value};
 
+use crate::inference::backends::registry::backend_fields;
+
 use super::*;
 use crate::documents::write_inference_backend_document;
 use crate::documents::AdvertisedModel;
@@ -82,9 +84,13 @@ impl Fixture {
             (XAI_OAUTH_PROVIDER, "Grok"),
         ] {
             let backend = preset_account_backend(did, provider, None, name.to_owned()).unwrap();
-            write_inference_backend_document(&access, &backend)
-                .await
-                .unwrap();
+            write_inference_backend_document(
+                &access,
+                &backend,
+                &crate::inference::resolved::ProviderProfilePolicy,
+            )
+            .await
+            .unwrap();
         }
         let mut credentials = BTreeMap::new();
         let mut backends = BTreeMap::from([("g", XAI_OAUTH_PROVIDER.to_owned())]);
@@ -187,7 +193,15 @@ impl Fixture {
         self.access
             .transact_write("test.switch.apply", |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                    .map(|_| ())
+                })
             })
             .await
             .unwrap();
@@ -419,7 +433,7 @@ async fn next_turns_use_the_target_credentials() {
         let agent_did = fixture.agents[name].agent_did.as_str();
         let profile = &references.agent_profiles(agent_did)[0];
         let (_, backend) = references.profile_with_backend(profile).unwrap().unwrap();
-        let fields = backend.backend_fields();
+        let fields = backend_fields(&backend);
         assert_eq!(
             fields.backend_id.as_deref(),
             Some(fixture.backends["b"].as_str()),
@@ -613,7 +627,7 @@ async fn the_plan_holds_no_secret() {
 
 #[tokio::test]
 async fn a_bound_plugin_slot_counts_and_keeps_serving_after_the_switch() {
-    use crate::plugin::model_calls::{AccessModels, ModelBinding, ModelResolver};
+    use crate::plugin::model_binding::{AccessModels, ModelBinding, ModelResolver};
     use crate::plugin::store;
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     let did_owned = node.node_identity_did().unwrap().to_owned();
@@ -637,9 +651,13 @@ async fn a_bound_plugin_slot_counts_and_keeps_serving_after_the_switch() {
             "auth": {"kind": "api_key", "key": "KEY-SENTINEL"},
         }))
         .unwrap();
-        write_inference_backend_document(&fixture.access, &backend)
-            .await
-            .unwrap();
+        write_inference_backend_document(
+            &fixture.access,
+            &backend,
+            &crate::inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
     }
     fixture
         .apply(vec![

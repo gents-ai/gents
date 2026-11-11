@@ -125,6 +125,7 @@ pub(crate) async fn apply_desired_state_plan_with_semantics(
     plan: &DesiredStateApplyPlan,
     binding: Option<&ConfigurationNodeBinding>,
     semantics: &dyn DesiredStateSemantics,
+    policy: &dyn crate::documents::inference_backend::AdvertisedProfilePolicy,
 ) -> Result<DesiredStateApplyCounts> {
     ensure_expectations_hold(txn, plan).await?;
     let event_grants = semantics.capture_event_grants(txn, plan).await?;
@@ -457,7 +458,7 @@ pub(crate) async fn apply_desired_state_plan_with_semantics(
         let references = crate::ConfigReferences::load_in_txn(txn, owner).await?;
         references.validate_affected(&changed_configuration_keys(plan, owner)?)?;
         validate_outcome_source_fields(txn, plan, owner, &references, &mut introspected).await?;
-        validate_advertised_profiles(txn, plan, owner, &references).await?;
+        validate_advertised_profiles(txn, plan, owner, &references, policy).await?;
         validate_trigger_document_fields(txn, plan, owner, &references, &mut introspected).await?;
     }
     Ok(counts)

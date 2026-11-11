@@ -391,7 +391,7 @@ impl crate::inference::llm::tool::Tool for BoundedWriteTool {
             .map_err(anyhow::Error::from)?
             .and_then(|rows| rows.first())
             .context("write returned no canonical document")?;
-        Ok(crate::tools::output::render(
+        Ok(crate::session::output_render::render(
             &json!({"collection":self.decl.collection, "document_id":doc_id,
                 "document":document}),
             &["document", "document_id", "collection"],

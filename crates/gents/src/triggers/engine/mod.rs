@@ -5,7 +5,7 @@ use tokio::sync::{watch, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::documents::task_delivery::TriggerKind;
-use crate::runtime::snapshot::ActiveRuntimeSnapshot;
+use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 
 pub(crate) mod deferred_delivery;
 pub(crate) mod durable;

@@ -77,9 +77,13 @@ async fn each_accounts_backend_keeps_its_own_models() {
             enabled: true,
             tags: Vec::new(),
         };
-        crate::documents::write_inference_backend_document(&access, &original)
-            .await
-            .unwrap();
+        crate::documents::write_inference_backend_document(
+            &access,
+            &original,
+            &crate::inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
         store(&access, product.sign_in(&did, "a", "refresh-a")).await;
         store(&access, product.sign_in(&did, "b", "refresh-b")).await;
         let added = backends(&access, &did)
@@ -156,7 +160,14 @@ async fn a_lost_backend_comes_back_at_the_next_sign_in() {
         access
             .transact_write("test.backend_rm", |txn| {
                 let plan = &plan;
-                Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    crate::documents::apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await
             .unwrap();

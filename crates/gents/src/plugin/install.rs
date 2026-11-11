@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use super::authority::{describe_plugin_authority, GrantError};
-use super::model_calls::ModelBinding;
+use super::model_binding::ModelBinding;
 use super::store::{self, InstalledPlugin};
 use super::{Manifold, PluginRunner};
 use crate::pack::{PackManifest, PackPlugin};
@@ -289,7 +289,7 @@ fn set_model_binding_locked(
     binding: Option<ModelBinding>,
 ) -> Result<InstalledPlugin> {
     lock.for_home(home)?;
-    let (namespace, name) = store::parse_coordinate(coordinate)?;
+    let (namespace, name) = crate::documents::plugin_coordinate::parse_coordinate(coordinate)?;
     let mut record = store::read_record(home, namespace, name)
         .with_context(|| format!("plugin {coordinate} is not installed"))?;
     anyhow::ensure!(

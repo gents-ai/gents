@@ -650,7 +650,7 @@ async fn install_event_delivery_config(
     access.transact_write("test.event_delivery.configure", |txn| {
         let plan = &plan;
         Box::pin(async move {
-            apply_desired_state_plan(txn, plan).await?;
+            apply_desired_state_plan(txn, plan, &gents::inference::resolved::ProviderProfilePolicy).await?;
             let query = format!("{{ Trigger(filter: {{node_did: {{_eq: \"{}\"}}, trigger_id: {{_eq: \"{}\"}}}}) {{_docID}} EventSource(filter: {{node_did: {{_eq: \"{}\"}}, event_source_id: {{_eq: \"{}\"}}}}) {{_docID}} Task(filter: {{node_did: {{_eq: \"{}\"}}, task_id: {{_eq: \"{}\"}}}}) {{_docID}} }}",
                 escape_graphql_string(node_did), escape_graphql_string(EVENT_SOURCE_TRIGGER_ID),
                 escape_graphql_string(node_did), escape_graphql_string(EVENT_SOURCE_ID),

@@ -280,7 +280,14 @@ async fn step0(output: Value, options: Options) -> Step0 {
     owner
         .transact_write("test.plugin_job_target", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();
@@ -322,9 +329,13 @@ async fn step0(output: Value, options: Options) -> Step0 {
         "agents": {"enabled": true, "target_ids": if options.caller_targets { vec!["t-worker"] } else { Vec::new() }},
         "integrations": {"plugins": [{"plugin": "team/plugin", "job": hook.job_tools.get(TOOL).unwrap().settings}]},
     })).unwrap();
-    crate::documents::write_tools_document(&owner, &tools)
-        .await
-        .unwrap();
+    crate::documents::write_tools_document(
+        &owner,
+        &tools,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
     if options.driver {
         let runtime = JobRuntime::new(
             node.clone(),
@@ -334,11 +345,11 @@ async fn step0(output: Value, options: Options) -> Step0 {
         );
         let mut unavailable_agents = rapidhash::RapidHashMap::default();
         for agent in [caller.clone(), worker.clone()] {
-            unavailable_agents.insert(agent.did().to_owned(), crate::runtime::snapshot::UnavailableAgent::new(
+            unavailable_agents.insert(agent.did().to_owned(), crate::triggers::runtime_snapshot::UnavailableAgent::new(
                 gents_protocol::node_readiness::AgentReadinessUnavailableReason::RuntimeConfigurationInvalid, "job fixture",
             ).with_watcher_identity(agent));
         }
-        let snapshot = Arc::new(crate::runtime::snapshot::ActiveRuntimeSnapshot {
+        let snapshot = Arc::new(crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
             generation: 1,
             node: None,
             local_did: identity.did().to_owned(),
@@ -358,7 +369,9 @@ async fn step0(output: Value, options: Options) -> Step0 {
         });
         let (_sender, receiver) = tokio::sync::watch::channel(snapshot);
         runtime
-            .bind_snapshot(crate::runtime::snapshot::ActiveSnapshotAgentIdentities::boxed(receiver))
+            .bind_snapshot(
+                crate::triggers::runtime_snapshot::ActiveSnapshotAgentIdentities::boxed(receiver),
+            )
             .unwrap();
         let admission = crate::store::service::RuntimeServiceAdmission::default();
         if !options.kicks {
@@ -1926,7 +1939,12 @@ impl Step0 {
                                     update: node,
                                 },
                             ])?;
-                            crate::documents::apply_desired_state_plan(txn, &plan).await
+                            crate::documents::apply_desired_state_plan(
+                                txn,
+                                &plan,
+                                &crate::inference::resolved::ProviderProfilePolicy,
+                            )
+                            .await
                         })
                     })
                     .await
@@ -1980,7 +1998,7 @@ impl Step0 {
         .await
         .unwrap()
         .unwrap();
-        match crate::tools::background::status::observe_canonical_tool_output_with_access(
+        match crate::session::tool_output_rows::observe_canonical_tool_output_with_access(
             &self.access(),
             row,
             tool.request_doc_id().unwrap(),
@@ -1991,10 +2009,10 @@ impl Step0 {
         .await
         .unwrap()
         {
-            crate::tools::background::status::CanonicalToolOutputObservation::Closed(output) => {
+            crate::session::tool_output_rows::CanonicalToolOutputObservation::Closed(output) => {
                 serde_json::from_str(&output).unwrap()
             }
-            crate::tools::background::status::CanonicalToolOutputObservation::Open(output) => {
+            crate::session::tool_output_rows::CanonicalToolOutputObservation::Open(output) => {
                 panic!("job row output is still open: {output}")
             }
         }

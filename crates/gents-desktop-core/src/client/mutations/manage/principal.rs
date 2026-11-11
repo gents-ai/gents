@@ -57,7 +57,12 @@ async fn set_default_agent_in_txn(
             })
             .collect(),
     )?;
-    apply_desired_state_plan(txn, &plan).await?;
+    apply_desired_state_plan(
+        txn,
+        &plan,
+        &gents::inference::resolved::ProviderProfilePolicy,
+    )
+    .await?;
     Ok(())
 }
 
@@ -122,7 +127,12 @@ async fn apply_config_components_in_txn(
     gents::documents::read_desired_state_record_in_txn(txn, Collection::Node, owner, owner)
         .await?
         .context("component apply requires an existing node")?;
-    apply_desired_state_plan(txn, plan).await?;
+    apply_desired_state_plan(
+        txn,
+        plan,
+        &gents::inference::resolved::ProviderProfilePolicy,
+    )
+    .await?;
     Ok(())
 }
 
@@ -240,7 +250,12 @@ async fn patch_config_components_in_txn(
         });
     }
     let plan = DesiredStateApplyPlan::new(documents)?;
-    apply_desired_state_plan(txn, &plan).await?;
+    apply_desired_state_plan(
+        txn,
+        &plan,
+        &gents::inference::resolved::ProviderProfilePolicy,
+    )
+    .await?;
     Ok(())
 }
 
@@ -269,7 +284,12 @@ mod tests {
             .transact_write("desktop.node.seed", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    apply_desired_state_plan(txn, plan).await?;
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await?;
                     Ok::<_, anyhow::Error>(())
                 })
             })
@@ -322,7 +342,12 @@ mod tests {
             .transact_write("desktop.default.seed", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    apply_desired_state_plan(txn, plan).await?;
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await?;
                     Ok::<_, anyhow::Error>(())
                 })
             })
@@ -395,7 +420,12 @@ mod tests {
             .transact_write("desktop.component.seed", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    apply_desired_state_plan(txn, plan).await?;
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await?;
                     Ok::<_, anyhow::Error>(())
                 })
             })
@@ -514,7 +544,12 @@ mod tests {
                 .transact_write("test.patch.seed", |txn| {
                     let plan = &plan;
                     Box::pin(async move {
-                        apply_desired_state_plan(txn, plan).await?;
+                        apply_desired_state_plan(
+                            txn,
+                            plan,
+                            &gents::inference::resolved::ProviderProfilePolicy,
+                        )
+                        .await?;
                         Ok::<_, anyhow::Error>(())
                     })
                 })

@@ -597,6 +597,7 @@ async fn embedded() -> (
     crate::documents::write_inference_backend_document(
         &access,
         &serde_json::from_value(original).unwrap(),
+        &crate::inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -626,9 +627,13 @@ async fn embedded() -> (
         .transact_write("test.blocked_turn", |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::documents::apply_desired_state_plan(txn, plan)
-                    .await
-                    .map(|_| ())
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
             })
         })
         .await

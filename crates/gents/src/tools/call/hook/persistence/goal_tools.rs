@@ -124,8 +124,10 @@ impl DefraSessionHook {
                 "error": error.to_string(),
             }),
         };
-        let result =
-            crate::tools::output::render(&outcome, &["goal", "error", "accepted", "disposition"])?;
+        let result = crate::session::output_render::render(
+            &outcome,
+            &["goal", "error", "accepted", "disposition"],
+        )?;
         self.complete_control_tool_call(&mut lifecycle, CREATE_GOAL_TOOL_NAME, result)
             .await
     }
@@ -219,7 +221,7 @@ impl DefraSessionHook {
                                     });
                                 value["notice"] = json!("This is the calling request's retained assignment. It is read-only; a new request is required to work on the current Goal.");
                             }
-                            crate::tools::output::render(
+                            crate::session::output_render::render(
                                 &value,
                                 &[
                                     "objective",
@@ -512,8 +514,10 @@ impl DefraSessionHook {
                 "error": format!("unsupported goal status {other:?}; expected active, complete or blocked")
             }),
         };
-        let result =
-            crate::tools::output::render(&outcome, &["goal", "error", "accepted", "disposition"])?;
+        let result = crate::session::output_render::render(
+            &outcome,
+            &["goal", "error", "accepted", "disposition"],
+        )?;
         self.complete_control_tool_call(&mut lifecycle, UPDATE_GOAL_TOOL_NAME, result)
             .await
     }

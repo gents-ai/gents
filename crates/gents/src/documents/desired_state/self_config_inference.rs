@@ -238,6 +238,7 @@ mod tests {
                         txn,
                         plan,
                         Some(node_binding),
+                        &crate::inference::resolved::ProviderProfilePolicy,
                     )
                     .await
                 })

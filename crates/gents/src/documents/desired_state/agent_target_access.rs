@@ -277,7 +277,14 @@ mod tests {
         access
             .transact_write("test.agent_target_access.apply", |txn| {
                 let plan = &plan;
-                Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    crate::documents::apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await
             .map(drop)

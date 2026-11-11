@@ -204,7 +204,7 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
         &access,
         &scope,
         &registry.live_outputs.registry,
-        crate::tools::background::status::r4c_args::ReadToolOutputArgs {
+        crate::tools::native::background_args::ReadToolOutputArgs {
             tool_call_id: "large-output".into(),
             offset: 0,
             max_tokens: 1024,
@@ -1568,7 +1568,7 @@ async fn fetch_tool_call_row_as(
         .pointer("/data/AgentToolCall/0")
         .cloned()
         .expect("tool call row");
-    let output = crate::tools::background::status::observe_canonical_tool_output_with_access(
+    let output = crate::session::tool_output_rows::observe_canonical_tool_output_with_access(
         access,
         row["_docID"].as_str().unwrap(),
         row["request_doc_id"].as_str().unwrap(),
@@ -1578,7 +1578,7 @@ async fn fetch_tool_call_row_as(
     )
     .await
     .ok()
-    .map(crate::tools::background::status::CanonicalToolOutputObservation::into_text);
+    .map(crate::session::tool_output_rows::CanonicalToolOutputObservation::into_text);
     row["result"] = output.map_or(serde_json::Value::Null, serde_json::Value::String);
     row
 }
@@ -4239,7 +4239,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
             },
         }],
     );
-    let hook = hook.with_output_obligation_gate(Some(gate.clone()));
+    let hook = hook.with_output_obligation_gate(Some(Arc::new(gate.clone())));
     let persistence_hook = hook.clone();
     let before = load_canonical_goal(&node, identity.did(), &session)
         .await

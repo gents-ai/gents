@@ -395,8 +395,8 @@ fn reserved_names_cover_native_and_meta_tools() {
     ];
     for tool in &native {
         assert!(
-            NativeTool::ALL_NAMES.contains(&tool.tool_name().as_str()),
-            "native tool {:?} missing from NativeTool::ALL_NAMES",
+            gents_protocol::tool_names::NATIVE_TOOL_NAMES.contains(&tool.tool_name().as_str()),
+            "native tool {:?} missing from NATIVE_TOOL_NAMES",
             tool.tool_name()
         );
         assert!(
@@ -405,7 +405,7 @@ fn reserved_names_cover_native_and_meta_tools() {
             tool.tool_name()
         );
     }
-    for name in NativeTool::ALL_NAMES {
+    for name in gents_protocol::tool_names::NATIVE_TOOL_NAMES {
         assert!(
             is_reserved_builtin_tool_name(name),
             "registry name {name:?} must be reserved"
@@ -495,9 +495,13 @@ async fn tools_document_round_trips_defra_query_fields() {
         }),
         ..Default::default()
     };
-    write_tools_document(&access, &doc)
-        .await
-        .expect("write should persist the defra_query fields");
+    write_tools_document(
+        &access,
+        &doc,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .expect("write should persist the defra_query fields");
 
     let loaded: Tools = access
         .transact_write("test.tools.read", |txn| {
@@ -560,7 +564,13 @@ async fn tools_update_can_clear_lsp_config() {
     };
 
     let doc = lsp(Some(r#"{"idle_timeout_ms":1000}"#.to_string()));
-    write_tools_document(&access, &doc).await.unwrap();
+    write_tools_document(
+        &access,
+        &doc,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
     async fn read(
         access: &crate::store::config_client::ConfigAccess,
         node_did: &str,
@@ -596,7 +606,13 @@ async fn tools_update_can_clear_lsp_config() {
         Some(r#"{"idle_timeout_ms":1000}"#.to_string())
     );
 
-    write_tools_document(&access, &lsp(None)).await.unwrap();
+    write_tools_document(
+        &access,
+        &lsp(None),
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
     let cleared: Tools = read(&access, node_did).await.unwrap().unwrap();
     let cleared_config = cleared
         .integrations
@@ -631,9 +647,13 @@ async fn tools_document_round_trips_read_only_commands() {
         }),
         ..Default::default()
     };
-    write_tools_document(&access, &doc)
-        .await
-        .expect("write should persist the read_only_commands field");
+    write_tools_document(
+        &access,
+        &doc,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .expect("write should persist the read_only_commands field");
 
     let loaded: Tools = access
         .transact_write("test.tools.read", |txn| {
@@ -733,7 +753,7 @@ async fn tools_document_round_trips_write_tools() {
             let surface = &surface;
             let decls = &decls;
             Box::pin(async move {
-                crate::documents::apply_desired_state_plan(txn, plan).await?;
+                crate::documents::apply_desired_state_plan(txn, plan, &crate::inference::resolved::ProviderProfilePolicy).await?;
                 let merged = super::merge_datastore_tool_surfaces(tools, [surface])?;
                 assert_eq!(
                     merged.write_tools, *decls,
@@ -763,9 +783,13 @@ async fn tools_document_round_trips_session_message_enablement() {
         }),
         ..Default::default()
     };
-    write_tools_document(&access, &doc)
-        .await
-        .expect("write should persist the session-message enablement");
+    write_tools_document(
+        &access,
+        &doc,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .expect("write should persist the session-message enablement");
 
     let loaded: Tools = access
         .transact_write("test.tools.read", |txn| {
@@ -853,7 +877,14 @@ async fn agent_description_round_trip_with_explicit_owner_fixture() {
     access
         .transact_write("test.agent.description", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .expect("upsert should persist description fields");
@@ -940,7 +971,14 @@ async fn inference_retry_policy_fields_round_trip() {
     access
         .transact_write("test.retry_chain.write", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .expect("apply should persist the retry chain");

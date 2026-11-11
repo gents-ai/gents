@@ -207,8 +207,7 @@ pub fn inference_setup_catalog() -> InferenceSetupCatalog {
                         method: ApiKey,
                         display_name: "Anthropic API key".into(),
                         default_endpoint:
-                            crate::inference::clients::claude_subscription::ANTHROPIC_API_ENDPOINT
-                                .into(),
+                            crate::documents::inference_defaults::ANTHROPIC_API_ENDPOINT.into(),
                     },
                 ],
                 default_auth_method: ClaudeOauth,
@@ -315,7 +314,7 @@ pub fn connection_spec(
             api_key_required: false,
         },
         (Anthropic, ApiKey) => {
-            let fixed = crate::inference::clients::claude_subscription::ANTHROPIC_API_ENDPOINT;
+            let fixed = crate::documents::inference_defaults::ANTHROPIC_API_ENDPOINT;
             anyhow::ensure!(
                 requested.is_empty() || requested.trim_end_matches('/') == fixed,
                 "the Anthropic API endpoint is fixed at {fixed}"
@@ -921,7 +920,7 @@ mod tests {
 
     #[test]
     fn anthropic_key_backends_recover_an_api_key_contract() {
-        let endpoint = crate::inference::clients::claude_subscription::ANTHROPIC_API_ENDPOINT;
+        let endpoint = crate::documents::inference_defaults::ANTHROPIC_API_ENDPOINT;
         assert_eq!(
             provider_selection_for_backend(BackendProviderKind::AnthropicApiKey, endpoint),
             (InferenceProviderId::Anthropic, InferenceAuthMethod::ApiKey)
@@ -966,7 +965,7 @@ mod tests {
                 CLAUDE_ENDPOINT,
                 "Anthropic API key",
                 BackendProviderKind::AnthropicApiKey,
-                crate::inference::clients::claude_subscription::ANTHROPIC_API_ENDPOINT,
+                crate::documents::inference_defaults::ANTHROPIC_API_ENDPOINT,
             ),
             (
                 InferenceProviderId::Grok,

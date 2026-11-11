@@ -1,4 +1,5 @@
-use super::{MailboxAction, MailboxItem, MailboxStatus};
+use super::{MailboxItem, MailboxStatus};
+use crate::documents::mailbox_write_decl::{MailboxAction, MailboxKind};
 use crate::store::config_client::ConfigApplyTxn;
 use crate::store::graphql::{rows, single_mutation_document};
 use anyhow::{ensure, Context, Result};
@@ -199,7 +200,7 @@ pub(super) fn validate_reply_claim(
     if item.parsed_status() == Some(MailboxStatus::Acted) {
         return Ok(());
     }
-    let modern_question = item.kind == super::MailboxKind::Ask.as_str()
+    let modern_question = item.kind == MailboxKind::Ask.as_str()
         && item
             .payload
             .as_deref()
@@ -210,7 +211,7 @@ pub(super) fn validate_reply_claim(
     );
     if let Some(evidence) = &request.input.question_reply {
         ensure!(
-            item.kind == super::MailboxKind::Ask.as_str(),
+            item.kind == MailboxKind::Ask.as_str(),
             "reply evidence does not belong to a question"
         );
         ensure!(

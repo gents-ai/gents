@@ -154,7 +154,15 @@ async fn apply(
     access
         .transact_write("test.delivery_live.configure", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
+            })
         })
         .await
 }
@@ -235,7 +243,13 @@ async fn bind_agents(access: &ConfigAccess, owner: &str, agents: &DeliveryAgents
                         })
                         .collect(),
                 )?;
-                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
             })
         })
         .await

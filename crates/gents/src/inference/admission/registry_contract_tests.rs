@@ -5,6 +5,8 @@ use std::time::Duration;
 
 use anyhow::{bail, ensure, Result};
 use serde::Deserialize;
+
+use crate::inference::backends::registry::backend_fields;
 use tokio::task::JoinHandle;
 
 #[derive(Deserialize)]
@@ -69,7 +71,7 @@ fn backend_document(
 fn slot_connection(backend_id: &str, connection: u64) -> Result<String> {
     let backend = backend_document(backend_id, connection, 1, 0, "slot")?;
     Ok(super::super::config::backend_connection_fingerprint(
-        &backend.backend_fields(),
+        &backend_fields(&backend),
     ))
 }
 

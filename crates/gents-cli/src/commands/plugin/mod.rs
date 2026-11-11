@@ -61,8 +61,8 @@ fn plugin_pack(
 ) -> Result<(Vec<u8>, gents::pack::archive::PackHeader)> {
     let package = &afb.manifest.package;
     anyhow::ensure!(
-        gents::pack::is_valid_pack_name(&package.name)
-            && gents::pack::is_valid_pack_name(&package.namespace),
+        gents::documents::pack_spec::is_valid_pack_name(&package.name)
+            && gents::documents::pack_spec::is_valid_pack_name(&package.namespace),
         "{}/{} cannot be a pack: pack names are snake_case; rename the plugin",
         package.namespace,
         package.name

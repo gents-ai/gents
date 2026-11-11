@@ -2,6 +2,7 @@ use std::fmt::Write as _;
 use std::sync::LazyLock;
 
 use super::*;
+use crate::session::output_render::Ordered;
 use gents_protocol::operations::agent::{AgentCreateOperation, AGENT_CLONE, AGENT_CREATE};
 
 macro_rules! mailbox_identity_choice {
@@ -452,8 +453,8 @@ pub(super) fn page(resource: &str) -> Option<Page> {
 
 fn mailbox_values() -> Value {
     json!({
-        "kind": crate::session::mailbox::MailboxKind::ALL.map(crate::session::mailbox::MailboxKind::as_str),
-        "action": crate::session::mailbox::MailboxAction::ALL.map(crate::session::mailbox::MailboxAction::as_str),
+        "kind": crate::documents::mailbox_write_decl::MailboxKind::ALL.map(crate::documents::mailbox_write_decl::MailboxKind::as_str),
+        "action": crate::documents::mailbox_write_decl::MailboxAction::ALL.map(crate::documents::mailbox_write_decl::MailboxAction::as_str),
         "identity": [{"mode":"event"}, {"mode":"condition","key":"monitor-summary"}],
         "document_response": {"action":"write_document","expected_collection":"COLLECTION","required_schema_field":"mailbox_item_key: String @immutable @index(unique: true)"},
     })

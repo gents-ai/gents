@@ -276,7 +276,7 @@ fn background_tool_names_are_gated_by_allowlist() {
 #[tokio::test]
 async fn spawn_process_decodes_only_its_advertised_schema() {
     use crate::inference::llm::tool::parse_tool_args;
-    use crate::tools::background::status::BackgroundToolArgs;
+    use crate::session::tool_output_rows::BackgroundToolArgs;
 
     let tools = build_background_tools(BackgroundToolConfig {
         allowlist: vec!["bash_unrestricted".to_string()],

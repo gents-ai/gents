@@ -90,7 +90,14 @@ impl SelfConfig {
         self.user()
             .transact_write("test.self_config.seed", |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await
             .unwrap();

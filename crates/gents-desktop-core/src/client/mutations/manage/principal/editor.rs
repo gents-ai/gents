@@ -319,7 +319,12 @@ mod tests {
             .transact_write("test.editor.seed", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    apply_desired_state_plan(txn, plan).await?;
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await?;
                     Ok::<_, anyhow::Error>(())
                 })
             })
@@ -496,7 +501,12 @@ mod tests {
             "provider_kind":"ClaudeCliSubscription","endpoint":"claude-cli://subscription",
             "auth":{"kind":"node_oauth"}
         }))?;
-        gents::documents::write_inference_backend_document(access, &backend).await?;
+        gents::documents::write_inference_backend_document(
+            access,
+            &backend,
+            &gents::inference::resolved::ProviderProfilePolicy,
+        )
+        .await?;
         Ok(())
     }
 

@@ -183,7 +183,7 @@ pub(crate) async fn resolve_pack_source(
             artifact_digest,
             version,
         } => {
-            let parsed = gents::pack::resolve::parse_pack_spec(spec)?;
+            let parsed = gents::documents::pack_spec::parse_pack_spec(spec)?;
             Source::Registry {
                 namespace: parsed.namespace.to_owned(),
                 name: parsed.name.to_owned(),

@@ -505,7 +505,14 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
         owner
             .transact_write("test.output_budget", |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await
             .unwrap();
@@ -566,7 +573,14 @@ async fn background_completion_summary_honors_the_configured_output_budget() {
         owner
             .transact_write("test.output_budget", |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await
             .unwrap();

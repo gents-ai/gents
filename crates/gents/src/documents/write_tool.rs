@@ -154,7 +154,7 @@ impl<'de> serde::Deserialize<'de> for WriteToolField {
 pub struct WriteToolDecl {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub notification: Option<crate::session::mailbox::MailboxNotificationPolicy>,
+    pub notification: Option<crate::documents::mailbox_write_decl::MailboxNotificationPolicy>,
     pub tool_name: String,
     pub collection: String,
     #[cfg_attr(feature = "typescript", ts(as = "Option<String>", optional))]
@@ -273,7 +273,7 @@ impl<'de> serde::Deserialize<'de> for WriteToolDecl {
         struct Raw {
             tool_name: String,
             #[serde(default)]
-            notification: Option<crate::session::mailbox::MailboxNotificationPolicy>,
+            notification: Option<crate::documents::mailbox_write_decl::MailboxNotificationPolicy>,
             collection: String,
             #[serde(default)]
             description: String,
@@ -448,7 +448,7 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
         gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
     ];
 
-    crate::tools::native::NativeTool::ALL_NAMES.contains(&name)
+    gents_protocol::tool_names::NATIVE_TOOL_NAMES.contains(&name)
         || name == gents_protocol::tool_names::LSP_TOOL_NAME
         || META_TOOL_NAMES.contains(&name)
         || AGENT_TOOL_NAMES.contains(&name)

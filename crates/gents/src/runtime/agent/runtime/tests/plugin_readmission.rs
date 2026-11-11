@@ -94,9 +94,13 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
         "integrations": {"plugins": [{"plugin": "fixture/list_files"}]},
     }))
     .unwrap();
-    crate::documents::write_tools_document(&fixture.user_access, &tools)
-        .await
-        .unwrap();
+    crate::documents::write_tools_document(
+        &fixture.user_access,
+        &tools,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
     let demoted = wait_for_agent_state(
         node.as_ref(),
         &node_did,

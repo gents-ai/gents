@@ -329,7 +329,7 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
         modeled_completion.tool_state.as_deref()
     );
     assert_eq!(row["await_mode"], "background");
-    let output = crate::tools::background::status::observe_canonical_tool_output_with_access(
+    let output = crate::session::tool_output_rows::observe_canonical_tool_output_with_access(
         &access,
         &tool_doc,
         &request_doc,

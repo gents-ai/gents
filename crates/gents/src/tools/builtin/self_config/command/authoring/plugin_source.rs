@@ -7,6 +7,7 @@
 //! built here is the same artifact `pack build` and `pack install` produce.
 
 use super::*;
+use crate::session::output_render::ordered;
 
 use crate::documents::PluginSourceDocument;
 

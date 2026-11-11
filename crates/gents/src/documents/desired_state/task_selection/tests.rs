@@ -315,7 +315,14 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
         signed_access
             .transact_write("test.task_target.apply", |txn| {
                 let plan = &plan;
-                Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    crate::documents::apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await?;
         let agent_access = ConfigAccess::local_as(node.clone(), identity::Did::new(actor)?);
@@ -373,7 +380,14 @@ async fn task_and_agent_target_visibility_follows_modeled_native_selection() -> 
     signed_access
         .transact_write("test.task_target.apply_rebind", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await?;
     for (actor, expected_case) in [(a.did(), "task-old-target"), (b.did(), "task-new-target")] {

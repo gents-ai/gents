@@ -57,9 +57,8 @@ pub(crate) use publication::flush_workspace_docs;
 pub use quickstart::{provision_read_only_workspace, WorkspaceProvisioningSelection};
 pub use runtime::cleanup_workspace;
 pub(crate) use runtime::{
-    integrate_on_integrator_success, materialize_workspace_binding,
-    release_terminal_writer_binding, release_writer_binding, seal_on_writer_success,
-    stamp_workspace_lineage, writer_request_already_sealed_with_identity,
+    integrate_on_integrator_success, materialize_workspace_binding, release_writer_binding,
+    seal_on_writer_success, stamp_workspace_lineage, writer_request_already_sealed_with_identity,
 };
 
 pub(crate) use overlay::{

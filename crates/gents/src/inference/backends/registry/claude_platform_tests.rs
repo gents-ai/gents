@@ -131,7 +131,7 @@ fn settings_outside_the_kind_are_refused_on_every_kind() {
     );
     for kind in ["OpenAiCompatible", "OpenRouter", "AnthropicApiKey"] {
         let endpoint = if kind == "AnthropicApiKey" {
-            crate::inference::clients::claude_subscription::ANTHROPIC_API_ENDPOINT
+            crate::documents::inference_defaults::ANTHROPIC_API_ENDPOINT
         } else {
             "https://example.test/v1"
         };
@@ -173,7 +173,7 @@ fn a_platform_credential_must_suit_the_platform() {
             _ => settings.clone(),
         };
         let endpoint = if kind == "AnthropicApiKey" {
-            crate::inference::clients::claude_subscription::ANTHROPIC_API_ENDPOINT
+            crate::documents::inference_defaults::ANTHROPIC_API_ENDPOINT
         } else {
             "https://example.test/v1"
         };
@@ -206,7 +206,7 @@ fn a_platform_credential_must_suit_the_platform() {
     assert_eq!(
         backend(
             "ClaudeCliSubscription",
-            crate::inference::clients::claude_subscription::ANTHROPIC_API_ENDPOINT,
+            crate::documents::inference_defaults::ANTHROPIC_API_ENDPOINT,
             key(),
             Value::Null
         )
@@ -259,7 +259,7 @@ fn settings_survive_the_document_round_trip_and_are_omitted_when_absent() {
     let decoded = InferenceBackend::from_value(&stored).unwrap();
     assert_eq!(decoded.claude_platform, foundry.claude_platform);
     assert_eq!(
-        decoded.backend_fields().claude_platform,
+        backend_fields(&decoded).claude_platform,
         foundry.claude_platform
     );
     let gateway = backend("ClaudeGateway", "https://g.example", key(), Value::Null);
@@ -359,7 +359,7 @@ fn the_connection_identity_covers_the_platform_settings() {
         json!({"region": "us-west-2", "workspace_id": "w2"}),
     );
     let fingerprint = |backend: &InferenceBackend| {
-        crate::inference::admission::backend_connection_fingerprint(&backend.backend_fields())
+        crate::inference::admission::backend_connection_fingerprint(&backend_fields(backend))
     };
     assert_eq!(fingerprint(&base), fingerprint(&base));
     assert_ne!(fingerprint(&base), fingerprint(&moved));

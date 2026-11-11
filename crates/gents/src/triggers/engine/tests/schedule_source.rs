@@ -711,7 +711,14 @@ async fn trigger_engine_enqueues_agent_request_for_due_schedule_e2e() {
     user_access
         .transact_write("test.schedule.install", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();

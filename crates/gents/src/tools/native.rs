@@ -1,7 +1,6 @@
 use gents_protocol::tool_names::{
-    AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME, AGENT_TOOL_NAMES, CANCEL_PROCESS_TOOL_NAME,
-    LIST_PROCESSES_TOOL_NAME, READ_PROCESS_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME,
-    WAIT_PROCESS_TOOL_NAME,
+    AGENT_NEW_TOOL_NAME, AGENT_TOOL_NAMES, CANCEL_PROCESS_TOOL_NAME, LIST_PROCESSES_TOOL_NAME,
+    READ_PROCESS_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME, WAIT_PROCESS_TOOL_NAME,
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -12,6 +11,7 @@ use anyhow::Result;
 use rapidhash::RapidHashMap;
 
 mod args;
+pub mod background_args;
 mod bash_tools;
 mod cli_tool;
 pub mod command_observability;
@@ -423,17 +423,6 @@ impl NativeTool {
     const BASH_UNRESTRICTED_NAME: &'static str =
         <UnrestrictedBashTool as crate::inference::llm::tool::Tool>::NAME;
 
-    pub(crate) const ALL_NAMES: [&'static str; 8] = [
-        Self::LIST_FILES_NAME,
-        Self::READ_FILE_NAME,
-        Self::GLOB_NAME,
-        Self::GREP_NAME,
-        Self::WRITE_FILE_NAME,
-        Self::EDIT_FILE_NAME,
-        Self::BASH_NAME,
-        Self::BASH_UNRESTRICTED_NAME,
-    ];
-
     pub fn tool_name(&self) -> String {
         match self {
             Self::ListFiles { .. } => Self::LIST_FILES_NAME.to_string(),
@@ -653,10 +642,6 @@ pub fn build_native_tools() -> Result<Vec<Box<dyn ToolDyn>>> {
         .bash_read_only()
         .build()
         .build_native_tools()
-}
-
-pub fn is_session_message_tool(tool_name: &str) -> bool {
-    tool_name == AGENT_NEW_TOOL_NAME || tool_name == AGENT_MESSAGE_TOOL_NAME
 }
 
 pub(crate) fn agent_tool_names(config: &AgentToolConfig) -> Vec<String> {

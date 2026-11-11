@@ -102,7 +102,7 @@ async fn stage_reset_resume(
         return Ok(None);
     };
     let account_serves = backend.enabled
-        && match backend.auth.account_pick() {
+        && match crate::inference::auth::credential::account_pick(&backend.auth) {
             Some(pick) => {
                 use crate::inference::backends::provider::BackendProviderOauthExt;
                 let Some(provider) = backend.provider_kind.oauth_provider() else {

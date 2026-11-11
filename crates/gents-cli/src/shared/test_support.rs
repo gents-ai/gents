@@ -70,7 +70,14 @@ pub(crate) async fn served_config(mut config: Value) -> Served {
     user_access(&graphql, &user)
         .transact_write("test.served_config.seed", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();
@@ -179,7 +186,15 @@ pub(crate) async fn publish_test_node_as(node: &std::sync::Arc<defra_node::Node>
     ConfigAccess::local_as(node.clone(), ::identity::Did::new(node_did).unwrap())
         .transact_write("test.publish_node", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
+            })
         })
         .await
         .unwrap();
@@ -238,9 +253,13 @@ pub(crate) async fn seed_unsent_xai_effort() -> (gents::store::config_client::Co
     let catalogs = value.as_object_mut().unwrap().remove("catalogs").unwrap();
     value.as_object_mut().unwrap().remove("probe_status");
     let backend: gents::InferenceBackend = serde_json::from_value(value).unwrap();
-    gents::documents::write_inference_backend_document(&access, &backend)
-        .await
-        .unwrap();
+    gents::documents::write_inference_backend_document(
+        &access,
+        &backend,
+        &gents::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
     let input = gents_protocol::graphql::graphql_input_literal(&xai_effort_profile(owner)).unwrap();
     access
         .write(
@@ -306,7 +325,12 @@ async fn catalog_freshness_reaches_cli_observation_reader() -> anyhow::Result<()
         "auth":{"kind":"unauthenticated"}
     }))?;
     let access = gents::ConfigAccess::local_as(node.clone(), ::identity::Did::new(owner)?);
-    gents::documents::write_inference_backend_document(&access, &backend).await?;
+    gents::documents::write_inference_backend_document(
+        &access,
+        &backend,
+        &gents::inference::resolved::ProviderProfilePolicy,
+    )
+    .await?;
     for observed_at in ["2026-10-28T01:00:00Z", "2026-10-28T02:00:00Z"] {
         let catalog: gents::documents::BackendModelCatalog =
             serde_json::from_value(serde_json::json!({
@@ -381,7 +405,14 @@ impl ClientHome {
         access
             .transact_write("test.client_home.node", |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await
             .unwrap();
@@ -472,7 +503,14 @@ impl ClientHome {
         self.access
             .transact_write("test.client_home.agent", |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await
             .unwrap();

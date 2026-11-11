@@ -422,7 +422,13 @@ async fn set_default_agent(access: &ConfigAccess, owner: &str, agent_did: &str) 
                     add: node.clone(),
                     update: node,
                 }])?;
-                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
             })
         })
         .await
@@ -444,7 +450,15 @@ async fn install(access: &ConfigAccess, documents: Vec<(Collection, Value)>) {
     access
         .transact_write("cli.eval.test_fixture", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
+            })
         })
         .await
         .unwrap();

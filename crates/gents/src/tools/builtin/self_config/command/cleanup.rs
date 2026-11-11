@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::output_render::ordered;
 
 impl ConfigCommandTool {
     pub(super) async fn cleanup(&self, argv: &[String]) -> Result<String> {
@@ -206,9 +207,19 @@ async fn cleanup_in_txn(
             "cleanup target content changed: preview authorized {expected:?}, current plan is {plan_digest:?}; preview again"
         );
     }
-    crate::documents::validate_desired_state_plan(txn, plan).await?;
+    crate::documents::validate_desired_state_plan(
+        txn,
+        plan,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await?;
     if !preview {
-        crate::documents::apply_desired_state_plan(txn, plan).await?;
+        crate::documents::apply_desired_state_plan(
+            txn,
+            plan,
+            &crate::inference::resolved::ProviderProfilePolicy,
+        )
+        .await?;
         for (_, target, id) in targets {
             anyhow::ensure!(
                 ops::read_owned_doc(txn, *target, owner, id)

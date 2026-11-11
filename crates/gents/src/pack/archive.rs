@@ -12,8 +12,6 @@ pub use format::{
     EXTENSION, FORMAT, FORMAT_VERSION, HEADER_ENTRY, MEDIA_TYPE,
 };
 
-pub const DEFAULT_NAMESPACE: &str = "gents";
-
 /// Caps compressed archive input before parsing it into retained assets.
 pub const MAX_PACK_BYTES: usize = 1024 * 1024 * 1024;
 

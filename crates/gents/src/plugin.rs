@@ -338,7 +338,7 @@ impl PluginRunner {
         arguments: &serde_json::Value,
         budget: &PluginBudget,
         manifold: Manifold,
-        host: Option<host_calls::Bridge>,
+        host: Option<host_bridge::Bridge>,
     ) -> Result<PluginOutcome> {
         debug_assert!(
             matches!(manifold.listen, ListenAccess::None),
@@ -693,9 +693,10 @@ fn narrow_manifold(declared: &Manifold, ceiling: &Manifold) -> Manifold {
 pub mod allowed;
 pub mod application_write;
 pub mod approval;
+pub mod authoring_test;
 pub mod authority;
 mod bound;
-pub use bound::BoundDir;
+pub use bound::{BoundDir, InvocationConsent};
 
 pub fn attempts_allowed(max_attempts: Option<u32>) -> u32 {
     max_attempts.unwrap_or(1).max(1)
@@ -707,6 +708,7 @@ pub fn retry_backoff(attempts: u32) -> std::time::Duration {
 }
 pub mod data;
 pub mod executor;
+pub mod host_bridge;
 mod host_calls;
 #[cfg(test)]
 pub(crate) use host_calls::live as live_guests;
@@ -714,6 +716,7 @@ pub mod host_imports;
 pub mod http_calls;
 pub mod install;
 pub mod job_calls;
+pub mod model_binding;
 pub mod model_calls;
 mod rounds;
 pub(crate) mod script_engine;

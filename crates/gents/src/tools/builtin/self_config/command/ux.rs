@@ -1,5 +1,6 @@
 use super::*;
 use crate::plugin::ux;
+use crate::session::output_render::ordered;
 
 mod page;
 
@@ -94,9 +95,8 @@ impl ConfigCommandTool {
                 let coordinate = format!("{namespace}/{plugin}");
                 let record = plugins.resolve(&coordinate, None)?;
                 plugins
-                    .call(&record, ux::producer_input())
+                    .call_outcome(&record, ux::producer_input())
                     .await?
-                    .outcome
                     .into_output(&coordinate)
             })
             .await?

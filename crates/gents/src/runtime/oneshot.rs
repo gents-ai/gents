@@ -274,9 +274,9 @@ where
                 );
             }
         };
-    config.output_obligation_gate = output_obligation_gate
-        .clone()
-        .map(|gate| Arc::new(gate) as Arc<dyn OutputObligationCheck>);
+    let output_obligation_gate =
+        output_obligation_gate.map(|gate| Arc::new(gate) as Arc<dyn OutputObligationCheck>);
+    config.output_obligation_gate = output_obligation_gate.clone();
     let capture_scope = crate::inference::rendered_request::scope_from_factory(
         crate::inference::rendered_request::context_for_claimed_request(
             &request,

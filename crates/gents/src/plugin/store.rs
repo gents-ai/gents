@@ -5,6 +5,8 @@ use anyhow::{Context, Result};
 use gents_protocol::job::PluginDataDeclaration;
 use serde::{Deserialize, Serialize};
 
+use crate::documents::plugin_coordinate::checked_component;
+
 fn plugins_root(home: &Path) -> PathBuf {
     home.join(crate::store::local::home::PLUGINS_DIR_NAME)
 }
@@ -32,26 +34,6 @@ pub fn artifact_path(home: &Path, digest_hex: &str) -> Result<PathBuf> {
     store_path(home, digest_hex)
 }
 
-fn checked_component(kind: &str, value: &str) -> Result<()> {
-    anyhow::ensure!(
-        !value.is_empty()
-            && value
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
-        "invalid plugin {kind} {value:?}: use letters, digits, underscore or hyphen"
-    );
-    Ok(())
-}
-
-pub fn parse_coordinate(coordinate: &str) -> Result<(&str, &str)> {
-    let (namespace, name) = coordinate
-        .split_once('/')
-        .with_context(|| format!("{coordinate:?} is not a plugin; name it as namespace/name"))?;
-    checked_component("namespace", namespace)?;
-    checked_component("name", name)?;
-    Ok((namespace, name))
-}
-
 fn record_path(home: &Path, namespace: &str, name: &str) -> Result<PathBuf> {
     checked_component("namespace", namespace)?;
     checked_component("name", name)?;
@@ -77,7 +59,7 @@ pub struct InstalledPlugin {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_pack_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_binding: Option<super::model_calls::ModelBinding>,
+    pub model_binding: Option<super::model_binding::ModelBinding>,
     /// Each collection of `declaration.data` and the field sets of its
     /// `@index(unique: true)` declarations in the pack's own SDL, computed at
     /// install so a call never reads SDL.

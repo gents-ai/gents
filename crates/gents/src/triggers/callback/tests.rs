@@ -19,8 +19,8 @@ use crate::tools::workspace::{
 use super::claim::invocation_is_claimable;
 use super::documents::{
     create_callback_result_mutation, succeeded_missing_result, succeeded_repair_cutoff,
-    update_invocation_mutation, validate_callback_binding, CallbackBindingDoc,
-    CallbackInvocationDoc, CallbackModuleDoc, CallbackResultDoc, CallbackResultInvocationRow,
+    update_invocation_mutation, CallbackBindingDoc, CallbackInvocationDoc, CallbackModuleDoc,
+    CallbackResultDoc, CallbackResultInvocationRow,
 };
 use super::planner::{
     compute_module_id, fixture_create_workspace_artifact, invoke_plugin_planner, plan_from_module,
@@ -34,6 +34,7 @@ use super::run::{
 use super::{
     LIFECYCLE_DENIED, LIFECYCLE_FAILED, LIFECYCLE_PENDING, LIFECYCLE_RUNNING, LIFECYCLE_SUCCEEDED,
 };
+use crate::documents::callback::validate_callback_binding;
 use crate::documents::callback_secret_fields::{
     reject_secret_bearing_callback_fields, strip_secret_fields,
 };
@@ -1828,7 +1829,15 @@ impl Backlog {
             .access
             .transact_write("test.backlog_config", |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                    .map(|_| ())
+                })
             })
             .await
             .unwrap();
@@ -1849,7 +1858,15 @@ impl Backlog {
         self.access
             .transact_write("test.backlog_binding", |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                    .map(|_| ())
+                })
             })
             .await
             .unwrap();
@@ -2739,7 +2756,15 @@ async fn callback_module_plan_commits_only_with_modeled_native_authority() {
         .access
         .transact_write("test.callback.module_config", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
+            })
         })
         .await
         .unwrap();
@@ -2883,7 +2908,15 @@ async fn callback_module_plan_commits_only_with_modeled_native_authority() {
         .access
         .transact_write("test.callback.changed_config", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
+            })
         })
         .await
         .unwrap();

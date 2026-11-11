@@ -30,9 +30,13 @@ impl Fixture {
                 "enabled": enabled, "auth": {"kind":"api_key", "key":format!("TOKEN-SECRET-{id}")},
             }))
             .unwrap();
-            gents::documents::write_inference_backend_document(&access, &backend)
-                .await
-                .unwrap();
+            gents::documents::write_inference_backend_document(
+                &access,
+                &backend,
+                &gents::inference::resolved::ProviderProfilePolicy,
+            )
+            .await
+            .unwrap();
             // Catalog discovery is the runtime's own observation.
             observer
                 .transact_write("test.recovery.catalog", |txn| {
@@ -75,15 +79,23 @@ impl Fixture {
             "node_did":owner, "profile_id":"profile-a", "backend_id":"main", "model_name":"model-a",
         }))
         .unwrap();
-        gents::documents::write_inference_profile_document(&access, &profile)
-            .await
-            .unwrap();
+        gents::documents::write_inference_profile_document(
+            &access,
+            &profile,
+            &gents::inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
         let engineer = runtime.provision_agent().await;
         for binding in [&engineer, &runtime.provision_agent().await] {
             let agent = serde_json::from_value(runtime.agent_value(binding, "profile-a")).unwrap();
-            gents::documents::write_agent_document(&access, &agent)
-                .await
-                .unwrap();
+            gents::documents::write_agent_document(
+                &access,
+                &agent,
+                &gents::inference::resolved::ProviderProfilePolicy,
+            )
+            .await
+            .unwrap();
         }
         let reason = if reset {
             "HttpError: Invalid status code 429 Too Many Requests with message: {\"error\":{\"type\":\"usage_limit_reached\",\"resets_at\":4102444800}}"

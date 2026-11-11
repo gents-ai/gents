@@ -213,9 +213,13 @@ mod tests {
             &backend.node_did,
         )
         .await;
-        gents::documents::write_inference_backend_document(access, backend)
-            .await
-            .unwrap();
+        gents::documents::write_inference_backend_document(
+            access,
+            backend,
+            &gents::inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
         if let Some(status) = status {
             gents::inference::backends::registry::set_backend_probe_status_as(
                 access,
@@ -332,16 +336,27 @@ mod tests {
         access
             .transact_write("test.diagnose.foreign_node", |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await
             .unwrap();
         for (owner, status) in [(owner.as_str(), "healthy"), (foreign.as_str(), "unhealthy")] {
             let mut value = backend.clone();
             value.node_did = owner.to_owned();
-            gents::documents::write_inference_backend_document(&access, &value)
-                .await
-                .unwrap();
+            gents::documents::write_inference_backend_document(
+                &access,
+                &value,
+                &gents::inference::resolved::ProviderProfilePolicy,
+            )
+            .await
+            .unwrap();
             gents::inference::backends::registry::set_backend_probe_status_as(
                 &access,
                 &value.node_did,

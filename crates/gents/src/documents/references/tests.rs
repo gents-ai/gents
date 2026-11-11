@@ -336,7 +336,14 @@ async fn event_args_rejection_rolls_back_the_whole_configuration_plan() {
     access
         .transact_write("test.manual_task", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();
@@ -349,7 +356,14 @@ async fn event_args_rejection_rolls_back_the_whole_configuration_plan() {
     assert!(access
         .transact_write("test.invalid_event_task", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .is_err());
@@ -383,7 +397,14 @@ async fn event_args_rejection_rolls_back_the_whole_configuration_plan() {
     access
         .transact_write("test.valid_event_task", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();

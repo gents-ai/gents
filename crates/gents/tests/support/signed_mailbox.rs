@@ -107,7 +107,14 @@ pub async fn prepare_signed_mailbox_turn(
     client
         .transact_write("test.mailbox.node", |txn| {
             let plan = &node_plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await?;
     let binding = gents::store::identity::provision_agent_identity_authorized(
@@ -229,7 +236,12 @@ pub async fn prepare_signed_mailbox_turn(
             let surface_id = &surface_id;
             let agent = &agent;
             Box::pin(async move {
-                apply_desired_state_plan(txn, plan).await?;
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await?;
                 grant_selected_self_configuration(txn, node_did, agent.did()).await?;
                 let (surface, _) = read_desired_state_record_in_txn(
                     txn,

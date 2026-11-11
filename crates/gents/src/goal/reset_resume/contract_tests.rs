@@ -101,7 +101,12 @@ pub(super) async fn disable_backend(f: &Fixture, backend: &str) {
                         update: value,
                     },
                 ])?;
-                crate::documents::apply_desired_state_plan(txn, &plan).await?;
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await?;
                 Ok::<_, anyhow::Error>(())
             })
         })

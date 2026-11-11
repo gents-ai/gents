@@ -107,7 +107,12 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
                     add: value.clone(),
                     update: value,
                 }])?;
-                apply_desired_state_plan(txn, &plan).await?;
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await?;
                 Ok::<_, anyhow::Error>(())
             })
         })
@@ -485,7 +490,14 @@ mod tests {
         access
             .transact_write("test.mcp.service", |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await
             .unwrap();

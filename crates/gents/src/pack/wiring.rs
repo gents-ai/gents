@@ -160,7 +160,12 @@ impl PluginWiring {
                 document(Collection::Tools, serde_json::to_value(&tools)?),
                 document(Collection::AgentContext, serde_json::to_value(&context)?),
             ])?;
-            apply_desired_state_plan(txn, &plan).await?;
+            apply_desired_state_plan(
+                txn,
+                &plan,
+                &crate::inference::resolved::ProviderProfilePolicy,
+            )
+            .await?;
         }
         Ok(report)
     }

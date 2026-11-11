@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::inference::backends::registry::backend_fields;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::Node as EmbeddedNode;
@@ -74,7 +75,7 @@ impl UsageAccount {
                 provider: backend.provider_kind.as_str().to_string(),
                 backend_id: backend.backend_id.clone(),
                 connection: crate::inference::admission::backend_connection_fingerprint(
-                    &backend.backend_fields(),
+                    &backend_fields(backend),
                 ),
             },
         }

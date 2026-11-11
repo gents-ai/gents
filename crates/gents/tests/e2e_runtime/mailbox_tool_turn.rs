@@ -100,7 +100,8 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
         .unwrap();
     assert!(hidden["data"]["MailboxItem"].as_array().unwrap().is_empty());
     let outcome = serde_json::to_value(
-        gents::session::mailbox::NotificationIdentity::Event.write_outcome(false, false),
+        gents::documents::mailbox_write_decl::NotificationIdentity::Event
+            .write_outcome(false, false),
     )
     .unwrap();
     let bodies = runtime.backend.observed_completion_bodies();

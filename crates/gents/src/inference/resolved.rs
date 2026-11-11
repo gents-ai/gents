@@ -5,11 +5,14 @@ use anyhow::Result;
 
 use crate::documents::inference_defaults::ReasoningEffort;
 use crate::inference::backends::provider::BackendProviderKind;
+use crate::inference::backends::registry::backend_fields;
 use crate::inference::compaction::CompactionStrategy;
 use crate::openai_wire::OpenAiWireApi;
 use crate::runtime::agent::completion_retry::CompletionRetryProfileFields;
 use crate::store::identity::{NodeIdentity, RuntimeNode};
 use crate::tools::surface::AgentToolSurfaceConfig;
+
+pub mod visibility;
 
 pub const DEFAULT_CONTEXT_WINDOW: usize = 131_072;
 pub const DEFAULT_MAX_OUTPUT_TOKENS: usize = 32_768;
@@ -185,7 +188,7 @@ impl ResolvedInference {
             reasoning_effort: self.profile.reasoning_effort,
             max_tokens: Some(u64::try_from(self.max_output_tokens()?)?),
         };
-        let backend = self.backend.backend_fields();
+        let backend = backend_fields(&self.backend);
         result.validate_for_provider(backend.backend_provider_kind, backend.openai_wire_api)?;
         Ok(result)
     }
@@ -506,7 +509,7 @@ pub fn unsent_reasoning_effort(
     observation: Option<&crate::documents::InferenceBackendObservation>,
 ) -> Option<String> {
     let effort = profile.reasoning_effort?;
-    let fields = backend.backend_fields();
+    let fields = backend_fields(backend);
     let model = backend_catalog(backend, observation)
         .ok()
         .flatten()
@@ -589,8 +592,12 @@ pub fn advertised_model_for_profile(
     Ok(Some(model.clone()))
 }
 
+/// The provider rules for admitting an InferenceProfile on its backend,
+/// handed to configuration publication.
+pub struct ProviderProfilePolicy;
+
 #[async_trait::async_trait]
-impl crate::documents::inference_backend::AdvertisedProfilePolicy for BackendProviderKind {
+impl crate::documents::inference_backend::AdvertisedProfilePolicy for ProviderProfilePolicy {
     async fn validate_advertised_profile(
         &self,
         txn: &crate::store::config_client::ConfigApplyTxn<'_>,

@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::output_render::{ordered, Ordered};
 
 pub(super) fn resource_target(resource: &str) -> Option<SelfConfigTarget> {
     cleanup_target(resource).ok()

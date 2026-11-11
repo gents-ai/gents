@@ -2,45 +2,11 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::pack::archive::{PackArchive, DEFAULT_NAMESPACE};
+use crate::documents::pack_spec::parse_pack_spec;
+use crate::pack::archive::PackArchive;
 use crate::pack::registry::{fetch_pack, RegistryClient, RegistryError};
-use crate::pack::store::{is_valid_index_version, PackStore};
-use crate::pack::{is_valid_pack_name, InstalledPack};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PackSpec<'a> {
-    pub namespace: &'a str,
-    pub name: &'a str,
-    pub version: Option<&'a str>,
-}
-
-pub fn parse_pack_spec(spec: &str) -> Result<PackSpec<'_>> {
-    let (coordinate, version) = match spec.split_once('@') {
-        Some((coordinate, version)) => {
-            anyhow::ensure!(!version.is_empty(), "{spec:?} names no version after @");
-            anyhow::ensure!(
-                is_valid_index_version(version),
-                "{spec:?} names an invalid version; a version is ASCII letters, \
-                 digits, '.', '+' or '-', and never a bare '.' or '..'"
-            );
-            (coordinate, Some(version))
-        }
-        None => (spec, None),
-    };
-    let (namespace, name) = coordinate
-        .split_once('/')
-        .unwrap_or((DEFAULT_NAMESPACE, coordinate));
-    anyhow::ensure!(
-        is_valid_pack_name(namespace) && is_valid_pack_name(name),
-        "{spec:?} is not a pack name; expected name, ns/name, or either with @version, \
-         namespace and name both snake_case"
-    );
-    Ok(PackSpec {
-        namespace,
-        name,
-        version,
-    })
-}
+use crate::pack::store::PackStore;
+use crate::pack::InstalledPack;
 
 #[derive(Debug, Clone)]
 pub enum ResolvedFrom {
@@ -172,32 +138,6 @@ mod tests {
         match result {
             Ok(_) => panic!("expected an error"),
             Err(error) => error,
-        }
-    }
-
-    #[test]
-    fn parse_pack_spec_accepts_an_uppercase_semver_pin() {
-        assert_eq!(
-            parse_pack_spec("demo@1.0.0-RC1").unwrap().version,
-            Some("1.0.0-RC1")
-        );
-    }
-
-    #[test]
-    fn parse_pack_spec_refuses_malformed_or_non_snake_case_specs() {
-        for spec in [
-            "",
-            "acme/",
-            "/demo",
-            "acme/demo/extra",
-            "demo@",
-            "Acme/Demo",
-            "acme/de-mo",
-            "demo@1@2",
-            "demo@a b",
-            "demo@../x",
-        ] {
-            assert!(parse_pack_spec(spec).is_err(), "{spec:?} should be refused");
         }
     }
 

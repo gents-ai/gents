@@ -1,9 +1,8 @@
+use anyhow::{anyhow, Context, Result};
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::Node as EmbeddedNode;
-use gents_protocol::background_completion::is_background_completion_notification_message_key;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
@@ -11,21 +10,6 @@ use serde::Deserialize;
 use crate::request::lifecycle::queue::{QueuePolicy, QueueSource, RequestQueue};
 use crate::store::graphql::escape_graphql_string;
 use crate::tools::call::lifecycle::{FailureClass, ToolCallLifecycle};
-
-pub(crate) fn notification_receipt_keys(encoded: &str) -> Result<Vec<String>> {
-    let keys: Vec<String> =
-        serde_json::from_str(encoded).context("invalid wake notification receipt")?;
-    anyhow::ensure!(
-        keys.iter()
-            .all(|key| is_background_completion_notification_message_key(key)),
-        "wake receipt names a non-notification message"
-    );
-    anyhow::ensure!(
-        keys.iter().collect::<std::collections::BTreeSet<_>>().len() == keys.len(),
-        "wake receipt contains duplicate notification keys"
-    );
-    Ok(keys)
-}
 
 mod datetime_fields;
 mod notification_delivery;

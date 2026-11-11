@@ -1,7 +1,6 @@
 use anyhow::{bail, ensure, Context, Result};
-use gents::session::mailbox::{
-    MailboxAction, MailboxItem, MailboxKind, MailboxStatus, MAILBOX_FIELDS,
-};
+use gents::documents::mailbox_write_decl::{MailboxAction, MailboxKind};
+use gents::session::mailbox::{MailboxItem, MailboxStatus, MAILBOX_FIELDS};
 use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
 use gents::store::graphql::escape_graphql_string;
 use gents_protocol::mailbox_question::{

@@ -165,7 +165,14 @@ async fn signed_skill_publication_and_self_configuration_use_native_grants() -> 
     access
         .transact_write("test.skill.install", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await?;
     let skill = access
@@ -285,7 +292,14 @@ async fn signed_skill_publication_and_self_configuration_use_native_grants() -> 
     access
         .transact_write("test.skill.unrelated", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await?;
     assert!(!visible(&agent_access.execute(query).await?));
@@ -314,6 +328,7 @@ async fn signed_skill_publication_and_self_configuration_use_native_grants() -> 
                     txn,
                     plan,
                     Some(binding),
+                    &crate::inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
@@ -378,7 +393,14 @@ async fn signed_skill_publication_and_self_configuration_use_native_grants() -> 
     access
         .transact_write("test.skill.create_removal_target", |txn| {
             let plan = &user_plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await?;
     let query_removable = "{ Skill(filter:{skill_id:{_eq:\"user-skill\"}}) {_docID description} }";
@@ -402,6 +424,7 @@ async fn signed_skill_publication_and_self_configuration_use_native_grants() -> 
                     txn,
                     plan,
                     Some(binding),
+                    &crate::inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })

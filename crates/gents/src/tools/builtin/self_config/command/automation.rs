@@ -1,5 +1,6 @@
 use super::*;
 use crate::request::task_run;
+use crate::session::output_render::ordered;
 
 impl ConfigCommandTool {
     pub(super) async fn mcp_service(&self, argv: &[String]) -> Result<String> {

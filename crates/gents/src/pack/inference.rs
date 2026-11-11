@@ -231,7 +231,7 @@ pub(crate) async fn preview_pack_inference_bindings_with_node_binding(
         node_binding,
     )
     .await?;
-    use crate::plugin::model_calls::{AccessModels, ModelBinding, ModelResolver};
+    use crate::plugin::model_binding::{AccessModels, ModelBinding, ModelResolver};
     let models = AccessModels(access);
     for slot in manifest
         .metadata
@@ -507,9 +507,13 @@ mod tests {
             .transact_write("test.inference.preview", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    crate::documents::apply_desired_state_plan(txn, plan)
-                        .await
-                        .map(|_| ())
+                    crate::documents::apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                    .map(|_| ())
                 })
             })
             .await
@@ -554,9 +558,13 @@ mod tests {
             .transact_write("test.inference.disable", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    crate::documents::apply_desired_state_plan(txn, plan)
-                        .await
-                        .map(|_| ())
+                    crate::documents::apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                    .map(|_| ())
                 })
             })
             .await

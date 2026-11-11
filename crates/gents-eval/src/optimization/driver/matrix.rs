@@ -261,7 +261,7 @@ async fn fixture_installs_bound_pack_documents_with_authored_origin() {
             tags.iter().any(|tag| tag
                 == &format!(
                     "gents:pack:{}/monitor_fixture",
-                    gents::pack::archive::DEFAULT_NAMESPACE
+                    gents::documents::pack_spec::DEFAULT_NAMESPACE
                 )),
             "{collection} lost its pack origin"
         );

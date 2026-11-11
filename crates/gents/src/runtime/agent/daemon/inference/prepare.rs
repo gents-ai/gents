@@ -14,7 +14,6 @@ use crate::runtime::agent::loop_stream::{
     AggregateTokenBudget, FoldedPrompt, LoopConfig, LoopReplayInput, TaggedMessage,
     TurnCompactionError, TurnCompactionOutcome, TurnCompactionRequest,
 };
-use crate::runtime::agent::output_obligation::OutputObligationGate;
 use crate::tools::call::hook::DefraSessionHook;
 use crate::turn::provider_input::budget::ContextCalibration;
 use crate::turn::provider_input::ProviderInputProfile;
@@ -283,8 +282,7 @@ where
         crate::claude_request_context::apply(&mut loop_config, claude_context.as_ref())?;
         loop_config.deadline = request_deadline;
         loop_config.context_calibration = context_calibration.clone();
-        loop_config.output_obligation_gate =
-            output_obligation_gate.map(|gate| Arc::new(gate) as Arc<dyn OutputObligationCheck>);
+        loop_config.output_obligation_gate = output_obligation_gate;
         let turn_compactor = self.compactor.clone();
         let provider_profile = loop_config.provider_input_counter.profile();
         let turn_context_window = self.agent_config.context_window;
@@ -348,7 +346,7 @@ where
     async fn session_hook(
         &self,
         preparation: InferencePreparation<'_>,
-    ) -> Result<(DefraSessionHook, Option<OutputObligationGate>)> {
+    ) -> Result<(DefraSessionHook, Option<Arc<dyn OutputObligationCheck>>)> {
         let InferencePreparation {
             request,
             lifecycle,
@@ -363,7 +361,8 @@ where
                 request,
                 self.output_obligations.as_ref(),
             )
-            .await?;
+            .await?
+            .map(|gate| Arc::new(gate) as Arc<dyn OutputObligationCheck>);
         let hook = DefraSessionHook::resume_with_actor_policy(
             self.node.clone(),
             &request.session_id,

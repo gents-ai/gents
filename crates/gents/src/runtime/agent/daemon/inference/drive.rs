@@ -13,11 +13,10 @@ use crate::error::LoopStreamError;
 use crate::inference::admission;
 use crate::inference::resolved::MaxTurnsProvenance;
 use crate::request::lifecycle::{RequestLifecycle, TriggerExecutionContext};
+use crate::request::seam_error::RuntimeSeamError;
 use crate::request::streaming::{DefraStreamWriter, StreamWriter};
 use crate::runtime::agent::loop_stream::LoopStreamItem;
-use crate::runtime::agent::stream_processor::{
-    processor_failure, RuntimeSeamError, StreamProcessor,
-};
+use crate::runtime::agent::stream_processor::{processor_failure, StreamProcessor};
 use crate::tools::call::hook::DefraSessionHook;
 use crate::turn::provider_input::ProviderInputProfile;
 

@@ -39,7 +39,7 @@ pub(crate) async fn oauth_credential_for_probe(
         provider,
         oauth_refresh_kind(backend.provider_kind),
         oauth_product(backend.provider_kind),
-        backend.auth.account_pick().unwrap_or(
+        crate::inference::auth::credential::account_pick(&backend.auth).unwrap_or(
             crate::inference::auth::credential::AccountPick::Reference(None),
         ),
     )

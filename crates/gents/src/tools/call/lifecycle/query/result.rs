@@ -431,7 +431,7 @@ async fn load_tool_call_read_source(
         } else if call.await_mode.as_deref() == Some("background") && !lifecycle_state.is_terminal()
         {
             let receipt_source =
-                super::super::plugin_effect::receipt_source(session_id, tool_call_doc_id);
+                crate::session::plugin_effect_rows::receipt_source(session_id, tool_call_doc_id);
             let query = gents_protocol::output::rows::source_output_segments_query(
                 &request_doc_id,
                 &receipt_source,
@@ -440,7 +440,7 @@ async fn load_tool_call_read_source(
             let rows = response["data"]["AgentOutputSegment"]
                 .as_array()
                 .context("plugin receipt read omitted segments")?;
-            let receipt = super::super::plugin_effect::receipt_from_rows(
+            let receipt = crate::session::plugin_effect_rows::receipt_from_rows(
                 rows,
                 node_did,
                 session_id,
@@ -606,15 +606,15 @@ async fn load_tool_call_read_source(
             Some(session_id),
             requester_did,
         )?;
-        match crate::tools::background::status::canonical_tool_output_from_rows(
+        match crate::session::tool_output_rows::canonical_tool_output_from_rows(
             rows,
             tool_call_doc_id,
             &expected_request_doc_id,
         )? {
-            crate::tools::background::status::CanonicalToolOutputObservation::Closed(text) => {
+            crate::session::tool_output_rows::CanonicalToolOutputObservation::Closed(text) => {
                 Some(text)
             }
-            crate::tools::background::status::CanonicalToolOutputObservation::Open(_) => None,
+            crate::session::tool_output_rows::CanonicalToolOutputObservation::Open(_) => None,
         }
     } else if let (ReadSource::Txn(txn), [ToolResultPart::Text { text }]) =
         (source, parts.as_slice())
@@ -691,7 +691,7 @@ pub async fn load_tool_call_presentation(
             .request_doc_id
             .as_deref()
             .context("spawned process is missing request document identity")?;
-        let output = crate::tools::background::status::observe_canonical_tool_output_with_access(
+        let output = crate::session::tool_output_rows::observe_canonical_tool_output_with_access(
             access,
             tool_call_doc_id,
             request_doc_id,
@@ -701,17 +701,17 @@ pub async fn load_tool_call_presentation(
         )
         .await?;
         match output {
-            crate::tools::background::status::CanonicalToolOutputObservation::Closed(output) => {
+            crate::session::tool_output_rows::CanonicalToolOutputObservation::Closed(output) => {
                 if call.plugin_parent_tool_call_doc_id.is_none() {
                     result = Some(output);
                 }
             }
-            crate::tools::background::status::CanonicalToolOutputObservation::Open(output)
+            crate::session::tool_output_rows::CanonicalToolOutputObservation::Open(output)
                 if !output.is_empty() =>
             {
                 live_output = Some(output);
             }
-            crate::tools::background::status::CanonicalToolOutputObservation::Open(_) => {}
+            crate::session::tool_output_rows::CanonicalToolOutputObservation::Open(_) => {}
         }
     }
     Ok(CanonicalToolCallPresentation {
@@ -856,7 +856,7 @@ async fn load_accepted_tool_call_inner(
                     && call.await_mode.as_deref() == Some("background"),
                 "spawned tool lacks its spawn_process owner"
             );
-            let input: crate::tools::background::status::BackgroundToolArgs =
+            let input: crate::session::tool_output_rows::BackgroundToolArgs =
                 serde_json::from_str(&parent_args)?;
             anyhow::ensure!(
                 input.tool_name == call.tool_name,

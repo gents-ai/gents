@@ -31,7 +31,6 @@ use crate::inference::usage_observation::now_unix_secs;
 use crate::inference::usage_observation::{RotationFeed, UsageAccount, UsageCache, UsageReporter};
 
 pub const DEFAULT_BACKEND_ENDPOINT: &str = "claude-cli://subscription";
-pub const ANTHROPIC_API_ENDPOINT: &str = "https://api.anthropic.com/v1";
 pub const DEFAULT_MODEL_ID: &str = "claude-opus-5-5";
 
 pub fn default_backend_endpoint() -> &'static str {

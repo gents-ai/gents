@@ -75,7 +75,12 @@ pub async fn select_agent_model_on(
                     add: agent.clone(),
                     update: agent,
                 });
-                apply_desired_state_plan(txn, &DesiredStateApplyPlan::new(documents)?).await?;
+                apply_desired_state_plan(
+                    txn,
+                    &DesiredStateApplyPlan::new(documents)?,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await?;
                 Ok(selected)
             })
         })
@@ -129,7 +134,12 @@ mod tests {
             "provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1",
             "auth":{"kind":"unauthenticated"}
         }))?;
-        gents::documents::write_inference_backend_document(&access, &backend).await?;
+        gents::documents::write_inference_backend_document(
+            &access,
+            &backend,
+            &gents::inference::resolved::ProviderProfilePolicy,
+        )
+        .await?;
         let original: InferenceProfile = serde_json::from_value(json!({
             "node_did":owner,"profile_id":"shared","backend_id":"backend",
             "model_name":"original","reasoning_effort":"high",
@@ -280,7 +290,12 @@ mod tests {
             "provider_kind":"AnthropicApiKey","endpoint":"https://api.anthropic.com/v1",
             "auth":{"kind":"api_key","key":"fixture"}
         }))?;
-        gents::documents::write_inference_backend_document(&access, &unsupported).await?;
+        gents::documents::write_inference_backend_document(
+            &access,
+            &unsupported,
+            &gents::inference::resolved::ProviderProfilePolicy,
+        )
+        .await?;
         assert!(select_agent_model_on(
             &access,
             owner,
@@ -332,7 +347,12 @@ mod tests {
         let backend = serde_json::from_value(
             json!({"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}),
         )?;
-        gents::documents::write_inference_backend_document(&access, &backend).await?;
+        gents::documents::write_inference_backend_document(
+            &access,
+            &backend,
+            &gents::inference::resolved::ProviderProfilePolicy,
+        )
+        .await?;
         let mut profile: InferenceProfile = serde_json::from_value(
             json!({"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model","reasoning_effort":"high","max_output_tokens":100}),
         )?;

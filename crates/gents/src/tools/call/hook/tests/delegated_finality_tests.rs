@@ -50,9 +50,14 @@ async fn fixture(name: &str) -> Fixture {
     user_access
         .transact_write("test.finality.node", |txn| {
             let node_plan = &node_plan;
-            Box::pin(
-                async move { crate::documents::apply_desired_state_plan(txn, node_plan).await },
-            )
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    node_plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();
@@ -92,7 +97,14 @@ async fn fixture(name: &str) -> Fixture {
     user_access
         .transact_write("test.finality.agents", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();
@@ -254,7 +266,14 @@ async fn set_parent_enabled(fixture: &Fixture, enabled: bool) {
         .config
         .transact_write("test.finality.parent_enabled", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();

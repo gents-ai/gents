@@ -5028,7 +5028,14 @@ async fn create_visible_foreign_collision(
     client
         .transact_write("test.foreign_collision.configuration", |txn| {
             let plan = &plan;
-            Box::pin(async move { gents::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                gents::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();

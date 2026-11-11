@@ -1641,16 +1641,16 @@ pub(crate) mod tests {
         managed_agent().did()
     }
 
-    fn agent_snapshot() -> Arc<crate::runtime::snapshot::ActiveRuntimeSnapshot> {
+    fn agent_snapshot() -> Arc<crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot> {
         let mut unavailable_agents = rapidhash::RapidHashMap::default();
         unavailable_agents.insert(
             agent_did().to_owned(),
-            crate::runtime::snapshot::UnavailableAgent::new(
+            crate::triggers::runtime_snapshot::UnavailableAgent::new(
                 gents_protocol::node_readiness::AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
                 "fixture agent",
             ).with_watcher_identity(managed_agent().clone()),
         );
-        Arc::new(crate::runtime::snapshot::ActiveRuntimeSnapshot {
+        Arc::new(crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
             generation: 1,
             node: None,
             local_did: node_did().to_owned(),
@@ -1765,9 +1765,13 @@ pub(crate) mod tests {
             "integrations": {"plugins": [{"plugin": "acme/engine", "job": settings}]},
         }))
         .unwrap();
-        crate::documents::write_tools_document(&owner, &tools)
-            .await
-            .unwrap();
+        crate::documents::write_tools_document(
+            &owner,
+            &tools,
+            &crate::inference::resolved::ProviderProfilePolicy,
+        )
+        .await
+        .unwrap();
         let agent = agent_access(&node);
         let now = chrono::Utc::now().to_rfc3339();
         let session_doc = insert_as(
@@ -1841,7 +1845,9 @@ pub(crate) mod tests {
         let (_snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(agent_snapshot());
         runtime
             .bind_snapshot(
-                crate::runtime::snapshot::ActiveSnapshotAgentIdentities::boxed(snapshot_rx),
+                crate::triggers::runtime_snapshot::ActiveSnapshotAgentIdentities::boxed(
+                    snapshot_rx,
+                ),
             )
             .unwrap();
         Job {

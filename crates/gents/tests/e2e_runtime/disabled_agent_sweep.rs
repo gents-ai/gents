@@ -39,7 +39,13 @@ async fn disable_agent(access: &gents::ConfigAccess, node_did: &str, agent_did: 
                     add: agent.clone(),
                     update: agent,
                 }])?;
-                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
             })
         })
         .await

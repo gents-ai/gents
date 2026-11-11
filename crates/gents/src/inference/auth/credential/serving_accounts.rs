@@ -179,7 +179,12 @@ mod tests {
                 },
             ),
         ] {
-            crate::documents::write_inference_backend_document(&access, &backend).await?;
+            crate::documents::write_inference_backend_document(
+                &access,
+                &backend,
+                &crate::inference::resolved::ProviderProfilePolicy,
+            )
+            .await?;
         }
         store_sign_in(&access, serving_sign_in(did, "a"), None).await?;
         let b = store_sign_in(&access, serving_sign_in(did, "b"), Some("label-b")).await?;
@@ -275,7 +280,12 @@ mod tests {
             enabled: true,
             tags: Vec::new(),
         };
-        crate::documents::write_inference_backend_document(&access, &original).await?;
+        crate::documents::write_inference_backend_document(
+            &access,
+            &original,
+            &crate::inference::resolved::ProviderProfilePolicy,
+        )
+        .await?;
         let a = store_sign_in(&access, claude_sign_in(did, "a"), None).await?;
         let b = store_sign_in(&access, claude_sign_in(did, "b"), None).await?;
         let b_backend = format!(
@@ -292,7 +302,12 @@ mod tests {
                 "node_did": did, "profile_id": profile_id, "backend_id": backend_id,
                 "model_name": "model-x",
             }))?;
-            crate::documents::write_inference_profile_document(&access, &profile).await?;
+            crate::documents::write_inference_profile_document(
+                &access,
+                &profile,
+                &crate::inference::resolved::ProviderProfilePolicy,
+            )
+            .await?;
         }
         let profiles = || async {
             access
@@ -422,6 +437,7 @@ mod tests {
         crate::documents::write_inference_backend_document(
             &access,
             &serde_json::from_value(original)?,
+            &crate::inference::resolved::ProviderProfilePolicy,
         )
         .await?;
         store_sign_in(&access, claude_sign_in(did, "a"), None).await?;
@@ -451,9 +467,13 @@ mod tests {
             .transact_write("test.agent_accounts", |txn| {
                 let plan = &plan;
                 Box::pin(async move {
-                    crate::documents::apply_desired_state_plan(txn, plan)
-                        .await
-                        .map(|_| ())
+                    crate::documents::apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                    .map(|_| ())
                 })
             })
             .await?;

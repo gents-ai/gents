@@ -1090,7 +1090,7 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
 
 #[tokio::test]
 async fn generated_snapshot_demotions_preserve_healthy_agents() {
-    use crate::runtime::snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
+    use crate::triggers::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
     use rapidhash::{RapidHashMap, RapidHashSet};
 
     fn ids(value: &Value) -> Vec<String> {
@@ -1226,7 +1226,14 @@ async fn write_runtime_documents(
     access
         .transact_write("test.runtime.configure", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();

@@ -102,7 +102,7 @@ async fn stored_row(admission: &PublishedAdmission) -> Value {
 /// The row's closed canonical tool output.
 async fn stored_output(admission: &PublishedAdmission) -> String {
     let tool = &admission.tool;
-    match crate::tools::background::status::observe_canonical_tool_output_with_access(
+    match crate::session::tool_output_rows::observe_canonical_tool_output_with_access(
         &admission.tool.access().unwrap(),
         tool.doc_id().unwrap(),
         tool.request_doc_id().unwrap(),
@@ -113,8 +113,8 @@ async fn stored_output(admission: &PublishedAdmission) -> String {
     .await
     .unwrap()
     {
-        crate::tools::background::status::CanonicalToolOutputObservation::Closed(output) => output,
-        crate::tools::background::status::CanonicalToolOutputObservation::Open(output) => {
+        crate::session::tool_output_rows::CanonicalToolOutputObservation::Closed(output) => output,
+        crate::session::tool_output_rows::CanonicalToolOutputObservation::Open(output) => {
             panic!("job row output is still open: {output}")
         }
     }
@@ -697,7 +697,14 @@ async fn write_inference(job: &Job) {
     job_owner(job)
         .transact_write("test.driver.inference", |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap();
@@ -717,9 +724,13 @@ pub(crate) async fn write_step_tools(job: &Job, settings: Option<&PluginJobSetti
         "integrations": {"plugins": [{"plugin": "acme/engine", "job": settings}]},
     }))
     .unwrap();
-    crate::documents::write_tools_document(&job_owner(job), &tools)
-        .await
-        .unwrap();
+    crate::documents::write_tools_document(
+        &job_owner(job),
+        &tools,
+        &crate::inference::resolved::ProviderProfilePolicy,
+    )
+    .await
+    .unwrap();
 }
 
 /// Installs `output` as the guest of `acme/engine` under the job's home,
@@ -938,7 +949,7 @@ impl Stepper {
     /// The row's closed canonical output.
     pub(crate) async fn output(&self, row: &str) -> Value {
         let tool = self.lifecycle(row).await;
-        match crate::tools::background::status::observe_canonical_tool_output_with_access(
+        match crate::session::tool_output_rows::observe_canonical_tool_output_with_access(
             &self.job.access,
             tool.doc_id().unwrap(),
             tool.request_doc_id().unwrap(),
@@ -949,10 +960,10 @@ impl Stepper {
         .await
         .unwrap()
         {
-            crate::tools::background::status::CanonicalToolOutputObservation::Closed(output) => {
+            crate::session::tool_output_rows::CanonicalToolOutputObservation::Closed(output) => {
                 serde_json::from_str(&output).unwrap()
             }
-            crate::tools::background::status::CanonicalToolOutputObservation::Open(output) => {
+            crate::session::tool_output_rows::CanonicalToolOutputObservation::Open(output) => {
                 panic!("job row output is still open: {output}")
             }
         }
@@ -1207,8 +1218,10 @@ async fn staged_plugin_defers_running_job_without_counting_a_failure() {
 async fn plugin_publication_after_step_precheck_is_transient() {
     let step = stepper(json!({"result": "done"})).await;
     let (input, revision) = step.input(&step.row).await;
-    let (namespace, name) =
-        crate::plugin::store::parse_coordinate(&input.pin.as_ref().unwrap().plugin_ref).unwrap();
+    let (namespace, name) = crate::documents::plugin_coordinate::parse_coordinate(
+        &input.pin.as_ref().unwrap().plugin_ref,
+    )
+    .unwrap();
     let (installed, guard) =
         crate::plugin::store::read_published_record(&step.job.runtime.home, namespace, name)
             .unwrap();

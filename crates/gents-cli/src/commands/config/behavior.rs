@@ -54,7 +54,12 @@ pub(super) async fn agent_set(args: AgentUpsertArgs) -> Result<()> {
         tags: args.tags.clone(),
         created_at: Some(chrono::Utc::now().to_rfc3339()),
     };
-    let doc_id = write_agent_document(&access, &agent).await?;
+    let doc_id = write_agent_document(
+        &access,
+        &agent,
+        &gents::inference::resolved::ProviderProfilePolicy,
+    )
+    .await?;
     let output = json!({
         "doc_id": doc_id,
         "agent_did": agent_did,
@@ -493,7 +498,14 @@ mod tests {
         access
             .transact_write("test.slug.profile", |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await?;
 
@@ -568,7 +580,14 @@ mod tests {
         access
             .transact_write("test.agent.profile", |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await?;
         // Write-preset host tools run only under a User-published root.
@@ -861,7 +880,14 @@ Next: gents config agent --help
             .access
             .transact_write("test.agent.dangling_profile", |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await
             .unwrap_err();

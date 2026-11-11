@@ -39,7 +39,7 @@ impl EditFileTool {
 }
 
 impl Tool for EditFileTool {
-    const NAME: &'static str = "edit_file";
+    const NAME: &'static str = gents_protocol::tool_names::EDIT_FILE_TOOL_NAME;
 
     type Error = ToolError;
     type Args = EditFileArgs;

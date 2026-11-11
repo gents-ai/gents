@@ -16,8 +16,10 @@ use crate::session::message::{
     AgentInterruptArgs, AgentListArgs, AgentMessageArgs, AgentNewArgs, AgentSessionListArgs,
     AgentSessionReadArgs,
 };
-use crate::tools::background::status::r4c_args::{ListBackgroundToolsArgs, ReadToolOutputArgs};
-use crate::tools::background::status::{BackgroundToolArgs, CancelToolArgs, WaitToolArgs};
+use crate::session::tool_output_rows::BackgroundToolArgs;
+use crate::tools::native::background_args::{
+    CancelToolArgs, ListBackgroundToolsArgs, ReadToolOutputArgs, WaitToolArgs,
+};
 use crate::tools::surface::BackgroundToolConfig;
 
 use super::shared::ToolError;
@@ -736,7 +738,7 @@ fn background_not_yet_executable_error(tool_name: &str) -> ToolError {
 }
 
 fn structured_error(error: serde_json::Value) -> ToolError {
-    let message = crate::tools::output::render(
+    let message = crate::session::output_render::render(
         &error,
         &[
             "message",

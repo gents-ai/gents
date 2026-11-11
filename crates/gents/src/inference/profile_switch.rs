@@ -204,7 +204,12 @@ pub async fn switch_profile_account(
                         })
                     })
                     .collect::<Result<Vec<_>>>()?;
-                apply_desired_state_plan(txn, &DesiredStateApplyPlan::new(documents)?).await?;
+                apply_desired_state_plan(
+                    txn,
+                    &DesiredStateApplyPlan::new(documents)?,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await?;
                 let agents = snapshot.references.agents_on_profile(profile_id);
                 Ok(SwitchReceipt {
                     headline: headline(

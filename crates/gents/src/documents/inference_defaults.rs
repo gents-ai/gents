@@ -1,5 +1,8 @@
 pub const DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS: u64 = 120;
 pub const DEFAULT_DEADLINE_DURATION_SECS: u64 = 86_400;
+pub const DEFAULT_MAX_CONCURRENT: i64 = 1;
+pub const DEFAULT_MAX_QUEUE_DEPTH: i64 = 100;
+pub const ANTHROPIC_API_ENDPOINT: &str = "https://api.anthropic.com/v1";
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,

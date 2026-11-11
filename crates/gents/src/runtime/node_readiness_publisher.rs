@@ -12,8 +12,8 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::runtime::agent::ProcessLifecycleState;
-use crate::runtime::snapshot::ActiveRuntimeSnapshot;
 use crate::store::graphql::escape_graphql_string;
+use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AgentAdmissionObservation {

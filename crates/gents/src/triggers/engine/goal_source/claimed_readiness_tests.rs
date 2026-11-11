@@ -38,7 +38,7 @@ async fn source(
 ) {
     let agent_identity = selected_identity(db).await;
     let agent_did = agent_identity.did().to_owned();
-    let unavailable = crate::runtime::snapshot::UnavailableAgent::new(
+    let unavailable = crate::triggers::runtime_snapshot::UnavailableAgent::new(
         AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
         "test fixture identity",
     )
@@ -672,7 +672,7 @@ async fn unclaimed_goal_follows_live_reconcile_status_and_modeled_readiness() {
     .await
     .unwrap();
 
-    let unavailable = crate::runtime::snapshot::UnavailableAgent::new(
+    let unavailable = crate::triggers::runtime_snapshot::UnavailableAgent::new(
         AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
         "test fixture identity",
     )

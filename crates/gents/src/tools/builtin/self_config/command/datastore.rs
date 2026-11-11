@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) fn mailbox_entries(
-    policy: crate::session::mailbox::MailboxNotificationPolicy,
+    policy: crate::documents::mailbox_write_decl::MailboxNotificationPolicy,
 ) -> Result<Value> {
     policy.validate()?;
     let mut declaration = crate::documents::mailbox_write_decl::canonical_mailbox_write_decl();
@@ -14,7 +14,7 @@ pub(super) fn mailbox_entries(
 pub(super) fn surface_patch(argv: &[String]) -> Result<SelfConfigPatch> {
     let mut parsed = ParsedArgs::parse(argv)?;
     if let Some(policy) = parsed.one("mailbox")? {
-        let policy: crate::session::mailbox::MailboxNotificationPolicy =
+        let policy: crate::documents::mailbox_write_decl::MailboxNotificationPolicy =
             serde_json::from_str(policy)
                 .context("--mailbox requires a notification policy JSON object")?;
         let entries = mailbox_entries(policy)?;

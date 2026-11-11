@@ -708,12 +708,10 @@ impl SchemaTool {
                     if let Some(loss) = loss {
                         output["loss"] = loss;
                     }
-                    serde_json::to_string(
-                        &crate::tools::builtin::self_config::Ordered::reading_order(
-                            output,
-                            &["effect", "loss", "warnings", "next_call", "metadata"],
-                        ),
-                    )
+                    serde_json::to_string(&crate::session::output_render::Ordered::reading_order(
+                        output,
+                        &["effect", "loss", "warnings", "next_call", "metadata"],
+                    ))
                 } else {
                     serde_json::to_string(&value)
                 };

@@ -247,7 +247,7 @@ type ReconciliationRecord = (u64, String, Result<(), String>);
 #[derive(Default)]
 struct SubscriptionObserver(std::sync::Mutex<Vec<ReconciliationRecord>>);
 
-impl crate::RuntimeSnapshotObserver for SubscriptionObserver {
+impl crate::triggers::snapshot_observer::RuntimeSnapshotObserver for SubscriptionObserver {
     fn on_generation_published(&self, _generation: u64, _fingerprint: &str, _behaviors: &[String]) {
     }
 

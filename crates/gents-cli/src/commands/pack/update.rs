@@ -369,7 +369,15 @@ mod tests {
             access
                 .transact_write("test.pack_update.profile", |txn| {
                     let plan = &plan;
-                    Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+                    Box::pin(async move {
+                        apply_desired_state_plan(
+                            txn,
+                            plan,
+                            &gents::inference::resolved::ProviderProfilePolicy,
+                        )
+                        .await
+                        .map(|_| ())
+                    })
                 })
                 .await
                 .unwrap();

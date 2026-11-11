@@ -9,7 +9,8 @@ const PACK_ORIGIN_PREFIX: &str = "gents:pack:";
 
 fn is_coordinate(value: &str) -> bool {
     value.split_once('/').is_some_and(|(namespace, name)| {
-        super::is_valid_pack_name(namespace) && super::is_valid_pack_name(name)
+        crate::documents::pack_spec::is_valid_pack_name(namespace)
+            && crate::documents::pack_spec::is_valid_pack_name(name)
     })
 }
 
@@ -92,7 +93,12 @@ pub(super) async fn apply_pack_documents(
             let documents = documents.clone();
             let guard = &guard;
             Box::pin(async move {
-                crate::documents::apply_desired_state_plan(txn, guard).await?;
+                crate::documents::apply_desired_state_plan(
+                    txn,
+                    guard,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await?;
                 let report = super::installation::install_in_txn(
                     txn, owner, pack, documents, policy, None, None, None,
                 )

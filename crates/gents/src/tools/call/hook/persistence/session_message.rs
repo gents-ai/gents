@@ -511,7 +511,7 @@ impl DefraSessionHook {
         )
         .await
         {
-            Ok(receipt) => crate::tools::output::render(
+            Ok(receipt) => crate::session::output_render::render(
                 &receipt,
                 &["status", "session_id", "request_id", "tool_call_id"],
             )?,

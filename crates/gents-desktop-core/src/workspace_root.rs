@@ -44,7 +44,12 @@ pub async fn select_agent_workspace_root(
     let mut tools = read_unshared_agent_tools(access, node_did, agent_did).await?;
     let tools_id = tools.tools_id.clone();
     if retarget_host_root(&mut tools, root_path) {
-        write_tools_document(access, &tools).await?;
+        write_tools_document(
+            access,
+            &tools,
+            &gents::inference::resolved::ProviderProfilePolicy,
+        )
+        .await?;
     }
     Ok(AgentWorkspaceRoot {
         root_path: root_path.to_owned(),

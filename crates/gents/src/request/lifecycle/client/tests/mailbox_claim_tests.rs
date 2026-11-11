@@ -1,12 +1,12 @@
 use super::*;
+use crate::documents::mailbox_write_decl::{
+    MailboxAction, MailboxKind, MailboxNotificationPolicy, MailboxWriteOutcome,
+};
 use crate::request::admission::AgentRequestAdmissionVerifier;
 use crate::request::lifecycle::{
     ClaimOutcome, ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
 };
-use crate::session::mailbox::{
-    MailboxAction, MailboxCreateTool, MailboxKind, MailboxNotificationPolicy, MailboxStatus,
-    MailboxWriteOutcome,
-};
+use crate::session::mailbox::{MailboxCreateTool, MailboxStatus};
 use crate::store::config_client::{GraphqlEndpoint, NodePermission};
 use gents_loop::tool::{bind_request_tools, ToolDyn};
 use gents_protocol::row::AgentRequest;

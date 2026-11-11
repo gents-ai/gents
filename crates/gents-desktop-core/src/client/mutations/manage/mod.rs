@@ -21,7 +21,12 @@ pub async fn apply_plan(
         .transact_write(operation, |txn| {
             let plan = &plan;
             Box::pin(async move {
-                apply_desired_state_plan(txn, plan).await?;
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await?;
                 Ok(())
             })
         })
@@ -47,7 +52,12 @@ pub async fn delete_scoped_document(
                 let existed = read_desired_state_record_in_txn(txn, collection, node_did, id)
                     .await?
                     .is_some();
-                apply_desired_state_plan(txn, plan).await?;
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await?;
                 Ok(usize::from(existed))
             })
         })

@@ -12,10 +12,10 @@ use super::BackgroundTaskResult;
 use crate::inference::admission::AdmissionRegistry;
 use crate::runtime::agent::p2p_reconcile::{EnrollmentAuthorityHandle, EnrollmentAuthorityOwner};
 use crate::runtime::agent::Gents;
-use crate::runtime::snapshot::{ActiveRuntimeSnapshot, ResolvedRuntimeSnapshot};
 use crate::runtime::status::RuntimeStatusHandle;
 use crate::tools::mcp::health::{spawn_health_checker, ServiceHealthMap};
 use crate::tools::surface::ToolRuntimeContext;
+use crate::triggers::runtime_snapshot::{ActiveRuntimeSnapshot, ResolvedRuntimeSnapshot};
 
 #[derive(Clone, Copy)]
 pub(super) struct StartupTasks<'a> {
@@ -343,8 +343,9 @@ pub(super) fn spawn_node_tasks(
     let completion_node_did = agent.node_did().to_string();
     let completion_background_executions = agent.background_execution_registry.clone();
     let completion_job_driver = runtime.job_driver.clone();
-    let completion_agents =
-        crate::runtime::snapshot::ActiveSnapshotAgentIdentities::boxed(active_snapshot_rx.clone());
+    let completion_agents = crate::triggers::runtime_snapshot::ActiveSnapshotAgentIdentities::boxed(
+        active_snapshot_rx.clone(),
+    );
     let completion_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::BackgroundCompletion(
@@ -455,8 +456,9 @@ pub(super) fn spawn_request_tasks(
     let control_node = agent.node.clone();
     let control_node_did = agent.node_did().to_owned();
     let control_executions = agent.background_execution_registry.clone();
-    let control_agents =
-        crate::runtime::snapshot::ActiveSnapshotAgentIdentities::boxed(active_snapshot_rx.clone());
+    let control_agents = crate::triggers::runtime_snapshot::ActiveSnapshotAgentIdentities::boxed(
+        active_snapshot_rx.clone(),
+    );
     let control_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::ToolControlReconcile(

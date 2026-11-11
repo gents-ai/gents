@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use crate::documents::PackConfig;
 use crate::pack::archive::PackArchive;
 use crate::store::config_client::{ConfigAccess, SchemaInstallPlan};
-use crate::tools::surface::ResolvedToolSelection;
 
 use super::super::home_install::materialize_asset_pack;
 use super::super::{
@@ -284,7 +283,8 @@ impl PreparedDocumentPackInstall {
             })
         {
             if !shipped.contains(&reference.plugin) {
-                let (namespace, name) = crate::plugin::store::parse_coordinate(&reference.plugin)?;
+                let (namespace, name) =
+                    crate::documents::plugin_coordinate::parse_coordinate(&reference.plugin)?;
                 let record = installed_plugin_record(home, namespace, name)?;
                 plugin_digests.insert(reference.plugin.clone(), record.digest);
             }
@@ -773,7 +773,10 @@ async fn default_host_tool_roots(
                 .as_deref()
                 .is_none_or(|root| root.trim().is_empty())
         });
-        if unset && ResolvedToolSelection::from_document(tools)?.requires_filesystem_root() {
+        if unset && {
+            tools.validate()?;
+            tools.requires_filesystem_root()
+        } {
             rootless.push(index);
         }
     }
@@ -1364,7 +1367,8 @@ fn ensure_plugin_references_resolve_with_inventory(
                     }
                     continue;
                 }
-                let (namespace, name) = crate::plugin::store::parse_coordinate(&reference.plugin)?;
+                let (namespace, name) =
+                    crate::documents::plugin_coordinate::parse_coordinate(&reference.plugin)?;
                 if let Some(inventory) = inventory {
                     let digest = inventory.get(&reference.plugin).with_context(|| {
                         format!("hosted plugin {} is unavailable", reference.plugin)

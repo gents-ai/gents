@@ -9,9 +9,9 @@ use gents_protocol::session_input_edit::SessionInputEdit;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
-pub use crate::runtime::snapshot::ActiveRuntimeSnapshot as SessionCommandAgentSnapshot;
 use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::NodeIdentity;
+pub use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot as SessionCommandAgentSnapshot;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) enum CommandKind {
@@ -213,7 +213,7 @@ pub(crate) async fn run_session_command_reconciler_with_agents(
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
     agents: Option<
-        tokio::sync::watch::Receiver<Arc<crate::runtime::snapshot::ActiveRuntimeSnapshot>>,
+        tokio::sync::watch::Receiver<Arc<crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot>>,
     >,
     cancel: CancellationToken,
 ) -> Result<()> {
@@ -242,7 +242,7 @@ pub(crate) async fn run_session_command_reconciler_observing<S, T>(
     mut changes: S,
     mut ticks: T,
     agents: Option<
-        tokio::sync::watch::Receiver<Arc<crate::runtime::snapshot::ActiveRuntimeSnapshot>>,
+        tokio::sync::watch::Receiver<Arc<crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot>>,
     >,
 ) -> Result<()>
 where

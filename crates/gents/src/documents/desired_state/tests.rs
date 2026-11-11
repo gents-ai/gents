@@ -359,7 +359,14 @@ async fn apply_with_counts(
     access
         .transact_write("test.desired.apply", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
 }
@@ -674,7 +681,14 @@ async fn desired_state_apply_batches_identity_reads_by_collection_and_owner() ->
         "test.desired.apply.batched_reads",
         |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         },
     ))
     .await;
@@ -824,13 +838,27 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
         let preview = access
             .transact_write("test.default.preview", |txn| {
                 let plan = &plan;
-                Box::pin(async move { validate_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    validate_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await;
         let published = access
             .transact_write("test.default.publish", |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await;
         let allowed = case["allowed"].as_bool().expect("modeled verdict");
@@ -887,7 +915,14 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
     assert!(access
         .transact_write("test.preview.replacement", |txn| {
             let plan = &preview_plan;
-            Box::pin(async move { validate_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                validate_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .is_err());
@@ -899,7 +934,14 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
     assert!(access
         .transact_write("test.preview.removal", |txn| {
             let plan = &preview_removal;
-            Box::pin(async move { validate_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                validate_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .is_err());
@@ -908,7 +950,14 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
     access
         .transact_write("test.preview.addition", |txn| {
             let plan = &preview_addition;
-            Box::pin(async move { validate_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                validate_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await?;
     let previewed = node.execute("{InferenceBackend{backend_id}}").await;
@@ -932,7 +981,14 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
     let error = access
         .transact_write("test.reject.removal", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap_err();
@@ -960,7 +1016,14 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
     access
         .transact_write("test.remove.cycle", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await?;
     let remaining = access
@@ -1110,7 +1173,14 @@ async fn matching_expectation_applies_the_plan() -> Result<()> {
     access
         .transact_write("test.cas.apply", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await?;
     assert_ne!(live_digest(&access, owner, "target").await?, None);
@@ -1141,7 +1211,14 @@ async fn drifted_expectation_refuses_and_writes_nothing() -> Result<()> {
     let error = access
         .transact_write("test.cas.stale", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap_err();
@@ -1168,7 +1245,14 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
     access
         .transact_write("test.cas.absent_ok", |txn| {
             let plan = &must_be_absent;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await?;
 
@@ -1177,7 +1261,14 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
     let error = access
         .transact_write("test.cas.absent_stale", |txn| {
             let plan = &wrongly_absent;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap_err();
@@ -1190,7 +1281,14 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
     let error = access
         .transact_write("test.cas.present_stale", |txn| {
             let plan = &wrongly_present;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .unwrap_err();
@@ -1270,7 +1368,14 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
         let outcome = access
             .transact_write("test.cas.lean", |txn| {
                 let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await;
         assert_eq!(outcome.is_ok(), case.applied, "case {}", case.name);
@@ -1312,7 +1417,14 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
             let replay = access
                 .transact_write("test.cas.lean.replay", |txn| {
                     let plan = &plan;
-                    Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+                    Box::pin(async move {
+                        apply_desired_state_plan(
+                            txn,
+                            plan,
+                            &crate::inference::resolved::ProviderProfilePolicy,
+                        )
+                        .await
+                    })
                 })
                 .await;
             assert_eq!(
@@ -1444,7 +1556,14 @@ async fn preview_window(
     access
         .transact_write("test.preview.context_window", |txn| {
             let plan = &plan;
-            Box::pin(async move { validate_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                validate_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
 }
@@ -1559,7 +1678,14 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
     let previewed = access
         .transact_write("test.obligation.preview", |txn| {
             let plan = &plan;
-            Box::pin(async move { validate_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                validate_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .expect_err("preflight refuses the same obligation");
@@ -1713,7 +1839,14 @@ async fn creation_judges_the_count_field_of_the_add_payload() -> Result<()> {
     let previewed = access
         .transact_write("test.obligation.preview.add", |txn| {
             let plan = &plan;
-            Box::pin(async move { validate_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                validate_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .expect_err("preflight judges the same add payload");
@@ -1776,7 +1909,14 @@ async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()
     let previewed = access
         .transact_write("test.obligation.preview.update", |txn| {
             let plan = &plan;
-            Box::pin(async move { validate_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                validate_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .expect_err("preflight judges the same update payload");
@@ -1933,7 +2073,14 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
     let previewed = access
         .transact_write("test.event_source.preview", |txn| {
             let plan = &plan;
-            Box::pin(async move { validate_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                validate_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .expect_err("preflight refuses the same event source");
@@ -2127,7 +2274,14 @@ async fn creation_judges_the_count_field_of_the_event_source_add_payload() -> Re
     let previewed = access
         .transact_write("test.event_source.preview.add", |txn| {
             let plan = &plan;
-            Box::pin(async move { validate_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                validate_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .expect_err("preflight judges the same add payload");
@@ -2195,7 +2349,14 @@ async fn replacement_judges_the_count_field_of_the_event_source_update_payload()
     let previewed = access
         .transact_write("test.event_source.preview.update", |txn| {
             let plan = &plan;
-            Box::pin(async move { validate_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                validate_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .expect_err("preflight judges the same update payload");
@@ -2436,7 +2597,14 @@ async fn publication_applies_native_route_template_fields_the_schema_does_not_de
     access
         .transact_write("test.native_route.preview", |txn| {
             let plan = &plan;
-            Box::pin(async move { validate_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                validate_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await?;
     apply(&access, documents).await?;
@@ -2665,7 +2833,15 @@ async fn projection_binding_publication_follows_modeled_native_ownership() -> Re
     creator_access
         .transact_write("test.projection.create", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
+            })
         })
         .await?;
     let query = "{ ProjectionAcpBinding { _docID policy_id } }";

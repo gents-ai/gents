@@ -10,7 +10,6 @@ pub mod origin;
 pub mod promote;
 pub mod records;
 pub mod recovery;
-pub mod settings;
 pub mod view;
 
 use rapidhash::RapidHashMap;

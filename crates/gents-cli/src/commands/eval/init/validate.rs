@@ -257,7 +257,7 @@ fn split_shape(definition: &EvalDefinition, floors: &Floors) -> BTreeSet<String>
         messages.insert("the draft repeats a case_id".to_owned());
     }
     for case_id in unique {
-        if !gents::pack::is_valid_pack_name(&case_id.replace('-', "_")) {
+        if !gents::documents::pack_spec::is_valid_pack_name(&case_id.replace('-', "_")) {
             messages.insert(format!(
                 "case_id {case_id:?} cannot name a case file: with `-` read as `_`, it must be a lowercase letter followed by lowercase letters, digits and underscores"
             ));

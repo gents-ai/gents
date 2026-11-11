@@ -36,8 +36,9 @@ pub(crate) const LIFECYCLE_DENIED: &str = "denied";
 pub(crate) struct CallbackEngine {
     node: Arc<EmbeddedNode>,
     node_did: String,
-    snapshots:
-        Option<tokio::sync::watch::Receiver<Arc<crate::runtime::snapshot::ActiveRuntimeSnapshot>>>,
+    snapshots: Option<
+        tokio::sync::watch::Receiver<Arc<crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot>>,
+    >,
     ceiling: Option<PathBuf>,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
     subscription_source: Arc<dyn UpdateSubscriptionSource>,
@@ -60,7 +61,9 @@ pub(crate) async fn run_callback_engine(
     node_did: String,
     ceiling: Option<PathBuf>,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
-    snapshots: tokio::sync::watch::Receiver<Arc<crate::runtime::snapshot::ActiveRuntimeSnapshot>>,
+    snapshots: tokio::sync::watch::Receiver<
+        Arc<crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot>,
+    >,
     cancel: CancellationToken,
 ) -> Result<()> {
     let mut engine = CallbackEngine::new(node, node_did.clone(), ceiling.clone(), cancel.clone());
@@ -210,14 +213,14 @@ pub(crate) fn test_agent_access(node: &Arc<defra_node::Node>) -> crate::ConfigAc
 
 #[cfg(test)]
 pub(crate) fn test_snapshot(
-) -> tokio::sync::watch::Receiver<Arc<crate::runtime::snapshot::ActiveRuntimeSnapshot>> {
+) -> tokio::sync::watch::Receiver<Arc<crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot>> {
     let agent = test_agent_identity();
     let mut unavailable_agents = rapidhash::RapidHashMap::default();
-    unavailable_agents.insert(agent.did().to_owned(), crate::runtime::snapshot::UnavailableAgent::new(
+    unavailable_agents.insert(agent.did().to_owned(), crate::triggers::runtime_snapshot::UnavailableAgent::new(
         gents_protocol::node_readiness::AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
         "callback test fixture",
     ).with_watcher_identity(agent.clone()));
-    let snapshot = Arc::new(crate::runtime::snapshot::ActiveRuntimeSnapshot {
+    let snapshot = Arc::new(crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
         generation: 1,
         node: None,
         local_did: crate::request::lifecycle::test_support::PIN_FIXED_DID.into(),
@@ -307,7 +310,15 @@ pub(crate) async fn seed_test_configuration(
     access
         .transact_write("test.callback.seed_configuration", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &crate::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
+            })
         })
         .await
         .unwrap();

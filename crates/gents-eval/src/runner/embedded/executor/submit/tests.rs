@@ -3,7 +3,7 @@ use crate::runner::embedded::executor::install::install_schema;
 use crate::runner::embedded::executor::tests::seed_trigger;
 use crate::runner::embedded::executor::{close, EventSourcesReady};
 use crate::runner::executor::FixtureDocument;
-use gents::RuntimeSnapshotObserver;
+use gents::triggers::snapshot_observer::RuntimeSnapshotObserver;
 use serde_json::json;
 
 #[tokio::test]

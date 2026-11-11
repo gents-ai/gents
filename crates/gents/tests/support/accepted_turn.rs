@@ -450,7 +450,13 @@ pub async fn boot_managed_accepted_turn_with_backend_capacity(
                     add: backend.clone(),
                     update: backend,
                 }])?;
-                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
             })
         })
         .await
@@ -524,7 +530,13 @@ async fn boot_accepted_turn_with_backend_capacity_inner(
                     add: backend.clone(),
                     update: backend,
                 }])?;
-                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+                .map(|_| ())
             })
         },
     )

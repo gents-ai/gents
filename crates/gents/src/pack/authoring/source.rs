@@ -1,6 +1,6 @@
 //! A plugin's source held on the node, turned into the pack directory the
 //! build owner compiles. A `PluginSource` document is one entry file plus its
-//! cases; this writes them where `build_plugin` and `run_plugin_cases`
+//! cases; this writes them where `build_plugin` and `plugin::authoring_test::run_plugin_cases`
 //! already look, through the scaffold owner, so a plugin built from a
 //! document and one built from a directory share the compiler, the cases
 //! runner and the manifest shape.

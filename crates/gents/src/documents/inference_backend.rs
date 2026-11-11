@@ -1,6 +1,9 @@
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
-use crate::documents::inference_defaults::ReasoningEffort;
+use crate::documents::inference_defaults::{
+    ReasoningEffort, ANTHROPIC_API_ENDPOINT, DEFAULT_MAX_CONCURRENT, DEFAULT_MAX_QUEUE_DEPTH,
+};
 use crate::inference::backends::provider::BackendProviderKind;
 use crate::openai_wire::OpenAiWireApi;
 pub use gents_loop::claude_platform::ClaudePlatform;
@@ -18,10 +21,10 @@ pub use read::{list_inference_backends_in_txn, load_inference_backend_in_txn};
 
 /// Whether a provider admits an InferenceProfile on its backend, given the
 /// catalog that backend advertises on this transaction's snapshot.
-/// Configuration publication asks the backend's own provider kind, so the
-/// provider policy stays with the inference owner that implements this.
+/// Configuration publication is handed the inference owner's implementation,
+/// so the provider policy stays with that owner.
 #[async_trait::async_trait]
-pub(crate) trait AdvertisedProfilePolicy {
+pub trait AdvertisedProfilePolicy: Send + Sync {
     async fn validate_advertised_profile(
         &self,
         txn: &crate::store::config_client::ConfigApplyTxn<'_>,
@@ -423,6 +426,145 @@ pub struct InferenceBackend {
     pub tags: Vec<String>,
 }
 
+impl InferenceBackend {
+    pub fn metadata_from_value(value: &serde_json::Value) -> anyhow::Result<Self> {
+        let mut config = value.clone();
+        let object = config
+            .as_object_mut()
+            .context("backend metadata must be an object")?;
+        for field in [
+            "_docID",
+            "_deleted",
+            "updated_at",
+            "catalogs",
+            "catalog_freshness",
+            "probe_status",
+            "last_probe",
+        ] {
+            object.remove(field);
+        }
+        let metadata: crate::documents::InferenceBackendMetadata = serde_json::from_value(config)?;
+        let backend = metadata.into_backend()?;
+        backend.validate()?;
+        Ok(backend)
+    }
+
+    pub fn from_value(value: &serde_json::Value) -> anyhow::Result<Self> {
+        let mut config = value.clone();
+        let object = config
+            .as_object_mut()
+            .context("InferenceBackend must be an object")?;
+        for field in [
+            "_docID",
+            "_deleted",
+            "updated_at",
+            "catalogs",
+            "catalog_freshness",
+            "probe_status",
+            "last_probe",
+        ] {
+            object.remove(field);
+        }
+        let backend: Self =
+            serde_json::from_value(config).context("decoding InferenceBackend configuration")?;
+        backend.validate()?;
+        Ok(backend)
+    }
+
+    pub fn effective_max_concurrent(&self) -> i64 {
+        self.max_concurrent.unwrap_or(DEFAULT_MAX_CONCURRENT)
+    }
+
+    pub fn effective_max_queue_depth(&self) -> i64 {
+        self.max_queue_depth.unwrap_or(DEFAULT_MAX_QUEUE_DEPTH)
+    }
+
+    pub fn validation_violations(&self) -> Vec<String> {
+        let mut violations = Vec::new();
+        for (name, value) in [
+            ("node_did", self.node_did.as_str()),
+            ("backend_id", self.backend_id.as_str()),
+            ("endpoint", self.endpoint.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                violations.push(format!("{name} must not be empty"));
+            }
+        }
+        if self.effective_max_concurrent() <= 0 {
+            violations.push("max_concurrent must be positive".into());
+        }
+        if self.effective_max_queue_depth() < 0 {
+            violations.push("max_queue_depth must not be negative".into());
+        }
+        for (name, value) in [
+            ("connect_timeout_secs", self.connect_timeout_secs),
+            ("discovery_timeout_secs", self.discovery_timeout_secs),
+        ] {
+            if value.is_some_and(|value| value <= 0) {
+                violations.push(format!("{name} must be positive"));
+            }
+        }
+        match &self.auth {
+            BackendAuth::ApiKey { key } if key.trim().is_empty() => {
+                violations.push("API key must not be blank".into())
+            }
+            BackendAuth::Environment { variable } if variable.trim().is_empty() => {
+                violations.push("API key environment variable must not be blank".into())
+            }
+            _ => {}
+        }
+        let node_oauth = self.auth.uses_node_oauth();
+        if (node_oauth && !self.provider_kind.accepts_node_oauth())
+            || (!node_oauth && self.provider_kind.is_node_scoped_oauth())
+            || !self.auth.suits_provider(self.provider_kind)
+        {
+            violations
+                .push("backend auth selection is incompatible with the provider adapter".into());
+        }
+        if let Err(error) =
+            ClaudePlatform::validate(self.provider_kind, self.claude_platform.as_ref())
+        {
+            violations.push(error.to_string());
+        }
+        if self.provider_kind.is_claude_platform()
+            && !(self.endpoint.starts_with("https://") || self.endpoint.starts_with("http://"))
+        {
+            violations.push("endpoint must be an http or https URL".into());
+        }
+        // The rotation policy reads Claude's unified rate-limit headers; no
+        // other provider adapter reports the limit state it chooses by.
+        if matches!(self.auth, BackendAuth::NodeOAuthPool { .. })
+            && self.provider_kind != BackendProviderKind::ClaudeCliSubscription
+        {
+            violations.push(
+                "account pools rotate Claude subscription accounts; select one account for this provider"
+                    .into(),
+            );
+        }
+        let anthropic_endpoint = ANTHROPIC_API_ENDPOINT;
+        if self.provider_kind == BackendProviderKind::AnthropicApiKey
+            && self.endpoint.trim_end_matches('/') != anthropic_endpoint
+        {
+            violations.push(format!(
+                "AnthropicApiKey endpoint must be {anthropic_endpoint}; a different endpoint is not supported"
+            ));
+        }
+        violations
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        let violations = self.validation_violations();
+        anyhow::ensure!(violations.is_empty(), "{}", violations.join("; "));
+        Ok(())
+    }
+
+    pub fn catalog_scope(&self) -> Option<&str> {
+        self.auth
+            .uses_node_oauth()
+            .then_some(self.node_did.as_str())
+    }
+}
+
 /// Backend-owned observation projection, excluded from desired config.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InferenceBackendObservation {
@@ -434,6 +576,48 @@ pub struct InferenceBackendObservation {
     /// Runtime-owned; configuration apply must not overwrite it.
     pub probe_status: Option<String>,
     pub last_probe: Option<String>,
+}
+
+pub const UNKNOWN_PROBE_STATUS: &str = "unknown";
+
+impl InferenceBackendObservation {
+    pub fn display_state(&self, enabled: bool) -> &'static str {
+        derive_display_state(
+            enabled,
+            self.probe_status.as_deref().unwrap_or(UNKNOWN_PROBE_STATUS),
+        )
+    }
+
+    pub fn catalog_for(
+        &self,
+        principal: Option<&str>,
+    ) -> anyhow::Result<Option<&BackendModelCatalog>> {
+        let mut catalogs = self
+            .catalogs
+            .iter()
+            .filter(|catalog| catalog.node_did.as_deref() == principal);
+        let catalog = catalogs.next();
+        anyhow::ensure!(
+            catalogs.next().is_none(),
+            "ambiguous backend catalog authentication scope"
+        );
+        Ok(catalog)
+    }
+}
+
+pub fn derive_display_state(enabled: bool, probe_status: &str) -> &'static str {
+    if !enabled {
+        return "disabled";
+    }
+    match probe_status {
+        "healthy" => "available",
+        "unhealthy" => "unhealthy",
+        "stale" => "stale",
+        "rate_limited" => "rate-limited",
+        "circuit_open" => "circuit-open",
+        "unknown" => "unknown",
+        _ => "unknown",
+    }
 }
 
 fn deserialize_backend_catalogs<'de, D>(
@@ -594,6 +778,48 @@ impl BackendAuth {
         match self {
             Self::NodeOAuth { account_ref } => account_ref.as_deref(),
             _ => None,
+        }
+    }
+
+    /// The key a health probe may send: cloud credentials sign requests rather than
+    /// travel as a key, so a probe has none to resolve for them.
+    pub fn probe_key(&self) -> anyhow::Result<Option<String>> {
+        match self {
+            Self::AwsCredentials { .. } | Self::GoogleCredentials { .. } => Ok(None),
+            other => other.resolve_api_key(),
+        }
+    }
+
+    pub fn resolve_api_key(&self) -> anyhow::Result<Option<String>> {
+        match self {
+            Self::Unauthenticated => Ok(None),
+            Self::ApiKey { key } => {
+                anyhow::ensure!(!key.trim().is_empty(), "API key must not be blank");
+                Ok(Some(key.clone()))
+            }
+            Self::Environment { variable } => {
+                anyhow::ensure!(
+                    !variable.trim().is_empty(),
+                    "API key environment variable must not be blank"
+                );
+                let key = std::env::var(variable).with_context(|| {
+                    format!("API key environment variable {variable:?} is unavailable")
+                })?;
+                anyhow::ensure!(
+                    !key.trim().is_empty(),
+                    "API key environment variable {variable:?} is blank"
+                );
+                Ok(Some(key))
+            }
+            Self::NodeOAuth { .. } | Self::NodeOAuthPool { .. } => {
+                anyhow::bail!("node OAuth requires the invoking node's OAuthCredential")
+            }
+            Self::Credential { .. } => {
+                anyhow::bail!("backend credential requires runtime resolution")
+            }
+            // AWS credentials sign each request and Google credentials mint
+            // tokens; neither is a key to send.
+            Self::AwsCredentials { .. } | Self::GoogleCredentials { .. } => Ok(None),
         }
     }
 }

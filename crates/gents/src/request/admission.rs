@@ -326,7 +326,7 @@ pub(crate) async fn terminalize_pending_request_rejection(
                     .context("pending rejection mutation omitted its result")?;
                 anyhow::ensure!(rows.len() <= 1, "pending rejection updated multiple requests");
                 for row in rows {
-                    crate::tools::workspace::release_terminal_writer_binding(txn, row).await?;
+                    crate::request::workspace_binding::release_terminal_writer_binding(txn, row).await?;
                     if let Some(request_id) = row["request_id"].as_str() {
                         crate::triggers::engine::durable::publish_request_outcome(
                             txn, owner, request_id, RequestLifecycleState::Failed, reason, now,
@@ -2070,7 +2070,12 @@ mod tests {
                             update: record,
                         },
                     ])?;
-                    crate::documents::apply_desired_state_plan(txn, &plan).await
+                    crate::documents::apply_desired_state_plan(
+                        txn,
+                        &plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
                 })
             })
             .await

@@ -189,7 +189,14 @@ pub async fn managed_agent_fixture(db: &TestDb) -> ManagedAgentFixture {
     access
         .transact_write("test.managed_agent.node", |txn| {
             let plan = &node_plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .expect("install test Node as user");
@@ -318,7 +325,14 @@ pub async fn install_managed_agent(
     access
         .transact_write("test.managed_agent", |txn| {
             let plan = &agent_plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .expect("install managed test Agent as user");
@@ -429,7 +443,14 @@ async fn install_runtime_node(db: &TestDb) {
     db.client_access(&user)
         .transact_write("test.p2p.runtime_node", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
         })
         .await
         .expect("install runtime Node as its User");

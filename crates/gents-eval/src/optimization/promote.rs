@@ -223,7 +223,12 @@ pub async fn promote(
                     gate.1.notified().await;
                 }
                 let (plan, promotion) = promotion_plan(&job.origin, &live, text)?;
-                apply_desired_state_plan(txn, &plan).await?;
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await?;
                 let written =
                     target_digest(&capture_closure(txn, &job.owner).await?, &job.origin.target)?;
                 anyhow::ensure!(
@@ -340,7 +345,12 @@ pub async fn revert(access: &ConfigAccess, owner: &str, job_id: &str, digest: &s
                     digest: promoted_digest.clone(),
                 }];
                 let plan = target_plan(&restored, target, &expectation)?;
-                apply_desired_state_plan(txn, &plan).await?;
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await?;
                 let entry = JournalEntry::Reverted { by: (*by).clone() };
                 append_in_txn(txn, job, &entry).await?;
                 Ok(())
@@ -616,7 +626,15 @@ mod tests {
     async fn apply(access: &ConfigAccess, plan: &DesiredStateApplyPlan) -> Result<()> {
         access
             .transact_write("test.apply_plan", |txn| {
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+                Box::pin(async move {
+                    apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &gents::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                    .map(|_| ())
+                })
             })
             .await
     }
@@ -912,7 +930,12 @@ mod tests {
                 Box::pin(async move {
                     let live = capture_closure(txn, &origin.owner).await?;
                     let (plan, _) = promotion_plan(origin, &live, text)?;
-                    apply_desired_state_plan(txn, &plan).await?;
+                    apply_desired_state_plan(
+                        txn,
+                        &plan,
+                        &gents::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await?;
                     Err::<(), anyhow::Error>(anyhow::anyhow!("target probe rollback"))
                 })
             })

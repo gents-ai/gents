@@ -33,6 +33,7 @@ mod provenance;
 mod publication_contract_tests;
 pub mod registry;
 pub mod resolve;
+pub mod rooted_paths;
 pub mod store;
 mod ux;
 pub mod wiring;
@@ -162,7 +163,7 @@ pub fn inference_slot_reference(name: &str) -> String {
 }
 
 fn default_namespace() -> String {
-    crate::pack::archive::DEFAULT_NAMESPACE.to_owned()
+    crate::documents::pack_spec::DEFAULT_NAMESPACE.to_owned()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
@@ -207,7 +208,7 @@ impl PackManifest {
             };
             anyhow::bail!(
                 "graph packs are retired; run `gents config pack remove {}/{}` and install the 2.x version",
-                text("namespace", crate::pack::archive::DEFAULT_NAMESPACE),
+                text("namespace", crate::documents::pack_spec::DEFAULT_NAMESPACE),
                 text("name", "<name>")
             );
         }
@@ -228,10 +229,6 @@ pub struct PackageExternalDependency {
 #[serde(deny_unknown_fields)]
 pub struct PackInstallOptions {
     pub node_did: String,
-}
-
-pub fn is_valid_pack_name(name: &str) -> bool {
-    asset_path::is_snake_case_name(name)
 }
 
 pub fn is_distributable_asset_path(path: &str) -> bool {

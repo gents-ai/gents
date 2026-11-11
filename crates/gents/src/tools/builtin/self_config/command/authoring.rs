@@ -6,6 +6,7 @@ use crate::pack::authoring::{
     read_manifest, scaffold, selectable_kind, source as source_pack, verify_pack_file, CheckReport,
     ExportSelection, Kind, PackAddition, PackEdit, ScaffoldInput, Template, SELECTABLE_KINDS,
 };
+use crate::session::output_render::ordered;
 
 mod plugin_source;
 

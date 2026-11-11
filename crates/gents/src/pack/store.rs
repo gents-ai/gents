@@ -4,10 +4,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{ensure, Context, Result};
 
+use crate::documents::pack_spec::{is_valid_index_version, is_valid_pack_name};
 use crate::pack::archive::{
     digest_hex, peek_header, read_pack, Bounds, PackArchive, PackHeader, EXTENSION,
 };
-use crate::pack::is_valid_pack_name;
 
 const NAME_INDEX_DIR_NAME: &str = "by-name";
 
@@ -66,15 +66,6 @@ impl VersionKey {
             .map(VersionKey::Semver)
             .unwrap_or_else(|_| VersionKey::Other(version.to_owned()))
     }
-}
-
-pub(crate) fn is_valid_index_version(version: &str) -> bool {
-    version != "."
-        && version != ".."
-        && !version.is_empty()
-        && version
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'+' | b'-'))
 }
 
 fn encode_version(version: &str) -> String {

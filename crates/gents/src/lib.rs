@@ -284,7 +284,14 @@ pub mod test_support {
         access
             .transact_write("test.signed_node", |txn| {
                 let plan = &plan;
-                Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    crate::documents::apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await
             .unwrap();
@@ -398,7 +405,12 @@ pub mod test_support {
                             update: node,
                         },
                     ])?;
-                    crate::documents::apply_desired_state_plan(txn, &plan).await
+                    crate::documents::apply_desired_state_plan(
+                        txn,
+                        &plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
                 })
             })
             .await
@@ -433,7 +445,12 @@ pub mod test_support {
                             update: node,
                         },
                     ])?;
-                    crate::documents::apply_desired_state_plan(txn, &plan).await
+                    crate::documents::apply_desired_state_plan(
+                        txn,
+                        &plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
                 })
             })
             .await
@@ -551,7 +568,14 @@ pub mod test_support {
         access
             .transact_write("test.install_agent", |txn| {
                 let plan = &plan;
-                Box::pin(async move { crate::documents::apply_desired_state_plan(txn, plan).await })
+                Box::pin(async move {
+                    crate::documents::apply_desired_state_plan(
+                        txn,
+                        plan,
+                        &crate::inference::resolved::ProviderProfilePolicy,
+                    )
+                    .await
+                })
             })
             .await
             .unwrap();
@@ -754,7 +778,7 @@ pub use inference::backends::provider::{
 };
 pub use inference::backends::registry::{
     record_discovered_catalog_on, record_model_catalog_in_txn, InferenceBackend,
-    HEALTHY_PROBE_STATUS, UNKNOWN_PROBE_STATUS,
+    HEALTHY_PROBE_STATUS,
 };
 pub use inference::compaction::CompactionStrategy;
 pub use inference::resolved::{
@@ -799,7 +823,7 @@ pub use request::streaming::{DefraStreamWriter, StreamWriter, MAX_LIVE_REASONING
 pub use request::watcher::{DefraWatcher, Watcher};
 pub use runtime::agent::{
     AgentBuilder, DocumentRuntimeOptions, Gents, GentsBuilder, ProcessLifecycleObserver,
-    ProcessLifecycleState, RuntimeSnapshotObserver,
+    ProcessLifecycleState,
 };
 pub use runtime::oneshot::{
     run_openai_oneshot_admitted, run_openai_oneshot_with_tools_admitted, OneshotRunResult,
@@ -814,7 +838,6 @@ pub use runtime::periodic_recovery::{
     periodic_recovery_sweep_metadata, run_periodic_recovery_sweeps_with_identities,
     PeriodicRecoverySweepMetadata, PeriodicRecoverySweepOutcome, PeriodicRecoverySweepRun,
 };
-pub use runtime::snapshot::{ActiveRuntimeSnapshot, DispatcherMap};
 pub use session::load_history;
 pub use session::{ForkError, ForkOutcome, ForkParams};
 pub use store::collection::{Collection, DESIRED_STATE_APPLY_ORDER};
@@ -863,6 +886,7 @@ pub use tools::surface::{
 pub use triggers::engine::event_source::EventSource;
 pub use triggers::engine::goal_source::GoalSource;
 pub use triggers::engine::{run_trigger_engine, FireIntent, FireResult, TriggerSource};
+pub use triggers::runtime_snapshot::{ActiveRuntimeSnapshot, DispatcherMap};
 pub use truncation::{TruncationLimits, TruncationMode};
 pub use turn::prompt::{LayeredPromptBuilder, PromptBuilder};
 

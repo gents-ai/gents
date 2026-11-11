@@ -2,11 +2,10 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use gents_loop::tool_effects::{ToolEffectDispatcher, ToolEffectError};
-use gents_protocol::plugin_tool_call_limits::MAX_EFFECTS;
+use gents_protocol::plugin_tool_call_limits::{MAX_EFFECTS, MAX_PAYLOAD_BYTES};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-use crate::session::plugin_effect_rows::MAX_PAYLOAD_BYTES;
 use crate::tools::call::lifecycle::ToolOutcome;
 
 pub(super) fn available(granted: bool, live_dispatcher: bool) -> bool {

@@ -468,7 +468,12 @@ async fn set_backend_max_concurrent(
                     add: backend.clone(),
                     update: backend,
                 }])?;
-                apply_desired_state_plan(txn, &plan).await
+                apply_desired_state_plan(
+                    txn,
+                    &plan,
+                    &gents::inference::resolved::ProviderProfilePolicy,
+                )
+                .await
             })
         })
         .await

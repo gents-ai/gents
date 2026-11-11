@@ -17,6 +17,7 @@ use crate::documents::{BashMode, FileToolMode};
 use crate::inference::admission::BackendAdmissionConfig;
 #[cfg(test)]
 use crate::inference::backends::provider::BackendProviderKind;
+use crate::inference::backends::registry::backend_fields;
 use crate::inference::backends::registry::lookup_backend;
 use crate::inference::compaction::CompactionStrategy;
 use crate::inference::resolved::{
@@ -294,7 +295,7 @@ impl GentsBuilder {
             operator_tool_root: self.tool_ceiling.root().map(std::path::PathBuf::from),
             plugins: Arc::new(crate::runtime::agent::plugin_executor(
                 self.plugin_home,
-                crate::plugin::model_calls::AccessModels(
+                crate::plugin::model_binding::AccessModels(
                     crate::store::config_client::ConfigAccess::local(plugin_node),
                 ),
             )),
@@ -612,7 +613,7 @@ impl PendingAgent {
         }
 
         let agent_name = self.name.clone();
-        let backend_fields = backend.backend_fields();
+        let backend_fields = backend_fields(&backend);
         let tool_ceiling = tool_ceiling.clone();
 
         Ok(Box::new(move |principal| {

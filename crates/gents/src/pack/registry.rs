@@ -26,7 +26,7 @@ pub enum RegistryError {
 
 pub fn split_pack_coordinate(name: &str) -> (&str, &str) {
     name.split_once('/')
-        .unwrap_or((crate::pack::archive::DEFAULT_NAMESPACE, name))
+        .unwrap_or((crate::documents::pack_spec::DEFAULT_NAMESPACE, name))
 }
 
 pub fn resolve_registry_url(explicit: Option<&str>) -> String {

@@ -274,7 +274,7 @@ async fn finish_completed(ctx: FinishCtx<'_>, lifecycle: &mut ToolCallLifecycle,
         }
     };
     let notification_result = if won_terminal_compare {
-        match crate::tools::background::status::observe_canonical_tool_output_with_access(
+        match crate::session::tool_output_rows::observe_canonical_tool_output_with_access(
             &crate::ConfigAccess::local_as(node.clone(), lifecycle.actor().clone()),
             execution_tool_doc_id,
             execution_request_doc_id,
@@ -370,7 +370,7 @@ async fn finish_failed(
         }
     };
     let notification_result = if won_terminal_compare {
-        match crate::tools::background::status::observe_canonical_tool_output_with_access(
+        match crate::session::tool_output_rows::observe_canonical_tool_output_with_access(
             &crate::ConfigAccess::local_as(node.clone(), lifecycle.actor().clone()),
             execution_tool_doc_id,
             execution_request_doc_id,
