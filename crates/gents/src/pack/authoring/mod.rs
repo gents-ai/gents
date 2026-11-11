@@ -9,8 +9,6 @@ pub mod source;
 pub mod template;
 pub mod test;
 
-use crate::tools::native::ToolContext;
-
 pub use build::{
     build_all, build_pack, build_plugin, built_pack_path, pack_built, plugin_entry,
     plugins_with_source, BuildReport, PluginCompiler, PluginReport, BUILDER_ID,

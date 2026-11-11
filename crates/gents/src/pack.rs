@@ -33,6 +33,7 @@ mod provenance;
 mod publication_contract_tests;
 pub mod registry;
 pub mod resolve;
+pub mod rooted_paths;
 pub mod store;
 mod ux;
 pub mod wiring;

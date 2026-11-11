@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 
+use crate::pack::rooted_paths::{ensure_within, normalize_for_creation};
 use crate::tools::call::lifecycle::FailureClass;
 use crate::tools::native::CommandPolicyDenial;
 
@@ -165,22 +166,7 @@ impl ToolContext {
     }
 
     fn ensure_allowed(&self, path: PathBuf) -> Result<PathBuf> {
-        if crate::plugin::allowed::is_protected(&path) {
-            bail!(
-                "{} holds the operator's plugin access settings; tools cannot use it",
-                path.display()
-            );
-        }
-        let root = self.effective_root();
-        if path.starts_with(&root) {
-            Ok(path)
-        } else {
-            bail!(
-                "path is outside the allowed tool root {}: {}",
-                root.display(),
-                path.display()
-            );
-        }
+        ensure_within(&self.effective_root(), path)
     }
 
     fn effective_root(&self) -> PathBuf {
@@ -220,39 +206,6 @@ fn resolve_default_read_root(
     current_dir
         .or(home_dir)
         .ok_or_else(|| anyhow!("unable to determine a tool root directory"))
-}
-
-fn normalize_for_creation(path: &Path) -> Result<PathBuf> {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::ParentDir => {
-                normalized.pop();
-            }
-            std::path::Component::CurDir => {}
-            _ => normalized.push(component.as_os_str()),
-        }
-    }
-    // Canonicalize the nearest filesystem entry, then append the missing
-    // suffix. `symlink_metadata` deliberately does not follow the final link:
-    // a dangling symlink must fail rather than resolve to a creatable leaf.
-    let mut ancestor = normalized.as_path();
-    let mut suffix = Vec::new();
-    while std::fs::symlink_metadata(ancestor).is_err() {
-        let name = ancestor
-            .file_name()
-            .ok_or_else(|| anyhow!("path has no existing ancestor: {}", path.display()))?;
-        suffix.push(name.to_os_string());
-        ancestor = ancestor
-            .parent()
-            .ok_or_else(|| anyhow!("path has no existing ancestor: {}", path.display()))?;
-    }
-    let mut resolved = std::fs::canonicalize(ancestor)
-        .with_context(|| format!("canonicalizing path ancestor {}", ancestor.display()))?;
-    for component in suffix.iter().rev() {
-        resolved.push(component);
-    }
-    Ok(resolved)
 }
 
 fn resolve_base_dir(root: &Path, base: Option<PathBuf>) -> Result<PathBuf> {
