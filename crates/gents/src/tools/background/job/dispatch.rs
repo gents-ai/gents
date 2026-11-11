@@ -35,7 +35,7 @@ use super::records::{
     read_step_state, write_pin_in_txn, write_progress_in_txn, write_step_state_in_txn,
     HostProgressFacts,
 };
-use super::settings::effective_ceiling;
+use gents_protocol::job_settings::effective_ceiling;
 use super::JobBinding;
 use crate::plugin::data::StampContext;
 use crate::plugin::data::{DataCaller, PluginData};

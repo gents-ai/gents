@@ -29,7 +29,7 @@ use crate::tools::background::job::driver::JobRuntime;
 use crate::tools::background::job::effects::scratch_name;
 use crate::tools::background::job::keys::decode_job_retry_key;
 use crate::tools::background::job::records::{read_pin, read_progress, read_step_state};
-use crate::tools::background::job::settings::effective_ceiling;
+use gents_protocol::job_settings::effective_ceiling;
 use crate::tools::background::job::JobBinding;
 use crate::tools::background::status::caused_request_terminals_in_txn;
 use crate::tools::call::lifecycle::{
@@ -2082,7 +2082,7 @@ pub(crate) mod tests {
         };
         assert_eq!(
             super::super::admit::meet(
-                &super::super::settings::effective_ceiling(Some(&live)),
+                &gents_protocol::job_settings::effective_ceiling(Some(&live)),
                 &pin.ceiling_at_pin
             )
             .targets,

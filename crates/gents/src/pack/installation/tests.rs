@@ -2278,7 +2278,7 @@ fn engine_admission(job: serde_json::Value, via: crate::pack::InstalledVia) -> R
     metadata.dependencies = vec!["acme/base".into()];
     let own = shipping(&["wf-run"]);
     let base = shipping(&["wf-read-only"]);
-    crate::tools::background::job::settings::pack_job_block_admissible(
+    crate::pack::job_admission::pack_job_block_admissible(
         &job_tools(job),
         &metadata,
         "acme/engine",

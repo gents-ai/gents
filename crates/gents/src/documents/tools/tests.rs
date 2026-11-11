@@ -310,7 +310,13 @@ mod wire {
             ..JobPolicy::default()
         };
         let (policy, job_targets, caller_targets) =
-            settings::wire_targets_from("acme/content", &pack_targets, policy, &[], &[]);
+            gents_protocol::job_settings::wire_targets_from(
+                "acme/content",
+                &pack_targets,
+                policy,
+                &[],
+                &[],
+            );
         let block = block(&tools).unwrap();
         assert_eq!(block.policy, policy);
         assert_eq!(block.agent_targets, job_targets);

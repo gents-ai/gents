@@ -904,7 +904,7 @@ async fn stepper_wat(wat: &str) -> Stepper {
         source_digest: "sha256:script".to_owned(),
         adopted_at: u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap(),
         agent_budget: 4,
-        ceiling_at_pin: crate::tools::background::job::settings::effective_ceiling(Some(&settings)),
+        ceiling_at_pin: gents_protocol::job_settings::effective_ceiling(Some(&settings)),
         ..job.pin(&row, None)
     };
     job.write_pin(&row, &pin).await;

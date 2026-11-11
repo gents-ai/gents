@@ -1112,7 +1112,7 @@ async fn prepare_document_pack_install_inner(
         )
         .collect();
     for tools in &config.tools {
-        crate::tools::background::job::settings::pack_job_block_admissible(
+        crate::pack::job_admission::pack_job_block_admissible(
             tools,
             &manifest.metadata,
             &coordinate,

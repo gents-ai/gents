@@ -2,10 +2,10 @@ use std::path::Path;
 
 use anyhow::Result;
 use gents_protocol::job::{JobPin, JobStepInput, JobStepOutput};
+use gents_protocol::job_settings::effective_ceiling;
 
 use super::super::admit::{HostFacts, StepContext};
 use super::super::origin::engine_guard;
-use super::super::settings::effective_ceiling;
 use super::JobRuntime;
 use crate::plugin::store::{parse_coordinate, read_published_record, InstalledPlugin};
 use crate::store::config_client::ConfigApplyTxn;

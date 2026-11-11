@@ -17,6 +17,7 @@ pub mod home_install;
 mod inference;
 mod installation;
 pub mod interpolate;
+pub mod job_admission;
 mod loader;
 pub mod local;
 mod manifest_validation;

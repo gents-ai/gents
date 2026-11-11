@@ -19,6 +19,7 @@ pub mod goal_names;
 pub mod goal_status;
 pub mod graphql;
 pub mod job;
+pub mod job_settings;
 pub mod mailbox_question;
 pub mod message;
 pub mod network_token;

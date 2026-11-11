@@ -33,11 +33,9 @@ use gents::tools::background::job::control::{self, KillAction, KillCause, KillOb
 use gents::tools::background::job::dispatch::{
     host_pin, split_address, unique_handle, Delivery, ToolCallView,
 };
+use gents::pack::job_admission::job_block_admissible;
 use gents::tools::background::job::driver;
 use gents::tools::background::job::origin::call_origin;
-use gents::tools::background::job::settings::{
-    job_block_admissible, policy_valid, wire_targets_from,
-};
 use gents::tools::background::status::ProcessControlScope;
 use gents::tools::call::lifecycle::{ToolCallState, ToolRowKind};
 use gents::tools::surface::EndpointScope;
@@ -53,6 +51,7 @@ use gents_protocol::job::{
     JobState, JobStepInput, JobStepOutput, JobSuspend, JobView, PluginDataDeclaration,
     PluginJobDeclaration, PluginJobSettings, RoundResult, StampedField,
 };
+use gents_protocol::job_settings::{policy_valid, wire_targets_from};
 use gents_protocol::tool_call::AwaitMode;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -1049,7 +1048,7 @@ fn home_record(r: &LeanPluginJobRecord) -> Option<Option<InstalledVia>> {
 /// `packJobBlockAdmissible`, `Policy.valid` and `wireTargetsFrom` through the
 /// pure cores `origin::call_origin`,
 /// `home_install::{recorded_provenance, record_after_install_via}` and
-/// `settings::{job_block_admissible, policy_valid, wire_targets_from}`.
+/// `pack::job_admission::job_block_admissible` and `job_settings::{policy_valid, wire_targets_from}`.
 #[test]
 fn generated_plugin_job_authority_cases_drive_origin_and_provenance() {
     let cases = lean_plugin_job_authority_cases();

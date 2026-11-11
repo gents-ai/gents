@@ -1154,7 +1154,7 @@ pub fn wire_plugin(
             };
             for (pack, pack_targets, via) in targets_from {
                 (block.policy, block.agent_targets, agents.target_ids) =
-                    settings::wire_targets_from(
+                    gents_protocol::job_settings::wire_targets_from(
                         pack,
                         pack_targets,
                         block.policy,
