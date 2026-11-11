@@ -451,3 +451,22 @@ async fn usage_capture_requires_no_persistent_schema() {
         .expect("usage recorded without schemas");
     assert_eq!(stored.report.windows[0].used_pct, 12.0);
 }
+
+#[test]
+fn provider_rejection_errors_carry_no_request_headers() {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::AUTHORIZATION,
+        "Bearer sk-ant-api03-HEADERSECRET".parse().unwrap(),
+    );
+    headers.insert("x-api-key", "sk-proj-HEADERSECRET".parse().unwrap());
+    headers.insert("retry-after", "30".parse().unwrap());
+    let error = rejected_response_error(
+        reqwest::StatusCode::TOO_MANY_REQUESTS,
+        &headers,
+        r#"{"error":{"type":"rate_limit_error"}}"#,
+    );
+    let rendered = error.to_string();
+    assert!(!rendered.contains("HEADERSECRET"), "{rendered}");
+    assert!(rendered.contains("rate_limit_error"));
+}
