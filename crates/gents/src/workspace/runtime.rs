@@ -8,7 +8,7 @@ use crate::request::lifecycle::WorkspaceLineage;
 use crate::store::graphql::escape_graphql_string;
 #[cfg(test)]
 use crate::store::graphql::graphql_with_transaction_retry;
-use crate::tools::native::WorkspaceAuthority;
+use gents_loop::tool_policy::WorkspaceAuthority;
 use gents_protocol::row::AgentRequest;
 
 use super::action_plan::{
@@ -126,7 +126,7 @@ pub(crate) fn apply_workspace_lineage_stamp(
     );
     lineage.workspace_owner_node_did = Some(workspace.owner_node_did.clone());
     let state =
-        crate::tools::native::normalize_workspace_lifecycle_state(&workspace.lifecycle_state);
+        gents_loop::tool_policy::normalize_workspace_lifecycle_state(&workspace.lifecycle_state);
     let authority = lineage
         .workspace_authority
         .as_deref()
@@ -385,7 +385,7 @@ pub(super) async fn claim_workspace_cleanup(
                 let state = row["lifecycle_state"]
                     .as_str()
                     .context("cleanup workspace state missing")?;
-                let normalized = crate::tools::native::normalize_workspace_lifecycle_state(state);
+                let normalized = gents_loop::tool_policy::normalize_workspace_lifecycle_state(state);
                 anyhow::ensure!(
                     matches!(
                         normalized,
@@ -528,7 +528,7 @@ fn writer_already_sealed(
     request_id: &str,
     request_doc_id: &str,
 ) -> bool {
-    crate::tools::native::normalize_workspace_lifecycle_state(lifecycle_state)
+    gents_loop::tool_policy::normalize_workspace_lifecycle_state(lifecycle_state)
         == Some(LIFECYCLE_SEALED)
         && (receipts.iter().any(|receipt| {
             receipt.kind == RECEIPT_KIND_WRITER

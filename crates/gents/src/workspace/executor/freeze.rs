@@ -6,7 +6,7 @@ use super::super::documents::{LIFECYCLE_READY, LIFECYCLE_SEALED};
 use super::super::journal::{self, ActionJournalEntry, ActionJournalState};
 use super::seal::{apply_seal_snapshot, persist_sealed_workspace_documents};
 use super::{workspace_host_path, CreateWorkspaceOutcome, HostExecuteError, HostExecutorContext};
-use crate::tools::native::normalize_workspace_lifecycle_state;
+use gents_loop::tool_policy::normalize_workspace_lifecycle_state;
 
 pub fn execute_freeze_workspace_base_plan(
     plan: &ActionPlan,

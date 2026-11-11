@@ -19,7 +19,7 @@ use super::{
     workspace_host_path, CreateWorkspaceOutcome, HostExecuteError, HostExecutorContext,
     LogicalWorkspaceIdentity,
 };
-use crate::tools::native::normalize_workspace_lifecycle_state;
+use gents_loop::tool_policy::normalize_workspace_lifecycle_state;
 
 #[expect(
     clippy::too_many_arguments,

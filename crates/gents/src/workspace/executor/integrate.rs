@@ -16,7 +16,7 @@ use super::super::documents::{
 use super::super::journal::{self, ActionJournalEntry, ActionJournalState};
 use super::seal::{bound_diff_artifact, changed_files_json, validate_receipt_binding};
 use super::{sanitize_fs, workspace_host_path, HostExecuteError, HostExecutorContext};
-use crate::tools::native::normalize_workspace_lifecycle_state;
+use gents_loop::tool_policy::normalize_workspace_lifecycle_state;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntegrateWorkspaceOutcome {

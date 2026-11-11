@@ -3,7 +3,7 @@ use anyhow::{bail, Result};
 use super::documents::{
     binding_id_for, WorkspaceBindingDoc, BINDING_ACTIVE, BINDING_RELEASED, LIFECYCLE_SEALED,
 };
-use crate::tools::native::{normalize_workspace_lifecycle_state, WorkspaceAuthority};
+use gents_loop::tool_policy::{normalize_workspace_lifecycle_state, WorkspaceAuthority};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AdmitBinding {

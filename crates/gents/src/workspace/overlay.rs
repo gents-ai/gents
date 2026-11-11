@@ -11,7 +11,8 @@ use crate::documents::FileToolMode;
 use crate::store::graphql::escape_graphql_string;
 #[cfg(test)]
 use crate::store::graphql::{first_row, graphql_with_transaction_retry, rows};
-use crate::tools::native::{workspace_write_sandbox_enforced, WorkspaceAuthority};
+use crate::tools::native::workspace_write_sandbox_enforced;
+use gents_loop::tool_policy::WorkspaceAuthority;
 use crate::tools::surface::resolve_configured_tool_root;
 use gents_protocol::row::AgentRequest;
 
@@ -397,7 +398,7 @@ async fn load_request_workspace_overlay(
     .ok_or_else(|| anyhow!("workspace placement for {workspace_id} not found on this node"))?;
     let request_cwd = request_workspace_cwd(request);
     let sealed =
-        crate::tools::native::normalize_workspace_lifecycle_state(&workspace.lifecycle_state)
+        gents_loop::tool_policy::normalize_workspace_lifecycle_state(&workspace.lifecycle_state)
             == Some("sealed");
     // Reject before binding or provider dispatch: a missing grant must never
     // let an artifact-selected request fall through legacy CLI/LSP paths.
@@ -469,7 +470,7 @@ pub(crate) fn bind_workspace_overlay(
         );
     }
 
-    if crate::tools::native::normalize_workspace_lifecycle_state(&workspace.lifecycle_state)
+    if gents_loop::tool_policy::normalize_workspace_lifecycle_state(&workspace.lifecycle_state)
         == Some("sealed")
     {
         let workspace_hash = optional_id(workspace.seal_hash.as_deref()).ok_or_else(|| {

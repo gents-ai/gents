@@ -385,8 +385,8 @@ fn validate_launch_rows(owner: &ArtifactOwner, response: &Value, now: DateTime<U
         || request["workspace_seal_hash"].as_str() != Some(&owner.seal_hash)
         || request["workspace_authority"]
             .as_str()
-            .and_then(|s| crate::tools::native::WorkspaceAuthority::parse(s).ok())
-            != Some(crate::tools::native::WorkspaceAuthority::ReadOnly)
+            .and_then(|s| gents_loop::tool_policy::WorkspaceAuthority::parse(s).ok())
+            != Some(gents_loop::tool_policy::WorkspaceAuthority::ReadOnly)
     {
         bail!("artifact execution owner is no longer current and live");
     }
@@ -412,8 +412,8 @@ fn validate_launch_rows(owner: &ArtifactOwner, response: &Value, now: DateTime<U
                 && row["lifecycle_state"].as_str() == Some(super::documents::BINDING_ACTIVE)
                 && row["authority"]
                     .as_str()
-                    .and_then(|s| crate::tools::native::WorkspaceAuthority::parse(s).ok())
-                    == Some(crate::tools::native::WorkspaceAuthority::ReadOnly)
+                    .and_then(|s| gents_loop::tool_policy::WorkspaceAuthority::parse(s).ok())
+                    == Some(gents_loop::tool_policy::WorkspaceAuthority::ReadOnly)
         })
         .count();
     if valid != 1 {
@@ -422,7 +422,7 @@ fn validate_launch_rows(owner: &ArtifactOwner, response: &Value, now: DateTime<U
     let workspace = one("IsolatedWorkspace")?;
     if workspace["owner_node_did"].as_str() != Some(&owner.owner_node_did)
         || workspace["seal_hash"].as_str() != Some(&owner.seal_hash)
-        || crate::tools::native::normalize_workspace_lifecycle_state(
+        || gents_loop::tool_policy::normalize_workspace_lifecycle_state(
             workspace["lifecycle_state"].as_str().unwrap_or(""),
         ) != Some("sealed")
     {

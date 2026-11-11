@@ -37,8 +37,8 @@ pub(crate) async fn flush_workspace_docs(
                 let response = txn.run(&query).await?;
                 let rows = response["data"]["IsolatedWorkspace"].as_array().context("workspace state query omitted rows")?;
                 let [row] = rows.as_slice() else { anyhow::bail!("workspace state unavailable or ambiguous") };
-                let previous = row["lifecycle_state"].as_str().and_then(crate::tools::native::normalize_workspace_lifecycle_state).context("workspace lifecycle state invalid")?;
-                let desired = crate::tools::native::normalize_workspace_lifecycle_state(&workspace.lifecycle_state).context("workspace publication state invalid")?;
+                let previous = row["lifecycle_state"].as_str().and_then(gents_loop::tool_policy::normalize_workspace_lifecycle_state).context("workspace lifecycle state invalid")?;
+                let desired = gents_loop::tool_policy::normalize_workspace_lifecycle_state(&workspace.lifecycle_state).context("workspace publication state invalid")?;
                 anyhow::ensure!(previous == desired || (previous == "provisioning" && matches!(desired, "ready" | "provisionFailed")), "stale callback workspace publication cannot replace an advanced lifecycle");
                 if previous == desired {
                     anyhow::ensure!(row["seal_hash"].as_str() == workspace.seal_hash.as_deref(), "workspace publication seal differs from the retained state");
@@ -241,7 +241,7 @@ pub(super) async fn flush_frozen_workspace(
                 };
                 let state = row["lifecycle_state"]
                     .as_str()
-                    .and_then(crate::tools::native::normalize_workspace_lifecycle_state)
+                    .and_then(gents_loop::tool_policy::normalize_workspace_lifecycle_state)
                     .context("workspace state invalid")?;
                 if state == "sealed" {
                     anyhow::ensure!(

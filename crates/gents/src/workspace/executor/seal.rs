@@ -11,7 +11,7 @@ use super::super::documents::{
 };
 use super::super::journal::{self, ActionJournalEntry, ActionJournalState};
 use super::{HostExecuteError, HostExecutorContext};
-use crate::tools::native::normalize_workspace_lifecycle_state;
+use gents_loop::tool_policy::normalize_workspace_lifecycle_state;
 
 const DIFF_ARTIFACT_LIMIT: usize = 64 * 1024;
 
