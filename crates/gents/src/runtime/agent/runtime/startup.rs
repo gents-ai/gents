@@ -425,7 +425,9 @@ async fn run_agent_owned(
         .map_err(|_| anyhow::anyhow!("runtime snapshot binding unavailable"))? =
         Some(active_snapshot_rx.clone());
     runtime.job_driver.runtime().bind_snapshot(
-        crate::triggers::runtime_snapshot::ActiveSnapshotAgentIdentities::boxed(active_snapshot_rx.clone()),
+        crate::triggers::runtime_snapshot::ActiveSnapshotAgentIdentities::boxed(
+            active_snapshot_rx.clone(),
+        ),
     )?;
     let (reconcile_tx, reconcile_rx) = mpsc::channel(8);
     let _reconcile_tx_guard = reconcile_tx.clone();

@@ -17,14 +17,14 @@ use crate::inference::resolved::{
     ResolvedAgent, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS,
 };
 use crate::runtime::agent::retry::RetryPolicy;
-use crate::triggers::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
 use crate::store::identity::{NodeIdentity, RuntimeNode};
 use crate::store::schema::migration;
-use crate::triggers::snapshot_observer::RuntimeSnapshotObserver;
 use crate::tools::call::hook::{BackgroundExecutionRegistry, FailurePolicy};
 use crate::tools::mcp::health::HealthCheckerOptions;
 use crate::tools::mcp::pool::McpPool;
 use crate::tools::surface::{AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling};
+use crate::triggers::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
+use crate::triggers::snapshot_observer::RuntimeSnapshotObserver;
 
 mod builder;
 pub mod completion_retry;

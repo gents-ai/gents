@@ -1,11 +1,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use gents::triggers::snapshot_observer::RuntimeSnapshotObserver;
 use gents::{
     ConfigAccess, DocumentRuntimeOptions, Gents, ProcessLifecycleObserver, ProcessLifecycleState,
     ToolCeiling,
 };
-use gents::triggers::snapshot_observer::RuntimeSnapshotObserver;
 use tokio::sync::watch;
 
 use crate::support::fixtures::bind_managed_agent_backend;

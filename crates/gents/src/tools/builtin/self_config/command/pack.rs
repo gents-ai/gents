@@ -91,19 +91,19 @@ impl ConfigCommandTool {
             }
             .into());
         }
-        let (output, unserved, binding_note) =
-            self.plugins
-                .clone()
-                .run_plugin_once(
-                    coordinate,
-                    &self.selected_plugins,
-                    self.node.clone(),
-                    &self.node_did,
-                    Some(self.core.agent_did()),
-                    input,
-                )
-                .await
-                .with_context(|| format!("calling plugin {coordinate}"))?;
+        let (output, unserved, binding_note) = self
+            .plugins
+            .clone()
+            .run_plugin_once(
+                coordinate,
+                &self.selected_plugins,
+                self.node.clone(),
+                &self.node_did,
+                Some(self.core.agent_did()),
+                input,
+            )
+            .await
+            .with_context(|| format!("calling plugin {coordinate}"))?;
         ordered! {"output": output, "unserved": unserved, "plugin": coordinate, "binding_note": binding_note}.pretty()
     }
 

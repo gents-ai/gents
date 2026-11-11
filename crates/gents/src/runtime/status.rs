@@ -11,8 +11,8 @@ use crate::runtime::agent::ProcessLifecycleState;
 use crate::runtime::node_readiness_publisher::{
     NodeReadinessPublisherHandle, NodeReadinessPublisherOwner,
 };
-use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use crate::store::graphql::escape_graphql_string;
+use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use gents_protocol::node_readiness::{ReconcilePhase, ReconcileResult};
 
 /// Reconcile-phase transitions are only observable through this event stream:

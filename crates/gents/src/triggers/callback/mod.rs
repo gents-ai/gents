@@ -36,8 +36,9 @@ pub(crate) const LIFECYCLE_DENIED: &str = "denied";
 pub(crate) struct CallbackEngine {
     node: Arc<EmbeddedNode>,
     node_did: String,
-    snapshots:
-        Option<tokio::sync::watch::Receiver<Arc<crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot>>>,
+    snapshots: Option<
+        tokio::sync::watch::Receiver<Arc<crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot>>,
+    >,
     ceiling: Option<PathBuf>,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
     subscription_source: Arc<dyn UpdateSubscriptionSource>,
@@ -60,7 +61,9 @@ pub(crate) async fn run_callback_engine(
     node_did: String,
     ceiling: Option<PathBuf>,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
-    snapshots: tokio::sync::watch::Receiver<Arc<crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot>>,
+    snapshots: tokio::sync::watch::Receiver<
+        Arc<crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot>,
+    >,
     cancel: CancellationToken,
 ) -> Result<()> {
     let mut engine = CallbackEngine::new(node, node_did.clone(), ceiling.clone(), cancel.clone());

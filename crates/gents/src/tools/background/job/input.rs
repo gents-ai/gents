@@ -1845,7 +1845,9 @@ pub(crate) mod tests {
         let (_snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(agent_snapshot());
         runtime
             .bind_snapshot(
-                crate::triggers::runtime_snapshot::ActiveSnapshotAgentIdentities::boxed(snapshot_rx),
+                crate::triggers::runtime_snapshot::ActiveSnapshotAgentIdentities::boxed(
+                    snapshot_rx,
+                ),
             )
             .unwrap();
         Job {

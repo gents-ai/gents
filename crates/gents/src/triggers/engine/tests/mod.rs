@@ -22,7 +22,6 @@ use crate::lean_vocab_test::{
     lean_trigger_dispatch_case_count, lean_trigger_dispatch_cases, LeanTriggerDispatchCase,
     LeanVocabulary,
 };
-use crate::triggers::runtime_snapshot::{ActiveRuntimeSnapshot, ResolvedRuntimeSnapshot};
 use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::{KeyIdentity, RuntimeNode};
 use crate::tools::surface::AgentToolSurfaceConfig;
@@ -31,6 +30,7 @@ use crate::triggers::engine::production_materializer::{
     execution_origin_for_trigger_kind, ProductionMaterializer,
 };
 use crate::triggers::engine::schedule_source::ScheduleSource;
+use crate::triggers::runtime_snapshot::{ActiveRuntimeSnapshot, ResolvedRuntimeSnapshot};
 use crate::BackendProviderKind;
 
 type MaterializeCall = (Option<String>, TriggerKind, String);

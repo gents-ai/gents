@@ -7,8 +7,8 @@ use tracing::Instrument;
 use crate::inference::admission::BackendAdmissionConfig;
 use crate::inference::backends::registry;
 use crate::runtime::agent::{DocumentResolveContext, Gents};
-use crate::triggers::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
 use crate::tools::surface::{ToolRuntimeContext, ToolSurface};
+use crate::triggers::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
 
 pub(super) fn is_degraded_startup_unavailable_reason(
     reason: gents_protocol::node_readiness::AgentReadinessUnavailableReason,

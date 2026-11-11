@@ -271,7 +271,8 @@ fn status_test_request(request_id: &str) -> gents_protocol::row::AgentRequest {
     }
 }
 
-fn unavailable_general() -> RapidHashMap<String, crate::triggers::runtime_snapshot::UnavailableAgent> {
+fn unavailable_general() -> RapidHashMap<String, crate::triggers::runtime_snapshot::UnavailableAgent>
+{
     RapidHashMap::from_iter([(
         "general".to_string(),
         crate::triggers::runtime_snapshot::UnavailableAgent::new(

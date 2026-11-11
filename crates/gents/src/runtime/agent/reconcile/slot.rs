@@ -11,9 +11,9 @@ use crate::inference::admission::BackendAdmissionConfig;
 use crate::inference::resolved::ResolvedAgent;
 use crate::runtime::agent::retry::RetryPolicy;
 use crate::runtime::agent::worker_capacity::WorkerCapacity;
-use crate::triggers::runtime_snapshot::ResolvedRuntimeSnapshot;
 use crate::runtime::startup_readiness::{BuildOutcome, BuildStanding};
 use crate::tools::surface::ToolSurface;
+use crate::triggers::runtime_snapshot::ResolvedRuntimeSnapshot;
 use gents_protocol::row::AgentRequest;
 
 use rapidhash::{HashMapExt, RapidHashMap};

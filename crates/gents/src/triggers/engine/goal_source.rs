@@ -25,10 +25,10 @@ use crate::goal::{
 use crate::goal::{
     publish_claimed_continuation_with_identity, resume_at_reset, GoalReconcileSettled,
 };
-use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::escape_graphql_string;
 use crate::store::subscription_source::UpdateSubscriptionSource;
+use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use gents_protocol::goal_names::GOAL_TRIGGER_KIND;
 use gents_protocol::goal_status::GoalStatus;
 use gents_protocol::row::AgentRequest;

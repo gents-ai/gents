@@ -369,7 +369,9 @@ async fn step0(output: Value, options: Options) -> Step0 {
         });
         let (_sender, receiver) = tokio::sync::watch::channel(snapshot);
         runtime
-            .bind_snapshot(crate::triggers::runtime_snapshot::ActiveSnapshotAgentIdentities::boxed(receiver))
+            .bind_snapshot(
+                crate::triggers::runtime_snapshot::ActiveSnapshotAgentIdentities::boxed(receiver),
+            )
             .unwrap();
         let admission = crate::store::service::RuntimeServiceAdmission::default();
         if !options.kicks {

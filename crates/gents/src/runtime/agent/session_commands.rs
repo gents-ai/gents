@@ -9,9 +9,9 @@ use gents_protocol::session_input_edit::SessionInputEdit;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
-pub use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot as SessionCommandAgentSnapshot;
 use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::NodeIdentity;
+pub use crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot as SessionCommandAgentSnapshot;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) enum CommandKind {

@@ -11,8 +11,8 @@ use std::sync::Arc;
 use crate::documents::AgentToolConfig;
 use crate::inference::resolved::ResolvedAgent;
 use crate::runtime::agent::tool_selection_from_document;
-use crate::triggers::runtime_snapshot::UnavailableAgent;
 use crate::tools::surface::{ResolvedToolSelection, ToolSurface};
+use crate::triggers::runtime_snapshot::UnavailableAgent;
 
 type AgentContextDocuments = (
     Option<crate::documents::AgentContext>,
@@ -289,8 +289,9 @@ pub(super) fn attach_watcher_identities(
             &record.value.identity_binding(),
         ) {
             if identity.did() != context.identity.did() {
-                reason.watcher_identity =
-                    Some(crate::triggers::runtime_snapshot::ResolvedWatcherIdentity(identity));
+                reason.watcher_identity = Some(
+                    crate::triggers::runtime_snapshot::ResolvedWatcherIdentity(identity),
+                );
             }
         }
     }
