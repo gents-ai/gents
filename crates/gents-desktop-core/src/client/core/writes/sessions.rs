@@ -1,9 +1,11 @@
 use anyhow::{Context, Result};
+use gents_protocol::operations::session::{
+    SessionArchiveInput, SessionForkBoundary, SessionForkInput, SessionRef, SessionRenameInput,
+};
 use gents_store::config_client::ConfigAccess;
 
-use super::super::bootstrap::normalize_required;
 use super::{ensure_peer_chat_ready, ClientCore};
-use crate::client::mutations;
+use crate::error::session_operation_failure;
 
 fn mailbox_node_for_document<'a>(
     rows: &'a [gents_protocol::row::MailboxItemRow],
@@ -50,41 +52,31 @@ impl ClientCore {
         client_did: &str,
         child_session_id: &str,
     ) -> Result<String> {
-        anyhow::ensure!(
-            client_did == self.node_identity.did(),
-            "the saved edit belongs to another native client"
-        );
-        let node_did = normalize_required("node_did", node_did)?;
-        let session_id = normalize_required("session_id", session_id)?;
-        anyhow::ensure!(
-            child_session_id == child_session_id.trim(),
-            "child_session_id must retain its exact canonical identity"
-        );
-        let child_session_id = normalize_required("child_session_id", child_session_id)?;
-        anyhow::ensure!(!message_key.trim().is_empty(), "message_key is required");
+        let node_did = node_did.trim();
         let peer = self.peer_record_for_chat_write(node_did)?;
         ensure_peer_chat_ready(node_did, peer.as_ref())?;
-        let requester = self.requester_did(
-            peer.as_ref()
-                .context("chat target has no current owned peer route")?,
-        );
         let access = self.operator_graphql(node_did)
             .map(ConfigAccess::Graphql)
             .context("Editing a message requires a direct runtime connection. Reconnect the local runtime and try again.")?;
-        gents_session::session::fork_edit_on(
+        gents_session::operations::session::fork(
             &access,
-            gents_session::session::ForkParams {
-                source_session_id: session_id,
-                boundary: gents_session::session::ForkBoundary::BeforeMessageKey(message_key),
-                caller_node_did: node_did,
-                caller_requester_did: Some(&requester),
+            &SessionForkInput {
+                source: SessionRef {
+                    node_did: node_did.to_owned(),
+                    session_id: session_id.trim().to_owned(),
+                    requester_did: Some(self.node_identity.did().to_owned()),
+                },
+                boundary: SessionForkBoundary::BeforeMessage {
+                    message_key: message_key.to_owned(),
+                    child_session_id: child_session_id.to_owned(),
+                    client_did: client_did.to_owned(),
+                },
                 target_agent_did: None,
             },
-            child_session_id,
-            client_did,
         )
         .await
-        .map_err(Into::into)
+        .map(|receipt| receipt.session_id)
+        .map_err(session_operation_failure)
     }
 
     pub async fn set_session_archived(
@@ -95,13 +87,18 @@ impl ClientCore {
         archived: bool,
     ) -> Result<gents_protocol::session::SessionArchiveReceipt> {
         let access = self.operator_access(node_did)?;
-        let result = gents_session::session::set_session_archived_on(
+        let result = gents_session::operations::session::set_archived(
             &access,
-            node_did,
-            session_id,
             &self.node_identity,
-            expected_revision,
-            archived,
+            &SessionArchiveInput {
+                session: SessionRef {
+                    node_did: node_did.to_owned(),
+                    session_id: session_id.to_owned(),
+                    requester_did: None,
+                },
+                expected_revision: Some(expected_revision),
+                archived,
+            },
         )
         .await;
         match result {
@@ -118,7 +115,7 @@ impl ClientCore {
                 } else {
                     "restore session"
                 },
-                error,
+                session_operation_failure(error),
             )),
         }
     }
@@ -129,25 +126,20 @@ impl ClientCore {
         session_id: &str,
         title: &str,
     ) -> Result<()> {
-        let snapshot = self.store.snapshot();
-        let requester = gents_session::session::client_requester_scope(
+        let result = gents_session::operations::session::rename(
             &self.session_queue_access(node_did)?,
-            node_did,
-            session_id,
-            self.node_identity.did(),
-        )
-        .await?;
-        let result = mutations::rename_session(
-            &self.session_queue_access(node_did)?,
-            snapshot.as_ref(),
-            node_did,
-            &requester,
-            session_id,
-            title,
+            &SessionRenameInput {
+                session: SessionRef {
+                    node_did: node_did.to_owned(),
+                    session_id: session_id.to_owned(),
+                    requester_did: None,
+                },
+                title: title.to_owned(),
+            },
         )
         .await;
         match result {
-            Ok(()) => {
+            Ok(_) => {
                 if self.refresh_node(node_did).await?.is_none() {
                     self.refresh_store().await?;
                 }
@@ -160,7 +152,10 @@ impl ClientCore {
                 );
                 Ok(())
             }
-            Err(error) => Err(self.record_mutation_error("rename session", error)),
+            Err(error) => Err(self.record_mutation_error(
+                "rename session",
+                session_operation_failure(error),
+            )),
         }
     }
 }

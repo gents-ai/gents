@@ -216,7 +216,7 @@ pub async fn desktop_session_fork_before_message(
         .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
     crate::commands::fork_session_before_message(&core, request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))
+        .map_err(BridgeError::classify_transport_error)
 }
 
 #[tauri::command]
@@ -228,7 +228,7 @@ pub async fn desktop_session_archive(
         .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
     crate::commands::set_session_archived(&core, request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))
+        .map_err(BridgeError::classify_transport_error)
 }
 
 #[tauri::command]
@@ -242,7 +242,7 @@ pub async fn desktop_session_rename(
 
     rename_session(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))
+        .map_err(BridgeError::classify_transport_error)
 }
 
 #[tauri::command]
@@ -262,7 +262,7 @@ where
     let scope = state.window_command_node(window.label(), node_did.as_deref());
     crate::commands::retry_request(&core, &request_id, scope.as_deref())
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))
+        .map_err(BridgeError::classify_transport_error)
 }
 
 #[tauri::command]
