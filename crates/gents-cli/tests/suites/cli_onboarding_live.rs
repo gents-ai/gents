@@ -408,6 +408,15 @@ mod no_model {
             read_json_file(&folder.join("init.json"))?["tool_root"],
             json!(live.root.join(WORK_FOLDER).to_string_lossy())
         );
+        // Every home on a machine shares the one service label, and the second setup would be
+        // refused control of the first home's service.
+        live.gents_ok(&[
+            "runtime",
+            "service",
+            "uninstall",
+            "--home",
+            &folder.to_string_lossy(),
+        ])?;
 
         let folder = live.folder("data-home");
         let mut terminal = setup_of(&live, &folder, "home")?;

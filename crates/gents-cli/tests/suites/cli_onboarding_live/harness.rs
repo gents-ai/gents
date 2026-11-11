@@ -468,10 +468,11 @@ impl Terminal {
         }
     }
 
-    /// Bare `gents` opens the built-in shell once setup finishes; `esc :q` quits it.
+    /// Bare `gents` opens the built-in shell once setup finishes; ctrl-c twice quits it in
+    /// every key set.
     pub(super) async fn quit_shell(&mut self) -> Result<()> {
         self.expect(SHELL_UP, RUNTIME_UP).await?;
-        self.send("\x1b:q\r")?;
+        self.send("\x03\x03")?;
         self.expect_exit(0).await
     }
 
