@@ -9,10 +9,6 @@ use tokio::process::Child;
 use gents_protocol::row::{
     decode_node_readiness_snapshot, NodeReadinessRow, NodeReadinessSnapshot,
 };
-use gents_store::graphql::escape_graphql_string;
-
-use crate::graphql_access::post_graphql;
-
 use gents_host::cli_process::path_arg;
 
 pub(super) fn spawn_server_with_args_and_env(
@@ -57,12 +53,28 @@ pub(super) async fn wait_runtime_ready(
     node_did: &str,
     server: &mut Child,
 ) -> Result<()> {
-    let query = format!(
-        r#"{{ NodeReadiness(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{ node_did snapshot_json updated_at }} }}"#,
-        escape_graphql_string(node_did)
-    );
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::node_readiness as fields, Filter, Query, Selection,
+        };
+        Query::select(
+            Selection::new()
+                .field(fields::NODE_DID)
+                .field(fields::SNAPSHOT_JSON)
+                .field(fields::UPDATED_AT),
+        )
+        .filter(Filter::eq(fields::NODE_DID, node_did))
+        .limit(1)
+        .render()
+    };
     for _ in 0..360 {
-        if let Ok(resp) = post_graphql(graphql, &query).await {
+        if let Ok(resp) = gents_store::config_client::post_graphql_with_variables(
+            graphql,
+            &rendered.document,
+            &rendered.variables,
+        )
+        .await
+        {
             if readiness_snapshot(&resp, node_did).is_some_and(|snapshot| {
                 snapshot.process_state.accepts_work()
                     && snapshot.active_generation > 0

@@ -16,7 +16,6 @@ use background::await_background_completion;
 use fan_in::verify_fan_in;
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_store::config_client::ConfigAccess;
-use gents_store::graphql::escape_graphql_string;
 use load::{
     load_manifest, load_manifest_with, read_distribution_manifest, resolve_scenario_dir,
     trigger_source_collections,
@@ -141,11 +140,20 @@ pub(crate) async fn seed(args: PackSeedArgs) -> Result<()> {
             let graphql = graphql.clone();
             let job_id = job_id.clone();
             async move {
-                let query = format!(
-                    "{{ AgentRequest(filter: {{ caused_by_correlation: {{ _eq: \"{}\" }} }}) {{ request_id }} }}",
-                    escape_graphql_string(&job_id)
-                );
-                let response = post_graphql(&graphql, &query).await?;
+                let rendered = {
+                    use gents_protocol::document_query::{
+                        fields::agent_request as fields, Filter, Query, Selection,
+                    };
+                    Query::select(Selection::new().field(fields::REQUEST_ID))
+                        .filter(Filter::eq(fields::CAUSED_BY_CORRELATION, &job_id))
+                        .render()
+                };
+                let response = gents_store::config_client::post_graphql_with_variables(
+                    &graphql,
+                    &rendered.document,
+                    &rendered.variables,
+                )
+                .await?;
                 Ok(has_correlated_request(&response))
             }
         },
