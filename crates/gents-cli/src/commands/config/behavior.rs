@@ -4,6 +4,10 @@ use gents::store::graphql::escape_graphql_string;
 use gents::tools::builtin::self_config::{configure_agent, ConfigureAgentParams};
 use gents::tools::surface::presets;
 use gents::Collection;
+use gents_protocol::agent_identity::AgentIdentityBinding;
+use gents_protocol::operations::agent::{
+    AgentCreateInput, AgentCreateOperation, AgentOperationError, NextCall,
+};
 use gents_protocol::operations::StringUpdate;
 use serde_json::{json, Value};
 
@@ -69,15 +73,56 @@ fn local_node_did(home: Option<&std::path::Path>) -> Result<String> {
         .context("No runtime configured; pass the target runtime home.")
 }
 
-async fn submit_agent(graphql: &str, owner: &str, mut params: ConfigureAgentParams) -> Result<()> {
-    let endpoint = crate::resolve_graphql_endpoint(Some(graphql), None)?;
-    if matches!(params.action.as_str(), "create" | "clone") {
-        params.identity_binding =
-            Some(gents_desktop_core::agent_identity::provision(&endpoint, owner).await?);
+/// A refused create or clone, shown with the command that explains the
+/// operation. Its causes stay those of the refusal.
+#[derive(Debug)]
+struct AgentCreateFailure {
+    error: AgentOperationError,
+    operation: AgentCreateOperation,
+}
+
+impl std::fmt::Display for AgentCreateFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let next = match self.error.recovery(self.operation) {
+            NextCall::VerbHelp { resource, verb } => format!("gents config {resource} {verb}"),
+            NextCall::ResourceHelp { resource } => format!("gents config {resource}"),
+        };
+        write!(formatter, "{}\nNext: {next} --help", self.error)
     }
+}
+
+impl std::error::Error for AgentCreateFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.error.source()
+    }
+}
+
+async fn create_agent(
+    access: &ConfigAccess,
+    owner: &str,
+    identity_binding: AgentIdentityBinding,
+    input: &AgentCreateInput,
+) -> Result<Value> {
+    let receipt = gents::operations::agent::create(
+        access,
+        owner,
+        identity_binding,
+        input,
+        &Default::default(),
+    )
+    .await
+    .map_err(|error| AgentCreateFailure {
+        error,
+        operation: input.operation,
+    })?;
+    Ok(serde_json::to_value(receipt)?)
+}
+
+async fn submit_create(graphql: &str, owner: &str, input: AgentCreateInput) -> Result<()> {
+    let endpoint = crate::resolve_graphql_endpoint(Some(graphql), None)?;
+    let identity_binding = gents_desktop_core::agent_identity::provision(&endpoint, owner).await?;
     let access = ConfigAccess::Graphql(endpoint);
-    let result = configure_agent(&access, owner, &params, &Default::default()).await?;
-    print_json(&serde_json::from_str::<Value>(&result)?)
+    print_json(&create_agent(&access, owner, identity_binding, &input).await?)
 }
 
 fn optional_update(value: Option<String>) -> StringUpdate {
@@ -108,24 +153,24 @@ pub(super) async fn agent_self_config_permission(
 }
 
 pub(super) async fn agent_create(args: AgentCreateArgs) -> Result<()> {
-    let action = if args.clone_from.is_some() {
-        "clone"
+    let operation = if args.clone_from.is_some() {
+        AgentCreateOperation::Clone
     } else {
-        "create"
+        AgentCreateOperation::Create
     };
-    submit_agent(
+    submit_create(
         &args.graphql,
         &args.node_did,
-        ConfigureAgentParams {
-            action: action.into(),
+        AgentCreateInput {
+            operation,
             clone_from: args.clone_from,
-            display_name: StringUpdate::Set(args.display_name),
+            display_name: args.display_name,
             description: optional_update(args.description),
             system_prompt: optional_update(args.system_prompt),
+            profile_id: args.profile_id,
+            preset: args.preset,
             root: optional_update(args.root),
-            preset: optional_update(args.preset),
-            profile_id: StringUpdate::Set(args.profile_id),
-            ..Default::default()
+            make_default: false,
         },
     )
     .await
@@ -133,18 +178,19 @@ pub(super) async fn agent_create(args: AgentCreateArgs) -> Result<()> {
 
 pub(super) async fn agent_clone(args: AgentCloneArgs) -> Result<()> {
     let owner = local_node_did(args.home.as_deref())?;
-    submit_agent(
+    submit_create(
         &args.graphql,
         &owner,
-        ConfigureAgentParams {
-            action: "clone".into(),
+        AgentCreateInput {
+            operation: AgentCreateOperation::Clone,
             clone_from: Some(args.source_agent_did),
-            display_name: StringUpdate::Set(args.display_name),
+            display_name: args.display_name,
             description: optional_update(args.description),
             system_prompt: optional_update(args.system_prompt),
+            profile_id: args.profile_id,
+            preset: None,
             root: optional_update(args.root),
-            profile_id: StringUpdate::Set(args.profile_id),
-            ..Default::default()
+            make_default: false,
         },
     )
     .await
@@ -152,16 +198,14 @@ pub(super) async fn agent_clone(args: AgentCloneArgs) -> Result<()> {
 
 pub(super) async fn agent_disable(args: AgentDisableArgs) -> Result<()> {
     let owner = local_node_did(args.home.as_deref())?;
-    submit_agent(
-        &args.graphql,
-        &owner,
-        ConfigureAgentParams {
-            action: "disable".into(),
-            agent_did: Some(args.agent_did),
-            ..Default::default()
-        },
-    )
-    .await
+    let access = ConfigAccess::Graphql(crate::resolve_graphql_endpoint(Some(&args.graphql), None)?);
+    let params = ConfigureAgentParams {
+        action: "disable".into(),
+        agent_did: Some(args.agent_did),
+        ..Default::default()
+    };
+    let result = configure_agent(&access, &owner, &params, &Default::default()).await?;
+    print_json(&serde_json::from_str::<Value>(&result)?)
 }
 
 /// Resolve one logical ID to one row, the same way the `config` tool does:
@@ -549,20 +593,25 @@ mod tests {
                 &user,
             )
         };
-        let doc = ConfigureAgentParams {
-            identity_binding: Some(provision().await?),
-            action: "create".into(),
-            display_name: StringUpdate::Set("Canonical".into()),
+        let create = |operation| AgentCreateInput {
+            operation,
+            clone_from: None,
+            display_name: "Canonical".into(),
+            description: StringUpdate::Omitted,
+            system_prompt: StringUpdate::Omitted,
+            profile_id: "profile-1".into(),
+            preset: None,
+            root: StringUpdate::Omitted,
+            make_default: false,
+        };
+        let doc = AgentCreateInput {
             description: StringUpdate::Set("Canonical test agent".into()),
             system_prompt: StringUpdate::Set("Perform the requested work and verify it.".into()),
-            preset: StringUpdate::Set("write".into()),
+            preset: Some("write".into()),
             root: StringUpdate::Set(root.clone()),
-            profile_id: StringUpdate::Set("profile-1".into()),
-            ..Default::default()
+            ..create(AgentCreateOperation::Create)
         };
-        let outcome: Value = serde_json::from_str(
-            &configure_agent(&access, owner, &doc, &Default::default()).await?,
-        )?;
+        let outcome = create_agent(&access, owner, provision().await?, &doc).await?;
         assert_eq!(outcome["committed"], true);
         let agent_did = outcome["agent_did"].as_str().context("created agent ID")?;
 
@@ -599,17 +648,12 @@ mod tests {
             Some(gents::tools::surface::BashMode::Unrestricted),
         );
 
-        let clone_doc = ConfigureAgentParams {
-            identity_binding: Some(provision().await?),
-            action: "clone".into(),
+        let clone_doc = AgentCreateInput {
             clone_from: Some(agent_did.to_owned()),
-            display_name: StringUpdate::Set("Cloned".into()),
-            profile_id: StringUpdate::Set("profile-1".into()),
-            ..Default::default()
+            display_name: "Cloned".into(),
+            ..create(AgentCreateOperation::Clone)
         };
-        let clone_outcome: Value = serde_json::from_str(
-            &configure_agent(&access, owner, &clone_doc, &Default::default()).await?,
-        )?;
+        let clone_outcome = create_agent(&access, owner, provision().await?, &clone_doc).await?;
         assert_eq!(clone_outcome["committed"], true);
         let cloned_id = clone_outcome["agent_did"]
             .as_str()
@@ -693,45 +737,35 @@ mod tests {
                 named(serde_json::to_string_pretty(receipt)?)
             ));
         }
-        for (label, params) in [
+        for (label, input) in [
             (
                 "create with an unpublished profile",
-                ConfigureAgentParams {
-                    identity_binding: Some(provision().await?),
-                    action: "create".into(),
-                    display_name: StringUpdate::Set("Canonical".into()),
+                AgentCreateInput {
                     system_prompt: StringUpdate::Set("Work.".into()),
-                    profile_id: StringUpdate::Set("absent".into()),
-                    ..Default::default()
+                    profile_id: "absent".into(),
+                    ..create(AgentCreateOperation::Create)
                 },
             ),
             (
                 "create with an unpublished root",
-                ConfigureAgentParams {
-                    identity_binding: Some(provision().await?),
-                    action: "create".into(),
-                    display_name: StringUpdate::Set("Canonical".into()),
+                AgentCreateInput {
                     system_prompt: StringUpdate::Set("Work.".into()),
-                    preset: StringUpdate::Set("readonly".into()),
+                    preset: Some("readonly".into()),
                     root: StringUpdate::Set("/pinned/unpublished".into()),
-                    profile_id: StringUpdate::Set("profile-1".into()),
-                    ..Default::default()
+                    ..create(AgentCreateOperation::Create)
                 },
             ),
             (
                 "clone with a preset",
-                ConfigureAgentParams {
-                    identity_binding: Some(provision().await?),
-                    action: "clone".into(),
+                AgentCreateInput {
                     clone_from: Some(agent_did.to_owned()),
-                    display_name: StringUpdate::Set("Cloned".into()),
-                    preset: StringUpdate::Set("write".into()),
-                    profile_id: StringUpdate::Set("profile-1".into()),
-                    ..Default::default()
+                    display_name: "Cloned".into(),
+                    preset: Some("write".into()),
+                    ..create(AgentCreateOperation::Clone)
                 },
             ),
         ] {
-            let error = configure_agent(&access, owner, &params, &Default::default())
+            let error = create_agent(&access, owner, provision().await?, &input)
                 .await
                 .expect_err(label);
             printed.push_str(&format!(
@@ -795,10 +829,13 @@ mod tests {
 }
 ## create with an unpublished profile
 Error: select a published inference profile
+Next: gents config agent create --help
 ## create with an unpublished root
 Error: Tools.host.root "/pinned/unpublished" is not admitted by published WorkspaceRoot policy: nonexistent path is outside the allowed roots
+Next: gents config agent create --help
 ## clone with a preset
 Error: clone inherits its source tools; edit the cloned Tools to change grants
+Next: gents config agent --help
 "###;
 
     #[tokio::test]
