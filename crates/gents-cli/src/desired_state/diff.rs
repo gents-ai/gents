@@ -83,6 +83,9 @@ fn compare_manifests(
     if live_principal.is_none() {
         live_docs.retain(|(collection, _), _| *collection != Collection::Node);
     }
+    if desired.default_agent_selection.is_none() {
+        live_docs.retain(|(collection, _), _| *collection != Collection::DefaultAgentSelection);
+    }
     let mut collections = DesiredStateDiffCollections::default();
     for collection in Collection::ALL {
         let mut desired_rows = Vec::new();

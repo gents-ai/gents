@@ -23,8 +23,11 @@ use super::inference_backend::{
 use super::InferenceBackend;
 #[cfg(test)]
 use apply::confirm_removal;
-pub use apply::grant_selected_self_configuration;
 pub use apply::{configuration_node_doc, ConfigurationNodeBinding};
+pub use apply::{
+    grant_agent_catalog, grant_node_administration, grant_selected_self_configuration,
+    revoke_agent_catalog,
+};
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigApplyTxn;
 #[cfg(test)]

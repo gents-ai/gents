@@ -22,6 +22,8 @@ pub(crate) struct DocumentRecord<T> {
 #[derive(Debug, Clone)]
 pub(crate) struct DocumentRuntimeView {
     pub(crate) node: DocumentRecord<Node>,
+    /// Absent selects no default.
+    pub(crate) default_selection: Option<DocumentRecord<DefaultAgentSelection>>,
     pub(crate) agents: RapidHashMap<String, DocumentRecord<Agent>>,
     pub(crate) contexts: RapidHashMap<String, DocumentRecord<AgentContext>>,
     pub(crate) compactions: RapidHashMap<String, DocumentRecord<CompactionConfig>>,
@@ -52,6 +54,12 @@ pub(crate) enum ControlUpdateOutcome {
 }
 
 impl DocumentRuntimeView {
+    pub(crate) fn default_agent_did(&self) -> Option<&str> {
+        self.default_selection
+            .as_ref()
+            .and_then(|record| record.value.selected())
+    }
+
     pub(super) fn resolves_oauth_credential(
         &self,
         provider: &str,
@@ -93,7 +101,7 @@ impl DocumentRuntimeView {
 
     pub(crate) fn pending_visibility_details(&self) -> Vec<String> {
         let mut details = Vec::new();
-        if let Some(id) = self.node.value.default_agent_did.as_deref() {
+        if let Some(id) = self.default_agent_did() {
             if !self.agents.contains_key(id) {
                 details.push(format!(
                     "principal {} references missing default agent {id}",

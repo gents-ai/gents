@@ -47,7 +47,6 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
           node_did: agent.nodeDid,
           display_name: next.displayName.trim(),
           avatar: next.avatar || null,
-          default_agent_did: next.defaultAgentDid,
           enabled: next.enabled,
           max_request_hop:
             next.maxRequestHop.trim() === "" ? null : Number(next.maxRequestHop),

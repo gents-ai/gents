@@ -81,7 +81,7 @@ fn identifier_paths(
 fn every_canonical_reference_field_reaches_reference_consumers() {
     let samples = [
         (
-            Collection::Node,
+            Collection::DefaultAgentSelection,
             json!({"node_did":"owner", "default_agent_did":"agent"}),
         ),
         (

@@ -158,7 +158,7 @@ async fn inventory_client_progress_has_its_pinned_protected_local_schema() {
 
 /// A retired collection leaves the baseline without a wipe or conversion; its
 /// stored lineage and rows stay exactly as they were.
-const RETIRED_IMAGE_DEMAND: &str = r#"type FileImageHydrationRequest @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6b93229d0c706380e71e", resource: "configuration") {
+const RETIRED_IMAGE_DEMAND: &str = r#"type FileImageHydrationRequest @policy(id: "ac7d6625bfe087880ab77635e5da9c48fe1ee5f9152748018a63c0d9a75ceb70", resource: "configuration") {
     request_key: String @index(unique: true) @immutable
     peer_id: String @immutable
     requester_did: String @index @immutable

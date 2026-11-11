@@ -554,7 +554,11 @@ async fn resolve_request_agent_did(
                 Node(
                     filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }},
                     limit: 2
-                ) {{ node_did default_agent_did enabled }}
+                ) {{ node_did enabled }}
+                DefaultAgentSelection(
+                    filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }},
+                    limit: 1
+                ) {{ default_agent_did }}
                 Agent(
                     filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }}
                 ) {{ agent_did node_did enabled }}
@@ -578,8 +582,8 @@ async fn resolve_request_agent_did(
     );
     let agent_did = match requested.map(str::trim).filter(|value| !value.is_empty()) {
         Some(agent_did) => agent_did.to_string(),
-        None => principal
-            .get("default_agent_did")
+        None => response
+            .pointer("/data/DefaultAgentSelection/0/default_agent_did")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())

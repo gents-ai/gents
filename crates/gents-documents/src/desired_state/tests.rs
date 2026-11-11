@@ -672,19 +672,20 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
         register_config_schemas(&node).await?;
         let access = runtime_access(&node)?;
         let owner = DEFAULT_REPLACEMENT_OWNER_DIDS[index];
-        let principal = |default: &Value, name: &str| {
-            config(
-                Collection::Node,
-                json!({"node_did":owner,"default_agent_did":agent_did(default),"display_name":name}),
-            )
-        };
         let mut documents = vec![
             document(backend(owner, "backend")),
             config(
                 Collection::InferenceProfile,
                 json!({"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}),
             ),
-            principal(&case["current"], "Original"),
+            config(
+                Collection::Node,
+                json!({"node_did":owner,"display_name":"Original"}),
+            ),
+            config(
+                Collection::DefaultAgentSelection,
+                json!({"node_did":owner,"default_agent_did":agent_did(&case["current"])}),
+            ),
         ];
         for agent in [CODING_AGENT_DID, REVIEW_AGENT_DID] {
             documents.push(config(
@@ -693,26 +694,17 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
             ));
         }
         apply(&access, documents).await?;
-        let mut requested = json!({"node": {
-            "node_did":owner,"display_name":"Changed"
-        }});
+        let mut requested = json!({
+            "node": {"node_did":owner,"display_name":"Changed"},
+            "default_agent_selection": {"node_did":owner}
+        });
         if !case["candidate"].is_null() {
-            requested["node"]["default_agent_did"] = agent_did(&case["candidate"]);
+            requested["default_agent_selection"]["default_agent_did"] =
+                agent_did(&case["candidate"]);
         }
         let pack: crate::PackConfig = serde_json::from_value(requested)?;
-        let mut replacement = DesiredStateApplyPlan::from_pack_config(&pack)?
-            .documents()
-            .first()
-            .expect("pack principal")
-            .clone();
-        replacement.add["default_agent_did"] = json!(CODING_AGENT_DID);
-        let plan = DesiredStateApplyPlan::new(vec![replacement])?;
-        let before = access
-            .transact_write("test.default.before", |txn| {
-                let owner = &owner;
-                Box::pin(async move { read_record(txn, Collection::Node, owner, owner).await })
-            })
-            .await?;
+        let plan = DesiredStateApplyPlan::from_pack_config(&pack)?;
+        let (before_node, before_selection) = read_principal_and_default(&access, owner).await?;
         let preview = access
             .transact_write("test.default.preview", |txn| {
                 let plan = &plan;
@@ -742,25 +734,55 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
         let allowed = case["allowed"].as_bool().expect("modeled verdict");
         assert_eq!(preview.is_ok(), allowed, "preview: {case}: {preview:?}");
         assert_eq!(published.is_ok(), allowed, "publish: {case}: {published:?}");
-        let after = access
-            .transact_write("test.default.after", |txn| {
-                let owner = &owner;
-                Box::pin(async move { read_record(txn, Collection::Node, owner, owner).await })
-            })
-            .await?;
+        let (after_node, after_selection) = read_principal_and_default(&access, owner).await?;
         if allowed {
-            let (_, after) = after.expect("published principal");
-            assert_eq!(after["default_agent_did"], agent_did(&case["candidate"]));
-            assert_eq!(after["display_name"], "Changed");
+            let (_, after_node) = after_node.expect("published principal");
+            assert_eq!(after_node["display_name"], "Changed");
+            let (_, after_selection) = after_selection.expect("published default selection");
+            assert_eq!(
+                after_selection["default_agent_did"],
+                agent_did(&case["candidate"])
+            );
         } else {
-            assert_eq!(after, before, "refused replacement changed the principal");
+            assert_eq!(
+                after_node, before_node,
+                "refused replacement changed the principal"
+            );
+            assert_eq!(
+                after_selection, before_selection,
+                "refused replacement changed the default selection"
+            );
             let message = format!("{:#}", published.unwrap_err());
-            assert!(message.contains("default_agent_did"), "{message}");
-            assert!(message.contains(CODING_AGENT_DID), "{message}");
+            assert!(
+                message.contains("DefaultAgentSelection replacement would clear default_agent_did"),
+                "{message}"
+            );
+            let current = agent_did(&case["current"]);
+            assert!(
+                message.contains(current.as_str().expect("refused default")),
+                "{message}"
+            );
         }
         node.shutdown().await.expect("node shutdown");
     }
     Ok(())
+}
+
+async fn read_principal_and_default(
+    access: &ConfigAccess,
+    owner: &str,
+) -> Result<(Option<(String, Value)>, Option<(String, Value)>)> {
+    access
+        .transact_write("test.default.read", |txn| {
+            let owner = &owner;
+            Box::pin(async move {
+                let node = read_record(txn, Collection::Node, owner, owner).await?;
+                let selection =
+                    read_record(txn, Collection::DefaultAgentSelection, owner, owner).await?;
+                Ok((node, selection))
+            })
+        })
+        .await
 }
 
 #[tokio::test]

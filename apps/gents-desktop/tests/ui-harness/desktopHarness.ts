@@ -1779,7 +1779,6 @@ export function createDesktopUiHarness(
           ...visibleDeployment.nodeConfig,
           node_did: remoteDid,
           display_name: "Amy",
-          default_agent_did: "remote-agent",
         },
         nodeReadiness: {
           ...visibleDeployment.nodeReadiness,
@@ -2909,14 +2908,11 @@ export function createDesktopUiHarness(
         node: {
           ...deployment.node,
           displayName: document.display_name?.trim() || deployment.label,
-          defaultAgentDid: document.default_agent_did ?? null,
           enabled: document.enabled ?? deployment.node.enabled,
         },
         nodeConfig: {
           ...document,
           display_name: document.display_name ?? deployment.label,
-          default_agent_did:
-            document.default_agent_did ?? deployment.node.defaultAgentDid,
           enabled: document.enabled ?? deployment.node.enabled,
         },
       };
@@ -2937,9 +2933,6 @@ export function createDesktopUiHarness(
           ...deployment.node,
           defaultAgentDid: request.agentDid,
         },
-        nodeConfig: deployment.nodeConfig
-          ? { ...deployment.nodeConfig, default_agent_did: request.agentDid }
-          : deployment.nodeConfig,
       };
       notify("config");
       return snapshot();
@@ -4396,7 +4389,6 @@ function createDeployment(): DeploymentView {
     nodeConfig: {
       node_did: NODE_DID,
       display_name: "Bombadil UI Agent",
-      default_agent_did: DEFAULT_AGENT_DID,
       enabled: true,
       created_at: STARTED_AT,
       created_by: "bombadil",

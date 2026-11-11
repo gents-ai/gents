@@ -130,7 +130,9 @@ impl InferenceSetupState {
             .map(|row| NodeView {
                 node_did: row.node_did.clone(),
                 display_name: normalize_optional(row.display_name.as_deref()),
-                default_agent_did: normalize_optional(row.default_agent_did.as_deref()),
+                default_agent_did: store
+                    .selected_default_agent_did(node_did)
+                    .map(str::to_owned),
                 enabled: Some(row.enabled),
                 created_at: normalize_optional(row.created_at.as_deref()),
                 created_by: normalize_optional(row.created_by.as_deref()),

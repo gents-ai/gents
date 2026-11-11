@@ -1602,8 +1602,9 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
             Collection::Agent,
             json!({"node_did":owner,"agent_did":binding.agent_did,"creation_nonce":binding.creation_nonce,"inference_profile_id":"profile"}),
         ),
+        home(Collection::Node, json!({"node_did":owner})),
         home(
-            Collection::Node,
+            Collection::DefaultAgentSelection,
             json!({"node_did":owner,"default_agent_did":binding.agent_did}),
         ),
     ])
@@ -1647,11 +1648,11 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
         .unwrap();
 
     let principal = access
-        .execute("{ Node { default_agent_did } }")
+        .execute("{ DefaultAgentSelection { default_agent_did } }")
         .await
         .unwrap();
     assert_eq!(
-        principal["data"]["Node"],
+        principal["data"]["DefaultAgentSelection"],
         json!([{"default_agent_did": binding.agent_did}])
     );
     assert_eq!(tools_ids(&access).await, ["pack-tools"]);

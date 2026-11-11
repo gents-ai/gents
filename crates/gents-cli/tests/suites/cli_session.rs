@@ -42,7 +42,7 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
         &["config", "export", "--root", &root.to_string_lossy()],
     )?;
     let config = read_json_file(&root.join("pack_config.json"))?;
-    let agent_did = config["node"]
+    let agent_did = config["default_agent_selection"]
         .get("default_agent_did")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("missing default_agent_did after export"))?

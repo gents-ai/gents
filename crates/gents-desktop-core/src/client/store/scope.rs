@@ -55,6 +55,9 @@ impl StoreScope {
         for row in &rows.nodes {
             self.insert_optional(Some(&row.node_did));
         }
+        for row in &rows.default_agent_selections {
+            self.insert_optional(Some(&row.node_did));
+        }
         for row in &rows.agents {
             self.insert_optional(Some(&row.node_did));
         }

@@ -174,8 +174,11 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
             "nodes": [{
                 "node_did": NODE_DID,
                 "display_name": "Amy",
-                "default_agent_did": default_agent_did,
                 "enabled": true
+            }],
+            "default_agent_selections": [{
+                "node_did": NODE_DID,
+                "default_agent_did": default_agent_did
             }]
         });
         for key in [
@@ -266,12 +269,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
     .await?;
     core.refresh_store().await?;
     assert_eq!(
-        core.store()
-            .snapshot()
-            .nodes
-            .iter()
-            .find(|node| node.node_did == NODE_DID)
-            .and_then(|node| node.default_agent_did.as_deref()),
+        core.store().snapshot().selected_default_agent_did(NODE_DID),
         Some("did:test:hosted-amy:default"),
         "the starting configuration is the runtime's"
     );
@@ -293,10 +291,9 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
     );
     timeout(Duration::from_secs(5), async {
         loop {
-            if core.store().snapshot().nodes.iter().any(|node| {
-                node.node_did == NODE_DID
-                    && node.default_agent_did.as_deref() == Some("did:test:hosted-amy:research")
-            }) {
+            if core.store().snapshot().selected_default_agent_did(NODE_DID)
+                == Some("did:test:hosted-amy:research")
+            {
                 break;
             }
             updates.changed().await.expect("store observer is running");
@@ -308,7 +305,7 @@ async fn terminal_operator_request_refreshes_non_replicated_agent_config() -> Re
     let local_node = core
         .node()
         .execute(&format!(
-            r#"query {{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ default_agent_did }} }}"#,
+            r#"query {{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ node_did }} }}"#,
             gents_store::graphql::escape_graphql_string(NODE_DID)
         ))
         .await;
@@ -668,5 +665,39 @@ fn default_agent_did_does_not_require_a_gossiped_node() {
     assert_eq!(
         store.default_agent_did_for_node(node_did),
         Some(agent_did.as_str())
+    );
+}
+
+#[test]
+fn default_agent_selection_wins_over_the_single_enabled_agent() {
+    let node_did = "did:key:z6MkAmy";
+    let agent = |agent_did: &str| gents_documents::Agent {
+        creation_nonce: String::new(),
+        agent_did: agent_did.to_string(),
+        node_did: node_did.to_string(),
+        display_name: None,
+        description: None,
+        context_id: None,
+        inference_profile_id: "profile".to_string(),
+        enabled: true,
+        tags: Vec::new(),
+        created_at: None,
+    };
+    let store = ClientStore::from_rows(ClientStoreRows {
+        agents: vec![agent("did:key:first"), agent("did:key:second")],
+        default_agent_selections: vec![gents_documents::DefaultAgentSelection::new(
+            node_did,
+            "did:key:second",
+        )],
+        ..ClientStoreRows::default()
+    });
+
+    assert_eq!(
+        store.selected_default_agent_did(node_did),
+        Some("did:key:second")
+    );
+    assert_eq!(
+        store.default_agent_did_for_node(node_did),
+        Some("did:key:second")
     );
 }

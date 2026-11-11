@@ -30,6 +30,7 @@ pub(super) fn anchored_request(
     });
     request
 }
+#[cfg(test)]
 pub(super) fn agent_request(
     core: &SelfConfigCore,
     patch: SelfConfigPatch,

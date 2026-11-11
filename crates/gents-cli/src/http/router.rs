@@ -193,6 +193,10 @@ pub(crate) fn runtime_contract_router(
             gents_protocol::agent_identity::AGENT_IDENTITY_PATH,
             post(crate::http::agent_identity::provision),
         )
+        .route(
+            gents_protocol::agent_identity::AGENT_ADMISSION_PATH,
+            post(crate::http::agent_identity::admission),
+        )
         .route("/status", get(status_route))
         .route("/fleet/slots", get(fleet_slots_handler))
         .route(

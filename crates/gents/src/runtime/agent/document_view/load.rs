@@ -33,6 +33,9 @@ pub(crate) async fn load_document_runtime_view_as(
                 let mut unknown_kind_backends = RapidHashMap::new();
                 let mut view = DocumentRuntimeView {
                     node: principal,
+                    default_selection: load_records(txn, &owner, Collection::DefaultAgentSelection)
+                        .await?
+                        .remove(&owner),
                     agents: load_records(txn, &owner, Collection::Agent).await?,
                     contexts: load_records(txn, &owner, Collection::AgentContext).await?,
                     compactions: load_records(txn, &owner, Collection::Compaction).await?,

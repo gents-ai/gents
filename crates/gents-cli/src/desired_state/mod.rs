@@ -67,7 +67,7 @@ impl Default for DesiredStateDiffCollections {
                 .into_iter()
                 .map(|collection| {
                     (
-                        collection.dir_name().unwrap_or("node").to_owned(),
+                        collection.to_string(),
                         DesiredStateCollectionDiff::default(),
                     )
                 })
@@ -78,12 +78,12 @@ impl Default for DesiredStateDiffCollections {
 
 impl DesiredStateDiffCollections {
     pub(crate) fn get(&self, collection: Collection) -> &DesiredStateCollectionDiff {
-        &self.0[collection.dir_name().unwrap_or("node")]
+        &self.0[&collection.to_string()]
     }
 
     fn get_mut(&mut self, collection: Collection) -> &mut DesiredStateCollectionDiff {
         self.0
-            .get_mut(collection.dir_name().unwrap_or("node"))
+            .get_mut(&collection.to_string())
             .expect("all canonical collection reports are initialized")
     }
     pub(crate) fn record_prune_deletes(&mut self, deletes: &[DocRef]) {

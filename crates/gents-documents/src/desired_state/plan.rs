@@ -78,7 +78,15 @@ impl DesiredStateApplyPlan {
                     .and_then(Value::as_array)
                     .cloned()
                     .unwrap_or_default(),
-                None => vec![bundle.get("node").context("pack requires node")?.clone()],
+                None if collection == Collection::Node => {
+                    vec![bundle.get("node").context("pack requires node")?.clone()]
+                }
+                None => bundle
+                    .get(collection.to_string())
+                    .filter(|value| !value.is_null())
+                    .cloned()
+                    .into_iter()
+                    .collect(),
             };
             documents.extend(values.into_iter().map(|value| DesiredStateApplyDocument {
                 collection,
@@ -147,6 +155,11 @@ impl DesiredStateApplyPlan {
             .collect();
         for (collection, owner, id) in &removals {
             reference_filter(*collection, owner, id)?;
+            anyhow::ensure!(
+                *collection != Collection::DefaultAgentSelection,
+                "the default agent selection of {owner:?} lives as long as its Node and cannot \
+                 be removed; replace its default_agent_did instead"
+            );
             anyhow::ensure!(
                 identities.insert((*collection, owner.clone(), id.clone())),
                 "duplicate or replaced removal {} {owner:?}/{id:?}",
@@ -288,14 +301,17 @@ fn ensure_expectations_match(
     }
 }
 
-pub(super) fn validate_node_replacement(current: &Value, candidate: &Value) -> Result<()> {
+pub(super) fn validate_default_selection_replacement(
+    current: &Value,
+    candidate: &Value,
+) -> Result<()> {
     if let Some(default) = current.get("default_agent_did").and_then(Value::as_str) {
         anyhow::ensure!(
             candidate
                 .get("default_agent_did")
                 .and_then(Value::as_str)
                 .is_some(),
-            "Node replacement would clear default_agent_did {default:?}; \
+            "DefaultAgentSelection replacement would clear default_agent_did {default:?}; \
              include the current default or another enabled agent in the replacement"
         );
     }

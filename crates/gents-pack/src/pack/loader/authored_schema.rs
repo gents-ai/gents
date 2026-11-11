@@ -10,10 +10,10 @@ use crate::pack::interpolate::SUBSTITUTION_PATTERN;
 use gents_documents::{noted, widen_schema, PageDocument, PluginSourceDocument};
 use gents_documents::{
     Agent, AgentContext, AgentTargetDocument, Callback, CallbackBinding, CallbackModule,
-    CompactionConfig, DatastoreToolSurfaceDocument, EvalDefinition, EventSource, InferenceBackend,
-    InferenceExecution, InferenceProfile, InferenceRetryPolicy, InferenceSampling, Node,
-    PackConfig, ProjectionAcpBinding, RepositoryPlacement, Schedule, SkillDocument, Task,
-    ToolServiceRegistry, Tools, Trigger,
+    CompactionConfig, DatastoreToolSurfaceDocument, DefaultAgentSelection, EvalDefinition,
+    EventSource, InferenceBackend, InferenceExecution, InferenceProfile, InferenceRetryPolicy,
+    InferenceSampling, Node, PackConfig, ProjectionAcpBinding, RepositoryPlacement, Schedule,
+    SkillDocument, Task, ToolServiceRegistry, Tools, Trigger,
 };
 use gents_store::collection::Collection;
 
@@ -61,6 +61,7 @@ pub fn authored_pack_config_schema() -> Schema {
 pub fn authored_document_schema(collection: Collection) -> Schema {
     let mut schema = match collection {
         Collection::Node => schema_for!(Node),
+        Collection::DefaultAgentSelection => schema_for!(DefaultAgentSelection),
         Collection::Agent => schema_for!(Agent),
         Collection::AgentContext => schema_for!(AgentContext),
         Collection::Compaction => schema_for!(CompactionConfig),
