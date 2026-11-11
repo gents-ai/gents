@@ -401,6 +401,50 @@ mod tests {
         }
     }
 
+    /// `config plugin run` drives a host-call plugin through the tool's own
+    /// invocation: the guest reaches the caller's tools only when the
+    /// caller's Tools select it with `tool_calls: true`.
+    #[tokio::test]
+    async fn plugin_run_serves_a_host_call_plugin_under_the_callers_selection() {
+        let (home, mut record) = crate::plugin::tests::executor::installed_plugin(
+            &crate::plugin::tests::executor::host_call_plugin_wat(
+                &json!({"tool_name": "query", "arguments": {}}),
+                1,
+            ),
+            None,
+        );
+        record.declaration.host_imports = vec![crate::pack::HostImport::HostCall];
+        crate::plugin::store::write_record(home.path(), &record).unwrap();
+        let coordinate = format!("{}/{}", record.namespace, record.name);
+        let executor = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+            home.path().to_owned(),
+        )));
+        for (tool_calls, expected) in [
+            (true, json!({"result": {"ordinal": 1}})),
+            (
+                false,
+                json!({"error": "tool access is disabled for this invocation"}),
+            ),
+        ] {
+            let selected = [crate::documents::PluginToolRef {
+                plugin: coordinate.clone(),
+                digest: None,
+                tool_calls,
+                input_fields: Vec::new(),
+                job: None,
+            }];
+            let tool =
+                crate::plugin::tool::PluginTool::for_run(executor.clone(), &coordinate, &selected)
+                    .unwrap();
+            let (output, unserved, _) =
+                gents_loop::tool_effects::scope(Some(Arc::new(Tools)), tool.run_once(json!({})))
+                    .await
+                    .unwrap();
+            assert_eq!(output, expected, "tool_calls {tool_calls}");
+            assert_eq!(unserved, None);
+        }
+    }
+
     #[tokio::test]
     async fn sleep_is_available_without_tool_authority() {
         let outcome = execute(json!({"sleep_ms": 1}), 1, false, json!({})).await;

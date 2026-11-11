@@ -799,7 +799,7 @@ async fn pin_under_the_empty_ceiling_is_not_available_with_the_next_call() {
     assert_eq!(answer["code"], "plugin_job_not_available", "{answer}");
     assert_eq!(
         answer["next"],
-        "Next: ask the operator to add `job` to integrations.plugins[team/plugin]"
+        "Next: wire it with config [\"pack\",\"wire\",\"<the pack that ships team/plugin>\"], which writes its `job` block (it needs the pack grant; without it ask the operator to run `gents config pack wire team/plugin --agent <you>`), then start a fresh request"
     );
     failed(&step.row().await, "serviceUnavailable");
     step.finish().await;
