@@ -767,7 +767,29 @@ pub(super) async fn install_documents_command_with_local(
     args: &PackInstallArgs,
     local_endpoint: Option<gents::store::config_client::GraphqlEndpoint>,
 ) -> Result<(), PackChangeError> {
+    let (receipt, failed_step) =
+        install_documents_report(access, pack, args, local_endpoint).await?;
+    crate::print_json(&receipt)?;
+    match failed_step {
+        Some(failed) => Err(anyhow::anyhow!(
+            "the pack is installed, but {failed}; the receipt above lists each step that failed and the command that completes it"
+        )
+        .into()),
+        None => Ok(()),
+    }
+}
+
+/// The install's receipt, and the step that failed after the install
+/// committed: the pack is on the node by then, so its receipt is returned
+/// with the failed step named rather than lost with the error.
+pub(super) async fn install_documents_report(
+    access: gents::store::config_client::ConfigAccess,
+    pack: &PackSource,
+    args: &PackInstallArgs,
+    local_endpoint: Option<gents::store::config_client::GraphqlEndpoint>,
+) -> Result<(serde_json::Value, Option<String>), PackChangeError> {
     let result = async {
+        let mut failed_step = None;
         let (home, owner, local) = async {
             let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
             let bind_mode = if args.scope.graphql.is_some() {
@@ -882,7 +904,7 @@ pub(super) async fn install_documents_command_with_local(
                 output["host_tool_roots"] = supplied;
             }
         } else {
-            let readers = wire::grant_pack_root_readers(
+            match wire::grant_pack_root_readers(
                 &access,
                 &owner,
                 &coordinates,
@@ -891,9 +913,25 @@ pub(super) async fn install_documents_command_with_local(
                     .and_then(|supplied| supplied["root"].as_str()),
                 args.grant_authority,
             )
-            .await?;
-            if !readers.is_empty() {
-                output["host_tool_roots"] = readers.into();
+            .await
+            {
+                Ok(readers) => {
+                    if readers.iter().any(|reader| reader.get("failed").is_some()) {
+                        failed_step =
+                            Some("an agent it ships was not granted its tool root".to_owned());
+                    }
+                    if !readers.is_empty() {
+                        output["host_tool_roots"] = readers.into();
+                    }
+                }
+                Err(error) => {
+                    failed_step =
+                        Some("the tool roots its agents need could not be read".to_owned());
+                    output["host_tool_roots_failed"] = json!({
+                        "error": format!("{error:#}"),
+                        "next": "repeat the install with --grant-authority once the cause is resolved",
+                    });
+                }
             }
         }
         if !args.wire.is_empty() && !args.preview && args.scope.graphql.is_none() {
@@ -901,7 +939,7 @@ pub(super) async fn install_documents_command_with_local(
                 .await?
                 .into();
         }
-        Ok::<_, PackChangeError>(output)
+        Ok::<_, PackChangeError>((output, failed_step))
     }
     .await;
     if let Some(node) = access.local_node() {
@@ -909,7 +947,7 @@ pub(super) async fn install_documents_command_with_local(
             tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
         }
     }
-    Ok(crate::print_json(&result?)?)
+    result
 }
 
 pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError> {

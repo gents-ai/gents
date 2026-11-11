@@ -646,14 +646,18 @@ async fn install_one(
         let host_tool_roots = async {
             let supplied =
                 gents::pack::installer_tool_root(&access, &owner, Some(engineer)).await?;
-            command::wire::grant_pack_root_readers(
+            let readers = command::wire::grant_pack_root_readers(
                 &access,
                 &owner,
                 &installing,
                 supplied.as_deref(),
                 approved,
             )
-            .await
+            .await?;
+            if let Some(failed) = readers.iter().find_map(|reader| reader["failed"].as_str()) {
+                anyhow::bail!("{failed}");
+            }
+            Ok(readers)
         }
         .await
         .with_context(|| {

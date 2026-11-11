@@ -1079,3 +1079,45 @@ async fn a_preview_lists_the_agent_bindings_its_install_was_given() {
     );
     assert!(super::parse_agent_bindings(&["bound-worker".into()]).is_err());
 }
+
+/// A reader grant that fails after the install committed leaves the pack
+/// installed: its receipt comes back with the failed step and the command
+/// that completes it, and the command still reports the failure.
+#[tokio::test]
+async fn a_failed_reader_grant_keeps_the_install_receipt() {
+    let (home, _) = engineer_home().await;
+    let pack = host_tools_pack_dir("grantfail", json!({"files": {"mode": "ReadOnly"}}));
+    let mut args = document_install_args(home.path(), pack.path(), Vec::new());
+    args.grant_authority = true;
+    let source = resolve_pack_source(&args.package, None, home.path())
+        .await
+        .unwrap();
+    let (access, _, local_endpoint) = crate::resolve_pack_config_access(Some(home.path()), None)
+        .await
+        .unwrap();
+    *super::wire::FAIL_GRANTS_FOR.lock().unwrap() = Some("fixture/grantfail".to_owned());
+    let outcome =
+        super::install::install_documents_report(access, &source, &args, local_endpoint).await;
+    *super::wire::FAIL_GRANTS_FOR.lock().unwrap() = None;
+    let (receipt, failed_step) = outcome.unwrap();
+    assert!(failed_step.is_some(), "{receipt}");
+    assert_eq!(receipt["pack"], "grantfail", "{receipt}");
+    let step = &receipt["host_tool_roots"][0];
+    assert!(
+        step["failed"]
+            .as_str()
+            .unwrap()
+            .contains("simulated reader grant failure")
+            && step["next"]
+                .as_str()
+                .unwrap()
+                .starts_with("gents config workspace-root grant-reader "),
+        "{receipt}"
+    );
+    assert!(
+        gents::pack::read_home_install(home.path(), "fixture/grantfail")
+            .unwrap()
+            .is_some(),
+        "the install committed"
+    );
+}

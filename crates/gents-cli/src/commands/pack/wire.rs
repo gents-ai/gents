@@ -297,6 +297,10 @@ pub(crate) async fn supplied_tool_root(
     )
 }
 
+/// The pack coordinate whose reader grants a test makes fail.
+#[cfg(test)]
+pub(super) static FAIL_GRANTS_FOR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
 /// Grants each agent the installed packs `coordinates` (a pack and the
 /// dependencies its install newly installed) ship with host tools reader on the published WorkspaceRoot covering its tool root, as the User
 /// holding `access`: a new agent lacks that grant, only a User makes it, and
@@ -332,10 +336,28 @@ pub(crate) async fn grant_pack_root_readers(
     {
         granted.push(match reader {
             ToolRootReader::Published(published) if approved && supplied == Some(root.as_str()) => {
-                gents::tools::surface::grant_workspace_root_reader(access, &published, &agent)
-                    .await
-                    .with_context(|| format!("granting {agent} reader on {published}"))?;
-                json!({"agent": agent, "root": root, "reader_on": published})
+                let grant =
+                    gents::tools::surface::grant_workspace_root_reader(access, &published, &agent)
+                        .await
+                        .map_err(anyhow::Error::from);
+                #[cfg(test)]
+                let grant = match &*FAIL_GRANTS_FOR.lock().unwrap() {
+                    Some(failing) if coordinates.contains(failing) => {
+                        Err(anyhow::anyhow!("simulated reader grant failure"))
+                    }
+                    _ => grant,
+                };
+                // One agent's failed grant does not hide the others': each is
+                // reported with the command that makes it.
+                match grant {
+                    Ok(()) => json!({"agent": agent, "root": root, "reader_on": published}),
+                    Err(error) => json!({
+                        "agent": agent,
+                        "root": root,
+                        "failed": format!("granting {agent} reader on {published}: {error:#}"),
+                        "next": grant_reader_command(&published, &agent),
+                    }),
+                }
             }
             ToolRootReader::Published(published) => {
                 let reason = if supplied == Some(root.as_str()) {
