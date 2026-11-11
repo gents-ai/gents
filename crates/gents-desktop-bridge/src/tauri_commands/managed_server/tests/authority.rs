@@ -2,31 +2,31 @@ use super::*;
 
 #[test]
 fn exit_stops_active_service_without_a_desktop_preference_but_respects_login_enablement() {
-    let active = gents_server::native_service::NativeServiceStatus {
+    let active = gents_service::native_service::NativeServiceStatus {
         installed: true,
         running: true,
         job_loaded: true,
         enabled: false,
         requires_approval: false,
-        background_item: gents_server::native_service::BackgroundItemStatus::Unavailable,
+        background_item: gents_service::native_service::BackgroundItemStatus::Unavailable,
         failed: false,
         detail: None,
     };
     assert!(should_stop_managed_service_on_exit(&active));
 
-    let keep_running = gents_server::native_service::NativeServiceStatus {
+    let keep_running = gents_service::native_service::NativeServiceStatus {
         enabled: true,
         ..active.clone()
     };
     assert!(!should_stop_managed_service_on_exit(&keep_running));
 
-    let absent = gents_server::native_service::NativeServiceStatus {
+    let absent = gents_service::native_service::NativeServiceStatus {
         installed: false,
         running: false,
         job_loaded: false,
         enabled: false,
         requires_approval: false,
-        background_item: gents_server::native_service::BackgroundItemStatus::Unavailable,
+        background_item: gents_service::native_service::BackgroundItemStatus::Unavailable,
         failed: false,
         detail: None,
     };

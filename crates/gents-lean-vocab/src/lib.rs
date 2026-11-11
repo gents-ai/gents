@@ -620,7 +620,13 @@ pub struct LeanContractSnapshot {
     pub capture_order_cases: Vec<LeanCaptureOrderCase>,
     pub aggregate_token_budget_cases: Vec<LeanAggregateTokenBudgetCase>,
     pub task_hook_admission_cases: Vec<LeanTaskHookAdmissionCase>,
-    pub store_encryption_upgrade_cases: Vec<serde_json::Value>,
+    pub storage_write_gate_cases: Vec<serde_json::Value>,
+    pub storage_write_gate_admission_cases: Vec<serde_json::Value>,
+    pub storage_write_gate_stream_waiter_cases: Vec<serde_json::Value>,
+    pub native_completion_cases: Vec<serde_json::Value>,
+    pub native_claim_lifetime_cases: Vec<serde_json::Value>,
+    pub families: BTreeMap<String, family::LeanFamily>,
+    pub family_vocabularies: BTreeMap<String, serde_json::Value>,
     pub task_hook_run_cases: Vec<LeanTaskHookRunCase>,
     pub task_hook_recovery_cases: Vec<LeanTaskHookRecoveryCase>,
     pub lifecycle_hook_effect_cases: Vec<LeanLifecycleHookEffectCase>,
@@ -633,6 +639,9 @@ pub struct LeanContractSnapshot {
     pub lifecycle_hook_owed_delivery_cases: LeanLifecycleHookOwedDeliveryCases,
     pub lifecycle_hook_admit_cases: Vec<LeanLifecycleHookAdmitCase>,
     pub lifecycle_hook_grant_cases: Vec<LeanLifecycleHookGrantCase>,
+    pub lifecycle_hook_supersede_cases: Vec<LeanLifecycleHookSupersedeCase>,
+    pub lifecycle_hook_goal_halt_cases: Vec<LeanLifecycleHookGoalHaltCase>,
+    pub lifecycle_hook_history_cases: Vec<LeanLifecycleHookHistoryCase>,
     pub follow_up_hooks: Vec<String>,
     pub coverage_ledger: Vec<LeanCoverageEntry>,
     pub feature_surface_requirements: Vec<LeanFeatureSurfaceRequirement>,
@@ -797,7 +806,6 @@ pub struct LeanIdentityClientAgentCreationCase {
 pub struct LeanGrantSetCase {
     pub set: String,
     pub permissions: Vec<String>,
-    pub native_admin: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2084,7 +2092,7 @@ pub struct LeanNamedTransition {
 pub struct LeanCoverageEntry {
     pub category: String,
     pub domain: String,
-    pub consumer: String,
+    pub consumed: bool,
     pub accepted_boundary: String,
     pub accepted_follow_up: String,
     pub feature: String,
@@ -2785,9 +2793,12 @@ mod command_identity_queue;
 mod compaction_canonical_projection;
 mod compaction_projection_join;
 mod composed_invariants;
+pub mod consumer_scan;
 mod durable_reduction;
 mod eval;
 mod event_delivery;
+pub mod family;
+mod hook_decisions;
 mod hooks;
 mod optimization;
 mod prompt_assembly;
@@ -2804,6 +2815,11 @@ mod title;
 mod tool_policy;
 mod triggers_runtime_apply;
 
+/// Family types generated from `families.schema.json`, which Lean emits.
+pub mod families {
+    include!(concat!(env!("OUT_DIR"), "/families.rs"));
+}
+
 pub use account_rotation::*;
 pub use background_transcript::*;
 pub use canonical_execution::*;
@@ -2818,6 +2834,7 @@ pub use composed_invariants::*;
 pub use durable_reduction::*;
 pub use eval::*;
 pub use event_delivery::*;
+pub use hook_decisions::*;
 pub use hooks::*;
 pub use optimization::*;
 pub use prompt_assembly::*;
@@ -3024,6 +3041,18 @@ pub fn lean_lifecycle_hook_admit_cases() -> &'static [LeanLifecycleHookAdmitCase
 
 pub fn lean_lifecycle_hook_grant_cases() -> &'static [LeanLifecycleHookGrantCase] {
     &lean_contract_snapshot().lifecycle_hook_grant_cases
+}
+
+pub fn lean_lifecycle_hook_supersede_cases() -> &'static [LeanLifecycleHookSupersedeCase] {
+    &lean_contract_snapshot().lifecycle_hook_supersede_cases
+}
+
+pub fn lean_lifecycle_hook_goal_halt_cases() -> &'static [LeanLifecycleHookGoalHaltCase] {
+    &lean_contract_snapshot().lifecycle_hook_goal_halt_cases
+}
+
+pub fn lean_lifecycle_hook_history_cases() -> &'static [LeanLifecycleHookHistoryCase] {
+    &lean_contract_snapshot().lifecycle_hook_history_cases
 }
 
 pub fn lean_request_execution_lease_cases() -> &'static [LeanRequestExecutionLeaseCase] {

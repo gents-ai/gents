@@ -2,7 +2,7 @@ use super::*;
 use gents_protocol::request_admission::RequestPurpose;
 use gents_protocol::request_input::QueueDelivery;
 
-pub(crate) async fn pending_rows_in_txn(
+pub async fn pending_rows_in_txn(
     txn: &ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
@@ -281,7 +281,7 @@ pub(crate) async fn pending_ids_in_txn(
     Ok(ids)
 }
 
-pub(crate) fn steering_compatible(
+pub fn steering_compatible(
     head: &AgentRequest,
     row: &AgentRequestRow,
     now: chrono::DateTime<chrono::Utc>,

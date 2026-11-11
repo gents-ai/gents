@@ -1,6 +1,10 @@
 use anyhow::Result;
 use serde_json::json;
+use gents_documents::AgentToolConfig;
+use gents_protocol::message::{AssistantContent, Message};
 use gents_session::session::message::inspection::*;
+use gents_store::config_client::ConfigApplyTxn;
+use gents_store::graphql::escape_graphql_string;
 
     /// The Goal the Goals plugin reports for the inspected session.
     struct ReadWorkerGoal;

@@ -1,3 +1,6 @@
+use gents_host::args::PrepareRuntimeArgs;
+use gents_host::args::ServeArgs;
+use gents_host::args::StoreKeyCustodyArg;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
@@ -30,7 +33,6 @@ mod work;
 
 pub(crate) use accounts::*;
 pub(crate) use backend::*;
-pub use config::ToolCeilingArg;
 pub(crate) use config::*;
 pub(crate) use config_documents::*;
 pub(crate) use docs::*;
@@ -49,71 +51,11 @@ pub(crate) use setup::*;
 pub(crate) use trace::*;
 pub(crate) use work::*;
 
-fn parse_env_var_name(value: &str) -> Result<String, String> {
-    let mut chars = value.chars();
-    let Some(first) = chars.next() else {
-        return Err("environment variable name cannot be empty".to_string());
-    };
-    if !(first == '_' || first.is_ascii_alphabetic())
-        || !chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
-    {
-        return Err(format!("invalid environment variable name {value:?}"));
-    }
-    Ok(value.to_string())
-}
-
 fn parse_message(value: &str) -> Result<String, String> {
     crate::require_non_empty("message", value)
         .map(str::to_string)
         .map_err(|error| error.to_string())
 }
-
-/// Root commands from before the regrouping, and where each went. A bare `gents PROMPT`
-/// sends the prompt to an agent that may run commands as the user, so one that is only a
-/// former command's name, typed from habit, is refused instead of sent: `gents reset` must
-/// not become a message saying "reset".
-const FORMER_COMMANDS: &[(&str, &str)] = &[
-    ("auth", "accounts"),
-    ("cloud", "accounts login cloud"),
-    ("codex", "shell"),
-    ("codex-login", "accounts login codex"),
-    ("grok-login", "accounts login grok"),
-    ("claude-login", "accounts login claude"),
-    ("claude-gateway-login", "accounts login claude-gateway"),
-    ("codex-auth-probe", "accounts probe codex"),
-    ("grok-auth-probe", "accounts probe grok"),
-    ("session", "sessions"),
-    ("goal", "automation goal"),
-    ("task", "automation task"),
-    ("job", "automation job"),
-    ("mailbox", "automation mailbox"),
-    ("tools", "config tools"),
-    ("mcp", "config mcp"),
-    ("pack", "config pack"),
-    ("plugin", "config pack plugin"),
-    ("ux", "config pack ux"),
-    ("provision", "runtime provision"),
-    ("reset", "runtime reset"),
-    ("diagnose", "runtime diagnose"),
-    ("p2p", "runtime p2p"),
-    ("desktop", "runtime desktop"),
-    ("version", "runtime version"),
-    ("data", "utils data"),
-    ("query", "utils data query"),
-    ("write", "utils data write"),
-    ("export", "utils data export"),
-    ("document", "utils data document"),
-    ("schema", "utils data schema"),
-    ("debug", "utils debug"),
-    ("request", "utils debug request"),
-    ("response", "utils debug response"),
-    ("trace", "utils debug trace"),
-    ("background", "utils debug background"),
-    ("fleet", "utils debug fleet"),
-    ("eval", "utils eval"),
-    ("optimization", "utils optimization"),
-    ("chat", "-p MESSAGE"),
-];
 
 /// A command name reaches the prompt only when a root option comes before it, as in
 /// `gents --home H status`, which meant `gents status --home H`.
@@ -126,12 +68,7 @@ fn parse_prompt(value: &str) -> Result<String, String> {
             "`{word}` is a command; put options after it, as in `gents {word} --home HOME`"
         ));
     }
-    match FORMER_COMMANDS.iter().find(|(former, _)| *former == word) {
-        Some((former, now)) => Err(format!(
-            "`gents {former}` is now `gents {now}`; a prompt that is only a former command's name is not sent"
-        )),
-        None => Ok(prompt),
-    }
+    Ok(prompt)
 }
 
 fn parse_session_id(value: &str) -> Result<String, String> {
@@ -381,5 +318,7 @@ pub(crate) enum DesktopCommand {
     },
 }
 
+#[cfg(test)]
+mod service_network_tests;
 #[cfg(test)]
 mod tests;

@@ -1,6 +1,3 @@
-#[path = "../../gents/tests/support/conformance_consumers.rs"]
-mod consumer_registry;
-
 #[test]
 fn generated_contract_decodes_into_runtime_snapshot() {
     let json = gents_lean_contract::load_contract_json().expect("generate Lean contracts");
@@ -9,25 +6,6 @@ fn generated_contract_decodes_into_runtime_snapshot() {
     assert!(!snapshot.generated_by.is_empty());
     assert!(!snapshot.vocabularies.is_empty());
     assert!(!snapshot.coverage_ledger.is_empty());
-}
-
-#[test]
-fn generated_consumers_resolve_to_registered_tests() {
-    let snapshot: gents_lean_vocab::LeanContractSnapshot =
-        gents_lean_contract::load_contract_snapshot().expect("decode Lean contracts");
-    let declared = snapshot
-        .coverage_ledger
-        .iter()
-        .filter(|entry| !entry.consumer.is_empty())
-        .map(|entry| entry.consumer.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    let registered = consumer_registry::assert_registered_conformance_consumers_resolve();
-    let stale: Vec<_> = registered.difference(&declared).collect();
-    let missing: Vec<_> = declared.difference(&registered).collect();
-    assert!(
-        stale.is_empty() && missing.is_empty(),
-        "consumer registry disagrees with Lean ledger: stale={stale:?}, missing={missing:?}"
-    );
 }
 
 #[test]

@@ -189,9 +189,9 @@ async fn fresh_enrolled_client_receives_node_administration_and_creates_agent() 
 /// approval never committed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn desktop_approve_admits_the_member_and_deny_grants_nothing() -> Result<()> {
-    use gents_server::server_host::{
-        admit_managed_enrollment_as, decide_managed_enrollment, ManagedEnrollmentDecision,
-    };
+    use gents_service::server_host::admit_managed_enrollment_as;
+    use gents_service::server_host::decide_managed_enrollment;
+    use gents_service::server_host::ManagedEnrollmentDecision;
     use gents_store::identity::{load_enrollment_grant_receipts, GrantSet};
     let _guard = enrollment_e2e_lock().lock().await;
     let model = FakeLlm::start(

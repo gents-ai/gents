@@ -93,8 +93,8 @@ fn ready_status(node_did: &str) -> ManagedServerStatus {
     }
 }
 
-fn service_exit(restarts: u64) -> gents_server::native_service::ServiceExit {
-    gents_server::native_service::ServiceExit {
+fn service_exit(restarts: u64) -> gents_service::native_service::ServiceExit {
+    gents_service::native_service::ServiceExit {
         reason: "exited with code 78".to_string(),
         restarts,
         clean: false,

@@ -53,7 +53,7 @@ where
     };
     let mut managed = state.managed_server.lock().await;
     if native.job_loaded
-        || native.background_item == gents_server::native_service::BackgroundItemStatus::Enabled
+        || native.background_item == gents_service::native_service::BackgroundItemStatus::Enabled
     {
         managed.approval_refused = false;
     }
@@ -133,7 +133,7 @@ where
 
 pub(super) fn project_external_status(
     mut external: ManagedServerStatus,
-    native: &gents_server::native_service::NativeServiceStatus,
+    native: &gents_service::native_service::NativeServiceStatus,
 ) -> ManagedServerStatus {
     external.auto_start = native.enabled;
     external.approval_required = native.requires_approval;
@@ -163,7 +163,7 @@ pub(super) fn project_foreign_port(
 pub(super) fn job_sample<'a>(
     port: &PortReadiness,
     job_loaded: bool,
-    last_exit: Option<&'a gents_server::native_service::ServiceExit>,
+    last_exit: Option<&'a gents_service::native_service::ServiceExit>,
 ) -> JobSample<'a> {
     match (port, last_exit) {
         (PortReadiness::Ready(_) | PortReadiness::StatusUnreadable { .. }, _) => JobSample::Ready,
@@ -184,21 +184,21 @@ pub(super) fn restarts_since(baseline: &mut Option<u64>, counter: u64) -> u64 {
 #[derive(Debug, Default)]
 pub struct CrashLoopWatch {
     pub(super) baseline: Option<u64>,
-    looping: Option<(gents_server::native_service::ServiceExit, u64)>,
+    looping: Option<(gents_service::native_service::ServiceExit, u64)>,
 }
 
 pub(super) enum JobSample<'a> {
     Unloaded,
     Ready,
     Running,
-    Exited(&'a gents_server::native_service::ServiceExit),
+    Exited(&'a gents_service::native_service::ServiceExit),
 }
 
 impl CrashLoopWatch {
     pub(super) fn observe(
         &mut self,
         sample: JobSample<'_>,
-    ) -> Option<(gents_server::native_service::ServiceExit, u64)> {
+    ) -> Option<(gents_service::native_service::ServiceExit, u64)> {
         match sample {
             JobSample::Unloaded | JobSample::Ready => *self = Self::default(),
             JobSample::Exited(exit) if exit.clean => *self = Self::default(),
@@ -215,9 +215,9 @@ impl CrashLoopWatch {
 pub(super) fn status_from(
     managed: &crate::state::ManagedServerState,
     stored: Option<&StoredManagedServer>,
-    native: Option<&gents_server::native_service::NativeServiceStatus>,
-    last_exit: Option<&gents_server::native_service::ServiceExit>,
-    crash_loop: Option<(&gents_server::native_service::ServiceExit, u64)>,
+    native: Option<&gents_service::native_service::NativeServiceStatus>,
+    last_exit: Option<&gents_service::native_service::ServiceExit>,
+    crash_loop: Option<(&gents_service::native_service::ServiceExit, u64)>,
 ) -> ManagedServerStatus {
     let approval_required =
         native.is_some_and(|status| status.approval_pending(managed.approval_refused));

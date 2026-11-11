@@ -15,8 +15,8 @@ mod terminalize;
 
 pub(crate) use background_receipt::{publish_background_receipt_in_txn, BackgroundReceiptBinding};
 pub(crate) use dispatch::{start_running_in_txn, DispatchStart};
-#[cfg(test)]
-pub(crate) use output_append::append_tool_output;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use output_append::append_tool_output;
 pub(crate) use output_append::ToolOutputBinding;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use output_append::{append_tool_output_at, ToolOutputAppendRejection};
@@ -41,19 +41,19 @@ pub(crate) struct PluginToolWrites {
     pub(crate) writes: Vec<gents_protocol::job::DataWrite>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 static FAIL_NEXT_TERMINAL: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
-#[cfg(test)]
-pub(crate) fn fail_next_terminal_for_test(tool_call_doc_id: &str) {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn fail_next_terminal_for_test(tool_call_doc_id: &str) {
     FAIL_NEXT_TERMINAL
         .lock()
         .unwrap()
         .push(tool_call_doc_id.to_owned());
 }
 
-#[cfg(test)]
-pub(crate) fn terminal_failure_pending_for_test(tool_call_doc_id: &str) -> bool {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn terminal_failure_pending_for_test(tool_call_doc_id: &str) -> bool {
     FAIL_NEXT_TERMINAL
         .lock()
         .unwrap()

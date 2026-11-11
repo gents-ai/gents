@@ -275,7 +275,7 @@ async fn documents_fixture_staging_installs_its_declared_schemas() {
     }
 
     let node = std::sync::Arc::new(
-        crate::shared::test_support::node_builder()
+        gents_host::test_support::node_builder()
             .build()
             .await
             .unwrap(),
@@ -284,10 +284,11 @@ async fn documents_fixture_staging_installs_its_declared_schemas() {
         .await
         .unwrap();
     let access = ConfigAccess::local(node.clone());
-    let phase = crate::commands::schema::apply_pack_schemas_if_present(&access, staged.path())
-        .await
-        .unwrap()
-        .expect("staged pack must have schemas");
+    let phase =
+        gents_pack::pack::schema_apply::apply_pack_schemas_if_present(&access, staged.path())
+            .await
+            .unwrap()
+            .expect("staged pack must have schemas");
     assert_eq!(phase.schema_files.len(), schema_assets.len());
 
     let config = gents_pack::pack::load_pack_authoring_config(

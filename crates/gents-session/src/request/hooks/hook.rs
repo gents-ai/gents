@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use super::effect::{Effect, Manifest, Row};
+use super::effect::{DocRef, Effect, Manifest, Row};
 
 /// A declared read: rows of one collection selected by equality on its
 /// fields. A plugin declares its reads from the event alone and gets one
@@ -74,6 +74,21 @@ impl Query {
         self.revisions = Some(links.into());
         self
     }
+}
+
+/// Lean `Hooks.historyPermitted`: a revision read is answered only for a
+/// collection the manifest declares history for that the plugin owns, or for
+/// a read its `_docID` filter pins to a document the event names.
+pub fn history_permitted(manifest: &Manifest, named: &[DocRef], query: &Query) -> bool {
+    let collection = query.collection.as_str();
+    manifest.history.contains(&collection)
+        && (manifest.owned(collection).is_some()
+            || query.filter.iter().any(|(field, value)| {
+                field == "_docID"
+                    && value
+                        .as_str()
+                        .is_some_and(|doc| named.contains(&DocRef::new(collection, doc)))
+            }))
 }
 
 /// Lean `Hooks.Outcome`: a refusal, or a value for core and the effects the

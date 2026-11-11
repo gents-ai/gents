@@ -36,10 +36,10 @@ use super::sections::{self, new_id};
 use super::tree::git_changes;
 use super::work::{self, Work};
 use super::{forms, git, items, menus, packs, prefs, setup, usage};
-use crate::caused_sessions::{load_caused_sessions_as, CausedSession};
 use crate::commands::accounts::account_rows;
 use crate::commands::config::crud::{query_collection_sorted, SKILL_SPEC};
 use crate::commands::mailbox;
+use gents_session::session::caused::{load_caused_sessions_as, CausedSession};
 
 /// What the shell opens with. `work` is why the shell has no runtime when it is `Err`.
 pub(super) struct Opening {
@@ -2176,7 +2176,7 @@ mod tests {
         let keys = tempfile::tempdir().unwrap();
         let key = keys.path().join("principal.key");
         let (home, _) = home_serving("http://127.0.0.1:1/api/v0/graphql", Some(&key));
-        crate::shared::test_support::cli_user().await;
+        gents_host::test_support::cli_user().await;
         let work = work::work_for(home.path());
         assert!(work.is_ok(), "this CLI's User signs: {:?}", work.err());
         let (updates, told) = std::sync::mpsc::channel();
@@ -2248,7 +2248,7 @@ mod tests {
             !reread_asked(source, watched).await,
             "a failure reads nothing"
         );
-        let data = crate::home_state::default_data_dir(home.path());
+        let data = gents_service::home_state::default_data_dir(home.path());
         assert!(!data.exists(), "a pack call opened the store");
     }
 

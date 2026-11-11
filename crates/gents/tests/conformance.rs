@@ -41,7 +41,6 @@ use gents_lean_vocab::{
     lean_transcript_cases, lean_vocabulary_values, LeanEventDeliveryAction,
     LeanLifecycleTransitionCase,
 };
-use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{
     fetch_request_lineage_snapshot, fetch_request_snapshot, fetch_request_snapshot_raw,
     fetch_session_snapshot, RequestLineageSnapshot, RequestSnapshot,
@@ -113,8 +112,6 @@ mod session_control;
 mod startup_readiness;
 #[path = "conformance/streaming_compaction.rs"]
 mod streaming_compaction;
-#[path = "conformance/tool_call.rs"]
-mod tool_call;
 
 #[test]
 fn lean_executable_contracts_cover_initial_domains() {
@@ -353,7 +350,5 @@ mod root_admission;
 mod scope_templates;
 #[path = "conformance/self_config.rs"]
 mod self_config;
-#[path = "conformance/structure.rs"]
-mod structure;
 #[path = "conformance/tool_policy.rs"]
 mod tool_policy;

@@ -6,7 +6,8 @@ pub enum ExecutionOriginError {
     Required,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ExecutionOrigin {
     Interactive,
     Scheduled,
@@ -29,5 +30,18 @@ impl ExecutionOrigin {
             }),
             None => Err(ExecutionOriginError::Required),
         }
+    }
+}
+
+#[cfg(test)]
+mod conformance {
+    use super::ExecutionOrigin;
+
+    #[test]
+    fn execution_origins_are_the_lean_execution_origins() {
+        gents_lean_vocab::families::execution_origin_vocabulary::replay(&[
+            ExecutionOrigin::Interactive,
+            ExecutionOrigin::Scheduled,
+        ]);
     }
 }

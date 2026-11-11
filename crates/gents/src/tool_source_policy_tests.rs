@@ -1,4 +1,5 @@
 use acp::NodePermission;
+use gents_store::identity::NodeIdentity;
 
 async fn write_fixture_tools(
     access: &gents_store::config_client::ConfigAccess,

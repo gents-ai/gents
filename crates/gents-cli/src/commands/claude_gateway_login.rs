@@ -2,7 +2,8 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
 use crate::cli::args::ClaudeGatewayLoginArgs;
-use crate::{print_json, resolve_config_access, resolve_node_did};
+use crate::{print_json, resolve_config_access};
+use gents_service::home_state::resolve_node_did;
 
 pub(crate) async fn claude_gateway_login(args: ClaudeGatewayLoginArgs) -> Result<()> {
     let base = gents_inference::claude_gateway_login::base_url(&args.url)?;

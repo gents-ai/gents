@@ -17,8 +17,8 @@ use serde_json::Value;
 
 use super::resolve_job;
 use crate::cli::{PackDriftArgs, PackInstallArgs, ScopeArgs};
-use crate::commands::pack::wire::{wire_in, WireRequest};
 use crate::output_format::OutputFormat;
+use gents_pack::pack::plugin_wire::{wire_in, WireRequest};
 
 /// A stage of a promotion; `promote` reports each one before it starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -259,7 +259,8 @@ pub async fn promote(
     };
     let installed = async {
         let source =
-            crate::commands::pack::resolve_pack_source(&install.package, None, home).await?;
+            gents_pack::pack::resolved_pack::resolve_pack_source(&install.package, None, home)
+                .await?;
         crate::commands::pack::install_documents_pack(access, actor, &source, &install, true)
             .await
             .map_err(gents_pack::pack::PackChangeError::into_anyhow)
@@ -301,6 +302,7 @@ pub async fn promote(
             dynamic_consent: false,
             tool_calls_consent: false,
         },
+        gents_service::home_state::load_held_user_identity,
     )
     .await
     .with_context(|| format!("promote wire failed{recovery}"))?;

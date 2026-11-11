@@ -1305,8 +1305,14 @@ struct StorageWriteGateCase {
 /// must complete before and after the modeled cleanup-timeout interval.
 #[tokio::test]
 async fn lean_cancelled_rollback_timeout_releases_actual_transaction_gate() {
-    let cases: Vec<StorageWriteGateCase> = serde_json::from_str(include_str!(
-        "../../../gents/tests/fixtures/storage_write_gate.json"
+    let cases: Vec<StorageWriteGateCase> = serde_json::from_value(serde_json::Value::from(
+        tokio::task::spawn_blocking(|| {
+            gents_lean_vocab::lean_contract_snapshot()
+                .storage_write_gate_cases
+                .clone()
+        })
+        .await
+        .expect("Lean snapshot load"),
     ))
     .expect("Lean storage write-gate fixture");
     let scenario = cases
@@ -1404,8 +1410,14 @@ async fn wait_for_gate_waiters(gate: &super::MutationWriteGate, expected: usize)
 
 #[tokio::test]
 async fn lean_write_admission_traces_match_native_independent_leases_and_capacity() {
-    let scenarios: Vec<WriteAdmissionScenario> = serde_json::from_str(include_str!(
-        "../../../gents/tests/fixtures/storage_write_gate_admission.json"
+    let scenarios: Vec<WriteAdmissionScenario> = serde_json::from_value(serde_json::Value::from(
+        tokio::task::spawn_blocking(|| {
+            gents_lean_vocab::lean_contract_snapshot()
+                .storage_write_gate_admission_cases
+                .clone()
+        })
+        .await
+        .expect("Lean snapshot load"),
     ))
     .expect("Lean write-admission traces");
 

@@ -1,6 +1,7 @@
 use gents_documents::FileToolMode;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LspAction {
     Diagnostics,
     Definition,
@@ -111,5 +112,17 @@ mod tests {
             FileToolMode::ReadWrite,
             LspMutationSource::ForegroundReturnedEdit
         ));
+    }
+}
+
+#[cfg(test)]
+mod conformance {
+    use super::LspAction;
+
+    #[test]
+    fn lsp_actions_mutate_exactly_as_the_lean_model() {
+        gents_lean_vocab::families::lsp_lsp_action_mutates::replay(|i| {
+            LspAction::mutates(i.lsp_action)
+        });
     }
 }

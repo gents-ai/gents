@@ -126,7 +126,7 @@ mod tests {
     #[tokio::test]
     async fn offline_client_access_exports_the_owned_configuration() {
         let node = std::sync::Arc::new(
-            crate::shared::test_support::fixture_node_builder()
+            gents_host::test_support::fixture_node_builder()
                 .build()
                 .await
                 .unwrap(),
@@ -134,7 +134,7 @@ mod tests {
         gents_store::schema::ensure_runtime_schemas(&node)
             .await
             .unwrap();
-        let owner = crate::shared::test_support::publish_test_node(&node).await;
+        let owner = gents_host::test_support::publish_test_node(&node).await;
         // Offline client configuration access refuses every write transaction,
         // even for the runtime's own DID.
         let offline_client = gents_store::config_client::ConfigAccess::local_as(

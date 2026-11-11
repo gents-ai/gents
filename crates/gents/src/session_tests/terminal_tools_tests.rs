@@ -1,4 +1,6 @@
 use gents_session::request::lifecycle::terminal_tools::*;
+use gents_protocol::row::AgentRequestRow;
+use gents_store::graphql::escape_graphql_string;
 use gents_store::config_client::ConfigAccess;
 
     #[tokio::test]

@@ -32,6 +32,7 @@ gents-automation = { workspace = true }
 gents-observe = { workspace = true }
 gents-loop = { workspace = true }
 gents-server = { package = "gents-cli", path = "../gents-cli", default-features = false }
+gents-host.workspace = true
 gents-desktop-core.workspace = true
 gents-protocol.workspace = true
 gents-desktop-bridge = { path = "../gents-desktop-bridge", default-features = false }
@@ -54,6 +55,7 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
+gents-service.workspace = true
 gents = { path = "../gents", features = ["test-home-guard"] }
 defra-node.workspace = true
 chrono.workspace = true

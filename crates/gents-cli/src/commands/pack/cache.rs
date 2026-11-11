@@ -39,7 +39,7 @@ pub(super) fn prepare_recorded_cache(
         record.coordinate == coordinate,
         "pack receipt coordinate mismatch"
     );
-    let (namespace, name) = super::split_namespace(coordinate);
+    let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(coordinate);
     let expected = cache_root(Path::new(""), namespace, name, &record.digest)?;
     let recorded = Path::new(&record.assets);
     let unscoped = Path::new(gents_store::local::home::PACKS_DIR_NAME)
@@ -86,8 +86,9 @@ pub(super) fn prepare_recorded_cache(
 }
 
 pub(super) async fn prune(args: PackPruneArgs) -> Result<()> {
-    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
-    let pack = super::resolve_pack_source(&args.package, None, &home).await?;
+    let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
+    let pack =
+        gents_pack::pack::resolved_pack::resolve_pack_source(&args.package, None, &home).await?;
     anyhow::ensure!(
         pack.manifest().metadata.kind == PackKind::Assets
             || pack
@@ -130,7 +131,9 @@ mod tests {
         for (namespace, version) in [("acme", "1.0.0"), ("acme", "2.0.0"), ("zeta", "1.0.0")] {
             let dir = assets_pack_dir(namespace, "tools", version);
             let pack = local_pack_source(dir.path(), home.path());
-            let (root, _lease) = super::super::materialize_cached_pack(home.path(), &pack).unwrap();
+            let (root, _lease) =
+                gents_pack::pack::resolved_pack::materialize_cached_pack(home.path(), &pack)
+                    .unwrap();
             sources.push((pack, root));
         }
         let unscoped = home.path().join("packs/tools").join("a".repeat(64));
@@ -165,7 +168,9 @@ mod tests {
         for name in ["store", "unpacked", "materialized"] {
             let dir = assets_pack_dir("acme", name, "1.0.0");
             let pack = local_pack_source(dir.path(), home.path());
-            let (root, _lease) = super::super::materialize_cached_pack(home.path(), &pack).unwrap();
+            let (root, _lease) =
+                gents_pack::pack::resolved_pack::materialize_cached_pack(home.path(), &pack)
+                    .unwrap();
             assert_eq!(
                 root.parent().unwrap(),
                 home.path().join("packs/.materialized/acme").join(name)

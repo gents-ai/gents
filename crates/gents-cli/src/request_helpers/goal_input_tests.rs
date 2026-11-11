@@ -12,14 +12,14 @@ use std::sync::{Arc, Mutex};
 /// proxy: the Node and its managed Agents are the User's, the session is the
 /// Agent's own, and a verified Goal observation is the Agent's signed row.
 pub(crate) struct Source {
-    pub(crate) home: crate::shared::test_support::ClientHome,
+    pub(crate) home: gents_host::test_support::ClientHome,
     /// The User's signed endpoint, through the recording proxy.
     pub(crate) graphql: GraphqlEndpoint,
     pub(crate) node_did: String,
     pub(crate) agent_did: String,
     pub(crate) default_agent_did: String,
     queries: Arc<Mutex<Vec<String>>>,
-    _proxy: crate::shared::test_support::ForwardingProxy,
+    _proxy: gents_host::test_support::ForwardingProxy,
 }
 
 impl Source {
@@ -93,7 +93,7 @@ pub(crate) fn reference(value: &Value) -> Option<GoalAssignmentInput> {
 }
 
 async fn publish_default_agent(
-    home: &crate::shared::test_support::ClientHome,
+    home: &gents_host::test_support::ClientHome,
     agent_did: &str,
 ) -> Result<()> {
     use gents_documents::apply_desired_state_plan;
@@ -144,7 +144,7 @@ async fn publish_default_agent(
 /// Publishes the Agent's signed observation of `session_doc`, as its runtime
 /// projects one, with `fault` applied before or after signing.
 async fn publish_observation(
-    home: &crate::shared::test_support::ClientHome,
+    home: &gents_host::test_support::ClientHome,
     binding: &gents_protocol::agent_identity::AgentIdentityBinding,
     session_doc: &str,
     observed: Option<GoalAssignmentInput>,
@@ -220,8 +220,9 @@ pub(crate) async fn fixture(
     observed: Option<GoalAssignmentInput>,
     fault: Option<&str>,
 ) -> Result<Source> {
-    use crate::shared::test_support::{ForwardingProxy, ProxyDecision};
-    let home = crate::shared::test_support::ClientHome::new().await;
+    use gents_host::test_support::ForwardingProxy;
+    use gents_host::test_support::ProxyDecision;
+    let home = gents_host::test_support::ClientHome::new().await;
     let binding = home.agent("Goal agent").await;
     let default_agent_did = if fault == Some("different-default-agent") {
         home.agent("Default agent").await.agent_did
@@ -248,7 +249,7 @@ pub(crate) async fn fixture(
         })
     };
     let proxy = ForwardingProxy::spawn(home.graphql(), hook).await;
-    let graphql = crate::shared::test_support::user_endpoint(&proxy.graphql, &home.user);
+    let graphql = gents_host::test_support::user_endpoint(&proxy.graphql, &home.user);
     Ok(Source {
         node_did: home.node_did().to_owned(),
         agent_did: binding.agent_did,

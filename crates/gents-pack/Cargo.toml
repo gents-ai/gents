@@ -8,16 +8,18 @@ description = "Packs and the plugin runner for Gents"
 
 [features]
 default = ["defra-node/http", "defra-node/p2p", "defra-node/wasmtime-runtime"]
-typescript = ["dep:ts-rs", "gents-loop/typescript", "gents-protocol/typescript", "gents-store/typescript", "gents-documents/typescript"]
-live-e2e = ["gents-store/live-e2e", "gents-documents/live-e2e"]
-test-home-guard = ["gents-store/test-home-guard", "gents-documents/test-home-guard"]
-test-fixtures = ["test-home-guard", "axum/ws", "gents-store/test-fixtures", "gents-documents/test-fixtures", "dep:wat"]
+typescript = ["dep:ts-rs", "gents-loop/typescript", "gents-protocol/typescript", "gents-store/typescript", "gents-documents/typescript", "gents-inference/typescript"]
+live-e2e = ["gents-store/live-e2e", "gents-documents/live-e2e", "gents-inference/live-e2e"]
+test-home-guard = ["gents-store/test-home-guard", "gents-documents/test-home-guard", "gents-inference/test-home-guard"]
+test-fixtures = ["test-home-guard", "axum/ws", "gents-store/test-fixtures", "gents-documents/test-fixtures", "gents-inference/test-fixtures", "dep:wat"]
 
 [dependencies]
 wat = { version = "1.254", optional = true }
 gents-store.workspace = true
 gents-documents.workspace = true
+gents-inference.workspace = true
 acp.workspace = true
+async-trait = "0.1"
 schema.workspace = true
 rapidhash = { workspace = true }
 ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat", "no-serde-warnings"] }
@@ -43,6 +45,7 @@ sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+uuid.workspace = true
 reqwest = { workspace = true, features = ["stream"] }
 tempfile = "3"
 memmap2 = "0.9"

@@ -9,7 +9,7 @@ use gents_eval::optimization::target::JobTarget;
 use gents_eval::optimization::{
     derive_state, job_dir, job_refused, load_job, promote_refused, removable, run_job,
     show as show_job, validate_job_id, Budgets, JobOutcome, JobRequest, JobState, PolicyV2,
-    Proposal, Proposer, ScriptedProposer,
+    Proposer,
 };
 use gents_eval::runner::embedded::EmbeddedExecutor;
 use gents_eval::runner::RunOptions;
@@ -25,7 +25,8 @@ use crate::commands::eval::{
     cancel_on_ctrl_c, default_id, follow_progress, load_policy, source_commit, source_dirty,
     write_json, Deps, EvalContext, Progress,
 };
-use crate::commands::pack::{resolve_pack_source, resolve_subject_pack, single_slot};
+use crate::commands::pack::{resolve_subject_pack, single_slot};
+use gents_pack::pack::resolved_pack::resolve_pack_source;
 
 use behavior_proposer::AgentProposer;
 
@@ -60,6 +61,7 @@ pub(crate) async fn dispatch(
         registry: &registry,
         cancel,
         options: RunOptions::default(),
+        proposer: None,
     };
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
@@ -90,26 +92,6 @@ fn surface_refusal(error: anyhow::Error) -> anyhow::Error {
         Some(text) => anyhow::anyhow!(text),
         None => crate::commands::eval::surface_refusal(error),
     }
-}
-
-fn scripted_proposer(path: &Path, rounds: u32) -> Result<ScriptedProposer> {
-    let bytes = std::fs::read(path)
-        .with_context(|| format!("reading proposer script {}", path.display()))?;
-    let proposals: Vec<Proposal> = serde_json::from_slice(&bytes)
-        .with_context(|| format!("parsing proposer script {}", path.display()))?;
-    if proposals.len() < usize::try_from(rounds).unwrap_or(usize::MAX) {
-        anyhow::bail!(
-            "proposer script {} holds {} proposals, fewer than --rounds {rounds}",
-            path.display(),
-            proposals.len()
-        );
-    }
-    Ok(ScriptedProposer::new(
-        proposals
-            .into_iter()
-            .map(|proposal| (proposal.text, proposal.rationale))
-            .collect(),
-    ))
 }
 
 async fn behavior_proposer(
@@ -229,7 +211,7 @@ fn ensure_tool_less(
 }
 
 fn subject_preamble(subject_dir: &Path, agent_did: &str, target: &JobTarget) -> Result<String> {
-    let dossier = crate::commands::eval::init::dossier::render(subject_dir, Some(agent_did))?;
+    let dossier = gents_eval::authoring::dossier::render(subject_dir, Some(agent_did))?;
     let instruction = match target {
         JobTarget::Context => "this agent's system prompt".to_owned(),
         JobTarget::Task(task_id) => format!(
@@ -272,15 +254,24 @@ fn proposer_agent_slot(
     }
 }
 
+enum ProposerSource<'a> {
+    Injected(&'a dyn Proposer),
+    Agent(&'a ProposerArg),
+}
+
 async fn run(
     ctx: &EvalContext,
     args: &OptimizationRunArgs,
     deps: &Deps<'_>,
     out: &mut dyn Write,
 ) -> Result<()> {
-    let proposer_arg = args.proposer.as_ref().context(
-        "optimization run needs a proposer: pass --proposer scripted:<file> or --proposer agent:<pack>[:<agent>]",
-    )?;
+    let source = match (deps.proposer, args.proposer.as_ref()) {
+        (Some(injected), _) => ProposerSource::Injected(injected),
+        (None, Some(arg)) => ProposerSource::Agent(arg),
+        (None, None) => anyhow::bail!(
+            "optimization run needs a proposer: pass --proposer agent:<pack>[:<agent>]"
+        ),
+    };
     let subject =
         resolve_subject_pack(&ctx.home_dir, &args.subject.pack, args.registry.as_deref()).await?;
     let baseline_pack = subject.directory().to_path_buf();
@@ -335,19 +326,22 @@ async fn run(
         run_options: deps.options.clone(),
     };
     gents_eval::optimization::check_request(&request, &policy)?;
-    let proposer: Box<dyn Proposer> = match proposer_arg {
-        ProposerArg::Scripted(script) => Box::new(scripted_proposer(script, args.rounds)?),
-        ProposerArg::Agent { pack, agent } => {
-            let proposer = behavior_proposer(
-                ctx,
-                args,
-                pack,
-                agent.as_deref(),
-                &request.baseline_pack,
-                &request.agent_slot,
-            )
-            .await?;
-            Box::new(proposer)
+    let built: Box<dyn Proposer>;
+    let proposer: &dyn Proposer = match source {
+        ProposerSource::Injected(injected) => injected,
+        ProposerSource::Agent(ProposerArg { pack, agent }) => {
+            built = Box::new(
+                behavior_proposer(
+                    ctx,
+                    args,
+                    pack,
+                    agent.as_deref(),
+                    &request.baseline_pack,
+                    &request.agent_slot,
+                )
+                .await?,
+            );
+            &*built
         }
     };
     let resume = format!(
@@ -357,7 +351,7 @@ async fn run(
         &ctx.access,
         &request,
         deps.executor,
-        proposer.as_ref(),
+        proposer,
         deps.registry,
         &policy,
         deps.cancel.clone(),

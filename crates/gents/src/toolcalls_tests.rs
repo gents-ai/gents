@@ -1,2 +1,2 @@
 mod hook;
-mod lifecycle;
+pub(crate) mod lifecycle;

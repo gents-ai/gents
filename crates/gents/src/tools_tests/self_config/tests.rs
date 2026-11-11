@@ -2,10 +2,19 @@ use super::agent_management::{model_agent_mutate, model_agent_preview};
 use super::command::{agents::agent_params, contracts::help_patch_contracts};
 use super::*;
 use gents_protocol::tool_names::{CONFIG_TOOL_NAME, SELF_CONFIG_TOOL_NAMES};
+use gents_tools::builtin::self_config::agent_management::agent_mutate;
+use gents_tools::builtin::self_config::ops::ApplyRequest;
+use gents_tools::builtin::self_config::test_support::{
+    agent_inspect, agent_request, anchored_request, backend_request, node_default_agent,
+    profile_create_request, profile_request, profile_target_request, protect_working_agent,
+    tools_request,
+};
 
 mod live_documents;
 mod pack_authoring;
 
+
+static PLUGIN_BUILDER_STUB: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn test_plugins() -> Arc<gents_toolcalls::plugin::executor::PluginExecutor> {
     Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::default())

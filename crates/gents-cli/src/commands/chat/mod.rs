@@ -29,7 +29,7 @@ pub(crate) async fn print_reply(
     message: &str,
 ) -> Result<()> {
     // The turn is the User's: it is signed by the CLI's client key, never the Node's.
-    crate::load_client_identity().await?;
+    gents_service::home_state::load_client_identity().await?;
     let session_id = session.map_or_else(|| uuid::Uuid::new_v4().to_string(), str::to_owned);
     let input = gents_session::request::lifecycle::prepare_user_message_input(
         &gents_store::config_client::ConfigAccess::Graphql(graphql.clone()),

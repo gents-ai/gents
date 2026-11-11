@@ -57,7 +57,7 @@ fn validate_trigger_provenance(trigger_lineage: &TriggerLineage) -> Result<()> {
     Ok(())
 }
 
-async fn resolve_created_agent_request_doc_id(
+pub async fn resolve_created_agent_request_doc_id(
     access: &gents_store::config_client::ConfigAccess,
     mutation_response: &defra_node::QueryResponse,
     mutation_field: &str,

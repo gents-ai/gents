@@ -249,7 +249,7 @@ pub async fn submit(
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct Intent {
+pub struct Intent {
     #[serde(rename = "_docID")]
     doc_id: String,
     intent_id: String,
@@ -648,12 +648,12 @@ pub async fn recover_claim(
 
 /// The physical invocation and action of a claimed, signature-verified control.
 pub struct ClaimedTarget<'a> {
-    pub(crate) node_did: &'a str,
-    pub(crate) session_id: &'a str,
-    pub(crate) requester_did: Option<&'a str>,
-    pub(crate) tool_call_id: &'a str,
-    pub(crate) tool_call_doc_id: &'a str,
-    pub(crate) action: &'a str,
+    pub node_did: &'a str,
+    pub session_id: &'a str,
+    pub requester_did: Option<&'a str>,
+    pub tool_call_id: &'a str,
+    pub tool_call_doc_id: &'a str,
+    pub action: &'a str,
 }
 
 /// Applies a claimed control as its selected Agent through the existing process

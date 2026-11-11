@@ -2,7 +2,8 @@ use rapidhash::{HashSetExt, RapidHashSet};
 
 pub use crate::request_lifecycle::{InvalidRequestLifecycleState, RequestLifecycleState};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ClientTurnState {
     WaitingForClaim,
     Running,
@@ -153,3 +154,15 @@ impl SessionRowObservation {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod conformance {
+    use super::ClientTurnState;
+
+    #[test]
+    fn client_turn_state_is_terminal_matches_lean() {
+        gents_lean_vocab::families::client_turn_state_is_terminal::replay(|i| {
+            ClientTurnState::is_terminal(i.client_turn_state)
+        });
+    }
+}

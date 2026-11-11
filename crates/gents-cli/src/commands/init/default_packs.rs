@@ -242,15 +242,17 @@ async fn engineer_of(
     let Ok(agent) = crate::commands::start::default_agent(access, owner).await else {
         return Ok(None);
     };
-    let rows = crate::graphql_rows(
-        access,
+    let rendered = {
+        use gents_protocol::document_query::{fields::agent as fields, Filter, Query, Selection};
+        Query::select(Selection::new().field(fields::TAGS))
+            .filter(Filter::eq(fields::AGENT_DID, &agent))
+            .limit(1)
+            .render()
+    };
+    let rows = gents_protocol::graphql::graphql_rows_from_response(
+        &access.read(&rendered).await?,
         "Agent",
-        &format!(
-            r#"{{ Agent(filter: {{agent_did: {{_eq: "{}"}}}}, limit: 1) {{ tags }} }}"#,
-            gents_store::graphql::escape_graphql_string(&agent)
-        ),
-    )
-    .await?;
+    );
     let engineer = rows.first().is_some_and(|row| {
         row["tags"].as_array().is_some_and(|tags| {
             tags.iter().any(|tag| {
@@ -452,7 +454,7 @@ enum Outcome {
 
 /// A default pack's archive with its dependencies and what its plugins ask.
 struct Resolved {
-    source: command::PackSource,
+    source: gents_pack::pack::resolved_pack::ResolvedPack,
     requested: Value,
 }
 
@@ -467,7 +469,7 @@ impl Resolved {
 async fn resolve(home: &Path, pack: &str, registry: Option<&str>) -> Result<Resolved> {
     let source = tokio::time::timeout(
         RESOLVE_BOUND,
-        command::resolve_pack_source(pack, registry, home),
+        gents_pack::pack::resolved_pack::resolve_pack_source(pack, registry, home),
     )
     .await
     .map_err(|_| {
@@ -481,14 +483,14 @@ async fn resolve(home: &Path, pack: &str, registry: Option<&str>) -> Result<Reso
         dependencies.push(
             tokio::time::timeout(
                 RESOLVE_BOUND,
-                command::resolve_pack_source(coordinate, registry, home),
+                gents_pack::pack::resolved_pack::resolve_pack_source(coordinate, registry, home),
             )
             .await
             .map_err(|_| anyhow::anyhow!("its dependency {coordinate} did not resolve in time"))?
             .with_context(|| format!("resolving its dependency {coordinate}"))?,
         );
     }
-    let requested = command::wire::requested_authority(
+    let requested = gents_pack::pack::plugin_wire::requested_authority(
         source.manifest(),
         &dependencies
             .iter()
@@ -510,7 +512,7 @@ async fn install_one(
     expect_digest: Option<&str>,
 ) -> Result<Outcome> {
     let Resolved { source, requested } = resolve(home, pack, registry).await?;
-    command::check_expected_digest(expect_digest, source.digest())?;
+    gents_pack::pack::install_flow::check_expected_digest(expect_digest, source.digest())?;
     let wire = !source.manifest().metadata.plugins.is_empty();
     let asks = requested.as_array().is_some_and(|asks| !asks.is_empty());
     let tool_calls = TOOL_CALLS_ON_APPROVAL.contains(&pack);
@@ -595,7 +597,7 @@ async fn install_one(
             anyhow::bail!("simulated wire failure for {pack}");
         }
         let wired = if wire {
-            command::wire_pack_plugins_consenting(
+            gents_pack::pack::plugin_wire::wire_pack_plugins_consenting(
                 &access,
                 &owner,
                 home,
@@ -603,6 +605,7 @@ async fn install_one(
                 &[engineer.to_owned()],
                 approved && dynamic,
                 approved && tool_calls,
+                gents_service::home_state::load_held_user_identity,
             )
             .await
             .with_context(|| {
@@ -611,12 +614,13 @@ async fn install_one(
         } else {
             Vec::new()
         };
-        let skills = command::wire::attach_pack_skills(
+        let skills = gents_pack::pack::plugin_wire::attach_pack_skills(
             &access,
             &owner,
             engineer,
             &coordinate,
             source.digest(),
+            gents_service::home_state::load_held_user_identity,
         )
         .await
         .with_context(|| {
@@ -645,7 +649,7 @@ async fn install_one(
 /// has them, or with `--approve` the named ones installed with what they
 /// request approved.
 pub(crate) async fn starter(args: crate::cli::PackStarterArgs) -> Result<()> {
-    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let home = gents_service::home_state::resolve_home_dir(args.home.as_deref());
     let registry = args.registry.as_deref();
     if args.approve.is_empty() {
         return crate::print_json(&json!({
@@ -724,8 +728,9 @@ async fn engineer_config(
         .local_node()
         .context("a runtime is serving this home; ask its Engineer to install the pack")?
         .clone();
-    let stored = crate::home_state::read_init_config(home)?.context("home is not initialized")?;
-    let runtime = crate::home_state::load_initialized_home_identity(home, &stored)?;
+    let stored =
+        gents_service::home_state::read_init_config(home)?.context("home is not initialized")?;
+    let runtime = gents_service::home_state::load_initialized_home_identity(home, &stored)?;
     let binding = agent_identity_binding(access, owner, engineer).await?;
     let agent = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding)?;
     let held = access
@@ -1272,11 +1277,12 @@ mod tests {
         assert_eq!(granted.as_array().map(Vec::len), Some(1), "{report}");
         let worker = granted[0]["agent"].as_str().unwrap().to_owned();
         let node = access.local_node().unwrap().clone();
-        let stored = crate::home_state::read_init_config(home.path())
+        let stored = gents_service::home_state::read_init_config(home.path())
             .unwrap()
             .unwrap();
         let runtime =
-            crate::home_state::load_initialized_home_identity(home.path(), &stored).unwrap();
+            gents_service::home_state::load_initialized_home_identity(home.path(), &stored)
+                .unwrap();
         let binding = agent_identity_binding(&access, &owner, &worker)
             .await
             .unwrap();

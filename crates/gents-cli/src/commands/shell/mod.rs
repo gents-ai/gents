@@ -43,7 +43,7 @@ pub(crate) async fn open(
         .await
         .context("reading this home's GraphQL endpoint")?;
     let config = runtime
-        .spawn_blocking(move || crate::home_state::read_finished_init_config(&setup))
+        .spawn_blocking(move || gents_service::home_state::read_finished_init_config(&setup))
         .await
         .context("reading this home's setup")??
         .context("this home is not set up: run `gents` to set it up")?;

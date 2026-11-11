@@ -1,5 +1,7 @@
-use serde_json::json;
+use serde_json::{json, Value};
 use gents_tools::native::session_history::discovery::*;
+use gents_store::config_client::ConfigAccess;
+use gents_tools::native::session_history::SessionHistoryTool;
 use gents_loop::tool::Tool;
 use gents_session::request::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 use gents_store::identity::{KeyIdentity, NodeIdentity};

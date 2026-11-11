@@ -2,17 +2,15 @@ use anyhow::Result;
 use serde_json::{json, Value};
 
 use crate::config_writes::ConfigAccess;
-use crate::{CONFIG_SCHEMA_COLLECTIONS, SCHEMA_COLLECTION_CHECKS};
+use gents_store::collection::Collection;
 
 pub(super) async fn diagnose_schema_presence(access: &ConfigAccess) -> Vec<Value> {
     let mut results = Vec::new();
-    for (collection, field) in SCHEMA_COLLECTION_CHECKS {
-        let required_for_config = CONFIG_SCHEMA_COLLECTIONS.contains(collection);
-        let query = format!(
-            r#"{{ {collection}(limit: 1) {{ {field} }} }}"#,
-            collection = collection,
-            field = field
-        );
+    for collection in gents_protocol::schemas::ALL_COLLECTION_NAMES {
+        let required_for_config = Collection::ALL
+            .iter()
+            .any(|config| config.graphql_type() == *collection);
+        let query = format!(r#"{{ {collection}(limit: 1) {{ _docID }} }}"#);
         match access.execute(&query).await {
             Ok(_) => results.push(json!({
                 "collection": collection,
@@ -34,25 +32,25 @@ pub(super) async fn load_runtime_row(
     access: &ConfigAccess,
     node_did: &str,
 ) -> Result<Option<Value>> {
-    use gents_store::graphql::escape_graphql_string;
-    let query = format!(
-        r#"{{
-            NodeRuntime(
-                filter: {{ node_did: {{ _eq: "{node_did}" }} }},
-                limit: 1
-            ) {{
-                node_did
-                reconcile_phase
-                last_reconcile_result
-                last_reconcile_error
-                last_reconcile_completed_at
-                updated_at
-            }}
-        }}"#,
-        node_did = escape_graphql_string(node_did),
-    );
-    Ok(crate::graphql_rows(access, "NodeRuntime", &query)
-        .await?
-        .into_iter()
-        .next())
+    use gents_protocol::document_query::{
+        fields::node_runtime as fields, Filter, Query, Selection,
+    };
+    let rendered = Query::select(
+        Selection::new()
+            .field(fields::NODE_DID)
+            .field(fields::RECONCILE_PHASE)
+            .field(fields::LAST_RECONCILE_RESULT)
+            .field(fields::LAST_RECONCILE_ERROR)
+            .field(fields::LAST_RECONCILE_COMPLETED_AT)
+            .field(fields::UPDATED_AT),
+    )
+    .filter(Filter::eq(fields::NODE_DID, node_did))
+    .limit(1)
+    .render();
+    Ok(gents_protocol::graphql::graphql_rows_from_response(
+        &access.read(&rendered).await?,
+        "NodeRuntime",
+    )
+    .into_iter()
+    .next())
 }

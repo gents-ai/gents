@@ -94,5 +94,3 @@ where
 def casesJson : String := jsonArray (cases.map caseJson)
 
 end Conformance.NativeCompletion
-
-def main : IO Unit := IO.println Conformance.NativeCompletion.casesJson

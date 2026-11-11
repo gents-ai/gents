@@ -3,6 +3,7 @@ use std::time::Duration;
 use std::time::Instant;
 use gents_session::request::watcher::cooldown::ProcessedMark;
 use gents_session::request::watcher::*;
+use gents_session::test_support::ScopedWatcherFixture;
 
 #[tokio::test]
 async fn pending_requests_are_scoped_by_node_did_without_host_identity() {

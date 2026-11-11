@@ -20,7 +20,7 @@ struct BackgroundCompletionGateKey {
     queue_key: String,
 }
 
-pub(super) fn background_completion_gate(
+pub fn background_completion_gate(
     node: &EmbeddedNode,
     session_id: &str,
     node_did: &str,

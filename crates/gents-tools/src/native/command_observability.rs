@@ -25,8 +25,8 @@ pub(super) fn credential_inspection_failed(node_did: Option<&str>) {
     record_credential_failure(&CREDENTIAL_INSPECTION_FAILURES, node_did);
 }
 
-#[cfg(any(target_os = "macos", test))]
-fn record_credential_failure(counter: &AtomicU64, node_did: Option<&str>) {
+#[cfg(any(target_os = "macos", test, feature = "test-fixtures"))]
+pub fn record_credential_failure(counter: &AtomicU64, node_did: Option<&str>) {
     let count = counter.fetch_add(1, Ordering::Relaxed).saturating_add(1);
     if count.is_power_of_two() {
         tracing::error!(

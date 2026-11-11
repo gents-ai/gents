@@ -10,10 +10,10 @@ use gents_inference::llm::message::{
 use gents_inference::llm::{HookAction, ToolCallHookAction};
 use gents_loop::provider_input::ProviderInputProfile;
 use gents_store::identity::{KeyIdentity, NodeIdentity};
-use chrono::Utc;
-use gents_store::schema::ensure_runtime_schemas;
 use serde_json::json;
+use chrono::Utc;
 
+use gents_store::schema::ensure_runtime_schemas;
 use gents_toolcalls::call::hook::fixtures::*;
 use gents_toolcalls::call::hook::*;
 use defra_node::Node as EmbeddedNode;
@@ -61,7 +61,7 @@ async fn list_processes_skip_publishes_canonical_tool_result() {
         ToolCallHookAction::Skip { .. }
     ));
 
-    let timeline = gents_observe::run_timeline_fetch::load_run_timeline_rows(
+    let timeline = gents_observe::observe::run_timeline_fetch::load_run_timeline_rows(
         &hook.actor_access().unwrap(),
         "request-control-result",
     )
@@ -142,7 +142,7 @@ async fn wait_and_cancel_process_skip_publish_canonical_tool_results() {
         skipped.push((*id, reason));
     }
 
-    let timeline = gents_observe::run_timeline_fetch::load_run_timeline_rows(
+    let timeline = gents_observe::observe::run_timeline_fetch::load_run_timeline_rows(
         &hook.actor_access().unwrap(),
         "request-control-results",
     )

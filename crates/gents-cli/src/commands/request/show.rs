@@ -9,7 +9,8 @@ use serde_json::Value;
 use crate::cli::args::RequestShowArgs;
 use crate::cli::output_format::OutputFormat;
 use crate::request_helpers::{observe_canonical_request_output, request_output_envelope};
-use crate::{post_graphql, print_json, resolve_graphql_endpoint, resolve_request_id};
+use crate::{post_graphql, print_json, resolve_request_id};
+use gents_service::home_state::resolve_graphql_endpoint;
 
 use super::show_text::render_request_show_text;
 use super::show_tools::{
@@ -83,12 +84,13 @@ async fn load_request_show_snapshot(
     let tool_rows = value_array(&tool_response, "/data/AgentToolCall");
 
     let access = ConfigAccess::Graphql(graphql.clone());
-    let child_requests = crate::caused_sessions::started_by_request(&access, &canonical_request)
-        .await
-        .with_context(|| format!("loading sessions started by {request_id}"))?
-        .into_iter()
-        .map(|(_, first)| serde_json::to_value(first).map(|row| child_request_view(&row)))
-        .collect::<Result<Vec<_>, _>>()?;
+    let child_requests =
+        gents_session::session::caused::started_by_request(&access, &canonical_request)
+            .await
+            .with_context(|| format!("loading sessions started by {request_id}"))?
+            .into_iter()
+            .map(|(_, first)| serde_json::to_value(first).map(|row| child_request_view(&row)))
+            .collect::<Result<Vec<_>, _>>()?;
 
     let request_terminal = canonical_request.is_terminal();
     let request_node_did = canonical_request.node_did.unwrap_or_default();

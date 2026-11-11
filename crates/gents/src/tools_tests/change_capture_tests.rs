@@ -9,6 +9,12 @@ use gents_toolcalls::call::lifecycle::admission_fixture::{
 };
 use gents_loop::live_output::LiveToolOutputRegistry;
 use gents_loop::tool::Tool;
+use gents_loop::live_output::DeferredToolWrites;
+use gents_protocol::file_changes::{
+    FileChangeImages as FileChange, FileImage, ToolFileChanges as ChangeBatch,
+    MAX_FILE_IMAGE_BYTES as MAX_IMAGE_BYTES,
+};
+use gents_session::file_contents::{content_hash, FileChanges};
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;

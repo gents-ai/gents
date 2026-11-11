@@ -22,7 +22,8 @@ use serde_json::Value;
 use crate::cli::ConfigTaskRunArgs;
 use crate::config_writes::ConfigAccess;
 use crate::request_helpers::wait_for_terminal_response;
-use crate::{print_json, resolve_config_access, resolve_graphql_endpoint};
+use crate::{print_json, resolve_config_access};
+use gents_service::home_state::resolve_graphql_endpoint;
 
 pub(crate) async fn config_task_run(args: ConfigTaskRunArgs) -> Result<()> {
     let output = enqueue_task_run(&args).await?;
@@ -81,7 +82,7 @@ pub(crate) async fn enqueue_task_run_on(
     session_id: Option<&str>,
     continue_session: Option<&str>,
 ) -> Result<TaskRunOutput> {
-    let node_did = crate::resolve_node_did(home, None)?;
+    let node_did = gents_service::home_state::resolve_node_did(home, None)?;
     let actor_did = access
         .actor_did()
         .context("Task invocation requires an authenticated client identity")?;
@@ -233,7 +234,8 @@ mod tests {
 
     #[tokio::test]
     async fn manual_task_goal_input_rejects_tampered_admitted_receipts() -> Result<()> {
-        use crate::shared::test_support::{ForwardingProxy, ProxyDecision};
+        use gents_host::test_support::ForwardingProxy;
+        use gents_host::test_support::ProxyDecision;
         let source = fixture(true, true, None, None).await?;
         source.admit(authored_input()).await?;
         let access = ConfigAccess::Graphql(source.graphql.clone());
@@ -259,7 +261,7 @@ mod tests {
             }) as futures_util::future::BoxFuture<'static, ProxyDecision>
         });
         let proxy = ForwardingProxy::spawn(source.home.graphql(), hook).await;
-        let tampering = ConfigAccess::Graphql(crate::shared::test_support::user_endpoint(
+        let tampering = ConfigAccess::Graphql(gents_host::test_support::user_endpoint(
             &proxy.graphql,
             source.user(),
         ));
@@ -275,10 +277,10 @@ mod tests {
     #[tokio::test]
     async fn run_now_uses_the_access_it_is_given() -> Result<()> {
         let home = tempfile::tempdir()?;
-        let did = crate::caused_sessions::fixtures::FIXTURE_DID.to_string();
-        crate::home_state::write_init_config(
+        let did = gents_session::test_support::lineage_fixtures::FIXTURE_DID.to_string();
+        gents_service::home_state::write_init_config(
             home.path(),
-            &crate::shared::StoredInitConfig {
+            &gents_service::state::StoredInitConfig {
                 home: home.path().to_string_lossy().into_owned(),
                 node_name: "fixture".into(),
                 node_did: did.clone(),
@@ -287,12 +289,12 @@ mod tests {
                 keychain_label: None,
                 secure_enclave_label: None,
                 tool_package: None,
-                tool_ceiling: crate::cli::args::ToolCeilingArg::MetaOnly,
+                tool_ceiling: gents_service::args::ToolCeilingArg::MetaOnly,
                 tool_root: None,
                 store_encryption: None,
             },
         )?;
-        let served = crate::shared::test_support::served_config(json!({
+        let served = gents_host::test_support::served_config(json!({
             "node": { "node_did": did },
             "default_agent_selection": { "node_did": did, "default_agent_did": "engineer" },
             "inference_backends": [{
@@ -341,7 +343,7 @@ mod tests {
         );
         assert_eq!(output.status, "pending");
         assert!(
-            !crate::home_state::default_data_dir(home.path()).exists(),
+            !gents_service::home_state::default_data_dir(home.path()).exists(),
             "the home's store is never opened"
         );
         served.node.shutdown().await.expect("node shutdown");

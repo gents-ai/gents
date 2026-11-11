@@ -1939,7 +1939,6 @@ fn owner_interface_fence_counts_anyhow_names_outside_tests() {
 #[rustfmt::skip]
 const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-cli/src/commands/eval/manage.rs", 1),
-    ("crates/gents-cli/src/commands/prepare_runtime.rs", 1),
     ("crates/gents-client-host/src/editor_store.rs", 1),
     ("crates/gents-desktop-bridge/src/host/local/windows.rs", 1),
     ("crates/gents-desktop-bridge/src/local_pairing.rs", 1),
@@ -1949,6 +1948,7 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-desktop-core/src/client/core/route_manager.rs", 2),
     ("crates/gents-desktop-core/src/error.rs", 1),
     ("crates/gents-desktop-core/src/inference.rs", 2),
+    ("crates/gents-host/src/prepare_runtime.rs", 1),
     ("crates/gents-loop/src/loop_stream/aggregate_budget.rs", 4),
     ("crates/gents-protocol/src/database_error.rs", 1),
     ("crates/gents-protocol/src/error_chain.rs", 1),
@@ -2141,8 +2141,6 @@ fn downcast_fence_counts_type_classification_outside_tests() {
 const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     // regolith store-lock messages through the node builder
     ("crates/gents-cli/src/commands/eval/watch.rs", 1),
-    // launchctl print output
-    ("crates/gents-cli/src/native_service.rs", 1),
     // provider text through Rig's ProviderError(String) (ProviderReport)
     ("crates/gents-loop/src/error.rs", 21),
     // serde_json schema-mismatch message prefixes
@@ -2155,6 +2153,8 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-protocol/src/graphql/response.rs", 4),
     // replicated AgentRequest failure_reason
     ("crates/gents-protocol/src/node_readiness.rs", 1),
+    // launchctl print output
+    ("crates/gents-service/src/native_service.rs", 1),
     // DefraDB HTTP 409 commit body
     ("crates/gents-store/src/config_client/retry.rs", 3),
     // JSON-RPC node pruned-history wording

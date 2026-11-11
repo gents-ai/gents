@@ -20,7 +20,8 @@ impl SyncHealthState {
 }
 
 /// `ClientSyncHealth.Cause`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SyncHealthCause {
     RuntimeConnecting,
     RuntimeDisconnected,
@@ -73,7 +74,8 @@ impl SyncHealthCause {
 }
 
 /// `ClientSyncHealth.NextAction`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SyncNextAction {
     Wait,
     RestoreAccess,
@@ -303,5 +305,17 @@ mod tests {
             assert_eq!(health.activation_error_count, case.enrollment.len());
             assert_eq!(health.connected_peer_count, case.dialed_peers);
         }
+    }
+}
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn sync_health_cause_next_action_matches_lean() {
+        gents_lean_vocab::families::client_sync_health_cause_next_action::replay(|i| {
+            SyncHealthCause::next_action(i.cause)
+        });
     }
 }

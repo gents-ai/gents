@@ -117,7 +117,8 @@ where
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ProcessLifecycleState {
     Uninitialized,
     Recovering,
@@ -695,3 +696,19 @@ pub(crate) fn tool_selection_from_document(
 }
 
 pub use loop_stream::REPEATED_TOOL_FAILURE_PREFIX;
+
+#[cfg(test)]
+mod conformance {
+    use super::ProcessLifecycleState;
+
+    #[test]
+    fn process_states_are_the_lean_process_states() {
+        gents_lean_vocab::families::process_state_vocabulary::replay(&[
+            ProcessLifecycleState::Uninitialized,
+            ProcessLifecycleState::Recovering,
+            ProcessLifecycleState::Ready,
+            ProcessLifecycleState::ShuttingDown,
+            ProcessLifecycleState::Shutdown,
+        ]);
+    }
+}

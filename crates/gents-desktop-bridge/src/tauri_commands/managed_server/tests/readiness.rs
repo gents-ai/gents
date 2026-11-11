@@ -319,15 +319,15 @@ async fn a_crash_looping_service_fails_with_its_exit_reason() {
     assert_eq!(observations.load(Ordering::SeqCst), 9);
 }
 
-fn refused_store_exit(restarts: u64) -> gents_server::native_service::ServiceExit {
-    gents_server::native_service::ServiceExit {
+fn refused_store_exit(restarts: u64) -> gents_service::native_service::ServiceExit {
+    gents_service::native_service::ServiceExit {
         reason: format!(
             "exited with code {}",
-            gents_server::native_service::INCOMPATIBLE_STORE_EXIT_CODE
+            gents_service::native_service::INCOMPATIBLE_STORE_EXIT_CODE
         ),
         restarts,
         clean: false,
-        code: Some(gents_server::native_service::INCOMPATIBLE_STORE_EXIT_CODE),
+        code: Some(gents_service::native_service::INCOMPATIBLE_STORE_EXIT_CODE),
     }
 }
 
@@ -350,9 +350,9 @@ async fn a_refused_store_fails_the_start_typed_on_its_first_exit() {
 #[tokio::test]
 async fn a_refused_store_fails_typed_even_while_status_reports_booting() {
     for code in [
-        gents_server::native_service::INCOMPATIBLE_STORE_EXIT_CODE,
-        gents_server::native_service::INSECURE_KEY_EXIT_CODE,
-        gents_server::native_service::FOREIGN_STORE_EXIT_CODE,
+        gents_service::native_service::INCOMPATIBLE_STORE_EXIT_CODE,
+        gents_service::native_service::INSECURE_KEY_EXIT_CODE,
+        gents_service::native_service::FOREIGN_STORE_EXIT_CODE,
     ] {
         let error = await_runtime_readiness(
             Duration::from_secs(60),
@@ -360,7 +360,7 @@ async fn a_refused_store_fails_typed_even_while_status_reports_booting() {
             || async { Ok(PortReadiness::Booting) },
             || async move {
                 Ok(NativeProgress::Exited(
-                    gents_server::native_service::ServiceExit {
+                    gents_service::native_service::ServiceExit {
                         reason: format!("exited with code {code}"),
                         restarts: 0,
                         clean: false,
@@ -382,7 +382,7 @@ async fn a_refused_store_fails_typed_even_while_status_reports_booting() {
 
 #[test]
 fn a_refused_store_exit_reports_an_incompatible_home_not_a_crash_loop() {
-    let native = gents_server::native_service::NativeServiceStatus {
+    let native = gents_service::native_service::NativeServiceStatus {
         installed: true,
         running: false,
         job_loaded: true,

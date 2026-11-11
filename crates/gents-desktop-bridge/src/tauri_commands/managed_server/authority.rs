@@ -92,12 +92,12 @@ pub(super) fn validate_tool_root(path: &Path) -> Result<PathBuf, BridgeError> {
 
 pub(super) fn runtime_tool_ceiling(
     value: ManagedServerToolCeiling,
-) -> gents_server::server_host::ManagedToolCeiling {
-    use gents_server::server_host::ManagedToolCeiling;
+) -> gents_service::args::ToolCeilingArg {
+    use gents_service::args::ToolCeilingArg;
     match value {
-        ManagedServerToolCeiling::MetaOnly => ManagedToolCeiling::MetaOnly,
-        ManagedServerToolCeiling::Readonly => ManagedToolCeiling::Readonly,
-        ManagedServerToolCeiling::Readwrite => ManagedToolCeiling::Readwrite,
+        ManagedServerToolCeiling::MetaOnly => ToolCeilingArg::MetaOnly,
+        ManagedServerToolCeiling::Readonly => ToolCeilingArg::Readonly,
+        ManagedServerToolCeiling::Readwrite => ToolCeilingArg::Readwrite,
     }
 }
 

@@ -14,9 +14,10 @@ use crate::cli::args::{McpCommand, McpProbeArgs, McpRegisterArgs};
 use crate::cli::output_format::OutputFormat;
 use crate::config_writes::ConfigAccess;
 use crate::{
-    graphql_rows_or_empty_if_collection_missing, normalize_optional_string, parse_duration_suffix,
-    print_json, resolve_config_access,
+    graphql_rows_or_empty_if_collection_missing, parse_duration_suffix, print_json,
+    resolve_config_access,
 };
+use gents_host::http_client::normalize_optional_string;
 
 pub(crate) async fn dispatch(command: McpCommand) -> Result<()> {
     match command {
@@ -64,7 +65,10 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
     if args.version.trim() != "unversioned" {
         anyhow::bail!("--version is not supported by the MCP service configuration");
     }
-    let node_did = crate::resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
+    let node_did = gents_service::home_state::resolve_node_did(
+        args.home.as_deref(),
+        args.node_did.as_deref(),
+    )?;
     let send_node_did = args.send_node_did;
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     if matches!(&access, ConfigAccess::Local(_)) {
@@ -131,7 +135,10 @@ async fn mcp_probe(args: McpProbeArgs) -> Result<()> {
     }
 
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let node_did = crate::resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
+    let node_did = gents_service::home_state::resolve_node_did(
+        args.home.as_deref(),
+        args.node_did.as_deref(),
+    )?;
     let services = load_mcp_services(&access, &node_did, target.service_id()).await?;
     if matches!(target, ProbeTarget::Single(_)) && services.is_empty() {
         anyhow::bail!(

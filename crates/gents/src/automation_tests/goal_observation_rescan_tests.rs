@@ -3,6 +3,7 @@ use std::sync::Arc;
 use futures::FutureExt;
 use gents_automation::goal::operator_resume::support::{Fixture, SESSION};
 use gents_automation::goal::*;
+use gents_protocol::goal_control::GoalRevision;
 use gents_store::identity::NodeIdentity;
 use serde::Deserialize;
 use serde_json::json;

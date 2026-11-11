@@ -8,13 +8,18 @@ use serde_json::{json, Value};
 use crate::cli::args::{
     P2pAccessArgs, P2pCollectionProfileArg, P2pReplicatorAddArgs, P2pReplicatorRemoveArgs,
 };
-use crate::shared::{P2pReplicatorDeleteRequest, P2pReplicatorRequest, P2pReplicatorRow};
-use crate::{http_send, print_json, resolve_graphql_endpoint, resolve_home_dir};
+use crate::print_json;
+use crate::shared::{P2pReplicatorDeleteRequest, P2pReplicatorRequest};
+use gents_host::http_client::http_send;
+use gents_host::p2p_status::P2pReplicatorRow;
+use gents_service::home_state::resolve_graphql_endpoint;
+use gents_service::home_state::resolve_home_dir;
 
-use super::output::{
-    fetch_live_http_p2p_status, flatten_p2p_fields, load_collection_name_by_id, p2p_replicator_rows,
-};
-use super::p2p_http_client;
+use gents_host::p2p_status::fetch_live_http_p2p_status;
+use gents_host::p2p_status::flatten_p2p_fields;
+use gents_host::p2p_status::load_collection_name_by_id;
+use gents_host::p2p_status::p2p_http_client;
+use gents_host::p2p_status::p2p_replicator_rows;
 
 fn expand_p2p_collection_args(
     explicit_collections: &[String],
@@ -34,9 +39,10 @@ pub(super) async fn p2p_replicators_list(args: P2pAccessArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let client = p2p_http_client()?;
     let api_base = crate::graphql_access::graphql_api_base(graphql.url())?;
-    let raw_replicators: Vec<P2pReplicatorRow> =
-        crate::http_get_json(graphql.authorize(client.get(format!("{api_base}/p2p/replicators")))?)
-            .await?;
+    let raw_replicators: Vec<P2pReplicatorRow> = gents_host::http_client::http_get_json(
+        graphql.authorize(client.get(format!("{api_base}/p2p/replicators")))?,
+    )
+    .await?;
     let collection_names_by_id = load_collection_name_by_id(&client, &api_base).await;
     let replicators = p2p_replicator_rows(raw_replicators, &collection_names_by_id);
     let count = replicators.len();

@@ -610,34 +610,6 @@ async fn managed_exec_bounds_continuously_writing_descendant_after_direct_child_
     }
 }
 
-#[test]
-fn rust_process_stop_outcome_vocabulary_matches_lean_model() {
-    let values = ownership::ProcessStopOutcome::ALL
-        .iter()
-        .copied()
-        .map(ownership::ProcessStopOutcome::as_str)
-        .collect::<Vec<_>>();
-    assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
-        domain: "ProcessStopOutcome",
-        rust_source: "ProcessStopOutcome::ALL",
-        rust_values: &values,
-    });
-}
-
-#[test]
-fn rust_cancel_process_reply_vocabulary_matches_lean_model() {
-    let values = ownership::CancelProcessReply::ALL
-        .iter()
-        .copied()
-        .map(ownership::CancelProcessReply::as_str)
-        .collect::<Vec<_>>();
-    assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
-        domain: "CancelProcessReply",
-        rust_source: "CancelProcessReply::ALL",
-        rust_values: &values,
-    });
-}
-
 #[cfg(unix)]
 #[tokio::test]
 async fn generated_process_stop_cases_drive_host_owner() {

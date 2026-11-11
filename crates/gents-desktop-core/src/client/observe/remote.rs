@@ -43,7 +43,8 @@ pub(super) fn armed_after(was_armed: bool, event: RuntimeConnectionEvent) -> boo
 }
 
 /// `RuntimeConnectionObservation.SnapshotOutcome` of a read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(super) enum SnapshotOutcome {
     Succeeded,
     Refused,
@@ -120,7 +121,8 @@ const RECONNECT_CAP_MS: u64 = 30_000;
 pub(super) const RECONNECT_STABLE: Duration = Duration::from_secs(30);
 
 /// `RuntimeConnectionObservation.Origin`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(super) enum Origin {
     /// A notice of the source task (its handshake or its stream).
     Source,
@@ -510,4 +512,37 @@ async fn arm(
         });
     }
     Ok(Armed { tasks, renew_at })
+}
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn armed_event_matches_lean() {
+        gents_lean_vocab::families::runtime_connection_observation_armed_event::replay(|i| {
+            armed_event(i.renewal)
+        });
+    }
+
+    #[test]
+    fn armed_after_matches_lean() {
+        gents_lean_vocab::families::runtime_connection_observation_armed_after::replay(|i| {
+            armed_after(i.was_armed, i.event)
+        });
+    }
+
+    #[test]
+    fn snapshot_event_matches_lean() {
+        gents_lean_vocab::families::runtime_connection_observation_snapshot_event::replay(|i| {
+            snapshot_event(i.snapshot_outcome)
+        });
+    }
+
+    #[test]
+    fn reconnects_matches_lean() {
+        gents_lean_vocab::families::runtime_connection_observation_reconnects::replay(|i| {
+            reconnects(i.origin, i.event)
+        });
+    }
 }

@@ -252,7 +252,7 @@ pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
 /// One dynamic run, selected by its address (SESSION_ID:TOOL_CALL_ID) or tool
 /// call id: its view, script and promotions.
 pub async fn dynamic_workflow(home: PathBuf, selector: String) -> Result<Value> {
-    let actor = crate::home_state::resolve_node_did(Some(&home), None)?;
+    let actor = gents_service::home_state::resolve_node_did(Some(&home), None)?;
     let (access, home) = crate::resolve_config_access(Some(&home), None).await?;
     let view = crate::commands::job::resolve_job(&access, &actor, &selector, None).await?;
     let run = gents_toolcalls::background::job::promote::load_dynamic_run(
@@ -507,7 +507,7 @@ pub fn plugin_call_uses_data(home: &std::path::Path, ux: &str, name: &str) -> Re
 }
 
 pub fn ux_installing_node(home: &std::path::Path) -> Result<String> {
-    let config = crate::home_state::read_init_config(home)?.ok_or_else(|| {
+    let config = gents_service::home_state::read_init_config(home)?.ok_or_else(|| {
         anyhow::anyhow!("the local node that installed this app is not initialized")
     })?;
     let node_did = config.node_did.trim();
@@ -575,9 +575,9 @@ mod tests {
     fn ux_plugin_data_uses_the_installing_home_node() {
         let home = tempfile::tempdir().unwrap();
         assert!(ux_installing_node(home.path()).is_err());
-        crate::home_state::write_init_config(
+        gents_service::home_state::write_init_config(
             home.path(),
-            &crate::shared::StoredInitConfig {
+            &gents_service::state::StoredInitConfig {
                 home: home.path().display().to_string(),
                 node_name: "local".into(),
                 node_did: "did:key:local".into(),
@@ -586,7 +586,7 @@ mod tests {
                 keychain_label: None,
                 secure_enclave_label: None,
                 tool_package: None,
-                tool_ceiling: crate::cli::args::ToolCeilingArg::Readonly,
+                tool_ceiling: gents_service::args::ToolCeilingArg::Readonly,
                 tool_root: None,
                 store_encryption: None,
             },

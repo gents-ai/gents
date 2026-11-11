@@ -14,8 +14,8 @@ use crate::observe::run_timeline_fetch::event_loaders::resolve_timeline_messages
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 
-#[cfg(test)]
-pub(crate) async fn load_session_tool_calls(
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn load_session_tool_calls(
     access: &ConfigAccess,
     node_did: &str,
     session_id: &str,

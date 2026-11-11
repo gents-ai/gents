@@ -8,9 +8,8 @@ use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 
 use super::*;
 use gents_lean_vocab::{
-    assert_lean_contract_vocabulary_matches, assert_lean_transition_is_legal,
-    assert_state_machine_contract_is_complete, lean_process_transition_cases,
-    lean_runtime_reconcile_case, LeanContractVocabulary, LeanLifecycleTransitionCase,
+    assert_lean_transition_is_legal, assert_state_machine_contract_is_complete,
+    lean_process_transition_cases, lean_runtime_reconcile_case, LeanLifecycleTransitionCase,
 };
 use gents_store::schema::ensure_runtime_schemas;
 
@@ -386,24 +385,6 @@ async fn restart_publishes_fail_closed_readiness_before_other_runtime_work() {
     second_owner.close().await.unwrap();
 }
 
-#[test]
-fn rust_process_state_vocabulary_matches_lean_model() {
-    let rust_states = vec![
-        ProcessLifecycleState::Uninitialized.as_str(),
-        ProcessLifecycleState::Recovering.as_str(),
-        ProcessLifecycleState::Ready.as_str(),
-        ProcessLifecycleState::ShuttingDown.as_str(),
-        ProcessLifecycleState::Shutdown.as_str(),
-    ];
-
-    assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
-        domain: "ProcessState",
-        rust_source:
-            "ProcessLifecycleState::{Uninitialized, Recovering, Ready, ShuttingDown, Shutdown}",
-        rust_values: &rust_states,
-    });
-}
-
 fn rust_process_transition_action(from: &str, to: &str) -> Option<&'static str> {
     match (from, to) {
         ("uninitialized", "recovering") => Some("startupRecover"),
@@ -539,23 +520,6 @@ async fn generated_process_transition_cases_match_runtime_status_policy() {
 
     assert_eq!(legal_count, 5);
     assert_eq!(illegal_count, 20);
-}
-
-#[test]
-fn rust_reconcile_phase_vocabulary_matches_lean_model() {
-    let rust_phases = vec![
-        ReconcilePhase::Idle.as_str(),
-        ReconcilePhase::Debouncing.as_str(),
-        ReconcilePhase::Resolving.as_str(),
-        ReconcilePhase::Diffing.as_str(),
-        ReconcilePhase::Applying.as_str(),
-    ];
-
-    assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
-        domain: "ReconcilePhase",
-        rust_source: "ReconcilePhase::{Idle, Debouncing, Resolving, Diffing, Applying}",
-        rust_values: &rust_phases,
-    });
 }
 
 #[test]

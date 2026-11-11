@@ -645,52 +645,7 @@ mod tests {
         node.shutdown().await.expect("shut down test node");
     }
 
-    use gents_lean_vocab::{
-        assert_lean_contract_vocabulary_matches, assert_state_machine_contract_is_complete,
-        lean_state_machine_contract, LeanContractVocabulary,
-    };
-
-    #[test]
-    fn rust_tool_call_state_vocabulary_matches_lean_model() {
-        let rust_states = ToolCallState::ALL
-            .iter()
-            .copied()
-            .map(ToolCallState::as_str)
-            .collect::<Vec<_>>();
-        assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
-            domain: "ToolCallState",
-            rust_source: "ToolCallState::ALL",
-            rust_values: &rust_states,
-        });
-    }
-
-    #[test]
-    fn rust_cancel_cause_vocabulary_matches_lean_model() {
-        let rust_causes = CancelCause::ALL
-            .iter()
-            .copied()
-            .map(CancelCause::as_str)
-            .collect::<Vec<_>>();
-        assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
-            domain: "CancelCause",
-            rust_source: "CancelCause::ALL",
-            rust_values: &rust_causes,
-        });
-    }
-
-    #[test]
-    fn rust_failure_class_vocabulary_matches_lean_model() {
-        let rust_classes = FailureClass::ALL
-            .iter()
-            .copied()
-            .map(FailureClass::as_str)
-            .collect::<Vec<_>>();
-        assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
-            domain: "ToolFailureClass",
-            rust_source: "FailureClass::ALL",
-            rust_values: &rust_classes,
-        });
-    }
+    use gents_lean_vocab::{assert_state_machine_contract_is_complete, lean_state_machine_contract};
 
     #[test]
     fn tool_call_state_machine_contract_is_complete() {

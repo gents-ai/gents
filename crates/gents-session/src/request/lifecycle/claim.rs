@@ -2,13 +2,13 @@ use super::*;
 use anyhow::Context;
 
 pub struct DurableClaimReceipt {
-    request: AgentRequest,
+    pub request: AgentRequest,
     request_commit_cid: String,
     deadline_at: chrono::DateTime<chrono::Utc>,
     background_completion_input_through_sequence: Option<u32>,
     valid_until_at_claim: Option<chrono::DateTime<chrono::Utc>>,
-    execution_generation: String,
-    lease_ms: u64,
+    pub execution_generation: String,
+    pub lease_ms: u64,
     folded_selection: Vec<super::queue::FoldedInput>,
 }
 

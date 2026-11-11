@@ -21,10 +21,10 @@ pub enum PlannedWrite {
 }
 
 pub struct Plan {
-    pub(super) session_id: String,
-    pub(super) hop: u32,
-    pub(super) steer_head: Option<Option<String>>,
-    pub(super) interrupt_before_publish: bool,
+    pub session_id: String,
+    pub hop: u32,
+    pub steer_head: Option<Option<String>>,
+    pub interrupt_before_publish: bool,
     pub write: PlannedWrite,
 }
 

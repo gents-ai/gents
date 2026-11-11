@@ -1,5 +1,7 @@
 
+use gents_loop::tool::ToolDyn;
 use gents_tools::native::cli_tool::*;
+use gents_tools::native::CliToolConfig;
 use rapidhash::RapidHashMap;
 
 
@@ -12,7 +14,7 @@ fn config(timeout_secs: u64) -> CliToolConfig {
         env_vars: RapidHashMap::from_iter([("GENTS_T".to_string(), "1".to_string())]),
         working_dir: None,
         timeout_secs,
-        max_output_chars: super::super::DEFAULT_MAX_COMMAND_CHARS,
+        max_output_chars: gents_tools::native::DEFAULT_MAX_COMMAND_CHARS,
     }
 }
 

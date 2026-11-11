@@ -411,3 +411,77 @@ pub fn live_settings(
     }
 }
 
+pub async fn write_config_with_access<T>(
+    access: &gents_store::config_client::ConfigAccess,
+    collection: gents_store::collection::Collection,
+    document: &T,
+) where
+    T: serde::Serialize,
+{
+    let value = serde_json::to_value(document).unwrap();
+    let plan = gents_documents::DesiredStateApplyPlan::new(vec![
+        gents_documents::DesiredStateApplyDocument {
+            collection,
+            add: value.clone(),
+            update: value,
+        },
+    ])
+    .unwrap();
+    access
+        .transact_write("test.write_config", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                gents_documents::apply_desired_state_plan(
+                    txn,
+                    plan,
+                    &gents_inference::resolved::ProviderProfilePolicy,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+}
+
+pub async fn enable_agents_tools_with_access(
+    access: &gents_store::config_client::ConfigAccess,
+    did: &str,
+    agent_did: &str,
+) {
+    write_config_with_access(
+        access,
+        gents_store::collection::Collection::AgentTarget,
+        &gents_documents::AgentTargetDocument {
+            target_id: "general:general".to_owned(),
+            node_did: did.to_owned(),
+            target_node_did: did.to_owned(),
+            agent_did: agent_did.to_owned(),
+            name: "general".to_owned(),
+            description: None,
+            tags: Vec::new(),
+        },
+    )
+    .await;
+    write_config_with_access(
+        access,
+        gents_store::collection::Collection::Tools,
+        &serde_json::json!({
+            "node_did": did,
+            "tools_id": format!("{agent_did}:tools"),
+            "agents": { "enabled": true, "target_ids": ["general:general"] }
+        }),
+    )
+    .await;
+    write_config_with_access(
+        access,
+        gents_store::collection::Collection::Task,
+        &serde_json::json!({
+            "node_did": did,
+            "task_id": "goal",
+            "agent_did": agent_did,
+            "prompt_template": "pursue the goal",
+            "goal_objective_template": "finish the work"
+        }),
+    )
+    .await;
+}

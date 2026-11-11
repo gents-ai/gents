@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use gents_store::graphql::escape_graphql_string;
 
 mod archive;
+pub mod caused;
 pub mod mailbox;
 pub mod message;
 pub mod origin;
@@ -37,6 +38,8 @@ pub mod title_text;
 pub use title_text::display_session_title;
 #[cfg(any(test, feature = "test-fixtures"))]
 mod history_fixture;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod output_replay_fixture;
 #[cfg(test)]
 mod tests;
 #[cfg(any(test, feature = "test-fixtures"))]

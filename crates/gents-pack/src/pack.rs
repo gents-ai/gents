@@ -16,6 +16,8 @@ pub use agent_bindings::{
 pub mod authoring;
 pub mod home_install;
 mod inference;
+pub mod install_flow;
+pub mod install_review;
 mod installation;
 pub mod interpolate;
 pub mod job_admission;
@@ -27,13 +29,16 @@ pub mod node_packs;
 mod plugin;
 pub mod plugin_lifecycle;
 mod plugin_validation;
+pub mod plugin_wire;
 mod plugin_wiring;
 mod provenance;
 #[cfg(test)]
 mod publication_contract_tests;
 pub mod registry;
 pub mod resolve;
+pub mod resolved_pack;
 pub mod rooted_paths;
+pub mod schema_apply;
 pub mod store;
 mod ux;
 pub mod wiring;

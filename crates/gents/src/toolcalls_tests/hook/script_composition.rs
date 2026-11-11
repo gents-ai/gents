@@ -87,7 +87,7 @@ async fn background_plugin_keeps_the_selected_tool_surface() {
     assert_eq!(count.load(Ordering::SeqCst), 3, "{reason}");
     let row = super::background_budget::tool_row(&fixture.access, &fixture.session_id, id).await;
     assert_eq!(row["lifecycle_state"], "completed", "{reason}");
-    let timeline = gents_observe::run_timeline_fetch::load_session_tool_calls(
+    let timeline = gents_observe::observe::run_timeline_fetch::load_session_tool_calls(
         &fixture.access,
         fixture.db.node_identity.did(),
         &fixture.session_id,
@@ -151,7 +151,7 @@ async fn composed_agent_new_keeps_its_asynchronous_receipt() {
     )
     .await;
     bind_admitted_deadline(&fixture).await;
-    super::session_message_commit::enable_agents_tools_with_access(
+    gents_toolcalls::test_support::enable_agents_tools_with_access(
         &fixture.owner,
         fixture.db.node_identity.did(),
         fixture.agent.did(),
@@ -456,7 +456,7 @@ async fn a_script_spawned_by_a_script_cannot_call_tools() {
         .find(|row| row["tool_call_id"] == inner_id.as_str())
         .unwrap();
     assert_eq!(inner["lifecycle_state"], "completed", "{rows:?}");
-    let timeline = gents_observe::run_timeline_fetch::load_session_tool_calls(
+    let timeline = gents_observe::observe::run_timeline_fetch::load_session_tool_calls(
         &fixture.access,
         fixture.db.node_identity.did(),
         &fixture.session_id,
@@ -639,8 +639,8 @@ async fn script_with_children(
 
 async fn timeline(
     fixture: &super::background_budget::BudgetHookFixture,
-) -> Vec<gents_observe::run_timeline::TimelineToolCallRow> {
-    gents_observe::run_timeline_fetch::load_session_tool_calls(
+) -> Vec<gents_observe::observe::run_timeline::TimelineToolCallRow> {
+    gents_observe::observe::run_timeline_fetch::load_session_tool_calls(
         &fixture.access,
         fixture.db.node_identity.did(),
         &fixture.session_id,

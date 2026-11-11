@@ -545,3 +545,22 @@ fn string_vec_field(value: &Value, key: &str) -> Option<Vec<String>> {
 fn shell_join_display(argv: &[String]) -> String {
     argv.join(" ")
 }
+
+#[cfg(test)]
+mod conformance {
+    use super::CommandExecutionMode;
+
+    #[test]
+    fn command_policy_execution_mode_meet_matches_lean() {
+        gents_lean_vocab::families::command_policy_execution_mode_meet::replay(|i| {
+            CommandExecutionMode::meet(i.a, i.b)
+        });
+    }
+
+    #[test]
+    fn command_policy_protects_credentials_matches_lean() {
+        gents_lean_vocab::families::command_policy_protects_credentials::replay(|i| {
+            CommandExecutionMode::protects_credentials(i.mode)
+        });
+    }
+}

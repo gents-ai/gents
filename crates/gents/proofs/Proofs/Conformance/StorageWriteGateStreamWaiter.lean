@@ -118,5 +118,3 @@ theorem fifo_case_uses_modelled_queue :
   decide
 
 end Conformance.StorageWriteGateStreamWaiter
-
-def main : IO Unit := IO.println Conformance.StorageWriteGateStreamWaiter.casesJson

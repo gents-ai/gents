@@ -1,3 +1,16 @@
+import Proofs.Conformance.Functions.Automation
+import Proofs.Conformance.Functions.Clients
+import Proofs.Conformance.Functions.Runtime
+import Proofs.Conformance.Functions.Session
+import Proofs.Conformance.Functions.ToolCalls
+import Proofs.Conformance.Functions.Tools
+import Proofs.Conformance.Functions.Shared
+import Proofs.Conformance.Functions.Store
+import Proofs.Conformance.StorageWriteGate
+import Proofs.Conformance.StorageWriteGateAdmission
+import Proofs.Conformance.StorageWriteGateStreamWaiter
+import Proofs.Conformance.NativeCompletion
+import Proofs.Conformance.NativeClaimLifetime
 import Proofs.Conformance.UpdateHandoff
 import Proofs.Runtime.CanonicalOutput.Execution.AdmissionHandoffCases
 import Proofs.Conformance.Contracts.Json.TerminalSelection
@@ -72,6 +85,7 @@ import Proofs.Conformance.FileReviewRoutes
 import Proofs.Conformance.FileInventory
 import Proofs.Conformance.TaskHooks
 import Proofs.Conformance.Hooks
+import Proofs.Conformance.HookDecisions
 import Proofs.Conformance.StoreEncryptionUpgrade
 import Proofs.Conformance.Contracts.Json.Core
 import Proofs.Conformance.Contracts.Json.Runtime
@@ -284,8 +298,13 @@ def snapshotCaptureTailJson : String :=
       ++ aggregateTokenBudgetCasesJson ++ ","
     ++ "\"task_hook_admission_cases\":"
       ++ Conformance.TaskHooksContracts.admissionCasesJson ++ ","
-    ++ "\"store_encryption_upgrade_cases\":"
-      ++ Conformance.StoreEncryptionUpgrade.casesJson ++ ","
+    ++ "\"storage_write_gate_cases\":" ++ Conformance.StorageWriteGateContracts.casesJson ++ ","
+    ++ "\"storage_write_gate_admission_cases\":" ++ Conformance.StorageWriteGateAdmission.casesJson ++ ","
+    ++ "\"storage_write_gate_stream_waiter_cases\":" ++ Conformance.StorageWriteGateStreamWaiter.casesJson ++ ","
+    ++ "\"native_completion_cases\":" ++ Conformance.NativeCompletion.casesJson ++ ","
+    ++ "\"native_claim_lifetime_cases\":" ++ Conformance.NativeClaimLifetime.casesJson ++ ","
+    ++ "\"families\":" ++ (conformance_families%).compress ++ ","
+    ++ "\"family_vocabularies\":" ++ (conformance_vocabularies%).compress ++ ","
     ++ "\"task_hook_run_cases\":"
       ++ Conformance.TaskHooksContracts.runCasesJson ++ ","
     ++ "\"task_hook_recovery_cases\":"
@@ -552,6 +571,12 @@ def snapshotRequestCasesJson : String :=
       ++ Conformance.HooksContracts.admitCasesJson ++ ","
     ++ "\"lifecycle_hook_grant_cases\":"
       ++ Conformance.HooksContracts.grantCasesJson ++ ","
+    ++ "\"lifecycle_hook_supersede_cases\":"
+      ++ Conformance.HookDecisions.supersedeCasesJson ++ ","
+    ++ "\"lifecycle_hook_goal_halt_cases\":"
+      ++ Conformance.HookDecisions.goalHaltCasesJson ++ ","
+    ++ "\"lifecycle_hook_history_cases\":"
+      ++ Conformance.HookDecisions.historyCasesJson ++ ","
 
 def snapshotSessionCasesJson : String :=
   ""

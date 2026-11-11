@@ -16,7 +16,7 @@ async fn managed_readiness_reads_status_as_the_user_and_never_the_node_key() {
     assert!(!gents_store::identity::can_mint_defradb_bearer(&did));
     let server = MockServer::start().await;
     let endpoint = reqwest::Url::parse(&server.uri()).unwrap();
-    let config = gents_server::server_host::ServerConfig {
+    let config = gents_service::server_host::ServerConfig {
         home: home.clone(),
         http_addr: "127.0.0.1".parse().unwrap(),
         http_port: endpoint.port().unwrap(),

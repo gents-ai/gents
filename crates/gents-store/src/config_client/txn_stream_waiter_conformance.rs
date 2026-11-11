@@ -94,8 +94,14 @@ fn actual_owner(gate: &MutationWriteGate) -> String {
 
 #[tokio::test]
 async fn lean_stream_waiter_schedules_match_the_canonical_write_gate() {
-    let cases: Vec<Case> = serde_json::from_str(include_str!(
-        "../../../gents/tests/fixtures/storage_write_gate_stream_waiter.json"
+    let cases: Vec<Case> = serde_json::from_value(serde_json::Value::from(
+        tokio::task::spawn_blocking(|| {
+            gents_lean_vocab::lean_contract_snapshot()
+                .storage_write_gate_stream_waiter_cases
+                .clone()
+        })
+        .await
+        .expect("Lean snapshot load"),
     ))
     .expect("Lean stream waiter fixture");
     assert_eq!(cases.len(), 4);

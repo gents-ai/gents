@@ -1,113 +1,7 @@
 use super::*;
 use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
 use std::{sync::Arc, time::Duration};
-
-struct FixtureGuard {
-    _db: gents_inference::test_support::TestDb,
-    owner: gents_store::config_client::ConfigAccess,
-}
-
-fn fixture_access(
-    node: &Arc<EmbeddedNode>,
-    lifecycle: &RequestLifecycle,
-) -> gents_store::config_client::ConfigAccess {
-    gents_store::config_client::ConfigAccess::local_with_agent_signer(
-        node.clone(),
-        lifecycle.actor_did().unwrap(),
-        lifecycle.managed_agent_signer().unwrap(),
-    )
-    .unwrap()
-}
-
-async fn fixture_with_ids(
-    name: &str,
-    request_id: &str,
-    session_id: &str,
-) -> (
-    Arc<EmbeddedNode>,
-    FixtureGuard,
-    RequestLifecycle,
-    DefraStreamWriter,
-) {
-    use gents_store::identity::NodeIdentity;
-    let (db, user, owner, binding) = gents_inference::test_support::signed_test_node(name).await;
-    let node = db.node.clone();
-    let agent =
-        gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
-    let create = crate::request::lifecycle::build_signed_client_request(
-        &owner,
-        crate::request::lifecycle::RequestSpec::new(
-            gents_protocol::request_admission::RequestPurpose::Normal,
-            crate::request::lifecycle::RequestIdentity {
-                request_id: request_id.into(),
-                node_did: db.node_identity.did().into(),
-                requester_did: Some(user.did().into()),
-                agent_did: agent.did().into(),
-                session_id: session_id.into(),
-                content: "hello".into(),
-                execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
-                created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            },
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(user.did()),
-        ),
-        crate::request::lifecycle::RequestSigner::Identity(&user),
-    )
-    .await
-    .unwrap();
-    crate::request::lifecycle::submit_client_request(&owner, &create)
-        .await
-        .unwrap();
-    let access = gents_store::config_client::ConfigAccess::local_managed_agent(
-        node.clone(),
-        agent.did().parse().unwrap(),
-        agent.as_ref(),
-    )
-    .unwrap();
-    let response = access
-        .execute(&format!(
-            "{{ AgentRequest {{ {} }} }}",
-            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
-        ))
-        .await
-        .unwrap();
-    let row: gents_protocol::row::AgentRequestRow =
-        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-    let request = row.try_into().unwrap();
-    let (_authority_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
-    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
-        node.clone(),
-        db.node_identity.clone(),
-        authority,
-    );
-    let (request, admission) = verifier
-        .verify_fresh_for_claim(&request, agent.did())
-        .await
-        .unwrap();
-    let mut lifecycle = RequestLifecycle::new_with_node_did(node.clone(), request, 60);
-    lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
-    lifecycle.set_client_claim_admission(admission);
-    assert_eq!(
-        lifecycle.claim_with_identity().await.unwrap(),
-        ClaimOutcome::Claimed
-    );
-    let writer =
-        DefraStreamWriter::new_managed(node.clone(), agent.as_ref(), Duration::from_millis(1))
-            .unwrap();
-    lifecycle.begin_owned_execution(&writer).await.unwrap();
-    (node, FixtureGuard { _db: db, owner }, lifecycle, writer)
-}
-
-async fn fixture_query(
-    access: &gents_store::config_client::ConfigAccess,
-    document: &str,
-) -> defra_node::QueryResponse {
-    access
-        .transact_readonly("test.canonical_stream.read", |txn| {
-            Box::pin(async move { txn.execute_local_response(document).await })
-        })
-        .await
-        .unwrap()
-}
+use crate::test_support::{FixtureGuard, fixture, fixture_access, fixture_query, fixture_with_ids};
 
 async fn fixture_insert_child(
     access: &gents_store::config_client::ConfigAccess,
@@ -310,17 +204,6 @@ async fn selected_history_missing_later_payload_never_returns_a_shortened_prefix
         "{error:#}"
     );
     node.shutdown().await.expect("shut down test node");
-}
-
-async fn fixture(
-    name: &str,
-) -> (
-    Arc<EmbeddedNode>,
-    FixtureGuard,
-    RequestLifecycle,
-    DefraStreamWriter,
-) {
-    fixture_with_ids(name, &format!("request-{name}"), &format!("session-{name}")).await
 }
 
 #[tokio::test]

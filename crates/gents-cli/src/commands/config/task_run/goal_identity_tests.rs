@@ -10,7 +10,7 @@ const NOW: &str = "2026-10-21T00:00:00Z";
 /// one: bound to the Agent-owned session document, related to it so the
 /// session's readers (the enrolled User) observe it.
 async fn set_goal(
-    home: &crate::shared::test_support::ClientHome,
+    home: &gents_host::test_support::ClientHome,
     binding: &gents_protocol::agent_identity::AgentIdentityBinding,
     session: &str,
     goal: Option<&str>,
@@ -85,7 +85,7 @@ async fn set_goal(
 /// tool source that lets a creator Agent retire the Goals it owns
 /// (`GrantSets.GrantSet.permissions`, `Configuration.goal_creator_deletes_its_goal`).
 async fn enable_goal_creation(
-    home: &crate::shared::test_support::ClientHome,
+    home: &gents_host::test_support::ClientHome,
     binding: &gents_protocol::agent_identity::AgentIdentityBinding,
 ) -> Result<()> {
     use gents_documents::{apply_desired_state_plan, AgentContext, BuiltInTools, Tools};
@@ -157,7 +157,7 @@ async fn enable_goal_creation(
 /// The Task invocation's request, signed by the enrolled User as
 /// `enqueue_task_run` signs it.
 async fn signed_request(
-    home: &crate::shared::test_support::ClientHome,
+    home: &gents_host::test_support::ClientHome,
     agent_did: &str,
     fire: &TriggerFire,
     input: RequestInput,
@@ -207,7 +207,7 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
         .as_array()
         .unwrap();
     assert_eq!(cases.len(), 14);
-    let home = crate::shared::test_support::ClientHome::new().await;
+    let home = gents_host::test_support::ClientHome::new().await;
     let binding = home.agent("Engineer").await;
     enable_goal_creation(&home, &binding).await?;
     let access = &home.access;
