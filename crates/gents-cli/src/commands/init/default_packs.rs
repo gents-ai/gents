@@ -20,6 +20,38 @@ pub(crate) const ENGINEER_DEFAULT_PACKS: &[&str] = &[
     "gents/script",
 ];
 
+/// What a default pack is for and what the Engineer lacks without it, as the
+/// init notice, its questions and the desktop's approval card say it.
+fn describe(pack: &str) -> (&'static str, &'static str) {
+    match pack {
+        "gents/pack_builder" => (
+            "skills for building and sharing packs",
+            "Without it the Engineer has no guide for packaging what it builds.",
+        ),
+        "gents/web" => (
+            "searching and reading the web",
+            "Without it the Engineer cannot search or read the web.",
+        ),
+        "gents/dynamic_workflows" => (
+            "workflows that put several agents on one job",
+            "Without it the Engineer cannot run workflows.",
+        ),
+        "gents/charts" => (
+            "charts on the pages it builds",
+            "Without it the Engineer's pages have no charts.",
+        ),
+        "gents/data_tables" => (
+            "data tables on the pages it builds",
+            "Without it the Engineer's pages have no data tables.",
+        ),
+        "gents/script" => (
+            "short scripts over its own tools: waiting, trying logic, bulk changes",
+            "Without it the Engineer makes every tool call one at a time.",
+        ),
+        _ => ("", ""),
+    }
+}
+
 /// The default packs whose approval is also the consent to dynamic workflow
 /// scripts: approving one sets its job block to `dynamic: run` as it is wired
 /// (Lean `consentedDynamic`), since a pack can only ship `check`, which
@@ -31,8 +63,20 @@ const DYNAMIC_RUN_ON_APPROVAL: &[&str] = &["gents/dynamic_workflows"];
 /// `tool_calls: true`. Without it a script only computes and sleeps.
 const TOOL_CALLS_ON_APPROVAL: &[&str] = &["gents/script"];
 
-/// What the notice says `gents/script` is for.
-const SCRIPT_PURPOSE: &str = "gents/script runs a short script over the Engineer's own tools: waiting, trying logic, bulk changes.";
+/// What approving `pack` turns on beyond the permissions its plugins request,
+/// in plain words.
+fn turns_on(pack: &str) -> Vec<&'static str> {
+    let mut turned_on = Vec::new();
+    if DYNAMIC_RUN_ON_APPROVAL.contains(&pack) {
+        turned_on.push("Lets workflow scripts the model writes start agents on this node.");
+    }
+    if TOOL_CALLS_ON_APPROVAL.contains(&pack) {
+        turned_on.push(
+            "Lets a script it runs call the Engineer's own tools. Declined, a script only computes and waits.",
+        );
+    }
+    turned_on
+}
 
 /// How long one default pack may take to resolve. Init succeeds without its
 /// default packs, so an unreachable registry must not hold a first run for
@@ -44,7 +88,8 @@ const RESOLVE_BOUND: Duration = Duration::from_secs(20);
 pub(crate) enum Approval {
     /// Ask on the terminal, pack by pack.
     Ask,
-    /// `--approve-default-packs`: the caller approved every request.
+    /// The caller approved every request: `--approve-default-packs`, a pack
+    /// named to `gents config pack starter --approve`, or the desktop's card.
     Approved,
     /// Nobody can be asked and nothing was approved: a pack that requests
     /// permissions is left uninstalled and reported.
@@ -65,17 +110,27 @@ impl Approval {
     }
 }
 
-fn install_command(home: &Path, pack: &str, engineer: &str, grant: bool, wire: bool) -> String {
+fn approve_command(home: &Path, pack: &str) -> String {
     format!(
-        "gents config pack install {pack} --home {}{}{}",
-        home.display(),
-        if grant { " --grant-authority" } else { "" },
-        if wire {
-            format!(" --wire {engineer}")
-        } else {
-            String::new()
-        },
+        "gents config pack starter --approve {pack} --home {}",
+        home.display()
     )
+}
+
+fn scope(home: &Path) -> ScopeArgs {
+    ScopeArgs {
+        home: Some(home.to_owned()),
+        graphql: None,
+        node_did: None,
+    }
+}
+
+async fn release(access: gents::ConfigAccess) {
+    if let Some(node) = access.local_node() {
+        if let Err(error) = node.shutdown().await {
+            tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
+        }
+    }
 }
 
 /// Installs `packs` into the fresh home `home` for its Engineer `engineer`:
@@ -93,30 +148,33 @@ pub(crate) async fn install(
     approval: Approval,
 ) -> Value {
     eprintln!(
-        "\nThe Engineer starts with these packs: {}.\nEach is installed from this home's pack store or the registry. {}{}",
-        packs.join(", "),
-        if packs.iter().any(|pack| TOOL_CALLS_ON_APPROVAL.contains(pack)) {
-            format!("{SCRIPT_PURPOSE} ")
-        } else {
-            String::new()
-        },
+        "\nThe Engineer starts with these packs, from this home's pack store or the pack registry (which needs the network):"
+    );
+    for pack in packs {
+        match describe(pack).0 {
+            "" => eprintln!("  {pack}"),
+            purpose => eprintln!("  {pack}: {purpose}"),
+        }
+    }
+    eprintln!(
+        "{}",
         match approval {
             Approval::Ask => "Before a pack whose plugins request permissions is installed, you are asked to approve them.",
             Approval::Approved => "The permissions their plugins request were approved with --approve-default-packs.",
-            Approval::Unattended => "A pack whose plugins request permissions is not installed without your approval; each is listed with the command that installs it.",
+            Approval::Unattended => "A pack whose plugins request permissions is not installed without your approval; each is listed with the command that approves and installs it.",
         }
     );
     let mut installed = Vec::new();
     let mut not_installed = Vec::new();
     for pack in packs {
-        match install_one(home, engineer, pack, registry, approval).await {
+        match install_one(home, engineer, pack, registry, approval, None).await {
             Ok(Outcome::Installed(report)) => {
                 eprintln!("  installed {pack}");
                 installed.push(report);
             }
-            Ok(Outcome::Unapproved { requested, wire }) => {
-                let command = install_command(home, pack, engineer, true, wire);
-                eprintln!("  {pack} was not installed: its plugins request permissions that were not approved. Install it with: {command}");
+            Ok(Outcome::Unapproved { requested }) => {
+                let command = approve_command(home, pack);
+                eprintln!("  {pack} was not installed: its plugins request permissions that were not approved. Approve and install it with: {command}");
                 not_installed.push(json!({
                     "pack": pack,
                     "reason": "its plugins request permissions that were not approved",
@@ -125,7 +183,7 @@ pub(crate) async fn install(
                 }));
             }
             Err(error) => {
-                let command = install_command(home, pack, engineer, false, false);
+                let command = approve_command(home, pack);
                 eprintln!(
                     "  {pack} was not installed: {error:#}. Install it later with: {command}"
                 );
@@ -140,18 +198,269 @@ pub(crate) async fn install(
     json!({"installed": installed, "not_installed": not_installed})
 }
 
-enum Outcome {
-    Installed(Value),
-    Unapproved { requested: Value, wire: bool },
+/// One default pack as `home` has it: what the desktop's approval card and
+/// `gents config pack starter` list.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct PackStatus {
+    pub(crate) pack: String,
+    pub(crate) purpose: &'static str,
+    /// What the Engineer lacks while the pack is not installed.
+    pub(crate) without: &'static str,
+    pub(crate) state: PackState,
+    pub(crate) version: Option<String>,
+    /// The archive an approval installs; the approval names it back.
+    pub(crate) digest: Option<String>,
+    /// `[{plugin, asks}]`: the permissions its plugins request.
+    pub(crate) requested: Value,
+    /// What approving turns on beyond those permissions.
+    pub(crate) turns_on: Vec<&'static str>,
+    /// Why an `unavailable` pack could not be resolved.
+    pub(crate) reason: Option<String>,
 }
 
-async fn install_one(
-    home: &Path,
-    engineer: &str,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PackState {
+    /// Installed, with its plugins wired into the Engineer's Tools as an
+    /// approval wires them and its skills attached to the Engineer's Context.
+    Installed,
+    /// Not installed as approved, and installing it grants something.
+    NeedsApproval,
+    /// Not installed, and installing it grants nothing.
+    Ready,
+    /// Neither the home's pack store nor the registry resolved it.
+    Unavailable,
+}
+
+/// The Engineer of `home`'s node: its default agent, when that agent is the
+/// Engineer. `None` on a home with another default agent, which has no
+/// default packs.
+async fn engineer_of(access: &gents::ConfigAccess, owner: &str) -> Result<Option<String>> {
+    let Ok(agent) = crate::commands::start::default_agent(access, owner).await else {
+        return Ok(None);
+    };
+    let rows = crate::graphql_rows(
+        access,
+        "Agent",
+        &format!(
+            r#"{{ Agent(filter: {{agent_did: {{_eq: "{}"}}}}, limit: 1) {{ tags }} }}"#,
+            gents::store::graphql::escape_graphql_string(&agent)
+        ),
+    )
+    .await?;
+    let engineer = rows.first().is_some_and(|row| {
+        row["tags"].as_array().is_some_and(|tags| {
+            tags.iter().any(|tag| {
+                tag.as_str() == Some(gents::tools::builtin::self_config::ENGINEER_AGENT_TAG)
+            })
+        })
+    });
+    Ok(engineer.then_some(agent))
+}
+
+/// Whether the installed `record` is in the Engineer's Tools and Context the
+/// way an approval leaves it: every plugin selected, with the consents its
+/// pack's approval carries, and every skill attached.
+async fn installed_as_approved(
+    access: &gents::ConfigAccess,
+    owner: &str,
     pack: &str,
+    record: &gents::pack::HomePackInstall,
+    context: &gents::documents::AgentContext,
+    tools: &gents::documents::Tools,
+) -> Result<bool> {
+    let (namespace, _) = gents::pack::registry::split_pack_coordinate(pack);
+    let selected: Vec<_> = tools
+        .integrations
+        .iter()
+        .flat_map(|integrations| integrations.plugins.iter().flatten())
+        .collect();
+    for shipped in &record.plugins {
+        let coordinate = format!("{namespace}/{}", shipped.name);
+        let Some(selection) = selected.iter().find(|plugin| plugin.plugin == coordinate) else {
+            return Ok(false);
+        };
+        if TOOL_CALLS_ON_APPROVAL.contains(&pack) && !selection.tool_calls {
+            return Ok(false);
+        }
+        if DYNAMIC_RUN_ON_APPROVAL.contains(&pack)
+            && selection.job.as_ref().is_some_and(|job| {
+                gents::tools::background::job::settings::consented_dynamic(true, job.policy.dynamic)
+                    != job.policy.dynamic
+            })
+        {
+            return Ok(false);
+        }
+    }
+    Ok(gents::pack::installed_pack_documents(access, owner, pack)
+        .await?
+        .into_iter()
+        .filter(|(collection, _)| *collection == gents::store::collection::Collection::Skill)
+        .all(|(_, skill)| context.skill_ids.contains(&skill)))
+}
+
+/// Each of `packs` as `home` has it, read through whatever serves the home:
+/// its own store, or the runtime running on it. A home whose default agent
+/// is not the Engineer has none.
+pub(crate) async fn status(
+    home: &Path,
+    packs: &[&str],
     registry: Option<&str>,
-    approval: Approval,
-) -> Result<Outcome> {
+) -> Result<Vec<PackStatus>> {
+    let (access, owner) = command::resolve_scope_owner(&scope(home)).await?;
+    let read = async {
+        let Some(engineer) = engineer_of(&access, &owner).await? else {
+            return Ok(None);
+        };
+        let (context, tools) = access
+            .transact_readonly("cli.default_packs.status", |txn| {
+                let (owner, engineer) = (&owner, &engineer);
+                Box::pin(async move {
+                    gents::documents::load_agent_context_and_tools_in_txn(txn, owner, engineer)
+                        .await
+                })
+            })
+            .await?;
+        let context = context.context("the Engineer has no Context document")?;
+        let tools = tools.context("the Engineer has no Tools document")?;
+        let mut installed = Vec::new();
+        for pack in packs {
+            installed.push(match gents::pack::read_home_install(home, pack)? {
+                Some(record) => {
+                    installed_as_approved(&access, &owner, pack, &record, &context, &tools)
+                        .await?
+                        .then_some(record)
+                }
+                None => None,
+            });
+        }
+        Ok::<_, anyhow::Error>(Some(installed))
+    }
+    .await;
+    release(access).await;
+    let Some(installed) = read? else {
+        return Ok(Vec::new());
+    };
+    let resolved = futures_util::future::join_all(packs.iter().zip(&installed).map(
+        |(pack, installed)| async move {
+            match installed {
+                Some(_) => None,
+                None => Some(resolve(home, pack, registry).await),
+            }
+        },
+    ))
+    .await;
+    Ok(packs
+        .iter()
+        .zip(installed)
+        .zip(resolved)
+        .map(|((pack, installed), resolved)| {
+            let (purpose, without) = describe(pack);
+            let mut status = PackStatus {
+                pack: (*pack).to_owned(),
+                purpose,
+                without,
+                state: PackState::Installed,
+                version: installed.as_ref().map(|record| record.version.clone()),
+                digest: installed.as_ref().map(|record| record.digest.clone()),
+                requested: json!([]),
+                turns_on: turns_on(pack),
+                reason: None,
+            };
+            match resolved {
+                None => {}
+                Some(Ok(resolved)) => {
+                    status.state = if resolved.asks() || !status.turns_on.is_empty() {
+                        PackState::NeedsApproval
+                    } else {
+                        PackState::Ready
+                    };
+                    status.version = Some(resolved.source.manifest().version.clone());
+                    status.digest = Some(resolved.source.digest().to_owned());
+                    status.requested = resolved.requested;
+                }
+                Some(Err(error)) => {
+                    status.state = PackState::Unavailable;
+                    status.reason = Some(format!("{error:#}"));
+                }
+            }
+            status
+        })
+        .collect())
+}
+
+/// Installs each approved pack of `approved` (a name of `packs`, with the
+/// digest its status showed when one is given) for `home`'s Engineer, as
+/// init installs a pack it was told to approve. The home's own store is
+/// opened, so a runtime serving the home is refused before anything is
+/// written. Returns `{installed, failed}`; a pack that fails leaves the
+/// others installed and is retried by approving it again.
+pub(crate) async fn approve(
+    home: &Path,
+    packs: &[&str],
+    approved: &[(String, Option<String>)],
+    registry: Option<&str>,
+) -> Result<Value> {
+    for (pack, _) in approved {
+        anyhow::ensure!(
+            packs.contains(&pack.as_str()),
+            "{pack} is not one of the Engineer's starter packs ({}). Install any other pack with: gents config pack install {pack} --home {}",
+            packs.join(", "),
+            home.display()
+        );
+    }
+    let (access, owner) = command::resolve_scope_owner(&scope(home)).await?;
+    let engineer = match access.local_node() {
+        Some(_) => engineer_of(&access, &owner).await,
+        None => Err(anyhow::anyhow!(
+            "a runtime is serving this home, and a starter pack is installed through the home's own store. Nothing was installed. Stop the runtime (gents service stop --home {}), approve again, then start it",
+            home.display()
+        )),
+    };
+    release(access).await;
+    let engineer = engineer?
+        .context("this home's default agent is not the Engineer, so it has no starter packs")?;
+    let mut installed = Vec::new();
+    let mut failed = Vec::new();
+    for (pack, digest) in approved {
+        match install_one(
+            home,
+            &engineer,
+            pack,
+            registry,
+            Approval::Approved,
+            digest.as_deref(),
+        )
+        .await
+        {
+            Ok(Outcome::Installed(report)) => installed.push(report),
+            Ok(Outcome::Unapproved { .. }) => unreachable!("an approved pack is never unapproved"),
+            Err(error) => failed.push(json!({"pack": pack, "error": format!("{error:#}")})),
+        }
+    }
+    Ok(json!({"installed": installed, "failed": failed}))
+}
+
+enum Outcome {
+    Installed(Value),
+    Unapproved { requested: Value },
+}
+
+/// A default pack's archive with its dependencies and what its plugins ask.
+struct Resolved {
+    source: command::PackSource,
+    requested: Value,
+}
+
+impl Resolved {
+    fn asks(&self) -> bool {
+        self.requested
+            .as_array()
+            .is_some_and(|asks| !asks.is_empty())
+    }
+}
+
+async fn resolve(home: &Path, pack: &str, registry: Option<&str>) -> Result<Resolved> {
     let source = tokio::time::timeout(
         RESOLVE_BOUND,
         command::resolve_pack_source(pack, registry, home),
@@ -182,10 +491,27 @@ async fn install_one(
             .map(|dependency| dependency.manifest())
             .collect::<Vec<_>>(),
     )?;
+    Ok(Resolved { source, requested })
+}
+
+#[cfg(test)]
+static FAIL_NEXT_WIRE: std::sync::Mutex<Option<std::path::PathBuf>> = std::sync::Mutex::new(None);
+
+async fn install_one(
+    home: &Path,
+    engineer: &str,
+    pack: &str,
+    registry: Option<&str>,
+    approval: Approval,
+    expect_digest: Option<&str>,
+) -> Result<Outcome> {
+    let Resolved { source, requested } = resolve(home, pack, registry).await?;
+    command::check_expected_digest(expect_digest, source.digest())?;
     let wire = !source.manifest().metadata.plugins.is_empty();
     let asks = requested.as_array().is_some_and(|asks| !asks.is_empty());
     let tool_calls = TOOL_CALLS_ON_APPROVAL.contains(&pack);
-    let approved = (asks || tool_calls)
+    let dynamic = DYNAMIC_RUN_ON_APPROVAL.contains(&pack);
+    let approved = (asks || tool_calls || dynamic)
         && match approval {
             Approval::Approved => true,
             Approval::Unattended => false,
@@ -202,32 +528,28 @@ async fn install_one(
                         ask["asks"].as_str().unwrap_or_default()
                     );
                 }
-                if DYNAMIC_RUN_ON_APPROVAL.contains(&pack) {
-                    eprintln!("  Approving also lets workflow scripts the model writes start agents (job.policy.dynamic: run).");
+                for turned_on in turns_on(pack) {
+                    eprintln!("  {turned_on}");
                 }
-                if tool_calls {
-                    eprintln!("  Approving lets a script it runs call the Engineer's own tools (tool_calls: true); declined, a script only computes and sleeps.");
+                match describe(pack).1 {
+                    "" => {}
+                    without => eprintln!("  {without}"),
                 }
                 crate::interactive_backend::confirm(
                     &if asks {
-                        format!("Install {pack} and allow this?")
+                        format!("Install {pack} with these permissions?")
                     } else {
-                        format!("Allow this for {pack}?")
+                        format!("Give {pack} this permission?")
                     },
-                    false,
+                    true,
                 )
                 .await
             }
         };
     let grant = asks && approved;
     if asks && !grant {
-        return Ok(Outcome::Unapproved { requested, wire });
+        return Ok(Outcome::Unapproved { requested });
     }
-    let scope = ScopeArgs {
-        home: Some(home.to_owned()),
-        graphql: None,
-        node_did: None,
-    };
     let coordinate = format!(
         "{}/{}",
         source.manifest().metadata.namespace,
@@ -235,16 +557,23 @@ async fn install_one(
     );
     // One held access installs the pack, wires its plugins and attaches its
     // skills, and its node is drained before the next pack opens the home.
-    let (access, owner) = command::resolve_scope_owner(&scope).await?;
-    let installed = install_as_engineer(
-        &access,
-        &owner,
-        home,
-        engineer,
-        &format!("{coordinate}@{}", source.manifest().version),
-        source.digest(),
-    )
-    .await;
+    let (access, owner) = command::resolve_scope_owner(&scope(home)).await?;
+    let already = gents::pack::read_home_install(home, &coordinate)?
+        .is_some_and(|record| record.digest == source.digest());
+    let installed = if already {
+        Ok(())
+    } else {
+        install_as_engineer(
+            &access,
+            &owner,
+            home,
+            engineer,
+            &format!("{coordinate}@{}", source.manifest().version),
+            source.digest(),
+        )
+        .await
+        .map(drop)
+    };
     let attached = async {
         installed?;
         let host_tool_roots = command::wire::grant_pack_root_readers(&access, &owner, &coordinate)
@@ -252,6 +581,15 @@ async fn install_one(
             .with_context(|| {
                 format!("{pack} is installed, but its agents were not granted their tool root")
             })?;
+        #[cfg(test)]
+        if FAIL_NEXT_WIRE
+            .lock()
+            .unwrap()
+            .take_if(|failing| failing == home)
+            .is_some()
+        {
+            anyhow::bail!("simulated wire failure for {pack}");
+        }
         let wired = if wire {
             command::wire_pack_plugins_consenting(
                 &access,
@@ -259,7 +597,7 @@ async fn install_one(
                 home,
                 &source,
                 &[engineer.to_owned()],
-                grant && DYNAMIC_RUN_ON_APPROVAL.contains(&coordinate.as_str()),
+                approved && dynamic,
                 approved && tool_calls,
             )
             .await
@@ -283,15 +621,10 @@ async fn install_one(
         Ok::<_, anyhow::Error>((wired, skills, host_tool_roots))
     }
     .await;
-    if let Some(node) = access.local_node() {
-        if let Err(error) = node.shutdown().await {
-            tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
-        }
-    }
-    drop(access);
+    release(access).await;
     let (wired, skills, host_tool_roots) = attached?;
     if tool_calls && !approved {
-        eprintln!("  {pack} is wired without the Engineer's tools, which was not approved: a script only computes and sleeps. The Engineer grants it with tool_calls true on that plugin in its Tools.");
+        eprintln!("  {pack} is wired without the Engineer's tools, which was not approved: a script only computes and waits. Approve it with: {}", approve_command(home, pack));
     }
     Ok(Outcome::Installed(json!({
         "pack": coordinate,
@@ -302,6 +635,31 @@ async fn install_one(
         "skills": skills,
         "host_tool_roots": host_tool_roots,
     })))
+}
+
+/// `gents config pack starter`: the Engineer's starter packs as this home
+/// has them, or with `--approve` the named ones installed with what they
+/// request approved.
+pub(crate) async fn starter(args: crate::cli::PackStarterArgs) -> Result<()> {
+    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let registry = args.registry.as_deref();
+    if args.approve.is_empty() {
+        return crate::print_json(&json!({
+            "packs": status(&home, ENGINEER_DEFAULT_PACKS, registry).await?,
+        }));
+    }
+    let approved: Vec<_> = args
+        .approve
+        .iter()
+        .map(|pack| (pack.clone(), None))
+        .collect();
+    let report = approve(&home, ENGINEER_DEFAULT_PACKS, &approved, registry).await?;
+    crate::print_json(&report)?;
+    anyhow::ensure!(
+        report["failed"].as_array().is_none_or(Vec::is_empty),
+        "a starter pack was not installed; its error is in the report above"
+    );
+    Ok(())
 }
 
 /// Installs `package` at `digest` as the Engineer `engineer`, so the pack's
@@ -541,9 +899,7 @@ mod tests {
         );
         let later = pending[0]["install_with"].as_str().unwrap();
         assert!(
-            later.starts_with("gents config pack install fixture/engineer_tools --home ")
-                && later.contains(" --grant-authority")
-                && later.ends_with(&format!(" --wire {engineer}")),
+            later.starts_with("gents config pack starter --approve fixture/engineer_tools --home "),
             "{later}"
         );
         assert_eq!(pending[1]["pack"], "fixture/unpublished", "{report}");
@@ -551,7 +907,7 @@ mod tests {
             pending[1]["install_with"]
                 .as_str()
                 .unwrap()
-                .starts_with("gents config pack install fixture/unpublished --home "),
+                .starts_with("gents config pack starter --approve fixture/unpublished --home "),
             "{report}"
         );
         assert!(
@@ -565,19 +921,94 @@ mod tests {
             "{documents}"
         );
 
-        let report = install(
-            home.path(),
-            &engineer,
-            &names[1..2],
-            unreachable,
-            Approval::Approved,
-        )
-        .await;
-        assert_eq!(report["not_installed"], json!([]), "{report}");
+        // What the desktop's card and `pack starter` list: the installed
+        // pack, the one waiting on an approval with what it requests and the
+        // archive an approval installs, and the one nothing resolves.
+        let states =
+            |listed: &[PackStatus]| listed.iter().map(|pack| pack.state).collect::<Vec<_>>();
+        let listed = status(home.path(), &names, unreachable).await.unwrap();
         assert_eq!(
-            report["installed"][0]["granted_permissions"][0]["plugin"], "fetch",
-            "{report}"
+            states(&listed),
+            [
+                PackState::Installed,
+                PackState::NeedsApproval,
+                PackState::Unavailable
+            ],
+            "{listed:?}"
         );
+        assert_eq!(listed[1].requested[0]["plugin"], "fetch", "{listed:?}");
+        assert!(listed[2].reason.is_some(), "{listed:?}");
+        let digest = listed[1].digest.clone().unwrap();
+        let tools_pack =
+            |digest: &str| vec![("fixture/engineer_tools".to_owned(), Some(digest.to_owned()))];
+
+        // An approval installs only a listed pack, and only the archive that
+        // was shown.
+        let unlisted = approve(
+            home.path(),
+            &names,
+            &[("fixture/other".into(), None)],
+            unreachable,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            format!("{unlisted:#}").contains("is not one of the Engineer's starter packs"),
+            "{unlisted:#}"
+        );
+        let other = approve(
+            home.path(),
+            &names,
+            &tools_pack("sha256:other"),
+            unreachable,
+        )
+        .await
+        .unwrap();
+        assert!(
+            other["failed"][0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("not the expected sha256:other"),
+            "{other}"
+        );
+        assert!(gents::plugin::store::read_record(home.path(), "fixture", "fetch").is_err());
+
+        // An install whose wiring fails leaves the pack waiting, and
+        // approving it again finishes it.
+        *FAIL_NEXT_WIRE.lock().unwrap() = Some(home.path().to_owned());
+        let half = approve(home.path(), &names, &tools_pack(&digest), unreachable)
+            .await
+            .unwrap();
+        assert!(
+            half["failed"][0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("simulated wire failure"),
+            "{half}"
+        );
+        assert!(
+            gents::pack::read_home_install(home.path(), "fixture/engineer_tools")
+                .unwrap()
+                .is_some()
+        );
+        let listed = status(home.path(), &names, unreachable).await.unwrap();
+        assert_eq!(listed[1].state, PackState::NeedsApproval, "{listed:?}");
+        assert_eq!(
+            listed[1].digest.as_deref(),
+            Some(digest.as_str()),
+            "{listed:?}"
+        );
+
+        for _ in 0..2 {
+            let report = approve(home.path(), &names, &tools_pack(&digest), unreachable)
+                .await
+                .unwrap();
+            assert_eq!(report["failed"], json!([]), "{report}");
+            assert_eq!(
+                report["installed"][0]["granted_permissions"][0]["plugin"], "fetch",
+                "{report}"
+            );
+        }
         let record = gents::plugin::store::read_record(home.path(), "fixture", "fetch").unwrap();
         assert!(
             record.granted.is_some(),
@@ -585,9 +1016,98 @@ mod tests {
         );
         let documents = engineer_documents(home.path()).await;
         assert_eq!(
+            documents["plugins"].as_array().map(Vec::len),
+            Some(1),
+            "approving again selects the plugin once: {documents}"
+        );
+        assert_eq!(
             documents["plugins"][0]["plugin"], "fixture/fetch",
             "{documents}"
         );
+        let listed = status(home.path(), &names, unreachable).await.unwrap();
+        assert_eq!(
+            states(&listed),
+            [
+                PackState::Installed,
+                PackState::Installed,
+                PackState::Unavailable
+            ],
+            "{listed:?}"
+        );
+    }
+
+    /// `init --engineer` installs its default packs itself, after it has let
+    /// go of the home: each pack opens the home again, which a node init
+    /// still held would lock.
+    #[tokio::test]
+    async fn init_installs_the_default_packs_its_home_store_holds() {
+        let home = tempfile::tempdir().unwrap();
+        let packs = tempfile::tempdir().unwrap();
+        for pack in ENGINEER_DEFAULT_PACKS {
+            let (namespace, name) = gents::pack::registry::split_pack_coordinate(pack);
+            let dir = packs.path().join(name);
+            write_pack(
+                &dir,
+                json!({
+                    "manifest_version": 1, "name": name, "namespace": namespace,
+                    "version": "1.0.0", "description": "A starter skill",
+                    "authors": ["tests"], "tags": [], "kind": "documents",
+                    "assets": ["README.md", "pack_config.json"], "dependencies": [],
+                    "config": "pack_config.json",
+                }),
+                &[(
+                    "pack_config.json",
+                    serde_json::to_vec(&json!({
+                        "node": {"node_did": "${GENTS_PACK_NODE_DID}"},
+                        "skills": [{"skill_id": format!("starter-{name}"),
+                            "node_did": "${GENTS_PACK_NODE_DID}", "name": name,
+                            "description": "A starter skill.", "instructions": "Use it."}],
+                    }))
+                    .unwrap(),
+                )],
+            );
+            gents::pack::local::open(&gents::pack::local::LocalName::Path(&dir), home.path())
+                .unwrap();
+        }
+        let cli = crate::cli::Cli::try_parse_from([
+            "gents",
+            "init",
+            "--store-key-custody",
+            "file",
+            "--engineer",
+            "--inference-url",
+            "http://127.0.0.1:9/v1",
+            "--home",
+            home.path().to_str().unwrap(),
+        ])
+        .unwrap();
+        let Some(crate::cli::Command::Init(mut args)) = cli.command else {
+            panic!("expected init")
+        };
+        args.unattended = true;
+        let initialized = crate::commands::init::init_home(args).await.unwrap();
+        let report = &initialized["default_packs"];
+        assert_eq!(report["not_installed"], json!([]), "{report}");
+        assert_eq!(
+            report["installed"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|pack| pack["pack"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ENGINEER_DEFAULT_PACKS,
+            "{report}"
+        );
+        let documents = engineer_documents(home.path()).await;
+        assert_eq!(
+            documents["skills"].as_array().map(Vec::len),
+            Some(ENGINEER_DEFAULT_PACKS.len()),
+            "{documents}"
+        );
+        for pack in ENGINEER_DEFAULT_PACKS {
+            let (purpose, without) = describe(pack);
+            assert!(!purpose.is_empty() && !without.is_empty(), "{pack}");
+        }
     }
 
     /// A default pack is installed as the Engineer, so what it ships is the

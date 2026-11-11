@@ -102,7 +102,7 @@ pub(super) async fn ensure_agent(
 }
 
 /// The node's default agent, as its Node document names it.
-pub(super) async fn default_agent(access: &ConfigAccess, node_did: &str) -> Result<String> {
+pub(crate) async fn default_agent(access: &ConfigAccess, node_did: &str) -> Result<String> {
     let rows = crate::graphql_rows(
         access,
         "Node",

@@ -1391,3 +1391,307 @@ async fn wire_sources_in_fixture_home() -> Result<()> {
     }
     Ok(())
 }
+
+const STARTER_HOME_ENV: &str = "GENTS_TEST_STARTER_HOME";
+const STARTER_STEP_ENV: &str = "GENTS_TEST_STARTER_STEP";
+
+/// A copy of the job fixture pack renamed to the starter pack `gents/<name>`,
+/// shipping the plugin `gents/<plugin>` (which requests an environment
+/// variable) and one skill, admitted to `home`'s pack store.
+fn admit_starter_fixture(
+    scratch: &std::path::Path,
+    home: &std::path::Path,
+    name: &str,
+    plugin: &str,
+    job: bool,
+) -> Result<()> {
+    let dir = scratch.join(name);
+    copy_dir_all(&fixture_pack_dir("job_plugin_fixture"), &dir)?;
+    std::fs::remove_file(dir.join("plugins/job_fixture.afb")).ok();
+    if plugin != "job_fixture" {
+        std::fs::rename(
+            dir.join("plugins/job_fixture"),
+            dir.join("plugins").join(plugin),
+        )?;
+        for file in ["Cargo.toml", "Cargo.lock"] {
+            let path = dir.join("plugins").join(plugin).join(file);
+            let text = std::fs::read_to_string(&path)?;
+            std::fs::write(&path, text.replace("job_fixture", plugin))?;
+        }
+    }
+    let manifest_path = dir.join("manifest.json");
+    let mut manifest = read_json_file(&manifest_path)?;
+    manifest["name"] = name.into();
+    manifest["namespace"] = "gents".into();
+    manifest["assets"] = serde_json::json!([
+        "README.md",
+        "pack_config.json",
+        format!("plugins/{plugin}.afb"),
+    ]);
+    manifest.as_object_mut().unwrap().remove("schemas");
+    let entry = &mut manifest["plugins"][0];
+    entry["name"] = plugin.into();
+    entry["artifact"] = format!("plugins/{plugin}.afb").into();
+    entry["source"] = format!("plugins/{plugin}").into();
+    entry["job"] = job.into();
+    entry.as_object_mut().unwrap().remove("data");
+    entry["manifold"] = serde_json::json!({
+        "fs": "None", "net": "None", "crypto": false, "child_process": false,
+        "env": {"AllowList": ["STARTER_FIXTURE"]},
+    });
+    write_json_file(&manifest_path, &manifest)?;
+    let mut selection = serde_json::json!({"plugin": format!("gents/{plugin}")});
+    let mut config = serde_json::json!({
+        "node": {"node_did": "${GENTS_PACK_NODE_DID}"},
+        "skills": [{
+            "skill_id": format!("starter-{name}"), "node_did": "${GENTS_PACK_NODE_DID}",
+            "name": name, "description": "A starter skill.", "instructions": "Use it.",
+        }],
+    });
+    if job {
+        let target = format!("wf-{name}");
+        selection["job"] =
+            serde_json::json!({"agent_targets": [target], "policy": {"dynamic": "check"}});
+        config["agent_targets"] = serde_json::json!([wire_target(&target)]);
+        config["tools"] = serde_json::json!([{
+            "tools_id": format!("{name}-caller"),
+            "display_name": "Starter fixture caller",
+            "integrations": {"plugins": [selection]},
+        }]);
+    }
+    edit_pack_config(&dir, |existing| *existing = config)?;
+    run_cli_text(scratch, &["config", "pack", "build", dir_arg(&dir)])?;
+    gents::pack::local::open(&gents::pack::local::LocalName::Path(&dir), home)
+        .with_context(|| format!("admitting {name} to the home's pack store"))?;
+    Ok(())
+}
+
+fn starter_step(fixture: &std::path::Path, home: &std::path::Path, step: &str) -> Result<()> {
+    let output = std::process::Command::new(std::env::current_exe()?)
+        .args([
+            "cli_pack::starter_packs_in_fixture_home",
+            "--exact",
+            "--include-ignored",
+            "--nocapture",
+        ])
+        .env("HOME", fixture)
+        .env_remove(gents_desktop_core::client::DESKTOP_HOME_ENV)
+        .env(STARTER_HOME_ENV, home)
+        .env(STARTER_STEP_ENV, step)
+        .output()?;
+    anyhow::ensure!(
+        output.status.success(),
+        "starter step {step} failed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
+}
+
+/// What the desktop's starter packs card does, against a real runtime. The
+/// list is read while the runtime serves the home. An approval installs
+/// through the home's own store, so it is refused, writing nothing, while
+/// the runtime runs, and the desktop restarts the node around it: here the
+/// runtime is stopped, the packs approved (twice: approving again changes
+/// nothing) and the runtime started again, where the Engineer's surface has
+/// the packs' plugin tools and its Context their skills.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn starter_packs_are_approved_around_a_running_runtime() -> Result<()> {
+    let tempdir = tempfile::tempdir()?;
+    let scratch = tempdir.path();
+    let home = scratch.join("agent-home");
+    let home_arg = dir_arg(&home);
+    let initialized = run_init_json(
+        scratch,
+        &[
+            "--engineer",
+            "--no-default-packs",
+            "--model-name",
+            "test-model",
+            "--inference-url",
+            "http://127.0.0.1:9/v1",
+            "--home",
+            home_arg,
+        ],
+    )?;
+    let node_did = node_did_from_init(&initialized)?;
+    let engineer = initialized["default_agent_did"]
+        .as_str()
+        .context("init output missing default_agent_did")?
+        .to_owned();
+    admit_starter_fixture(scratch, &home, "dynamic_workflows", "job_fixture", true)?;
+    admit_starter_fixture(scratch, &home, "script", "script", false)?;
+
+    let serve = |port: u16| spawn_server_with_ready_json(scratch, port, &["--home", home_arg], &[]);
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let (mut server, _) = serve(port)?;
+    wait_for_port(port, &mut server)?;
+    wait_for_runtime_ready(&graphql, &node_did, std::time::Duration::from_secs(60)).await?;
+    wait_for_runtime_state_graphql(&home, &graphql, std::time::Duration::from_secs(30)).await?;
+    starter_step(scratch, &home, "running")?;
+    drop(server);
+
+    starter_step(scratch, &home, "stopped")?;
+
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let (mut server, _) = serve(port)?;
+    wait_for_port(port, &mut server)?;
+    wait_for_runtime_ready(&graphql, &node_did, std::time::Duration::from_secs(60)).await?;
+    wait_for_runtime_state_graphql(&home, &graphql, std::time::Duration::from_secs(30)).await?;
+    starter_step(scratch, &home, "restarted")?;
+    let explained = run_cli_json(
+        scratch,
+        &[
+            "config",
+            "tools",
+            "explain",
+            "--agent-did",
+            &engineer,
+            "--home",
+            home_arg,
+        ],
+    )?;
+    let surface = explained["agents"]
+        .as_array()
+        .and_then(|agents| {
+            agents
+                .iter()
+                .find(|agent| agent["agent_did"] == engineer.as_str())
+        })
+        .and_then(|agent| agent.pointer("/surface/tool_names"))
+        .and_then(serde_json::Value::as_array)
+        .with_context(|| format!("the Engineer has no explained surface: {explained}"))?;
+    for tool in ["job_fixture", "script"] {
+        anyhow::ensure!(
+            surface.iter().any(|name| name == tool),
+            "the running Engineer's surface lacks the plugin tool {tool}: {explained}"
+        );
+    }
+    let tools = run_cli_json(
+        scratch,
+        &[
+            "config",
+            "tools",
+            "show",
+            &format!("{engineer}-tools"),
+            "--home",
+            home_arg,
+        ],
+    )?;
+    let selected = |plugin: &str| {
+        tools["integrations"]["plugins"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|entry| entry["plugin"] == plugin)
+            .collect::<Vec<_>>()
+    };
+    let workflow = selected("gents/job_fixture");
+    anyhow::ensure!(
+        workflow.len() == 1 && workflow[0]["job"]["policy"]["dynamic"] == "run",
+        "approving gents/dynamic_workflows did not set its job block to run, once: {tools}"
+    );
+    let script = selected("gents/script");
+    anyhow::ensure!(
+        script.len() == 1 && script[0]["tool_calls"] == true,
+        "approving gents/script did not wire it with tool_calls, once: {tools}"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "run by starter_packs_are_approved_around_a_running_runtime in the fixture's HOME"]
+async fn starter_packs_in_fixture_home() -> Result<()> {
+    let home = std::path::PathBuf::from(
+        std::env::var_os(STARTER_HOME_ENV).context("fixture home is not set")?,
+    );
+    let step = std::env::var(STARTER_STEP_ENV).context("fixture step is not set")?;
+    let registry = Some(UNROUTABLE_REGISTRY.to_owned());
+    let listed = gents_server::packs::default_packs(home.clone(), registry.clone()).await?;
+    let state = |pack: &str| {
+        listed["packs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|listed| listed["pack"] == pack)
+            .map(|listed| listed["state"].clone())
+    };
+    let fixtures = ["gents/dynamic_workflows", "gents/script"];
+    let approved = || {
+        fixtures
+            .iter()
+            .map(|pack| {
+                let digest = listed["packs"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .find(|listed| listed["pack"] == *pack)
+                    .and_then(|listed| listed["digest"].as_str())
+                    .with_context(|| format!("{pack} lists no digest: {listed}"))?;
+                Ok(((*pack).to_owned(), digest.to_owned()))
+            })
+            .collect::<Result<Vec<_>>>()
+    };
+    anyhow::ensure!(
+        listed["packs"].as_array().map(Vec::len) == Some(6)
+            && state("gents/web") == Some("unavailable".into()),
+        "{step}: every starter pack is listed, and one nothing publishes is unavailable: {listed}"
+    );
+    match step.as_str() {
+        "running" => {
+            anyhow::ensure!(
+                fixtures
+                    .iter()
+                    .all(|pack| state(pack) == Some("needs_approval".into())),
+                "the running node's packs wait on an approval: {listed}"
+            );
+            let refused =
+                gents_server::packs::approve_default_packs(home.clone(), approved()?, registry)
+                    .await
+                    .expect_err("an approval while the runtime serves the home");
+            anyhow::ensure!(
+                format!("{refused:#}").contains("a runtime is serving this home"),
+                "{refused:#}"
+            );
+            anyhow::ensure!(
+                gents::pack::read_home_install(&home, "gents/script")?.is_none()
+                    && gents::plugin::store::list_records(&home)?.is_empty(),
+                "a refused approval installed something"
+            );
+        }
+        "stopped" => {
+            for _ in 0..2 {
+                let report = gents_server::packs::approve_default_packs(
+                    home.clone(),
+                    approved()?,
+                    registry.clone(),
+                )
+                .await?;
+                anyhow::ensure!(
+                    report["failed"] == serde_json::json!([])
+                        && report["installed"].as_array().map(Vec::len) == Some(2),
+                    "the approval did not install both packs: {report}"
+                );
+                anyhow::ensure!(
+                    report["installed"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .all(|pack| pack["skills"].as_array().map(Vec::len) == Some(1)
+                            && pack["granted_permissions"].as_array().map(Vec::len) == Some(1)),
+                    "each pack's skill is attached and its permission granted: {report}"
+                );
+            }
+        }
+        "restarted" => anyhow::ensure!(
+            fixtures
+                .iter()
+                .all(|pack| state(pack) == Some("installed".into())),
+            "the restarted node lists the approved packs as installed: {listed}"
+        ),
+        other => anyhow::bail!("unknown step {other}"),
+    }
+    Ok(())
+}

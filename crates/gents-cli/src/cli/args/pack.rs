@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use super::{
     PackAccountArgs, PackBuildArgs, PackFetchArgs, PackInfoArgs, PackInitArgs, PackInstallArgs,
     PackLoginArgs, PackOutdatedArgs, PackOwnerArgs, PackPruneArgs, PackPublishArgs, PackRemoveArgs,
-    PackRunArgs, PackSearchArgs, PackSeedArgs, PackUpdateArgs, PackWireArgs, PackYankArgs,
-    PluginCommand, ScopeArgs, UxCommand,
+    PackRunArgs, PackSearchArgs, PackSeedArgs, PackStarterArgs, PackUpdateArgs, PackWireArgs,
+    PackYankArgs, PluginCommand, ScopeArgs, UxCommand,
 };
 
 #[derive(clap::Args)]
@@ -281,6 +281,9 @@ pub(crate) enum PackCommand {
     /// Wire an installed plugin into an agent's Tools and Context, or with
     /// `--remove` take it back out.
     Wire(PackWireArgs),
+    /// List the Engineer's starter packs and what each requests, or with
+    /// `--approve` install the ones you name.
+    Starter(PackStarterArgs),
     /// Remove an installed pack of any kind, and whatever nothing else still uses.
     Remove(PackRemoveArgs),
     /// List installed packs with a newer version in the registry.

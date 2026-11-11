@@ -24,8 +24,8 @@ pub(crate) mod wire;
 use crate::cli::*;
 use anyhow::{Context, Result};
 pub(crate) use install::{
-    install, install_documents_pack, install_documents_pack_resolved, parse_dependency_variables,
-    wire_pack_plugins, wire_pack_plugins_consenting,
+    check_expected_digest, install, install_documents_pack, install_documents_pack_resolved,
+    parse_dependency_variables, wire_pack_plugins, wire_pack_plugins_consenting,
 };
 pub(crate) use scope::{
     plugin_notification_scope, record_plugin_retirement, resolve_home_owner_under_plugin_store,
@@ -80,6 +80,7 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
         PackCommand::Check(args) => check::check(args).await,
         PackCommand::Install(args) => install(args).await,
         PackCommand::Wire(args) => wire::wire(args).await,
+        PackCommand::Starter(args) => crate::commands::init::default_packs::starter(args).await,
         PackCommand::Remove(args) => remove::remove(args).await,
         PackCommand::Outdated(args) => update::outdated(args).await,
         PackCommand::Update(args) => update::update(args).await,

@@ -632,7 +632,7 @@ fn merge(into: &mut serde_json::Value, from: serde_json::Value) {
 
 /// Refuses, before any write, a pack whose content digest is not the one the
 /// operator reviewed with `gents config pack show`.
-pub(super) fn check_expected_digest(expected: Option<&str>, actual: &str) -> Result<()> {
+pub(crate) fn check_expected_digest(expected: Option<&str>, actual: &str) -> Result<()> {
     match expected {
         Some(expected) if expected != actual => anyhow::bail!(
             "the pack's digest is {actual}, not the expected {expected}. Nothing was installed. \

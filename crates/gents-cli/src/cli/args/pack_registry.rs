@@ -267,6 +267,24 @@ pub(crate) struct PackWireArgs {
 }
 
 #[derive(clap::Args)]
+pub(crate) struct PackStarterArgs {
+    #[arg(
+        long,
+        value_name = "PACK",
+        action = clap::ArgAction::Append,
+        help = "Install this starter pack for the Engineer, approving the permissions it requests; repeat for each pack. The runtime must be stopped"
+    )]
+    pub(crate) approve: Vec<String>,
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Pack registry to resolve a pack the home's store does not hold"
+    )]
+    pub(crate) registry: Option<String>,
+}
+
+#[derive(clap::Args)]
 pub(crate) struct PackInstallArgs {
     #[arg(help = "A local path/sha256:<hex>, an installed coordinate, or a registry name")]
     pub(crate) package: String,

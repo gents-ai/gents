@@ -109,6 +109,40 @@ pub async fn install(
     .await
 }
 
+/// The Engineer's default packs as `home` has them: installed, waiting on an
+/// approval (with what its plugins request and the archive an approval
+/// installs), ready to install, or unavailable. Read through whatever serves
+/// the home, so it works while the runtime runs.
+pub async fn default_packs(home: PathBuf, registry: Option<String>) -> Result<Value> {
+    use crate::commands::init::default_packs as owner;
+    let packs = owner::status(&home, owner::ENGINEER_DEFAULT_PACKS, registry.as_deref()).await?;
+    Ok(serde_json::json!({ "packs": packs }))
+}
+
+/// Installs each `(pack, digest)` of `approved` for `home`'s Engineer, as
+/// `init --engineer` installs a default pack it was told to approve: the
+/// Engineer owns what the pack ships, its plugins are wired and its skills
+/// attached. Only a default pack, at the archive its status showed. The
+/// home's own store is opened, so the caller stops the runtime first.
+pub async fn approve_default_packs(
+    home: PathBuf,
+    approved: Vec<(String, String)>,
+    registry: Option<String>,
+) -> Result<Value> {
+    use crate::commands::init::default_packs as owner;
+    let approved: Vec<_> = approved
+        .into_iter()
+        .map(|(pack, digest)| (pack, Some(digest)))
+        .collect();
+    owner::approve(
+        &home,
+        owner::ENGINEER_DEFAULT_PACKS,
+        &approved,
+        registry.as_deref(),
+    )
+    .await
+}
+
 /// Wires the installed `plugin` into `agent`'s Tools and Context (or with
 /// `remove`, takes it back out), or with `preview` reports what that would
 /// write.
