@@ -9,6 +9,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use crate::documents::callback::validate_callback_binding;
 use crate::store::graphql::{
     escape_graphql_string, first_row, graphql_with_transaction_retry, rows,
 };
@@ -62,13 +63,6 @@ const PLACEMENT_FIELDS: &str = r#"
 pub use crate::documents::{
     CallbackBinding as CallbackBindingDoc, CallbackModule as CallbackModuleDoc,
 };
-
-impl CallbackBindingDoc {
-    pub fn projected_fields(&self) -> Result<Vec<String>> {
-        validate_callback_binding(self)?;
-        Ok(self.input_fields.clone())
-    }
-}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CallbackInvocationDoc {
@@ -187,40 +181,6 @@ pub(super) struct CallbackResultInvocationRow {
     pub invocation_id: String,
     #[serde(default)]
     pub parent_linked: bool,
-}
-
-pub fn validate_callback_binding(binding: &CallbackBindingDoc) -> Result<()> {
-    for (name, value) in [
-        ("binding_id", &binding.binding_id),
-        ("node_did", &binding.node_did),
-        ("agent_did", &binding.agent_did),
-        ("callback_id", &binding.callback_id),
-        ("event_source_id", &binding.event_source_id),
-    ] {
-        anyhow::ensure!(
-            !value.trim().is_empty(),
-            "CallbackBinding {name} must be non-empty"
-        );
-    }
-    identity::Did::new(binding.agent_did.clone())?;
-    anyhow::ensure!(
-        binding.agent_did != binding.node_did,
-        "callback agent cannot be its routing node"
-    );
-    let mut unique = RapidHashSet::new();
-    for field in &binding.input_fields {
-        crate::store::graphql::validate_graphql_name(field)?;
-        anyhow::ensure!(
-            unique.insert(field),
-            "duplicate callback input field {field}"
-        );
-        anyhow::ensure!(
-            !crate::documents::callback::is_secret_env_name(field),
-            "CallbackBinding {} source field `{field}` is secret-bearing",
-            binding.binding_id
-        );
-    }
-    Ok(())
 }
 
 async fn load_config<T>(

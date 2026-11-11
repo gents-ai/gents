@@ -19,9 +19,10 @@ use crate::tools::workspace::{
 use super::claim::invocation_is_claimable;
 use super::documents::{
     create_callback_result_mutation, succeeded_missing_result, succeeded_repair_cutoff,
-    update_invocation_mutation, validate_callback_binding, CallbackBindingDoc,
-    CallbackInvocationDoc, CallbackModuleDoc, CallbackResultDoc, CallbackResultInvocationRow,
+    update_invocation_mutation, CallbackBindingDoc, CallbackInvocationDoc, CallbackModuleDoc,
+    CallbackResultDoc, CallbackResultInvocationRow,
 };
+use crate::documents::callback::validate_callback_binding;
 use super::planner::{
     compute_module_id, fixture_create_workspace_artifact, invoke_plugin_planner, plan_from_module,
     validate_callback_module, CallbackModuleLimits, MAX_ARTIFACT_BYTES,

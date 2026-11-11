@@ -1,3 +1,5 @@
+use anyhow::Result;
+use rapidhash::{HashSetExt, RapidHashSet};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
@@ -166,6 +168,47 @@ pub struct CallbackBinding {
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
     #[schemars(transform = crate::documents::accepts_null)]
     pub tags: Vec<String>,
+}
+
+impl CallbackBinding {
+    pub fn projected_fields(&self) -> Result<Vec<String>> {
+        validate_callback_binding(self)?;
+        Ok(self.input_fields.clone())
+    }
+}
+
+pub fn validate_callback_binding(binding: &CallbackBinding) -> Result<()> {
+    for (name, value) in [
+        ("binding_id", &binding.binding_id),
+        ("node_did", &binding.node_did),
+        ("agent_did", &binding.agent_did),
+        ("callback_id", &binding.callback_id),
+        ("event_source_id", &binding.event_source_id),
+    ] {
+        anyhow::ensure!(
+            !value.trim().is_empty(),
+            "CallbackBinding {name} must be non-empty"
+        );
+    }
+    identity::Did::new(binding.agent_did.clone())?;
+    anyhow::ensure!(
+        binding.agent_did != binding.node_did,
+        "callback agent cannot be its routing node"
+    );
+    let mut unique = RapidHashSet::new();
+    for field in &binding.input_fields {
+        crate::store::graphql::validate_graphql_name(field)?;
+        anyhow::ensure!(
+            unique.insert(field),
+            "duplicate callback input field {field}"
+        );
+        anyhow::ensure!(
+            !crate::documents::callback::is_secret_env_name(field),
+            "CallbackBinding {} source field `{field}` is secret-bearing",
+            binding.binding_id
+        );
+    }
+    Ok(())
 }
 
 // Resource limits retain their executor defaults when absent; signer_did is
