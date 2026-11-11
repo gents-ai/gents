@@ -620,7 +620,7 @@ pub struct LeanContractSnapshot {
     pub capture_order_cases: Vec<LeanCaptureOrderCase>,
     pub aggregate_token_budget_cases: Vec<LeanAggregateTokenBudgetCase>,
     pub task_hook_admission_cases: Vec<LeanTaskHookAdmissionCase>,
-    pub store_encryption_upgrade_cases: Vec<serde_json::Value>,
+    pub families: BTreeMap<String, family::LeanFamily>,
     pub task_hook_run_cases: Vec<LeanTaskHookRunCase>,
     pub task_hook_recovery_cases: Vec<LeanTaskHookRecoveryCase>,
     pub lifecycle_hook_effect_cases: Vec<LeanLifecycleHookEffectCase>,
@@ -2788,6 +2788,7 @@ pub mod consumer_scan;
 mod durable_reduction;
 mod eval;
 mod event_delivery;
+pub mod family;
 mod hooks;
 mod optimization;
 mod prompt_assembly;
@@ -2803,6 +2804,11 @@ mod task_hooks;
 mod title;
 mod tool_policy;
 mod triggers_runtime_apply;
+
+/// Family types generated from `families.schema.json`, which Lean emits.
+pub mod families {
+    include!(concat!(env!("OUT_DIR"), "/families.rs"));
+}
 
 pub use account_rotation::*;
 pub use background_transcript::*;

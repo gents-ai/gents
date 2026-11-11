@@ -4,7 +4,9 @@
 //! is its own family, `<key>/<domain>`. A consumer site is a test file that
 //! reads the key, directly or through one of this crate's loaders, and for a
 //! domain family also names the domain. The coverage ledger says whether a
-//! family is consumed; it never names the test.
+//! family is consumed; it never names the test. A family converted to the
+//! derived mechanism is `families/<key>` and is consumed by its one
+//! `families::<key>::replay` call.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -28,6 +30,9 @@ const DOMAIN_FAMILIES: &[(&str, &str)] = &[
     ("vocabularies", "vocabulary"),
     ("state_machines", "state_machine"),
 ];
+
+/// The snapshot key holding the families whose types and replay are generated.
+const DERIVED_FAMILIES: &str = "families";
 
 /// Ledger categories the snapshot scan cannot see: follow-up hooks, accepted
 /// boundaries on domains with no emitted machine, and the standalone
@@ -193,7 +198,9 @@ pub fn emitted_families(snapshot: &Value) -> BTreeSet<String> {
     let mut families: BTreeSet<String> = snapshot
         .iter()
         .filter(|(key, value)| {
-            (value.is_array() || value.is_object()) && !CONTRACT_METADATA.contains(&key.as_str())
+            (value.is_array() || value.is_object())
+                && !CONTRACT_METADATA.contains(&key.as_str())
+                && key.as_str() != DERIVED_FAMILIES
         })
         .map(|(key, _)| key.clone())
         .collect();
@@ -203,6 +210,14 @@ pub fn emitted_families(snapshot: &Value) -> BTreeSet<String> {
             families.insert(format!("{key}/{domain}"));
         }
     }
+    let derived = snapshot[DERIVED_FAMILIES]
+        .as_object()
+        .expect("derived families");
+    families.extend(
+        derived
+            .keys()
+            .map(|key| format!("{DERIVED_FAMILIES}/{key}")),
+    );
     families
 }
 
@@ -271,6 +286,17 @@ pub fn consumer_sites(
                 .get_mut(&family)
                 .expect("known family")
                 .insert(relative.clone());
+        }
+        if !source.contains("families::") {
+            continue;
+        }
+        let prefix = format!("{DERIVED_FAMILIES}/");
+        for (family, found) in sites.range_mut(prefix.clone()..) {
+            let Some(key) = family.strip_prefix(&prefix) else {
+                break;
+            };
+            let calls = source.matches(&format!("families::{key}::replay(")).count();
+            found.extend((1..=calls).map(|call| format!("{relative}#{call}")));
         }
     }
     sites
@@ -346,6 +372,16 @@ mod tests {
         assert!(
             unread.is_empty(),
             "no native test reads these emitted families, and the coverage ledger does not say why: {unread:?}"
+        );
+
+        let prefix = format!("{DERIVED_FAMILIES}/");
+        let misplaced: Vec<_> = sites
+            .iter()
+            .filter(|(family, found)| family.starts_with(&prefix) && found.len() != 1)
+            .collect();
+        assert!(
+            misplaced.is_empty(),
+            "a derived family is replayed by exactly one test: {misplaced:?}"
         );
     }
 }
