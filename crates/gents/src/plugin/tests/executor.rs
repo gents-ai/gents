@@ -2602,3 +2602,30 @@ mod job_calls {
         finish(admission).await;
     }
 }
+
+pub(crate) fn host_call_plugin_wat(request: &serde_json::Value, count: u32) -> String {
+    let bytes = request.to_string();
+    let escaped = bytes
+        .bytes()
+        .map(|b| format!("\\{b:02x}"))
+        .collect::<String>();
+    format!(
+        r#"(module
+      (import "gents" "host_call" (func $call (param i32 i32) (result i32)))
+      (import "gents" "read_result" (func $read (param i32 i32) (result i32)))
+      (import "wasi_snapshot_preview1" "fd_write" (func $write (param i32 i32 i32 i32) (result i32)))
+      (memory (export "memory") 2)
+      (data (i32.const 32) "{escaped}")
+      (func (export "_start") (local $n i32) (local $i i32)
+        (loop $again
+          (local.set $n (call $call (i32.const 32) (i32.const {length})))
+          (if (i32.lt_s (local.get $n) (i32.const 0)) (then unreachable))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br_if $again (i32.lt_u (local.get $i) (i32.const {count}))))
+        (drop (call $read (i32.const 65536) (local.get $n)))
+        (i32.store (i32.const 0) (i32.const 65536))
+        (i32.store (i32.const 4) (local.get $n))
+        (drop (call $write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))))"#,
+        length = bytes.len()
+    )
+}

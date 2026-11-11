@@ -325,8 +325,7 @@ fn render_task_invocation(
         node: node_scope,
         ctx: ctx_scope,
     };
-    let content = gents::render_template(prompt_template, &scope)
-        .map_err(|error| anyhow!("render manual template for task {task_id}: {error}"))?;
+    let content = gents::render_manual_template(task_id, prompt_template, &scope)?;
     let goal_objective = task
         .goal_objective_template
         .as_deref()

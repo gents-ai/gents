@@ -158,6 +158,15 @@ pub fn wire_plugin(
         }
     }
     plugins[index].job = job.clone();
+    if job
+        .as_ref()
+        .is_some_and(|job| job.policy.dynamic == gents_protocol::job::DynamicMode::Check)
+    {
+        warnings.push(format!(
+            "dynamic_check: {}",
+            settings::dynamic_check_notice(&coordinate)
+        ));
+    }
 
     let added: Vec<String> = agents
         .target_ids
@@ -198,6 +207,52 @@ pub fn wire_plugin(
             next_call,
         },
     ))
+}
+
+/// Applies the node owner's consent to `coordinate` calling its caller's own
+/// tools: the selection [`wire_plugin`] wrote gets `tool_calls: true`. A pack
+/// cannot ship that grant for an agent it does not own, so it is given where
+/// the owner approves the pack.
+pub fn consent_tool_calls(tools: &mut Tools, coordinate: &str, report: &mut WireReport) {
+    let Some(selection) = tools
+        .integrations
+        .iter_mut()
+        .flat_map(|integrations| integrations.plugins.iter_mut().flatten())
+        .find(|plugin| plugin.plugin == coordinate && !plugin.tool_calls)
+    else {
+        return;
+    };
+    selection.tool_calls = true;
+    report.changed.push(format!(
+        "set tool_calls true for {coordinate}: the node owner approved it calling this agent's tools"
+    ));
+}
+
+/// Applies the node owner's consent to dynamic scripts to `coordinate`'s job
+/// block (Lean `consentedDynamic`): `check` becomes `run`, and the report
+/// records the grant in place of the `check` warning.
+pub fn consent_dynamic_run(tools: &mut Tools, coordinate: &str, report: &mut WireReport) {
+    let Some(job) = tools
+        .integrations
+        .iter_mut()
+        .flat_map(|integrations| integrations.plugins.iter_mut().flatten())
+        .find(|plugin| plugin.plugin == coordinate)
+        .and_then(|plugin| plugin.job.as_mut())
+    else {
+        return;
+    };
+    let consented = gents_protocol::job_settings::consented_dynamic(true, job.policy.dynamic);
+    if consented == job.policy.dynamic {
+        return;
+    }
+    job.policy.dynamic = consented;
+    report.job = Some(job.clone());
+    report
+        .warnings
+        .retain(|warning| !warning.starts_with("dynamic_check: "));
+    report.changed.push(format!(
+        "set job.policy.dynamic run for {coordinate}: the node owner approved its dynamic scripts"
+    ));
 }
 
 /// Inverse of [`wire_plugin`]. With no `targets_from`, drops the plugin entry

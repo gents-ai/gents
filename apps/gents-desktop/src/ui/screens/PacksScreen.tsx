@@ -26,6 +26,7 @@ import { inNativeShell, listenFileDrop, pickPackFile } from "../../lib/nativeShe
 import { errorText } from "../../lib/errorText";
 import { UxPluginSwitch } from "./agent/UxPluginsPanel";
 import { usePackActions } from "./agent/usePackActions";
+import { StarterPacksSection } from "./packs/DefaultPacksReview";
 import { PackInstallReview } from "./packs/PackInstallReview";
 import { type PackReviewRequest, usePackPreviewRequest } from "@/lib/packReview";
 import { PackItemView } from "./packs/PackItemView";
@@ -459,6 +460,8 @@ function PacksHome({
           )}
         </div>
       </header>
+
+      {local && view === "installed" && <StarterPacksSection />}
 
       {/* one list at a time: your packs, or the registry's */}
       <section aria-label="Packs" className="grid gap-2">

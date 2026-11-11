@@ -211,6 +211,7 @@ async fn reprovisioning_with_another_name_leaves_the_home_and_preference_alone()
             tool_ceiling: runtime_tool_ceiling(ManagedServerToolCeiling::Readwrite),
             tool_root: None,
             store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::File,
+            default_packs: false,
         },
     )
     .await

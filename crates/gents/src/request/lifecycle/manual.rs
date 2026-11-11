@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use defra_node::Node as EmbeddedNode;
 use serde_json::Value;
 
-use crate::documents::template::{render_template, task_node_ctx, TemplateScope};
+use crate::documents::template::{render_manual_template, task_node_ctx, TemplateScope};
 use crate::request::lifecycle::{
     write_pending_agent_request_with_lineage_workspace_and_conversation_title, ExecutionOrigin,
     TriggerLineage,
@@ -66,8 +66,7 @@ pub async fn write_manual_agent_request_with_conversation_title(
         node: node_scope,
         ctx: ctx_scope,
     };
-    let content = render_template(prompt_template, &scope)
-        .map_err(|e| anyhow!("render manual template for task {task_id}: {e}"))?;
+    let content = render_manual_template(task_id, prompt_template, &scope)?;
 
     let enqueued = write_pending_agent_request_with_lineage_workspace_and_conversation_title(
         node,

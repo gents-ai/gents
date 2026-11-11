@@ -9,6 +9,13 @@ inductive Action where
   | admissionReject
   | beginInference
   | continueProcessing
+  | parkBackend (closed : Bool)
+  | resumeBackend (wake : Bool)
+  | beginResumed
+  | interruptResuming
+  | expireResuming
+  | interruptBackendWait
+  | expireBackendWait
   | finish
   | fail
   | failBeforeStream
@@ -49,6 +56,43 @@ def step? (pre : RequestContext) : Action → Option RequestContext
         some pre
       else
         none
+  | .parkBackend closed =>
+      if pre.state = .processing ∧ pre.admission = .executing ∧ closed = true ∧
+          pre.interruptRequestedAt = none ∧ pre.currentTime < pre.deadline then
+        some { pre with state := .waitingForBackend, admission := .released,
+                        backendAttempts := pre.backendAttempts + 1,
+                        backendRetryAt := RequestBackendWake.fallback pre.currentTime pre.deadline pre.backendAttempts }
+      else none
+  | .resumeBackend wake =>
+      if pre.state = .waitingForBackend ∧ pre.admission = .released ∧ (wake = true ∨ pre.backendDue) ∧
+          pre.interruptRequestedAt = none ∧ pre.currentTime < pre.deadline then
+        some { pre with state := .resumingBackend, admission := .waiting }
+      else none
+  | .beginResumed =>
+      if pre.state = .resumingBackend ∧ pre.admission = .acquired ∧
+          pre.interruptRequestedAt = none ∧ pre.currentTime < pre.deadline then
+        some { pre with state := .processing, admission := .executing }
+      else none
+  | .interruptResuming =>
+      if pre.state = .resumingBackend ∧ (pre.admission = .waiting ∨ pre.admission = .acquired) ∧
+          pre.interruptRequestedAt.isSome then
+        some { pre with state := .interrupted, admission := .released }
+      else none
+  | .expireResuming =>
+      if pre.state = .resumingBackend ∧ (pre.admission = .waiting ∨ pre.admission = .acquired) ∧
+          pre.interruptRequestedAt = none ∧ pre.deadline ≤ pre.currentTime then
+        some { pre with state := .failed, admission := .released }
+      else none
+  | .interruptBackendWait =>
+      if pre.state = .waitingForBackend ∧ pre.admission = .released ∧
+          pre.interruptRequestedAt.isSome then
+        some { pre with state := .interrupted }
+      else none
+  | .expireBackendWait =>
+      if pre.state = .waitingForBackend ∧ pre.admission = .released ∧
+          pre.interruptRequestedAt = none ∧ pre.deadline ≤ pre.currentTime then
+        some { pre with state := .failed }
+      else none
   | .finish =>
       if pre.state = .processing ∧ pre.admission = .executing then
         some { pre with state := .completed, admission := .released, persistence := .committed }
@@ -137,6 +181,34 @@ theorem step_sound
       rcases h_step with ⟨h_continue, h_post⟩
       rcases h_continue with ⟨h_state, h_admission⟩
       exact Transition.continue_processing h_state h_admission h_post.symm
+  | parkBackend closed =>
+      simp [step?] at h_step
+      rcases h_step with ⟨⟨hs, ha, hc, hi, hd⟩, hp⟩
+      exact Transition.park_backend hs ha hc hi hd hp.symm
+  | resumeBackend wake =>
+      simp [step?] at h_step
+      rcases h_step with ⟨⟨hs, ha, hw, hi, hd⟩, hp⟩
+      exact Transition.resume_backend hs ha hw hi hd hp.symm
+  | beginResumed =>
+      simp [step?] at h_step
+      rcases h_step with ⟨⟨hs, ha, hi, hd⟩, hp⟩
+      exact Transition.begin_resumed hs ha hi hd hp.symm
+  | interruptResuming =>
+      simp [step?] at h_step
+      rcases h_step with ⟨⟨hs, ha, hi⟩, hp⟩
+      exact Transition.interrupt_resuming hs ha hi hp.symm
+  | expireResuming =>
+      simp [step?] at h_step
+      rcases h_step with ⟨⟨hs, ha, hi, hd⟩, hp⟩
+      exact Transition.expire_resuming hs ha hi hd hp.symm
+  | interruptBackendWait =>
+      simp [step?] at h_step
+      rcases h_step with ⟨⟨hs, ha, hi⟩, hp⟩
+      exact Transition.interrupt_backend_wait hs ha hi hp.symm
+  | expireBackendWait =>
+      simp [step?] at h_step
+      rcases h_step with ⟨⟨hs, ha, hi, hd⟩, hp⟩
+      exact Transition.expire_backend_wait hs ha hi hd hp.symm
   | finish =>
       simp [step?] at h_step
       rcases h_step with ⟨h_finish, h_post⟩
@@ -194,6 +266,20 @@ theorem transition_complete
       exact ⟨.beginInference, by simp [step?, h_state, h_admission, h_post]⟩
   | continue_processing h_state h_admission h_post =>
       exact ⟨.continueProcessing, by simp [step?, h_state, h_admission, h_post]⟩
+  | park_backend hs ha hc hi hd hp =>
+      exact ⟨.parkBackend true, by simp [step?, hs, ha, hi, hd, hp]⟩
+  | resume_backend hs ha hw hi hd hp =>
+      exact ⟨.resumeBackend true, by simp [step?, hs, ha, hi, hd, hp]⟩
+  | begin_resumed hs ha hi hd hp =>
+      exact ⟨.beginResumed, by simp [step?, hs, ha, hi, hd, hp]⟩
+  | interrupt_resuming hs ha hi hp =>
+      exact ⟨.interruptResuming, by simp [step?, hs, ha, hi, hp]⟩
+  | expire_resuming hs ha hi hd hp =>
+      exact ⟨.expireResuming, by simp [step?, hs, ha, hi, hd, hp]⟩
+  | interrupt_backend_wait hs ha hi hp =>
+      exact ⟨.interruptBackendWait, by simp [step?, hs, ha, hi, hp]⟩
+  | expire_backend_wait hs ha hi hd hp =>
+      exact ⟨.expireBackendWait, by simp [step?, hs, ha, hi, hd, hp]⟩
   | finish h_state h_admission h_post =>
       exact ⟨.finish, by simp [step?, h_state, h_admission, h_post]⟩
   | fail h_state h_admission h_post =>

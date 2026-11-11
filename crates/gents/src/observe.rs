@@ -6,3 +6,4 @@ pub mod run_timeline_fetch;
 pub(crate) mod runtime_trace;
 pub mod trace_export;
 pub mod ux_data;
+pub mod ux_preview;

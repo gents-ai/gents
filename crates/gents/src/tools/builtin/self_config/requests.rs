@@ -1,7 +1,20 @@
 use super::*;
 
 pub(super) fn outcome_text(outcome: &PatchOutcome) -> Result<String> {
-    serde_json::to_string_pretty(outcome).map_err(|error| anyhow!("serialize outcome: {error}"))
+    crate::tools::output::Ordered::reading_order(
+        serde_json::to_value(outcome)?,
+        &[
+            "committed",
+            "collection",
+            "target_id",
+            "agent_did",
+            "connection",
+            "created",
+            "changed",
+            "effect",
+        ],
+    )
+    .pretty()
 }
 
 pub(super) fn anchored_request(
@@ -173,6 +186,50 @@ pub(super) fn tools_request(
     request.guard = Box::new(|_, stored, merged| guard_tools_keep_control(stored, merged));
     request
 }
+/// Refuses a Tools write that newly selects a plugin this node has not
+/// installed (Lean `Configuration.pluginReferencesAvailable`). The runtime
+/// cannot build a tool surface that names one, so every agent that selects
+/// these Tools would be unavailable from its next request, the caller
+/// included when they are its own (#1796). A selection already stored is left
+/// alone, so Tools that hold one can still be edited, and a pin is not
+/// checked: an install moves a pin to its replacement before it publishes it.
+pub(super) fn refuse_uninstalled_plugins<F>(
+    mut request: ApplyRequest<'static>,
+    installed: F,
+) -> ApplyRequest<'static>
+where
+    F: Fn(&str) -> Result<()> + Send + Sync + 'static,
+{
+    fn selected(document: &serde_json::Map<String, Value>) -> BTreeSet<&str> {
+        document
+            .get("integrations")
+            .and_then(|integrations| integrations.get("plugins"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry.get("plugin")?.as_str())
+            .collect()
+    }
+    let guard = request.guard;
+    request.guard = Box::new(move |anchor, stored, merged| {
+        guard(anchor, stored, merged)?;
+        let before = selected(stored);
+        for plugin in selected(merged).difference(&before) {
+            if let Err(error) = installed(plugin) {
+                return Err(command::CommandGuidance {
+                    message: format!(
+                        "nothing was changed: these Tools would select plugin {plugin}, which is not installed on this node ({error:#}). An agent whose Tools select a plugin that is not installed cannot load its tools and fails its next request. Install the pack that ships {plugin}, then select it with pack wire, which pins the installed digest and writes its job block"
+                    ),
+                    next_call: json!({"argv":["pack","preview","install","<PACK>"]}),
+                }
+                .into());
+            }
+        }
+        Ok(())
+    });
+    request
+}
+
 pub(super) fn refuse_silent_tools_drops(
     mut request: ApplyRequest<'static>,
     allow_drop: BTreeSet<String>,
@@ -226,12 +283,26 @@ fn dropped_settings(path: &str, before: &Value, after: &Value, out: &mut Vec<Str
             }
         }
         (Value::Array(before), Value::Array(after)) => {
-            out.extend(
-                before
-                    .iter()
-                    .filter(|item| !after.contains(item))
-                    .map(|item| format!("{path} item {item}")),
-            );
+            for item in before.iter().filter(|item| !after.contains(item)) {
+                // A plugin selection is its coordinate: the same plugin at
+                // another digest is a moved pin, and only what that entry
+                // itself loses is dropped.
+                let kept = (path == "integrations.plugins")
+                    .then(|| item.get("plugin").filter(|plugin| plugin.is_string()))
+                    .flatten()
+                    .and_then(|plugin| {
+                        after
+                            .iter()
+                            .find(|candidate| candidate.get("plugin") == Some(plugin))
+                            .map(|candidate| (plugin, candidate))
+                    });
+                match kept {
+                    Some((plugin, candidate)) => {
+                        dropped_settings(&format!("{path} item {plugin}"), item, candidate, out)
+                    }
+                    None => out.push(format!("{path} item {item}")),
+                }
+            }
         }
         (_, Value::Null) => out.push(path.to_owned()),
         _ => {}
@@ -457,5 +528,42 @@ pub(super) fn automation_target(kind: &str) -> Result<SelfConfigTarget> {
         _ => {
             bail!("unknown automation kind {kind:?}; use task, schedule, trigger, or event_source")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_moved_plugin_pin_is_a_replacement_and_a_removed_selection_is_a_drop() {
+        let dropped = |before: Value, after: Value| {
+            let mut out = Vec::new();
+            dropped_settings("integrations", &before, &after, &mut out);
+            out
+        };
+        let pinned = |digest: &str| json!({"plugin": "node/engine", "digest": digest});
+        let other = json!({"plugin": "node/other"});
+        assert_eq!(
+            dropped(
+                json!({"plugins": [pinned("sha256:a"), other]}),
+                json!({"plugins": [other, pinned("sha256:b")]}),
+            ),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            dropped(
+                json!({"plugins": [pinned("sha256:a"), other]}),
+                json!({"plugins": [pinned("sha256:b")]}),
+            ),
+            ["integrations.plugins item {\"plugin\":\"node/other\"}"]
+        );
+        assert_eq!(
+            dropped(
+                json!({"plugins": [{"plugin": "node/engine", "digest": "sha256:a", "job": {}}]}),
+                json!({"plugins": [pinned("sha256:b")]}),
+            ),
+            ["integrations.plugins item \"node/engine\".job"]
+        );
     }
 }

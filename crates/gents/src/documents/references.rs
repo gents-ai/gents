@@ -44,6 +44,9 @@ pub(crate) struct RequiredReference {
     pub(crate) field: &'static str,
 }
 
+/// Tool names by the `DatastoreToolSurface` that holds them.
+pub(crate) type SurfaceTools = BTreeMap<String, Vec<String>>;
+
 impl ConfigReferences {
     pub fn documents(&self) -> impl Iterator<Item = (&(Collection, String), &Value)> {
         self.documents.iter()
@@ -222,6 +225,40 @@ impl ConfigReferences {
             .collect()
     }
 
+    /// The retained documents that name application collection `name`: each
+    /// `DatastoreToolSurface` holding an entry on it, with those entries' tool
+    /// names, and each `EventSource` reading it.
+    pub(crate) fn application_collection_users(
+        &self,
+        name: &str,
+    ) -> Result<(SurfaceTools, Vec<String>)> {
+        let mut surfaces = BTreeMap::new();
+        let mut sources = Vec::new();
+        for ((collection, id), value) in &self.documents {
+            match collection {
+                Collection::DatastoreToolSurface => {
+                    let tools: Vec<String> = decode::<DatastoreToolSurfaceDocument>(value)?
+                        .entries
+                        .unwrap_or_default()
+                        .iter()
+                        .filter(|entry| entry.collection() == name)
+                        .map(|entry| entry.tool_name().to_owned())
+                        .collect();
+                    if !tools.is_empty() {
+                        surfaces.insert(id.clone(), tools);
+                    }
+                }
+                Collection::EventSource
+                    if decode::<EventSource>(value)?.source_collection == name =>
+                {
+                    sources.push(id.clone());
+                }
+                _ => {}
+            }
+        }
+        Ok((surfaces, sources))
+    }
+
     pub fn validate(&self) -> Result<()> {
         for ((collection, _), document) in &self.documents {
             self.validate_document(*collection, document)?;
@@ -386,6 +423,7 @@ impl ConfigReferences {
             }
             Collection::Trigger => {
                 let doc: Trigger = decode(value)?;
+                doc.validate_options()?;
                 let task: Task = decode(
                     self.documents
                         .get(&(Collection::Task, doc.task_id.clone()))
@@ -494,6 +532,8 @@ impl ConfigReferences {
             Collection::ToolServiceRegistry => decode::<ToolServiceRegistry>(value)?.validate()?,
             Collection::RepositoryPlacement => decode::<RepositoryPlacement>(value)?.validate()?,
             Collection::EvalDefinition => decode::<EvalDefinition>(value)?.validate()?,
+            Collection::Page => decode::<PageDocument>(value)?.validate()?,
+            Collection::PluginSource => decode::<PluginSourceDocument>(value)?.validate()?,
             Collection::Skill | Collection::CallbackModule => {}
         }
         Ok(())
@@ -689,6 +729,8 @@ pub(crate) fn references_of(
         | Collection::ToolServiceRegistry
         | Collection::EvalDefinition
         | Collection::Skill
+        | Collection::Page
+        | Collection::PluginSource
         | Collection::CallbackModule => {}
     }
     Ok(references)

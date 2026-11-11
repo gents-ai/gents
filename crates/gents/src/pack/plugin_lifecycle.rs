@@ -4,8 +4,20 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use super::{HomePackInstall, InstalledPackPlugin, PackChangeError, PackIdentity, PackKind};
+use super::{
+    HomePackInstall, InstalledPackPlugin, InstalledVia, PackChangeError, PackIdentity, PackKind,
+};
 use crate::plugin::{install, store};
+pub(super) use store::InstalledPlugin;
+
+/// The published record of the installed plugin `namespace/name`.
+pub(super) fn installed_plugin(
+    home: &Path,
+    namespace: &str,
+    name: &str,
+) -> Result<InstalledPlugin> {
+    store::read_record(home, namespace, name)
+}
 
 /// Reviewed plugin records held by the staging owner until notification finishes.
 /// The private fields prevent a caller from inventing installed manifest facts.
@@ -22,6 +34,7 @@ pub async fn install<F>(
     consent: bool,
     owner: Option<&str>,
     bindings: &BTreeMap<String, String>,
+    installed_via: InstalledVia,
     source: super::PackSource,
     notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
 ) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>), PackChangeError>
@@ -35,7 +48,14 @@ where
         return Err(anyhow::anyhow!("expected a plugins or assets pack").into());
     }
     install_owned(
-        home, archive, consent, owner, bindings, false, source, notify,
+        home,
+        archive,
+        consent,
+        owner,
+        bindings,
+        installed_via,
+        source,
+        notify,
     )
     .await
 }
@@ -61,7 +81,7 @@ where
         consent,
         None,
         &BTreeMap::new(),
-        true,
+        InstalledVia::Operator,
         source,
         notify,
     )
@@ -76,7 +96,7 @@ async fn install_owned<F>(
     consent: bool,
     owner: Option<&str>,
     bindings: &BTreeMap<String, String>,
-    operator: bool,
+    installed_via: InstalledVia,
     source: super::PackSource,
     notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
 ) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>), PackChangeError>
@@ -114,17 +134,16 @@ where
             kind: manifest.metadata.kind.clone(), assets: relative_root, dependency_assets: Vec::new(),
             plugins: plugins.iter().map(|plugin| InstalledPackPlugin { name: plugin.name.clone(), digest: plugin.digest.clone() }).collect(),
             installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            ux: manifest.metadata.ux.clone(), installed_via: operator.then_some(super::InstalledVia::Operator),
+            ux: manifest.metadata.ux.clone(), installed_via: Some(installed_via),
             source: Some(source), source_history: Vec::new(),
+            created_collections: Vec::new(),
         };
         let publish_home = home.clone();
         let mut publish_record = record.clone();
         let previous = tokio::task::spawn_blocking(move || -> Result<_> {
             let previous = super::read_home_install(&publish_home, &publish_record.coordinate)?;
             super::home_install::record_source(&mut publish_record, previous.as_ref())?;
-            let result = if operator {
-                super::record_after_install(&publish_home, publish_record.clone(), super::InstalledVia::Operator, true)
-            } else { super::write_home_install(&publish_home, &publish_record) };
+            let result = super::record_after_install(&publish_home, publish_record.clone(), installed_via, true);
             if let Err(error) = result {
                 match &previous {
                     Some(previous) => super::write_home_install(&publish_home, previous)?,
@@ -158,6 +177,95 @@ where
     }).await.context("owned plugin installation task failed")?
 }
 
+/// A plugins or assets pack as installed: its home record and the plugin
+/// records published with it.
+pub struct InstalledHomePack {
+    pub record: HomePackInstall,
+    pub plugins: Vec<store::InstalledPlugin>,
+}
+
+/// What installing `manifest` grants each of its plugins that asks for
+/// anything: a successful install grants exactly what the plugin declares.
+pub fn authority_asked(manifest: &super::PackManifest) -> Result<Vec<serde_json::Value>> {
+    let mut asked = Vec::new();
+    for plugin in &manifest.metadata.plugins {
+        if let Some(description) = install::authority_asked(plugin)? {
+            asked.push(serde_json::json!({
+                "plugin": format!("{}/{}", manifest.metadata.namespace, plugin.name),
+                "granted": description,
+                "manifold": plugin.manifold,
+            }));
+        }
+    }
+    Ok(asked)
+}
+
+/// Why the plugin store refuses `manifest`'s plugins under `consent`: a
+/// plugin that asks for authority needs the operator's consent to it.
+pub fn install_blockers(
+    home: Option<&Path>,
+    manifest: &super::PackManifest,
+    consent: bool,
+) -> Vec<serde_json::Value> {
+    manifest
+        .metadata
+        .plugins
+        .iter()
+        .filter_map(|plugin| {
+            home.context("this runtime has no plugin home")
+                .and_then(|home| {
+                    store::grant_on_install(home, &manifest.metadata.namespace, plugin, consent)
+                        .map_err(anyhow::Error::from)
+                })
+                .err()
+                .map(
+                    |error| serde_json::json!({"plugin":plugin.name,"reason":format!("{error:#}")}),
+                )
+        })
+        .collect()
+}
+
+/// The plugins of `archive` another pack already owns in `home`. An artifact
+/// the plugin runtime does not admit is an error, not a blocker.
+pub fn admission_blockers(
+    home: &Path,
+    archive: &crate::pack::archive::PackArchive,
+) -> Result<Vec<serde_json::Value>> {
+    let manifest = archive.manifest();
+    let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
+    let mut blockers = Vec::new();
+    for plugin in &manifest.metadata.plugins {
+        if let Err(error) = store::check_plugin_ownership(
+            home,
+            &manifest.metadata.namespace,
+            &plugin.name,
+            &coordinate,
+        ) {
+            blockers.push(serde_json::json!({"plugin":plugin.name,"reason":format!("{error:#}")}));
+        }
+        install::admit(archive.asset(&plugin.artifact)?, plugin)?;
+    }
+    Ok(blockers)
+}
+
+/// The digest installing `archive` publishes for each of its plugins.
+pub fn published_digests(
+    archive: &crate::pack::archive::PackArchive,
+) -> Result<BTreeMap<String, String>> {
+    let manifest = archive.manifest();
+    let mut digests = BTreeMap::new();
+    for plugin in &manifest.metadata.plugins {
+        digests.insert(
+            format!("{}/{}", manifest.metadata.namespace, plugin.name),
+            format!(
+                "sha256:{}",
+                store::content_digest_hex(archive.asset(&plugin.artifact)?)
+            ),
+        );
+    }
+    Ok(digests)
+}
+
 /// Releases the plugin store records `coordinate` still owns at the digests its
 /// node record lists; records another pack or a newer install took over stay.
 pub fn release_plugin_records(
@@ -174,6 +282,15 @@ pub fn release_plugin_records(
         }
     }
     Ok(released)
+}
+
+/// Deletes the artifact bytes of `plugins` that no plugin record uses any
+/// more, and returns the digests released.
+pub fn release_plugin_bytes(home: &Path, plugins: &[InstalledPackPlugin]) -> Result<Vec<String>> {
+    store::release_unreferenced_bytes(
+        home,
+        &plugins.iter().map(|plugin| plugin.digest.clone()).collect(),
+    )
 }
 
 pub struct LocalPackRemoval {
@@ -273,6 +390,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            InstalledVia::Operator,
             local.clone(),
             |_, _| async { Ok(()) },
         )
@@ -284,6 +402,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            InstalledVia::Operator,
             super::super::PackSource::Store,
             |_, _| async { Ok(()) },
         )
@@ -308,6 +427,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::from([("model".into(), "profile".into())]),
+            InstalledVia::Operator,
             super::super::PackSource::Local { file_name: None },
             |_, _| async { panic!("refused install must not notify") },
         )
@@ -343,11 +463,24 @@ pub(crate) mod tests {
         std::path::PathBuf,
         crate::pack::archive::PackArchive,
     ) {
+        fixture_with_output(version, authority, br#"{"native_pack_echo":"ok"}"#)
+    }
+
+    /// The fixture pack whose plugin returns `output`: a different output is
+    /// a different artifact digest.
+    pub(crate) fn fixture_with_output(
+        version: &str,
+        authority: bool,
+        output: &[u8],
+    ) -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        crate::pack::archive::PackArchive,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("source");
         std::fs::create_dir_all(source.join("plugins")).unwrap();
-        let wat =
-            crate::plugin::test_fixtures::constant_output_wat(br#"{"native_pack_echo":"ok"}"#);
+        let wat = crate::plugin::test_fixtures::constant_output_wat(output);
         let afb = crate::plugin::test_fixtures::build_plugin_afb(&wat);
         std::fs::write(source.join("plugins/native_echo.afb"), afb).unwrap();
         let mut plugin = json!({"name":"native_echo","description":"Deterministic sealed native pack fixture","artifact":"plugins/native_echo.afb","language":"rust","input_schema":{"type":"object","properties":{},"additionalProperties":false}});
@@ -383,6 +516,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            InstalledVia::Operator,
             super::super::PackSource::Local { file_name: None },
             |_, _| async {
                 Err(super::super::PluginStoreChangeError::Unconfirmed(
@@ -406,6 +540,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            InstalledVia::Operator,
             super::super::PackSource::Local { file_name: None },
             |_, _| async { Ok(()) },
         )
@@ -431,6 +566,7 @@ pub(crate) mod tests {
                     false,
                     None,
                     &BTreeMap::new(),
+                    InstalledVia::Operator,
                     super::super::PackSource::Local { file_name: None },
                     move |_, _| async move {
                         reached.notify_one();
@@ -472,6 +608,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            InstalledVia::Operator,
             super::super::PackSource::Local { file_name: None },
             |_, _| async { Ok(()) }
         )
@@ -485,6 +622,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            InstalledVia::Operator,
             super::super::PackSource::Local { file_name: None },
             |_, _| async { Ok(()) },
         )
@@ -499,6 +637,7 @@ pub(crate) mod tests {
             false,
             None,
             &BTreeMap::new(),
+            InstalledVia::Operator,
             super::super::PackSource::Local { file_name: None },
             |_, _| async { Ok(()) }
         )

@@ -684,20 +684,14 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     );
     let (_fixture, _, archive) = crate::pack::plugin_lifecycle::tests::fixture("1.0.0", false);
     let plugin_home = tempfile::tempdir()?;
-    let distribution = super::pack_installer::ConfigPackDistribution(
-        crate::pack::resolve::ResolvedNamedPack {
-            archive,
-            from: crate::pack::resolve::ResolvedFrom::Store,
-        },
-        crate::pack::PackSource::Store,
-    );
+    let distribution = super::Distribution::stored(archive, crate::pack::PackSource::Store);
     let installer = super::pack_installer::PackInstaller {
         core: core.clone(),
         node: node.clone(),
         actor: Some(signer.clone()),
         home: Some(plugin_home.path().to_owned()),
     };
-    let args = super::pack_installer::PackInstallParams {
+    let args = super::PackChange {
         package: "fixture/native_echo_pack".into(),
         variables: Default::default(),
         inference_slots: Default::default(),
@@ -950,17 +944,14 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
             .len(),
         1
     );
-    let retirement = crate::pack::ensure_plugins_unreferenced(
+    // A Tools the retirer cannot read does not refuse a retirement
+    // (Lean `Configuration.pluginRetirementAllowed`).
+    crate::pack::ensure_plugins_unreferenced(
         &creator_access,
         runtime.did(),
         &std::collections::BTreeSet::from(["acme/hidden-plugin".to_owned()]),
     )
-    .await
-    .unwrap_err();
-    assert!(matches!(
-        retirement.downcast_ref::<crate::pack::PackRemovalError>(),
-        Some(crate::pack::PackRemovalError::ReferenceInventoryUnavailable)
-    ));
+    .await?;
     let surface_row = user_access
         .execute(
             "{ DatastoreToolSurface(filter: {surface_id: {_eq: \"fixture/surface\"}}) { _docID } }",
@@ -1698,8 +1689,8 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     assert!(
         crate::pack::read_home_install(plugin_home.path(), "fixture/native_echo_pack")?.is_none()
     );
-    // Without a complete reference inventory the disappearance notice keeps
-    // the installation evidence, refreshed by the Agent (`retainPluginStoreRecord`).
+    // A notice that the files are gone, which is not a retirement, keeps the
+    // installation evidence, refreshed by the Agent (`retainPluginStoreRecord`).
     let retain = tokio::task::spawn_blocking(|| {
         crate::lean_vocab_test::lean_plugin_reference_cases()
             .iter()
@@ -1758,20 +1749,14 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         let (bytes, _) = crate::pack::archive::pack_dir(directory.path())?;
         crate::pack::archive::PackArchive::from_bytes(&bytes)
     }).await??;
-    let distribution = super::pack_installer::ConfigPackDistribution(
-        crate::pack::resolve::ResolvedNamedPack {
-            archive,
-            from: crate::pack::resolve::ResolvedFrom::Store,
-        },
-        crate::pack::PackSource::Store,
-    );
+    let distribution = super::Distribution::stored(archive, crate::pack::PackSource::Store);
     let installer = super::pack_installer::PackInstaller {
         core: core.clone(),
         node: node.clone(),
         actor: Some(signer.clone()),
         home: None,
     };
-    let args = super::pack_installer::PackInstallParams {
+    let args = super::PackChange {
         package: "fixture/native_child".into(),
         variables: Default::default(),
         inference_slots: std::collections::BTreeMap::from([("model".into(), "profile".into())]),
@@ -1779,7 +1764,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     };
     let pack: Value = serde_json::from_str(
         &installer
-            .documents("install", &args, &distribution, true)
+            .documents("install", &args, &distribution, true, Default::default())
             .await?,
     )?;
     let pack_child = pack["install"]["agents"]["worker"]

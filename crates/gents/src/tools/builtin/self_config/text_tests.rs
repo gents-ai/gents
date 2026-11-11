@@ -680,11 +680,15 @@ async fn unsupported_surface_mutations_point_to_scoped_tools_help() {
             "{help}"
         );
         assert!(
-            help.contains(r#"{"argv":["tools","update","--help"]}"#),
+            help.contains(r#"{"argv":["tools","update","--help","datastore"]}"#),
             "{help}"
         );
     }
-    let tools_help = ok(&tools, json!({"argv":["tools","update","--help"]})).await;
+    let tools_help = ok(
+        &tools,
+        json!({"argv":["tools","update","--help","datastore"]}),
+    )
+    .await;
     let tools_help = tools_help.as_str().unwrap();
     assert!(tools_help.contains("enable_defra_query"), "{tools_help}");
     assert!(tools_help.contains("write_collections"), "{tools_help}");
@@ -1379,9 +1383,21 @@ async fn job_block_help_topic_states_bounds_defaults_and_policy() {
         page.contains("integrations.plugins[].job") && page.contains("non-job verbs only"),
         "{page}"
     );
-    let shapes = call_config_tool(&tools, vec!["tools".into(), "edit".into(), "--help".into()])
-        .await
-        .unwrap();
+    assert!(
+        page.contains(r#"["tools","edit","--help","integrations"]"#),
+        "{page}"
+    );
+    let shapes = call_config_tool(
+        &tools,
+        vec![
+            "tools".into(),
+            "edit".into(),
+            "--help".into(),
+            "integrations".into(),
+        ],
+    )
+    .await
+    .unwrap();
     for detail in [
         "plugin must declare job: true",
         "max_live: 1..64; default 8",
@@ -1581,6 +1597,27 @@ async fn config_usage_errors_return_executable_resource_verb_recovery() {
         failure["batch"]["results"][0]["recovery"]["next_call"].clone(),
     )
     .await;
+}
+
+#[tokio::test]
+async fn options_written_into_argv_return_the_corrected_call() {
+    let (_fixture, tools) = authenticated_setup("options-in-argv", &["automation"]).await;
+    for (args, expected) in [
+        (
+            json!({"argv":["task","list","options.limit","1"]}),
+            json!({"argv":["task","list"],"options":{"limit":"1"}}),
+        ),
+        (
+            json!({"argv":["task","list","options.limit=1"],"options":{"cursor":"a"}}),
+            json!({"argv":["task","list"],"options":{"cursor":"a","limit":"1"}}),
+        ),
+    ] {
+        let failure = structured_failure(&tools, args).await;
+        assert!(failure.to_string().contains("options object"), "{failure}");
+        let recovery = &failure["recovery"]["next_call"];
+        assert_eq!(recovery, &expected);
+        ok(&tools, recovery.clone()).await;
+    }
 }
 
 #[tokio::test]
@@ -1953,13 +1990,10 @@ async fn composition_help_and_field_placement_match_the_accepted_calls() {
             "{help}"
         );
     }
-    for argv in [
-        json!(["help", "tools"]),
-        json!(["tools", "update", "--help"]),
-    ] {
-        let help = ok(&tools, json!({"argv":argv})).await.to_string();
-        assert!(help.contains("Do not combine them"), "{help}");
-    }
+    let help = ok(&tools, json!({"argv":["tools","update","--help"]}))
+        .await
+        .to_string();
+    assert!(help.contains("Do not combine them"), "{help}");
     let root_help = ok(&tools, json!({"argv":["help","tools"]})).await;
     let root_help = root_help.as_str().unwrap();
     assert!(
@@ -2099,4 +2133,338 @@ async fn receipts_summarize_long_text_by_length_and_sha256() {
         change["to"]["sha256"],
         short["changed"][0]["from"]["sha256"]
     );
+}
+
+#[tokio::test]
+async fn trigger_explain_names_the_first_failed_step_and_what_to_do() {
+    let (fixture, tools) = authenticated_setup("explain", &["automation"]).await;
+    fixture
+        .add_collection("type ExplainInput { message: String }")
+        .await;
+    let edit = |kind: &str, id: &str, set: Value| json!({"argv":["automation","edit",kind],"target_id":id,"set":set});
+    ok(
+        &tools,
+        edit(
+            "event-source",
+            "input",
+            json!({"source_collection":"ExplainInput","filter":"{message: {_eq: \"go\"}}"}),
+        ),
+    )
+    .await;
+    ok(
+        &tools,
+        edit(
+            "task",
+            "work",
+            json!({"prompt_template":"Do {{ doc.message }}"}),
+        ),
+    )
+    .await;
+    ok(&tools, edit("trigger", "on-input", json!({"task_id":"work","source":{"kind":"event","event_source_id":"input"},"session_id_template":"game:{{ doc.message }}","create_session":true,"max_fires_per_hour":50}))).await;
+
+    let healthy = ok(&tools, json!({"argv":["trigger","explain","on-input"]})).await;
+    assert!(
+        healthy["answer"].as_str().unwrap().contains("healthy"),
+        "{healthy}"
+    );
+    assert_eq!(healthy["metadata"]["create_session"], true);
+    assert_eq!(healthy["metadata"]["max_fires_per_hour"], 50);
+    let raw = call_config_tool(
+        &tools,
+        vec!["trigger".into(), "explain".into(), "on-input".into()],
+    )
+    .await
+    .unwrap();
+    let position = |key: &str| raw.find(&format!("\"{key}\"")).unwrap();
+    assert!(position("answer") < position("how_to_proceed"), "{raw}");
+    assert!(position("how_to_proceed") < position("metadata"), "{raw}");
+
+    let response = fixture
+        .agent_access()
+        .write(
+            "test.explain_doc",
+            r#"mutation { create_ExplainInput(input: {message: "stop"}) { _docID } }"#,
+        )
+        .await
+        .unwrap();
+    let doc = crate::store::graphql::created_doc_id(&response, "ExplainInput").unwrap();
+    let filtered = ok(
+        &tools,
+        json!({"argv":["trigger","explain"],"target_id":"on-input","options":{"source-doc":doc}}),
+    )
+    .await;
+    assert!(
+        filtered["answer"].as_str().unwrap().starts_with("filter:"),
+        "{filtered}"
+    );
+
+    let missing = ok(
+        &tools,
+        json!({"argv":["trigger","explain","on-input"],"options":{"source-doc":"no-such-doc"}}),
+    )
+    .await;
+    assert!(
+        missing["answer"]
+            .as_str()
+            .unwrap()
+            .starts_with("source_document:"),
+        "{missing}"
+    );
+
+    ok(
+        &tools,
+        edit("trigger", "on-input", json!({"enabled":false})),
+    )
+    .await;
+    let disabled = ok(&tools, json!({"argv":["trigger","explain","on-input"]})).await;
+    assert!(
+        disabled["answer"]
+            .as_str()
+            .unwrap()
+            .starts_with("trigger: disabled"),
+        "{disabled}"
+    );
+    assert!(
+        disabled["how_to_proceed"]
+            .as_str()
+            .unwrap()
+            .contains("enabled: true"),
+        "{disabled}"
+    );
+}
+
+async fn ux_preview_tools(label: &str, home: &std::path::Path) -> (SelfConfigFixture, Tools) {
+    let fixture = SelfConfigFixture::new(label).await;
+    let mut grants = config(&["tools"]);
+    grants.agent_did = fixture.agent_did().to_owned();
+    let tools = fixture.tools_with_plugins(
+        &grants,
+        std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+            home.to_owned(),
+        ))),
+    );
+    (fixture, tools)
+}
+
+#[tokio::test]
+async fn ux_preview_explains_itself_and_names_a_missing_plugin() {
+    let home = tempfile::tempdir().unwrap();
+    let (_fixture, tools) = ux_preview_tools("ux-preview", home.path()).await;
+    let help = ok(&tools, json!({"argv":["ux","preview","--help"]})).await;
+    assert!(help.as_str().unwrap().starts_with("ux preview: "), "{help}");
+    let missing = refused(&tools, json!({"argv":["ux","preview","nope"]})).await;
+    assert!(missing.contains("no ux plugin"), "{missing}");
+    let unknown = refused(
+        &tools,
+        json!({"argv":["ux","preview","nope"],"options":{"theme":"dark"}}),
+    )
+    .await;
+    assert!(unknown.contains("options.viewport only"), "{unknown}");
+    // A host file outside the agent's tool root is not read as a draft: this
+    // agent has no file tools and no root.
+    let outside = tempfile::tempdir().unwrap();
+    let draft = outside.path().join("plugin.js");
+    std::fs::write(&draft, "export default {}").unwrap();
+    let host_file = refused(
+        &tools,
+        json!({"argv":["ux","preview",draft.to_string_lossy()]}),
+    )
+    .await;
+    assert!(
+        host_file.contains("not a plugin.js this agent may read")
+            && host_file.contains("effective tool root"),
+        "{host_file}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "needs a system browser and GENTS_UX_PREVIEW_ASSETS at a built preview page"]
+async fn ux_preview_reports_text_first_through_the_config_tool() {
+    let home = tempfile::tempdir().unwrap();
+    let dev = home
+        .path()
+        .join(crate::store::local::home::UX_PLUGINS_DIR_NAME)
+        .join("probe");
+    std::fs::create_dir_all(&dev).unwrap();
+    std::fs::write(
+        dev.join(crate::plugin::ux::DEV_ENTRY),
+        "import { PLUGIN_PAGE_AREA } from '@gents/ux-sdk'\n\
+         import { jsx } from 'react/jsx-runtime'\n\
+         export default { id: 'probe', register(ctx) { ctx.register({ id: 'page', area: PLUGIN_PAGE_AREA, \
+         render: () => jsx('h1', { children: 'hello from the probe' }) }) } }\n",
+    )
+    .unwrap();
+    let (_fixture, tools) = ux_preview_tools("ux-preview-live", home.path()).await;
+    let report = ok(&tools, json!({"argv":["ux","preview","probe"]})).await;
+    let report = report.as_str().unwrap();
+    assert!(
+        report.starts_with("probe at 1280x800: rendered 2 of 2 themes"),
+        "{report}"
+    );
+    let visible = report.find("hello from the probe").expect(report);
+    let next = report.find("\nNext: ").expect(report);
+    let metadata = report.find("\nMetadata:").expect(report);
+    assert!(visible < next && next < metadata, "{report}");
+    assert!(home.path().join("ux-preview/probe/light.png").is_file());
+    assert!(home.path().join("ux-preview/probe/report.json").is_file());
+}
+
+/// One row per model-facing text: its name, its length and its ceiling.
+/// Ceilings sit a little above the text as written; a text that outgrows its
+/// ceiling moves detail one layer down (a verb page, a field, an explicit
+/// read) instead of raising the number.
+pub(in crate::tools::builtin::self_config) fn assert_sizes(rows: &[(String, usize, usize)]) {
+    let table = rows
+        .iter()
+        .map(|(name, len, ceiling)| format!("{name}: {len} chars (ceiling {ceiling})"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rows.iter().all(|(_, len, ceiling)| len <= ceiling),
+        "model-facing text outgrew its ceiling:\n{table}"
+    );
+}
+
+async fn text(tools: &Tools, args: Value) -> String {
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .expect("config registered");
+    tool.call(args.to_string())
+        .await
+        .unwrap_or_else(|error| panic!("{args}: {error:#}"))
+}
+
+#[tokio::test]
+async fn help_pages_stay_within_their_size_ceilings() {
+    let (_fixture, tools) = authenticated_setup(
+        "help-sizes",
+        &["node", "agent", "tools", "profile", "automation"],
+    )
+    .await;
+    let mut rows = Vec::new();
+    for (argv, ceiling) in [
+        (json!(["help"]), HELP_INDEX_CEILING),
+        (json!(["help", "tools"]), 2_450),
+        (json!(["tools", "update", "--help"]), 1_300),
+        (json!(["tools", "update", "--help", "host"]), 2_200),
+        (json!(["tools", "update", "--help", "datastore"]), 850),
+        (json!(["tools", "update", "--help", "integrations"]), 1_400),
+        (json!(["help", "datastore"]), 2_600),
+        (json!(["datastore", "create", "--help"]), 2_450),
+        (json!(["help", "automation"]), 2_600),
+        (json!(["help", "task"]), 1_100),
+        (json!(["task", "create", "--help"]), 1_550),
+        (json!(["help", "trigger"]), 1_250),
+        (json!(["trigger", "create", "--help"]), 1_350),
+        (json!(["help", "event-source"]), 650),
+        (json!(["event-source", "create", "--help"]), 900),
+        (json!(["help", "agent"]), 2_450),
+    ] {
+        let page = text(&tools, json!({"argv":argv})).await;
+        rows.push((argv.to_string(), page.len(), ceiling));
+    }
+    assert_sizes(&rows);
+
+    let groups = text(&tools, json!({"argv":["tools","update","--help"]})).await;
+    assert!(
+        groups.contains(r#"["tools","update","--help",FIELD]"#),
+        "{groups}"
+    );
+    assert!(groups.contains("A group in set replaces that whole group"));
+    assert!(groups.contains("from the next request"), "{groups}");
+    assert!(
+        !groups.contains("clamped to"),
+        "the group list carries no shapes: {groups}"
+    );
+    let host = text(&tools, json!({"argv":["tools","update","--help","host"]})).await;
+    assert!(
+        host.contains("Tools.host: ") && host.contains("allowed_argv_prefixes"),
+        "{host}"
+    );
+    assert!(
+        !host.contains("self_config_categories"),
+        "one group, not every group: {host}"
+    );
+    assert_eq!(
+        text(&tools, json!({"argv":["help","tools","host"]})).await,
+        host
+    );
+    let verb = text(&tools, json!({"argv":["task","create","--help"]})).await;
+    let page = text(&tools, json!({"argv":["help","task"]})).await;
+    assert!(verb.contains("prompt_template") && !page.contains("rendered per invocation"));
+    assert!(
+        !verb.contains("skip_exit_codes") && page.contains("skip_exit_codes"),
+        "notes live on the resource page only: {verb}"
+    );
+}
+
+const HELP_INDEX_CEILING: usize = 1_900;
+
+#[tokio::test]
+async fn receipts_stay_within_their_size_ceilings() {
+    let (_fixture, tools) =
+        authenticated_setup("receipt-sizes", &["node", "tools", "automation"]).await;
+    let entries = json!([
+        {"kind":"query","tool_name":"get_game","collection":"IsleGame","description":"The current game document.","fields":["game_id","seed","max_rounds","status","winner","created_at"]},
+        {"kind":"query","tool_name":"latest_snapshot","collection":"IsleSnapshot","description":"The latest state snapshot.","fields":["game_id","round","actor","status","state","created_at"]},
+        {"kind":"query","tool_name":"recent_events","collection":"IsleEvent","description":"Game events, newest first.","fields":["game_id","seq","kind","actor","isle","target","ships","round","detail"]},
+    ]);
+    let created = text(
+        &tools,
+        json!({"argv":["datastore","create","isles"],"set":{"display_name":"Isles","entries":entries}}),
+    )
+    .await;
+    let receipt: Value = serde_json::from_str(&created).unwrap();
+    assert_eq!(receipt["committed"], true, "{created}");
+    let echoed = receipt["changed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|change| change["field"] == "entries")
+        .unwrap_or_else(|| panic!("{created}"));
+    assert!(
+        echoed["to"]["chars"].is_u64() && echoed["to"]["sha256"].is_string(),
+        "a long value the caller sent is summarized: {created}"
+    );
+    assert!(
+        created.contains("from the next request") || created.contains("later requests"),
+        "{created}"
+    );
+    let read = text(&tools, json!({"argv":["datastore","get","isles"]})).await;
+    assert!(
+        read.contains("latest_snapshot"),
+        "the saved value is one read away: {read}"
+    );
+    let mut smaller = entries.clone();
+    smaller.as_array_mut().unwrap().pop();
+    let updated = text(
+        &tools,
+        json!({"argv":["datastore","update","isles"],"set":{"entries":smaller}}),
+    )
+    .await;
+    assert!(
+        updated.contains("recent_events"),
+        "the replaced value stays readable in the receipt: {updated}"
+    );
+    let tools_update = text(
+        &tools,
+        json!({"argv":["tools","update"],"set":{"display_name":"Isle tools"}}),
+    )
+    .await;
+    assert!(
+        tools_update.contains("from the next request"),
+        "{tools_update}"
+    );
+    let validate = text(&tools, json!({"argv":["validate"]})).await;
+    assert_sizes(&[
+        ("datastore create, three entries".into(), created.len(), 950),
+        (
+            "datastore update, replacing entries".into(),
+            updated.len(),
+            1_400,
+        ),
+        ("tools update, one field".into(), tools_update.len(), 620),
+        ("validate".into(), validate.len(), 700),
+    ]);
 }

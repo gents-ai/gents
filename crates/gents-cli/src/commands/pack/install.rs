@@ -524,6 +524,8 @@ async fn install_documents_pack_resolved_inner(
         .collect();
     let schema_access = local.map_or(access, |local| &local.schema);
     let writer = local.map_or(access, |local| &local.writer);
+    let created_collections =
+        gents::pack::collections_install_creates(schema_access, pack.archive()).await?;
     gents::pack::apply_prepared_dependency_schemas(schema_access, &prepared).await?;
     let schemas = super::super::schema::apply_pack_schemas_if_present(schema_access, temp.path())
         .await
@@ -576,6 +578,7 @@ async fn install_documents_pack_resolved_inner(
                 installed_via: Some(gents::pack::InstalledVia::Operator),
                 source: Some(pack.provenance()),
                 source_history: Vec::new(),
+                created_collections,
             },
             gents::pack::InstalledVia::Operator,
             explicit,
@@ -632,7 +635,7 @@ fn merge(into: &mut serde_json::Value, from: serde_json::Value) {
 
 /// Refuses, before any write, a pack whose content digest is not the one the
 /// operator reviewed with `gents config pack show`.
-pub(super) fn check_expected_digest(expected: Option<&str>, actual: &str) -> Result<()> {
+pub(crate) fn check_expected_digest(expected: Option<&str>, actual: &str) -> Result<()> {
     match expected {
         Some(expected) if expected != actual => anyhow::bail!(
             "the pack's digest is {actual}, not the expected {expected}. Nothing was installed. \
@@ -673,6 +676,21 @@ pub(crate) async fn wire_pack_plugins(
     pack: &PackSource,
     agents: &[String],
 ) -> Result<Vec<serde_json::Value>> {
+    wire_pack_plugins_consenting(access, owner, home, pack, agents, false, false).await
+}
+
+/// [`wire_pack_plugins`], with the node owner's consent to dynamic scripts
+/// for this pack's job blocks when `dynamic_consent` is set, and to its
+/// plugins calling each agent's own tools when `tool_calls_consent` is.
+pub(crate) async fn wire_pack_plugins_consenting(
+    access: &gents::store::config_client::ConfigAccess,
+    owner: &str,
+    home: &std::path::Path,
+    pack: &PackSource,
+    agents: &[String],
+    dynamic_consent: bool,
+    tool_calls_consent: bool,
+) -> Result<Vec<serde_json::Value>> {
     let namespace = &pack.manifest().metadata.namespace;
     let mut wired = Vec::new();
     for agent in agents {
@@ -683,6 +701,8 @@ pub(crate) async fn wire_pack_plugins(
                 targets_from: Vec::new(),
                 remove: false,
                 preview: false,
+                dynamic_consent,
+                tool_calls_consent,
             };
             wired.push(wire::wire_in(access, owner, home, &request).await?);
         }
@@ -754,6 +774,21 @@ pub(super) async fn install_documents_command_with_local(
             local.as_ref(),
         )
         .await?;
+        if !args.preview {
+            let readers = wire::grant_pack_root_readers(
+                &access,
+                &owner,
+                &format!(
+                    "{}/{}",
+                    pack.manifest().metadata.namespace,
+                    pack.manifest().name
+                ),
+            )
+            .await?;
+            if !readers.is_empty() {
+                output["host_tool_roots"] = readers.into();
+            }
+        }
         if !args.wire.is_empty() && !args.preview && args.scope.graphql.is_none() {
             output["wired"] = wire_pack_plugins(&access, &owner, &home, pack, &args.wire)
                 .await?
@@ -864,6 +899,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                 args.grant_authority,
                 slot_owner.as_deref(),
                 &requested,
+                gents::pack::InstalledVia::Operator,
                 pack.provenance(),
                 move |identity, changes| {
                     let home = notify_home;

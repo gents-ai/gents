@@ -24,6 +24,7 @@ use std::time::Instant;
 use afterburner::afb_run::{AfbRunOutcome, AfbRunOutput, AfbRunRequest};
 use afterburner::wasi::embedder_vm::{
     shared_epoch_vm_with, BoundedCommandOutput, CommandOutcome, EmbedderState, WasiCommandOpts,
+    EPOCH_TICK_PERIOD_MS,
 };
 use afterburner_core::manifold::{EnvAccess, FsAccess, Manifold};
 use anyhow::{Context, Result};
@@ -50,6 +51,7 @@ pub(super) struct ImportSession {
     /// `ENGINE_FAILED`, so a guest that then exits non-zero reports the
     /// engine's failure, not the exit.
     pub failure: Option<(PluginVerdict, String)>,
+    pub host: Option<super::host_calls::Bridge>,
 }
 
 /// The call's `script`: a non-empty string. Whitespace is source.
@@ -99,6 +101,8 @@ pub(super) fn run_with_imports(
     afb: &afterburner_afb::Afb,
     request: AfbRunRequest,
     session: Arc<Mutex<ImportSession>>,
+    run_script_enabled: bool,
+    host_call_enabled: bool,
 ) -> Result<AfbRunOutput> {
     let AfbRunRequest {
         stdin,
@@ -120,16 +124,34 @@ pub(super) fn run_with_imports(
         })?;
     let vm = shared_epoch_vm_with(nan_mode).context("the plugin VM did not start")?;
     let run_session = session.clone();
+    let host_session = session.clone();
     let read_session = session;
     let module = vm
         .compile(wasm_bytes, true, move |linker| {
-            linker.func_wrap(
-                "gents",
-                "run_script",
-                move |mut caller: wasmtime::Caller<'_, EmbedderState>, ptr: i32, len: i32| -> i32 {
-                    run_script(&mut caller, &run_session, ptr, len)
-                },
-            )?;
+            if run_script_enabled {
+                linker.func_wrap(
+                    "gents",
+                    "run_script",
+                    move |mut caller: wasmtime::Caller<'_, EmbedderState>,
+                          ptr: i32,
+                          len: i32|
+                          -> i32 {
+                        run_script(&mut caller, &run_session, ptr, len)
+                    },
+                )?;
+            }
+            if host_call_enabled {
+                linker.func_wrap(
+                    "gents",
+                    "host_call",
+                    move |mut caller: wasmtime::Caller<'_, EmbedderState>,
+                          ptr: i32,
+                          len: i32|
+                          -> i32 {
+                        host_call(&mut caller, &host_session, ptr, len)
+                    },
+                )?;
+            }
             linker.func_wrap(
                 "gents",
                 "read_result",
@@ -151,6 +173,56 @@ pub(super) fn run_with_imports(
         .run_command_bounded(&module, opts, fuel, None, timeout)
         .context("running the plugin with its host imports")?;
     Ok(finish(raw))
+}
+
+fn host_call(
+    caller: &mut wasmtime::Caller<'_, EmbedderState>,
+    session: &Mutex<ImportSession>,
+    ptr: i32,
+    len: i32,
+) -> i32 {
+    let Ok(mut session) = session.lock() else {
+        return BAD_INPUT;
+    };
+    session.stored.clear();
+    let Some(host) = session.host.as_ref() else {
+        return NO_SCRIPT;
+    };
+    let (Ok(start), Ok(length)) = (usize::try_from(ptr), usize::try_from(len)) else {
+        return BAD_INPUT;
+    };
+    if length > crate::session::plugin_effect_rows::MAX_PAYLOAD_BYTES {
+        return TOO_LARGE;
+    }
+    let Some(memory) = memory_of(caller) else {
+        return BAD_INPUT;
+    };
+    let Some(bytes) = memory
+        .data(&*caller)
+        .get(start..start.saturating_add(length))
+    else {
+        return BAD_INPUT;
+    };
+    let answer = host.call(bytes.to_vec());
+    // The store's epoch deadline is reachable only here. Each host call renews
+    // the guest's compute allowance; a stopped invocation leaves none.
+    if let Some(allowance) = host.compute_allowance() {
+        let ticks = u64::try_from(
+            allowance
+                .as_millis()
+                .div_ceil(u128::from(EPOCH_TICK_PERIOD_MS)),
+        )
+        .unwrap_or(u64::MAX / 2);
+        wasmtime::AsContextMut::as_context_mut(caller).set_epoch_deadline(ticks);
+    }
+    match answer {
+        Ok(answer) => {
+            let length = i32::try_from(answer.len()).unwrap_or(i32::MAX);
+            session.stored = answer;
+            length
+        }
+        Err(_) => ENGINE_FAILED,
+    }
 }
 
 fn run_script(

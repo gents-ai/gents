@@ -21,6 +21,15 @@ pub enum BackendProtectionError {
     NotFresh,
     #[error("fresh backend protection provenance is absent or invalid")]
     InvalidProvenance,
+    /// An existing store carries no provenance marker at all: it was created
+    /// by a release from before backend protection (v1.0.0-rc1 and earlier),
+    /// which this release does not convert.
+    #[error(
+        "this home was created by an older Gents version (v1.0.0-rc1 or earlier), which this \
+         release cannot open or convert. Back the home up or delete it, then run `gents` to set \
+         up a fresh one. To keep anything, export it first with the release that created it."
+    )]
+    MissingProvenance,
     #[error("legacy backend policy binding is missing or incompatible")]
     InvalidBinding,
     #[error("backend protection refers to a different native node")]
@@ -134,9 +143,13 @@ pub struct ProtectedBackendStore<'a> {
 impl<'a> ProtectedBackendStore<'a> {
     pub async fn open(data: &Path, key: &StoreKey, lock: &'a StoreLock) -> Result<Self> {
         let data = check_lock(data, lock).await?;
-        let bytes = tokio::fs::read(data.join(MARKER))
-            .await
-            .map_err(|_| BackendProtectionError::InvalidProvenance)?;
+        let bytes =
+            tokio::fs::read(data.join(MARKER))
+                .await
+                .map_err(|error| match error.kind() {
+                    std::io::ErrorKind::NotFound => BackendProtectionError::MissingProvenance,
+                    _ => BackendProtectionError::InvalidProvenance,
+                })?;
         if bytes.len() != DOMAIN.len() + 16 + 32 || !bytes.starts_with(DOMAIN) {
             return Err(BackendProtectionError::InvalidProvenance);
         }

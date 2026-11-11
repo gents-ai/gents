@@ -137,6 +137,7 @@ impl EventSource {
         };
         let refusal = match &result {
             Ok(super::super::FireResult::Rejected { error }) => Some(error.clone()),
+            Ok(super::super::FireResult::BudgetExhausted { reason }) => Some(reason.clone()),
             Ok(super::super::FireResult::Skipped { reason })
                 if reason != super::super::SERIAL_BUSY =>
             {

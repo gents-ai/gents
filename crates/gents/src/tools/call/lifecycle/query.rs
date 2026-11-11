@@ -256,7 +256,7 @@ impl ToolCallLifecycle {
             .map(|effect| effect.parent_tool_call_doc_id.as_str())
             .or(spawned_by_tool_call_doc_id.as_deref())
             .unwrap_or(&row.doc_id);
-        let accepted = Self::load_direct_binding_in_txn(
+        let accepted = Self::load_accepted_binding_in_txn(
             txn,
             admission_doc_id,
             owner,
@@ -330,12 +330,6 @@ impl ToolCallLifecycle {
             anyhow::ensure!(
                 await_mode == AwaitMode::Background,
                 "spawned lifecycle must be background work"
-            );
-        }
-        if plugin_effect.is_some() {
-            anyhow::ensure!(
-                await_mode == AwaitMode::Foreground,
-                "plugin effect must remain foreground work"
             );
         }
         let arguments = if let Some(effect) = &plugin_effect {

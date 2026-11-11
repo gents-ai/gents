@@ -107,22 +107,36 @@ impl RuntimeAdmissionGate {
     }
 }
 
-pub(super) async fn run_router(
-    node: Arc<defra_node::Node>,
-    node_did: String,
-    active_snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
-    mut shutdown: watch::Receiver<bool>,
-    admission_gate: RuntimeAdmissionGate,
-    runtime_status: RuntimeStatusHandle,
-    runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
-) -> Result<()> {
+pub(super) struct RouterConfig {
+    pub(super) node: Arc<defra_node::Node>,
+    pub(super) node_did: String,
+    pub(super) active_snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
+    pub(super) shutdown: watch::Receiver<bool>,
+    pub(super) admission_gate: RuntimeAdmissionGate,
+    pub(super) runtime_status: RuntimeStatusHandle,
+    pub(super) runtime_snapshot_observer: Option<Arc<dyn RuntimeSnapshotObserver>>,
+    pub(super) backend_health: crate::inference::backends::health::BackendHealthMap,
+}
+
+pub(super) async fn run_router(config: RouterConfig) -> Result<()> {
+    let RouterConfig {
+        node,
+        node_did,
+        active_snapshot_rx,
+        mut shutdown,
+        admission_gate,
+        runtime_status,
+        runtime_snapshot_observer,
+        backend_health,
+    } = config;
     if *shutdown.borrow() {
         return Ok(());
     }
     if !admission_gate.wait_open(&mut shutdown).await {
         return Ok(());
     }
-    let watcher = DefraWatcher::for_agents(node.clone(), &node_did, Vec::new())?;
+    let watcher = DefraWatcher::for_agents(node.clone(), &node_did, Vec::new())?
+        .with_backend_health(backend_health);
     let result = run_router_with_watcher(RouterInputs {
         node,
         node_did,

@@ -8,11 +8,40 @@ def available (selectedGrant liveDispatcher : Bool) : Bool :=
 theorem requires_grant (liveDispatcher : Bool) :
     available false liveDispatcher = false := by simp [available]
 
-def childDispatcher : Bool := false
+/-- What started an invocation. The model calls a tool directly or backgrounds
+it through its own `spawn_process`; a plugin calls a child, which may itself be
+`spawn_process`. -/
+inductive Origin where
+  | accepted
+  | spawnedByAccepted
+  | pluginChild
+  | spawnedByPluginChild
+  deriving DecidableEq, Repr
+
+/-- Only an invocation the model started receives a tool dispatcher. A child
+receives none, and neither does the background invocation a child spawns:
+with a dispatcher it would compose under a fresh `maxEffects` budget and
+could spawn its like in turn, so delegation would be unbounded in depth. -/
+def dispatcherFor : Origin → Bool
+  | .accepted | .spawnedByAccepted => true
+  | .pluginChild | .spawnedByPluginChild => false
+
+def childDispatcher : Bool := dispatcherFor .pluginChild
 
 theorem children_cannot_delegate (selectedGrant : Bool) :
     available selectedGrant childDispatcher = false := by
-  simp [available, childDispatcher]
+  simp [available, childDispatcher, dispatcherFor]
+
+theorem spawned_by_child_cannot_delegate (selectedGrant : Bool) :
+    available selectedGrant (dispatcherFor .spawnedByPluginChild) = false := by
+  simp [available, dispatcherFor]
+
+/-- Every composing invocation was started by the model, so composition depth
+is one whatever a script spawns. -/
+theorem delegation_requires_model_origin (selectedGrant : Bool) (origin : Origin)
+    (h : available selectedGrant (dispatcherFor origin) = true) :
+    origin = .accepted ∨ origin = .spawnedByAccepted := by
+  cases origin <;> simp_all [available, dispatcherFor]
 
 def maxEffects : Nat := 64
 def maxPayloadBytes : Nat := 1048576
@@ -24,7 +53,7 @@ inductive DispatchRoute where
 
 def supported : DispatchRoute → Bool
   | .ordinary => true
-  | .hookOwned => false
+  | .hookOwned => true
 
 def childAdmissible (selected : Bool) (route : DispatchRoute) (admitted : Bool) : Bool :=
   selected && supported route && admitted
@@ -32,25 +61,31 @@ def childAdmissible (selected : Bool) (route : DispatchRoute) (admitted : Bool) 
 theorem admissible_child_is_selected (route : DispatchRoute) (admitted : Bool) :
     childAdmissible false route admitted = false := by simp [childAdmissible]
 
-theorem hook_owned_child_refused (selected admitted : Bool) :
-    childAdmissible selected .hookOwned admitted = false := by
+theorem hook_owned_child_requires_admission (selected : Bool) :
+    childAdmissible selected .hookOwned false = false := by
   simp [childAdmissible, supported]
 
-/-- Job-bound tool names are hook-owned: the hook adopts the call (flip, pin,
-effects) before any finite invocation could own it. Rust's
-`tool_calls::supported` consults the hook's job-tool set, because an
-operator-chosen name cannot be in the static table. -/
+/-- Hook-owned tools retain their own admission and lifecycle decisions when
+called by a plugin. A script never receives the hook or replaces its decisions. -/
 def routeOf (staticHookOwned jobBound : Bool) : DispatchRoute :=
   if staticHookOwned || jobBound then .hookOwned else .ordinary
 
-theorem job_tool_not_composable (selected staticHookOwned admitted : Bool) :
-    childAdmissible selected (routeOf staticHookOwned true) admitted = false := by
-  simpa [routeOf] using hook_owned_child_refused selected admitted
+theorem job_tool_requires_admission (selected staticHookOwned : Bool) :
+    childAdmissible selected (routeOf staticHookOwned true) false = false := by
+  simp [childAdmissible]
 
 def reserve (used : Nat) : Option Nat :=
   if used < maxEffects then some (used + 1) else none
 
 def resultFits (bytes : Nat) : Bool := bytes ≤ maxPayloadBytes
+
+/-- Sleeping grants no tool authority and cannot extend the enclosing invocation.
+The native adapter waits asynchronously while the sandbox keeps its live state. -/
+def sleepAdmissible (milliseconds remaining : Nat) : Bool := milliseconds ≤ remaining
+
+theorem sleep_cannot_extend_invocation (milliseconds remaining : Nat)
+    (h : sleepAdmissible milliseconds remaining = true) : milliseconds ≤ remaining := by
+  simpa [sleepAdmissible] using h
 
 theorem reserved_bounded (used next : Nat) (h : reserve used = some next) :
     next ≤ maxEffects := by
@@ -85,6 +120,37 @@ theorem child_interruption_is_child_scoped :
 theorem only_fatal_stops_parent (outcome : ChildOutcome) :
     settle outcome = .parentFatal ↔ outcome = .fatal := by
   cases outcome <;> simp [settle]
+
+/-- A background host-call plugin runs under the lifetime already admitted by
+its tool execution owner. Foreground calls retain the declared guest ceiling. -/
+def hostCallLifetime (declared : Nat) (background : Bool) (remaining : Option Nat) : Nat :=
+  match remaining with
+  | none => declared
+  | some available => if background then available else min declared available
+
+theorem background_host_call_uses_owner_lifetime (declared available : Nat) :
+    hostCallLifetime declared true (some available) = available := rfl
+
+theorem foreground_host_call_is_bounded (declared : Nat) (remaining : Option Nat) :
+    hostCallLifetime declared false remaining ≤ declared := by
+  cases remaining <;> simp [hostCallLifetime, Nat.min_le_left]
+
+/-- The compute a host-call guest may spend before its next host call. The
+sandbox exposes a guest's store only inside a host import, so the host renews
+this allowance at each call rather than preempting on demand: a guest computes
+for at most its declared wall clock between calls, never past the invocation's
+end, and not at all once the invocation stopped. A background guest's admitted
+lifetime (`hostCallLifetime`) therefore bounds its awaits, not its compute. -/
+def computeAllowance (declared remaining : Nat) (stopped : Bool) : Nat :=
+  if stopped then 0 else min declared remaining
+
+theorem stopped_guest_has_no_compute (declared remaining : Nat) :
+    computeAllowance declared remaining true = 0 := rfl
+
+theorem compute_allowance_is_bounded (declared remaining : Nat) (stopped : Bool) :
+    computeAllowance declared remaining stopped ≤ declared ∧
+      computeAllowance declared remaining stopped ≤ remaining := by
+  cases stopped <;> simp [computeAllowance, Nat.min_le_left, Nat.min_le_right]
 
 def chargedCompute (rounds : List (Nat × Nat)) : Nat :=
   (rounds.map Prod.fst).sum

@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use clap::CommandFactory as _;
 use gents::store::config_client::GraphqlEndpoint;
+use gents::store::local::storage_backend::{IncompatibleStore, IncompatibleStoreKind};
 use tokio::runtime::Handle;
 
 use crate::cli::args::{ShellArgs, StoreKeyCustodyArg};
@@ -12,13 +13,16 @@ use crate::cli::Cli;
 use crate::config_writes::ConfigAccess;
 use crate::graphql_access::graphql_endpoint_available;
 use crate::home_state::{read_finished_init_config, read_runtime_state, resolve_home_dir};
-use crate::native_service::{NativeServiceConfig, NativeServiceManager, NativeServicePlatform};
+use crate::native_service::{
+    NativeServiceConfig, NativeServiceManager, NativeServicePlatform, ServiceExit,
+};
 use crate::shared::StoredInitConfig;
 use gents_protocol::node_readiness::{AgentReadinessState, NodeReadinessSnapshot};
 
 mod setup;
 mod yolo;
 
+pub(crate) use yolo::default_agent;
 pub(crate) use yolo::node_readiness;
 
 const ENDPOINT_WAIT: Duration = Duration::from_secs(60);
@@ -204,7 +208,41 @@ async fn ensure_graphql(home: &Path) -> Result<GraphqlEndpoint> {
         return Ok(graphql);
     }
     start_service(home).await?;
-    wait_for_graphql(home).await
+    or_store_refusal(home, wait_for_graphql(home).await).await
+}
+
+/// A service that refuses to open its home's store says why only in its own log and exits
+/// with the refusal's status. A wait that ran out on such a home reports that refusal, typed,
+/// so this process prints it and exits as the service did.
+async fn or_store_refusal<T>(home: &Path, waited: Result<T>) -> Result<T> {
+    match waited {
+        Ok(value) => Ok(value),
+        Err(error) => Err(match service_store_refusal(home).await {
+            Some(store) => anyhow::Error::new(store),
+            None => error,
+        }),
+    }
+}
+
+async fn service_store_refusal(home: &Path) -> Option<IncompatibleStore> {
+    let service_home = home.to_path_buf();
+    let exit = tokio::task::spawn_blocking(move || -> Result<Option<ServiceExit>> {
+        let executable = std::env::current_exe().context("resolving the gents executable")?;
+        NativeServiceManager::new(NativeServiceConfig::new(service_home, executable)?)?.last_exit()
+    })
+    .await
+    .ok()?
+    .ok()??;
+    store_refusal(home, &exit)
+}
+
+fn store_refusal(home: &Path, exit: &ServiceExit) -> Option<IncompatibleStore> {
+    let kind = exit.refused_store()?;
+    let data_path = match kind {
+        IncompatibleStoreKind::InsecureKey => home.join("keys"),
+        _ => gents::store::local::home::default_data_dir(home),
+    };
+    Some(IncompatibleStore { kind, data_path })
 }
 
 /// A runtime records where its GraphQL answers once it serves, and nothing tells another
@@ -342,6 +380,40 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn a_service_that_exited_refusing_the_store_is_reported_as_that_refusal() {
+        let home = Path::new("/srv/home");
+        let exit = |code| ServiceExit {
+            reason: format!("exited with code {code}"),
+            restarts: 0,
+            clean: false,
+            code: Some(code),
+        };
+
+        let older = store_refusal(
+            home,
+            &exit(crate::native_service::INCOMPATIBLE_STORE_EXIT_CODE),
+        )
+        .expect("an older home");
+        assert_eq!(older.kind, IncompatibleStoreKind::UnknownLineage);
+        assert_eq!(
+            older.data_path,
+            gents::store::local::home::default_data_dir(home)
+        );
+        let error = anyhow::Error::new(older.clone());
+        assert_eq!(
+            gents::store::local::storage_backend::incompatible_store(error.as_ref(), Path::new("")),
+            Some(older)
+        );
+
+        let key = store_refusal(home, &exit(crate::native_service::INSECURE_KEY_EXIT_CODE))
+            .expect("an unsafe key");
+        assert_eq!(key.kind, IncompatibleStoreKind::InsecureKey);
+        assert_eq!(key.data_path, home.join("keys"));
+
+        assert_eq!(store_refusal(home, &exit(1)), None);
     }
 
     #[test]

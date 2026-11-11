@@ -778,3 +778,33 @@ async fn generated_count_carriers_bind_admission_parser_and_storage() {
         }
     }
 }
+
+#[test]
+fn write_grant_guidance_names_the_call_that_keeps_the_callers_datastore_group() {
+    let group: crate::documents::DatastoreTools = serde_json::from_value(json!({
+        "enable_defra_query": true,
+        "write_collections": ["Kept"],
+    }))
+    .unwrap();
+    let names = ["Board".to_owned()];
+    let held = super::write_grant_guidance(true, Some(&group), &names);
+    assert_eq!(held["writable"], false);
+    assert_eq!(held["next_call"]["tool"], "config");
+    assert_eq!(held["next_call"]["args"]["argv"], json!(["tools", "edit"]));
+    let set = &held["next_call"]["args"]["set"]["datastore"];
+    assert_eq!(set["write_collections"], json!(["Kept", "Board"]));
+    assert_eq!(
+        set["enable_defra_query"], true,
+        "the group is sent back whole"
+    );
+
+    let unheld = super::write_grant_guidance(false, Some(&group), &names);
+    assert!(unheld.get("next_call").is_none(), "{unheld}");
+    assert!(unheld["how"]
+        .as_str()
+        .unwrap()
+        .contains("you do not hold the tools category"));
+
+    let granted = super::write_grant_guidance(false, Some(&group), &["Kept".to_owned()]);
+    assert_eq!(granted["writable"], true);
+}

@@ -1321,8 +1321,8 @@ private theorem admitJobOutput_children {ctx : StepContext} {p : Pin} {j j' : Jo
 set_option maxHeartbeats 400000 in
 /-- A job gains a child key only when `admitStep` admits it from
 the output's `effects.spawns`, or carries it over from the prior row of a
-validated `resume`, and a job-bound tool is never a composed child
-call (`job_tool_not_composable`). -/
+validated `resume`. A job step has no tool dispatcher, so it cannot use tool
+composition to bypass this owner. -/
 theorem spawn_only_through_admitStep (ctx : StepContext) (job job' : Job) (out : StepOutput)
     (h : admitStep ctx job out = .ok job') :
     (∀ ch ∈ job'.children, (∃ c0 ∈ job.children, ch.key = c0.key) ∨
@@ -1331,10 +1331,9 @@ theorem spawn_only_through_admitStep (ctx : StepContext) (job job' : Job) (out :
         ∃ c0 ∈ prior.children, ch.key = c0.key) ∨
       ∃ e, out = .effects e ∧ ∃ s ∈ freshSpawns (stepRow ctx job out) e.spawns,
         ch.key = spawnKey (stepRow ctx job out) s) ∧
-    ∀ selected staticHookOwned admitted,
-      ToolPolicy.PluginCalls.childAdmissible selected
-        (ToolPolicy.PluginCalls.routeOf staticHookOwned true) admitted = false := by
-  refine ⟨fun ch hch => ?_, ToolPolicy.PluginCalls.job_tool_not_composable⟩
+    ∀ selected, ToolPolicy.PluginCalls.available selected
+      ToolPolicy.PluginCalls.childDispatcher = false := by
+  refine ⟨fun ch hch => ?_, ToolPolicy.PluginCalls.children_cannot_delegate⟩
   unfold admitStep at h
   rcases hsp : stepPin ctx job out with _ | pin <;> rw [hsp] at h <;> dsimp only at h <;>
     split_ifs at h

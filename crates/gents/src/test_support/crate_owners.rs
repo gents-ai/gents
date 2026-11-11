@@ -139,8 +139,10 @@ pub fn pending_agent_request_spec(
 pub struct PreparedFire {
     pub receipt: TriggerFire,
     pub target_existing: bool,
+    pub create_session: bool,
     pub replace_prior: bool,
     pub event_source_generation: Option<Value>,
+    pub max_fires_per_hour: u32,
 }
 
 pub async fn write_trigger_delivery_with_identity(
@@ -153,8 +155,10 @@ pub async fn write_trigger_delivery_with_identity(
     let PreparedFire {
         receipt,
         target_existing,
+        create_session,
         replace_prior,
         event_source_generation,
+        max_fires_per_hour,
     } = prepared.clone();
     durable::write_trigger_delivery_with_identity(
         node,
@@ -162,8 +166,10 @@ pub async fn write_trigger_delivery_with_identity(
         &durable::PreparedFire {
             receipt,
             target_existing,
+            create_session,
             replace_prior,
             event_source_generation,
+            max_fires_per_hour,
         },
         create,
         identity,

@@ -1,6 +1,196 @@
+use crate::inference::llm::message::Message;
 use std::sync::atomic::AtomicBool;
 
 const ACTIVE_STREAM_INTERVAL: Duration = Duration::from_millis(300);
+
+#[derive(Clone)]
+struct RecoveringProvider {
+    available: Arc<AtomicBool>,
+    /// The connection fails once the opened stream is first read, as an HTTP
+    /// client does, instead of before the attempt is opened.
+    fails_on_first_read: bool,
+}
+
+#[allow(refining_impl_trait)]
+impl CompletionModel for RecoveringProvider {
+    type Response = ();
+    type StreamingResponse = ();
+    type Client = ();
+
+    fn make(_: &(), _: impl Into<String>) -> Self {
+        unreachable!()
+    }
+
+    async fn completion(
+        &self,
+        _: CompletionRequest,
+    ) -> Result<CompletionResponse<()>, CompletionError> {
+        unreachable!()
+    }
+
+    async fn stream(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
+        crate::test_support::capture_scripted_provider_request(&request, "backend-recovery")
+            .await?;
+        if !self.available.load(Ordering::SeqCst) {
+            let error = CompletionError::ProviderError("HTTP status 503: unavailable".into());
+            if self.fails_on_first_read {
+                return Ok(StreamingCompletionResponse::stream(Box::pin(stream::iter(
+                    vec![Err(error)],
+                ))));
+            }
+            return Err(error);
+        }
+        Ok(StreamingCompletionResponse::stream(Box::pin(stream::iter(
+            vec![
+                Ok(RawStreamingChoice::Message("recovered reply".into())),
+                Ok(RawStreamingChoice::FinalResponse(())),
+            ],
+        ))))
+    }
+}
+
+#[tokio::test]
+async fn unavailable_provider_parks_and_resumes_the_same_request() {
+    unavailable_provider_parks_and_resumes(false).await;
+}
+
+#[tokio::test]
+async fn provider_failing_on_first_read_parks_and_resumes_the_same_request() {
+    unavailable_provider_parks_and_resumes(true).await;
+}
+
+async fn unavailable_provider_parks_and_resumes(fails_on_first_read: bool) {
+    let (db, user, access, mut agent_config) = held_daemon_fixture("backend-recovery").await;
+    let node = db.node.clone();
+    Arc::get_mut(&mut agent_config)
+        .unwrap()
+        .completion_retry
+        .retry_interactive_max = Some(1);
+    let agent_access = held_daemon_agent_access(&db, &agent_config);
+    let node_did = agent_config.node_did().to_owned();
+    let available = Arc::new(AtomicBool::new(false));
+    let prompt = LayeredPromptBuilder::for_agent(
+        &agent_config.system_prompt,
+        &agent_config.agent_did,
+        &[],
+        false,
+        &[],
+    );
+    let mut daemon = AgentDaemon::new(AgentDaemonInit {
+        node: node.clone(),
+        agent_config: agent_config.clone(),
+        provider_family: None,
+        model: Arc::new(RecoveringProvider {
+            available: available.clone(),
+            fails_on_first_read,
+        }),
+        preamble: prompt.preamble().to_owned(),
+        loop_tools: Arc::new(Vec::new()),
+        prompt_builder: prompt,
+        hook_failure_policy: FailurePolicy::default(),
+        rendered_request_capture_factory: Some(
+            crate::inference::rendered_request::defra_rendered_request_capture_factory_for_agent(
+                node.clone(),
+                agent_config.agent_identity.as_ref(),
+            )
+            .unwrap(),
+        ),
+        background_tool_registry: BackgroundToolRegistry::default(),
+        background_execution_registry: BackgroundExecutionRegistry::default(),
+        startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
+        runtime_status: crate::runtime::status::RuntimeStatusHandle::new(
+            node.clone(),
+            node_did.clone(),
+        ),
+        slot_generation: 1,
+        request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
+            node.clone(),
+            agent_config.node_identity().clone(),
+            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel().1,
+        ),
+    })
+    .unwrap();
+    let request =
+        create_held_routed_request(&db, &user, &access, &agent_config, Some("backend recovery"))
+            .await;
+    let doc_id = request.doc_id.clone();
+    let (_shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
+    daemon
+        .process_request(request.clone(), shutdown_rx.clone())
+        .await
+        .unwrap();
+    let doc = crate::store::graphql::escape_graphql_string(&doc_id);
+    let read_state = || async {
+        let response = held_daemon_query(&agent_access, &format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}) {{ lifecycle_state execution_generation deadline failure_reason }} }}"#)).await;
+        response.data.unwrap()["AgentRequest"][0].clone()
+    };
+    let parked = read_state().await;
+    assert_eq!(parked["lifecycle_state"], "waitingForBackend", "{parked}");
+    let old_generation = parked["execution_generation"].as_str().unwrap().to_owned();
+    let deadline = parked["deadline"].clone();
+    available.store(true, Ordering::SeqCst);
+    let past = crate::store::graphql::escape_graphql_string(
+        &(chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339(),
+    );
+    let wait = held_daemon_query(&agent_access, &format!(r#"{{ AgentRequestBackendWait(filter: {{ request_doc_id: {{ _eq: "{doc}" }} }}) {{ _docID }} }}"#)).await;
+    let wait_doc = crate::store::graphql::escape_graphql_string(
+        wait.data.as_ref().unwrap()["AgentRequestBackendWait"][0]["_docID"]
+            .as_str()
+            .expect("the parking Agent reads its wait record"),
+    );
+    let resumed = held_daemon_query(&agent_access, &format!(r#"mutation {{ update_AgentRequestBackendWait(docID: "{wait_doc}", input: {{ retry_at: "{past}" }}) {{ _docID }} }}"#)).await;
+    assert!(!resumed.has_errors(), "{:?}", resumed.errors);
+    let resumed_request = crate::request::admission::load_request_for_admission_test_as(
+        &node,
+        &doc_id,
+        &agent_config.agent_did,
+    )
+    .await
+    .unwrap();
+    daemon
+        .process_request(resumed_request, shutdown_rx)
+        .await
+        .unwrap();
+    let completed = read_state().await;
+    assert_eq!(completed["lifecycle_state"], "completed", "{completed}");
+    assert_ne!(completed["execution_generation"], old_generation);
+    assert_eq!(completed["deadline"], deadline);
+    let history = crate::session::load_history_with_access(
+        &agent_access,
+        &request.session_id,
+        &request.node_did,
+        request.requester_did.as_deref(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        history
+            .iter()
+            .filter(|message| matches!(message, Message::User { .. }))
+            .count(),
+        1
+    );
+    assert!(history
+        .iter()
+        .any(|message| matches!(message, Message::Assistant { .. })));
+    let captures = held_daemon_query(&agent_access, &format!(r#"{{ RenderedRequest(filter: {{ request_doc_id: {{ _eq: "{doc}" }} }}) {{ capture_scope capture_key }} }}"#)).await;
+    assert!(!captures.has_errors(), "{:?}", captures.errors);
+    let captures = captures.data.as_ref().unwrap()["RenderedRequest"]
+        .as_array()
+        .unwrap();
+    let scopes: rapidhash::RapidHashSet<_> = captures
+        .iter()
+        .filter_map(|capture| capture["capture_scope"].as_str())
+        .collect();
+    assert!(
+        scopes.len() >= 2,
+        "resumed provider calls must use a new capture scope"
+    );
+    node.shutdown().await.expect("node shutdown");
+}
 
 #[derive(Clone)]
 struct NonTerminalProvider {

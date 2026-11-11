@@ -350,6 +350,58 @@ async fn interrupt_delivery_latches_only_the_prepublication_head() {
 }
 
 #[tokio::test]
+async fn steer_reaches_a_head_parked_for_its_backend() {
+    let (message, caller, caused) = started("agent-steer-parked-head").await;
+    let node = message.admission.node.clone();
+    set_state(&owner(&message), &caused.doc_id, "waitingForBackend").await;
+    let cause = super::hop_tests::cause(&message, caller.request_hop).await;
+    let target = SessionMessageTarget {
+        node_did: caused.node_did.clone(),
+        agent_did: caused.agent_did.clone(),
+        session_id: caused.session_id.clone(),
+    };
+    let plan = plan_with_delivery(
+        &node,
+        &cause,
+        &target,
+        RenderedBody {
+            content: "change course".to_owned(),
+            goal: None,
+        },
+        None,
+        AgentMessageDelivery::Steer,
+        &super::hop_tests::signer(&message),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let (cause_ref, plan_ref) = (&cause, &plan);
+    let receipt = message
+        .admission
+        .tool
+        .access()
+        .unwrap()
+        .transact_write("test.steer.parked_head", move |txn| {
+            Box::pin(async move { stage_planned_write_in_txn(txn, cause_ref, plan_ref).await })
+        })
+        .await
+        .expect("a steer planned against a parked head is published");
+    let row = crate::request::binding::load_agent_request_by_doc_id_with_access(
+        &message.admission.tool.access().unwrap(),
+        &receipt.doc_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        row.input.queue.unwrap().delivery,
+        gents_protocol::request_input::QueueDelivery::Steer
+    );
+    node.shutdown().await.expect("shut down test node");
+    std::fs::remove_dir_all(&message.admission.path).unwrap();
+}
+
+#[tokio::test]
 async fn explicit_steer_checks_the_physical_head_at_publication() {
     let (message, caller, caused) = started("agent-steer-head-change").await;
     let node = message.admission.node.clone();

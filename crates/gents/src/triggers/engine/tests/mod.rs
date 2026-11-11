@@ -448,6 +448,8 @@ fn resolved_task(prompt_template: &str) -> ResolvedTask {
 fn resolved_schedule(schedule_id: &str, task: ResolvedTask) -> ResolvedSchedule {
     ResolvedSchedule {
         session_id_template: None,
+        create_session: false,
+        max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
         trigger_doc_id: format!("{schedule_id}-doc"),
         schedule_doc_id: format!("{schedule_id}-schedule-doc"),
         schedule_id: schedule_id.to_string(),
@@ -466,6 +468,8 @@ fn resolved_schedule_with_concurrency(
 ) -> ResolvedSchedule {
     ResolvedSchedule {
         session_id_template: None,
+        create_session: false,
+        max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
         trigger_doc_id: format!("{schedule_id}-doc"),
         schedule_doc_id: format!("{schedule_id}-schedule-doc"),
         schedule_id: schedule_id.to_string(),
@@ -487,6 +491,8 @@ fn resolved_event_trigger_with_concurrency(
         event_source_doc_id: "source-doc".into(),
         task_doc_id: "task-doc".into(),
         session_id_template: None,
+        create_session: false,
+        max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
         trigger_doc_id: format!("{trigger_id}-doc"),
         trigger_id: trigger_id.to_string(),
         task_id: task.task_id.clone(),

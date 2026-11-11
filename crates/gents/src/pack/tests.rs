@@ -42,6 +42,15 @@ fn host_imports_round_trip_and_default_empty() {
         .is_none());
 }
 
+#[test]
+fn host_calls_are_an_ordinary_plugin_seam() {
+    let mut plugin = valid_plugin();
+    plugin.host_imports = vec![HostImport::HostCall];
+    plugin.validate().unwrap();
+    plugin.job = PluginJobDeclaration(true);
+    assert!(plugin.validate().is_err());
+}
+
 fn valid_plugin() -> PackPlugin {
     PackPlugin {
         name: "format_check".to_owned(),

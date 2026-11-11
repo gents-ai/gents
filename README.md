@@ -53,9 +53,16 @@ macOS arm64) from the same release; checksums are in `SHA256SUMS-cli-*.txt`.
 
 ## First run
 
-The app walks you through setup: create a local node, review the folders and
-permissions it may use, then connect a model provider. If `~/.gents` already
-exists, setup continues that node instead of creating a second one.
+The app walks you through setup: name a local node, choose the folder its
+agents may work in and how much access they get, then connect a model provider.
+Your first agent is the Engineer. Tell it what you need and it builds it on
+your node: the data, the pages you open in the app, and the agents and
+schedules that keep it running. Setup also installs a few starter packs for it
+(web research, workflows, charts, data tables, and pack-building skills).
+
+A home created by v1.0.0-rc1 or earlier does not open on this release. Gents
+shows a screen that backs it up or deletes it and starts fresh; nothing is
+carried over. See [docs/upgrade-from-rc1.md](docs/upgrade-from-rc1.md).
 
 The node keeps running when you close the window or quit the app. Use
 **Stop Node** in the menu bar or tray menu to stop it; **Start at login** is a separate setting.

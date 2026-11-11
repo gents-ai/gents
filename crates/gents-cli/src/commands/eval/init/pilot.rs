@@ -185,7 +185,7 @@ async fn install_definition(ctx: &EvalContext, dir: &std::path::Path) -> Result<
     )
     .await
     .context(
-        "installing the pilot definition; choose a new --definition-id if this home already has it",
+        "installing the pilot definition; eval init takes no --overwrite or --keep, so choose a new --definition-id if this home already has it",
     )?;
     Ok(())
 }

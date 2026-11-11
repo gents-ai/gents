@@ -34,7 +34,7 @@ import {
 } from "@gents/ui/components/select";
 import type { PackInstallChoice } from "../agent/usePackActions";
 import { ItemIcon } from "./PackPage";
-import { ErrorDetail, Section } from "./PackCard";
+import { AccessAsks, ErrorDetail, Section } from "./PackCard";
 import {
   bytes,
   otherLabel,
@@ -494,14 +494,7 @@ export function PackInstallReview({
               {needsAllow && (
                 <Section title="Access it asks for">
                   {asks.length > 0 ? (
-                    <ul className="grid gap-1 text-sm">
-                      {asks.map((ask) => (
-                        <li key={ask.plugin}>
-                          <span className="font-medium">{ask.plugin}</span>{" "}
-                          <span className="text-muted-foreground">{ask.asks}</span>
-                        </li>
-                      ))}
-                    </ul>
+                    <AccessAsks asks={asks} />
                   ) : (
                     <p className="text-sm text-muted-foreground">
                       A plugin it installs asks for more than the review could list.

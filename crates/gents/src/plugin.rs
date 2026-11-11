@@ -132,6 +132,44 @@ pub struct PluginOutcome {
     pub wall_ms: u64,
 }
 
+impl PluginOutcome {
+    /// The plugin's output, or an error naming the budget or fault that stopped it.
+    pub fn into_output(self, coordinate: &str) -> Result<serde_json::Value> {
+        match self.verdict {
+            PluginVerdict::Success => Ok(self.output),
+            PluginVerdict::Refused => {
+                anyhow::bail!(
+                    "{coordinate} was refused before it ran: {}",
+                    self.diagnostics
+                )
+            }
+            PluginVerdict::OutOfFuel => {
+                anyhow::bail!(
+                    "{coordinate} ran out of its fuel budget: {}",
+                    self.diagnostics
+                )
+            }
+            PluginVerdict::OutOfMemory => {
+                anyhow::bail!(
+                    "{coordinate} exceeded its memory budget: {}",
+                    self.diagnostics
+                )
+            }
+            PluginVerdict::Timeout => {
+                anyhow::bail!(
+                    "{coordinate} exceeded its wall-clock budget: {}",
+                    self.diagnostics
+                )
+            }
+            PluginVerdict::BadOutput => anyhow::bail!(
+                "{coordinate} did not return a single JSON value: {}",
+                self.diagnostics
+            ),
+            PluginVerdict::Failed => anyhow::bail!("{coordinate} failed: {}", self.diagnostics),
+        }
+    }
+}
+
 pub struct PluginRunner {
     afb_bytes: Vec<u8>,
     plugin: PackPlugin,
@@ -292,6 +330,16 @@ impl PluginRunner {
         budget: &PluginBudget,
         manifold: Manifold,
     ) -> Result<PluginOutcome> {
+        self.call_with_host(arguments, budget, manifold, None)
+    }
+
+    fn call_with_host(
+        &self,
+        arguments: &serde_json::Value,
+        budget: &PluginBudget,
+        manifold: Manifold,
+        host: Option<host_calls::Bridge>,
+    ) -> Result<PluginOutcome> {
         debug_assert!(
             matches!(manifold.listen, ListenAccess::None),
             "a granted manifold must never carry a listen capability"
@@ -329,6 +377,7 @@ impl PluginRunner {
                 started,
                 stored: Vec::new(),
                 failure: None,
+                host,
             }))
         });
         let _wasi = wasi_runtime::enter()?;
@@ -341,7 +390,13 @@ impl PluginRunner {
                         self.plugin.name
                     )
                 })?;
-                host_imports::run_with_imports(&afb, request, session.clone())
+                host_imports::run_with_imports(
+                    &afb,
+                    request,
+                    session.clone(),
+                    self.plugin.imports_run_script(),
+                    self.plugin.imports_host_call(),
+                )
             }
         }
         .with_context(|| format!("plugin {:?} failed to start", self.plugin.name))?;
@@ -408,6 +463,14 @@ impl PluginRunner {
 
     pub fn definition(&self) -> &PackPlugin {
         &self.plugin
+    }
+
+    #[cfg(test)]
+    pub(crate) fn artifact_digest(&self) -> String {
+        format!(
+            "sha256:{:x}",
+            <sha2::Sha256 as sha2::Digest>::digest(&self.afb_bytes)
+        )
     }
 }
 
@@ -644,6 +707,9 @@ pub fn retry_backoff(attempts: u32) -> std::time::Duration {
 }
 pub mod data;
 pub mod executor;
+mod host_calls;
+#[cfg(test)]
+pub(crate) use host_calls::live as live_guests;
 pub mod host_imports;
 pub mod http_calls;
 pub mod install;

@@ -561,6 +561,7 @@ async fn run_inner(
             installed_via: Some(gents::pack::InstalledVia::Operator),
             source: Some(received.root.provenance()),
             source_history: Vec::new(),
+            created_collections: Vec::new(),
         };
         Some(gents::pack::HostedHomePublication {
             home,

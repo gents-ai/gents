@@ -18,10 +18,14 @@ export function createUxPluginCommands(
   invokeDesktop: ReturnType<typeof createDesktopInvoker>,
 ): Pick<DesktopApiAdapter, UxPluginCommand> {
   return {
-    listUxPlugins: () =>
-      shaped<{ plugins: UxPluginListing[] }>(invokeDesktop("desktop_ux_plugins_list")),
-    readUxPluginSource: (id: string) =>
-      shaped<UxPluginSource>(invokeDesktop("desktop_ux_plugin_source", { id })),
+    listUxPlugins: (nodeDid?: string | null) =>
+      shaped<{ plugins: UxPluginListing[]; pagesError?: string | null }>(
+        invokeDesktop("desktop_ux_plugins_list", { nodeDid: nodeDid ?? null }),
+      ),
+    readUxPluginSource: (id: string, nodeDid?: string | null) =>
+      shaped<UxPluginSource>(
+        invokeDesktop("desktop_ux_plugin_source", { id, nodeDid: nodeDid ?? null }),
+      ),
     callPackPlugin: (request: PackPluginCallRequest) =>
       shaped<{ output: unknown }>(
         invokeDesktop("desktop_plugin_call", {

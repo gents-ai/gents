@@ -138,7 +138,8 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
             durable::resolve_session_id(
                 &id,
                 case["target"].as_str(),
-                case["owned"].as_bool().unwrap()
+                case["owned"].as_bool().unwrap(),
+                case["create_missing"].as_bool().unwrap()
             ),
             decode::<Option<String>>(&case["resolved"])
         );
@@ -1349,5 +1350,225 @@ fn task_goal_assignment_root_matches_lean() {
             case["allowed"].as_bool().unwrap(),
             "{case}"
         );
+    }
+}
+
+fn trigger_with_options(
+    template: Option<&str>,
+    create_session: Option<bool>,
+    budget: Option<u32>,
+    receipted: bool,
+) -> crate::documents::Trigger {
+    let source = if receipted {
+        serde_json::json!({"kind": "event", "event_source_id": "s"})
+    } else {
+        serde_json::json!({"kind": "schedule", "schedule_id": "s"})
+    };
+    serde_json::from_value(serde_json::json!({
+        "node_did": "did:key:zOwner", "trigger_id": "t", "task_id": "task",
+        "source": source,
+        "session_id_template": template,
+        "create_session": create_session,
+        "max_fires_per_hour": budget,
+    }))
+    .unwrap()
+}
+
+#[test]
+fn generated_session_key_cases_match_admission_and_config() {
+    let cases = contract();
+    for case in cases["session_config"].as_array().unwrap() {
+        let trigger = trigger_with_options(
+            case["template"].as_str(),
+            case["create_session"].as_bool(),
+            None,
+            true,
+        );
+        assert_eq!(
+            trigger.validate_options().is_ok(),
+            case["allowed"].as_bool().unwrap(),
+            "{case}"
+        );
+    }
+}
+
+/// A signed Node whose Agent admits fires of the User-owned Trigger `handoff`.
+async fn budget_fixture(
+    name: &str,
+) -> (
+    crate::support::TestDb,
+    crate::ConfigAccess,
+    crate::ConfigAccess,
+    ProductionMaterializer,
+    ResolvedTask,
+    String,
+    String,
+) {
+    let (db, _user, client, behavior) = signed_materializer_agent(name).await;
+    let owner = behavior.node_did().to_owned();
+    let agent_did = behavior.agent_did.clone();
+    let config = serde_json::from_value(serde_json::json!({
+        "node":{"node_did":owner,"default_agent_did":agent_did},
+        "tasks":[{"node_did":owner,"task_id":"budget-task","agent_did":agent_did,"prompt_template":"work"}],
+        "schedules":[{"node_did":owner,"schedule_id":"s","cadence":{"kind":"interval","interval_secs":60}}],
+        "triggers":[{"node_did":owner,"trigger_id":"handoff","task_id":"budget-task","source":{"kind":"schedule","schedule_id":"s"}}]
+    }))
+    .unwrap();
+    let trigger_doc = apply_user_config(&client, &config, "handoff").await;
+    let agent = agent_access(&db.node, &behavior);
+    let snapshot = snapshot_with_agent_and_schedules(behavior, RapidHashMap::new());
+    let (_tx, rx) = watch::channel(snapshot);
+    let materializer = ProductionMaterializer::new(db.node.clone(), rx);
+    let task = ResolvedTask {
+        task_id: "budget-task".into(),
+        agent_did,
+        ..resolved_task("work")
+    };
+    (db, client, agent, materializer, task, owner, trigger_doc)
+}
+
+fn budget_fire(owner: &str, document: &str, created_at: String) -> TriggerFire {
+    let identity = FireIdentity {
+        owner_did: owner.to_owned(),
+        trigger_id: "handoff".into(),
+        source_collection: "Schedule".into(),
+        source_doc_id: document.to_owned(),
+    };
+    TriggerFire {
+        fire_key: identity.fire_key(),
+        request_id: identity.request_id(),
+        session_id: identity.session_id(),
+        identity,
+        task_id: "budget-task".into(),
+        goal_id: None,
+        goal_objective: None,
+        goal_token_budget: None,
+        goal_assignment_applied: false,
+        emit_outcome: false,
+        queued_serial: false,
+        source_handoff_id: None,
+        reply_session_id: None,
+        shard_id: None,
+        attempt: None,
+        created_at,
+    }
+}
+
+const BUDGET_NOW: &str = "2030-01-01T12:00:00Z";
+
+async fn seed_receipt(agent: &crate::ConfigAccess, fire: &TriggerFire) {
+    agent
+        .transact_write("test.budget_receipt", |txn| {
+            Box::pin(async { durable::stage_fire_receipt(txn, fire).await })
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn generated_fire_budget_cases_stop_at_the_modeled_receipt_count() {
+    let cases = contract();
+    assert_eq!(
+        cases["fire_budget_default"].as_u64(),
+        Some(crate::documents::DEFAULT_MAX_FIRES_PER_HOUR as u64)
+    );
+    assert_eq!(
+        cases["fire_budget_status"].as_str(),
+        Some(crate::documents::BUDGET_EXHAUSTED_STATUS)
+    );
+    for case in cases["fire_budget_config"].as_array().unwrap() {
+        let trigger = trigger_with_options(
+            None,
+            None,
+            case["configured"].as_u64().map(|value| value as u32),
+            case["receipted"].as_bool().unwrap(),
+        );
+        assert_eq!(
+            trigger.validate_options().is_ok(),
+            case["allowed"].as_bool().unwrap(),
+            "{case}"
+        );
+    }
+    let now = chrono::DateTime::parse_from_rfc3339(BUDGET_NOW).unwrap();
+    for case in cases["fire_budget"].as_array().unwrap() {
+        let name = case["name"].as_str().unwrap();
+        let (_db, client, agent, materializer, task, owner, trigger_doc) =
+            budget_fixture(&format!("fire-budget-{name}")).await;
+        let budget = trigger_with_options(
+            None,
+            None,
+            case["configured"].as_u64().map(|v| v as u32),
+            true,
+        )
+        .effective_max_fires_per_hour();
+        assert_eq!(budget as u64, case["budget"].as_u64().unwrap(), "{case}");
+        let current = budget_fire(&owner, "budget-fire", BUDGET_NOW.to_owned());
+        let prepared = durable::PreparedFire {
+            receipt: current.clone(),
+            target_existing: false,
+            create_session: false,
+            replace_prior: false,
+            event_source_generation: None,
+            max_fires_per_hour: budget,
+        };
+        let materialize = || {
+            materializer.materialize(
+                &task,
+                Some("handoff"),
+                TriggerKind::Schedule,
+                Some(&trigger_doc),
+                None,
+                None,
+                None,
+                "work",
+                None,
+                &prepared.receipt.fire_key,
+                Some(&prepared),
+                None,
+            )
+        };
+        if case["replay"].as_bool().unwrap() {
+            materialize().await.unwrap();
+        }
+        for (index, age) in case["prior_ages"].as_array().unwrap().iter().enumerate() {
+            let at = now - chrono::Duration::seconds(age.as_i64().unwrap());
+            let prior = budget_fire(
+                &owner,
+                &format!("prior-{index}"),
+                at.to_rfc3339_opts(SecondsFormat::Secs, true),
+            );
+            seed_receipt(&agent, &prior).await;
+        }
+        let result = materialize().await;
+        let admitted = result.is_ok();
+        let exhausted = result
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.downcast_ref::<MaterializeBudgetExhausted>().is_some());
+        let row = client
+            .execute(r#"{ Trigger(filter: {trigger_id: {_eq: "handoff"}}) { enabled last_status last_error } }"#)
+            .await
+            .unwrap();
+        let row = &row["data"]["Trigger"][0];
+        assert_eq!(admitted, case["admitted"].as_bool().unwrap(), "{name}");
+        assert_eq!(exhausted, case["stopped"].as_bool().unwrap(), "{name}");
+        assert_eq!(
+            row["enabled"].as_bool() == Some(false),
+            case["stopped"].as_bool().unwrap(),
+            "{name}: {row}"
+        );
+        assert_eq!(
+            row["last_status"].as_str(),
+            case["status"].as_str(),
+            "{name}"
+        );
+        if exhausted {
+            assert!(
+                row["last_error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("max_fires_per_hour")),
+                "{name}: {row}"
+            );
+        }
     }
 }

@@ -3,6 +3,7 @@
    that it came from the parent window — kept its port, and loaded this
    script from an in-frame blob. The port is the channel from here. */
 import "../../App.css";
+import "./chart-tokens.css";
 
 import { createSandboxRuntime } from "./runtime";
 

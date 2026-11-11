@@ -173,17 +173,39 @@ pub async fn run_step0(
             .await
         }
     };
-    let output: JobStepOutput = match serde_json::from_value(call.outcome.output) {
+    let output = match <JobStepOutput as serde::Deserialize>::deserialize(&call.outcome.output) {
         Ok(output) => output,
         Err(error) => {
+            let (message, next) = match unwired_spawn_targets(
+                &call.outcome.output,
+                binding,
+                &input.ceiling.targets,
+            ) {
+                Some(unwired) => (
+                    format!(
+                        "plugin {coordinate} asked to spawn an agent without naming a target: this job's targets are {}, and your Tools.agents.target_ids hold none of {}, so the step was given no target to name",
+                        unwired.job.join(", "),
+                        unwired.missing.join(", ")
+                    ),
+                    format!(
+                        "Next: add {} to your Tools with config [\"pack\",\"wire\",\"{}\"] (it needs the pack grant; without it ask the operator to run `gents config pack wire {coordinate} --agent <you>`), start a fresh request, then call `{tool}` again",
+                        unwired.missing.join(", "),
+                        installed.owner_pack_coordinate.as_deref().unwrap_or("<PACK>"),
+                    ),
+                ),
+                None => (
+                    format!("plugin {coordinate} returned a malformed job step output: {error}"),
+                    format!("Next: call `{tool}` again, or ask the operator to check {coordinate}"),
+                ),
+            };
             return refuse(
                 lifecycle,
                 FailureClass::ToolReturnedError,
                 None,
-                &format!("plugin {coordinate} returned a malformed job step output: {error}"),
-                &format!("Next: call `{tool}` again, or ask the operator to check {coordinate}"),
+                &message,
+                &next,
             )
-            .await
+            .await;
         }
     };
 
@@ -730,6 +752,40 @@ fn pin_mut(out: &mut JobStepOutput) -> Option<&mut gents_protocol::job::JobGuest
 
 /// Completes the running call failed with `message` and the call that
 /// follows; returns the payload the model reads.
+struct UnwiredSpawnTargets {
+    job: Vec<String>,
+    missing: Vec<String>,
+}
+
+/// A step output that spawns without a `target` while the job block names
+/// targets the calling agent's Tools do not select: the guest sees only the
+/// targets both hold (`JobCeilingView::targets`), so a step that takes its
+/// target from that list had none to name. `None` when the output names its
+/// targets or every job target was offered.
+fn unwired_spawn_targets(
+    output: &serde_json::Value,
+    binding: &JobBinding,
+    offered: &[String],
+) -> Option<UnwiredSpawnTargets> {
+    let targetless = output
+        .pointer("/effects/spawn")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|spawns| {
+            spawns.iter().any(|spawn| {
+                !spawn
+                    .get("target")
+                    .is_some_and(serde_json::Value::is_string)
+            })
+        });
+    let job = binding.settings.as_ref()?.agent_targets.clone();
+    let missing: Vec<String> = job
+        .iter()
+        .filter(|target| !offered.contains(target))
+        .cloned()
+        .collect();
+    (targetless && !missing.is_empty()).then_some(UnwiredSpawnTargets { job, missing })
+}
+
 async fn refuse(
     lifecycle: &mut ToolCallLifecycle,
     class: FailureClass,
@@ -780,7 +836,7 @@ fn step0_refusal(
         Refusal::NotAvailable => (
             FailureClass::ServiceUnavailable,
             format!("{tool} has no job grant for this agent"),
-            format!("Next: ask the operator to add `job` to integrations.plugins[{coordinate}]"),
+            format!("Next: wire it with config [\"pack\",\"wire\",\"<the pack that ships {coordinate}>\"], which writes its `job` block (it needs the pack grant; without it ask the operator to run `gents config pack wire {coordinate} --agent <you>`), then start a fresh request"),
         ),
         Refusal::DepthExceeded => (
             FailureClass::PolicyDenied,

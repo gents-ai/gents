@@ -40,6 +40,8 @@ impl ToolCallLifecycle {
             name: self.tool_name.clone(),
             selected_tool_fields: self.selected_tool_fields_fragment(),
             await_mode: self.await_mode.as_str(),
+            effect: self.plugin_effect_terminal()?,
+            deadline: self.deadline_at,
         })
     }
 
@@ -91,6 +93,8 @@ pub(crate) struct DispatchStart {
     name: String,
     selected_tool_fields: String,
     await_mode: &'static str,
+    effect: Option<super::super::plugin_effect::PluginEffectTerminal>,
+    deadline: DateTime<Utc>,
 }
 
 pub(crate) async fn start_running_in_txn(
@@ -100,69 +104,96 @@ pub(crate) async fn start_running_in_txn(
 ) -> Result<Option<DateTime<Utc>>> {
     let now = fixture_now.unwrap_or_else(Utc::now);
     let started_at = now.to_rfc3339_opts(SecondsFormat::Nanos, true);
-    let (message, _) = crate::session::load_canonical_message_in_txn(
-        txn,
-        &start.header,
-        &start.agent,
-        start.requester.as_deref(),
-    )
-    .await?;
-    anyhow::ensure!(
-        message.session_id == start.session
-            && message.request_doc_id.as_deref() == Some(start.request.as_str())
-            && message.role == MessageRole::Assistant
-            && message.outcome == OutputOutcome::Complete
-            && message.sequence == start.message_sequence
-            && matches!(message.publication, MessagePublication::RequestExecution {
+    if let Some(effect) = &start.effect {
+        super::super::plugin_effect::validate_parent(
+            txn,
+            &effect.parent,
+            &start.header,
+            &start.generation,
+            start.message_sequence,
+            start.deadline,
+            true,
+        )
+        .await?;
+        let (arguments, _) = super::super::plugin_effect::arguments_in_txn(
+            txn,
+            &effect.parent,
+            &start.doc_id,
+            &start.generation,
+            &start.id,
+            &start.name,
+        )
+        .await?;
+        anyhow::ensure!(
+            arguments == start.arguments,
+            "plugin effect dispatch arguments changed"
+        );
+    } else {
+        let (message, _) = crate::session::load_canonical_message_in_txn(
+            txn,
+            &start.header,
+            &start.agent,
+            start.requester.as_deref(),
+        )
+        .await?;
+        anyhow::ensure!(
+            message.session_id == start.session
+                && message.request_doc_id.as_deref() == Some(start.request.as_str())
+                && message.role == MessageRole::Assistant
+                && message.outcome == OutputOutcome::Complete
+                && message.sequence == start.message_sequence
+                && matches!(message.publication, MessagePublication::RequestExecution {
                     execution_generation: ref accepted_generation
                 } if accepted_generation == &start.generation)
-            && message.blocks.iter().any(|block| matches!(block,
+                && message.blocks.iter().any(|block| matches!(block,
                     MessageBlock::ToolCall { tool_call_doc_id, id: block_id,
                         call_id: block_call_id, name: block_name,
                         arguments: block_arguments, .. }
                     if tool_call_doc_id == &start.doc_id && block_id == &start.id
                         && block_call_id == &start.call_id && block_name == &start.name
                         && block_arguments == &start.arguments)),
-        "accepted header does not bind this exact dispatch"
-    );
-    let request_id = escape_graphql_string(&start.request);
-    let request_row = {
-        use gents_protocol::document_query::{
-            fields::agent_request as fields, Filter, Query, Selection,
+            "accepted header does not bind this exact dispatch"
+        );
+        let request_row = {
+            use gents_protocol::document_query::{
+                fields::agent_request as fields, Filter, Query, Selection,
+            };
+            let rendered = Query::select(
+                Selection::doc_id()
+                    .field(fields::REQUESTER_DID)
+                    .field(fields::LIFECYCLE_STATE)
+                    .field(fields::EXECUTION_GENERATION)
+                    .field(fields::EXECUTION_LEASE_EXPIRES_AT)
+                    .field(fields::INTERRUPT_REQUESTED_AT),
+            )
+            .filter(Filter::eq(fields::DOC_ID, &start.request))
+            .filter(Filter::eq(fields::NODE_DID, &start.agent))
+            .filter(Filter::eq(fields::SESSION_ID, &start.session))
+            .limit(2)
+            .render();
+            txn.run(&rendered).await?
         };
-        let rendered = Query::select(
-            Selection::doc_id()
-                .field(fields::REQUESTER_DID)
-                .field(fields::LIFECYCLE_STATE)
-                .field(fields::EXECUTION_GENERATION)
-                .field(fields::EXECUTION_LEASE_EXPIRES_AT)
-                .field(fields::INTERRUPT_REQUESTED_AT),
-        )
-        .filter(Filter::eq(fields::DOC_ID, &start.request))
-        .filter(Filter::eq(fields::NODE_DID, &start.agent))
-        .filter(Filter::eq(fields::SESSION_ID, &start.session))
-        .limit(2)
-        .render();
-        txn.run(&rendered).await?
-    };
-    let rows = request_row["data"]["AgentRequest"]
-        .as_array()
-        .context("dispatch request lookup omitted rows")?;
-    anyhow::ensure!(rows.len() == 1, "dispatch request is missing or ambiguous");
-    let row = &rows[0];
-    if row["requester_did"].as_str() != start.requester.as_deref()
-        || RequestLifecycleState::parse_opt(row["lifecycle_state"].as_str())
-            != Some(RequestLifecycleState::Processing)
-        || row["execution_generation"].as_str() != Some(start.generation.as_str())
-        || !row["interrupt_requested_at"].is_null()
-    {
-        return Err(ToolDispatchRejection::LostRequestOwnership.into());
+        let rows = request_row["data"]["AgentRequest"]
+            .as_array()
+            .context("dispatch request lookup omitted rows")?;
+        anyhow::ensure!(rows.len() == 1, "dispatch request is missing or ambiguous");
+        let row = &rows[0];
+        if row["requester_did"].as_str() != start.requester.as_deref()
+            || RequestLifecycleState::parse_opt(row["lifecycle_state"].as_str())
+                != Some(RequestLifecycleState::Processing)
+            || row["execution_generation"].as_str() != Some(start.generation.as_str())
+            || !row["interrupt_requested_at"].is_null()
+        {
+            return Err(ToolDispatchRejection::LostRequestOwnership.into());
+        }
+        let expiry = row["execution_lease_expires_at"]
+            .as_str()
+            .context("dispatch request lease deadline missing")?;
+        let expiry = DateTime::parse_from_rfc3339(expiry)?.with_timezone(&Utc);
+        anyhow::ensure!(expiry > now, "dispatch request lease has expired");
     }
-    let expiry = row["execution_lease_expires_at"]
-        .as_str()
-        .context("dispatch request lease deadline missing")?;
-    let expiry = DateTime::parse_from_rfc3339(expiry)?.with_timezone(&Utc);
-    anyhow::ensure!(expiry > now, "dispatch request lease has expired");
+
+    let request_id = escape_graphql_string(&start.request);
 
     let requester_filter = start
         .requester

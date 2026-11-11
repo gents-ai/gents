@@ -138,21 +138,17 @@ fn install_source_selection_matches_lean() {
 }
 
 #[test]
-fn edited_pack_error_identifies_the_operator_cli() {
+fn edited_pack_error_names_the_decision_on_both_surfaces() {
     let error = PackChangeError::Edited {
         coordinate: "acme/demo".into(),
         edited: vec!["Tools/t1".into()],
     }
     .to_string();
     assert!(error.contains("Tools/t1"));
-    assert!(error.contains("operator CLI `gents config pack install`"));
+    assert!(error.contains("`gents config pack install`"));
     assert!(error.contains("--overwrite"));
     assert!(error.contains("--keep"));
-    assert!(error.contains("agent pack command does not accept these flags"));
-    assert_eq!(
-        error,
-        "1 of acme/demo's documents were edited since it was installed: Tools/t1; use the operator CLI `gents config pack install`, `gents config pack update`, or `gents config pack remove` with --overwrite or --keep to decide how to handle them; the agent pack command does not accept these flags"
-    );
+    assert!(error.contains("options.edited on the agent pack command"));
 }
 
 #[test]
@@ -212,18 +208,12 @@ fn document_ux_install_admission_matches_lean() {
     )
     .unwrap();
     let cases: Vec<serde_json::Value> = serde_json::from_str(&raw).unwrap();
-    assert_eq!(cases.len(), 8);
+    assert_eq!(cases.len(), 4);
     for case in cases {
-        let via = if case["operator"].as_bool().unwrap() {
-            InstalledVia::Operator
-        } else {
-            InstalledVia::SelfConfig
-        };
         assert_eq!(
             documents::document_ux_install_allowed(
                 case["hasUx"].as_bool().unwrap(),
                 case["home"].as_bool().unwrap(),
-                via
             ),
             case["allowed"].as_bool().unwrap(),
             "{case}"
@@ -479,10 +469,51 @@ async fn installed_pack_documents_lists_what_the_record_holds() {
         .is_empty());
 }
 
+/// An existing document the pack did not install is adopted only as the pack
+/// ships it; the drift policy decides one that differs.
+#[tokio::test]
+async fn a_differing_existing_document_is_refused_kept_or_overwritten() {
+    let access = access().await;
+    edit_tools(&access, "shared", "Shared before the pack").await;
+    let pack = config(&[("shared", "Shared")]);
+
+    let refused = install(&access, "1", &pack, DriftPolicy::Refuse)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        refused.contains("Tools/shared") && refused.contains("different content"),
+        "{refused}"
+    );
+    let record = access
+        .execute("{ PackInstallation { _docID } }")
+        .await
+        .unwrap();
+    assert_eq!(record["data"]["PackInstallation"], json!([]));
+
+    let kept = install(&access, "1", &pack, DriftPolicy::Keep)
+        .await
+        .unwrap();
+    assert_eq!(kept.kept, vec!["Tools/shared"]);
+    assert!(kept.adopted.is_empty());
+    let live = access.execute("{ Tools { display_name } }").await.unwrap();
+    assert_eq!(
+        live["data"]["Tools"][0]["display_name"],
+        "Shared before the pack"
+    );
+
+    let overwritten = install(&access, "1", &pack, DriftPolicy::Overwrite)
+        .await
+        .unwrap();
+    assert_eq!(overwritten.adopted, vec!["Tools/shared"]);
+    let live = access.execute("{ Tools { display_name } }").await.unwrap();
+    assert_eq!(live["data"]["Tools"][0]["display_name"], "Shared");
+}
+
 #[tokio::test]
 async fn install_then_remove_leaves_no_pack_documents_and_keeps_adopted_ones() {
     let access = access().await;
-    edit_tools(&access, "shared", "Shared before the pack").await;
+    edit_tools(&access, "shared", "Shared").await;
 
     let report = install(
         &access,
@@ -804,6 +835,22 @@ async fn a_plugin_store_record_is_not_a_pack_install() {
         rows["data"]["PackInstallation"][0]["installed_at"],
         before["data"]["PackInstallation"][0]["installed_at"]
     );
+
+    // A retirement releases the record a disappearance notice keeps.
+    super::super::record_plugin_retirement_as(&access, OWNER, None, home.path(), "acme/demo")
+        .await
+        .unwrap();
+    let rows = access
+        .execute("{ PackInstallation { _docID } }")
+        .await
+        .unwrap();
+    assert_eq!(
+        !rows["data"]["PackInstallation"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        model["retain_retired_record"].as_bool().unwrap()
+    );
 }
 
 #[tokio::test]
@@ -843,14 +890,6 @@ async fn a_plugin_store_change_keeps_a_documents_install_record() {
             digest: identity("1").digest,
         })
     );
-    let error = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
-        .await
-        .unwrap_err()
-        .into_anyhow();
-    assert!(matches!(
-        error.downcast_ref::<PackRemovalError>(),
-        Some(PackRemovalError::ReferenceInventoryUnavailable)
-    ));
     let rows = access
         .execute("{ PackInstallation { plugins } }")
         .await
@@ -860,6 +899,16 @@ async fn a_plugin_store_change_keeps_a_documents_install_record() {
         json!([extra])
     );
     assert_eq!(tools_ids(&access).await, vec!["alpha"]);
+    // No Tools selects the plugin, so removing the pack retires it.
+    remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+        .await
+        .unwrap();
+    assert_eq!(
+        read_installed_pack(&access, OWNER, "acme/demo")
+            .await
+            .unwrap(),
+        None
+    );
 }
 
 #[tokio::test]
@@ -1534,7 +1583,7 @@ async fn an_upgrade_that_drops_a_dependency_releases_its_claim() {
 }
 
 #[tokio::test]
-async fn an_upgrade_keeps_a_plugin_dependency_without_complete_inventory() {
+async fn an_upgrade_retires_the_unselected_plugin_of_a_dependency_it_drops() {
     let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
     let owner = crate::NodeIdentity::did(&runtime);
     install_dependee(&access, &node, &runtime, false).await;
@@ -1557,11 +1606,7 @@ async fn an_upgrade_keeps_a_plugin_dependency_without_complete_inventory() {
     )
     .await
     .unwrap();
-    let before = access
-        .execute("{ PackInstallation { coordinate version required_by plugins } }")
-        .await
-        .unwrap();
-    let error = super::super::install_pack_documents(
+    super::super::install_pack_documents(
         &access,
         owner,
         &demo_identity(vec![]),
@@ -1569,17 +1614,18 @@ async fn an_upgrade_keeps_a_plugin_dependency_without_complete_inventory() {
         DriftPolicy::Refuse,
     )
     .await
-    .unwrap_err();
-    assert!(matches!(
-        error.downcast_ref::<PackRemovalError>(),
-        Some(PackRemovalError::ReferenceInventoryUnavailable)
-    ));
-    assert_eq!(
-        access
-            .execute("{ PackInstallation { coordinate version required_by plugins } }")
-            .await
-            .unwrap(),
-        before
+    .unwrap();
+    let after = access
+        .execute("{ PackInstallation { coordinate } }")
+        .await
+        .unwrap();
+    assert!(
+        after["data"]["PackInstallation"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["coordinate"] != "fixture/dependee_fixture"),
+        "{after}"
     );
 }
 
@@ -1806,6 +1852,7 @@ async fn a_delayed_plugin_notification_projects_the_current_home_pin() {
             installed_via: None,
             source: None,
             source_history: Vec::new(),
+            created_collections: Vec::new(),
         },
     )
     .unwrap();
@@ -2059,6 +2106,7 @@ fn operator_record(archive: &crate::pack::archive::PackArchive) -> crate::pack::
         installed_via: Some(crate::pack::InstalledVia::Operator),
         source: None,
         source_history: Vec::new(),
+        created_collections: Vec::new(),
     }
 }
 
@@ -2089,8 +2137,7 @@ async fn non_explicit_self_config_record_never_lowers_operator_provenance() {
         home.path(),
         archive.manifest(),
         &identity,
-        String::new(),
-        Vec::new(),
+        documents::HomeInstallContents::default(),
         crate::pack::InstalledVia::SelfConfig,
         false,
     )
@@ -3592,24 +3639,19 @@ async fn removing_a_plugin_pack_refuses_surviving_agents_and_rolls_back_document
         })
         .await
         .unwrap();
-    let error = remove_pack(&access, owner, "acme/demo", DriftPolicy::Refuse)
+    // With no agent left selecting the plugin, the removal retires it.
+    remove_pack(&access, owner, "acme/demo", DriftPolicy::Refuse)
         .await
-        .unwrap_err()
-        .into_anyhow();
-    assert!(matches!(
-        error.downcast_ref::<PackRemovalError>(),
-        Some(PackRemovalError::ReferenceInventoryUnavailable)
-    ));
-    assert_eq!(tools_ids(&access).await, before);
+        .unwrap();
     assert!(read_installed_pack(&access, owner, "acme/demo")
         .await
         .unwrap()
-        .is_some());
+        .is_none());
     node.shutdown().await.expect("node shutdown");
 }
 
 #[tokio::test]
-async fn removing_agents_with_their_plugin_pack_requires_complete_inventory() {
+async fn removing_agents_with_their_plugin_pack_retires_its_plugin() {
     let (_directory, runtime, node, access) = super::super::agent_bindings::tests::fixture().await;
     let owner = crate::NodeIdentity::did(&runtime);
     let binding = crate::store::identity::provision_agent_identity(&runtime).unwrap();
@@ -3635,21 +3677,17 @@ async fn removing_agents_with_their_plugin_pack_requires_complete_inventory() {
     )
     .await
     .unwrap();
-    let before = tools_ids(&access).await;
-    let error = remove_pack(&access, owner, "acme/demo", DriftPolicy::Refuse)
+    assert_ne!(tools_ids(&access).await, retained_tools);
+    // The agent that selects the plugin is removed with the pack, so
+    // nothing that survives selects it.
+    remove_pack(&access, owner, "acme/demo", DriftPolicy::Refuse)
         .await
-        .unwrap_err()
-        .into_anyhow();
-    assert!(matches!(
-        error.downcast_ref::<PackRemovalError>(),
-        Some(PackRemovalError::ReferenceInventoryUnavailable)
-    ));
-    assert_eq!(tools_ids(&access).await, before);
-    assert_ne!(before, retained_tools);
+        .unwrap();
+    assert_eq!(tools_ids(&access).await, retained_tools);
     assert!(read_installed_pack(&access, owner, "acme/demo")
         .await
         .unwrap()
-        .is_some());
+        .is_none());
     node.shutdown().await.expect("node shutdown");
 }
 
@@ -3701,13 +3739,9 @@ async fn plugin_removal_does_not_treat_dangling_scope_as_no_references() {
                 gents_protocol::schemas::AGENT_CONTEXT).await.map(|_| ())
         })
     }).await.unwrap();
-    let error = ensure_plugins_unreferenced(&access, owner, &removed)
+    ensure_plugins_unreferenced(&access, owner, &removed)
         .await
-        .unwrap_err();
-    assert!(matches!(
-        error.downcast_ref::<PackRemovalError>(),
-        Some(PackRemovalError::ReferenceInventoryUnavailable)
-    ));
+        .unwrap();
     node.shutdown().await.expect("node shutdown");
 }
 
@@ -4221,6 +4255,7 @@ async fn installed_plugin_pin_is_rechecked_at_graph_commit() {
         false,
         None,
         &BTreeMap::new(),
+        crate::pack::InstalledVia::Operator,
         crate::pack::PackSource::Local { file_name: None },
         |_, _| async { Ok(()) },
     )
@@ -4243,6 +4278,7 @@ async fn installed_plugin_pin_is_rechecked_at_graph_commit() {
         false,
         None,
         &BTreeMap::new(),
+        crate::pack::InstalledVia::Operator,
         crate::pack::PackSource::Local { file_name: None },
         |_, _| async { Ok(()) },
     )
@@ -4309,6 +4345,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
         false,
         None,
         &BTreeMap::new(),
+        crate::pack::InstalledVia::Operator,
         crate::pack::PackSource::Local { file_name: None },
         |_, _| async { Ok(()) },
     )
@@ -4374,6 +4411,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
         false,
         None,
         &BTreeMap::new(),
+        crate::pack::InstalledVia::Operator,
         crate::pack::PackSource::Local { file_name: None },
         move |identity, _| async move {
             super::record_plugin_store_change(
@@ -4406,6 +4444,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
         false,
         None,
         &BTreeMap::new(),
+        crate::pack::InstalledVia::Operator,
         crate::pack::PackSource::Local { file_name: None },
         move |identity, _| async move {
             super::record_plugin_store_change(
@@ -4443,6 +4482,7 @@ async fn standalone_plugin_update_restores_store_and_home_on_pin_conflict() {
         false,
         None,
         &BTreeMap::new(),
+        crate::pack::InstalledVia::Operator,
         crate::pack::PackSource::Local { file_name: None },
         |_, _| async { Ok(()) },
     )
@@ -4478,6 +4518,7 @@ async fn standalone_plugin_update_restores_store_and_home_on_pin_conflict() {
         false,
         None,
         &BTreeMap::new(),
+        crate::pack::InstalledVia::Operator,
         crate::pack::PackSource::Local { file_name: None },
         move |identity, _| async move {
             super::record_plugin_store_change(

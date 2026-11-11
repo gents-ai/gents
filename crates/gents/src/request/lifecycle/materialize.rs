@@ -815,6 +815,7 @@ impl RequestLifecycle {
             fold_admitted: Vec::new(),
             folded_selection: Vec::new(),
             natural_finish_allowed: false,
+            resumed_from_backend: false,
             execution_lease_duration_secs:
                 crate::documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         }
@@ -1196,7 +1197,7 @@ pub(crate) async fn created_session_provenance_in_txn(
     Ok(provenance)
 }
 
-pub(super) async fn apply_request_session_projection(
+pub(crate) async fn apply_request_session_projection(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
     now: &str,

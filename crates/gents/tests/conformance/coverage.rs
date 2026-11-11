@@ -83,6 +83,8 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
             "pending",
             "claimed",
             "processing",
+            "waitingForBackend",
+            "resumingBackend",
             "completed",
             "failed",
             "superseded",
@@ -123,7 +125,10 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     );
     assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 14);
     assert!(!lean_contract_snapshot().root_admission_cases.is_empty());
-    assert_eq!(lean_contract_snapshot().request_transition_cases.len(), 81);
+    assert_eq!(
+        lean_contract_snapshot().request_transition_cases.len(),
+        lean_vocabulary_values("RequestState").len().pow(2)
+    );
     assert_eq!(lean_contract_snapshot().process_transition_cases.len(), 25);
     assert_eq!(lean_contract_snapshot().apply_reconcile_cases.len(), 8);
     assert_eq!(lean_contract_snapshot().eval_outcome_cases.len(), 33);
@@ -1289,6 +1294,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             ][..],
         ),
         ("Triggers.Types", &["delivery_options"][..]),
+        ("Triggers.SessionKey", &["session_config"][..]),
+        (
+            "Triggers.FireBudget",
+            &["fire_budget", "fire_budget_config"][..],
+        ),
         ("Triggers.Queue", &["queues", "observed_claims"][..]),
         ("EventDelivery.Durable", &["cursors"][..]),
         (

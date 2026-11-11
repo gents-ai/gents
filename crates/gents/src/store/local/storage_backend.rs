@@ -183,6 +183,15 @@ pub fn incompatible_store(
             data_path: key.path.clone(),
         });
     }
+    if matches!(
+        find_source::<super::backend_protection::BackendProtectionError>(error),
+        Some(super::backend_protection::BackendProtectionError::MissingProvenance)
+    ) {
+        return Some(IncompatibleStore {
+            kind: IncompatibleStoreKind::UnknownLineage,
+            data_path: data_path.to_path_buf(),
+        });
+    }
     find_source::<gents_migration::Error>(error)
         .and_then(|cause| {
             if cause.is_unknown_lineage() {
@@ -542,6 +551,30 @@ mod tests {
             0o644,
             "the refused key is never repaired in place"
         );
+    }
+
+    /// A store from before backend protection (v1.0.0-rc1 and earlier) has
+    /// no provenance marker; it is refused as an older home, with the
+    /// start-fresh message, not as an internal fault.
+    #[test]
+    fn a_store_without_backend_provenance_is_an_older_home() {
+        let path = Path::new("/tmp/gents-home/data");
+        let error = anyhow::Error::new(
+            crate::store::local::backend_protection::BackendProtectionError::MissingProvenance,
+        )
+        .context("opening the home");
+        let store = incompatible_store(error.as_ref(), path).expect("typed refusal");
+        assert_eq!(store.kind, IncompatibleStoreKind::UnknownLineage);
+        assert!(store.kind.is_older());
+        assert!(
+            store.to_string().contains("older Gents version")
+                && store.to_string().contains("start fresh"),
+            "{store}"
+        );
+        let tampered = anyhow::Error::new(
+            crate::store::local::backend_protection::BackendProtectionError::InvalidProvenance,
+        );
+        assert!(incompatible_store(tampered.as_ref(), path).is_none());
     }
 
     #[test]

@@ -53,10 +53,14 @@ def caseJson (name : String) (references : List (List String))
     ",\"dependency_ships\":" ++ jsonStringArray dependencyShips ++
     ",\"installed\":" ++ jsonStringArray installed ++
     ",\"local\":" ++ toString isLocal ++
-    ",\"removal_accepted\":" ++ toString (Configuration.pluginRemovalObservedSafe
+    ",\"removal_accepted\":" ++ toString (Configuration.pluginRetirementAllowed
+      references.flatten (rootShips ++ dependencyShips) true) ++
+    ",\"unobserved_removal_accepted\":" ++ toString (Configuration.pluginRetirementAllowed
       references.flatten (rootShips ++ dependencyShips) false) ++
     ",\"retain_notification_record\":" ++ toString
       (Configuration.retainPluginStoreRecord rootShips false) ++
+    ",\"retain_retired_record\":" ++ toString
+      (Configuration.retainPluginStoreRecord rootShips true) ++
     ",\"accepted\":" ++ toString (Configuration.pluginInstallAvailable
       references.flatten (rootShips ++ dependencyShips) installed isLocal) ++ "}"
 

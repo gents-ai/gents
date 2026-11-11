@@ -129,6 +129,54 @@ fn asked(calls: &HostCalls, output: &Value) -> Result<Option<Asked>, String> {
     }
 }
 
+/// What a successful final output says about a service request in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Unserved {
+    /// The output is one well-formed request and nothing else: a plugin that
+    /// asks a service the call was not offered gets no further round, so its
+    /// request comes back as the output.
+    Request(&'static str),
+    /// The output is a result that also carries a field shaped like a
+    /// request. A served request never survives to the final output, so the
+    /// result stands and the field is only pointed out.
+    Carried(&'static str),
+}
+
+/// Tells an unserved request from a result. A request round's output is the
+/// request alone, as `asked` reads it for an offered service; anything more
+/// (other fields, or a `requests` list that is not a valid batch) is the
+/// plugin's own data. A result that is exactly one valid batch for a service
+/// the call did not offer cannot be told from a request, and reads as one.
+pub(super) fn unserved_request(output: &Value) -> Option<Unserved> {
+    let object = output.as_object()?;
+    let service = [
+        "model_calls",
+        "http_calls",
+        "tool_calls",
+        "data_calls",
+        "job_calls",
+    ]
+    .into_iter()
+    .find(|service| {
+        object
+            .get(*service)
+            .and_then(|asked| asked.get("requests"))
+            .is_some_and(Value::is_array)
+    })?;
+    let well_formed = match service {
+        "model_calls" => model_calls::parse_batch(output).map(|batch| batch.is_some()),
+        "http_calls" => http_calls::parse_batch(output).map(|batch| batch.is_some()),
+        "tool_calls" => tool_calls::parse_batch(output).map(|batch| batch.is_some()),
+        "data_calls" => data::parse_batch(output).map(|batch| batch.is_some()),
+        _ => job_calls::parse_batch(output).map(|batch| batch.is_some()),
+    } == Ok(true);
+    Some(if well_formed && object.len() == 1 {
+        Unserved::Request(service)
+    } else {
+        Unserved::Carried(service)
+    })
+}
+
 pub(super) async fn drive(
     calls: HostCalls,
     input: Value,
@@ -292,6 +340,27 @@ fn elapsed_ms(started: Instant, now: Instant) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unserved_request_is_told_from_a_result_that_carries_one() {
+        let batch =
+            serde_json::json!({"requests": [{"id": "a", "tool_name": "read", "arguments": {}}]});
+        assert_eq!(
+            unserved_request(&serde_json::json!({"tool_calls": batch})),
+            Some(Unserved::Request("tool_calls"))
+        );
+        assert_eq!(
+            unserved_request(&serde_json::json!({"tool_calls": batch, "summary": "done"})),
+            Some(Unserved::Carried("tool_calls"))
+        );
+        // A `requests` list that is not a valid batch is the plugin's data.
+        assert_eq!(
+            unserved_request(&serde_json::json!({"tool_calls": {"requests": ["note"]}})),
+            Some(Unserved::Carried("tool_calls"))
+        );
+        assert_eq!(unserved_request(&serde_json::json!({"answer": 1})), None);
+        assert_eq!(unserved_request(&serde_json::json!("text")), None);
+    }
     use crate::plugin::data::StampContext;
     use crate::tools::background::status::ProcessControlScope;
     use serde_json::json;

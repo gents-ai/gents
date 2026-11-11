@@ -176,6 +176,7 @@ fn selection_file_tool_root_clamps_within_operator_root() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
+            enable_pack_authority: false,
             enable_lsp: false,
             lsp_config: None,
             plugin_tools: Vec::new(),
@@ -259,6 +260,7 @@ fn build_tools_does_not_bake_a_per_request_workspace_root() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
+            enable_pack_authority: false,
             enable_lsp: false,
             lsp_config: None,
             plugin_tools: Vec::new(),
@@ -325,6 +327,7 @@ fn command_timeout_ceiling_reaches_selected_bash_tool() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
+            enable_pack_authority: false,
             enable_lsp: false,
             lsp_config: None,
             plugin_tools: Vec::new(),
@@ -381,6 +384,7 @@ fn command_timeout_max_ceiling_reaches_selected_bash_tool() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
+            enable_pack_authority: false,
             enable_lsp: false,
             lsp_config: None,
             plugin_tools: Vec::new(),
@@ -436,6 +440,7 @@ fn selection_file_tool_root_rejects_escape_outside_operator_root() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
+            enable_pack_authority: false,
             enable_lsp: false,
             lsp_config: None,
             plugin_tools: Vec::new(),
@@ -490,6 +495,7 @@ fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
+            enable_pack_authority: false,
             enable_lsp: false,
             lsp_config: None,
             plugin_tools: Vec::new(),
@@ -545,6 +551,7 @@ fn containing_selection_root_clamps_to_operator_root() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
+            enable_pack_authority: false,
             enable_lsp: false,
             lsp_config: None,
             plugin_tools: Vec::new(),
@@ -612,6 +619,7 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
+            enable_pack_authority: false,
             enable_lsp: false,
             lsp_config: None,
             plugin_tools: Vec::new(),
@@ -664,6 +672,7 @@ fn readonly_ceiling_clamps_unrestricted_background_bash_to_registered_tool() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
+            enable_pack_authority: false,
             enable_lsp: false,
             lsp_config: None,
             plugin_tools: Vec::new(),
@@ -717,6 +726,7 @@ fn selection_without_root_inherits_operator_root() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
+            enable_pack_authority: false,
             enable_lsp: false,
             lsp_config: None,
             plugin_tools: Vec::new(),
@@ -780,6 +790,7 @@ fn selection_cli_tools_require_ceiling_entries() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
+            enable_pack_authority: false,
             enable_lsp: false,
             lsp_config: None,
             plugin_tools: Vec::new(),
@@ -840,6 +851,7 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
+            enable_pack_authority: false,
             enable_lsp: false,
             lsp_config: None,
             plugin_tools: Vec::new(),
@@ -903,6 +915,7 @@ fn selection_mcp_service_allowlist_is_deduped() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
+            enable_pack_authority: false,
             enable_lsp: false,
             lsp_config: None,
             plugin_tools: Vec::new(),
@@ -1034,6 +1047,7 @@ fn background_tool_allowlist_registers_r6_tools() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
+            enable_pack_authority: false,
             enable_lsp: false,
             lsp_config: None,
             plugin_tools: Vec::new(),
@@ -1085,6 +1099,7 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
+            enable_pack_authority: false,
             enable_lsp: false,
             lsp_config: None,
             plugin_tools: Vec::new(),
@@ -1144,6 +1159,7 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
+            enable_pack_authority: false,
             enable_lsp: false,
             lsp_config: None,
             plugin_tools: Vec::new(),
@@ -3162,4 +3178,63 @@ fn provider_limits_is_available_under_an_agent_self_config_grant() {
         .tool_names
         .iter()
         .any(|name| name == "provider_limits"));
+}
+
+#[tokio::test]
+async fn only_a_host_call_plugin_adds_the_process_tools() {
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let node_did = node.node_identity_did().unwrap().to_owned();
+    let without = tools_document(serde_json::json!({}));
+    let with_plugin = tools_document(serde_json::json!({
+        "integrations": {"plugins": [{"plugin": "team/plugin"}]}
+    }));
+    for host_call in [false, true] {
+        let (home, mut record) = crate::plugin::tests::executor::installed_echo();
+        if host_call {
+            record.declaration.host_imports = vec![crate::pack::HostImport::HostCall];
+            crate::plugin::store::write_record(home.path(), &record).unwrap();
+        }
+        let plugins = crate::plugin::executor::PluginExecutor::new(Some(home.path().to_owned()));
+        let mut names = Vec::new();
+        let mut background = Vec::new();
+        for document in [&without, &with_plugin] {
+            let surface = AgentToolSurfaceConfig::from_tools_document(
+                "scripted",
+                document,
+                &ToolCeiling::meta_only(),
+                Vec::new(),
+            )
+            .unwrap()
+            .resolve(&node, &node_did, &plugins)
+            .await
+            .unwrap();
+            names.push(surface.tool_names());
+            background.push(surface.background_tools().allowlist.clone());
+        }
+        let mut expected = names[0].clone();
+        expected.push("plugin".to_owned());
+        let process_tools = crate::tools::native::background_tool_names(
+            &crate::tools::surface::BackgroundToolConfig {
+                allowlist: vec!["plugin".to_owned()],
+                timeouts: Default::default(),
+            },
+        );
+        if host_call {
+            expected.extend(process_tools);
+            assert_eq!(background[1], ["plugin".to_owned()]);
+        } else {
+            assert!(background[1].is_empty(), "{:?}", background[1]);
+        }
+        assert!(background[0].is_empty());
+        let sorted = |mut names: Vec<String>| {
+            names.sort();
+            names
+        };
+        assert_eq!(
+            sorted(names[1].clone()),
+            sorted(expected),
+            "host_call {host_call}"
+        );
+    }
 }

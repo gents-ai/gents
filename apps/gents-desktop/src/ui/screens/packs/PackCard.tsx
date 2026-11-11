@@ -7,6 +7,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@gents/ui/components/dropdown-menu";
+import type { PackAuthorityAsk } from "@source-inc/gents-desktop-client";
 import { navigate } from "@/lib/router";
 import { Skeleton } from "@gents/ui/components/skeleton";
 import {
@@ -282,6 +283,20 @@ export function PackMenu({
         ))}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/** what each plugin of a pack asks to be allowed, one plugin to a row */
+export function AccessAsks({ asks }: { asks: readonly PackAuthorityAsk[] }) {
+  return (
+    <ul className="grid gap-1 text-sm">
+      {asks.map((ask) => (
+        <li key={ask.plugin}>
+          <span className="font-medium">{ask.plugin}</span>{" "}
+          <span className="text-muted-foreground">{ask.asks}</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 

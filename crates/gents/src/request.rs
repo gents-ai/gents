@@ -5,4 +5,5 @@ pub mod failure_text;
 pub mod interrupt;
 pub mod lifecycle;
 pub mod streaming;
+pub mod task_run;
 pub mod watcher;

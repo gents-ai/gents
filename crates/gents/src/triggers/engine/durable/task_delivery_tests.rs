@@ -1,12 +1,162 @@
 use super::*;
 use crate::request::lifecycle::materialize::{
-    created_session_provenance_in_txn, pending_agent_request_spec,
+    apply_request_session_projection, build_request, created_session_provenance_in_txn,
+    pending_agent_request_spec,
     write_pending_agent_request_with_lineage_workspace_and_conversation_title,
 };
 use crate::request::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 use crate::request::lifecycle::{build_signed_request, ExecutionOrigin, TriggerLineage};
 use crate::store::graphql::escape_graphql_string;
 use std::sync::Arc;
+
+async fn keyed_delivery(
+    node: &std::sync::Arc<EmbeddedNode>,
+    owner: &str,
+    agent: &dyn crate::store::identity::NodeIdentity,
+    document: &str,
+    session: &str,
+    create_session: bool,
+) -> Result<TaskDeliveryAdmission> {
+    let identity = gents_protocol::trigger_delivery::FireIdentity {
+        owner_did: owner.to_owned(),
+        trigger_id: "player-red".to_owned(),
+        source_collection: "Schedule".to_owned(),
+        source_doc_id: document.to_owned(),
+    };
+    let fire = gents_protocol::trigger_delivery::TriggerFire {
+        fire_key: identity.fire_key(),
+        request_id: identity.request_id(),
+        session_id: session.to_owned(),
+        identity,
+        task_id: "play".to_owned(),
+        goal_id: None,
+        goal_objective: None,
+        goal_token_budget: None,
+        goal_assignment_applied: false,
+        emit_outcome: false,
+        queued_serial: false,
+        source_handoff_id: None,
+        reply_session_id: None,
+        shard_id: None,
+        attempt: None,
+        created_at: "2030-06-01T00:00:00Z".to_owned(),
+    };
+    let prepared = crate::triggers::engine::durable::PreparedFire {
+        receipt: fire.clone(),
+        target_existing: true,
+        create_session,
+        replace_prior: false,
+        event_source_generation: None,
+        max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
+    };
+    let spec = pending_agent_request_spec(
+        owner,
+        agent.did(),
+        "play",
+        crate::request::lifecycle::ExecutionOrigin::Scheduled,
+        crate::request::lifecycle::TriggerLineage {
+            trigger_id: Some("player-red".to_owned()),
+            trigger_kind: Some("schedule".to_owned()),
+            ..Default::default()
+        },
+        None,
+        None,
+        &fire.request_id,
+        session,
+        Some(&fire.fire_key),
+        None,
+        Some("player-red-document"),
+    )?;
+    let create = build_request(spec)?;
+    write_trigger_delivery_with_identity(
+        node,
+        ::identity::Did::new(agent.did()).unwrap(),
+        &prepared,
+        &create,
+        Some(agent),
+    )
+    .await
+}
+
+/// The claim owner runs for each request as its own committed transaction;
+/// the unique `(node_did, session_id)` index resolves the race between them.
+#[tokio::test]
+async fn fires_for_one_key_admit_before_it_exists_and_share_one_session() {
+    let (db, _user, _user_access, binding) =
+        crate::test_support::signed_test_node("keyed-session-fires").await;
+    let agent = crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+        .unwrap();
+    let owner = db.node_identity.did().to_owned();
+    let node = &db.node;
+    let key = "game:g1:red";
+    let (first, second, third) = tokio::join!(
+        keyed_delivery(node, &owner, agent.as_ref(), "turn-1", key, true),
+        keyed_delivery(node, &owner, agent.as_ref(), "turn-2", key, true),
+        keyed_delivery(node, &owner, agent.as_ref(), "turn-3", key, true),
+    );
+    let admissions = [first.unwrap(), second.unwrap(), third.unwrap()];
+    assert!(admissions
+        .iter()
+        .all(|admission| admission.request.session_id == key));
+
+    let refused = keyed_delivery(node, &owner, agent.as_ref(), "turn-4", "game:g2:red", false)
+        .await
+        .err()
+        .expect("a literal target without create_session still requires an owned session");
+    assert!(
+        format!("{refused:#}").contains("Task target session is missing"),
+        "{refused:#}"
+    );
+
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent.did().parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let now = "2030-06-01T00:00:01Z";
+    let requests = admissions.iter().map(|admission| {
+        let doc = admission.request.doc_id.clone();
+        let access = &access;
+        async move {
+            access
+                .transact_write("test.project_keyed_claim", |txn| {
+                    let doc = doc.clone();
+                    Box::pin(async move {
+                        let rows = txn
+                            .execute(&format!(
+                                "{{AgentRequest(filter: {{_docID: {{_eq: \"{doc}\"}}}}) {{{}}}}}",
+                                gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
+                            ))
+                            .await?;
+                        let row: gents_protocol::row::AgentRequestRow =
+                            serde_json::from_value(rows["data"]["AgentRequest"][0].clone())?;
+                        let request =
+                            crate::AgentRequest::try_from(row).map_err(anyhow::Error::msg)?;
+                        apply_request_session_projection(txn, &request, now).await
+                    })
+                })
+                .await
+        }
+    });
+    for result in futures::future::join_all(requests).await {
+        result.unwrap();
+    }
+
+    let sessions = access
+        .execute(&format!(
+            r#"{{ AgentSession(filter: {{session_id: {{_eq: "{key}"}}}}) {{ agent_did provenance }} }}"#
+        ))
+        .await
+        .unwrap();
+    let rows = sessions["data"]["AgentSession"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "one session per key: {rows:?}");
+    assert_eq!(rows[0]["agent_did"], agent.did());
+    assert_eq!(
+        rows[0]["provenance"]["task_id"], "play",
+        "AgentSession provenance names the Task from its fire receipt"
+    );
+}
 
 #[test]
 fn task_fire_requires_its_canonical_identity_and_exact_session() {

@@ -1,6 +1,6 @@
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use defra_node::Node as EmbeddedNode;
@@ -44,6 +44,10 @@ pub struct DefraWatcher {
     processed_request_ids: cooldown::ProcessedRequests,
     agents: Vec<Arc<dyn crate::store::identity::NodeIdentity>>,
     scan_failed: bool,
+    backend_health: Option<crate::inference::backends::health::BackendHealthMap>,
+    backend_observations: Option<tokio::sync::watch::Receiver<()>>,
+    has_parked: std::sync::atomic::AtomicBool,
+    parked_wait_ms: std::sync::atomic::AtomicU64,
 }
 
 impl DefraWatcher {
@@ -66,6 +70,12 @@ impl DefraWatcher {
             processed_request_ids: RapidHashMap::new(),
             agents: Vec::new(),
             scan_failed: false,
+            backend_health: None,
+            backend_observations: None,
+            has_parked: std::sync::atomic::AtomicBool::new(false),
+            parked_wait_ms: std::sync::atomic::AtomicU64::new(
+                GOSSIP_FALLBACK_POLL.as_millis() as u64
+            ),
         })
     }
 
@@ -77,6 +87,15 @@ impl DefraWatcher {
         let mut watcher = Self::new(node, node_did)?;
         watcher.set_agent_identities(agents)?;
         Ok(watcher)
+    }
+
+    pub(crate) fn with_backend_health(
+        mut self,
+        health: crate::inference::backends::health::BackendHealthMap,
+    ) -> Self {
+        self.backend_observations = Some(health.subscribe_observations());
+        self.backend_health = Some(health);
+        self
     }
 }
 
@@ -176,7 +195,26 @@ impl Watcher for DefraWatcher {
                 }
             }
 
-            let batch = match wait_for_request_change(&mut self.subscription).await {
+            let watch_health = self.has_parked.load(std::sync::atomic::Ordering::Relaxed);
+            let parked_wait = Duration::from_millis(
+                self.parked_wait_ms
+                    .load(std::sync::atomic::Ordering::Relaxed),
+            );
+            let batch = match tokio::select! {
+                result = wait_for_request_change(&mut self.subscription) => result,
+                _ = tokio::time::sleep(parked_wait), if watch_health => continue,
+                result = async {
+                    match self.backend_observations.as_mut() {
+                        Some(observations) if watch_health => observations.changed().await,
+                        _ => std::future::pending().await,
+                    }
+                } => {
+                    if result.is_err() {
+                        self.backend_observations = None;
+                    }
+                    continue;
+                }
+            } {
                 Ok(Some(batch)) => batch,
                 Ok(None) => return None,
                 Err(_timeout) => {

@@ -297,6 +297,8 @@ async fn persisted_disable_blocks_stale_admission_and_exclusion_but_not_committe
     let prepared = crate::triggers::engine::durable::PreparedFire {
         receipt: fire.clone(),
         target_existing: false,
+        create_session: false,
+        max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
         replace_prior: false,
         event_source_generation: Some(generation),
     };

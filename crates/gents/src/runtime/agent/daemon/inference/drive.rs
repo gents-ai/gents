@@ -369,6 +369,14 @@ async fn finish_inference_stream(
             .map_err(processor_failure)?;
         let error_reason =
             stream_failure_reason(&error.to_string(), error.cause(), max_turns_provenance);
+        if matches!(
+            error.loop_verdict(),
+            Some((gents_loop::error::LoopVerdict::BackendUnavailable, _))
+        ) {
+            return Ok(HandleRequestOutcome::BackendUnavailable(
+                anyhow::Error::new(error).context("agent stream failed"),
+            ));
+        }
         return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
             error_reason
         )));

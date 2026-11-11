@@ -102,6 +102,8 @@ export function createBridgeHttpAdapter(
     bindPackPlugin: unsupported("bindPackPlugin"),
     wirePack: unsupported("wirePack"),
     listPackWireSources: () => client.getJson("/desktop/packs/wire-sources"),
+    listDefaultPacks: () => Promise.resolve({ packs: [] }),
+    approveDefaultPacks: unsupported("approveDefaultPacks"),
     listDynamicWorkflows: unsupported("listDynamicWorkflows"),
     getDynamicWorkflow: unsupported("getDynamicWorkflow"),
     promoteWorkflow: unsupported("promoteWorkflow"),

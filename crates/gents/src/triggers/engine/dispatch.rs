@@ -491,14 +491,26 @@ impl TriggerEngine {
                 Ok(fire) => {
                     scope.session = Some(serde_json::json!({"session_id": fire.session_id}));
                     scope.request = Some(serde_json::json!({"request_id": fire.request_id}));
+                    let event_trigger = snapshot
+                        .active_event_triggers()
+                        .get(intent.trigger_id.as_deref().unwrap());
                     Some(durable::PreparedFire {
                         replace_prior: intent.concurrency
                             == crate::documents::ConcurrencyMode::LatestOnly,
                         target_existing: targeted_schedule
-                            || snapshot
-                                .active_event_triggers()
-                                .get(intent.trigger_id.as_deref().unwrap())
-                                .is_some_and(|t| t.session_id_template.is_some()),
+                            || event_trigger.is_some_and(|t| t.session_id_template.is_some()),
+                        create_session: event_trigger.map_or_else(
+                            || schedule.is_some_and(|s| s.create_session),
+                            |t| t.create_session,
+                        ),
+                        max_fires_per_hour: event_trigger.map_or_else(
+                            || {
+                                schedule.map_or(crate::documents::DEFAULT_MAX_FIRES_PER_HOUR, |s| {
+                                    s.max_fires_per_hour
+                                })
+                            },
+                            |t| t.max_fires_per_hour,
+                        ),
                         receipt: fire,
                         event_source_generation: intent.event_source_generation.clone(),
                     })

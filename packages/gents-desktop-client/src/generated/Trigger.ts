@@ -12,9 +12,20 @@ import type { TriggerSource } from "./TriggerSource.js";
 export type Trigger = { node_did: string, trigger_id: string, display_name?: string | null, description?: string | null, task_id: string, source: TriggerSource,
 /**
  * Render an existing session ID from the fire scope. Missing/null creates
- * a session; a configured template must render a nonempty owned session.
+ * a session per fire; a configured template must render a nonempty owned
+ * session unless `create_session` admits a missing one.
  */
-session_id_template?: string | null, enabled?: boolean | null,
+session_id_template?: string | null,
+/**
+ * Create the session `session_id_template` renders on its first fire.
+ * Lean: `Triggers.SessionKey`.
+ */
+create_session?: boolean | null,
+/**
+ * Fires admitted per rolling hour before the Trigger disables itself and
+ * records why. Null uses the default. Lean: `Triggers.FireBudget`.
+ */
+max_fires_per_hour?: number | null, enabled?: boolean | null,
 /**
  * Absent defaults to Parallel.
  */

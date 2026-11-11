@@ -29,6 +29,7 @@ pub(super) struct RequestInputs<'a> {
     pub(super) context_calibration: &'a ContextCalibration,
     pub(super) effective_seed: Option<i64>,
     pub(super) resume_from_history: bool,
+    pub(super) resume_same_request: bool,
 }
 
 pub(super) struct PreparedRequestInput {
@@ -67,14 +68,18 @@ where
     pub(super) async fn load_admission(
         &self,
         request: &AgentRequest,
-    ) -> Result<(bool, Option<AggregateTokenBudget>, ContextCalibration)> {
+        resumed_from_backend: bool,
+    ) -> Result<(bool, bool, Option<AggregateTokenBudget>, ContextCalibration)> {
         if let Some(guard) = &self.root_execution_guard {
             guard
                 .validate(&self.node, self.agent_config.agent_identity.as_ref())
                 .await
                 .context("validating current WorkspaceRoot policy for fresh request")?;
         }
-        let resume_from_history = session::retry_has_published_input(&self.node, request).await?;
+        let resume_same_request = resumed_from_backend
+            && session::resumed_request_has_published_input(&self.node, request).await?;
+        let resume_from_history =
+            resume_same_request || session::retry_has_published_input(&self.node, request).await?;
         let access = crate::store::config_client::ConfigAccess::local_managed_agent(
             self.node.clone(),
             identity::Did::new(request.agent_did.clone())?,
@@ -92,12 +97,13 @@ where
         .await;
         Ok((
             resume_from_history,
+            resume_same_request,
             aggregate_token_budget,
             context_calibration,
         ))
     }
 
-    pub(super) fn request_capture_scope(
+    pub(super) async fn request_capture_scope(
         &self,
         request: &AgentRequest,
         lifecycle: &crate::request::lifecycle::RequestLifecycle,
@@ -116,9 +122,21 @@ where
             capture_context.clone(),
             self.rendered_request_capture_factory.as_ref(),
         );
+        let previous_scopes = if lifecycle.resumed_from_backend() && capture_scope.is_some() {
+            crate::inference::rendered_request::load_scope_allocations(
+                &lifecycle.access()?,
+                request,
+            )
+            .await?
+        } else {
+            Vec::new()
+        };
         if let Some(scope) = capture_scope.as_mut() {
             let scope = std::sync::Arc::get_mut(scope)
                 .context("fresh request capture scope unexpectedly shared")?;
+            scope
+                .restore_allocations(previous_scopes)
+                .map_err(anyhow::Error::msg)?;
             if let Some(family) = &self.compaction_provider_family {
                 scope.set_compaction_provider_family(family.clone());
             }
@@ -281,6 +299,7 @@ where
             aggregate_token_budget,
             context_calibration,
             resume_from_history,
+            resume_same_request,
             ..
         } = inputs;
         let PromptAssembly {
@@ -327,6 +346,7 @@ where
                 background_cutoff,
                 prior_cursor,
                 provider_profile,
+                resume_same_request,
             )
             .instrument(tracing::info_span!(
                 "request.load_active_history",

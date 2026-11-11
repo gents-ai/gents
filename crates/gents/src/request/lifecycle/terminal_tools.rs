@@ -143,20 +143,52 @@ pub(super) async fn account_tools_in_txn(
             spawned.is_some(),
             tool.row.tool_call_id.as_deref().unwrap_or_default(),
         )?;
-        let accepted = if let Some(effect) = plugin_parent.as_ref() {
+        let mut root = tool;
+        let mut seen = rapidhash::RapidHashSet::default();
+        let mut live_background_ancestor = false;
+        while let Some(parent_id) = root
+            .row
+            .plugin_parent_tool_call_doc_id
+            .as_deref()
+            .or(root.row.spawned_by_tool_call_doc_id.as_deref())
+        {
+            anyhow::ensure!(
+                seen.insert(root.doc_id.clone()),
+                "cyclic tool invocation ancestry"
+            );
             let parent = tools
                 .iter()
-                .find(|candidate| candidate.doc_id == effect.parent_tool_call_doc_id)
-                .context("plugin effect has no direct parent in request")?;
+                .find(|candidate| candidate.doc_id == parent_id)
+                .context("derived tool has no parent in its request")?;
             anyhow::ensure!(
-                parent.row.spawned_by_tool_call_doc_id.is_none()
-                    && parent.row.plugin_parent_tool_call_doc_id.is_none()
-                    && parent.row.plugin_effect_ordinal.is_none(),
-                "plugin effect parent is not direct"
+                parent.request_doc_id == root.request_doc_id
+                    && parent.row.session_id == root.row.session_id
+                    && parent.row.message_sequence == root.row.message_sequence,
+                "derived tool crosses its parent scope"
             );
-            let binding = directly_bound(headers, parent, generation)?;
-            if binding.is_some() {
-                crate::tools::call::lifecycle::query::load_tool_call_arguments_in_txn(
+            if root.row.spawned_by_tool_call_doc_id.is_some() {
+                anyhow::ensure!(
+                    parent.row.tool_name.as_deref() == Some("spawn_process")
+                        && root.row.await_mode.as_deref() == Some("background"),
+                    "invalid spawned invocation"
+                );
+            }
+            live_background_ancestor |= parent.row.await_mode.as_deref() == Some("background")
+                && parent.row.lifecycle_state.as_deref() == Some("running");
+            root = parent;
+        }
+        let accepted = directly_bound(headers, root, generation)?;
+        if root.doc_id != tool.doc_id && accepted.is_some() {
+            crate::tools::call::lifecycle::query::load_tool_call_arguments_in_txn(
+                txn,
+                &tool.doc_id,
+                agent,
+                session,
+                request.requester_did.as_deref(),
+            )
+            .await?;
+            if completed {
+                crate::tools::call::lifecycle::query::load_tool_call_read_in_txn(
                     txn,
                     &tool.doc_id,
                     agent,
@@ -164,42 +196,8 @@ pub(super) async fn account_tools_in_txn(
                     request.requester_did.as_deref(),
                 )
                 .await?;
-                if completed {
-                    crate::tools::call::lifecycle::query::load_tool_call_read_in_txn(
-                        txn,
-                        &tool.doc_id,
-                        agent,
-                        session,
-                        request.requester_did.as_deref(),
-                    )
-                    .await?;
-                }
             }
-            binding
-        } else if let Some(parent_id) = spawned {
-            let Some(parent) = tools.iter().find(|candidate| candidate.doc_id == parent_id) else {
-                continue;
-            };
-            if parent.row.spawned_by_tool_call_doc_id.is_some()
-                || parent.doc_id == tool.doc_id
-                || parent.request_doc_id != tool.request_doc_id
-                || parent.row.session_id != tool.row.session_id
-                || parent.row.message_sequence != tool.row.message_sequence
-            {
-                continue;
-            }
-            let binding = directly_bound(headers, parent, generation)?;
-            if let Some(binding) = &binding {
-                anyhow::ensure!(
-                    binding.1 == "spawn_process"
-                        && tool.row.await_mode.as_deref() == Some("background"),
-                    "invalid spawned execution provenance"
-                );
-            }
-            binding
-        } else {
-            directly_bound(headers, tool, generation)?
-        };
+        }
         let Some((accepted_header, _accepted_name)) = accepted else {
             continue;
         };
@@ -215,6 +213,9 @@ pub(super) async fn account_tools_in_txn(
             ),
             "owned tool has invalid lifecycle"
         );
+        if live_background_ancestor {
+            continue;
+        }
         if completed && state != "pending" {
             if state == "running" && tool.row.await_mode.as_deref() != Some("background") {
                 return Err(ToolAccountingRejection::ForegroundRunning.into());
@@ -330,11 +331,14 @@ mod tests {
                 tool: mut parent,
                 ..
             } = fixture;
+            if name.starts_with("background_parent") {
+                parent.background().await.unwrap();
+            }
             let mut child = parent
                 .admit_plugin_effect(1, "fixture_effect", "{}")
                 .await
                 .unwrap();
-            if name != "pending_cancel" {
+            if !name.contains("pending") {
                 child.start_running().await.unwrap();
             }
             if name.starts_with("timed_out") {

@@ -124,7 +124,10 @@ impl PolicyFixture {
             no_lockout,
             preview: false,
             enable_pack_install: false,
+            enable_pack_authority: false,
             process_ceiling: Default::default(),
+            selected_plugins: Vec::new(),
+            ceiling_plugins: None,
         };
         build_self_config_tools_with_runtime(
             Arc::default(),

@@ -21,8 +21,13 @@ mod ops;
 mod pack_catalog;
 mod pack_documents;
 mod pack_installer;
-use pack_installer::{installs_kind, ConfigPackDistribution, PackInstallParams, PackInstaller};
+use crate::pack::node_packs::{
+    self, Distribution, DriftPolicy, HomePackRemovalError, LocalPackError, NodePacks, PackChange,
+    PluginPinConflict,
+};
+use pack_installer::{pin_edit, pin_move_call, PackInstaller};
 mod pack_plugins;
+mod pack_wiring;
 mod read;
 mod requests;
 #[cfg(test)]
@@ -30,7 +35,8 @@ use requests::profile_request;
 use requests::{
     agent_request, anchored_request, automation_request, automation_target, backend_request,
     local_backend_create_request, mcp_service_request, outcome_text, profile_create_request,
-    profile_target_request, protect_working_agent, refuse_silent_tools_drops, tools_request,
+    profile_target_request, protect_working_agent, refuse_silent_tools_drops,
+    refuse_uninstalled_plugins, tools_request,
 };
 #[cfg(test)]
 mod agent_operation_text_tests;
@@ -257,6 +263,7 @@ pub(crate) fn build_self_config_tools_with_runtime(
             .with_held_grants(OperatorGrants {
                 pack_install: config.enable_pack_install,
                 policy: config.categories.contains("policy"),
+                pack_authority: config.enable_pack_authority,
             }),
         Err(error) => {
             tracing::warn!(
@@ -284,6 +291,8 @@ pub(crate) fn build_self_config_tools_with_runtime(
         process_ceiling: config.process_ceiling.clone(),
         execution: Arc::new(execution::ExecutionObservation::default()),
         plugins,
+        selected_plugins: config.selected_plugins.clone(),
+        ceiling_plugins: config.ceiling_plugins.clone(),
     }));
     tools
 }

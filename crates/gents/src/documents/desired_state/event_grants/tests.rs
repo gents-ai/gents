@@ -443,6 +443,8 @@ async fn event_configuration_publication_rebinding_and_revocation_use_native_gra
     let prepared = crate::triggers::engine::durable::PreparedFire {
         receipt: fire.clone(),
         target_existing: false,
+        create_session: false,
+        max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
         replace_prior: false,
         event_source_generation: Some(generation.clone()),
     };

@@ -315,7 +315,7 @@ async fn initialized_home() -> tempfile::TempDir {
 #[tokio::test]
 async fn plugin_store_record_error_releases_the_owned_offline_store() {
     let home = initialized_home().await;
-    let error = record_plugin_store_change(home.path(), "invalid coordinate", None)
+    let error = record_plugin_retirement(home.path(), "invalid coordinate")
         .await
         .unwrap_err();
     assert!(format!("{error:#}").contains("invalid pack coordinate"));

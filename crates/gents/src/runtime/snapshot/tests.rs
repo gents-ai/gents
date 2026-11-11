@@ -99,6 +99,8 @@ fn configuration_fingerprint_reflects_schedule_set() {
             "s1".to_string(),
             ResolvedSchedule {
                 session_id_template: None,
+                create_session: false,
+                max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
                 trigger_doc_id: "s1-doc".to_string(),
                 schedule_doc_id: "s1-schedule-doc".to_string(),
                 schedule_id: "s1".to_string(),

@@ -21,6 +21,9 @@ import type { ConfigComponentsApplyRequest } from "./ConfigComponentsApplyReques
 import type { ConfigComponentsPatchRequest } from "./ConfigComponentsPatchRequest.js";
 import type { ContextDeleteRequest } from "./ContextDeleteRequest.js";
 import type { DefaultAgentSetRequest } from "./DefaultAgentSetRequest.js";
+import type { DefaultPacksApprovalView } from "./DefaultPacksApprovalView.js";
+import type { DefaultPacksApproveRequest } from "./DefaultPacksApproveRequest.js";
+import type { DefaultPacksView } from "./DefaultPacksView.js";
 import type { DesktopBackgroundToolRequest } from "./DesktopBackgroundToolRequest.js";
 import type { DesktopClientSnapshot } from "./DesktopClientSnapshot.js";
 import type { DesktopInitRequest } from "./DesktopInitRequest.js";
@@ -180,6 +183,8 @@ export type DesktopCommands = {
   desktop_config_components_patch: { args: { request: ConfigComponentsPatchRequest }; result: DesktopClientSnapshot };
   desktop_context_delete: { args: { request: ContextDeleteRequest }; result: DesktopClientSnapshot };
   desktop_default_agent_set: { args: { request: DefaultAgentSetRequest }; result: DesktopClientSnapshot };
+  desktop_default_packs: { args: Record<string, never>; result: DefaultPacksView };
+  desktop_default_packs_approve: { args: { request: DefaultPacksApproveRequest }; result: DefaultPacksApprovalView };
   desktop_ended_access_dismiss: { args: { nodeDid: string }; result: DesktopClientSnapshot };
   desktop_event_source_delete: { args: { request: EventSourceDeleteRequest }; result: DesktopClientSnapshot };
   desktop_event_source_save: { args: { request: EventSourceSaveRequest }; result: DesktopClientSnapshot };
@@ -292,8 +297,8 @@ export type DesktopCommands = {
   desktop_ux_data_surfaces: { args: { request: UxDataSurfacesRequest }; result: JsonValue };
   desktop_ux_data_unwatch: { args: { id: string }; result: void };
   desktop_ux_data_watch: { args: { request: UxDataCallRequest; channel: Channel<UxDataWatchEvent> }; result: string };
-  desktop_ux_plugin_source: { args: { id: string }; result: JsonValue };
-  desktop_ux_plugins_list: { args: Record<string, never>; result: JsonValue };
+  desktop_ux_plugin_source: { args: { id: string; nodeDid?: string | null }; result: JsonValue };
+  desktop_ux_plugins_list: { args: { nodeDid?: string | null }; result: JsonValue };
   desktop_workflow_dynamic: { args: { selector: string }; result: DynamicWorkflowView };
   desktop_workflow_promote: { args: { request: WorkflowPromoteRequest }; result: WorkflowPromoteView };
   desktop_workflows_dynamic: { args: Record<string, never>; result: DynamicWorkflowsView };

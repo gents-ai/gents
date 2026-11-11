@@ -373,6 +373,8 @@ async fn modeled_cached_schedule_requires_runtime_visibility() -> anyhow::Result
     };
     let schedule = crate::documents::automation::ResolvedSchedule {
         session_id_template: None,
+        create_session: false,
+        max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
         trigger_doc_id: trigger_doc,
         schedule_doc_id: schedule_doc.clone(),
         schedule_id: "schedule".into(),

@@ -542,8 +542,8 @@ impl Tool for ReadProcessTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Read an incremental, byte-addressed slice of a manageable background process in this session, including one started on an earlier turn. \
-captured output. stdout and stderr are merged in capture order behind a single byte cursor \
+            description: "Read an incremental, byte-addressed slice of the captured output of a manageable background process in this session, including one started on an earlier turn. \
+stdout and stderr are merged in capture order behind a single byte cursor \
 (stdout first, then a `--- stderr ---` boundary, then stderr), so you page through ALL output \
 gap-free with one `offset`. The response returns `output` (the slice), `next_offset` (= offset + \
 bytes returned; the exact cursor to pass next), `total_bytes` (total captured so far), `has_more` \
@@ -749,4 +749,20 @@ fn structured_error(error: serde_json::Value) -> ToolError {
     )
     .unwrap_or_else(|_| error.to_string());
     anyhow!(message).into()
+}
+
+#[cfg(test)]
+mod description_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn read_process_description_opens_with_what_it_reads() {
+        let description = ReadProcessTool.definition(String::new()).await.description;
+        assert!(
+            description.starts_with(
+                "Read an incremental, byte-addressed slice of the captured output of a manageable background process in this session, including one started on an earlier turn. stdout and stderr are merged"
+            ),
+            "{description}"
+        );
+    }
 }

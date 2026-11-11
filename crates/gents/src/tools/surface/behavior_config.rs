@@ -28,6 +28,12 @@ pub struct AgentToolSurfaceConfig {
     required_mcp_service_ids: Vec<String>,
     agent_tools: AgentToolConfig,
     background_tools: BackgroundToolConfig,
+    /// Selected plugin tools the policy would allow in the background. A
+    /// plugin joins `background_tools` only once its installed artifact is
+    /// known to import `host_call` (a live script that suspends across its
+    /// own tool calls); every other plugin is a finite foreground call, so
+    /// selecting one never adds the process tools to an Agent's surface.
+    background_plugins: Vec<String>,
     custom_tools: Vec<CustomToolFactory>,
     enable_context_budget_tool: bool,
     enable_session_history_tool: bool,
@@ -72,6 +78,7 @@ impl AgentToolSurfaceConfig {
             required_mcp_service_ids: Vec::new(),
             agent_tools: AgentToolConfig::default(),
             background_tools: BackgroundToolConfig::default(),
+            background_plugins: Vec::new(),
             custom_tools: Vec::new(),
             enable_context_budget_tool: true,
             enable_session_history_tool: true,
@@ -211,6 +218,7 @@ impl AgentToolSurfaceConfig {
             self_config_no_lockout,
             self_config_preview,
             enable_pack_install,
+            enable_pack_authority,
             enable_lsp: _,
             lsp_config,
             plugin_tools,
@@ -298,12 +306,25 @@ impl AgentToolSurfaceConfig {
                             }
                     })
                 });
-            if !allowed_mcp_wrapper && !host_tools.is_backgroundable_tool_name(name) {
+            let selected_plugin = plugin_tools
+                .iter()
+                .any(|plugin| plugin.job.is_none() && plugin.tool_name() == name);
+            if !allowed_mcp_wrapper
+                && !selected_plugin
+                && !host_tools.is_backgroundable_tool_name(name)
+            {
                 anyhow::bail!(
                     "agent {agent_name} backgroundable_tool_names entry {name:?} is not a registered backgroundable tool"
                 );
             }
         }
+
+        let (background_plugins, background_allowlist): (Vec<_>, Vec<_>) =
+            background_allowlist.into_iter().partition(|name| {
+                plugin_tools
+                    .iter()
+                    .any(|plugin| plugin.job.is_none() && plugin.tool_name() == name)
+            });
 
         let mut effective_agent_targets = dedupe_agent_targets(agent_tools.targets);
         effective_agent_targets.retain(|target| {
@@ -329,6 +350,7 @@ impl AgentToolSurfaceConfig {
                 allowlist: background_allowlist,
                 timeouts: timeouts.background.clone(),
             },
+            background_plugins,
             custom_tools,
             enable_context_budget_tool: static_policy.context_budget && enable_context_budget,
             enable_session_history_tool: static_policy.session_history,
@@ -355,10 +377,16 @@ impl AgentToolSurfaceConfig {
                 no_lockout: self_config_no_lockout,
                 preview: self_config_preview,
                 enable_pack_install,
+                enable_pack_authority,
                 process_ceiling: super::SelfConfigProcessCeiling {
                     file_mode: ceiling.file_tools(),
                     bash_mode: ceiling.bash(),
                     root: ceiling.root().map(ToOwned::to_owned),
+                },
+                selected_plugins: Vec::new(),
+                ceiling_plugins: match &ceiling_policy.plugin_tools {
+                    EndpointScope::All => None,
+                    scope => Some(scope.keys().into_iter().collect()),
                 },
             },
             agent_policy,
@@ -462,6 +490,24 @@ impl AgentToolSurfaceConfig {
         let mut surface =
             self.resolve_with_agent_tools_for_runtime_availability(availability, agent_tools);
         surface.plugin_resolutions = resolve_plugin_identities(plugins, &surface.plugin_tools);
+        for (plugin, record) in &surface.plugin_resolutions {
+            let name = plugin.tool_name();
+            if record
+                .as_ref()
+                .is_some_and(|record| record.declaration.imports_host_call())
+                && self
+                    .background_plugins
+                    .iter()
+                    .any(|allowed| allowed == name)
+                && !surface
+                    .background_tools
+                    .allowlist
+                    .iter()
+                    .any(|allowed| allowed == name)
+            {
+                surface.background_tools.allowlist.push(name.to_owned());
+            }
+        }
         Ok(surface)
     }
 
@@ -682,6 +728,7 @@ impl std::fmt::Debug for AgentToolSurfaceConfig {
             .field("required_mcp_service_ids", &self.required_mcp_service_ids)
             .field("agent_tools", &self.agent_tools)
             .field("background_tools", &self.background_tools)
+            .field("background_plugins", &self.background_plugins)
             .field(
                 "custom_tools",
                 &self

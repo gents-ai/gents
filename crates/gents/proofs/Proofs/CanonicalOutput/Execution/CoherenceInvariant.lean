@@ -35,22 +35,47 @@ private theorem authoredHeader_binding (world : World) (message : MessageEnvelop
     (notAssistant : message.header.role ≠ .assistant) (tool : OwnedTool)
     (h : acceptedHeaderBindsTool world tool = true) :
     acceptedHeaderBindsTool (authoredHeaderWorld world message) tool = true := by
-  unfold acceptedHeaderBindsTool at h ⊢
-  cases hp : tool.provenance <;> simp only [hp] at h ⊢
-  · rw [authoredHeader_direct world message notAssistant tool]; exact h
-  · have lookupFrame : ∀ doc, ownedToolByDocument? (authoredHeaderWorld world message) doc =
-        ownedToolByDocument? world doc := fun _ => rfl
-    simp only [spawnParentIntentValid, lookupFrame] at h ⊢
-    split at h <;> simp_all only [Bool.and_eq_true, Bool.false_eq_true, false_and]
-    simp only [authoredHeader_direct world message notAssistant]
-    simp only [authoredHeaderWorld, List.any_append, Bool.or_eq_true, Bool.and_eq_true] at h ⊢
-    aesop
-  · have lookupFrame : ∀ doc, ownedToolByDocument? (authoredHeaderWorld world message) doc =
-        ownedToolByDocument? world doc := fun _ => rfl
-    simp only [pluginParentIntentValid, lookupFrame] at h ⊢
-    split at h <;> simp_all only [Bool.and_eq_true, Bool.false_eq_true, false_and]
-    simp only [authoredHeader_direct world message notAssistant]
-    aesop
+  have nameFrame (value : OwnedTool) (name : String)
+      (hn : invocationName? world value = some name) :
+      invocationName? (authoredHeaderWorld world message) value = some name := by
+    cases hp : value.provenance with
+    | spawnedBackground _ => simp [invocationName?, hp] at hn
+    | pluginEffect _ _ => simpa [invocationName?, hp, authoredHeaderWorld] using hn
+    | acceptedIntent =>
+      simp only [invocationName?, hp] at hn ⊢
+      cases hf : (world.messages.flatMap toolIntents).find?
+          (fun intent => intent.call == value.document) with
+      | none => simp [hf] at hn
+      | some intent =>
+        simpa only [authoredHeaderWorld, List.flatMap_append, List.find?_append, hf,
+          Option.some_or] using hn
+  have frame (fuel : Nat) (value : OwnedTool)
+      (bound : invocationAncestryValid fuel world value = true) :
+      invocationAncestryValid fuel (authoredHeaderWorld world message) value = true := by
+    induction fuel generalizing value with
+    | zero => simp [invocationAncestryValid, invocationAncestryWith] at bound
+    | succ fuel ih =>
+      simp only [invocationAncestryValid, invocationAncestryWith] at bound ⊢
+      cases hp : invocationParent? value with
+      | none => simpa [hp, authoredHeader_direct world message notAssistant] using bound
+      | some doc =>
+        have lookup : ownedToolByDocument? (authoredHeaderWorld world message) doc =
+            ownedToolByDocument? world doc := rfl
+        simp only [hp, lookup] at bound ⊢
+        cases hl : ownedToolByDocument? world doc with
+        | none => simp [hl] at bound
+        | some parent =>
+          simp only [hl, Bool.and_eq_true] at bound ⊢
+          have link : invocationLinkValid (authoredHeaderWorld world message) value parent = true := by
+            have old := bound.1
+            cases hv : value.provenance with
+            | acceptedIntent => simp [invocationLinkValid, hv] at old
+            | pluginEffect _ _ => simpa [invocationLinkValid, hv] using old
+            | spawnedBackground _ =>
+              simp only [invocationLinkValid, hv, Bool.and_eq_true, beq_iff_eq] at old ⊢
+              exact ⟨old.1, old.2.1, nameFrame parent _ old.2.2⟩
+          exact ⟨link, ih parent bound.2⟩
+  exact frame _ tool h
 
 private theorem authoredHeader_rows (world : World) (message : MessageEnvelope) :
     (authoredHeaderWorld world message).transcript.toolCalls = world.transcript.toolCalls ∧

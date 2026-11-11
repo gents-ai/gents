@@ -199,7 +199,10 @@ fn tool_config(
         no_lockout,
         preview,
         enable_pack_install: false,
+        enable_pack_authority: false,
         process_ceiling: Default::default(),
+        selected_plugins: Vec::new(),
+        ceiling_plugins: None,
     }
 }
 

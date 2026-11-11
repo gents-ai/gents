@@ -52,8 +52,13 @@ where
             reason = Some(reason.map_or(note.clone(), |reason| format!("{reason}\n{note}")));
         }
 
-        let terminal = final_outcome.terminal_outcome();
+        let terminal = final_outcome
+            .terminal_outcome()
+            .expect("parked work returned before finish");
         match final_outcome {
+            crate::tools::call::task_hooks::TaskHookOutcome::Parked => {
+                unreachable!("parked work returned before finish")
+            }
             crate::tools::call::task_hooks::TaskHookOutcome::Success => {
                 if skipped_before_work {
                     if let Err(error) = lifecycle.begin_owned_execution(stream_writer).await {

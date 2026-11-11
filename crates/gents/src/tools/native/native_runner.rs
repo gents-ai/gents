@@ -314,7 +314,7 @@ fn adjacent_runner_binary() -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
-fn self_runner_binary() -> Option<PathBuf> {
+pub(super) fn self_runner_binary() -> Option<PathBuf> {
     let current = std::env::current_exe().ok()?;
     let stem = current.file_stem()?.to_str()?;
     if stem == "gents" || SELF_RUNNER_ENABLED.load(Ordering::Relaxed) {

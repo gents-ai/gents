@@ -25,7 +25,9 @@ pub fn is_live(observed: LeaseObservation<'_>, expected_generation: &str, now_ms
 pub fn renewable_lifecycle(request: RequestLifecycleState) -> bool {
     matches!(
         request,
-        RequestLifecycleState::Claimed | RequestLifecycleState::Processing
+        RequestLifecycleState::Claimed
+            | RequestLifecycleState::Processing
+            | RequestLifecycleState::ResumingBackend
     )
 }
 
@@ -100,8 +102,10 @@ pub fn authorize_begin(
     expected_generation: &str,
     now_ms: i64,
 ) -> bool {
-    observed.request == RequestLifecycleState::Claimed
-        && is_live(observed, expected_generation, now_ms)
+    matches!(
+        observed.request,
+        RequestLifecycleState::Claimed | RequestLifecycleState::ResumingBackend
+    ) && is_live(observed, expected_generation, now_ms)
 }
 
 pub fn can_finalize(request: RequestLifecycleState, completed: bool) -> bool {
@@ -110,7 +114,9 @@ pub fn can_finalize(request: RequestLifecycleState, completed: bool) -> bool {
     } else {
         matches!(
             request,
-            RequestLifecycleState::Claimed | RequestLifecycleState::Processing
+            RequestLifecycleState::Claimed
+                | RequestLifecycleState::Processing
+                | RequestLifecycleState::ResumingBackend
         )
     }
 }
@@ -124,6 +130,19 @@ pub fn authorize_finalize(
     can_finalize(observed.request, completed) && is_live(observed, expected_generation, now_ms)
 }
 
+/// Mirrors the outcome guard of Lean `RequestExecutionLease.finalizeParked`: a
+/// parked request holds no lease, so interruption, deadline expiry and policy
+/// supersession settle it here rather than through revocation.
+pub fn can_finalize_parked(request: RequestLifecycleState, outcome: RequestLifecycleState) -> bool {
+    request == RequestLifecycleState::WaitingForBackend
+        && matches!(
+            outcome,
+            RequestLifecycleState::Failed
+                | RequestLifecycleState::Interrupted
+                | RequestLifecycleState::Superseded
+        )
+}
+
 pub fn authorize_execution_revocation(
     observed: LeaseObservation<'_>,
     expected: LeaseObservation<'_>,
@@ -132,7 +151,9 @@ pub fn authorize_execution_revocation(
 ) -> bool {
     let active_pair = matches!(
         observed.request,
-        RequestLifecycleState::Claimed | RequestLifecycleState::Processing
+        RequestLifecycleState::Claimed
+            | RequestLifecycleState::Processing
+            | RequestLifecycleState::ResumingBackend
     );
     active_pair
         && observed.request == expected.request

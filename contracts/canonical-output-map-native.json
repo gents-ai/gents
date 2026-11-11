@@ -52,12 +52,17 @@
         "RequestExecutionLease.Action.policyRevoke",
         "RequestExecutionLease.Action.recoverExpiredAndFail",
         "RequestExecutionLease.Action.recoverExpiredTerminal",
-        "RequestExecutionLease.Action.recoverDroppedAndFail"
+        "RequestExecutionLease.Action.recoverDroppedAndFail",
+        "RequestExecutionLease.Action.parkBackend",
+        "RequestExecutionLease.Action.resumeBackend",
+        "RequestExecutionLease.Action.reparkExpiredResume",
+        "RequestExecutionLease.Action.finalizeParked"
       ],
       "generated_groups": ["request_execution_lease_cases", "request_execution_lease_trace_cases"],
       "fixture_status": "concrete_inputs",
       "native_owner_paths": [
         "crates/gents/src/request/lifecycle/execution_lease.rs",
+        "crates/gents/src/request/lifecycle/backend_wait.rs",
         "crates/gents/src/request/admission.rs"
       ],
       "consumer_paths": [

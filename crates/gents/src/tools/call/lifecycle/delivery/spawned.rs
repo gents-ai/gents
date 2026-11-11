@@ -4,7 +4,6 @@ use crate::store::graphql::created_doc_id;
 use crate::tools::call::lifecycle::ToolCallLifecycle;
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
-use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, OutputOutcome};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 impl ToolCallLifecycle {
@@ -125,7 +124,6 @@ impl ToolCallLifecycle {
                 self.state,
                 ToolCallState::Running | ToolCallState::Completed
             ) && !self.is_spawned_background()
-                && self.plugin_effect.is_none()
                 && self.tool_name == gents_protocol::tool_names::SPAWN_PROCESS_TOOL_NAME,
             "spawned background admission requires the accepted spawn_process owner"
         );
@@ -240,27 +238,17 @@ impl ToolCallLifecycle {
                     }
 
                     let now = fixture_now.unwrap_or_else(Utc::now);
-                    let (accepted, _) = crate::session::load_canonical_message_in_txn(
-                        txn,
-                        &accepted_header_doc_id,
-                        &node_did,
-                        requester_did.as_deref(),
-                    )
-                    .await?;
+                    let accepted = ToolCallLifecycle::load_accepted_binding_in_txn(
+                        txn, &parent_doc_id, &node_did, &session_id, requester_did.as_deref(), true,
+                    ).await?;
                     anyhow::ensure!(
                         accepted.session_id == session_id
-                            && accepted.request_doc_id.as_deref() == Some(request_doc_id.as_str())
-                            && accepted.role == MessageRole::Assistant
-                            && accepted.outcome == OutputOutcome::Complete
-                            && accepted.sequence == message_sequence
-                            && matches!(&accepted.publication,
-                                MessagePublication::RequestExecution { execution_generation }
-                                if execution_generation == &generation)
-                            && accepted.blocks.iter().any(|block| matches!(block,
-                                MessageBlock::ToolCall { tool_call_doc_id, id, name, .. }
-                                if tool_call_doc_id == &parent_doc_id
-                                    && id == &parent_tool_call_id
-                                    && name == gents_protocol::tool_names::SPAWN_PROCESS_TOOL_NAME)),
+                            && accepted.request_doc_id == request_doc_id
+                            && accepted.message_sequence == message_sequence
+                            && accepted.execution_generation == generation
+                            && accepted.accepted_header_doc_id == accepted_header_doc_id
+                            && accepted.id == parent_tool_call_id
+                            && accepted.tool_name == gents_protocol::tool_names::SPAWN_PROCESS_TOOL_NAME,
                         "spawned admission parent is not exactly bound by its accepted provider header"
                     );
                     let parent_row = {
@@ -298,17 +286,21 @@ impl ToolCallLifecycle {
                     anyhow::ensure!(
                         request_row["node_did"].as_str() == Some(node_did.as_str())
                             && request_row["session_id"].as_str() == Some(session_id.as_str())
-                            && request_row["requester_did"].as_str() == requester_did.as_deref()
-                            && RequestLifecycleState::parse_opt(request_row["lifecycle_state"].as_str())
-                                == Some(RequestLifecycleState::Processing)
-                            && request_row["execution_generation"].as_str() == Some(generation.as_str())
-                            && request_row["interrupt_requested_at"].is_null(),
-                        "spawned admission lost live request generation ownership"
+                            && request_row["requester_did"].as_str() == requester_did.as_deref(),
+                        "spawned admission parent request is out of scope"
                     );
                     let expires_at = request_row["execution_lease_expires_at"].as_str()
                         .context("spawned admission request lacks lease")?;
-                    anyhow::ensure!(DateTime::parse_from_rfc3339(expires_at)?.with_timezone(&Utc) > now,
-                        "spawned admission request lease has expired");
+                    // A spawned process spends the live request lease (Lean
+                    // `admitSpawnedBackgroundCore`), even for a script that outlives it.
+                    if RequestLifecycleState::parse_opt(request_row["lifecycle_state"].as_str())
+                        != Some(RequestLifecycleState::Processing)
+                        || request_row["execution_generation"].as_str() != Some(generation.as_str())
+                        || !request_row["interrupt_requested_at"].is_null()
+                        || DateTime::parse_from_rfc3339(expires_at)?.with_timezone(&Utc) <= now
+                    {
+                        return Err(crate::tools::call::hook::persistence::BackgroundSlotRefusal::RequestStopped.into());
+                    }
                     let request_id = request_row["request_id"].as_str()
                         .filter(|id| !id.trim().is_empty()).context("spawned admission request lacks logical identity")?;
                     let (session_doc_id, selected_agent) = crate::store::config_client::session_children::agent_session_child_binding_in_txn(

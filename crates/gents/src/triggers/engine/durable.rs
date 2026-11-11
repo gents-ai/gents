@@ -8,10 +8,12 @@ use crate::request::lifecycle::materialize::{
 };
 use crate::request::lifecycle::{
     bind_client_targets_in_txn, stage_client_request_in_txn,
-    stage_revoke_execution_preserving_output, RequestTerminalOutcome, TerminalizeResult,
+    stage_revoke_execution_preserving_output, stage_supersede_parked_execution,
+    RequestTerminalOutcome, TerminalizeResult,
 };
 use crate::session;
 use crate::store::config_client::ConfigApplyTxn;
+use crate::store::graphql::escape_graphql_string;
 use anyhow::{ensure, Context, Result};
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::request_lifecycle::EnqueuedAgentRequest;
@@ -28,8 +30,10 @@ pub(crate) use recovery::recover_outcomes_with_access;
 pub(crate) struct PreparedFire {
     pub receipt: TriggerFire,
     pub target_existing: bool,
+    pub create_session: bool,
     pub replace_prior: bool,
     pub event_source_generation: Option<serde_json::Value>,
+    pub max_fires_per_hour: u32,
 }
 
 pub(crate) fn fire_key(identity: &FireIdentity) -> String {
@@ -40,11 +44,73 @@ pub(crate) fn resolve_session_id(
     identity: &FireIdentity,
     target: Option<&str>,
     owned: bool,
+    create_missing: bool,
 ) -> Option<String> {
     match target {
         None => Some(identity.session_id()),
-        Some(value) if !value.is_empty() && owned => Some(value.to_owned()),
+        Some(value) if !value.is_empty() && (owned || create_missing) => Some(value.to_owned()),
         Some(_) => None,
+    }
+}
+
+/// Lean: `Triggers.FireBudget.decideFire`.
+pub(crate) fn fire_budget_exhausted(budget: u32, admitted_in_window: usize) -> bool {
+    u64::try_from(admitted_in_window).unwrap_or(u64::MAX) >= u64::from(budget)
+}
+
+/// A stopped Trigger keeps its arrival cursor, so re-enabling resumes exactly the
+/// undelivered documents. Requests admitted before the stop are unaffected;
+/// gents-ai/gents#3548 owns stopping an accepted backlog.
+fn budget_stop_reason(trigger_id: &str, budget: u32) -> String {
+    format!(
+        "Trigger {trigger_id} admitted its budget of {budget} fires within one hour, so it was disabled. Find out why it fires this often with trigger explain; a Task writing its own event-source collection is the usual cause. Then raise max_fires_per_hour, or wait for the hour to pass, and set enabled to true."
+    )
+}
+
+impl PreparedFire {
+    /// Counts this Trigger's receipts in the budget window inside the admission
+    /// transaction and returns the stop when the budget is spent. A replayed
+    /// fire spends nothing. The caller admits nothing on a stop and records it
+    /// through [`crate::documents::stop_trigger_for_budget`].
+    pub(crate) async fn stage_budget(
+        &self,
+        txn: &ConfigApplyTxn<'_>,
+    ) -> Result<Option<super::MaterializeBudgetExhausted>> {
+        let fire = &self.receipt;
+        let now = chrono::DateTime::parse_from_rfc3339(&fire.created_at)
+            .context("fire receipt has no valid admission time")?
+            .with_timezone(&chrono::Utc);
+        let cutoff =
+            (now - chrono::Duration::hours(1)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let owner = escape_graphql_string(&fire.identity.owner_did);
+        let trigger_id = escape_graphql_string(&fire.identity.trigger_id);
+        let budget = self.max_fires_per_hour;
+        let response = txn
+            .execute(&format!(
+                "{{ TriggerFire(filter: {{owner_did: {{_eq: \"{owner}\"}}, trigger_id: {{_eq: \"{trigger_id}\"}}, created_at: {{_gt: \"{cutoff}\"}}}}, limit: {budget}) {{ fire_key }} }}",
+            ))
+            .await?;
+        let admitted = response["data"]["TriggerFire"]
+            .as_array()
+            .context("fire budget query omitted rows")?
+            .len();
+        if !fire_budget_exhausted(budget, admitted) {
+            return Ok(None);
+        }
+        let replay = txn
+            .execute(&format!(
+                "{{ TriggerFire(filter: {{fire_key: {{_eq: \"{}\"}}}}, limit: 1) {{ fire_key }} }}",
+                escape_graphql_string(&fire.fire_key)
+            ))
+            .await?;
+        if replay["data"]["TriggerFire"]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty())
+        {
+            return Ok(None);
+        }
+        let reason = budget_stop_reason(&fire.identity.trigger_id, budget);
+        Ok(Some(super::MaterializeBudgetExhausted { reason }))
     }
 }
 
@@ -567,9 +633,12 @@ pub(crate) async fn write_trigger_delivery_with_identity(
 ) -> Result<TaskDeliveryAdmission> {
     let identity = identity.context("trigger delivery requires a managed Agent identity")?;
     let access = crate::ConfigAccess::local_managed_agent(node.clone(), actor, identity)?;
-    access
+    let admitted = access
         .transact_write("lifecycle.admit_trigger_delivery", |txn| {
             Box::pin(async move {
+                if let Some(stop) = prepared.stage_budget(txn).await? {
+                    return Ok::<_, anyhow::Error>(Err(stop));
+                }
                 let fresh = stage_fire_receipt(txn, &prepared.receipt).await?;
                 let mut create = create.clone();
                 if fresh {
@@ -590,6 +659,7 @@ pub(crate) async fn write_trigger_delivery_with_identity(
                     txn,
                     &prepared.receipt,
                     prepared.target_existing,
+                    prepared.create_session,
                     &create,
                     fresh,
                     prepared.event_source_generation.as_ref(),
@@ -604,10 +674,23 @@ pub(crate) async fn write_trigger_delivery_with_identity(
                     )
                     .await?;
                 }
-                Ok::<_, anyhow::Error>(admitted)
+                Ok(Ok(admitted))
             })
         })
-        .await
+        .await?;
+    match admitted {
+        Ok(admitted) => Ok(admitted),
+        Err(stop) => {
+            crate::documents::stop_trigger_for_budget(
+                node,
+                &prepared.receipt.identity.owner_did,
+                &prepared.receipt.identity.trigger_id,
+                &stop.reason,
+            )
+            .await?;
+            Err(stop.into())
+        }
+    }
 }
 
 #[doc(hidden)]
@@ -675,31 +758,29 @@ pub async fn supersede_trigger_requests_in_txn(
             .field(fields::EXECUTION_GENERATION)
             .field(fields::EXECUTION_LEASE_EXPIRES_AT),
     )
-    .filter(
-        scope.and(Filter::any_of(
-            fields::LIFECYCLE_STATE,
-            [
-                gents_protocol::request_lifecycle::RequestLifecycleState::Claimed,
-                gents_protocol::request_lifecycle::RequestLifecycleState::Processing,
-            ]
-            .into_iter()
-            .map(gents_protocol::request_lifecycle::RequestLifecycleState::as_str),
-        )),
-    )
+    .filter(scope.and(Filter::any_of(
+        fields::LIFECYCLE_STATE,
+        RequestLifecycleState::unsettled_execution().map(RequestLifecycleState::as_str),
+    )))
     .render();
     let response = txn.run(&query).await?;
     let active: Vec<gents_protocol::row::AgentRequestRow> =
         serde_json::from_value(response["data"]["AgentRequest"].clone())?;
     for row in &active {
-        anyhow::ensure!(
+        let reason = "superseded by a newer trigger fire";
+        let settled = if row.lifecycle_state == Some(RequestLifecycleState::WaitingForBackend) {
+            stage_supersede_parked_execution(txn, row, reason).await?
+        } else {
             stage_revoke_execution_preserving_output(
                 txn,
                 row,
                 RequestTerminalOutcome::Superseded,
-                "superseded by a newer trigger fire",
+                reason,
             )
             .await?
-                == TerminalizeResult::Won,
+        };
+        anyhow::ensure!(
+            settled == TerminalizeResult::Won,
             "execution changed during atomic trigger supersession",
         );
     }
@@ -713,13 +794,14 @@ async fn stage_task_delivery(
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<TaskDeliveryAdmission> {
     let fresh = stage_fire_receipt(txn, fire).await?;
-    stage_task_delivery_with_receipt(txn, fire, continue_existing, create, fresh, None).await
+    stage_task_delivery_with_receipt(txn, fire, continue_existing, false, create, fresh, None).await
 }
 
 async fn stage_task_delivery_with_receipt(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     fire: &gents_protocol::trigger_delivery::TriggerFire,
     continue_existing: bool,
+    create_session: bool,
     create: &gents_protocol::request_admission::AgentRequestCreate,
     fresh: bool,
     expected_event_source: Option<&serde_json::Value>,
@@ -795,14 +877,19 @@ async fn stage_task_delivery_with_receipt(
         .await?;
         if continue_existing {
             anyhow::ensure!(
-                resolve_session_id(&fire.identity, Some(&create.session_id), session.is_some())
-                    .is_some(),
+                resolve_session_id(
+                    &fire.identity,
+                    Some(&create.session_id),
+                    session.is_some(),
+                    create_session,
+                )
+                .is_some(),
                 "Task target session is missing or belongs to another owner"
             );
         } else {
             anyhow::ensure!(
                 manual_label
-                    || resolve_session_id(&fire.identity, None, false).as_deref()
+                    || resolve_session_id(&fire.identity, None, false, false).as_deref()
                         == Some(fire.session_id.as_str()),
                 "new Task session must derive from its fire identity"
             );

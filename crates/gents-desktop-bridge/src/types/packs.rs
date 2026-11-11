@@ -200,6 +200,53 @@ pub struct PackAuthorityAskView {
     pub asks: String,
 }
 
+/// The Engineer's default packs as the local node's home has them.
+#[derive(Debug, Serialize, Deserialize, TS)]
+pub struct DefaultPacksView {
+    pub packs: Vec<DefaultPackView>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+pub struct DefaultPackView {
+    pub pack: String,
+    /// What the pack is for.
+    pub purpose: String,
+    /// What the Engineer lacks while the pack is not installed.
+    pub without: String,
+    pub state: DefaultPackState,
+    pub version: Option<String>,
+    /// The archive an approval installs; the approval names it back.
+    pub digest: Option<String>,
+    pub requested: Vec<PackAuthorityAskView>,
+    /// What approving turns on beyond the requested permissions.
+    pub turns_on: Vec<String>,
+    /// Why an unavailable pack could not be resolved.
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum DefaultPackState {
+    Installed,
+    NeedsApproval,
+    Ready,
+    Unavailable,
+}
+
+/// What an approval left: every default pack's state after it, and the packs
+/// it could not install.
+#[derive(Debug, Serialize, Deserialize, TS)]
+pub struct DefaultPacksApprovalView {
+    pub packs: Vec<DefaultPackView>,
+    pub failed: Vec<DefaultPackFailureView>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+pub struct DefaultPackFailureView {
+    pub pack: String,
+    pub error: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, TS)]
 pub struct PackUpdateView {
     pub updated: Vec<String>,

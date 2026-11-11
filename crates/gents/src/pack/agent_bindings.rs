@@ -46,6 +46,15 @@ pub fn agent_slot_reference(slot: &str) -> String {
     format!("{AGENT_SLOT_REFERENCE_PREFIX}{slot}")
 }
 
+/// The variable prefix naming an agent slot's DID inside a string, for an ID
+/// derived from the Agent it belongs to (`${GENTS_PACK_AGENT_DID.worker}:context`).
+/// A whole agent DID field takes an agent slot reference instead.
+pub const AGENT_DID_VARIABLE_PREFIX: &str = "GENTS_PACK_AGENT_DID.";
+
+pub fn agent_did_variable(slot: &str) -> String {
+    format!("${{{AGENT_DID_VARIABLE_PREFIX}{slot}}}")
+}
+
 #[derive(Debug, Clone)]
 pub struct BoundPackConfig {
     pub installation_doc_id: Option<String>,
@@ -305,7 +314,26 @@ pub(super) async fn load_pack_install_config_with_dependencies(
         if recorded.contains_key(slot) {
             continue;
         }
-        let binding = if let Some(hosted) = hosted {
+        let original = match hosted {
+            Some(_) => None,
+            None => {
+                explicit_binding(access, &options.node_did, &coordinate, slot, environment).await?
+            }
+        };
+        if let Some(original) = &original {
+            anyhow::ensure!(
+                recorded
+                    .values()
+                    .chain(provisioned.values())
+                    .all(|bound| bound.agent_did != original.agent_did),
+                "{} binds agent slot {slot:?} to {}, which another slot of this pack already holds",
+                agent_binding_variable(slot),
+                original.agent_did
+            );
+        }
+        let binding = if let Some(original) = original {
+            original
+        } else if let Some(hosted) = hosted {
             hosted
                 .get(slot)
                 .with_context(|| format!("hosted pack is missing agent slot {slot:?}"))?
@@ -385,13 +413,90 @@ pub(super) async fn load_pack_install_config_with_dependencies(
         options,
         value,
         read_asset,
-        environment,
+        &|name| match name.strip_prefix(AGENT_DID_VARIABLE_PREFIX) {
+            Some(slot) => references.get(slot).map(|bound| bound.agent_did.clone()),
+            None => environment(name),
+        },
     )?;
     Ok(BoundPackConfig {
         installation_doc_id,
         config,
         agent_bindings: plan.recorded,
     })
+}
+
+/// The install variable that binds the agent slot `slot` to an existing Agent
+/// of the node, by DID: the slot upper-cased, every other character an
+/// underscore, so it is a name `--var` and a shell environment both carry.
+pub fn agent_binding_variable(slot: &str) -> String {
+    let slot: String = slot
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("GENTS_PACK_BIND_AGENT_{slot}")
+}
+
+/// The existing Agent the installer bound `slot` to with
+/// [`agent_binding_variable`], or `None` when it named none and the pack
+/// provisions its own agent.
+///
+/// Maintainer decision (2026-11-10): a slot binds to an existing Agent only
+/// when the installer says so. Binding by matching display name let a pack
+/// that ships an agent named like one of the user's take that agent, and with
+/// `overwrite` replace its documents. A reinstall keeps the bindings its
+/// installation record holds, and `pack export` names these variables for the
+/// agents it was written from. An Agent another pack installed is never taken.
+async fn explicit_binding(
+    access: &ConfigAccess,
+    owner: &str,
+    pack: &str,
+    slot: &str,
+    environment: &(dyn Fn(&str) -> Option<String> + Sync),
+) -> Result<Option<AgentIdentityBinding>> {
+    let variable = agent_binding_variable(slot);
+    let Some(agent_did) = environment(&variable)
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    let response = access
+        .execute(&format!(
+            r#"{{ Agent(filter: {{node_did: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}}}) {{ agent_did creation_nonce tags }} }}"#,
+            crate::store::graphql::escape_graphql_string(owner),
+            crate::store::graphql::escape_graphql_string(&agent_did),
+        ))
+        .await?;
+    let agent = response["data"]["Agent"]
+        .as_array()
+        .and_then(|agents| agents.first())
+        .with_context(|| {
+            format!("{variable} binds agent slot {slot:?} to {agent_did}, which is not an Agent of this node the installer can read; omit the variable to have the pack make its own agent")
+        })?;
+    let tags: Vec<String> = agent["tags"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|tag| tag.as_str().map(str::to_owned))
+        .collect();
+    if let Some(origin) = super::pack_origin_from_tags(&tags)?.filter(|origin| *origin != pack) {
+        anyhow::bail!(
+            "{variable} binds agent slot {slot:?} to {agent_did}, which pack {origin} installed; a slot never takes another pack's agent"
+        );
+    }
+    Ok(Some(AgentIdentityBinding {
+        agent_did,
+        creation_nonce: agent["creation_nonce"]
+            .as_str()
+            .context("live agent has no creation nonce")?
+            .to_owned(),
+    }))
 }
 
 /// An offline view keeps agent templates as JSON; only the remaining document
@@ -450,6 +555,15 @@ pub fn load_pack_authoring_config(
         None => anyhow::bail!("pack has no configuration"),
     };
     let original = value.clone();
+    // No Agent exists offline, so a slot's DID variable reads as a stand-in.
+    let authored = authored_slots(&value)?;
+    let environment = &|name: &str| match name.strip_prefix(AGENT_DID_VARIABLE_PREFIX) {
+        Some(slot) => authored
+            .iter()
+            .any(|authored| authored == slot)
+            .then(|| format!("did:pack:slot:{slot}")),
+        None => environment(name),
+    };
     super::loader::interpolate_values(&mut value, &|name| {
         if name == "GENTS_PACK_NODE_DID" {
             Some(options.node_did.clone())

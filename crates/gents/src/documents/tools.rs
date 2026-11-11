@@ -634,6 +634,13 @@ pub struct SelfConfigTools {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub enable_pack_install: Option<bool>,
+    /// Pack authority: an install grants what the pack's plugins ask for, and
+    /// `pack build` and `pack test` compile plugin source in the command
+    /// sandbox. The Engineer preset carries it; other agents have it only
+    /// through their own Tools, and a node owner narrows it by clearing it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub enable_pack_authority: Option<bool>,
 }
 
 impl Tools {

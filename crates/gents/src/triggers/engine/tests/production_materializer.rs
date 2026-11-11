@@ -159,6 +159,8 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
             created_at: "2030-01-01T00:00:00Z".into(),
         },
         target_existing: false,
+        create_session: false,
+        max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
         replace_prior: false,
         event_source_generation: None,
     };
@@ -967,6 +969,8 @@ async fn durable_goal_task_replay_retains_its_admitted_assignment() {
             created_at: "2030-01-01T00:00:00Z".into(),
         },
         target_existing: true,
+        create_session: false,
+        max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
         replace_prior: false,
         event_source_generation: None,
     };

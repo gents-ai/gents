@@ -337,6 +337,7 @@ async fn dependency_slot_is_provisioned_once_and_owned_by_its_installation() {
         &BTreeMap::from([("model".into(), "profile".into())]),
         &[&dependency],
         InstalledVia::Operator,
+        false,
         None,
         &|_| None,
         Some(&provisioner),

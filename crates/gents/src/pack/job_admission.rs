@@ -4,7 +4,7 @@ use crate::documents::{PackConfig, Tools};
 use crate::pack::{InstalledVia, PackMetadata};
 
 /// Lean `packJobBlockAdmissible`: a pack-shipped job block installs only on an
-/// operator install, with targets and trusted packs drawn from the pack and its
+/// install that records `Operator` (`installer_provenance`), with targets and trusted packs drawn from the pack and its
 /// dependencies, and dynamic scripts off or check.
 pub fn job_block_admissible(
     via: InstalledVia,
@@ -64,11 +64,14 @@ pub fn pack_job_block_admissible(
                 job.policy.dynamic,
             ),
             "plugin {:?} ships a job block this install cannot grant. A pack-shipped job \
-             block needs an operator install, job.agent_targets that name AgentTargets shipped \
+             block needs an operator install or an agent install under pack authority \
+             (self_config.enable_pack_authority), job.agent_targets that name AgentTargets shipped \
              by {coordinate} or its dependencies, job.policy.trusted_packs within {coordinate} \
-             and its dependencies, and job.policy.dynamic off or check. Next: drop the job \
-             block from the pack, or install the \
-             pack with `gents config pack install` and wire the block into Tools as the operator",
+             and its dependencies, and job.policy.dynamic off or check; a pack never ships run, which is set on the selecting \
+             Tools after install. Next: an agent that holds pack authority repeats this install \
+             (config [\"tools\",\"get\"] shows self_config.enable_pack_authority); without it, the node's User \
+             installs the pack with `gents config pack install`, or you drop the job block from \
+             the pack and install the rest",
             plugin.plugin
         );
     }

@@ -750,13 +750,13 @@ fn job_tools_are_bound_only_for_job_capable_plugins() {
 }
 
 #[test]
-fn plugin_child_call_naming_a_job_tool_is_hook_owned_child_refused() {
+fn plugin_child_call_naming_a_job_tool_uses_the_selected_surface() {
     let (_home, resolutions) = job_resolutions();
     let job_tools: std::collections::BTreeSet<String> =
         crate::tools::background::job::JobBinding::bind_all(&resolutions)
             .into_keys()
             .collect();
-    assert!(!crate::plugin::tool_calls::supported("plugin", &job_tools));
+    assert!(crate::plugin::tool_calls::supported("plugin", &job_tools));
     assert!(crate::plugin::tool_calls::supported("plain", &job_tools));
 }
 

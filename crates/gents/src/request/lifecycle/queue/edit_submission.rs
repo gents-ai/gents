@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::client_requester_scope;
 use crate::store::config_client::ConfigAccess;
 use crate::store::identity::NodeIdentity;
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
@@ -19,8 +20,7 @@ pub async fn submit_pending_user_edit(
     session_id: &str,
     edit: PendingQueueEdit,
 ) -> Result<SessionInputEditReceipt> {
-    let requester_did =
-        crate::session::client_requester_scope(access, node_did, session_id, signer.did()).await?;
+    let requester_did = client_requester_scope(access, node_did, session_id, signer.did()).await?;
     let replacements = super::prepare_pending_user_edit(
         access,
         signer,
@@ -62,8 +62,7 @@ pub async fn submit_pending_user_steer(
             }
         })
         .collect::<Vec<_>>();
-    let requester_did =
-        crate::session::client_requester_scope(access, node_did, session_id, signer.did()).await?;
+    let requester_did = client_requester_scope(access, node_did, session_id, signer.did()).await?;
     let replacements = super::management::prepare_pending_user_edit_with_deliveries(
         access,
         signer,

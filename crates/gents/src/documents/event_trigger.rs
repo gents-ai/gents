@@ -41,6 +41,33 @@ fn trigger_runtime_input(
     input
 }
 
+/// Disables a Trigger whose fire budget is spent and records why. Document
+/// ACP gives the admitting Agent no write on the Trigger, so the stop is
+/// written here, by the owner of the Trigger's runtime fields.
+pub(crate) async fn stop_trigger_for_budget(
+    node: &std::sync::Arc<EmbeddedNode>,
+    node_did: &str,
+    trigger_id: &str,
+    reason: &str,
+) -> Result<()> {
+    use gents_protocol::document_query::{fields::trigger as fields, Filter, Input, Update};
+    let rendered = Update::matching(
+        Filter::eq(fields::NODE_DID, node_did).and(Filter::eq(fields::TRIGGER_ID, trigger_id)),
+        Input::new()
+            .set(fields::ENABLED, false)
+            .set(fields::LAST_STATUS, super::BUDGET_EXHAUSTED_STATUS)
+            .set(fields::LAST_ERROR, reason),
+    )
+    .render();
+    crate::store::config_client::ConfigAccess::write_local_rendered(
+        node,
+        "document.stop_trigger_for_budget",
+        &rendered,
+    )
+    .await?;
+    Ok(())
+}
+
 pub(crate) async fn load_trigger_next_run_at_batch(
     node: &EmbeddedNode,
     scopes: &[(String, String)],

@@ -58,6 +58,7 @@ theorem handoffRunningWorld_header (world : World) (document : DocId) (tool : Ow
     (handoffRunningEdit_session world document) (handoffRunningEdit_sequence world document)
     (handoffRunningEdit_provenance world document)
     (handoffRunningEdit_await world document)
+    (by intro value; unfold handoffRunningEdit handoffRunningTool; split <;> rfl)
 
 theorem handoffRunningWorld_result (world : World) (document : DocId) (tool : OwnedTool)
     (key : Transcript.ToolResultKey) :

@@ -6,10 +6,13 @@ use crate::documents::{Agent, AgentContext, Tools};
 use crate::store::config_client::ConfigRead;
 use crate::store::graphql::escape_graphql_string;
 
-/// Check the surviving document graph before retiring plugin files. Pack
-/// removal calls this inside its transaction after proposed document deletions;
-/// standalone plugin removal calls it before changing the local store. Missing
-/// or malformed reads must refuse removal, never establish non-use.
+/// Check the surviving document graph before retiring plugin files (Lean
+/// `Configuration.pluginRetirementAllowed`): the plugins retire unless a Tools
+/// the actor can read still selects one, and the refusal names every such
+/// Tools. Pack removal calls this inside its transaction after proposed
+/// document deletions; standalone plugin removal calls it before changing the
+/// local store. Missing or malformed reads refuse removal, never establish
+/// non-use.
 pub async fn ensure_plugins_unreferenced<R>(
     access: &R,
     owner: &str,
@@ -21,14 +24,24 @@ where
     if removed.is_empty() {
         return Ok(());
     }
-    for (agent, tools, reference) in selected_plugin_references(access, owner).await? {
-        anyhow::ensure!(
-            !removed.contains(&reference.plugin),
-            "cannot remove plugin {}: agent {:?} still selects it through Tools {:?}; remove that reference first with `gents config pack wire {} --agent {} --remove --home <node-home>`",
-            reference.plugin, agent, tools, reference.plugin, agent
-        );
-    }
-    Err(super::PackRemovalError::ReferenceInventoryUnavailable.into())
+    let mut selecting = selected_plugin_references(access, owner)
+        .await?
+        .into_iter()
+        .filter(|(_, _, reference, _)| removed.contains(&reference.plugin))
+        .map(|(agent, tools, reference, _)| (reference.plugin, agent, tools));
+    let Some((plugin, agent, tools)) = selecting.next() else {
+        return Ok(());
+    };
+    let others = selecting
+        .map(|(plugin, agent, tools)| {
+            format!("; Tools {tools:?} of agent {agent:?} selects {plugin}")
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<String>();
+    anyhow::bail!(
+        "cannot remove plugin {plugin}: agent {agent:?} still selects it through Tools {tools:?}{others}; remove that reference first with `gents config pack wire {plugin} --agent {agent} --remove --home <node-home>`"
+    )
 }
 
 pub(crate) async fn ensure_replaced_plugins_match<R>(
@@ -39,28 +52,132 @@ pub(crate) async fn ensure_replaced_plugins_match<R>(
 where
     R: ConfigRead + ?Sized,
 {
-    if replacements.is_empty() {
-        return Ok(None);
+    Ok(plugin_pin_conflicts(access, owner, replacements)
+        .await?
+        .first()
+        .map(|conflict| {
+            format!(
+                "cannot replace plugin {} with {}: agent {:?} selects pin {} through Tools {:?}",
+                conflict.plugin, conflict.replacement, conflict.agent, conflict.pin, conflict.tools,
+            )
+        }))
+}
+
+/// A Tools document that selects a plugin, as far as the reading actor can see.
+#[derive(Debug, Clone)]
+pub struct PluginSelection {
+    pub plugin: String,
+    pub agent: String,
+    pub tools: String,
+    /// The selecting Tools' `integrations` without the named plugins.
+    pub integrations: serde_json::Value,
+}
+
+/// The selections of `plugins` the reading actor can see. ACP filters the
+/// read: a Tools the actor cannot read may still select one
+/// (Lean `Configuration.pluginRetirementAllowed`).
+pub async fn visible_plugin_selections<R>(
+    access: &R,
+    owner: &str,
+    plugins: &BTreeSet<String>,
+) -> Result<Vec<PluginSelection>>
+where
+    R: ConfigRead + ?Sized,
+{
+    let mut selections = Vec::new();
+    for (agent, tools, reference, integrations) in selected_plugin_references(access, owner).await?
+    {
+        if !plugins.contains(&reference.plugin) {
+            continue;
+        }
+        let mut remaining = integrations;
+        if let Some(entries) = remaining.plugins.as_mut() {
+            entries.retain(|entry| !plugins.contains(&entry.plugin));
+        }
+        selections.push(PluginSelection {
+            plugin: reference.plugin,
+            agent,
+            tools,
+            integrations: serde_json::to_value(&remaining)?,
+        });
     }
-    for (agent, tools, reference) in selected_plugin_references(access, owner).await? {
-        if let (Some(replacement), Some(pin)) =
+    Ok(selections)
+}
+
+/// A selection whose pin refuses a plugin replacement
+/// (Lean `Configuration.pluginReplacementSafe`).
+#[derive(Debug, Clone)]
+pub struct PluginPinConflict {
+    pub plugin: String,
+    pub replacement: String,
+    pub agent: String,
+    pub tools: String,
+    pub pin: String,
+    /// The selecting Tools' `integrations` with every replaced plugin's pin
+    /// moved to its replacement: the value that lets the replacement through.
+    pub integrations: serde_json::Value,
+    /// The selecting Tools' `integrations` as they are now: what puts the
+    /// pins back when the replacement does not install.
+    pub previous_integrations: serde_json::Value,
+}
+
+/// Every selection pinned to a digest other than the one `replacements`
+/// publishes for its plugin, in the order the references are read.
+pub async fn plugin_pin_conflicts<R>(
+    access: &R,
+    owner: &str,
+    replacements: &BTreeMap<String, String>,
+) -> Result<Vec<PluginPinConflict>>
+where
+    R: ConfigRead + ?Sized,
+{
+    if replacements.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut conflicts = Vec::new();
+    for (agent, tools, reference, integrations) in selected_plugin_references(access, owner).await?
+    {
+        let (Some(replacement), Some(pin)) =
             (replacements.get(&reference.plugin), &reference.digest)
-        {
-            if pin != replacement {
-                return Ok(Some(format!(
-                    "cannot replace plugin {} with {}: agent {:?} selects pin {} through Tools {:?}",
-                    reference.plugin, replacement, agent, pin, tools,
-                )));
+        else {
+            continue;
+        };
+        if pin == replacement {
+            continue;
+        }
+        let previous_integrations = serde_json::to_value(&integrations)?;
+        let mut moved = integrations;
+        for entry in moved.plugins.iter_mut().flatten() {
+            if let Some(replacement) = replacements.get(&entry.plugin) {
+                if entry.digest.is_some() {
+                    entry.digest = Some(replacement.clone());
+                }
             }
         }
+        conflicts.push(PluginPinConflict {
+            plugin: reference.plugin,
+            replacement: replacement.clone(),
+            agent,
+            tools,
+            pin: pin.clone(),
+            integrations: serde_json::to_value(&moved)?,
+            previous_integrations,
+        });
     }
-    Ok(None)
+    Ok(conflicts)
 }
 
 async fn selected_plugin_references<R>(
     access: &R,
     owner: &str,
-) -> Result<Vec<(String, String, crate::documents::PluginToolRef)>>
+) -> Result<
+    Vec<(
+        String,
+        String,
+        crate::documents::PluginToolRef,
+        crate::documents::IntegrationTools,
+    )>,
+>
 where
     R: ConfigRead + ?Sized,
 {
@@ -116,6 +233,7 @@ where
                 agent.agent_did.clone(),
                 tools.tools_id.clone(),
                 reference.clone(),
+                tools.integrations.clone().unwrap_or_default(),
             ));
         }
     }

@@ -18,20 +18,26 @@ mod declared_access;
 mod dependencies;
 mod documents;
 mod hosted;
-pub(crate) use documents::{prepare_document_pack_archive_with_provisioner, sdl_paths};
+pub(crate) use documents::{
+    declared_collections, prepare_document_pack_archive_with_provisioner, sdl_paths,
+};
 mod removal;
 pub use catalog::{installed_catalog, InstalledCatalogEntry};
 pub use declared_access::declared_readers;
 pub use documents::{
     apply_hosted_document_graph, apply_prepared_dependency_schemas, assemble_document_graph_report,
-    document_pack_schema_paths, hosted_document_graph, install_prepared_document_graph,
-    install_prepared_document_pack, plugin_data_unique_keys, prepare_document_pack_archive,
-    prepare_document_pack_archive_with_runtime, prepare_document_pack_install,
-    prepare_hosted_document_pack_archive, DependencyVariableOverrides, HostedDocumentGraph,
-    HostedPackPreparation, PreparedDependency, PreparedDocumentPackInstall,
+    collections_install_creates, document_pack_schema_paths, hosted_document_graph,
+    install_prepared_document_graph, install_prepared_document_pack, plugin_data_unique_keys,
+    prepare_document_pack_archive, prepare_document_pack_archive_with_runtime,
+    prepare_document_pack_install, prepare_hosted_document_pack_archive,
+    DependencyVariableOverrides, HostedDocumentGraph, HostedPackPreparation, PreparedDependency,
+    PreparedDocumentPackInstall,
 };
 pub use hosted::{stage_hosted_pack, HostedHomePublication, HostedPackStage, HostedPackStageError};
-pub use removal::ensure_plugins_unreferenced;
+pub use removal::{
+    ensure_plugins_unreferenced, plugin_pin_conflicts, visible_plugin_selections,
+    PluginPinConflict, PluginSelection,
+};
 const RECORD: &str = "PackInstallation";
 const HISTORY_LIMIT: usize = 32;
 
@@ -207,12 +213,23 @@ pub enum DriftPolicy {
     Keep,
 }
 
+impl DriftPolicy {
+    /// The decision as its word on every surface that takes it.
+    pub fn parse(word: &str) -> Option<Self> {
+        match word {
+            "overwrite" => Some(Self::Overwrite),
+            "keep" => Some(Self::Keep),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum PackRemovalError {
     #[error("pack-owned {collection} {id:?} is unavailable to the removing actor")]
     OwnedDocumentUnavailable { collection: String, id: String },
-    #[error("plugin retirement requires a complete native configuration reference inventory")]
-    ReferenceInventoryUnavailable,
+    #[error("plugin retirement reads the node's Tools for selections, and this home has no node configuration to read; initialize the home, then remove the plugin")]
+    NodeUnobserved,
 }
 
 fn require_owned_document_visible(
@@ -522,6 +539,51 @@ async fn ensure_removal_origin(
     Ok(())
 }
 
+/// The documents `coordinate` installed whose live content is no longer what
+/// the installation recorded: the ones an install, update or removal under
+/// [`DriftPolicy::Refuse`] stops at. `removal` narrows them to the documents a
+/// removal would delete. Empty when the pack is not installed.
+pub async fn edited_installed_documents(
+    access: &ConfigAccess,
+    owner: &str,
+    coordinate: &str,
+    removal: bool,
+) -> Result<Vec<String>> {
+    access
+        .transact_readonly("pack.edited_documents", |txn| {
+            Box::pin(async move {
+                let record = read_record(txn, owner, coordinate).await?;
+                let recorded: Vec<(&String, &RecordedDocument, Collection)> = record
+                    .documents
+                    .iter()
+                    .filter(|(_, document)| {
+                        (document.created || !removal) && !is_reserved(document)
+                    })
+                    .filter_map(|(name, document)| {
+                        Some((name, document, managed_collection(&document.collection)?))
+                    })
+                    .collect();
+                let live = live_digests(
+                    txn,
+                    owner,
+                    recorded
+                        .iter()
+                        .map(|(_, document, collection)| (*collection, document.id.as_str())),
+                )
+                .await?;
+                Ok(recorded
+                    .into_iter()
+                    .filter(|(_, document, collection)| {
+                        live.get(&(*collection, document.id.clone()))
+                            .is_some_and(|digest| *digest != document.digest)
+                    })
+                    .map(|(name, _, _)| name.clone())
+                    .collect())
+            })
+        })
+        .await
+}
+
 fn select_install_source(
     same_digest: bool,
     prior: Option<&PackSource>,
@@ -725,6 +787,7 @@ pub(crate) async fn install_in_txn(
     };
     let mut recorded = BTreeMap::new();
     let mut edited = Vec::new();
+    let mut differing = Vec::new();
     let mut keep = Vec::new();
 
     let document_ids: Vec<(Collection, &str)> = documents
@@ -770,7 +833,20 @@ pub(crate) async fn install_in_txn(
                 report.replaced.push(name.clone());
                 previous.created
             }
-            (Some(_), None) => {
+            (Some(live), None) => {
+                // A document the pack did not install is taken over only as
+                // the pack ships it; any other content is the node's own.
+                if *live != super::pack_artifact_document_digest(&document.add)? {
+                    match policy {
+                        DriftPolicy::Refuse => differing.push(name.clone()),
+                        DriftPolicy::Overwrite => {}
+                        DriftPolicy::Keep => {
+                            report.kept.push(name.clone());
+                            keep.push(name.clone());
+                            continue;
+                        }
+                    }
+                }
                 report.adopted.push(name.clone());
                 false
             }
@@ -829,6 +905,12 @@ pub(crate) async fn install_in_txn(
         return Err(PackChangeError::Edited {
             coordinate: pack.coordinate.clone(),
             edited,
+        });
+    }
+    if !differing.is_empty() {
+        return Err(PackChangeError::Differing {
+            coordinate: pack.coordinate.clone(),
+            differing,
         });
     }
 
@@ -955,14 +1037,28 @@ impl crate::store::config_client::TransactionFailure for PluginStoreChangeError 
 #[derive(Debug, thiserror::Error)]
 pub enum PackChangeError {
     #[error(
-        "{} of {coordinate}'s documents were edited since it was installed: {}; \
-         use the operator CLI `gents config pack install`, `gents config pack update`, or `gents config pack remove` with --overwrite or --keep to decide how to handle them; the agent pack command does not accept these flags",
+        "{} of {coordinate}'s documents were edited since it was installed: {}. Overwrite replaces \
+         them with the pack's versions (a removal deletes them); keep leaves them as edited. \
+         Decide with --overwrite or --keep on `gents config pack install`, `gents config pack update` or \
+         `gents config pack remove`, or options.edited on the agent pack command",
         .edited.len(),
         .edited.join(", ")
     )]
     Edited {
         coordinate: String,
         edited: Vec<String>,
+    },
+    #[error(
+        "{} of {coordinate}'s documents already exist on this node with different content: {}; \
+         the pack adopts an existing document only when it matches. Rename or remove them, or \
+         decide: overwrite replaces them with the pack's versions, keep leaves them as they are \
+         (--overwrite or --keep on `gents config pack install`, options.edited on the agent pack command)",
+        .differing.len(),
+        .differing.join(", ")
+    )]
+    Differing {
+        coordinate: String,
+        differing: Vec<String>,
     },
     #[error(transparent)]
     Grant(#[from] GrantError),
@@ -1002,6 +1098,7 @@ impl crate::store::config_client::TransactionFailure for PackChangeError {
     fn config_client_error(&self) -> Option<&crate::store::config_client::ConfigClientError> {
         match self {
             Self::Edited { .. }
+            | Self::Differing { .. }
             | Self::Grant(GrantError::Ungranted { .. })
             | Self::Slots(super::SlotBindingError::Unbound { .. }) => None,
             Self::Other(error)
@@ -1038,6 +1135,32 @@ pub async fn record_plugin_store_change_as(
     .await
 }
 
+/// Tells the node that `coordinate`'s plugins were retired from `home` after
+/// [`ensure_plugins_unreferenced`] allowed it: the record that listed them is
+/// released, where a notice of files that merely disappeared keeps it.
+pub async fn record_plugin_retirement_as(
+    access: &ConfigAccess,
+    owner: &str,
+    identity: Option<Did>,
+    home: &Path,
+    coordinate: &str,
+) -> std::result::Result<(), PluginStoreChangeError> {
+    record_plugin_store_change_with_stage(
+        access,
+        owner,
+        identity,
+        home,
+        coordinate,
+        None,
+        PluginStageContext {
+            node_binding: None,
+            changes: None,
+            retired: true,
+        },
+    )
+    .await
+}
+
 pub(crate) async fn record_plugin_store_change_as_with_node_binding(
     access: &ConfigAccess,
     owner: &str,
@@ -1057,6 +1180,7 @@ pub(crate) async fn record_plugin_store_change_as_with_node_binding(
         PluginStageContext {
             node_binding,
             changes: None,
+            retired: false,
         },
     )
     .await
@@ -1082,6 +1206,7 @@ pub async fn record_staged_plugin_store_change(
         PluginStageContext {
             node_binding: None,
             changes: Some(changes),
+            retired: false,
         },
     )
     .await
@@ -1105,6 +1230,9 @@ pub(crate) async fn record_staged_plugin_store_change_as_with_node_binding(
 pub(crate) struct PluginStageContext<'a> {
     pub(crate) node_binding: Option<&'a crate::documents::ConfigurationNodeBinding>,
     pub(crate) changes: Option<&'a crate::pack::plugin_lifecycle::PluginStageChanges>,
+    /// The plugins were retired, so the node's record of them is released
+    /// rather than kept as evidence (Lean `Configuration.retainPluginStoreRecord`).
+    pub(crate) retired: bool,
 }
 
 async fn record_plugin_store_change_with_stage(
@@ -1119,6 +1247,7 @@ async fn record_plugin_store_change_with_stage(
     let PluginStageContext {
         node_binding,
         changes,
+        retired,
     } = stage;
     if let Some(identity) = identity {
         if access.actor_did().as_deref() != Some(identity.as_str()) {
@@ -1145,7 +1274,16 @@ async fn record_plugin_store_change_with_stage(
                     )
                     .await?;
                 }
-                write_plugin_record(txn, owner, home, coordinate, installed, node_binding).await
+                write_plugin_record(
+                    txn,
+                    owner,
+                    home,
+                    coordinate,
+                    installed,
+                    node_binding,
+                    retired,
+                )
+                .await
             })
         })
         .await;
@@ -1232,6 +1370,7 @@ async fn write_plugin_record(
     coordinate: &str,
     installed: Option<&PackIdentity>,
     node_binding: Option<&crate::documents::ConfigurationNodeBinding>,
+    retired: bool,
 ) -> std::result::Result<(), PluginStoreChangeError> {
     if let Some(pack) = installed {
         if let Some(conflict) =
@@ -1279,7 +1418,7 @@ async fn write_plugin_record(
             .map_err(Into::into)
         }
         None if prior.doc_id.is_none() => return Ok(()),
-        None if own && !retained && prior.plugins.is_empty() => {
+        None if own && !retained && (retired || prior.plugins.is_empty()) => {
             return remove_record_in_txn(txn, owner, coordinate, &prior, DriftPolicy::Refuse)
                 .await
                 .map(|_| ())

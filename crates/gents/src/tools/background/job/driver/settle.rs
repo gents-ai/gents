@@ -149,7 +149,7 @@ pub(in crate::tools::background::job) fn refusal_text(
         ),
         Refusal::NotAvailable => (
             "the job's plugin or its job grant is no longer available",
-            format!("Next: ask the operator to restore `{tool}` and its `job` block, then call `{tool}` again"),
+            format!("Next: restore `{tool}` and its `job` block with config [\"pack\",\"wire\",\"<its pack>\"] (it needs the pack grant; without it ask the operator), then call `{tool}` again"),
         ),
         Refusal::EngineChanged => (
             "the job's plugin changed since the job was pinned",

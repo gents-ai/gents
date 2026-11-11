@@ -19,6 +19,12 @@ export type { InstalledWorkflowSummary } from "../generated/InstalledWorkflowSum
 export type { DynamicWorkflowView as DynamicWorkflow } from "../generated/DynamicWorkflowView.js";
 export type { WorkflowPromoteRequest } from "../generated/WorkflowPromoteRequest.js";
 export type { WorkflowPromoteView as WorkflowPromoted } from "../generated/WorkflowPromoteView.js";
+export type { DefaultPacksView as DefaultPacks } from "../generated/DefaultPacksView.js";
+export type { DefaultPackView as DefaultPack } from "../generated/DefaultPackView.js";
+export type { DefaultPackState } from "../generated/DefaultPackState.js";
+export type { DefaultPackApproval } from "../generated/DefaultPackApproval.js";
+export type { DefaultPacksApprovalView as DefaultPacksApproval } from "../generated/DefaultPacksApprovalView.js";
+export type { DefaultPackFailureView as DefaultPackFailure } from "../generated/DefaultPackFailureView.js";
 
 /* The bridge's wire commands return the JSON `gents config pack wire` reports, which
    the bridge does not type (`serde_json::Value`); these are its shapes. */

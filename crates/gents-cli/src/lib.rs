@@ -139,10 +139,10 @@ applies it locally, and verifies an exact post-apply diff.
 
 Examples:
   gents runtime provision --home /path/to/home --root infra/agents/HOST/AGENT
-  gents runtime provision --root infra/agents/mini-1/mini-1-steward
+  gents runtime provision --root infra/agents/mini-1/mini-1-engineer
   gents runtime provision --root infra/agents/dev/dev-agent --bootstrap-file-identity
-  gents runtime provision --root infra/agents/mini-1/mini-1-steward --bootstrap-macos-keychain --keychain-label LABEL
-  gents runtime provision --root infra/agents/mini-1/mini-1-steward --bootstrap-macos-secure-enclave --secure-enclave-label LABEL
+  gents runtime provision --root infra/agents/mini-1/mini-1-engineer --bootstrap-macos-keychain --keychain-label LABEL
+  gents runtime provision --root infra/agents/mini-1/mini-1-engineer --bootstrap-macos-secure-enclave --secure-enclave-label LABEL
 
 Production low-level flow:
   gents init --identity-only --identity-backend macos-keychain --keychain-label LABEL
@@ -405,6 +405,9 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Some(Command::NativeFsRunner(args)) => {
             return commands::native_fs_runner::native_fs_runner(args);
         }
+        Some(Command::PluginBuild(args)) => {
+            return packs::plugin_build(args.dir, args.test).await;
+        }
         Some(Command::DocsBundle(args)) => return commands::docs_bundle::docs_bundle(args),
         Some(Command::Shell(args)) => return commands::start::shell(args, runtime).await,
         Some(command) => command,
@@ -509,7 +512,10 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
                 commands::optimization::dispatch(command, runtime).await
             }
         },
-        Command::Shell(_) | Command::NativeFsRunner(_) | Command::DocsBundle(_) => {
+        Command::Shell(_)
+        | Command::NativeFsRunner(_)
+        | Command::PluginBuild(_)
+        | Command::DocsBundle(_) => {
             unreachable!("handled before telemetry initialization")
         }
     };

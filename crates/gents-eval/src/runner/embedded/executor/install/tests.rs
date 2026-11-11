@@ -166,6 +166,8 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
         let prepared = gents::test_support::PreparedFire {
             receipt: fire,
             target_existing: false,
+            create_session: false,
+            max_fires_per_hour: gents::documents::DEFAULT_MAX_FIRES_PER_HOUR,
             replace_prior: false,
             event_source_generation: Some(generation),
         };

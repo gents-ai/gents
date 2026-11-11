@@ -2,10 +2,12 @@ use rapidhash::{HashSetExt, RapidHashSet};
 use std::ops::RangeInclusive;
 
 use anyhow::Context;
-use gents_protocol::job::PluginJobSettings;
+use gents_protocol::job::{DynamicMode, PluginJobSettings};
 use gents_protocol::job_settings::{
     policy_valid, MAX_LIVE, MAX_MESSAGES_PER_SLOT, MAX_SPAWNS, MAX_WALL_SECS, RESULT_BYTES,
 };
+
+use crate::documents::Tools;
 
 /// Decodes one `integrations.plugins[].job` block; unknown fields are refused.
 pub fn parse(value: serde_json::Value) -> anyhow::Result<PluginJobSettings> {
@@ -13,6 +15,31 @@ pub fn parse(value: serde_json::Value) -> anyhow::Result<PluginJobSettings> {
         "job is not a valid block; its fields are agent_targets, max_live, max_spawns, \
          max_messages_per_slot, result_bytes, max_wall_secs and policy",
     )
+}
+
+/// What a job block at `check` means to whoever just installed or wired
+/// `plugin`, and the call that changes it: nothing else tells them a workflow
+/// pack does nothing dynamic as shipped (a pack cannot ship `run`).
+pub fn dynamic_check_notice(plugin: &str) -> String {
+    format!(
+        "{plugin}: its job block has policy.dynamic check, so a workflow script the model writes is checked but every spawn and message it asks for is refused until dynamic is run. Set it on the Tools that select {plugin}: config [\"tools\",\"get\"], then [\"tools\",\"edit\"] with set.integrations sent back and that plugin's job.policy.dynamic \"run\" (operator: gents config tools set --file tools.json)"
+    )
+}
+
+/// [`dynamic_check_notice`] for every job block at `check` in `tools`.
+pub fn dynamic_check_notices<'a>(tools: impl IntoIterator<Item = &'a Tools>) -> Vec<String> {
+    tools
+        .into_iter()
+        .flat_map(|tools| tools.integrations.iter())
+        .flat_map(|integrations| integrations.plugins.iter().flatten())
+        .filter(|plugin| {
+            plugin
+                .job
+                .as_ref()
+                .is_some_and(|job| job.policy.dynamic == DynamicMode::Check)
+        })
+        .map(|plugin| dynamic_check_notice(&plugin.plugin))
+        .collect()
 }
 
 /// Every violation of the block's rules, each naming the field and the fix.

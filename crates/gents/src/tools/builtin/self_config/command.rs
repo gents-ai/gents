@@ -21,6 +21,9 @@ mod patch;
 mod policy;
 mod reads;
 mod skill;
+mod trigger_explain;
+mod ux;
+mod ux_preview;
 mod validate;
 
 use args::{
@@ -60,14 +63,26 @@ const HELP_INDEX: &[(&str, &str)] = &[
         "automation",
         "connect sources, tasks and triggers; wiring recipes",
     ),
-    ("pack", "pack installation"),
+    ("pack", "pack installation and authoring"),
+    (
+        "page",
+        "a desktop page held on this node as a document, or shipped in a pack",
+    ),
+    (
+        "plugin-source",
+        "a plugin's source held on this node; plugin build compiles it",
+    ),
     (
         "policy",
         "node permissions and document relationships, delegated as this agent",
     ),
     (
         "plugin",
-        "installed plugin inspection and explicit Tools selection",
+        "build from source on this node, run, inspect and select plugins",
+    ),
+    (
+        "ux",
+        "render a pack's UI page in the real sandbox: ux preview",
     ),
     ("discovery", "external configuration scan"),
     ("cleanup", "atomic multi-document deletion"),
@@ -80,9 +95,9 @@ Preview: [RESOURCE,preview,VERB]. Delete needs options.digest from preview. batc
 
 #[derive(Debug, thiserror::Error)]
 #[error("{message}")]
-struct CommandGuidance {
-    message: String,
-    next_call: Value,
+pub(super) struct CommandGuidance {
+    pub(super) message: String,
+    pub(super) next_call: Value,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -111,6 +126,13 @@ impl ConfigCommandParams {
                 "help accepts a command path only; remove target_id, set, clear and options"
             );
         }
+        if let Some(next_call) = self.options_moved_out_of_argv() {
+            return Err(CommandGuidance {
+                message: "options go in the options object beside argv, not in argv as options.NAME tokens".into(),
+                next_call,
+            }
+            .into());
+        }
         let mut argv = self.argv;
         normalize_verbs(&mut argv);
         if let Some(id) = self.target_id {
@@ -124,7 +146,8 @@ impl ConfigCommandParams {
                 ["datastore" | "agent-target" | "execution", "preview", "create" | "edit", ..]
                 | ["agent", "preview", "edit" | "default", ..]
                 | ["backend" | "profile", "preview", "create", ..]
-                | ["pack", "preview", "install" | "update", ..] => 3,
+                | ["pack", "preview", "install" | "update" | "remove", ..] => 3,
+                ["trigger", "explain", ..] => 2,
                 ["datastore" | "agent-target" | "execution", "get" | "create" | "edit", ..]
                 | ["mcp-service", "get" | "preview" | "edit", ..]
                 | ["agent", "get" | "edit" | "default", ..]
@@ -132,7 +155,9 @@ impl ConfigCommandParams {
                 | ["profile", "create", ..]
                 | ["skill", "get", ..]
                 | ["pack", "get" | "install" | "update" | "remove", ..]
-                | ["plugin", "get", ..] => 2,
+                | ["plugin", "get" | "run" | "build", ..]
+                | ["page", "lint", ..] => 2,
+                ["task", "run", ..] => 2,
                 ["automation", "get" | "preview" | "edit", _, ..] => 3,
                 ["get", ..] => return Err(CommandGuidance {
                     message: "Put the resource before the verb: use agent get to inspect an agent.".into(),
@@ -223,6 +248,48 @@ impl ConfigCommandParams {
     }
 }
 
+impl ConfigCommandParams {
+    /// The same call with every `options.NAME VALUE` (or `options.NAME=VALUE`)
+    /// argv token moved into `options`; `None` when argv holds none.
+    fn options_moved_out_of_argv(&self) -> Option<Value> {
+        let mut argv = Vec::with_capacity(self.argv.len());
+        let mut options = self.options.clone();
+        let mut words = self.argv.iter().peekable();
+        while let Some(word) = words.next() {
+            let Some(option) = word.strip_prefix("options.") else {
+                argv.push(word.clone());
+                continue;
+            };
+            let (name, value) = match option.split_once('=') {
+                Some((name, value)) => (name, value.to_owned()),
+                None => (
+                    option,
+                    words
+                        .next_if(|next| !next.starts_with("options."))
+                        .cloned()
+                        .unwrap_or_else(|| "<VALUE>".to_owned()),
+                ),
+            };
+            options.insert(name.to_owned(), Value::String(value));
+        }
+        (argv.len() != self.argv.len()).then(|| {
+            let mut call = serde_json::Map::new();
+            call.insert("argv".into(), json!(argv));
+            if let Some(id) = &self.target_id {
+                call.insert("target_id".into(), json!(id));
+            }
+            if !self.set.is_empty() {
+                call.insert("set".into(), json!(self.set));
+            }
+            if !self.clear.is_empty() {
+                call.insert("clear".into(), json!(self.clear));
+            }
+            call.insert("options".into(), json!(options));
+            Value::Object(call)
+        })
+    }
+}
+
 fn config_help_resource(argv: &[String]) -> Option<Option<&str>> {
     let first = argv.first()?.as_str();
     if matches!(first, "help" | "--help" | "-h") {
@@ -249,19 +316,26 @@ pub fn is_help_call(args: &Value) -> bool {
         .is_some_and(|argv| config_help_resource(&argv).is_some())
 }
 
+/// A help call's words after the resource: the verb, then what narrows it (a
+/// Tools group, SDK export names), wherever `--help` sits among them.
+const HELP_WORDS: usize = 12;
+
 fn help_verb(argv: &[String]) -> Vec<&str> {
-    if argv
-        .first()
-        .is_none_or(|first| matches!(first.as_str(), "help" | "--help" | "-h"))
-    {
+    let Some(first) = argv.first() else {
         return Vec::new();
-    }
-    let mut words = argv[1..]
+    };
+    let start = if matches!(first.as_str(), "help" | "--help" | "-h") {
+        2
+    } else {
+        1
+    };
+    let mut words = argv
+        .get(start..)
+        .unwrap_or_default()
         .iter()
         .map(String::as_str)
-        .take_while(|word| !matches!(*word, "--help" | "-h"))
         .filter(|word| !word.starts_with('-') && *word != "help")
-        .take(3)
+        .take(HELP_WORDS)
         .collect::<Vec<_>>();
     if words.len() > 1 && words[0] == "preview" {
         words.remove(0);
@@ -288,6 +362,10 @@ pub struct ConfigCommandTool {
     pub(super) process_ceiling: crate::tools::surface::SelfConfigProcessCeiling,
     pub(super) execution: Arc<super::execution::ExecutionObservation>,
     pub(super) plugins: Arc<crate::plugin::executor::PluginExecutor>,
+    /// The plugins the calling agent's Tools select for this request.
+    pub(super) selected_plugins: Vec<crate::documents::PluginToolRef>,
+    /// The plugin tool names the process ceiling admits; `None` is all.
+    pub(super) ceiling_plugins: Option<BTreeSet<String>>,
 }
 
 impl Tool for ConfigCommandTool {
@@ -336,8 +414,10 @@ Agent IDs are DIDs; copy the exact agent_did from a creation receipt or ["agent"
             let argv = args.into_argv()?;
             previewing = argv.iter().any(|word| word == "preview");
             deleting = argv.first().is_some_and(|word| word == "cleanup")
-                || argv.iter().take(3).any(|word| word == "delete");
-            help = config_help_resource(&argv).is_some();
+                || argv.iter().take(3).any(|word| word == "delete")
+                || argv.first().is_some_and(|word| word == "pack")
+                    && argv.iter().take(3).any(|word| word == "remove");
+            help = config_help_resource(&argv).is_some() || ux_preview::is_ux_preview(&argv);
             call.dispatch(&argv).await
         }
         .await;
@@ -374,6 +454,9 @@ impl ConfigCommandTool {
     }
 
     async fn dispatch(&self, argv: &[String]) -> Result<String> {
+        if ux_preview::is_ux_preview(argv) {
+            return self.ux_preview(argv).await;
+        }
         if let Some(resource) = config_help_resource(argv) {
             return self.help(resource, help_verb(argv));
         }
@@ -413,6 +496,9 @@ impl ConfigCommandTool {
                     "agent" => ["clone", "disable", "default", "context"].contains(&verb.as_str()),
                     "backend" => ["discover", "accounts"].contains(&verb.as_str()),
                     "skill" => verb == "import",
+                    "task" => verb == "run",
+                    "trigger" => verb == "explain",
+                    "page" => verb == "lint",
                     _ => false,
                 };
                 if !common.contains(&verb.as_str()) && !extra {
@@ -457,10 +543,20 @@ impl ConfigCommandTool {
             "backend" => self.backend(&argv[1..]).await,
             "mcp-service" => self.mcp_service(&argv[1..]).await,
             "automation" => self.automation(&argv[1..]).await,
+            "trigger" => self.trigger_explain(&argv[1..]).await,
             "cleanup" => self.cleanup(&argv[1..]).await,
             "pack" => self.pack(&argv[1..]).await,
             "policy" => self.policy(&argv[1..]).await,
+            "ux" => self.ux(&argv[1..]).await,
+            "task" => self.task_run(&argv[1..]).await,
+            "plugin" if argv.get(1).is_some_and(|verb| verb == "run") => {
+                self.plugin_run(&argv[2..]).await
+            }
+            "plugin" if argv.get(1).is_some_and(|verb| verb == "build") => {
+                self.plugin_build(&argv[2..]).await
+            }
             "plugin" => self.plugin(&argv[1..]),
+            "page" => self.page(&argv[1..]).await,
             "skill" => self.skill(&argv[1..]).await,
             "discovery" => self.discovery(&argv[1..]).await,
             "validate" => self.validate_saved(&argv[1..]).await,

@@ -201,17 +201,20 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
     assert!(!oneshot.contains("add_AgentRequest(input:"));
     assert!(oneshot.contains("agent.node_identity().clone()"));
 
-    for (name, source) in [
+    for (name, builder, source) in [
         (
             "CLI requests",
+            "gents::request::lifecycle::build_signed_client_request",
             include_str!("../../../gents-cli/src/request_helpers.rs"),
         ),
         (
-            "CLI task runs",
-            include_str!("../../../gents-cli/src/commands/config/task_run.rs"),
+            "task runs",
+            "crate::request::lifecycle::build_signed_client_request",
+            include_str!("../../src/request/task_run.rs"),
         ),
         (
             "desktop requests",
+            "gents::request::lifecycle::build_signed_client_request",
             concat!(
                 include_str!("../../../gents-desktop-core/src/client/mutations/chat/request.rs"),
                 include_str!(
@@ -235,7 +238,7 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
             );
         }
         assert!(
-            production.contains("gents::request::lifecycle::build_signed_client_request"),
+            production.contains(builder),
             "{name} lost the shared client request builder"
         );
     }

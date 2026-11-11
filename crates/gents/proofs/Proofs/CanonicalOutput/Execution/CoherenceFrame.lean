@@ -48,13 +48,95 @@ theorem runningReceiptSourceBound_append_open (world : World) (record : Segment)
       noDeniedDocuments ref closing hr]
     simpa [hr] using hp
 
+theorem invocationName_append_open (world : World) (record : Segment)
+    (_fresh : ∀ existing ∈ world.segments, existing.id ≠ record.id)
+    (openSource : closures world.segments record.coordinate = [])
+    (tool : OwnedTool) (name : String) (h : invocationName? world tool = some name) :
+    invocationName? { world with segments := world.segments ++ [record] } tool = some name := by
+  cases hp : tool.provenance with
+  | acceptedIntent => simpa [invocationName?, hp] using h
+  | spawnedBackground parent => simp [invocationName?, hp] at h
+  | pluginEffect parent ordinal =>
+    simp only [invocationName?, hp] at h ⊢
+    cases ha : tool.effectArguments with
+    | none => simp [ha] at h
+    | some argument =>
+      cases hf : world.segments.find? (fun segment => segment.id == argument) with
+      | none => simp [ha, hf] at h
+      | some closing =>
+        have member : closing ∈ world.segments := List.mem_of_find?_eq_some hf
+        have closed : closing.close.isSome = true := by
+          cases hc : closing.close with
+          | none =>
+            cases hw : writerMatchesSource closing.coordinate closing.writer <;>
+              simp [ha, hf, reconstructExtent, hc, hw] at h
+          | some close => simp [hc]
+        have differentCoordinate : record.coordinate ≠ closing.coordinate := by
+          intro heq
+          have hm : closing ∈ closures world.segments record.coordinate := by
+            simp [closures, sourceRecords, member, closed, heq]
+          simp [openSource] at hm
+        have extents (count : Nat) :
+            extent (world.segments ++ [record]) closing.coordinate count =
+              extent world.segments closing.coordinate count := by
+          simp [extent, sourceRecords, List.filter_append, differentCoordinate]
+        simpa [ha, List.find?_append, hf, reconstructExtent, extents] using h
+
+theorem invocationLinkValid_append_open (world : World) (record : Segment)
+    (fresh : ∀ existing ∈ world.segments, existing.id ≠ record.id)
+    (openSource : closures world.segments record.coordinate = [])
+    (tool parent : OwnedTool) (h : invocationLinkValid world tool parent = true) :
+    invocationLinkValid { world with segments := world.segments ++ [record] } tool parent = true := by
+  cases hp : tool.provenance with
+  | acceptedIntent => simp [invocationLinkValid, hp] at h
+  | pluginEffect _ _ => simpa [invocationLinkValid, hp] using h
+  | spawnedBackground _ =>
+    simp only [invocationLinkValid, hp, Bool.and_eq_true, beq_iff_eq] at h ⊢
+    exact ⟨h.1, h.2.1, invocationName_append_open world record fresh openSource parent _ h.2.2⟩
+
+theorem invocationAncestryValid_append_open (world : World) (record : Segment)
+    (fresh : ∀ existing ∈ world.segments, existing.id ≠ record.id)
+    (openSource : closures world.segments record.coordinate = [])
+    (fuel : Nat) (tool : OwnedTool) (h : invocationAncestryValid fuel world tool = true) :
+    invocationAncestryValid fuel { world with segments := world.segments ++ [record] } tool = true := by
+  induction fuel generalizing tool with
+  | zero => simp [invocationAncestryValid, invocationAncestryWith] at h
+  | succ fuel ih =>
+    simp only [invocationAncestryValid, invocationAncestryWith] at h ⊢
+    cases hp : invocationParent? tool with
+    | none => simpa [hp, directAcceptedHeaderMetadataBindsTool] using h
+    | some parentDoc =>
+      have lookup : ownedToolByDocument? { world with segments := world.segments ++ [record] }
+          parentDoc = ownedToolByDocument? world parentDoc := rfl
+      simp only [hp] at h ⊢
+      rw [lookup]
+      cases hb : ownedToolByDocument? world parentDoc with
+      | none => simp [hb] at h
+      | some parent =>
+        simp only [hb, Bool.and_eq_true] at h ⊢
+        exact ⟨invocationLinkValid_append_open world record fresh openSource tool parent h.1,
+          ih parent h.2⟩
+
+theorem toolLifecycleProjectionCoherent_append_open (world : World) (record : Segment)
+    (fresh : ∀ existing ∈ world.segments, existing.id ≠ record.id)
+    (openSource : closures world.segments record.coordinate = [])
+    (h : toolLifecycleProjectionCoherent world = true) :
+    toolLifecycleProjectionCoherent { world with segments := world.segments ++ [record] } = true := by
+  simp only [toolLifecycleProjectionCoherent, Bool.and_eq_true] at h ⊢
+  refine ⟨⟨h.1.1, ?_⟩, h.2⟩
+  rw [List.all_eq_true]
+  intro tool member
+  have ht := (List.all_eq_true.mp h.1.2) tool member
+  simp only [Bool.and_eq_true] at ht ⊢
+  exact ⟨⟨ht.1.1, invocationAncestryValid_append_open world record fresh openSource _ tool ht.1.2⟩, ht.2⟩
+
 theorem toolProjectionCoherent_append_open (world : World) (record : Segment)
     (fresh : ∀ existing ∈ world.segments, existing.id ≠ record.id)
     (openSource : closures world.segments record.coordinate = [])
     (h : toolProjectionCoherent world = true) :
     toolProjectionCoherent { world with segments := world.segments ++ [record] } = true := by
   simp only [toolProjectionCoherent, Bool.and_eq_true] at h ⊢
-  refine ⟨h.1, ?_⟩
+  refine ⟨toolLifecycleProjectionCoherent_append_open world record fresh openSource h.1, ?_⟩
   rw [List.all_eq_true] at h ⊢
   intro tool hmem
   have ht := h.2 tool hmem

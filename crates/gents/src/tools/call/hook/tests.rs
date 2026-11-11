@@ -29,6 +29,9 @@ mod background_budget;
 #[path = "tests/background_admission.rs"]
 mod background_admission;
 
+#[path = "tests/script_composition.rs"]
+mod script_composition;
+
 #[path = "tests/foreground_handoff.rs"]
 mod foreground_handoff;
 
@@ -4707,7 +4710,7 @@ async fn plugin_child_timeout_is_child_terminal_and_parent_completes() {
 }
 
 #[tokio::test]
-async fn plugin_child_naming_a_job_tool_is_refused_and_persisted_as_policy_denied() {
+async fn plugin_child_naming_a_job_tool_reaches_its_owner() {
     use gents_loop::SessionHook;
 
     let data_path =
@@ -4761,15 +4764,11 @@ async fn plugin_child_naming_a_job_tool_is_refused_and_persisted_as_policy_denie
             .await,
         ToolCallHookAction::Continue
     ));
-    let error = hook
+    let child = hook
         .admit_tool_effect("plugin-parent", 1, "workflow_run", "{}")
         .await
-        .unwrap_err();
-    assert!(
-        error.contains("call it directly outside the plugin"),
-        "{error}"
-    );
-    assert!(hook.effect_tool_calls.lock().await.is_empty());
+        .unwrap();
+    assert!(hook.effect_tool_calls.lock().await.contains_key(&child));
     let rows = hook_query(
         &hook,
         "query { AgentToolCall { tool_name lifecycle_state } }",
@@ -4778,10 +4777,16 @@ async fn plugin_child_naming_a_job_tool_is_refused_and_persisted_as_policy_denie
         .clone();
     assert!(
         rows.as_array().unwrap().iter().any(|row| {
-            row["tool_name"] == "workflow_run" && row["lifecycle_state"] == "failed"
+            row["tool_name"] == "workflow_run" && row["lifecycle_state"] == "pending"
         }),
         "{rows}"
     );
+    hook.finish_tool_effect(
+        &child,
+        Some(&crate::tools::call::lifecycle::ToolOutcome::Cancelled),
+    )
+    .await
+    .unwrap();
     node.shutdown().await.expect("shut down test node");
     let _ = std::fs::remove_dir_all(data_path);
 }

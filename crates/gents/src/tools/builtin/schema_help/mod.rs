@@ -6,6 +6,7 @@ use gents_protocol::tool_names::SCHEMA_TOOL_NAME;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 mod help;
@@ -37,8 +38,11 @@ impl SchemaCommand {
         let words: Vec<_> = args.argv.iter().map(String::as_str).collect();
         let takes_id = matches!(
             words.as_slice(),
-            ["collection", "get" | "update" | "materialize", _]
-                | ["version", "list" | "get" | "activate", _]
+            [
+                "collection",
+                "get" | "update" | "materialize" | "empty" | "remove",
+                _
+            ] | ["version", "list" | "get" | "activate", _]
         );
         if takes_id {
             let id = args.argv.pop().unwrap();
@@ -100,21 +104,62 @@ struct SchemaDigestMismatch;
 #[error("SDL definition is invalid")]
 struct SchemaSdlFailure;
 
+/// Why an application collection cannot be emptied or removed yet.
+#[derive(Debug, thiserror::Error)]
+enum CleanupRefusal {
+    #[error("{collection} is still in use; release every user in recovery.release_first, then preview again")]
+    InUse {
+        collection: String,
+        users: Vec<crate::collection_use::CollectionUser>,
+    },
+    #[error("{collection} holds {documents} document(s) and DefraDB removes only an empty collection; empty it with the recovery call, then preview remove again")]
+    NotEmpty {
+        collection: String,
+        documents: usize,
+    },
+}
+
+impl CleanupRefusal {
+    fn recovery(&self, args: &SchemaParams) -> Value {
+        match self {
+            Self::InUse { users, .. } => {
+                json!({"release_first":users,"then":{"tool":"schema","args":preview_call(args)}})
+            }
+            Self::NotEmpty { collection, .. } => {
+                json!({"tool":"schema","args":{"argv":["collection","preview","empty",collection]}})
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct SchemaTool {
     access: ConfigAccess,
+    node_did: String,
+    home: Option<std::path::PathBuf>,
+    /// The calling agent and whether it holds the `tools` category of
+    /// `config`: what a create receipt needs to say how the new collection
+    /// becomes writable.
+    caller: Option<(String, bool)>,
 }
 
 impl SchemaTool {
     #[cfg(test)]
     pub fn new(node: Arc<EmbeddedNode>) -> Self {
         Self {
+            node_did: node.node_identity_did().unwrap_or_default().to_owned(),
             access: ConfigAccess::local(node),
+            home: None,
+            caller: None,
         }
     }
 
+    /// `node_did` owns the configuration, and `home` holds the installed
+    /// packs, that collection cleanup checks for remaining users.
     pub fn for_managed_agent(
         node: Arc<EmbeddedNode>,
+        node_did: &str,
+        home: Option<&std::path::Path>,
         agent: &dyn crate::store::identity::NodeIdentity,
     ) -> std::result::Result<Self, SchemaIdentityError> {
         Ok(Self {
@@ -123,10 +168,122 @@ impl SchemaTool {
                 identity::Did::new(agent.did())?,
                 agent,
             )?,
+            node_did: node_did.to_owned(),
+            home: home.map(ToOwned::to_owned),
+            caller: Some((agent.did().to_owned(), false)),
         })
     }
 
-    async fn execute(&self, command: &SchemaCommand) -> Result<Value> {
+    /// Whether the calling agent holds the `tools` category of `config`.
+    pub fn with_tools_category(mut self, held: bool) -> Self {
+        if let Some((_, holds_tools)) = &mut self.caller {
+            *holds_tools = held;
+        }
+        self
+    }
+
+    /// How the calling agent writes to the collections it just created.
+    async fn write_access(&self, collections: &[String]) -> Option<Value> {
+        let (agent_did, holds_tools) = self.caller.as_ref()?;
+        let datastore = self
+            .access
+            .transact_readonly("schema.write_grant", |txn| {
+                Box::pin(async move {
+                    crate::documents::load_agent_context_and_tools_in_txn(
+                        txn,
+                        &self.node_did,
+                        agent_did,
+                    )
+                    .await
+                })
+            })
+            .await
+            .ok()
+            .and_then(|(_, tools)| tools)
+            .map(|tools| tools.datastore.unwrap_or_default());
+        Some(crate::tools::builtin::defra_write::write_grant_guidance(
+            *holds_tools,
+            datastore.as_ref(),
+            collections,
+        ))
+    }
+
+    /// The application collection `name` and what emptying or removing it
+    /// loses. Emptying leaves every reference intact, so its users are listed
+    /// in the loss; removal is refused while any remain.
+    async fn cleanup_target(
+        &self,
+        name: &str,
+        remove: bool,
+    ) -> Result<std::result::Result<Value, CleanupRefusal>> {
+        ensure_application_collection(name)?;
+        let access = &self.access;
+        let current = access
+            .collection_version(name)
+            .await?
+            .context("collection not found; use collection list")?;
+        let users = crate::collection_use::application_collection_users(
+            access,
+            self.home.as_deref(),
+            &self.node_did,
+            name,
+            None,
+        )
+        .await?;
+        if remove && !users.is_empty() {
+            return Ok(Err(CleanupRefusal::InUse {
+                collection: name.to_owned(),
+                users,
+            }));
+        }
+        let rows = access
+            .execute(&format!("{{ {name} {{ _docID }} }}"))
+            .await?;
+        let documents = rows["data"][name]
+            .as_array()
+            .context("document count query did not return rows")?
+            .len();
+        if remove && documents > 0 {
+            return Ok(Err(CleanupRefusal::NotEmpty {
+                collection: name.to_owned(),
+                documents,
+            }));
+        }
+        let versions = access.collection_versions().await?;
+        let names = |key: &str| -> Vec<&Value> {
+            current[key]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|index| index.get("Name").unwrap_or(index))
+                .collect()
+        };
+        let mut loss = json!({
+            "documents": documents,
+            "indexes": names("Indexes"),
+            "fulltext_indexes": names("FullTextIndexes"),
+            "encrypted_indexes": names("EncryptedIndexes"),
+            "versions": versions.iter().filter(|v| v["CollectionID"] == current["CollectionID"]).count(),
+            "views_reading_it": versions
+                .iter()
+                .filter(|v| v["Query"]["Query"]["Name"].as_str() == Some(name))
+                .filter_map(|v| v["Name"].as_str())
+                .collect::<BTreeSet<_>>(),
+        });
+        if !users.is_empty() {
+            loss["still_used_by"] = json!(users);
+        }
+        if !current["Policy"].is_null() {
+            loss["documents_note"] = json!("This collection has a document policy: the count covers only documents you can read, while cleanup removes every document.");
+        }
+        Ok(Ok(json!({"VersionID": current["VersionID"], "loss": loss})))
+    }
+
+    async fn execute(
+        &self,
+        command: &SchemaCommand,
+        refused: &mut Option<CleanupRefusal>,
+    ) -> Result<Value> {
         let args = &command.args;
         let access = &self.access;
         let words: Vec<_> = args.argv.iter().map(String::as_str).collect();
@@ -149,7 +306,7 @@ impl SchemaTool {
             ["collection", "update"] => &["patch"],
             ["view", "create"] => &["query", "sdl"],
             ["migration", "set"] => &["config"],
-            ["collection", "list" | "get" | "materialize"] | ["version", "list" | "get" | "activate"] => &[],
+            ["collection", "list" | "get" | "materialize" | "empty" | "remove"] | ["version", "list" | "get" | "activate"] => &[],
             _ => bail!("unknown schema command; use RESOURCE VERB [ID]. Read [\"help\"] for resources, or RESOURCE VERB --help for parameters"),
         };
         for key in args.options.keys() {
@@ -248,6 +405,16 @@ impl SchemaTool {
                 }
                 current
             }
+            ["collection", "empty" | "remove"] => {
+                match self.cleanup_target(target()?, words[1] == "remove").await? {
+                    Ok(before) => before,
+                    Err(refusal) => {
+                        let message = refusal.to_string();
+                        *refused = Some(refusal);
+                        bail!(message)
+                    }
+                }
+            }
             ["version", "activate"] => {
                 let version = find_version(access, target()?).await?;
                 let name = version["Name"]
@@ -293,6 +460,12 @@ impl SchemaTool {
             if !sdl_warnings.is_empty() {
                 preview["warnings"] = json!(sdl_warnings);
             }
+            if let Some(loss) = preview["before"]
+                .as_object_mut()
+                .and_then(|before| before.remove("loss"))
+            {
+                preview["loss"] = loss;
+            }
             return Ok(preview);
         }
         if command.digest.as_deref() != Some(digest.as_str()) {
@@ -309,7 +482,13 @@ impl SchemaTool {
                     &plan.artifact_digest,
                 )
                 .await?;
-                json!({"collections":installed.collection_contracts.keys().collect::<Vec<_>>()})
+                let collections: Vec<String> =
+                    installed.collection_contracts.keys().cloned().collect();
+                let mut receipt = json!({"collections": collections});
+                if let Some(write_access) = self.write_access(&collections).await {
+                    receipt["write_access"] = write_access;
+                }
+                receipt
             }
             ["collection", "update"] => {
                 let mut patch = option("patch")?
@@ -336,6 +515,14 @@ impl SchemaTool {
             }
             ["collection", "materialize"] => {
                 json!({"documents_materialized":access.materialize_schema_collection(target()?).await?})
+            }
+            ["collection", "empty"] => {
+                access.truncate_collection(target()?).await?;
+                json!({"collection":target()?,"documents_removed":before["loss"]["documents"]})
+            }
+            ["collection", "remove"] => {
+                access.remove_collections(&[target()?.to_owned()]).await?;
+                json!({"collection":target()?,"removed":true})
             }
             _ => unreachable!(),
         };
@@ -505,21 +692,26 @@ impl SchemaTool {
                 ), json!({"tool":"schema","args":next})));
             }
         }
-        match self.execute(&command).await {
+        let mut refused = None;
+        match self.execute(&command, &mut refused).await {
             Ok(mut value) => {
                 let encoded = if command.preview {
                     let effect = value.as_object_mut().unwrap().remove("effect").unwrap();
                     let next_call = value.as_object_mut().unwrap().remove("next_call").unwrap();
                     let warnings = value.as_object_mut().unwrap().remove("warnings");
+                    let loss = value.as_object_mut().unwrap().remove("loss");
                     let mut output =
                         json!({"effect":effect,"next_call":next_call,"metadata":value});
                     if let Some(warnings) = warnings {
                         output["warnings"] = warnings;
                     }
+                    if let Some(loss) = loss {
+                        output["loss"] = loss;
+                    }
                     serde_json::to_string(
                         &crate::tools::builtin::self_config::Ordered::reading_order(
                             output,
-                            &["effect", "warnings", "next_call", "metadata"],
+                            &["effect", "loss", "warnings", "next_call", "metadata"],
                         ),
                     )
                 } else {
@@ -528,7 +720,9 @@ impl SchemaTool {
                 encoded.map_err(|error| SchemaError(error.to_string()))
             }
             Err(error) => {
-                let recovery = if error.is::<SchemaDigestMismatch>() {
+                let recovery = if let Some(refusal) = &refused {
+                    refusal.recovery(args)
+                } else if error.is::<SchemaDigestMismatch>() {
                     json!({"tool":"schema","args":preview_call(args)})
                 } else if let Some(mismatch) =
                     crate::store::config_client::schema_install_mismatch(error.as_ref())

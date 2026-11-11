@@ -1,9 +1,8 @@
 use crate::config_writes::{ConfigAccess, ConfigApplyTxn};
 use crate::{desired_state, shared::ConfigExportBundle, CONFIG_EXPORT_FORMAT};
 use anyhow::{Context, Result};
-use gents::store::graphql::escape_graphql_string;
-use gents::{documents::config_projection, Collection};
-use serde_json::{Map, Value};
+use gents::pack::authoring::export::sort_document_rows;
+use serde_json::Value;
 use std::collections::BTreeSet;
 
 pub(crate) async fn build_config_export_bundle(
@@ -47,82 +46,17 @@ pub(crate) async fn read_owned_config_bundle_in_txn(
     node_did: &str,
     access_mode: String,
 ) -> Result<Option<ConfigExportBundle>> {
-    anyhow::ensure!(!node_did.trim().is_empty(), "configuration owner is blank");
-    let owner = node_did.to_owned();
-    let mut config = Map::new();
-    let mut has_documents = false;
-    for collection in Collection::ALL {
-        let name = collection.graphql_type();
-        let rows = if collection == Collection::InferenceBackend {
-            gents::documents::list_inference_backends_in_txn(txn, &owner)
-                .await?
-                .into_iter()
-                .map(serde_json::to_value)
-                .collect::<std::result::Result<Vec<_>, _>>()?
-        } else {
-            let (fields, _) = config_projection(collection, None)?;
-            let response = txn
-                .execute(&format!(
-                    "{{{name}(filter:{{node_did:{{_eq:\"{}\"}}}}) {{{}}}}}",
-                    escape_graphql_string(&owner),
-                    fields.join(" ")
-                ))
-                .await?;
-            response
-                .get("data")
-                .and_then(|data| data.get(name))
-                .and_then(Value::as_array)
-                .with_context(|| format!("configuration query returned no {name} rows"))?
-                .clone()
-        };
-        let mut normalized = Vec::with_capacity(rows.len());
-        let mut identities = BTreeSet::new();
-        for row in &rows {
-            let (_, document) = config_projection(collection, Some(row))?;
-            let document = document.context("canonical config projection missing")?;
-            anyhow::ensure!(
-                document.get("node_did").and_then(Value::as_str) == Some(owner.as_str()),
-                "{name} query returned a foreign owner"
-            );
-            let id = document
-                .get(collection.unique_field())
-                .and_then(Value::as_str)
-                .context("configuration logical ID missing")?;
-            anyhow::ensure!(
-                identities.insert(id.to_owned()),
-                "ambiguous {name} logical ID {id:?} within owner"
-            );
-            normalized.push(document);
-        }
-        sort_document_rows(&mut normalized, collection.unique_field());
-        has_documents |= !normalized.is_empty();
-        if let Some(key) = collection.dir_name() {
-            if !normalized.is_empty() {
-                config.insert(key.to_owned(), Value::Array(normalized));
-            }
-        } else {
-            anyhow::ensure!(normalized.len() <= 1, "ambiguous configuration node");
-            if let Some(node) = normalized.pop() {
-                config.insert("node".into(), node);
-            }
-        }
-    }
-    if !config.contains_key("node") {
-        anyhow::ensure!(
-            !has_documents,
-            "owned configuration exists without its Node"
-        );
-        return Ok(None);
-    }
-    let config = serde_json::from_value(Value::Object(config))
-        .context("decode canonical configuration snapshot")?;
-    Ok(Some(ConfigExportBundle {
-        format: CONFIG_EXPORT_FORMAT.into(),
-        node_did: owner,
-        exported_at: chrono::Utc::now().to_rfc3339(),
-        access_mode,
-        config,
-    }))
+    Ok(
+        gents::pack::authoring::export::read_owned_config_in_txn(txn, node_did)
+            .await?
+            .map(|config| ConfigExportBundle {
+                format: CONFIG_EXPORT_FORMAT.into(),
+                node_did: node_did.to_owned(),
+                exported_at: chrono::Utc::now().to_rfc3339(),
+                access_mode,
+                config,
+            }),
+    )
 }
 
 pub(crate) fn live_manifest_from_bundle(
@@ -139,14 +73,6 @@ pub(crate) fn live_manifest_from_bundle(
         let empty = serde_json::from_value(serde_json::json!({"node":desired.node}))?;
         Ok((None, empty))
     }
-}
-
-pub(crate) fn sort_document_rows(rows: &mut [Value], key: &str) {
-    rows.sort_by(|left, right| {
-        let left_key = left.get(key).and_then(Value::as_str).unwrap_or_default();
-        let right_key = right.get(key).and_then(Value::as_str).unwrap_or_default();
-        left_key.cmp(right_key)
-    });
 }
 
 pub(crate) fn select_apply_collection_docs(

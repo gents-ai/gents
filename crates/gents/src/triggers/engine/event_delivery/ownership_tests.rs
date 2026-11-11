@@ -25,6 +25,8 @@ fn modeled_event_execution_generations_match_runtime_projection() {
         .unwrap();
         let resolved = crate::documents::automation::ResolvedEventTrigger {
             session_id_template: trigger.session_id_template.clone(),
+            create_session: false,
+            max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
             trigger_doc_id: value["trigger_doc"].as_str().unwrap().into(),
             trigger_id: trigger.trigger_id.clone(),
             task_id: task.task_id.clone(),
@@ -106,6 +108,8 @@ fn modeled_event_source_generations_match_resolved_projection() {
             event_source_doc_id: "source-doc".into(),
             task_doc_id: "task-doc".into(),
             session_id_template: None,
+            create_session: false,
+            max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
             trigger_doc_id: "trigger-doc".into(),
             trigger_id: "trigger".into(),
             task_id: "task".into(),
