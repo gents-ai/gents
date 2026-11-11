@@ -83,9 +83,9 @@ pub async fn read_owned_config_in_txn(
                 config.insert(key.to_owned(), Value::Array(rows));
             }
         } else {
-            anyhow::ensure!(rows.len() <= 1, "ambiguous configuration node");
-            if let Some(node) = rows.pop() {
-                config.insert("node".into(), node);
+            anyhow::ensure!(rows.len() <= 1, "ambiguous configuration {collection}");
+            if let Some(document) = rows.pop() {
+                config.insert(collection.to_string(), document);
             }
         }
     }

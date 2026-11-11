@@ -4,6 +4,7 @@ use gents_documents::apply_desired_state_plan;
 #[cfg(test)]
 use gents_documents::read_desired_state_record_in_txn;
 use gents_documents::Agent as AgentDocument;
+#[cfg(test)]
 use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
@@ -23,27 +24,43 @@ pub async fn upsert_agent_on(access: &ConfigAccess, document: &AgentDocument) ->
     super::apply_plan(access, "desktop.agent.save", plan).await
 }
 
+/// Saves an Agent document through the operations layer's admission
+/// (`operations::agent::put_in_txn`) inside the publication transaction, so a
+/// new Agent's post-commit grants are journaled by `observer`.
 pub(crate) async fn upsert_agent_with_publication_on(
     access: &ConfigAccess,
     document: &AgentDocument,
     observer: std::sync::Arc<dyn gents_store::config_client::AgentPublicationObserver>,
 ) -> Result<()> {
-    let value = serde_json::to_value(document)?;
-    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::Agent,
-        add: value.clone(),
-        update: value,
-    }])?;
+    use gents::operations::agent::{observe, put_in_txn};
+    use gents_protocol::agent_identity::AgentIdentityBinding;
+    use gents_tools::surface::SelfConfigProcessCeiling;
+
+    use super::principal::agent_failure;
+
+    let ceiling = SelfConfigProcessCeiling::default();
+    let binding = AgentIdentityBinding {
+        creation_nonce: document.creation_nonce.clone(),
+        agent_did: document.agent_did.clone(),
+    };
+    let owner = document.node_did.as_str();
+    let admission = observe(access, owner, std::slice::from_ref(&document.agent_did))
+        .await
+        .map_err(agent_failure)?;
     access
         .transact_write_with_agent_publication("desktop.agent.save", observer, |txn| {
-            let plan = &plan;
+            let (admission, binding, ceiling) = (&admission, &binding, &ceiling);
             Box::pin(async move {
-                gents_documents::apply_desired_state_plan(
+                put_in_txn(
                     txn,
-                    plan,
-                    &gents_inference::resolved::ProviderProfilePolicy,
+                    owner,
+                    admission,
+                    document,
+                    Some(binding.clone()),
+                    ceiling,
                 )
-                .await?;
+                .await
+                .map_err(agent_failure)?;
                 Ok(())
             })
         })
@@ -233,13 +250,24 @@ mod tests {
             access
                 .transact_write("test.node.default", |txn| {
                     Box::pin(async move {
-                        let (_, mut value) =
-                            read_desired_state_record_in_txn(txn, Collection::Node, alpha, alpha)
-                                .await?
-                                .unwrap();
-                        value["default_agent_did"] = json!(default);
+                        let value = match read_desired_state_record_in_txn(
+                            txn,
+                            Collection::DefaultAgentSelection,
+                            alpha,
+                            alpha,
+                        )
+                        .await?
+                        {
+                            Some((_, mut value)) => {
+                                value["default_agent_did"] = json!(default);
+                                value
+                            }
+                            None => serde_json::to_value(
+                                gents_documents::DefaultAgentSelection::new(alpha, default),
+                            )?,
+                        };
                         let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                            collection: Collection::Node,
+                            collection: Collection::DefaultAgentSelection,
                             add: value.clone(),
                             update: value,
                         }])?;

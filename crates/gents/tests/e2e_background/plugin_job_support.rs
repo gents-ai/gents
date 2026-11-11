@@ -347,16 +347,16 @@ pub(crate) async fn reboot_job_harness(
     );
     let user = crate::support::load_managed_fixture_user(&db).await;
     let access = db.client_access(&user);
-    let response = access.execute("{ Node { node_did default_agent_did } Agent { node_did agent_did creation_nonce display_name } }").await.expect("read retained job identities");
+    let response = access.execute("{ DefaultAgentSelection { node_did default_agent_did } Agent { node_did agent_did creation_nonce display_name } }").await.expect("read retained job identities");
     let rows = response["data"]["Agent"]
         .as_array()
         .expect("retained job Agents");
-    let parent_did = response["data"]["Node"]
+    let parent_did = response["data"]["DefaultAgentSelection"]
         .as_array()
-        .expect("retained Node")
+        .expect("retained default agent selection")
         .iter()
-        .find(|node| node["node_did"] == db.node_identity.did())
-        .and_then(|node| node["default_agent_did"].as_str())
+        .find(|selection| selection["node_did"] == db.node_identity.did())
+        .and_then(|selection| selection["default_agent_did"].as_str())
         .expect("retained default Agent");
     let parent = rows
         .iter()

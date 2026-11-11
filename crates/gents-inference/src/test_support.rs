@@ -51,8 +51,10 @@ pub async fn ensure_test_default_agent(
     owner: &str,
 ) -> gents_protocol::agent_identity::AgentIdentityBinding {
     ensure_test_node(node, owner).await;
-    let principal = gents_documents::ensure_node(node, owner).await.unwrap();
-    if let Some(did) = principal.default_agent_did {
+    if let Some(did) = gents_documents::load_default_agent_did(node, owner)
+        .await
+        .unwrap()
+    {
         let agent = gents_documents::load_agent(node, &did)
             .await
             .unwrap()

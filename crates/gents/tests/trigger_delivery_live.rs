@@ -219,12 +219,13 @@ async fn bind_agents(access: &ConfigAccess, owner: &str, agents: &DeliveryAgents
             let profiles = &profiles;
             let lead = &agents.lead;
             Box::pin(async move {
-                let (_, node) = read(txn, Collection::Node, owner, owner)
+                read(txn, Collection::Node, owner, owner)
                     .await?
                     .context("the fixture User's Node is missing")?;
-                let mut node: gents_documents::Node = serde_json::from_value(node)?;
-                node.default_agent_did = Some(lead.clone());
-                let mut documents = vec![(Collection::Node, serde_json::to_value(node)?)];
+                let mut documents = vec![(
+                    Collection::DefaultAgentSelection,
+                    serde_json::json!({"node_did": owner, "default_agent_did": lead}),
+                )];
                 for (agent_did, profile_id) in profiles {
                     let (_, agent) = read(txn, Collection::Agent, owner, agent_did)
                         .await?

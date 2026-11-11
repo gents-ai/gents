@@ -197,8 +197,9 @@ pub async fn prepare_signed_mailbox_turn(
         )
     };
     let mut docs = vec![
+        (Collection::Node, serde_json::json!({"node_did":node_did})),
         (
-            Collection::Node,
+            Collection::DefaultAgentSelection,
             serde_json::json!({"node_did":node_did, "default_agent_did":agent.did()}),
         ),
         (

@@ -1851,7 +1851,7 @@ pub(crate) fn installable_documents(config: &PackConfig) -> Result<Vec<DesiredSt
     Ok(DesiredStateApplyPlan::from_pack_config(config)?
         .documents()
         .iter()
-        .filter(|document| document.collection != Collection::Node)
+        .filter(|document| !document.collection.keyed_by_owner())
         .cloned()
         .collect())
 }

@@ -87,6 +87,7 @@ pub fn config_projection(
     use crate::*;
     match collection {
         Collection::Node => project::<Node>(value),
+        Collection::DefaultAgentSelection => project::<DefaultAgentSelection>(value),
         Collection::Agent => project::<Agent>(value),
         Collection::AgentContext => project::<AgentContext>(value),
         Collection::Compaction => project::<CompactionConfig>(value),
@@ -133,8 +134,8 @@ pub(super) fn reference_filter(collection: Collection, owner: &str, id: &str) ->
         !owner.trim().is_empty() && !id.trim().is_empty(),
         "configuration reference requires owner and ID"
     );
-    if collection == Collection::Node {
-        anyhow::ensure!(id == owner, "node reference must match owner");
+    if collection.keyed_by_owner() {
+        anyhow::ensure!(id == owner, "{collection} reference must match owner");
         Ok(format!(
             r#"{{ node_did: {{ _eq: "{}" }} }}"#,
             escape_graphql_string(owner)

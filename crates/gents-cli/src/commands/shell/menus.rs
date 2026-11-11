@@ -922,7 +922,8 @@ mod tests {
         const OWNER: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
         let did = |name| crate::shared::test_support::fixture_agent_named(name).agent_did;
         let served = crate::shared::test_support::served_config(json!({
-            "node": { "node_did": OWNER, "default_agent_did": "engineer" },
+            "node": { "node_did": OWNER },
+            "default_agent_selection": { "node_did": OWNER, "default_agent_did": "engineer" },
             "inference_backends": [{
                 "node_did": OWNER,
                 "backend_id": "backend",

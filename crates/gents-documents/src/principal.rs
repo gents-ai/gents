@@ -19,9 +19,6 @@ pub struct Node {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub avatar: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub default_agent_did: Option<String>,
     #[serde(
         default = "super::serde_helpers::default_enabled",
         deserialize_with = "super::serde_helpers::deserialize_enabled",
@@ -50,6 +47,88 @@ pub struct Node {
     pub tags: Vec<String>,
 }
 
+/// Lean `SelfConfig.initDefaultSelection`: a Node's default Agent selection,
+/// one document per Node, keyed by `node_did`. Its update is the Node's
+/// `manage_agents` (the agent catalog), so choosing the default never needs
+/// Node update. Node initialisation creates it as the init User in the
+/// transaction that publishes the Node.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct DefaultAgentSelection {
+    pub node_did: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub default_agent_did: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub updated_at: Option<String>,
+}
+
+impl DefaultAgentSelection {
+    pub fn new(node_did: &str, default_agent_did: &str) -> Self {
+        Self {
+            node_did: node_did.to_owned(),
+            default_agent_did: Some(default_agent_did.to_owned()),
+            updated_at: None,
+        }
+    }
+
+    /// The selected Agent; a blank selection selects none.
+    pub fn selected(&self) -> Option<&str> {
+        self.default_agent_did
+            .as_deref()
+            .filter(|did| !did.trim().is_empty())
+    }
+}
+
+/// The Node's default Agent as the reader behind `node` sees its selection
+/// document; the runtime reads it through its `runtime_reader` relation.
+pub async fn load_default_agent_did(node: &EmbeddedNode, node_did: &str) -> Result<Option<String>> {
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::default_agent_selection as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::new().field(fields::DEFAULT_AGENT_DID))
+            .filter(Filter::eq(fields::NODE_DID, node_did))
+            .limit(1)
+            .render()
+    };
+    let resp =
+        gents_store::graphql::read_rendered(node, &rendered, "query DefaultAgentSelection").await?;
+    Ok(selected_default(resp.data.as_ref()))
+}
+
+/// The Node's default Agent as this transaction's actor sees its selection
+/// document.
+pub async fn load_default_agent_did_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+) -> Result<Option<String>> {
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::default_agent_selection as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::new().field(fields::DEFAULT_AGENT_DID))
+            .filter(Filter::eq(fields::NODE_DID, node_did))
+            .limit(1)
+            .render()
+    };
+    let response = txn.run(&rendered).await?;
+    Ok(selected_default(response.get("data")))
+}
+
+fn selected_default(data: Option<&serde_json::Value>) -> Option<String> {
+    data?
+        .get("DefaultAgentSelection")?
+        .as_array()?
+        .first()?
+        .get("default_agent_did")?
+        .as_str()
+        .filter(|did| !did.trim().is_empty())
+        .map(str::to_owned)
+}
+
 pub async fn load_node(node: &EmbeddedNode, node_did: &str) -> Result<Option<Node>> {
     Ok(load_node_record(node, node_did)
         .await?
@@ -67,7 +146,6 @@ pub(crate) async fn load_node_record(
                 .field(fields::NODE_DID)
                 .field(fields::DISPLAY_NAME)
                 .field(fields::AVATAR)
-                .field(fields::DEFAULT_AGENT_DID)
                 .field(fields::ENABLED)
                 .field(fields::CREATED_AT)
                 .field(fields::CREATED_BY)

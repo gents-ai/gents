@@ -1,8 +1,9 @@
 use super::*;
 use gents_session::session::output_render::Ordered;
 
-/// The runtime refreshes its physical Node selection without changing the
-/// invoking Agent used for Agent reads and writes.
+/// The Node's default Agent. With a runtime Node binding it is refreshed as
+/// the runtime reads it; otherwise it is the selection document as the
+/// invoking Agent reads it.
 pub(super) async fn node_default_agent(core: &SelfConfigCore) -> Result<Option<String>> {
     if core.node_binding().is_some() {
         return Ok(core
@@ -11,29 +12,19 @@ pub(super) async fn node_default_agent(core: &SelfConfigCore) -> Result<Option<S
             .context("runtime Node binding is unavailable")?
             .default_agent_did);
     }
-    let query = format!(
-        r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}, limit: 2) {{ default_agent_did }} }}"#,
-        escape_graphql_string(core.node_did())
-    );
-    let access = core.access()?;
-    let response = access.execute(&query).await?;
-    let rows = response
-        .get("data")
-        .and_then(|data| data.get("Node"))
-        .and_then(Value::as_array)
-        .context("Node query returned no rows")?;
-    anyhow::ensure!(rows.len() <= 1, "ambiguous node identity");
-    Ok(rows
-        .first()
-        .and_then(|row| row.get("default_agent_did"))
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned))
+    let node_did = core.node_did();
+    core.access()?
+        .transact_readonly("self_config.default_agent", |txn| {
+            Box::pin(gents_documents::load_default_agent_did_in_txn(
+                txn, node_did,
+            ))
+        })
+        .await
 }
 
 async fn agent_snapshot(
     core: &SelfConfigCore,
     agent_did: &str,
-    protected: bool,
     default_agent_did: Option<&str>,
 ) -> Result<Value> {
     let effective = SelfConfigCore::new(
@@ -48,7 +39,6 @@ async fn agent_snapshot(
     .await?;
     Ok(json!({
         "agent_did": agent_did,
-        "protected": protected,
         "is_default": default_agent_did == Some(agent_did),
         "effective_config": effective,
     }))
@@ -75,14 +65,7 @@ pub(super) async fn agent_list(
     let truncated = selected.len() > limit;
     let mut agents = Vec::new();
     for (agent_did, reference) in selected.into_iter().take(limit) {
-        let snapshot = match agent_snapshot(
-            core,
-            agent_did,
-            catalog.protected_ids.contains(agent_did),
-            default_agent_did.as_deref(),
-        )
-        .await
-        {
+        let snapshot = match agent_snapshot(core, agent_did, default_agent_did.as_deref()).await {
             Ok(snapshot) => {
                 let effective = &snapshot["effective_config"];
                 json!({
@@ -90,7 +73,6 @@ pub(super) async fn agent_list(
                     "display_name": effective.pointer("/agent/display_name"),
                     "description": effective.pointer("/agent/description"),
                     "enabled": *reference,
-                    "protected": catalog.protected_ids.contains(agent_did),
                     "is_default": default_agent_did.as_deref() == Some(agent_did.as_str()),
                     "context_id": effective.pointer("/agent/context_id"),
                     "profile_id": effective.pointer("/agent/inference_profile_id"),
@@ -103,7 +85,6 @@ pub(super) async fn agent_list(
             Err(error) => json!({
                 "agent_did": agent_did,
                 "enabled": *reference,
-                "protected": catalog.protected_ids.contains(agent_did),
                 "is_default": default_agent_did.as_deref() == Some(agent_did.as_str()),
                 "configuration_error": format!("{error:#}"),
             }),
@@ -142,21 +123,12 @@ pub(super) async fn agent_inspect(core: &SelfConfigCore, agent_did: &str) -> Res
         format!("unknown agent_did {agent_did:?}; copy an exact ID from [\"agent\",\"list\"]")
     })?;
     let default_agent_did = node_default_agent(core).await?;
-    let snapshot = agent_snapshot(
-        core,
-        agent_did,
-        catalog.protected_ids.contains(agent_did),
-        default_agent_did.as_deref(),
-    )
-    .await?;
+    let snapshot = agent_snapshot(core, agent_did, default_agent_did.as_deref()).await?;
     let Value::Object(mut snapshot) = snapshot else {
         bail!("agent snapshot must be an object");
     };
     let effective = snapshot.remove("effective_config").unwrap_or_default();
-    let mut result = Ordered::reading_order(
-        Value::Object(snapshot),
-        &["agent_did", "is_default", "protected"],
-    );
+    let mut result = Ordered::reading_order(Value::Object(snapshot), &["agent_did", "is_default"]);
     result.push(Ordered::entry(
         "effective_config",
         &Ordered::reading_order(effective, EFFECTIVE_ORDER),

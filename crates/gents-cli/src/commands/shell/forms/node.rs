@@ -7,8 +7,7 @@ use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 
 use super::{
-    choice, field, helped, merged, optional, problem, refused, shown, switch, tags, tags_field,
-    value,
+    choice, field, helped, merged, problem, refused, shown, switch, tags, tags_field, value,
 };
 use crate::commands::config::crud::{query_collection, NODE_SPEC};
 use crate::commands::shell::sections;
@@ -39,10 +38,35 @@ pub(super) async fn save(
     upsert_node_on(access, &node).await.map_err(refused)
 }
 
+/// The Node row with its `DefaultAgentSelection` shown as `default_agent_did`, which the page
+/// edits as one field though the selection is its own document.
 async fn stored(access: &ConfigAccess, node_did: &str) -> anyhow::Result<Value> {
+    use gents_protocol::document_query::{
+        fields::default_agent_selection as fields, Filter, Query, Selection,
+    };
     let nodes = query_collection(access, NODE_SPEC, node_did, None).await?;
-    let node = nodes.into_iter().next();
-    node.with_context(|| format!("not found: Node {node_did:?}"))
+    let mut node = nodes
+        .into_iter()
+        .next()
+        .with_context(|| format!("not found: Node {node_did:?}"))?;
+    let rendered = Query::select(Selection::new().field(fields::DEFAULT_AGENT_DID))
+        .filter(Filter::eq(fields::NODE_DID, node_did))
+        .limit(1)
+        .render();
+    let selection = gents_protocol::graphql::graphql_rows_from_response(
+        &access.read(&rendered).await?,
+        "DefaultAgentSelection",
+    );
+    if let (Some(object), Some(default)) = (
+        node.as_object_mut(),
+        selection
+            .first()
+            .and_then(|row| row.get("default_agent_did"))
+            .filter(|did| did.as_str().is_some_and(|did| !did.trim().is_empty())),
+    ) {
+        object.insert("default_agent_did".to_owned(), default.clone());
+    }
+    Ok(node)
 }
 
 /// The desktop's node page (`AgentCard.tsx:249-420`, `AgentPanel.tsx:106-194`) on `node`, whose
@@ -111,14 +135,17 @@ pub(super) fn document(current: &Value, values: &[(String, String)]) -> Result<N
     if name.is_empty() {
         return Err(problem("display_name", "Display name is required"));
     }
+    let mut current = current.clone();
+    if let Some(object) = current.as_object_mut() {
+        object.remove("default_agent_did");
+    }
     let fields = json!({
         "display_name": name,
-        "default_agent_did": optional(value(values, "default_agent_did")),
         "enabled": value(values, "enabled") == "on",
         "max_request_hop": hop(value(values, "max_request_hop"))?,
-        "tags": tags(Some(current), values),
+        "tags": tags(Some(&current), values),
     });
-    merged(Some(current), fields).map_err(refused)
+    merged(Some(&current), fields).map_err(refused)
 }
 
 /// Digits up to 2147483647, or blank for no limit, as the desktop checks the hop as typed.

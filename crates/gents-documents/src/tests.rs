@@ -674,8 +674,9 @@ fn default_agent_publication_matches_lean() {
                     "context_id":case["context_id"],"inference_profile_id":"profile",
                     "enabled":case["enabled"]}),
             ),
+            (Collection::Node, json!({"node_did":scope})),
             (
-                Collection::Node,
+                Collection::DefaultAgentSelection,
                 json!({"node_did":scope,"default_agent_did":default}),
             ),
         ];

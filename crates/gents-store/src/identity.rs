@@ -17,8 +17,9 @@ mod registered;
 pub mod request_receipt;
 
 pub use agent::{
-    derive_agent_identity, provision_agent_identity, provision_agent_identity_authorized,
-    provision_agent_identity_for_agent, resolve_agent_identity, AgentProvisionError,
+    derive_agent_identity, observe_agent_admission, provision_agent_identity,
+    provision_agent_identity_authorized, provision_agent_identity_for_agent,
+    resolve_agent_identity, AgentAdmissionObservationError, AgentProvisionError,
 };
 pub use enrollment_grant::{
     grant_enrollment_authority, load_enrollment_grant_receipts, plan_grant, plan_withdrawal,
@@ -34,6 +35,7 @@ pub use macos::{
     load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
 };
 pub use provision_client::{
+    observe_admission as observe_agent_admission_remote,
     provision as provision_agent_identity_remote, RemoteAgentProvisionError,
 };
 use registered::raw_identity_from_signing_config;

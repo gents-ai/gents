@@ -29,6 +29,7 @@ pub(crate) fn snapshot_query(node_did: Option<&str>) -> Result<String> {
     let backend_fields = INFERENCE_BACKEND_FIELDS;
     Ok(format!("query DesktopSnapshot {{
       nodes: {NODE_NAME}{args} {{ {NODE_FIELDS} }}
+      default_agent_selections: {DEFAULT_AGENT_SELECTION_NAME}{args} {{ {DEFAULT_AGENT_SELECTION_FIELDS} }}
       agents: {AGENT_NAME}{args} {{ {AGENT_FIELDS} }}
       runtimes: {NODE_RUNTIME_NAME}{args} {{ {NODE_RUNTIME_FIELDS} }}
       node_readiness: {NODE_READINESS_NAME}{args} {{ {NODE_READINESS_FIELDS} }}
@@ -143,6 +144,7 @@ pub(super) fn snapshot_rows_with_requests(
     let datastore_tool_surface_source_node_dids = source(datastore_tool_surfaces.len());
     Ok(ClientStore::from_rows(ClientStoreRows {
         nodes: rows!(Node, "nodes"),
+        default_agent_selections: rows!(DefaultAgentSelection, "default_agent_selections"),
         agents: rows!(Agent, "agents"),
         runtimes: rows!(NodeRuntimeRow, "runtimes"),
         node_readiness: rows!(NodeReadinessRow, "node_readiness"),
@@ -720,6 +722,7 @@ pub async fn load_full_snapshot_with_peer_records(
 /// ones the reader may not read.
 pub(crate) const SNAPSHOT_ROOTS: &[&str] = &[
     "nodes",
+    "default_agent_selections",
     "agents",
     "runtimes",
     "node_readiness",
@@ -845,6 +848,7 @@ pub async fn load_inference_configuration(
     let backend_fields = INFERENCE_BACKEND_FIELDS;
     let query = format!(
         "query DesktopInferenceConfig {{ nodes: {NODE_NAME}({did_filter}) {{ {NODE_FIELDS} }}
+            default_agent_selections: {DEFAULT_AGENT_SELECTION_NAME}({did_filter}) {{ {DEFAULT_AGENT_SELECTION_FIELDS} }}
             agents: {AGENT_NAME}({did_filter}) {{ {AGENT_FIELDS} }}
             inference_backends: {INFERENCE_BACKEND_NAME}({did_filter}) {{ {backend_fields} }}
             backend_observations: {INFERENCE_BACKEND_OBSERVATION_NAME}({did_filter}) {{ node_did {INFERENCE_BACKEND_OBSERVATION_FIELDS} }}
@@ -876,6 +880,7 @@ fn operator_config_store_from_data_with_requests(
     scope: OperatorConfigScope,
 ) -> Result<ClientStore> {
     let (nodes, nodes_complete) = parse_query_rows_with_completeness(data, "nodes")?;
+    let default_agent_selections = parse_query_rows(data, "default_agent_selections")?;
     let (agents, agents_complete) = parse_query_rows_with_completeness(data, "agents")?;
     let (inference_profiles, profiles_complete) =
         parse_query_rows_with_completeness(data, "inference_profiles")?;
@@ -894,6 +899,7 @@ fn operator_config_store_from_data_with_requests(
         parse_backend_observation_rows(data, "backend_observations")?;
     let mut common = ClientStoreRows {
         nodes,
+        default_agent_selections,
         agents,
         inference_profiles,
         inference_backends,

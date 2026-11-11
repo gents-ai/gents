@@ -408,72 +408,132 @@ async fn trial_http(served: ServedNode) -> Result<(crate::defra_node::HttpConfig
     Ok((config, endpoint))
 }
 
-/// A trial home serves Agent identity provisioning as a runtime does, so a
-/// client installing an Agent provisions its identity through the same
-/// authorized owner (`provision_agent_identity_authorized`).
+/// A trial home serves Agent identity provisioning and agent admission facts
+/// as a runtime does, so a client installing or configuring an Agent goes
+/// through the same owners (`provision_agent_identity_authorized`,
+/// `observe_agent_admission`). The admission route observes native ACP for
+/// the authenticated caller only; it decides nothing itself.
 fn agent_identity_routes(served: ServedNode) -> axum::Router {
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
     let failure = |status: StatusCode, message: &str| {
         (status, axum::Json(serde_json::json!({ "error": message }))).into_response()
     };
-    axum::Router::new().route(
-        gents_protocol::agent_identity::AGENT_IDENTITY_PATH,
-        axum::routing::post(
-            move |identity: defra_http::ExtractIdentity,
-                  axum::Json(request): axum::Json<
-                gents_protocol::agent_identity::ProvisionAgentIdentityRequest,
-            >| {
-                let served = served.clone();
-                async move {
-                    let Some(caller) = identity
-                        .did()
-                        .and_then(|did| ::identity::Did::new(did.as_ref()).ok())
-                    else {
-                        return failure(
-                            StatusCode::UNAUTHORIZED,
-                            "Connect this client before creating an agent.",
-                        );
-                    };
-                    let Some((node, runtime)) = served
-                        .get()
-                        .and_then(|(node, runtime)| Some((node.upgrade()?, runtime)))
-                    else {
-                        return failure(
-                            StatusCode::SERVICE_UNAVAILABLE,
-                            "The runtime is still starting.",
-                        );
-                    };
-                    if request.node_did != runtime.did() {
-                        return failure(
-                            StatusCode::BAD_REQUEST,
-                            "The requested node does not serve this endpoint.",
-                        );
-                    }
-                    match gents_store::identity::provision_agent_identity_authorized(
-                        &node,
-                        runtime.as_ref(),
-                        &caller,
-                    )
-                    .await
-                    {
-                        Ok(binding) => axum::Json(binding).into_response(),
-                        Err(gents_store::identity::AgentProvisionError::Unauthorized) => failure(
-                            StatusCode::FORBIDDEN,
-                            "This client cannot create an agent on this node.",
-                        ),
-                        Err(error) => {
-                            tracing::warn!(%error, "trial agent identity provisioning failed");
-                            failure(
+    let admission = served.clone();
+    axum::Router::new()
+        .route(
+            gents_protocol::agent_identity::AGENT_ADMISSION_PATH,
+            axum::routing::post(
+                move |identity: defra_http::ExtractIdentity,
+                      axum::Json(request): axum::Json<
+                    gents_protocol::agent_identity::AgentAdmissionRequest,
+                >| {
+                    let served = admission.clone();
+                    async move {
+                        let Some(caller) = identity
+                            .did()
+                            .and_then(|did| ::identity::Did::new(did.as_ref()).ok())
+                        else {
+                            return failure(
+                                StatusCode::UNAUTHORIZED,
+                                "Connect this client before configuring agents.",
+                            );
+                        };
+                        let Some((node, runtime)) = served
+                            .get()
+                            .and_then(|(node, runtime)| Some((node.upgrade()?, runtime)))
+                        else {
+                            return failure(
                                 StatusCode::SERVICE_UNAVAILABLE,
-                                "The runtime cannot provision an agent identity.",
-                            )
+                                "The runtime is still starting.",
+                            );
+                        };
+                        if request.node_did != runtime.did() {
+                            return failure(
+                                StatusCode::BAD_REQUEST,
+                                "The requested node does not serve this endpoint.",
+                            );
+                        }
+                        match gents_store::identity::observe_agent_admission(
+                            &node,
+                            runtime.did(),
+                            &caller,
+                            &request.agent_dids,
+                        )
+                        .await
+                        {
+                            Ok(facts) => axum::Json(facts).into_response(),
+                            Err(error) => {
+                                tracing::warn!(%error, "trial agent admission observation failed");
+                                failure(
+                                    StatusCode::SERVICE_UNAVAILABLE,
+                                    "The runtime cannot observe agent grants.",
+                                )
+                            }
                         }
                     }
-                }
-            },
-        ),
-    )
+                },
+            ),
+        )
+        .route(
+            gents_protocol::agent_identity::AGENT_IDENTITY_PATH,
+            axum::routing::post(
+                move |identity: defra_http::ExtractIdentity,
+                      axum::Json(request): axum::Json<
+                    gents_protocol::agent_identity::ProvisionAgentIdentityRequest,
+                >| {
+                    let served = served.clone();
+                    async move {
+                        let Some(caller) = identity
+                            .did()
+                            .and_then(|did| ::identity::Did::new(did.as_ref()).ok())
+                        else {
+                            return failure(
+                                StatusCode::UNAUTHORIZED,
+                                "Connect this client before creating an agent.",
+                            );
+                        };
+                        let Some((node, runtime)) = served
+                            .get()
+                            .and_then(|(node, runtime)| Some((node.upgrade()?, runtime)))
+                        else {
+                            return failure(
+                                StatusCode::SERVICE_UNAVAILABLE,
+                                "The runtime is still starting.",
+                            );
+                        };
+                        if request.node_did != runtime.did() {
+                            return failure(
+                                StatusCode::BAD_REQUEST,
+                                "The requested node does not serve this endpoint.",
+                            );
+                        }
+                        match gents_store::identity::provision_agent_identity_authorized(
+                            &node,
+                            runtime.as_ref(),
+                            &caller,
+                        )
+                        .await
+                        {
+                            Ok(binding) => axum::Json(binding).into_response(),
+                            Err(gents_store::identity::AgentProvisionError::Unauthorized) => {
+                                failure(
+                                    StatusCode::FORBIDDEN,
+                                    "This client cannot create an agent on this node.",
+                                )
+                            }
+                            Err(error) => {
+                                tracing::warn!(%error, "trial agent identity provisioning failed");
+                                failure(
+                                    StatusCode::SERVICE_UNAVAILABLE,
+                                    "The runtime cannot provision an agent identity.",
+                                )
+                            }
+                        }
+                    }
+                },
+            ),
+        )
 }
 
 async fn trial_store_key(

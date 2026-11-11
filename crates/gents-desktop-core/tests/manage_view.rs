@@ -23,7 +23,7 @@ async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
     runtime.connect(&core).await;
     let node_did = runtime.node_did();
 
-    let mut node: Node = serde_json::from_value(json!({
+    let node: Node = serde_json::from_value(json!({
         "node_did": node_did,
         "display_name": "Amy",
         "tags": ["managed"]
@@ -89,8 +89,7 @@ async fn canonical_manage_document_saves_refresh_store() -> Result<()> {
         "tags": ["managed"]
     }))?;
     core.save_agent(&agent).await?;
-    node.default_agent_did = Some(amy_default.into());
-    core.save_node(&node).await?;
+    core.set_default_agent(node_did, amy_default).await?;
 
     let task: Task = serde_json::from_value(json!({
         "node_did": node_did,

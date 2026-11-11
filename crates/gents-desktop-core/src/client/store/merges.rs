@@ -57,6 +57,8 @@ macro_rules! retain_node_scope {
             .retain(|owner| (owner == node_did) == keep_target);
         rows.nodes
             .retain(|row| (row.node_did == node_did) == keep_target);
+        rows.default_agent_selections
+            .retain(|row| (row.node_did == node_did) == keep_target);
         rows.agents
             .retain(|row| (row.node_did == node_did) == keep_target);
         rows.runtimes
@@ -250,6 +252,12 @@ impl ClientStore {
         replace_node_rows(&mut rows.nodes, remote.nodes, node_did, |row| {
             row.node_did.as_str()
         });
+        replace_node_rows(
+            &mut rows.default_agent_selections,
+            remote.default_agent_selections,
+            node_did,
+            |row| row.node_did.as_str(),
+        );
         replace_node_rows(&mut rows.agents, remote.agents, node_did, |row| {
             row.node_did.as_str()
         });
@@ -471,6 +479,11 @@ impl ClientStore {
 
     fn merge_snapshot_rows(mut rows: ClientStoreRows, incoming: ClientStoreRows) -> Self {
         upsert_rows_by_key(&mut rows.nodes, incoming.nodes, |row| row.node_did.clone());
+        upsert_rows_by_key(
+            &mut rows.default_agent_selections,
+            incoming.default_agent_selections,
+            |row| row.node_did.clone(),
+        );
         upsert_rows_by_key(&mut rows.agents, incoming.agents, agent_merge_key);
         upsert_rows_by_key(&mut rows.runtimes, incoming.runtimes, |row| {
             row.node_did.clone()
@@ -713,6 +726,7 @@ impl ClientStore {
     pub fn to_rows(&self) -> ClientStoreRows {
         ClientStoreRows {
             nodes: self.nodes.clone(),
+            default_agent_selections: self.default_agent_selections.clone(),
             agents: self.agents.clone(),
             runtimes: self.runtimes.clone(),
             node_readiness: self.node_readiness.clone(),
@@ -1209,7 +1223,6 @@ mod overlay_tests {
             node_did: node_did.to_string(),
             display_name: Some(display_name.to_string()),
             avatar: None,
-            default_agent_did: None,
             enabled: true,
             created_at: None,
             created_by: None,

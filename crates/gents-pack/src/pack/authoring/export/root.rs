@@ -69,7 +69,7 @@ pub fn write_manifest_root(root: &Path, manifest: &PackConfig, force: bool) -> R
     )?;
     let mut handles = BTreeSet::new();
     for doc in plan.documents() {
-        if doc.collection == Collection::Node {
+        if doc.collection.keyed_by_owner() {
             continue;
         }
         let id = doc.add[doc.collection.unique_field()]

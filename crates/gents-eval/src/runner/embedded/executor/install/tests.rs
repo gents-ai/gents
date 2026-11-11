@@ -546,7 +546,7 @@ async fn a_trial_subject_supplies_an_omitted_default_agent() {
     write_slot_pack(&pack_dir, "gents:inference-slot:primary");
     let path = pack_dir.join("pack_config.json");
     let config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    assert!(config["node"].get("default_agent_did").is_none());
+    assert!(config.get("default_agent_selection").is_none());
     let bytes = serde_json::to_vec(&config).unwrap();
     std::fs::write(&path, &bytes).unwrap();
     let mut spec = TrialSpec {
@@ -564,10 +564,13 @@ async fn a_trial_subject_supplies_an_omitted_default_agent() {
 
     let access = ConfigAccess::local(home.node.clone());
     let response = access
-        .execute("query { Node { default_agent_did } }")
+        .execute("query { DefaultAgentSelection { default_agent_did } }")
         .await
         .unwrap();
-    assert_eq!(response["data"]["Node"][0]["default_agent_did"], agent_did);
+    assert_eq!(
+        response["data"]["DefaultAgentSelection"][0]["default_agent_did"],
+        agent_did
+    );
     let agent = gents::Gents::from_default_agent_documents(
         home.node.clone(),
         home.identity.clone(),

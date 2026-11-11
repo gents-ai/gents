@@ -143,12 +143,18 @@ pub(crate) struct ConfigExportBundle {
 impl ConfigExportBundle {
     pub(crate) fn docs_for_collection(&self, collection: Collection) -> anyhow::Result<Vec<Value>> {
         let config = serde_json::to_value(&self.config)?;
-        match collection.dir_name() {
-            None => Ok(vec![config["node"].clone()]),
-            Some(key) => match config.get(key) {
+        match collection {
+            Collection::Node => Ok(vec![config["node"].clone()]),
+            Collection::DefaultAgentSelection => Ok(match config.get("default_agent_selection") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(selection) => vec![selection.clone()],
+            }),
+            _ => match collection.dir_name().and_then(|key| config.get(key)) {
                 None | Some(Value::Null) => Ok(Vec::new()),
                 Some(Value::Array(rows)) => Ok(rows.clone()),
-                Some(_) => anyhow::bail!("canonical configuration {key} is not a document array"),
+                Some(_) => {
+                    anyhow::bail!("canonical configuration {collection} is not a document array")
+                }
             },
         }
     }
@@ -165,8 +171,7 @@ impl Serialize for ConfigApplyCounts {
         use serde::ser::SerializeMap;
         let mut map = serializer.serialize_map(Some(Collection::ALL.len()))?;
         for collection in Collection::ALL {
-            let key = collection.dir_name().unwrap_or("node");
-            map.serialize_entry(key, &self.get(collection))?;
+            map.serialize_entry(&collection.to_string(), &self.get(collection))?;
         }
         map.end()
     }
@@ -177,9 +182,16 @@ impl ConfigApplyCounts {
         let value = serde_json::to_value(config)?;
         let mut counts = Self::default();
         for collection in Collection::ALL {
-            let count = match collection.dir_name() {
-                Some(key) => value.get(key).and_then(Value::as_array).map_or(0, Vec::len),
-                None => 1,
+            let count = match collection {
+                Collection::Node => 1,
+                Collection::DefaultAgentSelection => {
+                    usize::from(value.get("default_agent_selection").is_some())
+                }
+                _ => collection
+                    .dir_name()
+                    .and_then(|key| value.get(key))
+                    .and_then(Value::as_array)
+                    .map_or(0, Vec::len),
             };
             counts.set(collection, count);
         }
