@@ -65,8 +65,14 @@ fn fence_profile_pick(request: &mut ApplyRequest<'static>) {
                     .map(ToOwned::to_owned),
             };
             let next_backend = ops::profile_backend_id(txn, owner, next).await?;
-            ops::guard_backend_choice_in_txn(txn, owner, current_backend.as_deref(), &next_backend)
-                .await
+            gents_inference::operations::admit_backend_choice_in_txn(
+                txn,
+                owner,
+                current_backend.as_deref(),
+                &next_backend,
+            )
+            .await?;
+            Ok(())
         })
     });
 }
@@ -306,31 +312,11 @@ fn dropped_settings(path: &str, before: &Value, after: &Value, out: &mut Vec<Str
     }
 }
 pub fn profile_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
-    let mut request = anchored_request(
+    anchored_request(
         SelfConfigTarget::InferenceProfile,
         "inference_profile_id",
         patch,
-    );
-    fence_profile_backend(&mut request);
-    request
-}
-fn fence_profile_backend(request: &mut ApplyRequest<'static>) {
-    request.validate = Box::new(|txn, _, stored, merged| {
-        Box::pin(async move {
-            let Some(next) = merged.get("backend_id").and_then(Value::as_str) else {
-                return Ok(());
-            };
-            let current = stored.get("backend_id").and_then(Value::as_str);
-            if current == Some(next) {
-                return Ok(());
-            }
-            let owner = merged
-                .get("node_did")
-                .and_then(Value::as_str)
-                .context("profile is missing node_did")?;
-            ops::guard_backend_choice_in_txn(txn, owner, current, next).await
-        })
-    });
+    )
 }
 pub fn profile_create_request(
     owner: String,
@@ -347,7 +333,6 @@ pub fn profile_create_request(
         merged.insert("node_did".into(), json!(owner));
         Ok(())
     });
-    fence_profile_backend(&mut request);
     request
 }
 pub fn profile_target_request(
@@ -376,16 +361,6 @@ pub fn profile_target_request(
 }
 pub fn backend_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
     let mut request = anchored_request(SelfConfigTarget::InferenceBackend, "backend_id", patch);
-    request.validate = Box::new(move |_, _, stored, merged| {
-        let merged = merged.clone();
-        let stored = stored.clone();
-        Box::pin(async move {
-            let backend: gents_documents::InferenceBackend =
-                decode_merged("InferenceBackend", &merged)?;
-            guard_backend_auth(&stored, &merged)?;
-            backend.validate()
-        })
-    });
     request.guard = Box::new(|_, _, merged| {
         anyhow::ensure!(
             merged.get("enabled").and_then(Value::as_bool) != Some(false),
@@ -428,26 +403,6 @@ pub(super) fn local_backend_create_request(
         merged.insert("backend_id".into(), json!(id));
         merged.insert("node_did".into(), json!(owner));
         Ok(())
-    });
-    request.validate = Box::new(move |_, _, _, merged| {
-        let merged = merged.clone();
-        Box::pin(async move {
-            let backend: gents_documents::InferenceBackend =
-                decode_merged("InferenceBackend", &merged)?;
-            anyhow::ensure!(
-                backend.provider_kind == gents_inference::backends::provider::BackendProviderKind::OpenAiCompatible
-                    && matches!(
-                        backend.auth,
-                        gents_documents::BackendAuth::Unauthenticated
-                    ),
-                "model-facing backend creation is limited to unauthenticated OpenAI-compatible local servers"
-            );
-            anyhow::ensure!(
-                backend.enabled,
-                "a newly created local backend must be enabled for discovery"
-            );
-            backend.validate()
-        })
     });
     request
 }

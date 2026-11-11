@@ -131,6 +131,10 @@ pub async fn switch_profile_account(
     move_companions: bool,
     plugin_slots: &[String],
 ) -> Result<SwitchReceipt> {
+    crate::operations::admit_account_operation_on(
+        access,
+        gents_protocol::operations::inference::AccountOperation::SelectForProfile,
+    )?;
     let accounts = list_accounts(access, node_did).await?;
     let accounts = &accounts;
     access

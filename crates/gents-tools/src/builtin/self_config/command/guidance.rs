@@ -1,6 +1,6 @@
 use super::*;
 use agent_management::AgentApplyError;
-use gents_protocol::operations::agent::NextCall;
+use gents_protocol::operations::NextCall;
 
 /// The model tool's spelling of a declared next call.
 pub(super) fn next_call(next: NextCall) -> Value {
@@ -9,6 +9,7 @@ pub(super) fn next_call(next: NextCall) -> Value {
         NextCall::ResourceHelp { resource } => json!({"argv":["help", resource]}),
         NextCall::Inspect { resource } => json!({"argv":[resource, "get"]}),
         NextCall::List { resource } => json!({"argv":[resource, "list"]}),
+        NextCall::Verb { resource, verb } => json!({"argv":[resource, verb]}),
     }
 }
 
