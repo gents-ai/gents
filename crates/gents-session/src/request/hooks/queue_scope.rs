@@ -137,14 +137,41 @@ impl ScopeFailure {
         }
     }
 
-    fn error(&self) -> anyhow::Error {
-        let mut messages = self.chain.iter().rev();
-        let mut error = anyhow::Error::msg(messages.next().cloned().unwrap_or_default());
-        for outer in messages {
-            error = error.context(outer.clone());
+    fn refused(&self, plugin: &'static str) -> ScopeRefused {
+        let mut messages = self.chain.iter();
+        let message = messages.next().cloned().unwrap_or_default();
+        let cause = messages.rev().fold(None, |cause, message| {
+            Some(Box::new(ScopeCause {
+                message: message.clone(),
+                cause,
+            }))
+        });
+        ScopeRefused {
+            plugin,
+            message,
+            cause,
         }
-        error
     }
+}
+
+/// Lean `Hooks.Refusal.refused` for one request at `request.queue.scope`.
+/// It reads as the error the plugin met, message by message, so a caller sees
+/// the text it saw before the answer moved behind the seam.
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub struct ScopeRefused {
+    pub plugin: &'static str,
+    message: String,
+    #[source]
+    cause: Option<Box<ScopeCause>>,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub struct ScopeCause {
+    message: String,
+    #[source]
+    cause: Option<Box<ScopeCause>>,
 }
 
 /// Lean `Hooks.QueueScope.Answer` for one request; a request absent from a
@@ -165,8 +192,8 @@ pub type ScopeAnswers = RapidHashMap<String, ScopeAnswer>;
 pub struct Partition(Vec<(&'static str, RequestAssignmentScope)>);
 
 impl Partition {
-    pub fn is_unscoped(&self) -> bool {
-        self.0.is_empty()
+    pub fn keys(&self) -> &[(&'static str, RequestAssignmentScope)] {
+        &self.0
     }
 
     /// The first answered key that names an assignment reference. A wake
@@ -188,7 +215,7 @@ pub fn partition(named: &[(&'static str, ScopeAnswers)], doc: &str) -> anyhow::R
         match answers.get(doc) {
             None => {}
             Some(ScopeAnswer::Keyed(key)) => keys.push((*plugin, key.clone())),
-            Some(ScopeAnswer::Failed(failure)) => return Err(failure.error()),
+            Some(ScopeAnswer::Failed(failure)) => return Err(failure.refused(plugin).into()),
         }
     }
     Ok(Partition(keys))
