@@ -35,12 +35,12 @@ impl ToolDyn for Probe {
 
 #[tokio::test]
 async fn background_plugin_keeps_the_selected_tool_surface() {
-    use crate::plugin::tests::executor::{host_call_plugin_wat, installed_plugin};
+    use gents_toolcalls::test_support::{host_call_plugin_wat, installed_plugin};
     let wat = host_call_plugin_wat(&json!({"tool_name":"probe", "arguments":{}}), 3);
     let (home, mut record) = installed_plugin(&wat, None);
     record.declaration.host_imports = vec![gents_pack::pack::HostImport::HostCall];
     gents_pack::plugin::store::write_record(home.path(), &record).unwrap();
-    let executor = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+    let executor = Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(Some(
         home.path().to_owned(),
     )));
     let selected = gents_documents::PluginToolRef {
@@ -50,7 +50,7 @@ async fn background_plugin_keeps_the_selected_tool_surface() {
         input_fields: Vec::new(),
         job: None,
     };
-    let tool = crate::plugin::tool::PluginTool::resolve(executor, &selected, None).unwrap();
+    let tool = gents_toolcalls::plugin::tool::PluginTool::resolve(executor, &selected, None).unwrap();
     let registry = BackgroundToolRegistry::from_tools(vec![Box::new(tool)], &["plugin".into()]);
     let fixture = super::background_budget::budget_hook_fixture(
         "script-background",
@@ -87,7 +87,7 @@ async fn background_plugin_keeps_the_selected_tool_surface() {
     assert_eq!(count.load(Ordering::SeqCst), 3, "{reason}");
     let row = super::background_budget::tool_row(&fixture.access, &fixture.session_id, id).await;
     assert_eq!(row["lifecycle_state"], "completed", "{reason}");
-    let timeline = crate::observe::run_timeline_fetch::load_session_tool_calls(
+    let timeline = gents_observe::run_timeline_fetch::load_session_tool_calls(
         &fixture.access,
         fixture.db.node_identity.did(),
         &fixture.session_id,
@@ -224,11 +224,11 @@ impl ToolDyn for Stall {
 
 /// A selected `team/plugin` tool over a `host_call` guest, with its artifact digest.
 fn host_call_tool(wat: &str) -> (tempfile::TempDir, Box<dyn ToolDyn>, String) {
-    use crate::plugin::tests::executor::installed_plugin;
+    use gents_toolcalls::test_support::installed_plugin;
     let (home, mut record) = installed_plugin(wat, None);
     record.declaration.host_imports = vec![gents_pack::pack::HostImport::HostCall];
     gents_pack::plugin::store::write_record(home.path(), &record).unwrap();
-    let executor = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+    let executor = Arc::new(gents_toolcalls::plugin::executor::PluginExecutor::new(Some(
         home.path().to_owned(),
     )));
     let selected = gents_documents::PluginToolRef {
@@ -238,7 +238,7 @@ fn host_call_tool(wat: &str) -> (tempfile::TempDir, Box<dyn ToolDyn>, String) {
         input_fields: Vec::new(),
         job: None,
     };
-    let tool = crate::plugin::tool::PluginTool::resolve(executor, &selected, None).unwrap();
+    let tool = gents_toolcalls::plugin::tool::PluginTool::resolve(executor, &selected, None).unwrap();
     (home, Box::new(tool), record.digest)
 }
 
@@ -281,7 +281,7 @@ async fn session_tool_rows(
 
 async fn guest_stopped(digest: &str, within: std::time::Duration) {
     tokio::time::timeout(within, async {
-        while crate::plugin::host_calls::live::count(digest) != 0 {
+        while gents_toolcalls::plugin::host_calls::live::count(digest) != 0 {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
     })
@@ -291,7 +291,7 @@ async fn guest_stopped(digest: &str, within: std::time::Duration) {
 
 #[tokio::test]
 async fn cancelling_a_background_script_settles_its_in_flight_child() {
-    use crate::plugin::tests::executor::host_call_plugin_wat;
+    use gents_toolcalls::test_support::host_call_plugin_wat;
     let wat = host_call_plugin_wat(&json!({"tool_name":"stall", "arguments":{}}), 1);
     let (_home, tool, digest) = host_call_tool(&wat);
     let registry = BackgroundToolRegistry::from_tools(vec![tool], &["plugin".into()]);
@@ -390,7 +390,7 @@ async fn a_stopped_invocation_times_out_the_child_it_left_running() {
 
 #[tokio::test]
 async fn a_script_spawned_by_a_script_cannot_call_tools() {
-    use crate::plugin::tests::executor::host_call_plugin_wat;
+    use gents_toolcalls::test_support::host_call_plugin_wat;
     // Every generation runs the same guest: it asks to spawn itself again.
     let wat = host_call_plugin_wat(
         &json!({"tool_name":"spawn_process", "arguments":{"tool_name":"plugin", "args":{}}}),
@@ -456,7 +456,7 @@ async fn a_script_spawned_by_a_script_cannot_call_tools() {
         .find(|row| row["tool_call_id"] == inner_id.as_str())
         .unwrap();
     assert_eq!(inner["lifecycle_state"], "completed", "{rows:?}");
-    let timeline = crate::observe::run_timeline_fetch::load_session_tool_calls(
+    let timeline = gents_observe::run_timeline_fetch::load_session_tool_calls(
         &fixture.access,
         fixture.db.node_identity.did(),
         &fixture.session_id,
@@ -529,7 +529,7 @@ async fn spawn_spinner(
     .await;
     let id = receipt["tool_call_id"].as_str().unwrap().to_owned();
     tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        while crate::plugin::host_calls::live::count(&digest) == 0 {
+        while gents_toolcalls::plugin::host_calls::live::count(&digest) == 0 {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     })
@@ -639,8 +639,8 @@ async fn script_with_children(
 
 async fn timeline(
     fixture: &super::background_budget::BudgetHookFixture,
-) -> Vec<crate::observe::run_timeline::TimelineToolCallRow> {
-    crate::observe::run_timeline_fetch::load_session_tool_calls(
+) -> Vec<gents_observe::run_timeline::TimelineToolCallRow> {
+    gents_observe::run_timeline_fetch::load_session_tool_calls(
         &fixture.access,
         fixture.db.node_identity.did(),
         &fixture.session_id,
@@ -736,7 +736,7 @@ async fn one_unreadable_script_child_is_marked_and_the_timeline_still_loads() {
 async fn a_background_request_on_a_script_child_is_refused() {
     let (fixture, [_completed, _pending, running, _cancelled]) =
         script_with_children("script-child-background-control").await;
-    let refusal = crate::background::status::request_foreground_backgrounding(
+    let refusal = gents_toolcalls::background::status::request_foreground_backgrounding(
         &fixture.access,
         fixture.db.node_identity.did(),
         &fixture.session_id,

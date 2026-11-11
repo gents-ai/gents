@@ -622,8 +622,8 @@ impl AgentRequestAdmissionVerifier {
             .map(|(request, _)| request)
     }
 
-    #[cfg(test)]
-    pub(crate) async fn verify_fresh_for_claim(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn verify_fresh_for_claim(
         &self,
         request: &AgentRequest,
         target_agent_did: &str,

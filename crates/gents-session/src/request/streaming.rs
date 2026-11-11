@@ -131,7 +131,7 @@ impl StreamBufferSnapshot {
 }
 
 impl DefraStreamWriter {
-    pub(crate) async fn publish_authored_message(
+    pub async fn publish_authored_message(
         &self,
         lifecycle: &crate::request::lifecycle::RequestLifecycle,
         key: &str,
@@ -140,7 +140,7 @@ impl DefraStreamWriter {
         Box::pin(self.publish_authored_message_with_time(lifecycle, key, message, None)).await
     }
 
-    pub(crate) async fn publish_authored_message_with_time(
+    pub async fn publish_authored_message_with_time(
         &self,
         lifecycle: &crate::request::lifecycle::RequestLifecycle,
         key: &str,
@@ -223,7 +223,7 @@ impl DefraStreamWriter {
         Ok(published.message_doc_id)
     }
 
-    pub(crate) async fn start_provider_attempt(
+    pub async fn start_provider_attempt(
         &self,
         request_doc_id: &str,
         turn: usize,
@@ -423,7 +423,7 @@ impl DefraStreamWriter {
         Ok(())
     }
 
-    pub(crate) async fn publish_native_turn(
+    pub async fn publish_native_turn(
         &self,
         lifecycle: &crate::request::lifecycle::RequestLifecycle,
         turn: usize,

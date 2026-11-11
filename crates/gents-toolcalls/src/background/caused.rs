@@ -3,13 +3,13 @@ use defra_node::Node as EmbeddedNode;
 
 use gents_session::session::message::load_receipt;
 
-pub(crate) enum CausedObservation {
+pub enum CausedObservation {
     Bound(Box<gents_protocol::row::AgentRequestRow>),
     NotVisible,
     Unbound(&'static str),
 }
 
-pub(crate) async fn observe_caused_request(
+pub async fn observe_caused_request(
     _node: &std::sync::Arc<EmbeddedNode>,
     lifecycle: &crate::call::lifecycle::ToolCallLifecycle,
 ) -> Result<CausedObservation> {

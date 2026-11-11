@@ -53,10 +53,10 @@ pub(crate) fn session_message_call_ids(message: &gents_protocol::message::Messag
 
 #[derive(Clone, Debug)]
 pub struct PublishedProviderTurn {
-    pub(crate) message_doc_id: String,
-    #[cfg(test)]
-    pub(crate) sequence: u32,
-    pub(crate) accepted_tools: Vec<super::AcceptedToolCall>,
+    pub message_doc_id: String,
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub sequence: u32,
+    pub accepted_tools: Vec<super::AcceptedToolCall>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

@@ -90,7 +90,7 @@ pub(super) fn continuation_assignment(
 
 /// Reading the canonical row here puts its binding in the storage transaction's
 /// conflict set, including a Goal created earlier in this same transaction.
-pub(crate) async fn bind_goal_first_request_in_txn(
+pub async fn bind_goal_first_request_in_txn(
     txn: &ConfigApplyTxn<'_>,
     goal: &GoalDocument,
     request_doc_id: &str,

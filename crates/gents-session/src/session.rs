@@ -63,7 +63,7 @@ pub use fork::{
     fork_edit_on, fork_on, is_user_turn, publish_fork_relationships, ForkBoundary, ForkError,
     ForkOutcome, ForkParams, ForkRelationshipIntent,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use history::load_history_with_access;
 pub use history::{load_history, sequence_message_key};
 pub use history::{load_sequenced_history_for_request, load_sequenced_history_projection_on};
@@ -125,7 +125,7 @@ pub use sessions::{
     stage_created_session_relationships_in_txn,
 };
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use sessions::max_sequence;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

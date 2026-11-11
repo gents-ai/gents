@@ -14,7 +14,7 @@ use gents_store::graphql::escape_graphql_string;
 
 mod datetime_fields;
 mod notification_delivery;
-mod session_message;
+pub mod session_message;
 #[cfg(test)]
 pub use session_message::turn_assignment_handoff;
 mod side_effects;

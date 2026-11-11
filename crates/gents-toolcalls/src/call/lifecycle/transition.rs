@@ -116,7 +116,7 @@ impl ToolCallLifecycle {
 }
 
 mod cancel;
-mod session_message;
+pub mod session_message;
 pub use session_message::CausedRequestTerminal;
 mod mode_policy;
 mod native;

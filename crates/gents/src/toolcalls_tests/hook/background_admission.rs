@@ -88,12 +88,12 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
         tool_call_doc_id: row["_docID"].as_str().unwrap().to_owned(),
     };
     let agent_did = ::identity::Did::new(harness.access.actor_did().unwrap()).unwrap();
-    let outcome = crate::call::control::client::apply_claimed(
+    let outcome = gents_toolcalls::call::control::client::apply_claimed(
         &harness.node,
         &harness.access,
         &executions,
         &agent_did,
-        crate::call::control::client::ClaimedTarget {
+        gents_toolcalls::call::control::client::ClaimedTarget {
             node_did: &request.node_did,
             session_id: &request.session_id,
             requester_did: Some(&key.requester_did),
@@ -110,16 +110,16 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
     };
     assert!(matches!(
         outcome,
-        crate::call::control::CancelBackgroundToolCallOutcome::Cancelled {
+        gents_toolcalls::call::control::CancelBackgroundToolCallOutcome::Cancelled {
             live_execution_cancelled: true
-        } | crate::call::control::CancelBackgroundToolCallOutcome::AlreadyTerminal { .. }
+        } | gents_toolcalls::call::control::CancelBackgroundToolCallOutcome::AlreadyTerminal { .. }
     ));
     let row = super::background_budget::tool_row(&harness.access, &session, child).await;
     assert_eq!(row["lifecycle_state"], expected.durable_state);
     assert!(executions
         .process_record(child, &request.tool_call_doc_id)
         .is_none());
-    crate::call::lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
+    gents_toolcalls::call::lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
         &harness.node,
         &key.node_did,
         std::slice::from_ref(&agent),

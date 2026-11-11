@@ -1,4 +1,4 @@
-use crate::call::hook::{BackgroundToolRegistry, DefraSessionHook};
+use gents_toolcalls::call::hook::{BackgroundToolRegistry, DefraSessionHook};
 use gents_inference::llm::ToolCallHookAction;
 use gents_loop::tool::BoxFuture;
 use gents_loop::tool::ToolDefinition;

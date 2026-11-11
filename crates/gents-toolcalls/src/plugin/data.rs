@@ -398,7 +398,7 @@ impl DataCaller {
         Ok(::identity::Did::new(&self.caller_did)?)
     }
 
-    pub(crate) fn actor(&self) -> Option<&::identity::Did> {
+    pub fn actor(&self) -> Option<&::identity::Did> {
         match &self.access {
             DataAccess::Node(_, actor) => Some(actor),
             DataAccess::Operator(_) => None,

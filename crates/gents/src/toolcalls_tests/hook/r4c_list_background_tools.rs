@@ -1,4 +1,4 @@
-use crate::call::hook::{BackgroundToolRegistry, DefraSessionHook};
+use gents_toolcalls::call::hook::{BackgroundToolRegistry, DefraSessionHook};
 use gents_inference::llm::ToolCallHookAction;
 use gents_loop::tool::BoxFuture;
 use gents_loop::tool::ToolDefinition;
@@ -97,7 +97,7 @@ async fn background_wait_recovers_without_notification(closed: bool) {
     )
     .await;
     let handle = background_tool(&hook, "gated-background", "gated_tool").await;
-    let caller = crate::background::status::ProcessControlScope {
+    let caller = gents_toolcalls::background::status::ProcessControlScope {
         request_id,
         session_id,
         node_did: db.node_identity.did().to_owned(),
@@ -698,7 +698,7 @@ async fn selected_agent_reads_private_background_call_but_other_agent_cannot() {
     let handle = background_tool(&hook, "private-background", "slow_tool").await;
     let call_id = handle["tool_call_id"].as_str().expect("background call ID");
     let selected = hook.actor.clone().expect("selected agent identity");
-    let visible = crate::call::lifecycle::ToolCallLifecycle::load_as(
+    let visible = gents_toolcalls::call::lifecycle::ToolCallLifecycle::load_as(
         db.node.clone(),
         selected,
         &session_id,
@@ -718,7 +718,7 @@ async fn selected_agent_reads_private_background_call_but_other_agent_cannot() {
     .await;
     let other = identity::Did::new(&other_binding.agent_did).unwrap();
     assert!(
-        crate::call::lifecycle::ToolCallLifecycle::load_as(
+        gents_toolcalls::call::lifecycle::ToolCallLifecycle::load_as(
             db.node.clone(),
             other,
             &session_id,

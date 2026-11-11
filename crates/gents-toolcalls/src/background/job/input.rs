@@ -128,7 +128,7 @@ struct ChildRead {
 }
 
 impl ChildRead {
-    fn new(rows: Vec<Stored>, result_bytes: u64) -> Result<Self> {
+    pub fn new(rows: Vec<Stored>, result_bytes: u64) -> Result<Self> {
         let caused: RapidHashSet<String> = rows.iter().map(|row| row.request_id.clone()).collect();
         let mut attempts: BTreeMap<(String, u32), Attempt> = BTreeMap::new();
         let mut sessions: RapidHashMap<String, (String, u32)> = RapidHashMap::new();
@@ -810,25 +810,7 @@ pub(crate) mod tests {
         node
     }
 
-    /// Inserts a document through `access` and returns its doc id. Rows owned
-    /// by an Agent must be written through that Agent's access.
-    pub(crate) async fn insert_as(access: &ConfigAccess, collection: &str, value: Value) -> String {
-        access
-            .transact_write("test.plugin_job_children", |txn| {
-                let value = &value;
-                Box::pin(async move {
-                    let query = format!(
-                        "mutation($input: {collection}MutationInputArg!) {{create_{collection}(input:$input){{_docID}}}}"
-                    );
-                    let response = txn
-                        .execute_with_variables(&query, &json!({ "input": value }))
-                        .await?;
-                    Ok::<_, anyhow::Error>(gents_protocol::graphql::extract_mutation_doc_id(&response, collection)?)
-                })
-            })
-            .await
-            .unwrap()
-    }
+    pub(crate) use crate::test_support::insert_as;
 
     pub(crate) async fn doc_id_of(
         access: &ConfigAccess,
@@ -1575,42 +1557,13 @@ pub(crate) mod tests {
             .unwrap()
     }
 
-    pub(crate) fn node_did() -> &'static str {
+    pub fn node_did() -> &'static str {
         use gents_store::identity::NodeIdentity as _;
         node_identity().did()
     }
 
     pub(crate) fn agent_did() -> &'static str {
         managed_agent().did()
-    }
-
-    fn agent_snapshot() -> Arc<crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot> {
-        let mut unavailable_agents = rapidhash::RapidHashMap::default();
-        unavailable_agents.insert(
-            agent_did().to_owned(),
-            crate::triggers::runtime_snapshot::UnavailableAgent::new(
-                gents_protocol::node_readiness::AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
-                "fixture agent",
-            ).with_watcher_identity(managed_agent().clone()),
-        );
-        Arc::new(crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
-            generation: 1,
-            node: None,
-            local_did: node_did().to_owned(),
-            default_agent_did: agent_did().to_owned(),
-            agents: Default::default(),
-            tool_surfaces: Default::default(),
-            backend_admission_configs: Default::default(),
-            unavailable_agents,
-            active_schedules: Default::default(),
-            unavailable_schedules: Default::default(),
-            active_event_triggers: Default::default(),
-            unavailable_event_triggers: Default::default(),
-            active_tasks: Default::default(),
-            dispatchers: Default::default(),
-            agent_executor_capacities: Default::default(),
-            agent_executor_queue_capacities: Default::default(),
-        })
     }
 
     pub(crate) fn agent_actor() -> identity::Did {
@@ -1638,17 +1591,7 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) fn live_settings(policy: JobPolicy) -> PluginJobSettings {
-        PluginJobSettings {
-            agent_targets: vec!["a".into(), "b".into()],
-            max_live: 3,
-            max_spawns: 10,
-            max_messages_per_slot: 2,
-            result_bytes: 2048,
-            max_wall_secs: 600,
-            policy,
-        }
-    }
+    pub(crate) use crate::test_support::live_settings;
 
     fn binding(settings: Option<PluginJobSettings>) -> JobBinding {
         JobBinding {
@@ -1788,13 +1731,10 @@ pub(crate) mod tests {
             tool_root: Some(cwd.path().to_path_buf()),
             agent_snapshots: Default::default(),
         };
-        let (_snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(agent_snapshot());
         runtime
-            .bind_snapshot(
-                crate::triggers::runtime_snapshot::ActiveSnapshotAgentIdentities::boxed(
-                    snapshot_rx,
-                ),
-            )
+            .bind_snapshot(crate::test_support::FixedAgentIdentities::boxed(vec![
+                managed_agent().clone(),
+            ]))
             .unwrap();
         Job {
             node,

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::call::lifecycle::ToolCallLifecycle;
+use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
 use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents_loop::tool_call_lifecycle::FailureClass;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
@@ -156,7 +156,7 @@ async fn fixture(name: &str) -> Fixture {
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         AgentRequestAdmissionRecord::client(user.did()),
     );
-    let mut owner = crate::call::lifecycle::admission_fixture::pending_client_fixture_request(
+    let mut owner = gents_toolcalls::call::lifecycle::admission_fixture::pending_client_fixture_request(
         &node,
         &user_access,
         runtime.clone(),
@@ -176,7 +176,7 @@ async fn fixture(name: &str) -> Fixture {
         owner.claim_with_identity().await.unwrap(),
         ClaimOutcome::Claimed
     ));
-    let tool = crate::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request(
+    let tool = gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request(
         node.clone(),
         &mut owner,
         runtime.did(),
@@ -209,7 +209,7 @@ async fn fixture(name: &str) -> Fixture {
     };
     let signer = parent_identity.managed_agent_signer().unwrap();
     let mut plan = gents_session::session::message::plan_with_delivery(
-        &node,
+        &node, &gents_automation::goal::session_message::SessionGoals,
         &cause,
         &target,
         RenderedBody {
@@ -323,7 +323,7 @@ async fn competing_failure_and_child_commit_obey_the_native_compare() {
             reached.clone(),
             release.clone(),
             gents_session::session::message::commit(
-                &fixture.node,
+                &fixture.node, &gents_automation::goal::session_message::SessionGoals,
                 &fixture.cause,
                 &mut child_tool,
                 fixture.plan.take().unwrap(),
@@ -378,7 +378,7 @@ async fn lost_commit_ack_recovers_the_exact_child_receipt() {
     let (result, fired) = ConfigApplyTxn::with_post_commit_receipt_loss_for_operation(
         Some("session_message.commit_request"),
         gents_session::session::message::commit(
-            &fixture.node,
+            &fixture.node, &gents_automation::goal::session_message::SessionGoals,
             &fixture.cause,
             &mut tool,
             fixture.plan.take().unwrap(),
@@ -409,7 +409,7 @@ async fn cancelled_after_child_commit_recovers_relationships_in_the_actor_watche
     let mut dispatch = Box::pin(ConfigApplyTxn::with_embedded_commit_ack_pause(
         reached.clone(),
         gents_session::session::message::commit(
-            &fixture.node,
+            &fixture.node, &gents_automation::goal::session_message::SessionGoals,
             &fixture.cause,
             &mut tool,
             fixture.plan.take().unwrap(),
@@ -528,7 +528,7 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
         })
         .await;
         let first = gents_session::session::message::commit(
-            &fixture.node,
+            &fixture.node, &gents_automation::goal::session_message::SessionGoals,
             &fixture.cause,
             &mut fixture.tool,
             fixture.plan.take().unwrap(),
@@ -594,7 +594,7 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
                 .unwrap();
         }
         let mut tool =
-            crate::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request(
+            gents_toolcalls::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request(
                 fixture.node.clone(),
                 &mut fixture._owner,
                 fixture.runtime.did(),
@@ -620,7 +620,7 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
             let mut forged = cause.clone();
             forged.tool_call_doc_id = "unrelated-tool-document".into();
             let forged_plan = gents_session::session::message::plan_with_delivery(
-                &fixture.node,
+                &fixture.node, &gents_automation::goal::session_message::SessionGoals,
                 &forged,
                 &target,
                 RenderedBody {
@@ -635,7 +635,7 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
             .unwrap()
             .unwrap();
             assert!(gents_session::session::message::commit(
-                &fixture.node,
+                &fixture.node, &gents_automation::goal::session_message::SessionGoals,
                 &forged,
                 &mut tool,
                 forged_plan,
@@ -649,7 +649,7 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
             assert!(rows["data"]["AgentRequest"].as_array().unwrap().is_empty());
         }
         let plan = gents_session::session::message::plan_with_delivery(
-            &fixture.node,
+            &fixture.node, &gents_automation::goal::session_message::SessionGoals,
             &cause,
             &target,
             RenderedBody {
@@ -668,7 +668,7 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
         .unwrap()
         .unwrap();
         let receipt =
-            gents_session::session::message::commit(&fixture.node, &cause, &mut tool, plan, true)
+            gents_session::session::message::commit(&fixture.node, &gents_automation::goal::session_message::SessionGoals, &cause, &mut tool, plan, true)
                 .await
                 .unwrap();
         let query = format!(

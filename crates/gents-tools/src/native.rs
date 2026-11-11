@@ -49,7 +49,7 @@ use session_message::{
 use crate::surface::BackgroundToolConfig;
 use gents_documents::AgentToolConfig;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn read_only_bash_for_test(
     root: &std::path::Path,
     allowlist: Vec<String>,
@@ -61,7 +61,7 @@ pub fn read_only_bash_for_test(
     ))
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(any(test, feature = "test-fixtures"), unix))]
 pub fn write_capable_bash_for_test(root: &std::path::Path) -> Box<dyn gents_loop::tool::ToolDyn> {
     Box::new(UnrestrictedBashTool::new(
         ToolContext::new(root.to_path_buf(), false).unwrap(),
@@ -69,7 +69,7 @@ pub fn write_capable_bash_for_test(root: &std::path::Path) -> Box<dyn gents_loop
     ))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn cli_tool_for_test(config: CliToolConfig) -> Box<dyn gents_loop::tool::ToolDyn> {
     Box::new(CliTool::new(config))
 }

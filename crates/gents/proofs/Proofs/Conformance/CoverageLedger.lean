@@ -863,7 +863,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "agent_folded_binding_cases"
       "AgentFoldedBindingCases"
-      "background_completion::session_message::turn_assignment_tests::folded_session_message_waits_for_exact_head_and_replays_once"
+      "toolcalls_tests::background::session_message_assignment::folded_session_message_waits_for_exact_head_and_replays_once"
       "Binds requester and physical-head outcome checks; cross-node replication races remain to be exercised.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
@@ -2026,7 +2026,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "goal_delivery_input_cases"
       "GoalDeliveryInputCases"
-      "plugin_job::effects::goal_input_tests::generated_deliveries_capture_destination_goal_in_the_admission_transaction")
+      "toolcalls_tests::background::goal_input_tests::generated_deliveries_capture_destination_goal_in_the_admission_transaction")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_input_binding_cases"
@@ -2061,7 +2061,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "goal_tool_context_cases"
       "GoalToolContextCases"
-      "hook::tests::goal_context::generated_goal_tool_context_uses_the_signed_callers_assignment")
+      "toolcalls_tests::hook::goal_context::generated_goal_tool_context_uses_the_signed_callers_assignment")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_request_scope_cases"
@@ -2226,13 +2226,13 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "r6_background_cases"
       "R6BackgroundingCases"
-      "tool_call_lifecycle::background_hook_conformance::generated_absent_requester_process_control_uses_accepted_hook_calls"
+      "toolcalls_tests::lifecycle::background_hook_conformance::generated_absent_requester_process_control_uses_accepted_hook_calls"
       "The scope comparator preserves absent-versus-empty behavior for retained history. Native signed admission rejects a requester-less local-self request before any hook effect; accepted hook envelopes use a real admitted requester, and a forged requester fails against its immutable physical header.")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "r6_background_cases"
       "R6BackgroundingCases"
-      "tool_call_lifecycle::completion_owner_conformance::generated_r6_completion_owner_cases_use_accepted_native_output"
+      "toolcalls_tests::lifecycle::completion_owner_conformance::generated_r6_completion_owner_cases_use_accepted_native_output"
       "Binds all seven completion_continuation_owner cases through accepted native tool output, durable notification and redrive owners. Parent completion is an imported model observation; this consumer does not establish the parent terminalization transition or the separate continuation-publication family.")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
@@ -2260,7 +2260,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "recovery_sweep_cases"
       "RecoverySweepCases"
-      "tool_call_lifecycle::recovery_closeout_conformance::generated_session_message_recovery_cases_use_accepted_call")
+      "toolcalls_tests::lifecycle::recovery_closeout::generated_session_message_recovery_cases_use_accepted_call")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "recovery_sweep_cases"
@@ -2285,7 +2285,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "r6_background_cases"
       "R6BackgroundingCases"
-      "tool_call_lifecycle::completion_owner_conformance::generated_r6_notification_precedes_continuation_claim")
+      "toolcalls_tests::lifecycle::completion_owner_conformance::generated_r6_notification_precedes_continuation_claim")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "composed_invariant_witnesses"
@@ -2296,7 +2296,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "r6_background_theorem_witnesses"
       "BackgroundBudgetBoundedTheoremWitness"
-      "hook::tests::background_budget::generated_background_budget_uses_accepted_dispatch")
+      "toolcalls_tests::hook::background_budget::generated_background_budget_uses_accepted_dispatch")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "r4c_background_work_cases"
@@ -2373,17 +2373,17 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "canonical_spawned_target_rejection_cases"
       "CanonicalSpawnedTargetRejectionCases"
-      "hook::tests::background_admission::spawn_process_rejects_target_policy_before_spawned_admission")
+      "toolcalls_tests::hook::background_admission::spawn_process_rejects_target_policy_before_spawned_admission")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
   , tagged (consumerCoverage
       "canonical_dispatch_observation_cases"
       "CanonicalDispatchObservationCases"
-      "hook::tests::dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies")
+      "toolcalls_tests::hook::dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
   , tagged (consumerCoverage
       "canonical_dispatch_observation_cases"
       "CanonicalDispatchObservationCases"
-      "hook::tests::control_tool_completion_failure_never_reauthorizes_dispatch")
+      "toolcalls_tests::hook::control_tool_completion_failure_never_reauthorizes_dispatch")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
   , tagged (consumerCoverage
       "canonical_dispatch_observation_cases"

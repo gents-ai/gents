@@ -4,7 +4,7 @@ use crate::call::lifecycle::admission_fixture::{
 };
 use gents_protocol::tool_call::AwaitMode;
 
-use super::fixtures::completion_obligations;
+use crate::call::lifecycle::admission_fixture::completion_obligations;
 
 async fn kill_fixture(observation: &str) -> (PublishedAdmission, Option<String>) {
     let options = |start_running| PublishedAdmissionOptions {

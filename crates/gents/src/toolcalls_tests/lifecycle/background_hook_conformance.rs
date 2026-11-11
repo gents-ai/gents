@@ -27,7 +27,7 @@ impl gents_loop::tool::ToolDyn for PendingTool {
 }
 
 async fn publish_hook_action(
-    hook: &crate::call::hook::DefraSessionHook,
+    hook: &gents_toolcalls::call::hook::DefraSessionHook,
     writer: &gents_session::request::streaming::DefraStreamWriter,
     owner: &gents_session::request::lifecycle::RequestLifecycle,
     turn: usize,
@@ -78,7 +78,7 @@ async fn publish_hook_action(
 }
 
 async fn publish_hook_call(
-    hook: &crate::call::hook::DefraSessionHook,
+    hook: &gents_toolcalls::call::hook::DefraSessionHook,
     writer: &gents_session::request::streaming::DefraStreamWriter,
     owner: &gents_session::request::lifecycle::RequestLifecycle,
     turn: usize,
@@ -96,7 +96,7 @@ async fn publish_hook_call(
 
 #[tokio::test]
 async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
-    use crate::background::status::ProcessControlScope;
+    use gents_toolcalls::background::status::ProcessControlScope;
     use gents_protocol::request_admission::{
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
     };
@@ -145,7 +145,7 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
             AgentRequestAdmissionRecord::client(user.did()),
         )
     };
-    let mut origin = crate::call::lifecycle::admission_fixture::pending_client_fixture_request(
+    let mut origin = gents_toolcalls::call::lifecycle::admission_fixture::pending_client_fixture_request(
         &node,
         &client,
         runtime.clone(),
@@ -166,17 +166,17 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
     )
     .unwrap();
     origin.begin_owned_execution(&writer).await.unwrap();
-    let registry = crate::call::hook::BackgroundToolRegistry::from_tools(
+    let registry = gents_toolcalls::call::hook::BackgroundToolRegistry::from_tools(
         vec![Box::new(PendingTool)],
         &["slow_tool".into()],
     );
-    let hook = crate::call::hook::DefraSessionHook::resume_with_actor_policy(
+    let hook = gents_toolcalls::call::hook::DefraSessionHook::resume_with_actor_policy(
         node.clone(),
         session,
         runtime.did(),
         Some(user.did()),
         identity::Did::new(agent.did()).unwrap(),
-        crate::call::hook::FailurePolicy::default(),
+        gents_toolcalls::call::hook::FailurePolicy::default(),
     )
     .await
     .unwrap()
@@ -265,7 +265,7 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
         TerminalizeResult::Won
     );
 
-    let mut next = crate::call::lifecycle::admission_fixture::pending_client_fixture_request(
+    let mut next = gents_toolcalls::call::lifecycle::admission_fixture::pending_client_fixture_request(
         &node,
         &client,
         runtime.clone(),

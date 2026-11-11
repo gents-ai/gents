@@ -24,7 +24,7 @@ pub async fn load_history(
     load_history_through_sequence(node, session_id, node_did, requester_did, None).await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn load_history_with_access(
     access: &gents_store::config_client::ConfigAccess,
     session_id: &str,

@@ -32,7 +32,7 @@ pub(super) struct Observation {
 }
 
 impl Observation {
-    pub(super) fn new(rescan_at: Instant, feed_open: bool) -> Self {
+    pub fn new(rescan_at: Instant, feed_open: bool) -> Self {
         Self {
             rescan_at,
             feed_open,

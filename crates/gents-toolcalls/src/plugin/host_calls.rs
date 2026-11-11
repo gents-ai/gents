@@ -23,7 +23,7 @@ pub(crate) mod live {
     pub(super) struct Guard(String);
 
     impl Guard {
-        pub(super) fn new(digest: String) -> Self {
+        pub fn new(digest: String) -> Self {
             GUESTS.lock().unwrap().push(digest.clone());
             Self(digest)
         }

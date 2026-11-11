@@ -115,8 +115,8 @@ impl ProcessObservation {
     #[cfg(test)]
     pub(crate) const ALL: [Self; 3] = [Self::Running, Self::Exited, Self::Unowned];
 
-    #[cfg(test)]
-    pub(crate) const fn as_str(self) -> &'static str {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Running => "running",
             Self::Exited => "exited",
@@ -201,12 +201,12 @@ impl CancelProcessReply {
 pub struct ProcessIdentity {
     pub pid: i32,
     pub pgid: i32,
-    pub(crate) start: String,
+    pub start: String,
 }
 
 impl ProcessIdentity {
-    #[cfg(all(unix, test))]
-    pub(crate) fn of_live(pid: i32) -> Option<Self> {
+    #[cfg(all(unix, any(test, feature = "test-fixtures")))]
+    pub fn of_live(pid: i32) -> Option<Self> {
         let info = platform::process_info(pid)?;
         (!info.zombie).then_some(Self {
             pid,
@@ -297,7 +297,7 @@ pub struct ProcessRecord {
 }
 
 mod records;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use records::record_path;
 pub use records::{HostRecord, HostRecordStore};
 
@@ -631,20 +631,20 @@ mod platform {
 }
 
 // A test-owned process group. Tests signal only groups spawned here.
-#[cfg(all(test, unix))]
+#[cfg(all(any(test, feature = "test-fixtures"), unix))]
 pub mod test_support {
     use super::{scope_process_recorder, ProcessIdentity, ProcessRecorder};
     use crate::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
     use tokio_util::sync::CancellationToken;
 
     pub struct OwnedTestProcess {
-        pub(crate) identity: ProcessIdentity,
+        pub identity: ProcessIdentity,
         token: CancellationToken,
         task: Option<tokio::task::JoinHandle<ManagedExecOutcome>>,
     }
 
     impl OwnedTestProcess {
-        pub(crate) async fn spawn(recorder: Option<ProcessRecorder>) -> Self {
+        pub async fn spawn(recorder: Option<ProcessRecorder>) -> Self {
             let (sender, receiver) = tokio::sync::oneshot::channel();
             let sender = std::sync::Mutex::new(Some(sender));
             let observer = ProcessRecorder::new(move |identity: ProcessIdentity| {
@@ -682,7 +682,7 @@ pub mod test_support {
             }
         }
 
-        pub(crate) async fn finish(mut self) {
+        pub async fn finish(mut self) {
             self.token.cancel();
             if let Some(task) = self.task.take() {
                 let _ = task.await;

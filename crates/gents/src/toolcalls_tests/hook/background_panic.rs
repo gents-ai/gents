@@ -54,7 +54,7 @@ async fn accepted_background_panic_terminalizes_and_notifies_before_release() {
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         AgentRequestAdmissionRecord::client(user.did()),
     );
-    let mut lifecycle = crate::call::lifecycle::admission_fixture::pending_client_fixture_request(
+    let mut lifecycle = gents_toolcalls::call::lifecycle::admission_fixture::pending_client_fixture_request(
         &node,
         &owner,
         db.node_identity.clone(),

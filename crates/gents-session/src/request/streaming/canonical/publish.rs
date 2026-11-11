@@ -327,7 +327,7 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
             }).collect();
             Ok(PublishedProviderTurn {
                 message_doc_id,
-                #[cfg(test)]
+                #[cfg(any(test, feature = "test-fixtures"))]
                 sequence,
                 accepted_tools,
             })
@@ -516,7 +516,7 @@ async fn replay_publication_in_txn(
     }
     Ok(PublishedProviderTurn {
         message_doc_id: row.doc_id,
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         sequence: row.message.sequence,
         accepted_tools,
     })

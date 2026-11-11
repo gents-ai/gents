@@ -62,7 +62,7 @@ pub use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, 
 use input::queue_is_automated_wakeup;
 pub use input::row_is_automated_wakeup;
 pub(crate) use input::{background_wake_queue, is_automated_wakeup, row_queue};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use intake::pending_in_txn;
 pub(crate) use intake::{
     pending_ids_in_txn, pending_with_new_candidate_in_txn, steer_reachable, SteerAdmissionRefusal,
