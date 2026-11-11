@@ -159,7 +159,7 @@ impl ToolCallLifecycle {
                         escape_graphql_string(&key), escape_graphql_string(&internal_id), escape_graphql_string(&name),
                         escape_graphql_string(&request_id), escape_graphql_string(&binding.request_doc_id),
                         escape_graphql_string(&binding.session_id), escape_graphql_string(&binding.node_did),
-                        gents_session::session::requester_did_create_field(binding.requester_did.as_deref()),
+                        gents_store::graphql::requester_did_create_field(binding.requester_did.as_deref()),
                         escape_graphql_string(&deadline.to_rfc3339_opts(SecondsFormat::Nanos, true)))).await?;
                     let child = created_doc_id(&created, "AgentToolCall")?;
                     let segment = OutputSegment {

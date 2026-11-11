@@ -6,7 +6,7 @@ use serde_json::json;
 use super::http_calls::MAX_RESPONSE_BYTES;
 
 pub struct Server {
-    port: u16,
+    pub port: u16,
     hits: Arc<Mutex<Vec<String>>>,
 }
 

@@ -642,5 +642,14 @@ pub fn is_storage_full(error: &(dyn std::error::Error + 'static)) -> bool {
         })
 }
 
+/// The `requester_did` create-input field, or nothing when the requester is absent or blank.
+pub fn requester_did_create_field(requester_did: Option<&str>) -> String {
+    requester_did
+        .map(str::trim)
+        .filter(|did| !did.is_empty())
+        .map(|did| format!(r#"requester_did: "{}","#, escape_graphql_string(did)))
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests;

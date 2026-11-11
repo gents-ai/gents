@@ -3,7 +3,6 @@ use defra_node::Node as EmbeddedNode;
 use gents_inference::llm::message::Message;
 use serde::{Deserialize, Serialize};
 
-use gents_store::graphql::escape_graphql_string;
 
 mod archive;
 pub mod mailbox;
@@ -120,14 +119,6 @@ pub use sessions::{
 
 #[cfg(test)]
 pub use sessions::max_sequence;
-
-pub fn requester_did_create_field(requester_did: Option<&str>) -> String {
-    requester_did
-        .map(str::trim)
-        .filter(|did| !did.is_empty())
-        .map(|did| format!(r#"requester_did: "{}","#, escape_graphql_string(did)))
-        .unwrap_or_default()
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompactionEntry {
