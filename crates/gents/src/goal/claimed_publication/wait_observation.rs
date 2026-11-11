@@ -4,8 +4,8 @@ use serde_json::Value;
 
 use crate::session::tool_call_state::ToolCallState;
 use crate::store::config_client::ConfigApplyTxn;
-use crate::tools::native::background_args::WaitToolArgs;
 use crate::tools::call::lifecycle::query;
+use crate::tools::native::background_args::WaitToolArgs;
 
 pub(super) enum WaitEvidence {
     Absent,

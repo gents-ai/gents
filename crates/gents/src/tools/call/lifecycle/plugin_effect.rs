@@ -10,7 +10,8 @@ use crate::store::config_client::session_children::output_segment_bound_variable
 use crate::store::config_client::{ConfigApplyTxn, IdempotentTransactionRetry};
 use crate::store::graphql::{created_doc_id, escape_graphql_string};
 use gents_protocol::output::rows::{
-    request_output_segments_filter, AGENT_OUTPUT_SEGMENT_FIELDS, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    request_output_segments_filter, AGENT_OUTPUT_SEGMENT_FIELDS,
+    CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
 
 use super::ToolCallLifecycle;

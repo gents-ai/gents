@@ -687,11 +687,11 @@ pub async fn validate_resume(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::graphql::escape_graphql_string;
-    use crate::tools::background::job::admit::StepCall;
     use crate::session::tool_output_rows::{
         observe_canonical_tool_output_with_access, CanonicalToolOutputObservation,
     };
+    use crate::store::graphql::escape_graphql_string;
+    use crate::tools::background::job::admit::StepCall;
     use crate::tools::call::lifecycle::admission_fixture::{
         published_admission, PublishedAdmission, PublishedAdmissionOptions,
     };

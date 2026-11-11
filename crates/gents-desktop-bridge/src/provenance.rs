@@ -7,10 +7,10 @@ use gents::store::config_client::ConfigAccess;
 use gents::store::graphql::graphql_string_list_literal;
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
-use gents_protocol::tool_names::is_session_message_tool;
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::session::session_scope_filter;
 use gents_protocol::session::SessionScope;
+use gents_protocol::tool_names::is_session_message_tool;
 use serde_json::Value;
 
 use crate::types::{
