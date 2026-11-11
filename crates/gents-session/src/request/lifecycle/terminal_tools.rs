@@ -307,5 +307,4 @@ pub(super) async fn account_tools_in_txn(
 mod tests {
     use super::*;
     use gents_store::config_client::ConfigAccess;
-
 }

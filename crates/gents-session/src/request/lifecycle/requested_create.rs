@@ -37,7 +37,7 @@ pub fn request_create(request: AgentRequestCreate) -> anyhow::Result<Effect> {
 /// Creates the request under the transaction's actor, signed by core's signer
 /// for that actor, only when that actor could create it itself: the actor is
 /// the request's agent and its admission signer, and document ACP admits the
-/// write.
+/// write. Then `request.create.stage` stages with the created row.
 struct RequestCreateOperation;
 
 #[async_trait::async_trait]
@@ -92,8 +92,16 @@ impl CoreOperation for RequestCreateOperation {
         let response = txn
             .execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
             .await?;
-        gents_store::graphql::created_doc_id(&response, "AgentRequest")?;
-        Ok(())
+        let doc_id = gents_store::graphql::created_doc_id(&response, "AgentRequest")?;
+        crate::request::hooks::points::request_created(
+            txn,
+            context,
+            &crate::request::hooks::registry::RequestCreated {
+                request: create,
+                doc_id,
+            },
+        )
+        .await
     }
 }
 

@@ -224,7 +224,7 @@ theorem staged_writes_are_owned_and_authorized (host : Host Core Q Doc Val Op)
   have accepted := staged_effects_passed_validation host plugins actor event snapshot final
     values ok plugin member
   simp only [valid, Bool.and_eq_true, List.all_eq_true] at accepted
-  simpa [Effect.permitted] using accepted.2 _ written
+  simpa [Effect.permitted] using accepted.1.2 _ written
 
 theorem staging_moves_core_only_through_perform (host : Host Core Q Doc Val Op)
     (plugins : List (Plugin Q Ev V Doc Val Op)) (actor : Actor) (event : Ev)

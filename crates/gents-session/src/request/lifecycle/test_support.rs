@@ -84,7 +84,10 @@ pub async fn native_queue_image_with_access(
     }
 }
 
-pub fn hints(source: gents_protocol::request_input::QueueSource, policy: gents_protocol::request_input::QueuePolicy) -> gents_protocol::request_input::RequestQueue {
+pub fn hints(
+    source: gents_protocol::request_input::QueueSource,
+    policy: gents_protocol::request_input::QueuePolicy,
+) -> gents_protocol::request_input::RequestQueue {
     gents_protocol::request_input::RequestQueue {
         delivery: Default::default(),
         position: None,
@@ -97,14 +100,20 @@ pub fn hints(source: gents_protocol::request_input::QueueSource, policy: gents_p
     }
 }
 
-pub fn wake_queue_input(queue: gents_protocol::request_input::RequestQueue) -> gents_protocol::request_input::RequestInput {
+pub fn wake_queue_input(
+    queue: gents_protocol::request_input::RequestQueue,
+) -> gents_protocol::request_input::RequestInput {
     gents_protocol::request_input::RequestInput {
         queue: Some(queue),
         ..Default::default()
     }
 }
 
-pub fn parent_request(node_did: &str, agent_did: &str, session_id: &str) -> gents_protocol::row::AgentRequest {
+pub fn parent_request(
+    node_did: &str,
+    agent_did: &str,
+    session_id: &str,
+) -> gents_protocol::row::AgentRequest {
     gents_protocol::row::AgentRequest {
         retry_parent_request_doc_id: None,
         purpose: gents_protocol::request_admission::RequestPurpose::Normal,
@@ -140,7 +149,6 @@ pub fn parent_request(node_did: &str, agent_did: &str, session_id: &str) -> gent
     }
 }
 
-
 pub fn normalize_pin_fields(fields: &str) -> String {
     let start = fields
         .find("admission_signature: \"")
@@ -154,14 +162,12 @@ pub fn normalize_pin_fields(fields: &str) -> String {
     normalized
 }
 
-
-    pub fn pin_parent_request() -> gents_protocol::row::AgentRequest {
-        let mut parent = parent_request(PIN_FIXED_DID, PIN_FIXED_DID, "sess-pin-parent");
-        parent.request_id = "pin-parent-request".to_string();
-        parent.doc_id = "pin-parent-doc".to_string();
-        parent.request_hop = 2;
-        parent.caused_by_correlation = Some("corr-parent".to_string());
-        parent.caused_by_trigger_context = Some(r#"{"a":"b"}"#.to_string());
-        parent
-    }
-
+pub fn pin_parent_request() -> gents_protocol::row::AgentRequest {
+    let mut parent = parent_request(PIN_FIXED_DID, PIN_FIXED_DID, "sess-pin-parent");
+    parent.request_id = "pin-parent-request".to_string();
+    parent.doc_id = "pin-parent-doc".to_string();
+    parent.request_hop = 2;
+    parent.caused_by_correlation = Some("corr-parent".to_string());
+    parent.caused_by_trigger_context = Some(r#"{"a":"b"}"#.to_string());
+    parent
+}

@@ -2198,6 +2198,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_lifecycle_hook_delivery_cases_drive_the_delivery_record",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::hooks::generated_lifecycle_hook_owed_delivery_cases_drive_the_redrive_record",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/hooks.rs",
+            module_path: "conformance::hooks",
+            function: "generated_lifecycle_hook_owed_delivery_cases_drive_the_redrive_record",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::hooks::generated_lifecycle_hook_admit_cases_drive_prepared_admission",
             package: "gents",
             source_path: "crates/gents/tests/conformance/hooks.rs",

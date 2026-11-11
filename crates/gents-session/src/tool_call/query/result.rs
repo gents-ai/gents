@@ -1124,5 +1124,4 @@ fn verify_exact_call_identity(
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }

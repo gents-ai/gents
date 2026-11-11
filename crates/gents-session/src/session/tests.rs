@@ -1,6 +1,6 @@
+use super::*;
 use gents_inference::llm::message::{Text, ToolResult, ToolResultContent, UserContent};
 use gents_store::test_support::first_content;
-use super::*;
 
 async fn sequenced_history_on(
     access: &gents_store::config_client::ConfigAccess,
@@ -806,7 +806,8 @@ async fn fork_reader_node(
 ) {
     use gents_store::config_client::NodePermission;
     use gents_store::identity::NodeIdentity;
-    let (db, user, client) = gents_inference::test_support::signed_test_node_without_agent(name).await;
+    let (db, user, client) =
+        gents_inference::test_support::signed_test_node_without_agent(name).await;
     let runtime = db.node_identity.as_ref();
     let admin = gents_store::config_client::ConfigAccess::local_as(
         db.node.clone(),
@@ -1976,7 +1977,8 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
         "fork",
     ] {
         let (db, user, client, binding) =
-            gents_inference::test_support::signed_test_node(&format!("header-coordinate-{case}")).await;
+            gents_inference::test_support::signed_test_node(&format!("header-coordinate-{case}"))
+                .await;
         let node_did = db.node_identity.did();
         let foreign_did = foreign_db.node_identity.did();
         let user_did = user.did();

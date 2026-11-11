@@ -376,4 +376,3 @@ async fn shutdown_close_replays_a_dropped_complete_title_closure() {
     );
     node.shutdown().await.expect("shut down test node");
 }
-

@@ -10,4 +10,3 @@ use crate::workspace::WorkspaceBindingDoc;
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
-

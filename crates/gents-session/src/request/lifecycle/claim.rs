@@ -137,7 +137,6 @@ pub async fn claim_gate_in_txn(
         ClaimVerdict::Allow => Ok(ClaimGate::Allowed),
         ClaimVerdict::LeaveQueued => Ok(ClaimGate::Queued),
         ClaimVerdict::Retire { reason, successor } => {
-            let successor = successor.context("claim retirement names no superseding request")?;
             supersede_pending_in_txn(
                 txn,
                 &request.node_did,
@@ -1098,5 +1097,4 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-
 }

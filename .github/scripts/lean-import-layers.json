@@ -226,7 +226,7 @@
     },
     "Proofs.Runtime.Recovery": {
       "rust_owner": "gents",
-      "reason": "the sweep registry and startup order stay in runtime; per-collection sweeps sit with their rows: Contract and Inference in inference, Requests in session, tool-call, session-message, background-restart, plugin-job and task-hook sweeps in toolcalls"
+      "reason": "the sweep registry and startup order stay in runtime; per-collection sweeps sit with their rows: Contract and Inference in inference, Requests and owed-delivery in session, tool-call, session-message, background-restart, plugin-job and task-hook sweeps in toolcalls"
     },
     "Proofs.Session.Client": {
       "rust_owner": "gents-protocol",

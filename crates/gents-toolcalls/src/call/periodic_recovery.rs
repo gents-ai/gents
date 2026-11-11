@@ -20,6 +20,7 @@ const INFERENCE_CALL_SWEEP_IDS: &[&str] = &["inference_call_recover_all_stale_ca
 const SESSION_MESSAGE_SWEEP_IDS: &[&str] = &["tool_call_lifecycle_recover_session_message_rows"];
 const PLUGIN_JOB_SWEEP_IDS: &[&str] = &["tool_call_lifecycle_recover_plugin_job_rows"];
 const TASK_HOOK_SWEEP_IDS: &[&str] = &["task_hook_recover_interrupted_cleanup"];
+const OWED_DELIVERY_SWEEP_IDS: &[&str] = &["lifecycle_hook_redrive_owed_deliveries"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PeriodicRecoverySweepMetadata {
@@ -36,6 +37,7 @@ pub enum PeriodicRecoverySweepOutcome {
     InferenceCalls(InferenceCallRecoveryReport),
     SessionMessageRows(usize),
     TaskHookRecords(usize),
+    OwedDeliveries(gents_session::request::hooks::owed::OwedSweepReport),
 }
 
 impl PeriodicRecoverySweepOutcome {
@@ -48,6 +50,7 @@ impl PeriodicRecoverySweepOutcome {
             Self::InferenceCalls(report) => report.calls_recovered == 0,
             Self::SessionMessageRows(settled) => *settled == 0,
             Self::TaskHookRecords(started) => *started == 0,
+            Self::OwedDeliveries(report) => report.is_noop(),
         }
     }
 }
@@ -114,6 +117,10 @@ const PERIODIC_RECOVERY_SWEEP_METADATA: &[PeriodicRecoverySweepMetadata] = &[
         sweep_ids: PLUGIN_JOB_SWEEP_IDS,
         rust_function: "plugin_job::recovery::redrive_running_jobs",
     },
+    PeriodicRecoverySweepMetadata {
+        sweep_ids: OWED_DELIVERY_SWEEP_IDS,
+        rust_function: "hooks::owed::redrive_pending",
+    },
 ];
 
 const PERIODIC_RECOVERY_SWEEP_EXECUTORS: &[PeriodicRecoverySweepExecutor] = &[
@@ -144,6 +151,10 @@ const PERIODIC_RECOVERY_SWEEP_EXECUTORS: &[PeriodicRecoverySweepExecutor] = &[
     PeriodicRecoverySweepExecutor {
         metadata_index: 6,
         run: recover_task_hook_records,
+    },
+    PeriodicRecoverySweepExecutor {
+        metadata_index: 8,
+        run: redrive_owed_deliveries,
     },
 ];
 
@@ -312,6 +323,21 @@ fn recover_task_hook_records<'a>(
         )
         .await
         .map(PeriodicRecoverySweepOutcome::TaskHookRecords)
+    })
+}
+
+fn redrive_owed_deliveries<'a>(
+    node: &'a std::sync::Arc<EmbeddedNode>,
+    node_did: &'a str,
+    identities: &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
+    _background_executions: &'a crate::call::hook::BackgroundExecutionRegistry,
+    _goals: &'a dyn gents_session::session::message::SessionMessageGoals,
+) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
+    Box::pin(async move {
+        gents_session::request::hooks::owed::redrive_pending(node, node_did, identities)
+            .await
+            .map(PeriodicRecoverySweepOutcome::OwedDeliveries)
+            .map_err(anyhow::Error::from)
     })
 }
 

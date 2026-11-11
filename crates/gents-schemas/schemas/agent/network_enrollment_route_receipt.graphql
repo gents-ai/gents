@@ -1,7 +1,7 @@
 # Admin-signed immutable evidence that the runtime reconciled the exact
 # client-to-server route for one enrollment authorization generation;
 # authorization remains owned by NetworkAuthorizationRevision.
-type NetworkEnrollmentRouteReceipt @policy(id: "ac7d6625bfe087880ab77635e5da9c48fe1ee5f9152748018a63c0d9a75ceb70", resource: "enrollment_records") @branchable {
+type NetworkEnrollmentRouteReceipt @policy(id: "5214e9adbbb9b355e4f18a31587c3592d67bf40567688584187bd3ea74bafd91", resource: "enrollment_records") @branchable {
     protocol_version: Int @immutable
     receipt_id: String @index(unique: true) @immutable
     request_id: String @index @immutable

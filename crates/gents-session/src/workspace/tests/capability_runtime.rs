@@ -1,6 +1,8 @@
-use crate::workspace::{bind_integrate, git, git_worktree_caps, integrate_writer, seal_writer, Fixture};
 use super::*;
 use crate::request::lifecycle::{RequestLifecycle, RequestTerminalOutcome, WorkspaceLineage};
+use crate::workspace::{
+    bind_integrate, git, git_worktree_caps, integrate_writer, seal_writer, Fixture,
+};
 use anyhow::Context;
 use gents_store::identity::NodeIdentity;
 use std::sync::Arc;
@@ -613,4 +615,3 @@ async fn invisible_workspace_request_cannot_release_exclusive_binding() -> anyho
     node.shutdown().await?;
     Ok(())
 }
-

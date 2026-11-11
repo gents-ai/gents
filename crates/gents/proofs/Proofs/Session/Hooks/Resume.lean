@@ -197,4 +197,88 @@ theorem unsettled_resume_commits_nothing (host : Host Session Q Doc Val CreateAr
     resume host plugins settled actor event state = .error .core := by
   simp [resume, unsettled]
 
+/-- `request.create` as core performs it for a resume, with the staging of
+`request.create.stage` after the row exists (`Hooks.Catalog.requestCreateStage`):
+the restaging plugins' effects create the request through `perform`, then the
+point's listeners stage, refusably, on the state that holds it, with the
+created request in their event (`created` builds it from the session before
+and after), in the same transaction.
+
+A listener decides on the rows as they stand after the resume point's staging
+(a later point sees what earlier points staged, `Hooks.stage`), so a revision
+it holds of a row the resume already updated is current.
+
+Decision 2026-11-11, maintainer-approved: a paused, idle Goal with no
+assignment root is resumed, and the Goals plugin binds that root here, to the
+created continuation's document id, which exists only once core has created
+the row. A listener refusal or miss leaves the whole resume unapplied
+(`create_stage_refusal_leaves_resume_unapplied`).
+
+Native premise: core runs these listeners inside its `request.create`
+operation, right after the row is created; the model runs them once the
+resume point's staging is done. The two agree because the Goals plugin is the
+only plugin at `control.session.resume` and `request.create` is the last
+effect of its result. -/
+def resumeCreating {EvC : Type} (host : Host Session Q Doc Val CreateArgs)
+    (plugins : List (Plugin Q Ev V Doc Val CreateArgs))
+    (listeners : List (Plugin Q EvC Unit Doc Val CreateArgs)) (created : Session → Session → EvC)
+    (settled : Session → Bool) (actor : Actor) (event : Ev) (state : State Session Doc Val) :
+    Except Refusal (State Session Doc Val × List V) :=
+  match resume host plugins settled actor event state with
+  | .error refusal => .error refusal
+  | .ok (resumed, values) =>
+      match stage host listeners actor (created state.core resumed.core) resumed with
+      | .error refusal => .error refusal
+      | .ok (final, _) => .ok (final, values)
+
+/-- A refusal, invalid result or miss at `request.create.stage` leaves the
+whole resume unapplied: latch, created request and every staged row. -/
+theorem create_stage_refusal_leaves_resume_unapplied {EvC : Type}
+    (host : Host Session Q Doc Val CreateArgs) (plugins : List (Plugin Q Ev V Doc Val CreateArgs))
+    (listeners : List (Plugin Q EvC Unit Doc Val CreateArgs)) (created : Session → Session → EvC)
+    (settled : Session → Bool) (actor : Actor) (event : Ev) (state resumed : State Session Doc Val)
+    (values : List V) (ok : resume host plugins settled actor event state = .ok (resumed, values))
+    (refusal : Refusal)
+    (failed : stage host listeners actor (created state.core resumed.core) resumed =
+      .error refusal) :
+    settle state (resumeCreating host plugins listeners created settled actor event state) =
+      state := by
+  simp [resumeCreating, ok, failed, settle]
+
+/-- In particular a listener that refuses on the resumed state leaves the
+resume unapplied. -/
+theorem create_listener_refusal_leaves_resume_unapplied {EvC : Type}
+    (host : Host Session Q Doc Val CreateArgs) (plugins : List (Plugin Q Ev V Doc Val CreateArgs))
+    (listeners : List (Plugin Q EvC Unit Doc Val CreateArgs)) (created : Session → Session → EvC)
+    (settled : Session → Bool) (actor : Actor) (event : Ev) (state resumed : State Session Doc Val)
+    (values : List V) (ok : resume host plugins settled actor event state = .ok (resumed, values))
+    (listener : Plugin Q EvC Unit Doc Val CreateArgs) (member : listener ∈ listeners)
+    (reason : String)
+    (refused : listener.hook.run host (created state.core resumed.core) resumed = .refuse reason) :
+    settle state (resumeCreating host plugins listeners created settled actor event state) =
+      state := by
+  cases staged : stage host listeners actor (created state.core resumed.core) resumed with
+  | error refusal =>
+    exact create_stage_refusal_leaves_resume_unapplied host plugins listeners created settled
+      actor event state resumed values ok refusal staged
+  | ok result =>
+    obtain ⟨final, observed⟩ := result
+    have decided := staged_values_are_snapshot_decisions host listeners actor _ resumed final
+      observed staged
+    have present := List.mem_map_of_mem
+      (fun plugin => (plugin.hook.run host (created state.core resumed.core) resumed).value?)
+      member
+    rw [decided] at present
+    simp [refused, Outcome.value?] at present
+
+/-- Whatever the resume point refuses, the resume with creation staging
+refuses too. -/
+theorem resume_refusal_precedes_create_stage {EvC : Type}
+    (host : Host Session Q Doc Val CreateArgs) (plugins : List (Plugin Q Ev V Doc Val CreateArgs))
+    (listeners : List (Plugin Q EvC Unit Doc Val CreateArgs)) (created : Session → Session → EvC)
+    (settled : Session → Bool) (actor : Actor) (event : Ev) (state : State Session Doc Val)
+    (refusal : Refusal) (refused : resume host plugins settled actor event state = .error refusal) :
+    resumeCreating host plugins listeners created settled actor event state = .error refusal := by
+  simp [resumeCreating, refused]
+
 end Hooks.Resume

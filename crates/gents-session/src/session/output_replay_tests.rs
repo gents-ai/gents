@@ -1789,18 +1789,17 @@ async fn a_pass_with_many_selected_turns_batches_capture_rows_and_block_commits(
         })
         .sum::<usize>();
 
-    let ((batched, commit_statements), capture_queries) =
-        super::count_capture_row_queries(
-            gents_inference::rendered_request::commits::count_field_commit_statements(
-                super::output::replay_tags::resolve_canonical_replay_tags(
-                    &fixture.access,
-                    fixture.scope(),
-                    &fixture.boundary,
-                    &tags,
-                ),
+    let ((batched, commit_statements), capture_queries) = super::count_capture_row_queries(
+        gents_inference::rendered_request::commits::count_field_commit_statements(
+            super::output::replay_tags::resolve_canonical_replay_tags(
+                &fixture.access,
+                fixture.scope(),
+                &fixture.boundary,
+                &tags,
             ),
-        )
-        .await;
+        ),
+    )
+    .await;
     let batched = batched.unwrap();
     assert_eq!(
         batched.len(),

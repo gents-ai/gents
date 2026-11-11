@@ -1,4 +1,3 @@
-
 use super::*;
 
 use crate::request::lifecycle::RequestTerminalOutcome;
@@ -163,4 +162,3 @@ async fn append_sequence_excludes_foreign_session_messages_and_reservations() {
     txn.discard().await.unwrap();
     assert_eq!(next, 7);
 }
-

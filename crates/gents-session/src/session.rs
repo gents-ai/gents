@@ -35,14 +35,14 @@ mod sessions;
 pub use sessions::{close_session_with_access, recover_agent_session_relationships_with_access};
 pub mod title_text;
 pub use title_text::display_session_title;
+#[cfg(any(test, feature = "test-fixtures"))]
+mod history_fixture;
 #[cfg(test)]
 mod tests;
 #[cfg(any(test, feature = "test-fixtures"))]
-mod history_fixture;
+pub use history_fixture::import_history_observation;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use history_fixture::import_history_observation_as;
-#[cfg(any(test, feature = "test-fixtures"))]
-pub use history_fixture::import_history_observation;
 #[cfg(test)]
 pub use tests::publish_signed_history;
 
@@ -73,9 +73,9 @@ pub use history::{load_history, sequence_message_key};
 pub use history::{load_sequenced_history_for_request, load_sequenced_history_projection_on};
 pub use history::{resumed_request_has_published_input, retry_has_published_input};
 pub use observations::load_latest_requests_in_txn;
+pub use observations::load_recent_titles_for_agent;
 pub use observations::load_session_current_hop;
 pub use observations::load_session_current_hop_in_txn;
-pub use observations::load_recent_titles_for_agent;
 pub(crate) use observations::{
     advance_refused_request_observation_in_txn, advance_session_request_observation_in_txn,
     load_scoped_request_facts_in_txn,

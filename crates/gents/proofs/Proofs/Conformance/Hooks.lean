@@ -1,6 +1,7 @@
 import Proofs.Session.Hooks.Claim
 import Proofs.Session.Hooks.Grant
 import Proofs.Session.Hooks.MustCommit
+import Proofs.Session.Hooks.OwedDelivery
 import Proofs.Session.Hooks.Prepared
 import Proofs.Automation.Hooks.QueueScope
 import Proofs.Conformance.ContractTypes
@@ -165,7 +166,10 @@ private def scriptJson {V : Type} (valueJson : V → String) (script : Script V)
 private def verdictJson : ClaimVerdict → String
   | .allow => "{\"kind\":\"allow\"}"
   | .leaveQueued => "{\"kind\":\"leave_queued\"}"
-  | .retire reason => "{\"kind\":\"retire\",\"reason\":" ++ jsonString reason ++ "}"
+  | .retire reason successor =>
+      "{\"kind\":\"retire\",\"reason\":" ++ jsonString reason ++
+        ",\"successor\":{\"request_id\":" ++ jsonString successor.request ++
+        ",\"request_doc_id\":" ++ jsonString successor.doc ++ "}}"
   | .reject reason => "{\"kind\":\"reject\",\"reason\":" ++ jsonString reason ++ "}"
 
 /-! Effect validation and application: `Hooks.valid` and `Hooks.commit`. -/
@@ -231,17 +235,21 @@ def effectCases : List EffectCase :=
   , { name := "delete_with_stale_revision_misses"
     , world := { effectWorld with denied := [] }, manifest := notes
     , effects := [delete "Note" "n1" 3] }
-  , { name := "create_then_update_sees_the_created_revision", world := effectWorld
+  , { name := "create_then_update_of_one_document_is_invalid", world := effectWorld
     , manifest := notes, effects := [create "Note" "n2" "a", update "Note" "n2" 0 "b"] }
-  , { name := "update_then_create_misses_in_that_order", world := effectWorld
+  , { name := "update_then_create_of_one_document_is_invalid", world := effectWorld
     , manifest := notes, effects := [update "Note" "n2" 0 "b", create "Note" "n2" "a"] }
-  , { name := "two_updates_chain_revisions", world := effectWorld, manifest := notes
+  , { name := "two_updates_of_one_document_are_invalid", world := effectWorld, manifest := notes
     , effects := [update "Note" "n1" 2 "b", update "Note" "n1" 3 "c"] }
-  , { name := "delete_then_create_restarts_the_revision"
+  , { name := "delete_then_create_of_one_document_is_invalid"
     , world := { effectWorld with denied := [] }, manifest := notes
     , effects := [delete "Note" "n1" 2, create "Note" "n1" "again"] }
   , { name := "core_operations_apply_in_returned_order", world := effectWorld
-    , manifest := notes, effects := [coreOp "second", coreOp "first"] } ]
+    , manifest := notes, effects := [coreOp "second", coreOp "first"] }
+  , { name := "writes_to_distinct_documents_check_against_the_snapshot", world := effectWorld
+    , manifest := notes, effects := [update "Note" "n1" 2 "b", create "Note" "n2" "c"] }
+  , { name := "one_stale_write_among_distinct_documents_misses", world := effectWorld
+    , manifest := notes, effects := [create "Note" "n2" "c", update "Note" "n1" 1 "b"] } ]
 
 private def effectCaseJson (c : EffectCase) : String :=
   "{\"name\":" ++ jsonString c.name ++
@@ -453,9 +461,12 @@ def mustCommitCases : List MustCommitCase :=
   , { name := "failed_core_operation_is_dropped_whole", world := stageWorld
     , plugins := [notesPlugin.deciding
         (.proceed "notes-ok" [update "Note" "n1" 0 "b", coreOp "explode"]), tagsPlugin] }
+  , { name := "repeated_document_is_dropped_and_owed", world := stageWorld
+    , plugins := [notesPlugin.deciding
+        (.proceed "notes-ok" [update "Note" "n1" 0 "b", update "Note" "n1" 1 "c"]), tagsPlugin] }
   , { name := "partial_miss_is_dropped_whole", world := stageWorld
     , plugins := [notesPlugin.deciding
-        (.proceed "notes-ok" [update "Note" "n1" 0 "b", update "Note" "n1" 0 "c"]),
+        (.proceed "notes-ok" [update "Note" "n1" 0 "b", update "Note" "n7" 0 "c"]),
                   auditPlugin] }
   , { name := "every_plugin_failing_still_commits_the_transition", world := stageWorld
     , plugins := [notesPlugin, tagsWith (.refuse "cannot record")], readFailed := ["notes"] }
@@ -478,6 +489,9 @@ def mustCommitCasesJson : String := jsonArray (mustCommitCases.map mustCommitCas
 
 /-! Claim verdicts: `Hooks.combine` and `Hooks.gate`. -/
 
+/-- A successor named by its request id; its document id is derived. -/
+private def successorOf (request : String) : Successor := ⟨request, request ++ "-doc"⟩
+
 structure CombineCase where
   name : String
   verdicts : List ClaimVerdict
@@ -486,13 +500,20 @@ def combineCases : List CombineCase :=
   [ { name := "no_plugins_allow", verdicts := [] }
   , { name := "all_allow", verdicts := [.allow, .allow, .allow] }
   , { name := "leave_queued_over_allow", verdicts := [.allow, .leaveQueued, .allow] }
-  , { name := "retire_over_leave_queued", verdicts := [.leaveQueued, .retire "superseded", .allow] }
-  , { name := "reject_over_retire", verdicts := [.retire "superseded", .reject "denied", .leaveQueued] }
-  , { name := "reject_over_retire_permuted", verdicts := [.leaveQueued, .reject "denied", .retire "superseded"] }
-  , { name := "reject_first_permuted", verdicts := [.reject "denied", .leaveQueued, .retire "superseded"] }
+  , { name := "retire_over_leave_queued"
+    , verdicts := [.leaveQueued, .retire "superseded" (successorOf "r2"), .allow] }
+  , { name := "reject_over_retire"
+    , verdicts := [.retire "superseded" (successorOf "r2"), .reject "denied", .leaveQueued] }
+  , { name := "reject_over_retire_permuted"
+    , verdicts := [.leaveQueued, .reject "denied", .retire "superseded" (successorOf "r2")] }
+  , { name := "reject_first_permuted"
+    , verdicts := [.reject "denied", .leaveQueued, .retire "superseded" (successorOf "r2")] }
   , { name := "equal_rejects_first_reason_wins", verdicts := [.allow, .reject "first", .reject "second"] }
   , { name := "equal_rejects_swapped_first_reason_wins", verdicts := [.reject "second", .allow, .reject "first"] }
-  , { name := "equal_retires_first_reason_wins", verdicts := [.retire "older", .leaveQueued, .retire "newer"] }
+  , { name := "equal_retires_first_reason_and_successor_win"
+    , verdicts := [.retire "older" (successorOf "r2"), .leaveQueued, .retire "newer" (successorOf "r3")] }
+  , { name := "equal_reasons_first_successor_wins"
+    , verdicts := [.retire "superseded" (successorOf "r3"), .retire "superseded" (successorOf "r2")] }
   , { name := "single_leave_queued", verdicts := [.leaveQueued] } ]
 
 private def combineCaseJson (c : CombineCase) : String :=
@@ -512,7 +533,7 @@ def GateCase.result (c : GateCase) : Except Refusal (List ClaimVerdict) :=
 
 private def fence : Script ClaimVerdict :=
   { name := "goal-fence", owns := ["GoalFence"], bound := 1, reads := ["Note"]
-  , decision := .byShown 1 (.retire "goal superseded", []) (.allow, []) }
+  , decision := .byShown 1 (.retire "goal superseded" (successorOf "r2"), []) (.allow, []) }
 
 private def mailbox : Script ClaimVerdict :=
   { name := "mailbox", owns := ["Mailbox"], bound := 1
@@ -532,7 +553,8 @@ def gateCases : List GateCase :=
     , plugins := [fence, mailbox.deciding (.refuse "mailbox closed")] }
   , { name := "verdict_with_effects_is_invalid", world := stageWorld
     , plugins := [fence.deciding
-        (.proceed (.retire "goal superseded") [create "GoalFence" "f1" "retired"]), mailbox] }
+        (.proceed (.retire "goal superseded" (successorOf "r2")) [create "GoalFence" "f1" "retired"]),
+        mailbox] }
   , { name := "effects_rejected_even_when_allowing", world := stageWorld
     , plugins := [mailbox, fence.deciding (.proceed .allow [coreOp "request.supersede"])] } ]
 
@@ -801,5 +823,210 @@ private def admitCaseJson (c : AdmitCase) : String :=
     ",\"result\":" ++ admitResultJson c.result ++ "}"
 
 def admitCasesJson : String := jsonArray (admitCases.map admitCaseJson)
+
+/-! The owed-delivery record: `Hooks.OwedDelivery.owe`, `publish`, `redrive`
+and `performs` over the records of one node; `deriveHalts`; `prune`. -/
+
+inductive OwedStep where
+  | owe (point : String) (actor owner : Option String) (signable : List String)
+      (keys : List OwedDelivery.Key) (commit : Bool)
+  | redrive (key : OwedDelivery.Key) (authorized current : Bool)
+      (attempt : OwedDelivery.Attempt) (refused : List OwedDelivery.Write)
+
+def OwedStep.runner : OwedStep → Option String
+  | .owe point actor owner signable _ _ =>
+      OwedDelivery.owe (OwedDelivery.Kind.ofPoint point) actor owner (signable.contains ·)
+  | .redrive .. => none
+
+def OwedStep.run (step : OwedStep) (records : List OwedDelivery.Record) :
+    List OwedDelivery.Record :=
+  match step with
+  | .owe point actor _ _ keys commit =>
+      match step.runner with
+      | some runner =>
+          OwedDelivery.publish records
+            (OwedDelivery.Record.fresh (OwedDelivery.Kind.ofPoint point) actor runner) keys commit
+      | none => records
+  | .redrive key authorized current attempt refused =>
+      records.map fun record =>
+        if record.key == key then
+          OwedDelivery.redrive record ⟨authorized, current⟩ attempt (!refused.contains ·)
+        else record
+
+def OwedStep.performed : OwedStep → List OwedDelivery.Record → Bool
+  | .owe .., _ => false
+  | .redrive key authorized current attempt refused, records =>
+      records.any fun record =>
+        record.key == key &&
+          OwedDelivery.performs record ⟨authorized, current⟩ attempt (!refused.contains ·)
+
+structure OwedCase where
+  name : String
+  steps : List OwedStep
+
+def OwedCase.trace (c : OwedCase) :
+    List (OwedStep × Option String × List OwedDelivery.Record × Bool) :=
+  (c.steps.foldl (fun (acc : List OwedDelivery.Record ×
+      List (OwedStep × Option String × List OwedDelivery.Record × Bool)) step =>
+    let next := step.run acc.1
+    (next, acc.2 ++ [(step, step.runner, next, step.performed acc.1)])) ([], [])).2
+
+def haltKey : OwedDelivery.Key := ⟨"control.session.halt", "goals", "session-1"⟩
+def terminalKey : OwedDelivery.Key := ⟨"request.terminal.stage", "triggers", "request-1"⟩
+def stopKey : OwedDelivery.Key := ⟨"safety.monitor.stop", "monitor", "request-1"⟩
+def goalWrite : OwedDelivery.Write := ⟨"session-1", "goal-1"⟩
+def fireWrite : OwedDelivery.Write := ⟨"request-1", "fire-1"⟩
+
+def owedCases : List OwedCase :=
+  [ { name := "rollback_publishes_nothing"
+    , steps := [.owe "control.session.halt" (some "user") (some "agent") [] [haltKey] false,
+                .redrive haltKey true true (.applied [goalWrite]) []] }
+  , { name := "user_halt_runs_as_the_owning_agent"
+    , steps := [.owe "control.session.halt" (some "user") (some "agent") [] [haltKey] true,
+                .redrive haltKey true true (.applied [goalWrite]) []] }
+  , { name := "actorless_staging_runs_as_the_owning_agent"
+    , steps := [.owe "request.terminal.stage" none (some "agent") [] [terminalKey] true,
+                .redrive terminalKey true true (.applied [fireWrite]) []] }
+  , { name := "staging_without_an_owning_agent_is_not_recorded"
+    , steps := [.owe "control.session.halt" (some "user") none ["user"] [haltKey] true] }
+  , { name := "unowned_subject_is_dropped_unperformed"
+    , steps := [.owe "control.session.halt" (some "agent") (some "agent") ["agent"] [haltKey] true,
+                .redrive haltKey false true (.applied [goalWrite]) []] }
+  , { name := "superseded_transition_is_dropped_unperformed"
+    , steps := [.owe "control.session.halt" (some "user") (some "agent") [] [haltKey] true,
+                .redrive haltKey true false (.applied [goalWrite]) []] }
+  , { name := "write_off_the_subject_is_refused_and_stays_owed"
+    , steps := [.owe "control.session.halt" (some "user") (some "agent") [] [haltKey] true,
+                .redrive haltKey true true (.applied [fireWrite]) [],
+                .redrive haltKey true true (.applied [goalWrite]) []] }
+  , { name := "write_the_agent_may_not_make_is_refused_and_stays_owed"
+    , steps := [.owe "control.session.halt" (some "user") (some "agent") [] [haltKey] true,
+                .redrive haltKey true true (.applied [goalWrite]) [goalWrite]] }
+  , { name := "failed_attempts_stay_owed_until_delivered"
+    , steps := [.owe "request.terminal.stage" (some "agent") (some "agent") [] [terminalKey] true,
+                .redrive terminalKey true true (.failed "refused") [],
+                .redrive terminalKey true true (.failed "unreadable") [],
+                .redrive terminalKey true true (.applied [fireWrite]) []] }
+  , { name := "on_behalf_runs_under_its_signable_actor"
+    , steps := [.owe "safety.monitor.stop" (some "agent") (some "other") ["agent"] [stopKey] true,
+                .redrive stopKey true true (.applied [fireWrite]) []] }
+  , { name := "on_behalf_for_an_unsignable_actor_is_refused_at_owe"
+    , steps := [.owe "safety.monitor.stop" (some "user") (some "agent") ["agent"] [stopKey] true,
+                .redrive stopKey true true (.applied [fireWrite]) []] }
+  , { name := "revoked_on_behalf_actor_is_dropped"
+    , steps := [.owe "safety.monitor.stop" (some "agent") (some "agent") ["agent"] [stopKey] true,
+                .redrive stopKey false true (.applied [fireWrite]) []] }
+  , { name := "redelivery_is_inert"
+    , steps := [.owe "control.session.halt" (some "user") (some "agent") [] [haltKey] true,
+                .redrive haltKey true true (.applied [goalWrite]) [],
+                .redrive haltKey true true (.applied [goalWrite]) [],
+                .redrive haltKey false false (.failed "late") []] }
+  , { name := "publishing_twice_is_inert"
+    , steps := [.owe "control.session.halt" (some "user") (some "agent") [] [haltKey, haltKey] true,
+                .owe "control.session.halt" (some "other") (some "agent") [] [haltKey] true,
+                .redrive haltKey true true (.applied [goalWrite]) [],
+                .owe "control.session.halt" (some "other") (some "agent") [] [haltKey] true] } ]
+
+structure OwedDeriveCase where
+  name : String
+  bound : Nat
+  sessions : List OwedDelivery.HaltedSession
+
+def owedDeriveCases : List OwedDeriveCase :=
+  [ { name := "current_halts_are_derived_within_the_bound", bound := 2
+    , sessions := [⟨"s1", some "agent", some "t1", true⟩, ⟨"s2", some "agent", some "t2", true⟩,
+                   ⟨"s3", some "other", some "t3", true⟩] }
+  , { name := "superseded_unowned_and_unlatched_sessions_are_skipped", bound := 8
+    , sessions := [⟨"resumed", some "agent", some "t1", false⟩, ⟨"orphan", none, some "t2", true⟩,
+                   ⟨"running", some "agent", none, true⟩, ⟨"halted", some "agent", some "t4", true⟩] }
+  , { name := "zero_bound_derives_nothing", bound := 0
+    , sessions := [⟨"s1", some "agent", some "t1", true⟩] } ]
+
+structure OwedPruneCase where
+  name : String
+  retention : Nat
+  records : List (OwedDelivery.Record × Nat)
+
+def settledRecord (key : OwedDelivery.Key) (settled : Option OwedDelivery.Settlement) :
+    OwedDelivery.Record :=
+  { OwedDelivery.Record.fresh .staging (some "user") "agent" key with settled := settled }
+
+def owedPruneCases : List OwedPruneCase :=
+  [ { name := "settled_records_past_retention_are_pruned", retention := 10
+    , records := [(settledRecord haltKey (some .delivered), 11),
+                  (settledRecord terminalKey (some .dropped), 10),
+                  (settledRecord stopKey none, 100)] } ]
+
+private def owedKeyJson (key : OwedDelivery.Key) : String :=
+  "{\"point\":" ++ jsonString key.point ++ ",\"plugin\":" ++ jsonString key.plugin ++
+    ",\"subject\":" ++ jsonString key.subject ++ "}"
+
+private def optionJson (value : Option String) : String := (value.map jsonString).getD "null"
+
+private def owedRecordJson (record : OwedDelivery.Record) : String :=
+  "{\"key\":" ++ owedKeyJson record.key ++
+    ",\"kind\":" ++ (match record.kind with
+      | .staging => "\"staging\"" | .onBehalf => "\"on_behalf\"") ++
+    ",\"actor\":" ++ optionJson record.actor ++
+    ",\"runner\":" ++ jsonString record.runner ++
+    ",\"attempts\":" ++ toString record.attempts ++
+    ",\"last_error\":" ++ optionJson record.lastError ++
+    ",\"settled\":" ++ (match record.settled with
+      | none => "null"
+      | some .delivered => "\"delivered\""
+      | some .dropped => "\"dropped\"") ++ "}"
+
+private def owedWriteJson (write : OwedDelivery.Write) : String :=
+  "{\"subject\":" ++ jsonString write.subject ++ ",\"doc\":" ++ jsonString write.doc ++ "}"
+
+private def owedAttemptJson : OwedDelivery.Attempt → String
+  | .applied writes => "{\"kind\":\"applied\",\"writes\":" ++
+      jsonArray (writes.map owedWriteJson) ++ "}"
+  | .failed error => "{\"kind\":\"failed\",\"error\":" ++ jsonString error ++ "}"
+
+private def owedStepJson : OwedStep → String
+  | .owe point actor owner signable keys commit =>
+      "{\"kind\":\"owe\",\"point\":" ++ jsonString point ++
+        ",\"actor\":" ++ optionJson actor ++ ",\"owner\":" ++ optionJson owner ++
+        ",\"signable\":" ++ jsonStringArray signable ++
+        ",\"keys\":" ++ jsonArray (keys.map owedKeyJson) ++ ",\"commit\":" ++ boolJson commit ++ "}"
+  | .redrive key authorized current attempt refused =>
+      "{\"kind\":\"redrive\",\"key\":" ++ owedKeyJson key ++
+        ",\"authorized\":" ++ boolJson authorized ++ ",\"current\":" ++ boolJson current ++
+        ",\"attempt\":" ++ owedAttemptJson attempt ++
+        ",\"refused\":" ++ jsonArray (refused.map owedWriteJson) ++ "}"
+
+private def owedCaseJson (c : OwedCase) : String :=
+  "{\"name\":" ++ jsonString c.name ++
+    ",\"trace\":" ++ jsonArray (c.trace.map fun (step, runner, records, performed) =>
+      "{\"step\":" ++ owedStepJson step ++
+        ",\"runner\":" ++ optionJson runner ++
+        ",\"records\":" ++ jsonArray (records.map owedRecordJson) ++
+        ",\"performed\":" ++ boolJson performed ++ "}") ++ "}"
+
+private def haltedSessionJson (session : OwedDelivery.HaltedSession) : String :=
+  "{\"session\":" ++ jsonString session.session ++ ",\"owner\":" ++ optionJson session.owner ++
+    ",\"latched_at\":" ++ optionJson session.latchedAt ++
+    ",\"current\":" ++ boolJson session.current ++ "}"
+
+private def owedDeriveCaseJson (c : OwedDeriveCase) : String :=
+  "{\"name\":" ++ jsonString c.name ++ ",\"bound\":" ++ toString c.bound ++
+    ",\"sessions\":" ++ jsonArray (c.sessions.map haltedSessionJson) ++
+    ",\"derived\":" ++ jsonArray ((OwedDelivery.deriveHalts c.bound c.sessions).map
+      fun (session, time, owner) =>
+        "{\"session\":" ++ jsonString session ++ ",\"at\":" ++ jsonString time ++
+          ",\"owner\":" ++ jsonString owner ++ "}") ++ "}"
+
+private def owedPruneCaseJson (c : OwedPruneCase) : String :=
+  "{\"name\":" ++ jsonString c.name ++ ",\"retention\":" ++ toString c.retention ++
+    ",\"records\":" ++ jsonArray (c.records.map fun (record, age) =>
+      "{\"record\":" ++ owedRecordJson record ++ ",\"age\":" ++ toString age ++ "}") ++
+    ",\"kept\":" ++ jsonArray ((OwedDelivery.prune c.records c.retention).map fun (record, age) =>
+      "{\"record\":" ++ owedRecordJson record ++ ",\"age\":" ++ toString age ++ "}") ++ "}"
+
+def owedCasesJson : String :=
+  "{\"traces\":" ++ jsonArray (owedCases.map owedCaseJson) ++
+    ",\"derive\":" ++ jsonArray (owedDeriveCases.map owedDeriveCaseJson) ++
+    ",\"prune\":" ++ jsonArray (owedPruneCases.map owedPruneCaseJson) ++ "}"
 
 end Conformance.HooksContracts

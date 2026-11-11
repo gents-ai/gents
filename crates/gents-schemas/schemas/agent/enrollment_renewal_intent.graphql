@@ -1,6 +1,6 @@
 # Member-signed request for a fresh offer that renews one existing enrollment
 # generation; it grants nothing until the owner's ordinary decision.
-type EnrollmentRenewalIntent @policy(id: "ac7d6625bfe087880ab77635e5da9c48fe1ee5f9152748018a63c0d9a75ceb70", resource: "enrollment_records") @branchable {
+type EnrollmentRenewalIntent @policy(id: "5214e9adbbb9b355e4f18a31587c3592d67bf40567688584187bd3ea74bafd91", resource: "enrollment_records") @branchable {
     intent_id: String @index(unique: true) @immutable
     network_id: String @index @immutable
     admin_did: String @index @immutable
