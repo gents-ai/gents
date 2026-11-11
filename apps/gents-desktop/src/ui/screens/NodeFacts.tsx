@@ -3,10 +3,8 @@
 import { cn } from "@gents/ui/lib/utils";
 import type { NodeView } from "../../hooks/fleetStore";
 import { providerLogo } from "@/lib/provider";
-import {
-  projectRuntimeConnectionStatus,
-  type OperationalStatusKind,
-} from "@source-inc/gents-desktop-client";
+import type { OperationalStatusKind } from "@source-inc/gents-desktop-client";
+import { nodeConnectionState } from "@/lib/nodeConnection";
 import { ProviderLogo } from "./ProviderLogo";
 import { healthy } from "./agent/inferenceKinds";
 import { useStoppedLocalNode } from "./agent/LocalServer";
@@ -46,15 +44,28 @@ export function StateDot({
   );
 }
 
-/** How a node's connection stands; this computer's own node, stopped, reads
-    as stopped rather than as a connection being retried. */
+/** How a node's connection stands, and its dot's tone; `stopped` for this
+    computer's own node while it isn't running. */
+export function nodeConnection(
+  deployment: Pick<NodeView, "runtimeConnection">,
+  stopped: boolean,
+) {
+  const state = nodeConnectionState(deployment, stopped);
+  const tone: Tone = stopped ? "idle" : statusTone(state.status.kind);
+  return { ...state, tone };
+}
+
+export function useNodeConnection(deployment: NodeView) {
+  return nodeConnection(deployment, useStoppedLocalNode(deployment) !== null);
+}
+
+/** How a node's connection stands, as a dot and its short label. */
 export function OnlineStatus({ deployment }: { deployment: NodeView }) {
-  const stopped = useStoppedLocalNode(deployment);
-  const status = projectRuntimeConnectionStatus(deployment.runtimeConnection);
+  const { tone, label } = useNodeConnection(deployment);
   return (
     <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
-      <StateDot tone={stopped ? "idle" : statusTone(status.kind)} />
-      {stopped ? "Stopped" : status.shortLabel}
+      <StateDot tone={tone} />
+      {label}
     </span>
   );
 }

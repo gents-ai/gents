@@ -6,6 +6,7 @@ import { useDraft } from "./draft";
 import { Fact, focusField, Group, PathFact, Row, Unfold } from "./rows";
 import { LocalServer } from "./LocalServer";
 import { AgentCard } from "./AgentCard";
+import { ConnectionGroup } from "./ConnectionGroup";
 import { saveDefault } from "./BehaviorsPanel";
 import { packOrigin } from "./ListDetail";
 import { useApp } from "@/app/AppContext";
@@ -160,6 +161,7 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
           />
         </>
       )}
+      <ConnectionGroup deployment={deployment} />
       <Group title="Identity">
         <Row
           label="Node DID"
@@ -182,9 +184,6 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
         )}
         <Row label="Tool root" description="The directory tools are confined to.">
           <PathFact path={reach.root} local={reach.local} />
-        </Row>
-        <Row label="Peer" description="Where the node's runtime runs.">
-          <Fact mono>{deployment.peerId}</Fact>
         </Row>
         <Row label="Created">
           <Fact>

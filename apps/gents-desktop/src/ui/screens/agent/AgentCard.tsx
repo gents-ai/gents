@@ -18,6 +18,7 @@ import { useApp } from "@/app/AppContext";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { useHomeDid, useNodeReach } from "@/hooks/useClient";
 import { isLocalNode } from "@/lib/firstRun";
+import { joinedPeerId } from "@/lib/nodes";
 import { InferenceSummary, OnlineStatus, StateDot, counted } from "../NodeFacts";
 import { AgentMark } from "../parts";
 import { span, useMinute } from "../time";
@@ -306,6 +307,7 @@ export function AgentCard({
     nodeDid: deployment.nodeDid,
     section,
   });
+  const peerId = joinedPeerId(deployment, homeDid);
   const facts = [
     reach.ceiling,
     reach.root && shortPath(reach.root, { home: reach.local ? home : null, max: 40 }),
@@ -347,12 +349,12 @@ export function AgentCard({
           </div>
           <p className="mt-1 truncate text-xs text-muted-foreground">
             {facts.join(" · ")}
-            {/* the host's id in full only on hover; its end tells hosts apart */}
-            {deployment.peerId && (
+            {/* the peer ID in full only on hover; its end tells nodes apart */}
+            {peerId && (
               <>
                 {facts.length ? " · " : ""}
-                <span title={deployment.peerId} className="font-mono">
-                  {deployment.peerId.slice(-8)}
+                <span title={peerId} className="font-mono">
+                  {peerId.slice(-8)}
                 </span>
               </>
             )}

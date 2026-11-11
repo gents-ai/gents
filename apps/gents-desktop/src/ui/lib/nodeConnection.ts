@@ -24,6 +24,36 @@ export function connectionLine(name: string, status: OperationalStatus) {
   }
 }
 
+/** How a line to a node is drawn: up, on its way up, turned away, or idle. */
+export type ConnectionLink = "connected" | "connecting" | "refused" | "idle";
+
+/** A node's connection as the desktop names it: the owner's status, its
+    short label and detail, and how a line to the node is drawn. This
+    computer's own node, `stopped`, reads as stopped rather than as a
+    connection being retried. */
+export function nodeConnectionState(
+  node: Pick<NodeView, "runtimeConnection">,
+  stopped: boolean,
+): { status: OperationalStatus; label: string; detail: string; link: ConnectionLink } {
+  const status = projectRuntimeConnectionStatus(node.runtimeConnection);
+  if (stopped)
+    return {
+      status,
+      label: "Stopped",
+      detail: "This computer’s node isn’t running.",
+      link: "idle",
+    };
+  const link: ConnectionLink =
+    status.reason === "connected"
+      ? "connected"
+      : status.reason === "connecting" || status.reason === "disconnected"
+        ? "connecting"
+        : status.reason === "refused"
+          ? "refused"
+          : "idle";
+  return { status, label: status.shortLabel, detail: status.detail, link };
+}
+
 /** Where a page of one node's data says the connection isn't up: in place of
     the page while it connects (`loading`) or while nothing can be shown
     (`unavailable`), or over data a lost connection kept (`stale`). */
