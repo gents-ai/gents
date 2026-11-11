@@ -103,7 +103,7 @@ impl BackendAdmissionConfig {
             max_queue_depth,
             enabled: backend.enabled,
             probe_status: observation.probe_status.clone().unwrap_or_else(|| {
-                crate::inference::backends::registry::UNKNOWN_PROBE_STATUS.into()
+                crate::documents::inference_backend::UNKNOWN_PROBE_STATUS.into()
             }),
             measured_unhealthy: false,
             config_fingerprint,

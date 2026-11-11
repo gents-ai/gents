@@ -754,7 +754,7 @@ pub use inference::backends::provider::{
 };
 pub use inference::backends::registry::{
     record_discovered_catalog_on, record_model_catalog_in_txn, InferenceBackend,
-    HEALTHY_PROBE_STATUS, UNKNOWN_PROBE_STATUS,
+    HEALTHY_PROBE_STATUS,
 };
 pub use inference::compaction::CompactionStrategy;
 pub use inference::resolved::{

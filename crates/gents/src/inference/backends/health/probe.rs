@@ -6,7 +6,8 @@ use chrono::{DateTime, Utc};
 use defra_node::Node as EmbeddedNode;
 use tokio_util::sync::CancellationToken;
 
-use crate::inference::backends::registry::{backend_fields, InferenceBackend, UNKNOWN_PROBE_STATUS};
+use crate::documents::inference_backend::UNKNOWN_PROBE_STATUS;
+use crate::inference::backends::registry::{backend_fields, InferenceBackend};
 
 use super::oauth::{oauth_credential_for_probe, OAuthProbeContext};
 use super::{

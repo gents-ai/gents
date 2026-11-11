@@ -578,6 +578,48 @@ pub struct InferenceBackendObservation {
     pub last_probe: Option<String>,
 }
 
+pub const UNKNOWN_PROBE_STATUS: &str = "unknown";
+
+impl InferenceBackendObservation {
+    pub fn display_state(&self, enabled: bool) -> &'static str {
+        derive_display_state(
+            enabled,
+            self.probe_status.as_deref().unwrap_or(UNKNOWN_PROBE_STATUS),
+        )
+    }
+
+    pub fn catalog_for(
+        &self,
+        principal: Option<&str>,
+    ) -> anyhow::Result<Option<&BackendModelCatalog>> {
+        let mut catalogs = self
+            .catalogs
+            .iter()
+            .filter(|catalog| catalog.node_did.as_deref() == principal);
+        let catalog = catalogs.next();
+        anyhow::ensure!(
+            catalogs.next().is_none(),
+            "ambiguous backend catalog authentication scope"
+        );
+        Ok(catalog)
+    }
+}
+
+pub fn derive_display_state(enabled: bool, probe_status: &str) -> &'static str {
+    if !enabled {
+        return "disabled";
+    }
+    match probe_status {
+        "healthy" => "available",
+        "unhealthy" => "unhealthy",
+        "stale" => "stale",
+        "rate_limited" => "rate-limited",
+        "circuit_open" => "circuit-open",
+        "unknown" => "unknown",
+        _ => "unknown",
+    }
+}
+
 fn deserialize_backend_catalogs<'de, D>(
     deserializer: D,
 ) -> Result<Vec<BackendModelCatalog>, D::Error>
