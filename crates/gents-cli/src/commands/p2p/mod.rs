@@ -6,8 +6,8 @@ mod pairings;
 mod replicators;
 mod templates;
 
-use gents_host::p2p_status::p2p_http_client;
 use anyhow::Result;
+use gents_host::p2p_status::p2p_http_client;
 use serde_json::{json, Value};
 
 use crate::cli::args::{

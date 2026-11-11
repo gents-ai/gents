@@ -27,8 +27,7 @@ pub use process::{sample_process_memory, ProcessMetricsSnapshot, StoreSizeCache}
 const INFERENCE_METRICS_WINDOW_SECS: i64 = 5 * 60;
 const INFERENCE_METRICS_PAGE_SIZE: usize = 500;
 const LIVENESS_ACTIVITY_CHUNK: usize = 32;
-pub const LIVENESS_ACTIVITY_BUDGET: std::time::Duration =
-    std::time::Duration::from_millis(500);
+pub const LIVENESS_ACTIVITY_BUDGET: std::time::Duration = std::time::Duration::from_millis(500);
 
 #[derive(Debug, Serialize)]
 pub struct MetricsQueryData {

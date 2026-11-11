@@ -392,9 +392,23 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     let telemetry = gents_service::telemetry::init(DEFAULT_LOG_FILTER)?;
     let result = match command {
         Command::Init(args) => commands::init::init(args).await,
-        Command::Server(args) => gents_host::serve::serve(args, runtime, std::sync::Arc::new(commands::serve_client::CliServeClient)).await,
+        Command::Server(args) => {
+            gents_host::serve::serve(
+                args,
+                runtime,
+                std::sync::Arc::new(commands::serve_client::CliServeClient),
+            )
+            .await
+        }
         Command::Service { command } => service_command(command).await,
-        Command::PrepareRuntime(args) => gents_host::prepare_runtime::prepare(args, runtime, std::sync::Arc::new(commands::serve_client::CliServeClient)).await,
+        Command::PrepareRuntime(args) => {
+            gents_host::prepare_runtime::prepare(
+                args,
+                runtime,
+                std::sync::Arc::new(commands::serve_client::CliServeClient),
+            )
+            .await
+        }
         Command::Status(args) => commands::status::status(args).await,
         Command::Sessions { command } => commands::session::dispatch(command).await,
         Command::Automation { command } => match command {
@@ -425,7 +439,14 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         },
         Command::Config { command } => commands::config::dispatch(command).await,
         Command::Runtime { command } => match command {
-            RuntimeCommand::Server(args) => gents_host::serve::serve(*args, runtime, std::sync::Arc::new(commands::serve_client::CliServeClient)).await,
+            RuntimeCommand::Server(args) => {
+                gents_host::serve::serve(
+                    *args,
+                    runtime,
+                    std::sync::Arc::new(commands::serve_client::CliServeClient),
+                )
+                .await
+            }
             RuntimeCommand::Service { command } => service_command(command).await,
             RuntimeCommand::Provision(args) => commands::provision::provision(args).await,
             RuntimeCommand::Reset(args) => commands::reset::reset(args).await,

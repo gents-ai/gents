@@ -2501,5 +2501,4 @@ mod tests {
         );
         node.shutdown().await.unwrap();
     }
-
 }

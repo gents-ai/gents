@@ -7,11 +7,11 @@ use anyhow::Result;
 use gents_protocol::row::{project_node_readiness_summary, ProjectedNodeReadinessSummary};
 use serde_json::{json, Value};
 
-use crate::cli::args::{DiagnoseArgs};
-use gents_host::args::P2pTransportArg;
+use crate::cli::args::DiagnoseArgs;
 use crate::{
     build_config_export_bundle, graphql_endpoint_available, print_json, resolve_config_access,
 };
+use gents_host::args::P2pTransportArg;
 use gents_service::home_state::read_init_config;
 use gents_service::home_state::read_runtime_state;
 use gents_service::home_state::resolve_home_dir;

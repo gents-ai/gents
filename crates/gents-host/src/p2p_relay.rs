@@ -9,9 +9,7 @@ pub fn default_relay_urls() -> Vec<String> {
         .collect()
 }
 
-pub fn non_production_relay_urls<'a>(
-    urls: impl IntoIterator<Item = &'a String>,
-) -> Vec<String> {
+pub fn non_production_relay_urls<'a>(urls: impl IntoIterator<Item = &'a String>) -> Vec<String> {
     urls.into_iter()
         .filter(|url| {
             let url = url.to_ascii_lowercase();

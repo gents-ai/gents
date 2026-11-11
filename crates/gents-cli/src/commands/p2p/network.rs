@@ -499,9 +499,7 @@ mod tests {
     #[test]
     fn delete_registry_mutation_uses_peer_id_filter() {
         let mutation = delete_registry_mutation(r#"peer"one"#);
-        assert!(mutation
-            .document
-            .contains("filter: {peer_id: {_eq: $v0}}"));
+        assert!(mutation.document.contains("filter: {peer_id: {_eq: $v0}}"));
         assert!(mutation.document.contains("delete_PeerRegistry"));
         assert_eq!(mutation.variables, json!({ "v0": r#"peer"one"# }));
     }

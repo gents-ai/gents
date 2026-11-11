@@ -20,10 +20,10 @@ use serde_json::{json, Value};
 use tokio::sync::watch;
 use uuid::Uuid;
 
-use crate::http::router::{RuntimeActivationObservation, ServeLifecycleHandle};
-use crate::http::runtime_contract_router;
 use crate::args::*;
 use crate::defaults::*;
+use crate::http::router::{RuntimeActivationObservation, ServeLifecycleHandle};
+use crate::http::runtime_contract_router;
 use crate::tool_ceiling::{format_tool_ceiling, host_tool_ceiling, parse_cli_tool_arg};
 use gents_protocol::row::{
     project_node_readiness_summary, AgentReadinessState, NodeReadinessSummary,
@@ -1636,8 +1636,7 @@ mod shim_host_tests {
             .unwrap();
         assert!(!cases.is_empty());
         for case in cases {
-            let mut runtime =
-                ServeRuntime::new(crate::test_support::test_runtime_handle());
+            let mut runtime = ServeRuntime::new(crate::test_support::test_runtime_handle());
             let shutdown = runtime.shutdown_tx.clone();
             let join_kind = case["join"]["kind"].as_str().unwrap().to_owned();
             let failure = case["join"]["message"].as_str().unwrap_or("").to_owned();

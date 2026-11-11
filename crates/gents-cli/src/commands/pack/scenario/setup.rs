@@ -3,10 +3,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
-use gents_host::cli_process::path_arg;
 use super::super::server::spawn_server_with_args_and_env;
 use super::manifest::{PackSeed, ScenarioManifest};
 use super::validate::tool_package_needs_root;
+use gents_host::cli_process::path_arg;
 use gents_store::graphql::validate_collection_identifier;
 
 pub(super) struct DependencyInstall<'a> {

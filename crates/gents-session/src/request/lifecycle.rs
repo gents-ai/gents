@@ -32,9 +32,9 @@ mod background_wake_recovery;
 pub use background_wake_recovery::{background_wake_next_retry_at, background_wake_retry_delay};
 pub mod arrival_order;
 pub mod claim;
+pub(crate) use claim::supersede_pending_in_txn;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use claim::{claim_gate_in_txn, ClaimGate};
-pub(crate) use claim::supersede_pending_in_txn;
 pub mod execution_lease;
 mod execution_renewal;
 #[cfg(test)]
@@ -84,9 +84,7 @@ pub use manual::{
     ManualRequestTarget,
 };
 pub use materialize::build_session_message_request;
-pub(crate) use materialize::{
-    write_pending_agent_request_with_lineage_workspace_and_conversation_title,
-};
+pub(crate) use materialize::write_pending_agent_request_with_lineage_workspace_and_conversation_title;
 pub use materialize::{
     build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
     build_signed_request, ParentLink, RequestIdentity, RequestSigner, RequestSpec, RetryLink,

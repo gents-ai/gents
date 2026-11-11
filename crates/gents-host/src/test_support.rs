@@ -141,9 +141,7 @@ pub fn fixture_node_builder() -> defra_node::NodeBuilder {
 
 /// The fixture signer's managed Agent named `name`: the same name derives the
 /// same Agent DID, so fixtures can name Agents across documents and reads.
-pub fn fixture_agent_named(
-    name: &str,
-) -> gents_protocol::agent_identity::AgentIdentityBinding {
+pub fn fixture_agent_named(name: &str) -> gents_protocol::agent_identity::AgentIdentityBinding {
     use sha2::Digest as _;
 
     let creation_nonce = sha2::Sha256::digest(name.as_bytes())
@@ -839,6 +837,9 @@ impl crate::serve::ServeClient for TestServeClient {
         _home_dir: &std::path::Path,
         _access: &gents_store::config_client::ConfigAccess,
     ) -> anyhow::Result<crate::serve::BoundRootAgents> {
-        anyhow::bail!("no desired-state root is bound in tests: {}", root.display())
+        anyhow::bail!(
+            "no desired-state root is bound in tests: {}",
+            root.display()
+        )
     }
 }

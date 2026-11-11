@@ -2,19 +2,20 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 
 use crate::cli::args::{P2pAccessArgs, P2pConnectArgs};
-use crate::{print_json};
+use crate::print_json;
 use gents_host::http_client::http_send;
 use gents_service::home_state::resolve_graphql_endpoint;
 use gents_service::home_state::resolve_home_dir;
 
+use super::p2p_probe_get;
 use gents_host::p2p_status::fetch_live_http_p2p_status;
 use gents_host::p2p_status::flatten_p2p_fields;
 use gents_host::p2p_status::load_live_http_p2p_status;
-use super::p2p_probe_get;
 
 pub(super) async fn p2p_connect(args: P2pConnectArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-    let client = gents_host::p2p_status::p2p_http_client().context("building P2P connect HTTP client")?;
+    let client =
+        gents_host::p2p_status::p2p_http_client().context("building P2P connect HTTP client")?;
     let api_base = crate::graphql_access::graphql_api_base(graphql.url())?;
     http_send(
         graphql.authorize(

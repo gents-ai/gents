@@ -36,14 +36,14 @@ mod sessions;
 pub use sessions::{close_session_with_access, recover_agent_session_relationships_with_access};
 pub mod title_text;
 pub use title_text::display_session_title;
+#[cfg(any(test, feature = "test-fixtures"))]
+mod history_fixture;
 #[cfg(test)]
 mod tests;
 #[cfg(any(test, feature = "test-fixtures"))]
-mod history_fixture;
+pub use history_fixture::import_history_observation;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub use history_fixture::import_history_observation_as;
-#[cfg(any(test, feature = "test-fixtures"))]
-pub use history_fixture::import_history_observation;
 #[cfg(test)]
 pub use tests::publish_signed_history;
 

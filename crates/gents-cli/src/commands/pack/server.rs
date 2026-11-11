@@ -6,10 +6,10 @@ use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use tokio::process::Child;
 
+use gents_host::cli_process::path_arg;
 use gents_protocol::row::{
     decode_node_readiness_snapshot, NodeReadinessRow, NodeReadinessSnapshot,
 };
-use gents_host::cli_process::path_arg;
 
 pub(super) fn spawn_server_with_args_and_env(
     bin: &Path,

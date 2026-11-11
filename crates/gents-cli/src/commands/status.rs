@@ -5,8 +5,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use gents_protocol::row::{
-    decode_node_readiness_snapshot, project_node_readiness_summary,
-    ProjectedNodeReadinessSummary,
+    decode_node_readiness_snapshot, project_node_readiness_summary, ProjectedNodeReadinessSummary,
 };
 use serde_json::{json, Value};
 

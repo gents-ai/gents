@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde_json::Value;
 
 use crate::cli::args::{FleetCommand, FleetSlotsArgs};
-use crate::{print_json};
+use crate::print_json;
 use gents_host::http_client::http_get_json;
 use gents_service::home_state::resolve_graphql_endpoint;
 

@@ -1,5 +1,5 @@
-use anyhow::Result;
 use super::*;
+use anyhow::Result;
 use std::{sync::Arc, time::Duration};
 use tracing::field::{Field, Visit};
 use tracing::instrument::WithSubscriber;
@@ -2312,4 +2312,3 @@ impl Visit for PendingNativeOutcome {
         }
     }
 }
-

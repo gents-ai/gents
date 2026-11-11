@@ -5,12 +5,12 @@ use clap::Parser as _;
 use gents_store::local::home::remember_home;
 use gents_tools::surface::refuse_too_broad_root;
 
-use crate::cli::args::{InitArgs};
-use gents_host::args::StoreKeyCustodyArg;
+use crate::cli::args::InitArgs;
 use crate::cli::{Cli, Command};
 use crate::commands::eval::terminal_size;
 use crate::commands::init::init_home;
 use crate::interactive_backend::{confirm, prompt_line_default, resolve_backend_interactively};
+use gents_host::args::StoreKeyCustodyArg;
 use gents_service::home_state::read_finished_init_config;
 use gents_service::home_state::resolve_home_dir;
 

@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
-use crate::request::lifecycle::test_support::{hints, parent_request, wake_queue_input};
 use super::*;
+use crate::request::lifecycle::test_support::{hints, parent_request, wake_queue_input};
 
 use crate::request::lifecycle::{
     extract_single_doc_id, ClaimOutcome, RequestLifecycle, DEFAULT_REQUEST_MAX_RETRIES,
@@ -46,8 +46,8 @@ mod input;
 mod pin_tests {
     use super::*;
     use crate::request::lifecycle::test_support::{
-        hints, normalize_pin_fields, parent_request, pin_fixed_signing_identity, pin_parent_request,
-        wake_queue_input, PIN_FIXED_DID,
+        hints, normalize_pin_fields, parent_request, pin_fixed_signing_identity,
+        pin_parent_request, wake_queue_input, PIN_FIXED_DID,
     };
 
     /// The fixed pin root cannot mint a managed Agent signer, so the Agent is a
@@ -170,7 +170,8 @@ impl TestDb {
 }
 
 async fn test_db(name: &str) -> TestDb {
-    let (db, user, user_access, binding) = gents_inference::test_support::signed_test_node(name).await;
+    let (db, user, user_access, binding) =
+        gents_inference::test_support::signed_test_node(name).await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
     let agent_identity = gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding)
@@ -337,4 +338,3 @@ async fn request_doc_lookup_rejects_duplicate_logical_request_ids() {
         .expect_err("duplicate logical ids must not resolve to an arbitrary document");
     assert!(error.to_string().contains("ambiguous across 2 documents"));
 }
-

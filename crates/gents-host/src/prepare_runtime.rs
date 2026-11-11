@@ -32,7 +32,6 @@ const STARTUP_WAIT: Duration = Duration::from_secs(60);
 /// A recorded runtime endpoint may be stale or unresponsive during preparation.
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
 
-
 #[cfg(test)]
 mod tests;
 

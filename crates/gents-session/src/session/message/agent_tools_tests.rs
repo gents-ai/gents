@@ -1,4 +1,3 @@
-
 use super::target::session_target_allowed;
 use super::*;
 
@@ -99,4 +98,3 @@ fn session_list_entries_match_lean_owner() {
         );
     }
 }
-

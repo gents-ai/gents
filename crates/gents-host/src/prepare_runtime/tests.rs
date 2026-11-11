@@ -252,7 +252,8 @@ async fn preparation_busy_refusal_leaves_identity_store_and_saved_route_unchange
         args,
         crate::test_support::test_runtime_handle(),
         std::sync::Arc::new(crate::test_support::TestServeClient),
-    ).await;
+    )
+    .await;
     assert_eq!(
         result
             .unwrap_err()
@@ -305,8 +306,8 @@ async fn changing_root_does_not_modify_a_busy_runtime() {
         crate::test_support::test_runtime_handle(),
         std::sync::Arc::new(crate::test_support::TestServeClient),
     )
-        .await
-        .unwrap_err();
+    .await
+    .unwrap_err();
     assert_eq!(
         error.downcast_ref::<PreparationFailure>().unwrap().reason,
         RuntimePreparationRefusal::Busy
@@ -388,8 +389,8 @@ async fn changed_root_does_not_retire_a_runtime_with_stricter_live_access() {
         crate::test_support::test_runtime_handle(),
         std::sync::Arc::new(crate::test_support::TestServeClient),
     )
-        .await
-        .unwrap_err();
+    .await
+    .unwrap_err();
     assert_eq!(
         refusal_reason(&error),
         RuntimePreparationRefusal::Unavailable
@@ -451,8 +452,8 @@ async fn changing_root_without_the_store_key_preserves_the_initialized_home() {
         crate::test_support::test_runtime_handle(),
         std::sync::Arc::new(crate::test_support::TestServeClient),
     )
-        .await
-        .unwrap_err();
+    .await
+    .unwrap_err();
     assert_eq!(
         refusal_reason(&error),
         RuntimePreparationRefusal::Credentials
@@ -542,8 +543,8 @@ async fn preparation_missing_store_key_refuses_before_requesting_retirement() {
         crate::test_support::test_runtime_handle(),
         std::sync::Arc::new(crate::test_support::TestServeClient),
     )
-        .await
-        .unwrap_err();
+    .await
+    .unwrap_err();
     assert_eq!(
         error.downcast_ref::<PreparationFailure>().unwrap().reason,
         RuntimePreparationRefusal::Credentials

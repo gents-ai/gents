@@ -96,10 +96,7 @@ pub fn flatten_p2p_fields(map: &mut serde_json::Map<String, Value>, p2p: &Value)
     }
 }
 
-pub async fn load_live_http_p2p_status(
-    home: Option<&Path>,
-    graphql: &GraphqlEndpoint,
-) -> Value {
+pub async fn load_live_http_p2p_status(home: Option<&Path>, graphql: &GraphqlEndpoint) -> Value {
     let home_dir = resolve_home_dir(home);
     let runtime_state = read_runtime_state(&home_dir)
         .ok()

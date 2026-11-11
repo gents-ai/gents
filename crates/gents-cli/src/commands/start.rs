@@ -8,11 +8,11 @@ use gents_store::config_client::GraphqlEndpoint;
 use gents_store::local::storage_backend::{IncompatibleStore, IncompatibleStoreKind};
 use tokio::runtime::Handle;
 
-use crate::cli::args::{ShellArgs};
-use gents_host::args::StoreKeyCustodyArg;
+use crate::cli::args::ShellArgs;
 use crate::cli::Cli;
 use crate::config_writes::ConfigAccess;
 use crate::graphql_access::graphql_endpoint_available;
+use gents_host::args::StoreKeyCustodyArg;
 use gents_protocol::node_readiness::{AgentReadinessState, NodeReadinessSnapshot};
 use gents_service::home_state::read_finished_init_config;
 use gents_service::home_state::read_runtime_state;

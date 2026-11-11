@@ -99,10 +99,8 @@ pub(super) fn chat_progress_query(
             "#,
     ))
     .filter(
-        session_scope(&request.node_did, &request.session_id, requester_did).and(Filter::eq(
-            agent_tool_call::REQUEST_DOC_ID,
-            request_doc_id,
-        )),
+        session_scope(&request.node_did, &request.session_id, requester_did)
+            .and(Filter::eq(agent_tool_call::REQUEST_DOC_ID, request_doc_id)),
     )
     .order_by(agent_tool_call::STARTED_AT, Direction::Asc);
     QuerySet::new().plain(&requests).plain(&tool_calls).render()

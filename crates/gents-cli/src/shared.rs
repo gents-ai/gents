@@ -202,7 +202,6 @@ pub(crate) async fn load_backend_observation(
     gents_inference::backends::registry::decode_backend_observation(rows[0].clone())
 }
 
-
 pub(crate) fn wire<T>(value: &T) -> String
 where
     T: Serialize,
@@ -220,14 +219,19 @@ mod catalog_tests {
 
     #[tokio::test]
     async fn catalog_freshness_reaches_cli_observation_reader() -> anyhow::Result<()> {
-        let node = std::sync::Arc::new(gents_host::test_support::fixture_node_builder().build().await?);
+        let node = std::sync::Arc::new(
+            gents_host::test_support::fixture_node_builder()
+                .build()
+                .await?,
+        );
         gents_store::schema::ensure_runtime_schemas(&node).await?;
         let owner = gents_host::test_support::publish_test_node(&node).await;
-        let backend: gents_documents::InferenceBackend = serde_json::from_value(serde_json::json!({
-            "node_did":owner, "backend_id":"catalog-backend", "name":"Catalog",
-            "provider_kind":"OpenAiCompatible", "endpoint":"http://127.0.0.1:1/v1",
-            "auth":{"kind":"unauthenticated"}
-        }))?;
+        let backend: gents_documents::InferenceBackend =
+            serde_json::from_value(serde_json::json!({
+                "node_did":owner, "backend_id":"catalog-backend", "name":"Catalog",
+                "provider_kind":"OpenAiCompatible", "endpoint":"http://127.0.0.1:1/v1",
+                "auth":{"kind":"unauthenticated"}
+            }))?;
         let access = gents_store::config_client::ConfigAccess::local_as(
             node.clone(),
             ::identity::Did::new(owner)?,

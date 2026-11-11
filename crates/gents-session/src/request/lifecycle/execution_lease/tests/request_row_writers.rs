@@ -4,4 +4,3 @@
 //! one when the other commits first.
 
 use super::*;
-
