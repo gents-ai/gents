@@ -316,16 +316,19 @@ impl AssignmentScope {
         };
         let mut answers = ScopeAnswers::default();
         for doc in &event.asked {
-            let needs_history = request_assignment::scopes_need_history(
-                &assignments,
-                std::slice::from_ref(doc),
-            );
-            let answer = match (&unavailable, needs_history) {
-                (Some(failure), true) => ScopeAnswer::Failed(failure.clone()),
-                _ => match request_assignment::assignment_scope(&assignments, doc) {
-                    Ok(scope) => ScopeAnswer::Keyed(scope),
-                    Err(error) => ScopeAnswer::Failed(ScopeFailure::of(&error)),
-                },
+            let scope = assignments.request(doc).and_then(|_| {
+                match request_assignment::signed_scope(&assignments, doc) {
+                    Ok(Some(scope)) => Ok(Ok(scope)),
+                    _ => match &unavailable {
+                        Some(failure) => Ok(Err(failure.clone())),
+                        None => assignments.scope(doc).map(Ok),
+                    },
+                }
+            });
+            let answer = match scope {
+                Ok(Ok(scope)) => ScopeAnswer::Keyed(scope),
+                Ok(Err(failure)) => ScopeAnswer::Failed(failure),
+                Err(error) => ScopeAnswer::Failed(ScopeFailure::of(&error)),
             };
             answers.insert(doc.clone(), answer);
         }

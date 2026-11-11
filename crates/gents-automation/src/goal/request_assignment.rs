@@ -427,19 +427,6 @@ pub(super) fn scopes_need_history(requests: &RequestAssignments, asked: &[String
     })
 }
 
-/// The scope of one request, from its signed reference or, failing that, the
-/// retained assignments `requests` holds.
-pub(super) fn assignment_scope(
-    requests: &RequestAssignments,
-    doc: &str,
-) -> anyhow::Result<RequestAssignmentScope> {
-    requests.request(doc)?;
-    match signed_scope(requests, doc) {
-        Ok(Some(scope)) => Ok(scope),
-        _ => requests.scope(doc),
-    }
-}
-
 pub(crate) struct RequestAssignmentScopes<'a, R>
 where
     R: gents_store::config_client::ConfigRead,
@@ -462,17 +449,23 @@ where
         if let Some(scope) = self.scopes.get(doc) {
             return Ok(scope.clone());
         }
-        if !self.history_loaded && scopes_need_history(&self.requests, &[doc.to_owned()]) {
-            let versions = super::load_assignment_versions_for_session(
-                self.access,
-                self.requests.requests.owner(),
-                self.requests.requests.session(),
-            )
-            .await?;
-            self.requests.goals = latest_assignment_goals(&versions)?;
-            self.history_loaded = true;
-        }
-        let scope = assignment_scope(&self.requests, doc)?;
+        self.requests.request(doc)?;
+        let scope = match signed_scope(&self.requests, doc) {
+            Ok(Some(scope)) => scope,
+            _ => {
+                if !self.history_loaded {
+                    let versions = super::load_assignment_versions_for_session(
+                        self.access,
+                        self.requests.requests.owner(),
+                        self.requests.requests.session(),
+                    )
+                    .await?;
+                    self.requests.goals = latest_assignment_goals(&versions)?;
+                    self.history_loaded = true;
+                }
+                self.requests.scope(doc)?
+            }
+        };
         self.scopes.insert(doc.to_owned(), scope.clone());
         Ok(scope)
     }
@@ -493,7 +486,7 @@ where
 /// A signed physical assignment determines scope independently of Goal status.
 /// Authenticate the existing continuation chain before using that reference;
 /// legacy or incomplete ancestry still requires the full historical owner.
-fn signed_scope(
+pub(super) fn signed_scope(
     requests: &RequestAssignments,
     doc: &str,
 ) -> anyhow::Result<Option<RequestAssignmentScope>> {
