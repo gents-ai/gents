@@ -23,7 +23,8 @@ structure Run where
 request, or stop its session. There is no resume in this vocabulary, so a
 plugin can ask for work to stop and cannot ask for stopped work to continue
 (maintainer decision, gents-ai/gents#3656). Resume stays an operator control
-that core alone performs. -/
+that core alone performs; the `request.create` operation a plugin may request
+(`Hooks.Resume.perform`) leaves both latches as they are. -/
 inductive StopOp where
   | interrupt (request : Nat) (reason : String)
   | stop (request : Nat) (reason : String)
