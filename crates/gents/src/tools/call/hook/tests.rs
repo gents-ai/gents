@@ -4239,7 +4239,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
             },
         }],
     );
-    let hook = hook.with_output_obligation_gate(Some(gate.clone()));
+    let hook = hook.with_output_obligation_gate(Some(Arc::new(gate.clone())));
     let persistence_hook = hook.clone();
     let before = load_canonical_goal(&node, identity.did(), &session)
         .await
