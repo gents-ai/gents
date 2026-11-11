@@ -7,7 +7,9 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use gents_store::config_client::document_decide::{
+    decide_document_access, DocumentAccessQuestion, DocumentDecideError,
+};
 
 use crate::http::router::RuntimeHttpState;
 
@@ -16,11 +18,6 @@ pub(crate) struct IdentityDecideRequest {
     actor: String,
     permission: String,
     resource: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct DefraDbDecisionResponse {
-    allowed: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -75,41 +72,32 @@ async fn decide_identity_access(
 
     let api_base = crate::graphql_access::graphql_api_base(state.graphql.url())
         .map_err(|error| IdentityDecideError::Internal(error.to_string()))?;
-    let url = format!("{}/acp/document/decide", api_base.trim_end_matches('/'));
-
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
         .map_err(|error| IdentityDecideError::Internal(error.to_string()))?;
-    let response = state
-        .p2p_graphql
-        .authorize(client.post(url))
-        .map_err(|error| IdentityDecideError::Internal(error.to_string()))?
-        .json(&json!({
-            "actor": body.actor,
-            "permission": permission,
-            "policyID": resource.policy_id,
-            "resourceName": resource.resource_name,
-            "docID": resource.doc_id,
-        }))
-        .send()
-        .await
-        .map_err(|error| IdentityDecideError::Backend(error.to_string()))?;
-
-    let status = response.status();
-    let text = response
-        .text()
-        .await
-        .map_err(|error| IdentityDecideError::Backend(error.to_string()))?;
-    if !status.is_success() {
-        return Err(IdentityDecideError::Backend(format!(
-            "DefraDB decision endpoint returned {status}: {text}"
-        )));
-    }
-
-    let response: DefraDbDecisionResponse = serde_json::from_str(&text)
-        .map_err(|error| IdentityDecideError::Backend(error.to_string()))?;
-    Ok(response.allowed)
+    decide_document_access(
+        &client,
+        &api_base,
+        Some(&state.p2p_graphql),
+        &DocumentAccessQuestion {
+            actor: &body.actor,
+            permission,
+            policy_id: &resource.policy_id,
+            resource_name: &resource.resource_name,
+            doc_id: &resource.doc_id,
+        },
+    )
+    .await
+    .map_err(|error| match error {
+        DocumentDecideError::Authorize(error) => IdentityDecideError::Internal(error.to_string()),
+        DocumentDecideError::Request(error)
+        | DocumentDecideError::ReadBody(error) => IdentityDecideError::Backend(error.to_string()),
+        DocumentDecideError::Decode(error) => IdentityDecideError::Backend(error.to_string()),
+        refused @ DocumentDecideError::Refused { .. } => {
+            IdentityDecideError::Backend(refused.to_string())
+        }
+    })
 }
 
 fn parse_resource(resource: &str) -> Result<ParsedResource, String> {
@@ -177,6 +165,7 @@ mod tests {
     use axum::{extract::State, routing::post, Router};
     use identity::Did;
     use serde::Deserialize;
+    use serde_json::json;
     use tokio::net::TcpListener;
 
     use super::*;
