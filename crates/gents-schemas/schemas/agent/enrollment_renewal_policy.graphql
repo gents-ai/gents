@@ -1,0 +1,9 @@
+# Local operator policy; deliberately NOT branchable, so it is never learned
+# from a peer.
+type EnrollmentRenewalPolicy @policy(id: "202ce2df1b18d27183b29b653e2c06654178b2e79d4d6b93229d0c706380e71e", resource: "operations") {
+    network_id: String @index(unique: true)
+    enabled: Boolean
+    lease_seconds: Int
+    node_doc_id: String
+    parent_linked: Boolean
+}

@@ -2,9 +2,9 @@ use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 
 use super::{
-    parse_env_var_name, P2pDiscoveryArg, P2pRelayModeArg, P2pTransportArg, ToolCeilingArg,
+    parse_env_var_name, P2pDiscoveryArg, P2pRelayModeArg, P2pTransportArg, StoreKeyCustodyArg,
+    ToolCeilingArg,
 };
-use crate::cli::output_format::OutputFormat;
 
 #[derive(clap::Args)]
 pub(crate) struct PrepareRuntimeArgs {
@@ -34,7 +34,7 @@ pub(crate) struct ServeArgs {
     pub(crate) data_dir: Option<PathBuf>,
     #[arg(
         long,
-        help = "HTTP listen address. Defaults to the home's network.json (`gents service install --http-addr`), else 127.0.0.1"
+        help = "HTTP listen address. Defaults to the home's network.json (`gents runtime service install --http-addr`), else 127.0.0.1"
     )]
     pub(crate) http_addr: Option<IpAddr>,
     #[arg(
@@ -110,63 +110,9 @@ pub(crate) struct ServeArgs {
     pub(crate) tool_root: Option<PathBuf>,
     #[arg(
         long,
-        default_value_t = false,
-        help = "Disable the Codex TUI endpoint (`gents codex` needs it)"
-    )]
-    pub(crate) no_codex_shim: bool,
-    #[arg(
-        long,
-        default_value = "127.0.0.1",
-        help = "Address for the app-server shim to listen on; non-loopback addresses require --codex-shim-auth-token-env"
-    )]
-    pub(crate) codex_shim_bind_addr: IpAddr,
-    #[arg(long, default_value_t = crate::DEFAULT_CODEX_SHIM_PORT)]
-    pub(crate) codex_shim_port: u16,
-    #[arg(
-        long,
-        value_name = "ENV_VAR",
-        value_parser = parse_env_var_name,
-        conflicts_with = "no_codex_shim",
-        help = "Environment variable containing the bearer token required by the app-server WebSocket"
-    )]
-    pub(crate) codex_shim_auth_token_env: Option<String>,
-    #[arg(
-        long,
-        value_name = "WSS_URL",
-        requires = "codex_shim_auth_token_env",
-        conflicts_with = "no_codex_shim",
-        help = "Public wss:// app-server URL advertised when TLS terminates in a reverse proxy"
-    )]
-    pub(crate) codex_shim_public_url: Option<String>,
-    #[arg(long, help = "Optional GENTS agent override for Codex turns")]
-    pub(crate) codex_shim_agent_did: Option<String>,
-    #[arg(long, default_value_t = crate::DEFAULT_CODEX_SHIM_TIMEOUT_SECS)]
-    pub(crate) codex_shim_timeout_secs: u64,
-    #[arg(long, default_value_t = 250)]
-    pub(crate) codex_shim_poll_ms: u64,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Expose the Grok TUI leader socket (Unix only) so stock Grok can attach as the pager client: start this server first, then run `grok --leader --leader-socket <path>`"
-    )]
-    pub(crate) grok_shim: bool,
-    #[arg(
-        long,
-        requires = "grok_shim",
-        help = "Unix socket path for the Grok TUI leader. Defaults to $XDG_RUNTIME_DIR/gents/grok.sock, falling back to /tmp/gents-grok.sock"
-    )]
-    pub(crate) grok_shim_socket_path: Option<PathBuf>,
-    #[arg(
-        long,
-        requires = "grok_shim",
-        help = "Optional GENTS agent override for Grok pager turns"
-    )]
-    pub(crate) grok_shim_agent_did: Option<String>,
-    #[arg(
-        long,
         value_enum,
         default_value_t = P2pTransportArg::Iroh,
-        help = "P2P transport for this server. Use `none` for local-only demos that only need GraphQL/Codex shim"
+        help = "P2P transport for this server. Use `none` for local-only demos that only need GraphQL"
     )]
     pub(crate) p2p_transport: P2pTransportArg,
     #[arg(
@@ -245,80 +191,11 @@ pub(crate) struct ServeArgs {
 }
 
 #[derive(clap::Args)]
-pub(crate) struct CodexArgs {
-    #[arg(
-        long,
-        default_value = crate::DEFAULT_CODEX_REMOTE,
-        help = "Codex shim endpoint (ws://HOST:PORT, wss://HOST:PORT, or unix://PATH)"
-    )]
-    pub(crate) remote: String,
-    #[arg(
-        long,
-        value_name = "ENV_VAR",
-        value_parser = parse_env_var_name,
-        help = "Environment variable containing the bearer token for the remote app server; requires wss:// or loopback ws://"
-    )]
-    pub(crate) remote_auth_token_env: Option<String>,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Run inline, preserving terminal scrollback, instead of the alternate screen"
-    )]
-    pub(crate) no_alt_screen: bool,
-    #[arg(
-        value_name = "PROMPT",
-        help = "Optional prompt to start the session with"
-    )]
-    pub(crate) prompt: Option<String>,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct ChatArgs {
-    #[arg(long, help = "Node home directory. Defaults to ~/.gents")]
+pub(crate) struct ShellArgs {
+    /// Node home to set up or open. Defaults to GENTS_HOME, the folder chosen at setup, then ~/.gents.
+    #[arg(long)]
     pub(crate) home: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) graphql: Option<String>,
-    #[arg(long)]
-    pub(crate) node_did: Option<String>,
-    #[arg(long)]
-    pub(crate) node_name: Option<String>,
-    #[arg(
-        long,
-        help = "Continue an existing session instead of starting a fresh one"
-    )]
-    pub(crate) session_id: Option<String>,
-    #[arg(long, help = "Override the agent for this one-off turn or session")]
-    pub(crate) agent_did: Option<String>,
-    #[arg(
-        long,
-        value_name = "OBJECTIVE",
-        requires = "session_id",
-        help = "Atomically create this durable session goal before the first request; omit on later turns"
-    )]
-    pub(crate) goal_objective: Option<String>,
-    #[arg(
-        long,
-        value_name = "TOKENS",
-        requires = "goal_objective",
-        value_parser = clap::value_parser!(i64).range(1..),
-        help = "Optional positive token budget for --goal-objective"
-    )]
-    pub(crate) goal_token_budget: Option<i64>,
-    #[arg(long = "message-file", help = "Read the user message from a file")]
-    pub(crate) message_file: Option<PathBuf>,
-    #[arg(long = "output", value_enum, default_value_t = OutputFormat::Text)]
-    pub(crate) output_format: OutputFormat,
-    #[arg(long = "output-file", help = "Write the final response to a file")]
-    pub(crate) output_file: Option<PathBuf>,
-    #[arg(long, default_value_t = crate::DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS)]
-    pub(crate) timeout_secs: u64,
-    #[arg(long, default_value_t = 1)]
-    pub(crate) poll_secs: u64,
-    #[arg(
-        long,
-        help = "Print raw tool call arguments/results as JSON instead of the short summary line"
-    )]
-    pub(crate) verbose: bool,
-    #[arg(value_name = "MESSAGE")]
-    pub(crate) message: Vec<String>,
+    /// As on `init`: tests pass `file` so they never write login-keychain items.
+    #[arg(long, value_enum, hide = true)]
+    pub(crate) store_key_custody: Option<StoreKeyCustodyArg>,
 }

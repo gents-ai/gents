@@ -5,8 +5,8 @@ use std::io::Write;
 use anyhow::{anyhow, Context, Result};
 use gents::eval::documents::default_breaker_threshold;
 use gents::eval::load_trials;
-use gents::eval::report::load_report;
-use gents::eval::runner::{self, CellRequest, RunOutcome, RunRequest, CANCEL_MARKER};
+use gents_eval::report::load_report;
+use gents_eval::runner::{self, CellRequest, RunOutcome, RunRequest, CANCEL_MARKER};
 
 use super::{
     default_id, follow_progress, render, source_commit, source_dirty, write_json, Deps,
@@ -264,7 +264,7 @@ async fn finish(
     let outcome = result?;
     let stopped = (outcome.cancelled || outcome.abandoned > 0).then(|| {
         format!(
-            "run {run_id} stopped before it finished ({} completed, {} abandoned this pass); `gents eval resume {run_id}` continues it",
+            "run {run_id} stopped before it finished ({} completed, {} abandoned this pass); `gents utils eval resume {run_id}` continues it",
             outcome.completed, outcome.abandoned
         )
     });

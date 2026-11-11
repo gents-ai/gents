@@ -157,7 +157,7 @@ impl PackInstaller {
     /// Removes an installed pack's `PackInstallation` record and everything
     /// it lists. Never resolves the package (no
     /// store or registry lookup); releases its home and plugin store records
-    /// but no plugin bytes or archive; use `gents pack remove` for that.
+    /// but no plugin bytes or archive; use `gents config pack remove` for that.
     pub(super) async fn remove(&self, package: &str) -> anyhow::Result<String> {
         let args = PackInstallParams {
             package: package.to_owned(),
@@ -186,7 +186,8 @@ impl PackInstaller {
             &coordinate,
             crate::pack::DriftPolicy::Refuse,
         )
-        .await?;
+        .await
+        .map_err(|error| error.into_anyhow())?;
         if let Some(home) = self.home.as_deref() {
             crate::pack::forget_home_install(home, &coordinate)?;
             for removed in std::iter::once(&report).chain(&report.dependencies) {

@@ -3,16 +3,16 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use gents::documents::template::catalog::{default_catalog, Site};
-use gents::eval::checks::CheckRegistry;
 use gents::eval::documents::default_breaker_threshold;
-use gents::eval::optimization::target::JobTarget;
-use gents::eval::optimization::{
+use gents_eval::checks::CheckRegistry;
+use gents_eval::optimization::target::JobTarget;
+use gents_eval::optimization::{
     derive_state, job_dir, job_refused, load_job, promote_refused, removable, run_job,
     show as show_job, validate_job_id, Budgets, JobOutcome, JobRequest, JobState, PolicyV2,
     Proposal, Proposer, ScriptedProposer,
 };
-use gents::eval::runner::embedded::EmbeddedExecutor;
-use gents::eval::runner::RunOptions;
+use gents_eval::runner::embedded::EmbeddedExecutor;
+use gents_eval::runner::RunOptions;
 use tokio_util::sync::CancellationToken;
 
 use crate::cli::{
@@ -127,7 +127,7 @@ async fn behavior_proposer(
     ensure_tool_less(&config, &ctx.owner, &agent_slot)?;
     let gents::ConfigAccess::Graphql(graphql) = &ctx.access else {
         anyhow::bail!(
-            "start `gents server` for this home and retry: an agent proposer runs on a served home"
+            "start `gents runtime server` for this home and retry: an agent proposer runs on a served home"
         );
     };
 
@@ -334,7 +334,7 @@ async fn run(
         captures: Vec::new(),
         run_options: deps.options.clone(),
     };
-    gents::eval::optimization::check_request(&request, &policy)?;
+    gents_eval::optimization::check_request(&request, &policy)?;
     let proposer: Box<dyn Proposer> = match proposer_arg {
         ProposerArg::Scripted(script) => Box::new(scripted_proposer(script, args.rounds)?),
         ProposerArg::Agent { pack, agent } => {
@@ -455,14 +455,14 @@ async fn promote(
         .await?
         .map(|job| job.origin.policy);
     let promotion =
-        gents::eval::optimization::promote(&ctx.access, &ctx.owner, &args.job_id, &args.digest)
+        gents_eval::optimization::promote(&ctx.access, &ctx.owner, &args.job_id, &args.digest)
             .await?;
     if let Some(policy) = &policy {
         render::uncalibrated_banner(policy, out)?;
     }
     writeln!(
         out,
-        "promoted job {}: the target now digests to {} (was {}); `gents optimization revert {} --digest {}` undoes it",
+        "promoted job {}: the target now digests to {} (was {}); `gents utils optimization revert {} --digest {}` undoes it",
         args.job_id,
         promotion.target_digest,
         promotion.previous_digest,
@@ -477,7 +477,7 @@ async fn revert(
     args: &OptimizationDigestArgs,
     out: &mut dyn Write,
 ) -> Result<()> {
-    gents::eval::optimization::revert(&ctx.access, &ctx.owner, &args.job_id, &args.digest).await?;
+    gents_eval::optimization::revert(&ctx.access, &ctx.owner, &args.job_id, &args.digest).await?;
     writeln!(
         out,
         "reverted job {}; Reverted is final, and a further promotion is a new job",
@@ -512,7 +512,7 @@ async fn rm(ctx: &EvalContext, args: &OptimizationRmArgs, out: &mut dyn Write) -
     tracing::warn!(job_id = %args.job_id, bytes, "optimization job directory removed; its documents stay");
     let unpromotable = if state == JobState::ReadyToPromote {
         format!(
-            "; a later `gents optimization promote {}` will refuse: the retained checkpoint pack under {} is gone",
+            "; a later `gents utils optimization promote {}` will refuse: the retained checkpoint pack under {} is gone",
             args.job_id,
             dir.display()
         )

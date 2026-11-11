@@ -1566,7 +1566,7 @@ async fn wait_tool_caller_interrupt_returns_without_cancelling_background_row() 
         observer_case.result.as_deref()
     );
     assert_eq!(row.cancel_cause.as_deref(), None);
-    gents::tools::call::control::cancel_session_background_process(
+    gents::tools::call::control::cancel_background_tool_call(
         &gents::ConfigAccess::local_managed_agent(
             turn.db.node.clone(),
             identity::Did::new(turn.agent_identity.did()).unwrap(),
@@ -1574,8 +1574,6 @@ async fn wait_tool_caller_interrupt_returns_without_cancelling_background_row() 
         )
         .unwrap(),
         &turn.executions,
-        turn.db.node_identity.did(),
-        Some(turn.fixture.user.did()),
         &turn.session_id,
         &tool_call_id,
     )

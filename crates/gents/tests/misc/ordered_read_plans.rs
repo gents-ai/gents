@@ -324,6 +324,47 @@ sys.stdout.write(json.dumps(strings.literals))
 }
 
 /// A module directory holds the body of its same-named file, so both follow one rule.
+/// A typed query renders its document at run time, so the literal inventory
+/// cannot see it. Until the plan screen can explain typed queries, a read that
+/// is both ordered and bounded stays a literal the screen covers.
+#[derive(Default)]
+struct TypedOrderedBoundedReads(usize);
+impl<'ast> Visit<'ast> for TypedOrderedBoundedReads {
+    fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        if item.ident != "tests" && !test_only(&item.attrs) {
+            syn::visit::visit_item_mod(self, item);
+        }
+    }
+    fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
+        if !test_only(&item.attrs) {
+            syn::visit::visit_item_fn(self, item);
+        }
+    }
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if call.method == "render" {
+            let mut ordered = false;
+            let mut bounded = false;
+            let mut receiver = &*call.receiver;
+            while let syn::Expr::MethodCall(inner) = receiver {
+                ordered |= inner.method == "order_by";
+                bounded |= inner.method == "limit";
+                receiver = &inner.receiver;
+            }
+            if ordered && bounded {
+                self.0 += 1;
+            }
+        }
+        syn::visit::visit_expr_method_call(self, call);
+    }
+}
+
+fn typed_ordered_bounded_reads(source: &str) -> usize {
+    let syntax = syn::parse_file(source).unwrap();
+    let mut found = TypedOrderedBoundedReads::default();
+    found.visit_file(&syntax);
+    found.0
+}
+
 fn scanned_stem(stem: &str) -> bool {
     stem != "tests"
         && !stem.starts_with("test_")
@@ -562,6 +603,48 @@ query = f"""{{ AgentRequest(order: {{request_id: ASC}}, limit: {limit}) {{_docID
         .collect();
     assert_eq!(found.len(), 1);
     assert!(found[0].arguments.contains("$GENTS_limit$"));
+}
+
+#[test]
+fn typed_ordered_bounded_read_detection_follows_the_builder_chain() {
+    let ordered_bounded = r#"fn read() {
+        let rendered = Query::select(Selection::doc_id())
+            .filter(Filter::eq(fields::NODE_DID, node))
+            .order_by(fields::CREATED_AT, Direction::Desc)
+            .limit(1)
+            .render();
+    }"#;
+    let ordered_only = r#"fn read() {
+        let rendered = Query::select(Selection::doc_id())
+            .order_by(fields::CREATED_AT, Direction::Desc)
+            .render();
+    }"#;
+    let test_only = format!("#[cfg(test)]\n{ordered_bounded}");
+    assert_eq!(typed_ordered_bounded_reads(ordered_bounded), 1);
+    assert_eq!(typed_ordered_bounded_reads(ordered_only), 0);
+    assert_eq!(typed_ordered_bounded_reads(&test_only), 0);
+}
+
+#[test]
+fn typed_queries_leave_ordered_bounded_reads_to_the_plan_screen() {
+    let proofs = gents_lean_contract::proofs_dir().expect("runtime source anchor");
+    let root = proofs.ancestors().nth(3).expect("repository proofs layout");
+    let mut files = Vec::new();
+    source_files(&root.join("crates"), &mut files);
+    let unscreened: Vec<_> = files
+        .iter()
+        .filter(|file| file.extension().is_some_and(|extension| extension == "rs"))
+        .filter_map(|file| {
+            let count = typed_ordered_bounded_reads(&std::fs::read_to_string(file).unwrap());
+            (count > 0).then(|| format!("{}: {count}", file.strip_prefix(root).unwrap().display()))
+        })
+        .collect();
+    assert!(
+        unscreened.is_empty(),
+        "typed queries that are both ordered and bounded are invisible to the plan screen; \
+         keep them as literals:\n{}",
+        unscreened.join("\n")
+    );
 }
 
 /// Pinned DefraDB can bound an ordered index scan before its residual filter;

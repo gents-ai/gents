@@ -43,8 +43,6 @@ pub enum ConfigClientError {
         node_did: String,
         id: String,
     },
-    #[error("resolving the trusted canonical schema lineage")]
-    ClientCanonicalSchema(#[source] gents_migration::Error),
     #[error("building the client-signed configuration update graph")]
     ClientConfigurationGraph(#[source] db::block::builder::ClientUpdateError),
     #[error("decoding the client-signed mutation history response")]
@@ -533,6 +531,11 @@ impl ConfigClientError {
             }
             _ => self,
         }
+    }
+
+    /// Whether the transaction owner classified this failure as a replayable conflict.
+    pub fn is_transaction_conflict(&self) -> bool {
+        self.transaction_conflict().is_some()
     }
 
     /// The conflict origin when the transaction owner may replay this failure.

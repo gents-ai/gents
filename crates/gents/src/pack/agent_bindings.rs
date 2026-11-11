@@ -8,12 +8,29 @@ use super::{InstalledVia, PackInstallOptions, PackManifest};
 use crate::documents::PackConfig;
 use crate::store::config_client::ConfigAccess;
 
-pub(crate) struct AgentProvisioner<'a> {
+pub struct AgentProvisioner<'a> {
     pub node: &'a std::sync::Arc<defra_node::Node>,
     pub runtime: &'a dyn crate::store::identity::NodeIdentity,
     pub actor: Option<&'a dyn crate::store::identity::NodeIdentity>,
     pub selected_agent_did: Option<&'a str>,
-    pub node_binding: Option<&'a crate::store::config_client::ConfigurationNodeBinding>,
+    pub(crate) node_binding: Option<&'a crate::store::config_client::ConfigurationNodeBinding>,
+}
+
+impl<'a> AgentProvisioner<'a> {
+    /// Provision local pack agents with the runtime's identity; document access
+    /// remains bounded by the configuration client's actor.
+    pub fn local(
+        node: &'a std::sync::Arc<defra_node::Node>,
+        runtime: &'a dyn crate::NodeIdentity,
+    ) -> Self {
+        Self {
+            node,
+            runtime,
+            actor: None,
+            selected_agent_did: None,
+            node_binding: None,
+        }
+    }
 }
 
 pub(super) struct PackBindingInputs<'a, 'b> {
@@ -140,7 +157,7 @@ pub(super) fn authored_slots(value: &Value) -> Result<Vec<String>> {
     Ok(slots)
 }
 
-pub(crate) fn rewrite_references(value: &mut Value, bindings: &PackAgentBindings) -> Result<()> {
+pub fn rewrite_references(value: &mut Value, bindings: &PackAgentBindings) -> Result<()> {
     match value {
         Value::Object(object) => {
             for (field, value) in object {
@@ -219,7 +236,7 @@ pub async fn load_pack_install_config(
     .await
 }
 
-pub(crate) async fn load_pack_install_config_with_provisioner(
+pub async fn load_pack_install_config_with_provisioner(
     access: &ConfigAccess,
     manifest: &PackManifest,
     options: &PackInstallOptions,

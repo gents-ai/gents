@@ -440,6 +440,52 @@ pub async fn fetch_hosted_runtime_status(
     }
 }
 
+/// The User key that administers a co-hosted home, and so reads its private
+/// status. Provisioning (`gents init`) makes the CLI client key under
+/// `desktop`'s root the home's first admin; the desktop's own key becomes an
+/// admin only once its managed pairing into that Node completes, which its
+/// peer directory records (`PeerRecord::records_completed_enrollment_into`).
+/// The choice follows that record, never a refused read, and the co-hosted
+/// runtime's node key is never a candidate. `running` is the started client's
+/// capability, which is the desktop key.
+pub async fn hosted_status_signer(
+    desktop: &DesktopPaths,
+    node_did: Option<&str>,
+    peers: &[crate::client::PeerRecord],
+    running: Option<gents::store::config_client::ClientSigningCapability>,
+) -> Option<gents::store::config_client::ClientSigningCapability> {
+    use gents::store::identity::NodeIdentity as _;
+    let desktop_enrolled = node_did.is_some_and(|node_did| {
+        peers
+            .iter()
+            .any(|peer| peer.records_completed_enrollment_into(node_did))
+    });
+    let paths = if desktop_enrolled {
+        if running.is_some() {
+            return running;
+        }
+        desktop.clone()
+    } else {
+        desktop.cli_client()
+    };
+    match tokio::task::spawn_blocking(move || {
+        crate::client::PrincipalIdentity::load_existing(&paths)
+            .and_then(|user| Ok(user.client_signing_capability()?))
+    })
+    .await
+    {
+        Ok(Ok(capability)) => Some(capability),
+        Ok(Err(error)) => {
+            tracing::debug!(desktop_enrolled, error = %format!("{error:#}"), "no administering User key to read hosted runtime status");
+            None
+        }
+        Err(error) => {
+            tracing::warn!(error = %error, "loading the hosted runtime status signer failed");
+            None
+        }
+    }
+}
+
 /// Observe the selected runtime using the caller's existing HTTP identity.
 /// A response from another node cannot establish liveness for this target.
 pub async fn fetch_runtime_status_for_node(
@@ -613,7 +659,7 @@ pub async fn init_standard_local_runtime(
         next_steps: vec![
             "Run `gents-desktop` and leave the desktop app open.".to_string(),
             "Wait for the status bar to show `replication subscriptions armed`.".to_string(),
-            "Then submit prompts from Chat, or run `gents chat` in another terminal.".to_string(),
+            "Then submit prompts from Chat, or run `gents` in another terminal.".to_string(),
         ],
     })
 }
@@ -625,7 +671,7 @@ pub(crate) async fn discover_standard_runtime(
     let runtime = read_json::<StoredRuntimeState>(&node_home.join(RUNTIME_STATE_FILE_NAME))
         .with_context(|| {
             format!(
-                "no running local Gents runtime found at {}; run `gents server` first",
+                "no running local Gents runtime found at {}; run `gents runtime server` first",
                 node_home.join(RUNTIME_STATE_FILE_NAME).display()
             )
         })?;
@@ -754,7 +800,7 @@ and replication bootstrap on launch.
 Next:
   1. Run `gents-desktop` and leave it open.
   2. Wait for the status bar to show `replication subscriptions armed`.
-  3. Then submit prompts from Chat, or run `gents chat` in another terminal.
+  3. Then submit prompts from Chat, or run `gents` in another terminal.
 ",
         discovery_line = discovery_line,
         graphql = summary.graphql,
@@ -915,7 +961,7 @@ fn url_host_is_loopback_or_unspecified(url: &reqwest::Url) -> bool {
 fn validate_runtime_identity(runtime: &StoredRuntimeState, init: &StoredInitConfig) -> Result<()> {
     if runtime.p2p_transport != "iroh" {
         anyhow::bail!(
-            "local runtime uses p2p_transport={}; desktop pairing requires iroh. Restart with `gents server` from a current build.",
+            "local runtime uses p2p_transport={}; desktop pairing requires iroh. Restart with `gents runtime server` from a current build.",
             if runtime.p2p_transport.is_empty() {
                 "<empty>"
             } else {

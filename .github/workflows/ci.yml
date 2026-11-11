@@ -349,11 +349,11 @@ jobs:
             -p gents-callback-fixture-create-workspace \
             -p gents-protocol \
             -p gents-schemas \
-            -p gents-codex-protocol \
             -p gents-chatgpt-login \
             -p gents-claude \
             -p gents-claude-login \
             -p gents-fs-runner \
+            -p gents-shell \
             -p gents-lean-contract
 
       - name: Collect migration lens diagnostics on support failure
@@ -384,8 +384,8 @@ jobs:
           # that breaks it, not the post-merge main run (#2686).
           cargo test -p gents --lib tools::call::hook::tests::r4c_list_background_tools::
           cargo test -p gents --lib triggers::callback::
-          cargo test -p gents --test onboarding_evals
-          cargo test -p gents --test eval_runner_canary
+          cargo test -p gents-eval --test onboarding_evals
+          cargo test -p gents-eval --test eval_runner_canary
           # Per-request store budgets: a capture, segment or write-drop
           # regression must fail the PR that grows the store, not a user's
           # node after release.
@@ -404,7 +404,7 @@ jobs:
           cargo test -p gents-cli --test cli_server server_startup_with_iroh_p2p_reports_runtime_connectivity -- --nocapture --test-threads=1
           cargo test -p gents-cli --test cli_runtime cli_status:: -- --nocapture --test-threads=1
           cargo test -p gents-cli --test cli_runtime cli_reconciliation::reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop -- --nocapture --test-threads=1
-          # gents pack check over the fixture packs: manifests, files,
+          # gents config pack check over the fixture packs: manifests, files,
           # configuration, graphs, filters, README and topology diagrams.
           env -u CARGO_TARGET_DIR cargo test --target-dir "$CARGO_TARGET_DIR" \
             -p gents-cli --lib commands::pack::check::
@@ -413,7 +413,7 @@ jobs:
         if: matrix.suite == 'runtime' && github.event_name != 'pull_request'
         env:
           RUST_MIN_STACK: 16777216
-        run: cargo test --no-fail-fast -p gents -p gents-loop --lib --tests
+        run: cargo test --no-fail-fast -p gents -p gents-eval -p gents-loop --lib --tests
 
       - name: Run desktop Rust package tests
         if: matrix.suite == 'desktop'

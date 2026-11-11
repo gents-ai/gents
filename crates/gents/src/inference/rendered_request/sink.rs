@@ -91,40 +91,42 @@ impl DefraRenderedRequestSink {
 
     async fn stored_fact(&self, rendered: &RenderedCompletionRequest) -> Result<Option<Value>> {
         let capture_key = &rendered.capture_key;
-        let response = self.access_for_capture(rendered)?.transact_readonly(
-            "rendered_request.lookup",
-            |txn| {
+        let response = self
+            .access_for_capture(rendered)?
+            .transact_readonly("rendered_request.lookup", |txn| {
                 Box::pin(async move {
                     let (session_doc_id, _) = capture_session_binding(txn, rendered).await?;
-                    let query = format!(
-            r#"query {{
-                {collection}(filter: {{ session_doc_id: {{ _eq: "{session_doc_id}" }}, capture_key: {{ _eq: "{capture_key}" }} }}, limit: 2) {{
-                    request_doc_id
-                    request_commit_cid
-                    request_id
-                    session_id
-                    node_did
-                    requester_did
-                    agent_did
-                    capture_scope
-                    turn_index
-                    attempt
-                    capture_version
-                    model_name
-                    source
-                    request_json
-                    provenance_json
-                }}
-            }}"#,
-            collection = RENDERED_REQUEST_COLLECTION,
-            session_doc_id = escape_graphql_string(&session_doc_id),
-            capture_key = escape_graphql_string(capture_key),
-        );
-                    txn.execute_local_response(&query).await.map_err(anyhow::Error::from)
+                    use gents_protocol::document_query::{
+                        fields::rendered_request as fields, Filter, Query, Selection,
+                    };
+                    let query = Query::select(
+                        Selection::new()
+                            .field(fields::REQUEST_DOC_ID)
+                            .field(fields::REQUEST_COMMIT_CID)
+                            .field(fields::REQUEST_ID)
+                            .field(fields::SESSION_ID)
+                            .field(fields::NODE_DID)
+                            .field(fields::REQUESTER_DID)
+                            .field(fields::AGENT_DID)
+                            .field(fields::CAPTURE_SCOPE)
+                            .field(fields::TURN_INDEX)
+                            .field(fields::ATTEMPT)
+                            .field(fields::CAPTURE_VERSION)
+                            .field(fields::MODEL_NAME)
+                            .field(fields::SOURCE)
+                            .field(fields::REQUEST_JSON)
+                            .field(fields::PROVENANCE_JSON),
+                    )
+                    .filter(Filter::eq(fields::SESSION_DOC_ID, session_doc_id.as_str()))
+                    .filter(Filter::eq(fields::CAPTURE_KEY, capture_key))
+                    .limit(2)
+                    .render();
+                    txn.run_local_response(&query)
+                        .await
+                        .map_err(anyhow::Error::from)
                 })
-            },
-        )
-        .await?;
+            })
+            .await?;
         let data = response
             .data
             .ok_or_else(|| anyhow!("reading RenderedRequest by capture key returned no data"))?;
@@ -160,51 +162,35 @@ impl DefraRenderedRequestSink {
             .ok()
             .and_then(|value| value.as_str().map(ToOwned::to_owned))
             .unwrap_or_else(|| "unknown".to_string());
-        let mutation = format!(
-            r#"mutation {{
-                create_{collection}(input: {{
-                    capture_key: "{capture_key}",
-                    request_doc_id: "{request_doc_id}",
-                    request_commit_cid: "{request_commit_cid}",
-                    request_id: "{request_id}",
-                    session_id: "{session_id}",
-                    session_doc_id: "{session_doc_id}",
-                    node_did: "{node_did}",
-                    requester_did: "{requester_did}",
-                    agent_did: "{agent_did}",
-                    capture_scope: "{capture_scope}",
-                    turn_index: {turn_index},
-                    attempt: {attempt},
-                    capture_version: {capture_version},
-                    model_name: "{model_name}",
-                    source: "{source}",
-                    request_json: "{request_json}",
-                    provenance_json: "{provenance_json}",
-                    created_at: "{created_at}"
-                }}) {{ _docID }}
-            }}"#,
-            collection = RENDERED_REQUEST_COLLECTION,
-            capture_key = escape_graphql_string(&rendered.capture_key),
-            request_doc_id = escape_graphql_string(&rendered.request_doc_id),
-            request_commit_cid = escape_graphql_string(&rendered.request_commit_cid),
-            request_id = escape_graphql_string(&rendered.request_id),
-            session_id = escape_graphql_string(&rendered.session_id),
-            session_doc_id = escape_graphql_string(session_doc_id),
-            node_did = escape_graphql_string(&rendered.node_did),
-            requester_did = escape_graphql_string(&rendered.requester_did),
-            agent_did = escape_graphql_string(&rendered.agent_did),
-            capture_scope = escape_graphql_string(&rendered.capture_scope),
-            turn_index = rendered.turn_index,
-            attempt = rendered.attempt,
-            capture_version = rendered.capture_version,
-            model_name = escape_graphql_string(&rendered.model_name),
-            source = escape_graphql_string(&source),
-            request_json = escape_graphql_string(request_json),
-            provenance_json = escape_graphql_string(provenance_json),
-            created_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
-        );
+        let mutation = {
+            use gents_protocol::document_query::{
+                fields::rendered_request as fields, Create, Input,
+            };
+            Create::new(
+                Input::new()
+                    .set(fields::CAPTURE_KEY, &rendered.capture_key)
+                    .set(fields::REQUEST_DOC_ID, &rendered.request_doc_id)
+                    .set(fields::REQUEST_COMMIT_CID, &rendered.request_commit_cid)
+                    .set(fields::REQUEST_ID, &rendered.request_id)
+                    .set(fields::SESSION_ID, &rendered.session_id)
+                    .set(fields::SESSION_DOC_ID, session_doc_id)
+                    .set(fields::NODE_DID, &rendered.node_did)
+                    .set(fields::REQUESTER_DID, &rendered.requester_did)
+                    .set(fields::AGENT_DID, &rendered.agent_did)
+                    .set(fields::CAPTURE_SCOPE, &rendered.capture_scope)
+                    .set(fields::TURN_INDEX, rendered.turn_index)
+                    .set(fields::ATTEMPT, rendered.attempt)
+                    .set(fields::CAPTURE_VERSION, rendered.capture_version)
+                    .set(fields::MODEL_NAME, &rendered.model_name)
+                    .set(fields::SOURCE, source.as_str())
+                    .set(fields::REQUEST_JSON, request_json)
+                    .set(fields::PROVENANCE_JSON, provenance_json)
+                    .set(fields::CREATED_AT, chrono::Utc::now().to_rfc3339()),
+            )
+            .render()
+        };
 
-        let response = txn.execute(&mutation).await?;
+        let response = txn.run(&mutation).await?;
         if !response
             .get("data")
             .and_then(single_mutation_result)
@@ -624,19 +610,19 @@ async fn stored_block_doc_ids_in_txn(
     if keys.is_empty() {
         return Ok(stored);
     }
-    let rendered_keys = keys
-        .iter()
-        .map(|key| format!("\"{}\"", escape_graphql_string(scope.key(key).1)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let query = format!(
-        r#"{{ {collection}(filter: {{ session_doc_id: {{ _eq: "{session_doc_id}" }}, content_key: {{ _in: [{rendered_keys}] }} }}) {{
-            _docID content_key
-        }} }}"#,
-        collection = RENDERED_REQUEST_BLOCK_COLLECTION,
-        session_doc_id = escape_graphql_string(scope.key("").0),
-    );
-    let response = txn.execute(&query).await?;
+    let query = {
+        use gents_protocol::document_query::{
+            fields::rendered_request_block as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::doc_id().field(fields::CONTENT_KEY))
+            .filter(Filter::eq(fields::SESSION_DOC_ID, scope.key("").0))
+            .filter(Filter::any_of(
+                fields::CONTENT_KEY,
+                keys.iter().map(|key| scope.key(key).1),
+            ))
+            .render()
+    };
+    let response = txn.run(&query).await?;
     let rows = response
         .get("data")
         .and_then(|data| data.get(RENDERED_REQUEST_BLOCK_COLLECTION))
@@ -800,22 +786,31 @@ async fn encode_payload_tree(
     );
     let leaves = chunks.len();
     let mut entries = payload_entries(chunks, pins)?;
+    let mut boundary_keys = chunks
+        .iter()
+        .map(|chunk| chunk.content_key.clone())
+        .collect::<Vec<_>>();
     let mut height = 0;
     while entries.len() > 1 {
         anyhow::ensure!(
             height < encoding::MAX_MANIFEST_HEIGHT,
             "capture manifest exceeds maximum height"
         );
-        let nodes = encoding::manifest_groups(&entries)
-            .into_iter()
-            .map(|group| {
-                let bytes = serde_json::to_vec(group)?;
+        let groups = encoding::manifest_groups(&boundary_keys);
+        let nodes = groups
+            .iter()
+            .map(|range| {
+                let bytes = serde_json::to_vec(&entries[range.clone()])?;
                 Ok(ChunkedBlock {
                     content_key: encoding::block_content_key(&bytes),
                     bytes,
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        boundary_keys = groups
+            .into_iter()
+            .map(|range| encoding::manifest_node_boundary_key(&boundary_keys[range]))
+            .collect();
         let blocks = unique_blocks(&[&nodes]);
         pins.extend(pin_blocks_in_txn(txn, scope, &blocks).await?);
         entries = payload_entries(&nodes, pins)?;

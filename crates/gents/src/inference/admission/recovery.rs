@@ -140,36 +140,32 @@ async fn lookup_parent_request(
     node_did: &str,
     row: &StaleInferenceCallRow,
 ) -> Result<AgentRequestRow> {
-    let escaped_node_did = escape_graphql_string(node_did);
     let request_id = &row.request_id;
-    let escaped_request_id = escape_graphql_string(request_id);
-    let request_doc_id = escape_graphql_string(&row.request_doc_id);
-    let agent_did = escape_graphql_string(&row.agent_did);
     anyhow::ensure!(
         access.actor_did().as_deref() == Some(row.agent_did.as_str()),
         "inference recovery actor mismatch"
     );
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{
-                    node_did: {{ _eq: "{escaped_node_did}" }},
-                    agent_did: {{ _eq: "{agent_did}" }},
-                    request_id: {{ _eq: "{escaped_request_id}" }}
-                    _docID: {{ _eq: "{request_doc_id}" }}
-                }},
-                limit: 1
-            ) {{
-                request_id
-                lifecycle_state
-            }}
-        }}"#
-    );
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(
+            Selection::new()
+                .field(fields::REQUEST_ID)
+                .field(fields::LIFECYCLE_STATE),
+        )
+        .filter(Filter::eq(fields::NODE_DID, node_did))
+        .filter(Filter::eq(fields::AGENT_DID, &row.agent_did))
+        .filter(Filter::eq(fields::REQUEST_ID, request_id))
+        .filter(Filter::eq(fields::DOC_ID, &row.request_doc_id))
+        .limit(1)
+        .render()
+    };
 
     let resp = access
         .transact_readonly("inference.recovery_parent", |txn| {
             let query = &query;
-            Box::pin(async move { txn.execute_local_response(query).await })
+            Box::pin(async move { txn.run_local_response(query).await })
         })
         .await
         .with_context(|| {

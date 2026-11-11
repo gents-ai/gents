@@ -2,9 +2,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use gents::eval::checks::CheckRegistry;
-use gents::eval::runner::embedded::EmbeddedExecutor;
-use gents::eval::runner::{RunOptions, TrialExecutor};
+use gents_eval::checks::CheckRegistry;
+use gents_eval::runner::embedded::EmbeddedExecutor;
+use gents_eval::runner::{RunOptions, TrialExecutor};
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
@@ -198,7 +198,7 @@ pub(crate) async fn execute(
     result.map_err(surface_refusal)
 }
 
-/// `gents eval cancel` from argv alone: the marker is written before the
+/// `gents utils eval cancel` from argv alone: the marker is written before the
 /// home's access is opened, since the process hosting the run may hold the
 /// home's embedded node.
 async fn cancel_without_context(
@@ -215,7 +215,7 @@ async fn cancel_without_context(
     manage::cancel(&runs_dir(&home_dir), &args.run_id, purpose, &mut out).await
 }
 
-/// `gents eval watch` from argv. The process hosting the run may hold the
+/// `gents utils eval watch` from argv. The process hosting the run may hold the
 /// home's embedded node; then the watch reads the files the runner leaves
 /// and tries the node again only once no live process holds the run.
 async fn watch_while_held(
@@ -343,11 +343,11 @@ pub(crate) async fn follow_progress<T>(
 }
 
 pub(crate) fn surface_refusal(error: anyhow::Error) -> anyhow::Error {
-    let verbatim = gents::eval::report::report_refused(&error)
+    let verbatim = gents_eval::report::report_refused(&error)
         .map(ToString::to_string)
-        .or_else(|| gents::eval::runner::freeze_refused(&error).map(ToString::to_string))
+        .or_else(|| gents_eval::runner::freeze_refused(&error).map(ToString::to_string))
         .or_else(|| gents::eval::already_invalidated(&error).map(ToString::to_string))
-        .or_else(|| gents::eval::runner::provider_down(&error).map(ToString::to_string));
+        .or_else(|| gents_eval::runner::provider_down(&error).map(ToString::to_string));
     match verbatim {
         Some(text) => anyhow::anyhow!(text),
         None => error,
@@ -387,10 +387,10 @@ pub(crate) const UNCALIBRATED_BANNER: &str =
 
 pub(crate) fn load_policy(
     arg: &crate::cli::PolicyArg,
-) -> Result<gents::eval::optimization::PolicyV2> {
+) -> Result<gents_eval::optimization::PolicyV2> {
     use anyhow::Context;
     match arg {
-        crate::cli::PolicyArg::Defaults => Ok(gents::eval::optimization::PolicyV2::uncalibrated()),
+        crate::cli::PolicyArg::Defaults => Ok(gents_eval::optimization::PolicyV2::uncalibrated()),
         crate::cli::PolicyArg::File(path) => {
             let bytes = std::fs::read(path)
                 .with_context(|| format!("reading policy {}", path.display()))?;
@@ -404,6 +404,7 @@ mod batch;
 mod checks;
 mod compare;
 mod frame;
+pub(crate) use frame::terminal_size;
 pub(crate) mod init;
 mod inspect;
 pub(crate) mod manage;

@@ -232,7 +232,7 @@ fn canonical_tool_payload(
         }
     }
     if tool.spawned_by_tool_call_doc_id.is_some() || tool.plugin_parent_tool_call_doc_id.is_some() {
-        return match super::terminal_tool_output::terminal_tool_output(
+        return match gents_desktop_core::client::canonical_output::terminal_tool_output(
             tool,
             output_segments,
             denied_segments,
@@ -388,40 +388,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                 .collect()
         },
     );
-    let goal = store
-        .goals
-        .iter()
-        .filter(|row| {
-            row.session_id == session_id
-                && node_did.is_none_or(|node_did| row.node_did == node_did)
-                && row
-                    .status
-                    .as_deref()
-                    .and_then(gents::goal::GoalStatus::parse)
-                    != Some(gents::goal::GoalStatus::Stopped)
-        })
-        .min_by(|left, right| {
-            left.created_at
-                .cmp(&right.created_at)
-                .then_with(|| left.goal_id.cmp(&right.goal_id))
-        })
-        .map(|row| GoalView {
-            goal_id: row.goal_id.clone(),
-            objective: normalize_optional(row.objective.as_deref()),
-            status: normalize_optional(row.status.as_deref()),
-            token_budget: row.token_budget,
-            tokens_used: row.tokens_used.unwrap_or_default().max(0),
-            active_time_seconds: row.active_time_seconds.unwrap_or_default().max(0),
-            consecutive_blocked_audits: row.consecutive_blocked_audits.unwrap_or_default().max(0),
-            continuation_sequence: row.continuation_sequence.unwrap_or_default().max(0),
-            wrapup_requested: row.wrapup_requested.unwrap_or(false),
-            wrapup_completed: row.wrapup_completed.unwrap_or(false),
-            last_blocked_reason: normalize_optional(row.last_blocked_reason.as_deref()),
-            last_failure: normalize_optional(row.last_failure.as_deref()),
-            completion_evidence: normalize_optional(row.completion_evidence.as_deref()),
-        });
-
-    if session_row.is_none() && requests.is_empty() && goal.is_none() {
+    if session_row.is_none() && requests.is_empty() {
         return None;
     }
 
@@ -716,7 +683,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
     let mut live_cursor = None;
     if include_live_tail {
         if let Some(request_id) = latest_request_id.as_deref() {
-            if let Some(live) = super::live_delta::canonical_live_text(
+            if let Some(live) = gents_desktop_core::client::canonical_output::canonical_live_text(
                 store,
                 context_store,
                 session_id,
@@ -759,7 +726,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                 "active".to_string()
             }
         }),
-        goal,
+        goal: None,
         turn_state: turn_state_label,
         inference_activity: None,
         latest_request_id,
@@ -2296,3 +2263,7 @@ pub(crate) async fn render_transcript_rows_with_provenance(
 #[cfg(test)]
 #[path = "fork_input_tests.rs"]
 mod fork_input_tests;
+
+#[cfg(test)]
+#[path = "background_origin_tests.rs"]
+mod background_origin_tests;

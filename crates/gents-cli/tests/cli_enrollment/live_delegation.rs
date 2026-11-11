@@ -82,8 +82,8 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
         let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}")).await?;
         let pending = core.request_status_enrollment_with_label(&status, Some("live delegation")).await?;
         wait_for_runtime_enrollment_request(&graphql, &pending.request_id).await?;
-        run_cli_json_with_env(&runtime_home, &["p2p", "enrollment", "grant", &pending.request_id, "--home", home], &owner_env)?;
-        run_cli_json_with_env(&runtime_home, &["p2p", "enrollment", "approve", &pending.request_id, "--home", home], &owner_env)?;
+        run_cli_json_with_env(&runtime_home, &["runtime", "p2p", "enrollment", "grant", &pending.request_id, "--home", home], &owner_env)?;
+        run_cli_json_with_env(&runtime_home, &["runtime", "p2p", "enrollment", "approve", &pending.request_id, "--home", home], &owner_env)?;
         wait_for_chat_ready_enrollment(&core, &node_did).await?;
         wait_for_client_node_readiness(&core, &node_did).await?;
         let user = core.node_identity().did().to_owned();
@@ -146,15 +146,6 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
         let mut tools_a = tools_a;
         tools_a.agents = Some(gents::documents::AgentTools { enabled: Some(true), target_ids: vec![target.target_id.clone()] });
         publish(&access, vec![(Collection::Tools, serde_json::to_value(&tools_a)?)]).await?;
-        access.transact_write("test.live_delegation_invoke", |txn| {
-            let (node_did, a_did, b_did) = (&node_did, &a.agent_did, &b.agent_did);
-            Box::pin(async move {
-                let (doc, _) = read_desired_state_record_in_txn(txn, Collection::Agent, node_did, b_did)
-                    .await?.context("child Agent unavailable")?;
-                txn.add_actor_relationship("Agent", &doc, "session_writer", &a_did.parse()?).await?;
-                Ok::<_, anyhow::Error>(())
-            })
-        }).await?;
         let parent_session = Uuid::new_v4().to_string();
         let prompt = format!("Use agent_new once to delegate to child: 'Say hello and identify yourself as child.' Reference {}. Do not answer in place of the child.", Uuid::new_v4());
         let parent = core.submit_request(&parent_session, &node_did, &prompt, Some(&a.agent_did)).await?;

@@ -25,17 +25,46 @@ pub async fn installed_catalog(
     owner: &str,
     home: Option<&Path>,
 ) -> Result<BTreeMap<String, InstalledCatalogEntry>> {
+    use gents_protocol::document_query::{
+        fields::pack_installation as fields, Direction, Filter, Query, Selection,
+    };
     let mut installed = BTreeMap::new();
-    for record in super::list_installed_packs(access, owner).await? {
+    let rendered = Query::select(
+        Selection::new()
+            .field(fields::COORDINATE)
+            .field(fields::VERSION)
+            .field(fields::DIGEST)
+            .field(fields::PLUGIN_STORE)
+            .field(fields::SOURCE)
+            .field(fields::SOURCE_HISTORY),
+    )
+    .filter(Filter::eq(fields::NODE_DID, owner))
+    .order_by(fields::COORDINATE, Direction::Asc)
+    .render();
+    let response = access.read(&rendered).await?;
+    let records = response["data"]["PackInstallation"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("reading pack installation records"))?;
+    for record in records
+        .iter()
+        .filter(|row| !super::is_plugin_store_row(row))
+    {
+        let coordinate = super::required_record_field_str(record, "coordinate")?;
+        let version = super::required_record_field_str(record, "version")?;
+        let digest = super::required_record_field_str(record, "digest")?;
+        let public_record = serde_json::json!({
+            "coordinate": coordinate, "version": version, "digest": digest,
+            "source": record["source"], "source_history": record["source_history"],
+        });
         let entry = InstalledCatalogEntry {
             stored: StoredName {
-                version: record.version.clone(),
-                digest: record.digest.clone(),
+                version: version.to_owned(),
+                digest: digest.to_owned(),
             },
-            record: serde_json::to_value(&record)?,
+            record: public_record,
             kind: PackKind::Documents,
         };
-        installed.insert(record.coordinate, entry);
+        installed.insert(coordinate.to_owned(), entry);
     }
     let Some(home) = home else {
         return Ok(installed);

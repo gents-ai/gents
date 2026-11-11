@@ -195,26 +195,28 @@ async fn run_contract_with_streaming_cadence(
         let enrollment = timeout(enroll_budget, async {
             let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}")).await?;
             reached("enrollment_token");
-            let pending = core.request_status_enrollment_with_label(&status, Some("Contract")).await?;
+            let pending = core.request_status_enrollment_with_names(&status, Some("Contract"), Some("Ivan")).await?;
             anyhow::ensure!(pending.state == "pending_approval", "unexpected initial enrollment: {pending:?}");
             reached("enrollment_offered");
             wait_for_runtime_enrollment_request(&graphql, &pending.request_id).await?;
             reached("runtime_saw_request");
-            let stored = graphql_query(&graphql, "{ NetworkEnrollmentRequest { request_id profile issued_at } }").await?;
+            core.resend_status_enrollment(&pending.request_id).await?;
+            let stored = graphql_query(&graphql, "{ NetworkEnrollmentRequest { request_id profile issued_at candidate_name } }").await?;
             let signed_request = stored.pointer("/data/NetworkEnrollmentRequest")
                 .and_then(Value::as_array)
                 .and_then(|rows| rows.iter().find(|row| row["request_id"] == pending.request_id))
                 .context("runtime did not return the signed enrollment request")?;
-            let queue = run_cli_json(&runtime_home, &["p2p", "enrollment", "pending", "--home", home])?;
+            let queue = run_cli_json(&runtime_home, &["runtime", "p2p", "enrollment", "pending", "--home", home])?;
             let displayed = queue["pending"].as_array()
                 .and_then(|rows| rows.iter().find(|row| row["request_id"] == pending.request_id))
                 .context("operator pending queue omitted the enrollment request")?;
-            for field in ["profile", "issued_at"] {
+            for field in ["profile", "issued_at", "candidate_name"] {
                 anyhow::ensure!(signed_request[field].as_str().is_some_and(|value| !value.is_empty()), "signed request lacks {field}");
                 anyhow::ensure!(displayed[field] == signed_request[field], "pending queue did not preserve signed {field}");
             }
-            run_cli_json(&runtime_home, &["p2p", "enrollment", "grant", &pending.request_id, "--home", home])?;
-            run_cli_json(&runtime_home, &["p2p", "enrollment", "approve", &pending.request_id, "--home", home])?;
+            anyhow::ensure!(displayed["candidate_name"] == "Ivan", "pending queue did not preserve the chosen name");
+            run_cli_json(&runtime_home, &["runtime", "p2p", "enrollment", "grant", &pending.request_id, "--home", home])?;
+            run_cli_json(&runtime_home, &["runtime", "p2p", "enrollment", "approve", &pending.request_id, "--home", home])?;
             reached("operator_approved");
             wait_for_chat_ready_enrollment(&core, &node_did).await?;
             reached("chat_ready_route");
@@ -1069,9 +1071,9 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
                 wait_for_runtime_enrollment_request(&graphql, &pending.request_id).await.context("publishing activity enrollment request")?;
                 let home = runtime_home.to_str().context("runtime home UTF-8")?;
                 if administered {
-                    run_cli_json(&runtime_home, &["p2p", "enrollment", "grant", &pending.request_id, "--home", home])?;
+                    run_cli_json(&runtime_home, &["runtime", "p2p", "enrollment", "grant", &pending.request_id, "--home", home])?;
                 }
-                run_cli_json(&runtime_home, &["p2p", "enrollment", "approve", &pending.request_id, "--home", home])?;
+                run_cli_json(&runtime_home, &["runtime", "p2p", "enrollment", "approve", &pending.request_id, "--home", home])?;
                 wait_for_chat_ready_enrollment(&core, &node_did).await.context("activity enrollment approval projection")?;
                 if administered {
                     wait_for_client_node_readiness(&core, &node_did).await.context("activity client readiness")?;

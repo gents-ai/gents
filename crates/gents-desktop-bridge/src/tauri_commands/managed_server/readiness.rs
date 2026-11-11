@@ -66,7 +66,7 @@ where
 }
 
 pub(super) fn managed_selection_outdated_message() -> &'static str {
-    "The selected managed runtime predates this app. Update it with `gents service update --home <node-home>` using a compatible packaged build, or explicitly reinstall it through external administration. Its running service and executable will be preserved."
+    "The selected managed runtime predates this app. Update it with `gents runtime service update --home <node-home>` using a compatible packaged build, or explicitly reinstall it through external administration. Its running service and executable will be preserved."
 }
 
 pub(super) fn ensure_selected_restart_compatible(
@@ -98,7 +98,11 @@ where
         MANAGED_SERVER_READY_TIMEOUT,
         MANAGED_SERVER_POLL_INTERVAL,
         || async {
-            observe_port_readiness(node_home, user_status_signer(state).await.as_ref()).await
+            observe_port_readiness(
+                node_home,
+                user_status_signer(state, node_home).await.as_ref(),
+            )
+            .await
         },
         || observe_native_progress(app, state),
     )

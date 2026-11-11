@@ -71,12 +71,12 @@ async fn execute_graphql_async_with_tx_sets_header_when_id_provided() {
         retry_backoff: std::time::Duration::from_millis(50),
     };
 
-    execute_graphql_async_with_tx(&endpoint, None, "{ __typename }", options, Some("42"))
+    execute_graphql_async_with_tx(&endpoint, None, "{ __typename }", None, options, Some("42"))
         .await
         .unwrap();
     assert_eq!(state.last_tx_header.lock().unwrap().as_deref(), Some("42"));
 
-    execute_graphql_async_with_tx(&endpoint, None, "{ __typename }", options, None)
+    execute_graphql_async_with_tx(&endpoint, None, "{ __typename }", None, options, None)
         .await
         .unwrap();
     assert_eq!(state.last_tx_header.lock().unwrap().as_deref(), None);

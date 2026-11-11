@@ -1,6 +1,7 @@
 import type { DesktopTransport } from "../transport.js";
 import { createHostAccessCommands } from "./hostAccess.js";
 import { createDesktopInvoker } from "./invoke.js";
+import { createJoinRequestCommands } from "./joinRequests.js";
 import { createManagedServerCommands } from "./managedServer.js";
 import { createPackCommands } from "./packs.js";
 import { createUxPluginCommands } from "./uxPlugins.js";
@@ -44,6 +45,7 @@ export function createDesktopApiAdapter(
     startDesktopClient: () => invokeDesktop("desktop_client_start"),
     shutdownDesktopClient: () => invokeDesktop("desktop_client_shutdown"),
     ...createManagedServerCommands(invokeDesktop),
+    ...createJoinRequestCommands(invokeDesktop),
     quitDesktop: () => invokeDesktop("desktop_app_quit"),
     openDbExplorer: () => invokeDesktop("desktop_open_db_explorer"),
     openExternalUrl: (url) =>
@@ -56,13 +58,15 @@ export function createDesktopApiAdapter(
         peerId,
         label,
       }),
+    dismissEndedAccess: (nodeDid) =>
+      invokeDesktop("desktop_ended_access_dismiss", { nodeDid }),
     fetchPeerStatus: (peerId) =>
       invokeDesktop("desktop_peer_status_fetch", {
         request: { peerId },
       }),
-    requestStatusEnrollment: (serverAddress) =>
+    requestStatusEnrollment: (serverAddress, candidateName) =>
       invokeDesktop("desktop_peer_enroll_status", {
-        request: { serverAddress },
+        request: { serverAddress, ...(candidateName ? { candidateName } : {}) },
       }),
     listWorkspace: (subpath) =>
       invokeDesktop("desktop_workspace_list", {

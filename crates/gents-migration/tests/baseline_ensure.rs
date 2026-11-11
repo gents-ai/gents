@@ -28,17 +28,6 @@ fn default_baseline_matches_ordered_protocol_catalog() {
         )
         .collect::<Vec<_>>();
 
-    // A collection changed since v1.0.0-rc0 is registered at its rc0 root and reaches the
-    // live SDL through the same patches an upgraded rc0 store takes.
-    let expected = expected
-        .into_iter()
-        .map(
-            |(name, sdl)| match gents_migration::canonical_schema_plan(name).unwrap() {
-                Some(plan) => (name, plan.root_sdl),
-                None => (name, sdl),
-            },
-        )
-        .collect::<Vec<_>>();
     assert_eq!(actual, expected, "baseline must use the canonical live SDL");
     assert!(gents_migration::DEFAULT_STEPS.is_empty());
     let stepped_client_collections = gents_migration::DEFAULT_STEPS
@@ -125,11 +114,8 @@ async fn ensure_migrations_registers_baseline_and_is_idempotent() {
             >= gents_migration::DEFAULT_BASELINE.len(),
         "expected full baseline coverage, got {report1:?}"
     );
-    assert_eq!(
-        report1.steps_applied,
-        gents_migration::DEFAULT_STEPS.len() + common::fresh_canonical_steps()
-    );
-    if gents_migration::DEFAULT_STEPS.is_empty() && common::fresh_canonical_steps() == 0 {
+    assert_eq!(report1.steps_applied, gents_migration::DEFAULT_STEPS.len());
+    if gents_migration::DEFAULT_STEPS.is_empty() {
         assert_eq!(
             report1.materialization.collections_attempted, 0,
             "a chain-free baseline has no old document versions to materialize"
@@ -142,7 +128,7 @@ async fn ensure_migrations_registers_baseline_and_is_idempotent() {
     assert_eq!(report2.steps_applied, 0);
     assert_eq!(
         report2.steps_already_current,
-        gents_migration::DEFAULT_STEPS.len() + common::fresh_canonical_steps()
+        gents_migration::DEFAULT_STEPS.len()
     );
     assert!(
         report2.baseline_already_present >= gents_migration::DEFAULT_BASELINE.len()
@@ -231,7 +217,7 @@ async fn agent_request_baseline_is_chain_free_and_migrations_are_idempotent() {
     assert_eq!(rerun.steps_applied, 0, "re-run applied steps: {rerun:?}");
     assert_eq!(
         rerun.steps_already_current,
-        gents_migration::DEFAULT_STEPS.len() + common::fresh_canonical_steps()
+        gents_migration::DEFAULT_STEPS.len()
     );
     let cv = node
         .get_collection(gents_protocol::schemas::AGENT_REQUEST_NAME)
@@ -741,17 +727,10 @@ async fn file_observation_install_preserves_retained_collection_lineages_and_doc
         .get_collection(gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
         .unwrap()
         .is_some());
-    let canonical = gents_migration::canonical_versions().unwrap();
     for (name, version) in versions {
-        // A collection stored at its rc0 root moves on to its canonical version; every other
-        // lineage is left exactly where it was.
-        let expected = match gents_migration::canonical_schema_plan(name).unwrap() {
-            Some(plan) if plan.root_version == version => canonical[name].clone(),
-            _ => version,
-        };
         assert_eq!(
             node.get_collection(name).unwrap().unwrap().version_id,
-            expected,
+            version,
             "{name}"
         );
     }
@@ -785,56 +764,9 @@ async fn removed_node_memory_is_not_registered_or_deleted() {
     node.shutdown().await.expect("shut down test node");
 }
 
-/// The `Node` lineage released builds carry (the rc0 root plus `avatar`) predates the native
-/// identity baseline and was branchable: a store holding it is refused before any write and
-/// keeps its version, and a fresh store
-/// registers the current SDL as the canonical version.
-#[tokio::test]
-async fn released_node_avatar_lineage_is_refused_without_conversion() {
-    let fresh = fresh_node().await;
-    fresh.add_collection(schemas::NODE).await.unwrap();
-    let fresh_id = fresh.get_collection("Node").unwrap().unwrap().version_id;
-    let old = fresh_node().await;
-    let old_sdl = include_str!("../schemas/rc0/node.graphql");
-    old.add_collection(old_sdl).await.unwrap();
-    assert_eq!(
-        old.get_collection("Node").unwrap().unwrap().version_id,
-        "bafyreiebppz3w6ri6lg6ft2jy3il7gk6bexfy3wjqizbcct4pzx3puppby"
-    );
-    let patched = common::patch_collection(
-        &old,
-        "Node",
-        r#"[{"op":"add","path":"/Node/Fields/-","value":{"Name":"avatar","Kind":"String"}}]"#,
-    )
-    .await;
-    assert_eq!(
-        patched.version_id,
-        "bafyreibibfxzzu4wbr2z5w3fxdfik6vnalwg3mkxqm66sivdoesqpjosli"
-    );
-    old.set_active_collection_version_as(&common::node_context(&old), &patched.version_id)
-        .await
-        .unwrap();
-    let before = old.get_all_collection_versions().await.unwrap();
-    let refused = ensure_migrations(old.as_ref()).await.unwrap_err();
-    assert!(
-        matches!(refused, Error::RuntimeLocalityMismatch { ref collection } if collection == "Node"),
-        "{refused:?}"
-    );
-    assert_eq!(
-        serde_json::to_value(&before).unwrap(),
-        serde_json::to_value(old.get_all_collection_versions().await.unwrap()).unwrap()
-    );
-    assert!(!gents_migration::is_known_off_lineage("Node", &fresh_id));
-    assert_eq!(
-        gents_migration::canonical_versions().unwrap()["Node"],
-        fresh_id
-    );
-    fresh.shutdown().await.expect("shut down test node");
-    old.shutdown().await.expect("shut down test node");
-}
-
-/// Native workflow documents gain immutable handoff route columns and
-/// configuration gains declared reader policy; an existing store keeps its
+/// Native workflow documents gain immutable handoff route columns,
+/// configuration gains declared reader policy and pack installations gain
+/// their recorded source and install values; an existing store keeps its
 /// collection, field positions and rows, and its existing rows read nulls.
 #[tokio::test]
 async fn added_route_and_reader_columns_preserve_existing_rows() {
@@ -873,6 +805,16 @@ async fn added_route_and_reader_columns_preserve_existing_rows() {
             schemas::REPOSITORY_PLACEMENT,
             r#"mutation {create_RepositoryPlacement(input: {repository_id: "retained", node_did: "owner"}) {_docID}}"#,
             &[("readers", false)][..],
+        ),
+        (
+            schemas::PACK_INSTALLATION_NAME,
+            schemas::PACK_INSTALLATION,
+            r#"mutation {create_PackInstallation(input: {node_did: "owner", coordinate: "acme/retained"}) {_docID}}"#,
+            &[
+                ("source", false),
+                ("source_history", false),
+                ("variables", false),
+            ][..],
         ),
     ] {
         let node = fresh_node().await;
@@ -954,9 +896,9 @@ async fn tool_file_content_schema_pin_matches() {
     node.shutdown().await.expect("shut down test node");
 }
 
-/// `AgentMessage` is client-authored, so it keeps its v1.0.0-rc0 schema: a fresh store and an
-/// rc0 store share the rc0 version, and an rc0 store's messages are left exactly as written
-/// (the provider request id now travels inside `publication`, not as a column).
+/// `AgentMessage` is client-authored, so a fresh store and a retained store share its current
+/// version, and a retained store's messages are left exactly as written (the provider request
+/// id travels inside `publication`, not as a column).
 #[tokio::test]
 async fn agent_message_keeps_its_current_schema_and_rows() {
     assert!(!schemas::AGENT_MESSAGE.contains("native_request_id"));

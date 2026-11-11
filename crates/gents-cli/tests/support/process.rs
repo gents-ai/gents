@@ -161,15 +161,7 @@ pub fn spawn_server(home_dir: &Path, port: u16) -> Result<ServeProcess> {
     spawn_server_with_env(home_dir, port, &[], &[])
 }
 
-fn codex_shim_opt_out(extra_args: &[&str]) -> &'static [&'static str] {
-    if extra_args.iter().any(|arg| arg.starts_with("--codex-shim")) {
-        &[]
-    } else {
-        &["--no-codex-shim"]
-    }
-}
-
-/// Spawn a `gents server` and wait for its readiness JSON. Never replaces a
+/// Spawn a `gents runtime server` and wait for its readiness JSON. Never replaces a
 /// raced-away port: a caller holding this signature cannot observe a port
 /// change, so moving the server would strand it on a dead port.
 pub fn spawn_server_with_ready_json(
@@ -226,12 +218,11 @@ fn spawn_server_with_ready_json_inner(
             .arg("server")
             .arg("--http-port")
             .arg(port.to_string())
-            .args(codex_shim_opt_out(extra_args))
             .args(extra_args)
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr));
         configure_foreground_server_env(&mut command, envs);
-        let child = command.spawn().context("spawning gents server")?;
+        let child = command.spawn().context("spawning gents runtime server")?;
         let mut serve = ServeProcess::with_logs(child, stdout_log, stderr_log);
 
         loop {
@@ -313,12 +304,11 @@ pub fn spawn_server_with_env(
         .arg("server")
         .arg("--http-port")
         .arg(port.to_string())
-        .args(codex_shim_opt_out(extra_args))
         .args(extra_args)
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
     configure_foreground_server_env(&mut command, envs);
-    let child = command.spawn().context("spawning gents server")?;
+    let child = command.spawn().context("spawning gents runtime server")?;
     super::graphql::register_served_home(
         home_dir,
         &served_home_dir(home_dir, extra_args, envs),

@@ -146,6 +146,7 @@ pub(crate) enum LeanPayloadKind {
     Text,
     Reasoning,
     Signature,
+    ReasoningStop,
     Summary,
     Encrypted,
     Redacted,

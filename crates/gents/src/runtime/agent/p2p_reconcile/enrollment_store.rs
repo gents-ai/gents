@@ -10,7 +10,7 @@ use gents_protocol::enrollment::{
     decode_offer, derive_decision_id, derive_revision_id, derive_route_receipt_id,
     enrollment_schema_fingerprint, AuthorizationRevisionKind as WireRevisionKind,
     AuthorizationRevisionRecord, EnrollmentDecisionKind as WireDecisionKind,
-    EnrollmentDecisionRecord, EnrollmentRequestRecord,
+    EnrollmentDecisionRecord, EnrollmentRenewalPolicy, EnrollmentRequestRecord,
     EnrollmentRouteReceiptDirection as WireReceiptDirection, EnrollmentRouteReceiptRecord,
     DEFAULT_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS, ENROLLMENT_PROTOCOL_VERSION,
 };
@@ -24,17 +24,18 @@ use tokio::time::timeout;
 use crate::store::identity::NodeIdentity;
 
 use super::enrollment::{
-    AuthorizationRevision, AuthorizationRevisionKind, DurableEnrollmentDocuments,
-    EnrollmentDecision, EnrollmentDecisionKind, EnrollmentOffer, EnrollmentRequest,
-    EnrollmentRouteDirection, EnrollmentRouteReceipt, NetworkAdminPin,
+    AuthorizationRevision, AuthorizationRevisionKind, EnrollmentDecision, EnrollmentDecisionKind,
+    EnrollmentOffer, EnrollmentRequest, EnrollmentRouteDirection, EnrollmentRouteReceipt,
 };
 use super::graphql_helpers::rows;
+
+mod project;
 
 const ENROLLMENT_DOCUMENT_QUERY: &str = r#"{
   Network { network_id admin_did display_name default_template created_at admin_sig }
   NetworkEnrollmentRequest {
     _docID protocol_version request_id request_digest offer_id offer_token challenge
-    network_id admin_did server_peer candidate_did candidate_peer candidate_ticket
+    network_id admin_did server_peer candidate_did candidate_peer candidate_name candidate_ticket
     owner_node_did profile client_nonce issued_at expires_at candidate_sig
   }
   NetworkEnrollmentDecision {
@@ -133,6 +134,53 @@ impl EnrollmentDecisionRefusal {
 }
 
 impl EnrollmentProjection {
+    pub(super) fn current_for_renewal_intent(
+        &self,
+        intent: &gents_protocol::enrollment::RenewalIntent,
+        now: DateTime<Utc>,
+    ) -> Result<&ActiveEnrollment> {
+        use gents_protocol::enrollment::{AuthorizationLease, AuthorizationLeaseState};
+        intent.validate_at(now)?;
+        anyhow::ensure!(
+            self.conflict.is_none(),
+            "enrollment authority is conflicted"
+        );
+        let scope = (intent.network_id.clone(), intent.member_did.clone());
+        anyhow::ensure!(
+            !self.scoped_conflicts.contains_key(&scope),
+            "member authority is conflicted"
+        );
+        let active = self
+            .active
+            .iter()
+            .find(|active| {
+                active.request.network_id == intent.network_id
+                    && active.request.candidate_did == intent.member_did
+            })
+            .context("member has no active enrollment")?;
+        anyhow::ensure!(
+            active.request.admin_did == intent.admin_did
+                && active.request.server_peer == intent.server_peer
+                && active.request.candidate_peer == intent.member_peer
+                && active.revision.sequence == intent.predecessor_sequence,
+            "renewal intent changes the current enrollment"
+        );
+        let next = intent
+            .predecessor_sequence
+            .checked_add(1)
+            .context("authorization sequence exhausted")?;
+        anyhow::ensure!(
+            self.next_authorization_sequences.get(&scope) == Some(&next),
+            "enrollment generation changed"
+        );
+        anyhow::ensure!(
+            AuthorizationLease::at(&active.revision.authorization_expires_at, now).state
+                == AuthorizationLeaseState::RenewalDue,
+            "enrollment is not within its live renewal window"
+        );
+        Ok(active)
+    }
+
     fn conflicted(network_id: Option<String>, error: impl std::fmt::Display) -> Self {
         Self {
             network_id,
@@ -159,6 +207,96 @@ impl EnrollmentProjection {
                 request_id: request_id.to_string(),
             })
     }
+
+    /// Evaluate a pending renewal against the current verified projection.
+    /// The approval owner must hold its decision lock, authenticate the live
+    /// candidate and read the operator policy under the same lock before use.
+    pub fn renewal_lease_for(
+        &self,
+        request_id: &str,
+        enabled: bool,
+        configured_limit: Option<u64>,
+        now: DateTime<Utc>,
+    ) -> Result<Duration> {
+        use gents_protocol::enrollment::{
+            renewal_challenge_matches, AuthorizationLease, AuthorizationLeaseState,
+            MAX_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS,
+        };
+
+        anyhow::ensure!(enabled, "automatic enrollment renewal is disabled");
+        anyhow::ensure!(
+            self.conflict.is_none(),
+            "enrollment authority is conflicted"
+        );
+        let pending = self.pending_for_decision(request_id)?;
+        let request = &pending.request;
+        let scope = (request.network_id.clone(), request.candidate_did.clone());
+        anyhow::ensure!(
+            !self.scoped_conflicts.contains_key(&scope),
+            "enrollment member authority is conflicted"
+        );
+        let request_issued = DateTime::parse_from_rfc3339(&request.issued_at)?.with_timezone(&Utc);
+        let request_expires =
+            DateTime::parse_from_rfc3339(&request.expires_at)?.with_timezone(&Utc);
+        anyhow::ensure!(
+            request_issued <= now && now < request_expires,
+            "renewal request is not currently fresh"
+        );
+        let active = self
+            .active
+            .iter()
+            .find(|entry| {
+                entry.request.network_id == request.network_id
+                    && entry.request.candidate_did == request.candidate_did
+            })
+            .context("no active enrollment for renewal")?;
+        let next_sequence = active
+            .revision
+            .sequence
+            .checked_add(1)
+            .context("enrollment authorization sequence exhausted")?;
+        anyhow::ensure!(
+            self.next_authorization_sequences.get(&scope) == Some(&next_sequence),
+            "enrollment authorization generation changed or is incomplete"
+        );
+        anyhow::ensure!(
+            active.request.candidate_peer == request.candidate_peer
+                && active.request.owner_node_did == request.owner_node_did
+                && active.request.profile == request.profile
+                && active.request.admin_did == request.admin_did
+                && active.request.server_peer == request.server_peer,
+            "renewal changes the current enrollment scope"
+        );
+        anyhow::ensure!(
+            AuthorizationLease::at(&active.revision.authorization_expires_at, now).state
+                == AuthorizationLeaseState::RenewalDue,
+            "enrollment is not within its live renewal window"
+        );
+        anyhow::ensure!(
+            renewal_challenge_matches(
+                &request.challenge,
+                &request.network_id,
+                &request.candidate_did,
+                &request.candidate_peer,
+                active.revision.sequence,
+            ),
+            "renewal offer does not bind the current enrollment generation"
+        );
+        let issued = DateTime::parse_from_rfc3339(&active.decision.decided_at)?;
+        let expires = DateTime::parse_from_rfc3339(&active.revision.authorization_expires_at)?;
+        let original = u64::try_from((expires - issued).num_seconds())
+            .context("current enrollment lease is invalid")?;
+        anyhow::ensure!(
+            (1..=MAX_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS).contains(&original),
+            "current enrollment lease is outside the protocol limit"
+        );
+        let lease = configured_limit.unwrap_or(original);
+        anyhow::ensure!(
+            (1..=MAX_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS).contains(&lease),
+            "renewal lease is outside the protocol limit"
+        );
+        Ok(Duration::from_secs(lease))
+    }
 }
 
 #[derive(Clone)]
@@ -167,6 +305,14 @@ pub struct GraphqlEnrollmentStore {
     identity: Arc<dyn NodeIdentity>,
     decision_lock: Arc<Mutex<()>>,
     fail_closed: Arc<FailClosedLog>,
+}
+
+#[derive(Deserialize)]
+struct RenewalPolicyRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    enabled: Option<bool>,
+    lease_seconds: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,6 +367,190 @@ fn enrollment_decision_gate(node: &EmbeddedNode) -> Arc<Mutex<()>> {
 }
 
 impl GraphqlEnrollmentStore {
+    pub async fn issue_renewal_offer(
+        &self,
+        intent: &gents_protocol::enrollment::RenewalIntent,
+    ) -> Result<gents_protocol::enrollment::RenewalOfferResponse> {
+        let _guard = self.decision_lock.lock().await;
+        let policy = self.renewal_policy(&intent.network_id).await?;
+        anyhow::ensure!(policy.enabled, "automatic enrollment renewal is disabled");
+        let projection = self.load_projection().await?;
+        let active = projection
+            .current_for_renewal_intent(intent, Utc::now())?
+            .clone();
+        anyhow::ensure!(
+            self.identity
+                .verify(
+                    &intent.member_did,
+                    &intent.signing_payload(),
+                    &intent.member_sig
+                )
+                .await?,
+            "renewal intent signature is invalid"
+        );
+        let p2p =
+            crate::store::identity::node_p2p(&self.node).context("runtime P2P is unavailable")?;
+        let local_peer = timeout(Duration::from_secs(20), p2p.local_peer_id())
+            .await?
+            .map_err(anyhow::Error::msg)?;
+        anyhow::ensure!(
+            local_peer == intent.server_peer,
+            "renewal intent targets another server"
+        );
+        timeout(
+            Duration::from_secs(20),
+            p2p.connect_peer(&active.request.candidate_ticket),
+        )
+        .await?
+        .map_err(anyhow::Error::msg)?;
+        let peer = TransportPeerId::new(intent.member_peer.clone()).map_err(anyhow::Error::msg)?;
+        let resolved = timeout(Duration::from_secs(20), p2p.resolve_peer_identity(&peer))
+            .await?
+            .map_err(anyhow::Error::msg)?
+            .context("member has no authenticated transport identity")?;
+        anyhow::ensure!(
+            resolved.to_string() == intent.member_did,
+            "renewal transport identity mismatch"
+        );
+        let issuer = super::enrollment_offer::EnrollmentOfferIssuer::new(
+            self.identity.clone(),
+            p2p,
+            intent.network_id.clone(),
+            active.request.owner_node_did.clone(),
+            active.request.profile.clone(),
+        );
+        let offer = issuer
+            .mint_renewal(
+                &intent.member_did,
+                &intent.member_peer,
+                intent.predecessor_sequence,
+            )
+            .await?;
+        let latest = self.load_projection().await?;
+        anyhow::ensure!(
+            latest.current_for_renewal_intent(intent, Utc::now())? == &active,
+            "enrollment generation changed while issuing renewal offer"
+        );
+        let mut response = gents_protocol::enrollment::RenewalOfferResponse {
+            intent_id: intent.intent_id(),
+            member_did: intent.member_did.clone(),
+            offer_token: offer.token,
+            admin_did: self.identity.did().to_owned(),
+            admin_sig: Vec::new(),
+        };
+        response.admin_sig = self.identity.sign(&response.signing_payload()).await?;
+        response.validate_for(intent, Utc::now())?;
+        Ok(response)
+    }
+
+    async fn read_renewal_policy_row(&self, network_id: &str) -> Result<Option<RenewalPolicyRow>> {
+        let network = crate::store::graphql::escape_graphql_string(network_id);
+        let query = format!(
+            r#"{{ EnrollmentRenewalPolicy(filter: {{ network_id: {{ _eq: "{network}" }} }}) {{ _docID enabled lease_seconds }} }}"#
+        );
+        let response = crate::store::graphql::graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "load local enrollment renewal policy",
+        )
+        .await?;
+        let mut policies = rows::<RenewalPolicyRow>(&response, "EnrollmentRenewalPolicy")?;
+        anyhow::ensure!(
+            policies.len() <= 1,
+            "conflicting enrollment renewal policies"
+        );
+        Ok(policies.pop())
+    }
+
+    /// Callers must first authenticate the operator. Policy writes share the
+    /// enrollment decision lock so a disable cannot race an automatic grant.
+    pub async fn set_renewal_policy(&self, policy: EnrollmentRenewalPolicy) -> Result<()> {
+        if let Some(lease) = policy.lease_seconds {
+            anyhow::ensure!(
+                (1..=gents_protocol::enrollment::MAX_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS)
+                    .contains(&lease),
+                "renewal lease is outside the protocol limit"
+            );
+        }
+        let _guard = self.decision_lock.lock().await;
+        let projection = self.load_projection().await?;
+        anyhow::ensure!(
+            projection.conflict.is_none(),
+            "enrollment authority is conflicted"
+        );
+        let network_id = projection.network_id.context("no enrollment network")?;
+        let current = self.read_renewal_policy_row(&network_id).await?;
+        let lease = policy
+            .lease_seconds
+            .map_or_else(|| "null".to_owned(), |value| value.to_string());
+        let fields = format!("enabled: {}, lease_seconds: {lease}", policy.enabled);
+        let runtime = identity::Did::new(self.identity.did())?;
+        let access =
+            crate::store::config_client::ConfigAccess::local_as(self.node.clone(), runtime.clone());
+        match current {
+            Some(row) => {
+                let mutation = format!(
+                    r#"mutation {{ update_EnrollmentRenewalPolicy(docID: "{}", input: {{ {fields} }}) {{ _docID }} }}"#,
+                    crate::store::graphql::escape_graphql_string(&row.doc_id)
+                );
+                access
+                    .write("enrollment.set_renewal_policy", &mutation)
+                    .await?;
+            }
+            None => {
+                let mutation = format!(
+                    r#"mutation {{ create_EnrollmentRenewalPolicy(input: {{ network_id: "{}", {fields}, parent_linked: false }}) {{ _docID }} }}"#,
+                    crate::store::graphql::escape_graphql_string(&network_id)
+                );
+                access
+                    .transact_write("enrollment.set_renewal_policy", |txn| {
+                        let mutation = &mutation;
+                        let runtime = &runtime;
+                        Box::pin(async move {
+                            txn.validate_runtime_actor(runtime)?;
+                            let response = txn.execute(mutation).await?;
+                            let doc = gents_protocol::graphql::extract_mutation_doc_id(
+                                &response,
+                                "EnrollmentRenewalPolicy",
+                            )?;
+                            crate::store::config_client::maybe_link_deferred_operation_in_txn(
+                                txn,
+                                "EnrollmentRenewalPolicy",
+                                &doc,
+                                runtime,
+                            )
+                            .await?;
+                            Ok::<_, anyhow::Error>(())
+                        })
+                    })
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) async fn renewal_policy(&self, network_id: &str) -> Result<EnrollmentRenewalPolicy> {
+        let Some(row) = self.read_renewal_policy_row(network_id).await? else {
+            return Ok(EnrollmentRenewalPolicy::default());
+        };
+        let lease_seconds = row
+            .lease_seconds
+            .map(u64::try_from)
+            .transpose()
+            .context("invalid enrollment renewal lease")?;
+        if let Some(lease) = lease_seconds {
+            anyhow::ensure!(
+                (1..=gents_protocol::enrollment::MAX_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS)
+                    .contains(&lease),
+                "renewal lease is outside the protocol limit"
+            );
+        }
+        Ok(EnrollmentRenewalPolicy {
+            enabled: row.enabled.unwrap_or(false),
+            lease_seconds,
+        })
+    }
+
     pub fn new(node: Arc<EmbeddedNode>, identity: Arc<dyn NodeIdentity>) -> Self {
         let decision_lock = enrollment_decision_gate(node.as_ref());
         Self {
@@ -231,7 +561,7 @@ impl GraphqlEnrollmentStore {
         }
     }
 
-    async fn publish_records(
+    pub(super) async fn publish_records(
         &self,
         operation: &'static str,
         mutation: &str,
@@ -313,6 +643,24 @@ impl GraphqlEnrollmentStore {
         kind: WireDecisionKind,
         lease: Duration,
     ) -> Result<EnrollmentDecisionOutcome> {
+        self.decide_request_inner(request_id, kind, Some(lease))
+            .await
+    }
+
+    pub async fn decide_automatic_renewal(
+        &self,
+        request_id: &str,
+    ) -> Result<EnrollmentDecisionOutcome> {
+        self.decide_request_inner(request_id, WireDecisionKind::Approved, None)
+            .await
+    }
+
+    async fn decide_request_inner(
+        &self,
+        request_id: &str,
+        kind: WireDecisionKind,
+        operator_lease: Option<Duration>,
+    ) -> Result<EnrollmentDecisionOutcome> {
         let _guard = self.decision_lock.lock().await;
         let projection = self.load_projection().await?;
         anyhow::ensure!(
@@ -362,6 +710,8 @@ impl GraphqlEnrollmentStore {
             let request = denied.request.clone();
             let decision_doc_id = denied.decision_doc_id.clone();
             drop(_guard);
+            self.finish_grant_withdrawal(request_id, &request.candidate_did)
+                .await?;
             let delivery_pending = self
                 .deliver_terminal(&request, &decision_doc_id, None, None)
                 .await;
@@ -375,7 +725,34 @@ impl GraphqlEnrollmentStore {
         }
         let pending = projection.pending_for_decision(request_id)?;
 
-        let decided_at = self.verify_live_candidate(&pending.request).await?;
+        let mut decided_at = self.verify_live_candidate(&pending.request).await?;
+        let lease = match operator_lease {
+            Some(lease) => lease,
+            None => {
+                let policy = self.renewal_policy(&pending.request.network_id).await?;
+                let latest = self.load_projection().await?;
+                anyhow::ensure!(
+                    latest.pending_for_decision(request_id)?.request == pending.request,
+                    "renewal request changed during authorization"
+                );
+                let scope = (
+                    pending.request.network_id.clone(),
+                    pending.request.candidate_did.clone(),
+                );
+                anyhow::ensure!(
+                    latest.next_authorization_sequences.get(&scope)
+                        == projection.next_authorization_sequences.get(&scope),
+                    "enrollment generation changed during authorization"
+                );
+                decided_at = Utc::now();
+                latest.renewal_lease_for(
+                    request_id,
+                    policy.enabled,
+                    policy.lease_seconds,
+                    decided_at,
+                )?
+            }
+        };
         let sequence = match kind {
             WireDecisionKind::Approved => projection
                 .next_authorization_sequences
@@ -495,6 +872,12 @@ impl GraphqlEnrollmentStore {
                 })?,
         };
         drop(_guard);
+        /* Lean `Identity.EnrollmentGrant.applyDecision .deny`: a grant whose
+        approval never committed is withdrawn with the denial */
+        if kind == WireDecisionKind::Denied {
+            self.finish_grant_withdrawal(request_id, &pending.request.candidate_did)
+                .await?;
+        }
         let delivery_pending = match &revision_doc_id {
             Some(revision_doc_id) => {
                 self.deliver_terminal(
@@ -998,674 +1381,71 @@ impl GraphqlEnrollmentStore {
         network_rows: &[NetworkRow],
         now: DateTime<Utc>,
     ) -> Result<EnrollmentProjection> {
-        let [network_row] = network_rows else {
-            anyhow::bail!("expected exactly one Network, found {}", network_rows.len());
-        };
-        let network = network_row.to_record()?;
-        anyhow::ensure!(
-            network.admin_did == self.identity.did(),
-            "Network admin does not match the local runtime identity"
-        );
-        anyhow::ensure!(
-            self.identity
-                .verify(&network.admin_did, &network.signing_payload(), &network.sig)
-                .await?,
-            "Network signature is invalid"
-        );
-
-        let mut scoped_conflicts = BTreeMap::<(String, String), Vec<String>>::new();
-        let mut request_conflicts = BTreeMap::<String, Vec<String>>::new();
-        let mut request_scopes = BTreeMap::<String, (String, String)>::new();
-        let mut requests = Vec::new();
-        for raw in rows::<Value>(response, "NetworkEnrollmentRequest")? {
-            let (request_id, scope) = match attribute_candidate_request(&raw, &network.network_id) {
-                CandidateRequestAttribution::Exact { request_id, scope } => (request_id, scope),
-                CandidateRequestAttribution::RequestOnly(request_id) => {
-                    add_request_conflict(
-                        &mut request_conflicts,
-                        &request_id,
-                        "malformed enrollment request has no candidate_did",
-                    );
-                    continue;
-                }
-                CandidateRequestAttribution::ScopeOnly(scope) => {
-                    add_scope_conflict(
-                        &mut scoped_conflicts,
-                        scope,
-                        "malformed enrollment request has no request_id",
-                    );
-                    continue;
-                }
-                CandidateRequestAttribution::Foreign => continue,
-                CandidateRequestAttribution::Unattributable => {
-                    tracing::warn!(
-                        "quarantining enrollment request without request or member identity"
-                    );
-                    continue;
-                }
-            };
-            if let Some(existing) = request_scopes.insert(request_id.clone(), scope.clone()) {
-                if existing != scope {
-                    add_request_conflict(
-                        &mut request_conflicts,
-                        &request_id,
-                        "request identity is bound to conflicting member scopes",
-                    );
-                    tracing::warn!(
-                        ?existing,
-                        ?scope,
-                        request_id,
-                        "immutable request identity is bound to conflicting member scopes"
-                    );
-                }
-            }
-            let row = match serde_json::from_value::<RequestRow>(raw) {
-                Ok(row) => row,
-                Err(error) => {
-                    add_request_conflict(
-                        &mut request_conflicts,
-                        &request_id,
-                        format!("malformed enrollment request: {error}"),
-                    );
-                    continue;
-                }
-            };
-            match self.verify_request(row, &network).await {
-                Ok(request) => requests.push(request),
-                Err(error) => add_request_conflict(
-                    &mut request_conflicts,
-                    &request_id,
-                    format!("invalid enrollment request: {error:#}"),
-                ),
-            }
-        }
+        let network = self.verified_network(network_rows).await?;
+        let project::VerifiedRequests {
+            requests,
+            request_scopes,
+            mut findings,
+        } = self.verify_requests(response, &network).await?;
         let requests_by_id = requests.iter().fold(BTreeMap::new(), |mut map, verified| {
             map.entry(verified.record.request_id.clone())
                 .or_insert_with(Vec::new)
                 .push(verified);
             map
         });
-        for (request_id, rows) in &requests_by_id {
-            if rows.len() != 1 {
-                add_request_conflict(
-                    &mut request_conflicts,
-                    request_id,
-                    format!("request identity has {} distinct rows", rows.len()),
-                );
-            }
-        }
-        let mut challenge_requests = BTreeMap::<String, BTreeSet<String>>::new();
-        for request in &requests {
-            challenge_requests
-                .entry(request.record.challenge.clone())
-                .or_default()
-                .insert(request.record.request_id.clone());
-        }
-        let mut reused_challenge_requests = BTreeSet::new();
-        for request_ids in challenge_requests.values().filter(|ids| ids.len() > 1) {
-            reused_challenge_requests.extend(request_ids.iter().cloned());
-            for request_id in request_ids {
-                add_request_conflict(
-                    &mut request_conflicts,
-                    request_id,
-                    "enrollment challenge is reused by another request",
-                );
-            }
-        }
-
-        let mut decisions = Vec::new();
-        let mut invalid_authority_max = BTreeMap::<(String, String), u64>::new();
-        let mut observed_revision_next = BTreeMap::<(String, String), u64>::new();
-        for raw in rows::<Value>(response, "NetworkEnrollmentDecision")? {
-            let request_id = raw_text(&raw, "request_id").map(str::to_string);
-            let request_key = request_id.as_deref().unwrap_or("");
-            let Some(scope) = scope_for_authority_row(
-                &raw,
-                request_key,
-                &request_scopes,
-                &network.network_id,
-                "candidate_did",
-            )?
-            else {
-                continue;
-            };
-            let observed_sequence =
-                raw_i64(&raw, "authorization_sequence").and_then(|value| u64::try_from(value).ok());
-            if let Some(sequence) = observed_sequence {
-                observe_next_authorization_sequence(
-                    &mut observed_revision_next,
-                    &mut scoped_conflicts,
-                    scope.clone(),
-                    sequence,
-                );
-            }
-            let Some(request_id) = request_id else {
-                if let Some(sequence) = observed_sequence {
-                    invalid_authority_max
-                        .entry(scope)
-                        .and_modify(|current| *current = (*current).max(sequence))
-                        .or_insert(sequence);
-                } else {
-                    add_scope_conflict(
-                        &mut scoped_conflicts,
-                        scope,
-                        "malformed enrollment decision has no request_id or usable generation",
-                    );
-                }
-                continue;
-            };
-            let row = match serde_json::from_value::<DecisionRow>(raw) {
-                Ok(row) => row,
-                Err(error) => {
-                    if let Some(sequence) = observed_sequence {
-                        invalid_authority_max
-                            .entry(scope.clone())
-                            .and_modify(|current| *current = (*current).max(sequence))
-                            .or_insert(sequence);
-                    }
-                    add_request_conflict(
-                        &mut request_conflicts,
-                        &request_id,
-                        format!("malformed enrollment decision: {error}"),
-                    );
-                    continue;
-                }
-            };
-            let verified = async {
-                let record = row.to_record()?;
-                let request = unique_request(&requests_by_id, &record.request_id)?;
-                record.validate_against_request(&request.record)?;
-                let signed = self
-                    .identity
-                    .verify(
-                        &record.signer_did,
-                        &record.signing_payload(),
-                        &record.admin_sig,
-                    )
-                    .await?;
-                anyhow::ensure!(signed, "enrollment decision signature is invalid");
-                Ok::<_, anyhow::Error>(VerifiedDecision {
-                    doc_id: row.doc_id,
-                    record,
-                    signed,
-                })
-            }
-            .await;
-            match verified {
-                Ok(decision) => decisions.push(decision),
-                Err(error) => {
-                    if let Some(sequence) = observed_sequence {
-                        invalid_authority_max
-                            .entry(scope.clone())
-                            .and_modify(|current| *current = (*current).max(sequence))
-                            .or_insert(sequence);
-                    }
-                    add_request_conflict(
-                        &mut request_conflicts,
-                        &request_id,
-                        format!("invalid enrollment decision: {error:#}"),
-                    );
-                    tracing::warn!(?scope, request_id, error = %error, "scoped invalid enrollment decision");
-                }
-            }
-        }
+        let reused_challenge_requests = project::flag_request_identity_conflicts(
+            &requests,
+            &requests_by_id,
+            &mut findings.request_conflicts,
+        );
+        let index = project::RequestIndex {
+            network: &network,
+            request_scopes: &request_scopes,
+            requests_by_id: &requests_by_id,
+        };
+        let decisions = self
+            .verify_decisions(response, index, &mut findings)
+            .await?;
         let decisions_by_request = decisions.iter().fold(BTreeMap::new(), |mut map, verified| {
             map.entry(verified.record.request_id.clone())
                 .or_insert_with(Vec::new)
                 .push(verified);
             map
         });
-        for (request_id, rows) in &decisions_by_request {
-            if rows.len() != 1 {
-                add_request_conflict(
-                    &mut request_conflicts,
-                    request_id,
-                    format!("request has {} immutable terminal decisions", rows.len()),
-                );
-            }
-        }
-
-        let mut revisions = Vec::new();
-        for raw in rows::<Value>(response, "NetworkAuthorizationRevision")? {
-            let request_id = raw_text(&raw, "request_id").map(str::to_string);
-            let request_key = request_id.as_deref().unwrap_or("");
-            let Some(scope) = scope_for_authority_row(
-                &raw,
-                request_key,
-                &request_scopes,
-                &network.network_id,
-                "member_did",
-            )?
-            else {
-                continue;
-            };
-            let observed_sequence =
-                raw_i64(&raw, "sequence").and_then(|value| u64::try_from(value).ok());
-            if let Some(sequence) = observed_sequence {
-                observe_next_authorization_sequence(
-                    &mut observed_revision_next,
-                    &mut scoped_conflicts,
-                    scope.clone(),
-                    sequence,
-                );
-            }
-            let Some(request_id) = request_id else {
-                if let Some(sequence) = observed_sequence {
-                    invalid_authority_max
-                        .entry(scope)
-                        .and_modify(|current| *current = (*current).max(sequence))
-                        .or_insert(sequence);
-                } else {
-                    add_scope_conflict(
-                        &mut scoped_conflicts,
-                        scope,
-                        "malformed authorization revision has no request_id or usable sequence",
-                    );
-                }
-                continue;
-            };
-            let row = match serde_json::from_value::<RevisionRow>(raw) {
-                Ok(row) => row,
-                Err(error) => {
-                    if let Some(sequence) = observed_sequence {
-                        invalid_authority_max
-                            .entry(scope.clone())
-                            .and_modify(|current| *current = (*current).max(sequence))
-                            .or_insert(sequence);
-                    } else {
-                        add_scope_conflict(
-                            &mut scoped_conflicts,
-                            scope,
-                            format!(
-                                "malformed authorization revision without usable sequence: {error}"
-                            ),
-                        );
-                    }
-                    continue;
-                }
-            };
-            let verified = async {
-                let record = row.to_record()?;
-                let request = unique_request(&requests_by_id, &record.request_id)?;
-                let decision = unique_approved_decision(&decisions_by_request, &record.request_id)?;
-                record.validate_against_approval(&request.record, &decision.record)?;
-                let signed = self
-                    .identity
-                    .verify(
-                        &record.signer_did,
-                        &record.signing_payload(),
-                        &record.admin_sig,
-                    )
-                    .await?;
-                anyhow::ensure!(signed, "authorization revision signature is invalid");
-                Ok::<_, anyhow::Error>(VerifiedRevision {
-                    doc_id: row.doc_id,
-                    record,
-                    signed,
-                })
-            }
-            .await;
-            match verified {
-                Ok(revision) => revisions.push(revision),
-                Err(error) => {
-                    if let Some(sequence) = observed_sequence {
-                        invalid_authority_max
-                            .entry(scope.clone())
-                            .and_modify(|current| *current = (*current).max(sequence))
-                            .or_insert(sequence);
-                    } else {
-                        add_scope_conflict(
-                            &mut scoped_conflicts,
-                            scope.clone(),
-                            "invalid authorization revision without usable sequence",
-                        );
-                    }
-                    tracing::warn!(?scope, request_id, error = %error, "scoped invalid authorization revision");
-                }
-            }
-        }
-
-        let valid_revision_max = revisions
-            .iter()
-            .fold(BTreeMap::new(), |mut maxes, revision| {
-                let scope = (
-                    revision.record.network_id.clone(),
-                    revision.record.member_did.clone(),
-                );
-                maxes
-                    .entry(scope)
-                    .and_modify(|current: &mut u64| {
-                        *current = (*current).max(revision.record.sequence)
-                    })
-                    .or_insert(revision.record.sequence);
-                maxes
-            });
-        for (scope, invalid_max) in invalid_authority_max {
-            if invalid_revision_is_current(valid_revision_max.get(&scope).copied(), invalid_max) {
-                add_scope_conflict(
-                    &mut scoped_conflicts,
-                    scope,
-                    format!("invalid authorization revision at observed sequence {invalid_max}"),
-                );
-            }
-        }
-
-        let mut receipts = Vec::new();
-        let mut invalid_receipt_generations = BTreeSet::new();
-        for raw in rows::<Value>(response, "NetworkEnrollmentRouteReceipt")? {
-            let request_id = raw_text(&raw, "request_id").map(str::to_string);
-            let request_key = request_id.as_deref().unwrap_or("");
-            let Some(scope) = scope_for_authority_row(
-                &raw,
-                request_key,
-                &request_scopes,
-                &network.network_id,
-                "member_did",
-            )?
-            else {
-                continue;
-            };
-            let sequence =
-                raw_i64(&raw, "authorization_sequence").and_then(|value| u64::try_from(value).ok());
-            let Some(request_id) = request_id else {
-                if let Some(sequence) = sequence {
-                    invalid_receipt_generations.insert((scope, sequence));
-                } else {
-                    add_scope_conflict(
-                        &mut scoped_conflicts,
-                        scope,
-                        "malformed route receipt has no request_id or usable generation",
-                    );
-                }
-                continue;
-            };
-            let row = match serde_json::from_value::<RouteReceiptRow>(raw) {
-                Ok(row) => row,
-                Err(error) => {
-                    if let Some(sequence) = sequence {
-                        invalid_receipt_generations.insert((scope, sequence));
-                    } else {
-                        add_scope_conflict(
-                            &mut scoped_conflicts,
-                            scope,
-                            format!("malformed route receipt without usable generation: {error}"),
-                        );
-                    }
-                    continue;
-                }
-            };
-            let verified = async {
-                let record = row.to_record()?;
-                let request = unique_request(&requests_by_id, &record.request_id)?;
-                let decision = unique_approved_decision(&decisions_by_request, &record.request_id)?;
-                record.validate_against_approval(&request.record, &decision.record)?;
-                let signed = self
-                    .identity
-                    .verify(
-                        &record.signer_did,
-                        &record.signing_payload(),
-                        &record.admin_sig,
-                    )
-                    .await?;
-                anyhow::ensure!(signed, "enrollment route receipt signature is invalid");
-                Ok::<_, anyhow::Error>(VerifiedRouteReceipt {
-                    doc_id: row.doc_id,
-                    record,
-                })
-            }
-            .await;
-            match verified {
-                Ok(receipt) => receipts.push(receipt),
-                Err(error) => {
-                    if let Some(sequence) = sequence {
-                        invalid_receipt_generations.insert((scope.clone(), sequence));
-                    } else {
-                        add_scope_conflict(
-                            &mut scoped_conflicts,
-                            scope.clone(),
-                            "invalid route receipt without usable generation",
-                        );
-                    }
-                    tracing::warn!(?scope, request_id, error = %error, "scoped invalid enrollment route receipt");
-                }
-            }
-        }
-
-        let mut durable = DurableEnrollmentDocuments {
-            admin_pins: BTreeSet::from([NetworkAdminPin {
-                network_id: network.network_id.clone(),
-                admin_did: network.admin_did.clone(),
-            }]),
-            ..DurableEnrollmentDocuments::default()
+        project::flag_duplicate_decisions(&decisions_by_request, &mut findings.request_conflicts);
+        let revisions = self
+            .verify_revisions(response, index, &decisions_by_request, &mut findings)
+            .await?;
+        let valid_revision_max = project::flag_current_invalid_authority(&revisions, &mut findings);
+        let receipts = self
+            .verify_receipts(response, index, &decisions_by_request, &mut findings)
+            .await?;
+        let documents = project::VerifiedDocuments {
+            requests: &requests,
+            decisions: &decisions,
+            revisions: &revisions,
+            receipts: &receipts,
+            decisions_by_request: &decisions_by_request,
         };
-        for verified in &requests {
-            durable.offers.insert(verified.offer.clone());
-            durable.requests.insert(
-                verified.pure_request(
-                    now,
-                    decisions_by_request
-                        .get(&verified.record.request_id)
-                        .is_some_and(|rows| rows.iter().any(|decision| decision.signed)),
-                ),
-            );
-        }
-        for verified in &decisions {
-            durable.decisions.insert(verified.pure(now));
-        }
-        for verified in &revisions {
-            durable.revisions.insert(verified.pure());
-        }
-        for verified in &receipts {
-            durable.route_receipts.insert(verified.pure());
-        }
-        for receipt in &receipts {
-            if !durable.route_receipt_identity_unique(&receipt.pure()) {
-                invalid_receipt_generations.insert((
-                    (
-                        receipt.record.network_id.clone(),
-                        receipt.record.member_did.clone(),
-                    ),
-                    receipt.record.authorization_sequence,
-                ));
-            }
-        }
-        for (scope, invalid_sequence) in &invalid_receipt_generations {
-            if valid_revision_max
-                .get(scope)
-                .is_some_and(|valid_sequence| valid_sequence == invalid_sequence)
-            {
-                add_scope_conflict(
-                    &mut scoped_conflicts,
-                    scope.clone(),
-                    format!(
-                        "invalid enrollment route receipt at authorization sequence {invalid_sequence}"
-                    ),
-                );
-            }
-        }
-
+        let durable = project::durable_documents(
+            &network,
+            now,
+            documents,
+            &valid_revision_max,
+            &mut findings,
+        );
         let mut projection = EnrollmentProjection {
-            network_id: Some(network.network_id),
-            next_authorization_sequences: observed_revision_next,
+            network_id: Some(network.network_id.clone()),
+            next_authorization_sequences: std::mem::take(&mut findings.observed_revision_next),
             ..EnrollmentProjection::default()
         };
-        for verified in &requests {
-            if request_conflicts.contains_key(&verified.record.request_id) {
-                continue;
-            }
-            let matching_decisions = decisions_by_request
-                .get(&verified.record.request_id)
-                .cloned()
-                .unwrap_or_default();
-            if matching_decisions.is_empty() {
-                if verified.is_fresh(now)? {
-                    projection.pending.push(PendingEnrollment {
-                        request_doc_id: verified.doc_id.clone(),
-                        offer_token: verified.record.offer_token.clone(),
-                        request: verified.record.clone(),
-                    });
-                }
-                continue;
-            }
-            for decision in matching_decisions {
-                if decision.record.decision == WireDecisionKind::Denied && decision.signed {
-                    projection.denied.push(DeniedEnrollment {
-                        request_doc_id: verified.doc_id.clone(),
-                        decision_doc_id: decision.doc_id.clone(),
-                        request: verified.record.clone(),
-                        decision: decision.record.clone(),
-                    });
-                    continue;
-                }
-                let pure_request = verified.pure_request(now, decision.signed);
-                let pure_decision = decision.pure(now);
-                let Some(revision_rows) = revisions_for(&revisions, &verified.record.request_id)
-                else {
-                    continue;
-                };
-                for revision in revision_rows {
-                    let scope = (
-                        verified.record.network_id.clone(),
-                        verified.record.candidate_did.clone(),
-                    );
-                    if scoped_conflicts.contains_key(&scope) {
-                        continue;
-                    }
-                    if durable.current_approval(&verified.offer, &pure_request, &pure_decision)
-                        && revision.record.kind == WireRevisionKind::Active
-                        && revision.record.sequence == decision.record.authorization_sequence
-                    {
-                        let current_receipts = receipts
-                            .iter()
-                            .filter(|receipt| {
-                                durable.current_server_route_receipt(
-                                    &verified.offer,
-                                    &pure_request,
-                                    &pure_decision,
-                                    &receipt.pure(),
-                                )
-                            })
-                            .collect::<Vec<_>>();
-                        let current_receipt = if invalid_receipt_generations
-                            .contains(&(scope, decision.record.authorization_sequence))
-                            || current_receipts.len() > 1
-                        {
-                            None
-                        } else {
-                            current_receipts.first().copied()
-                        };
-                        projection.active.push(ActiveEnrollment {
-                            request_doc_id: verified.doc_id.clone(),
-                            decision_doc_id: decision.doc_id.clone(),
-                            revision_doc_id: revision.doc_id.clone(),
-                            route_receipt_doc_id: current_receipt
-                                .map(|receipt| receipt.doc_id.clone()),
-                            request: verified.record.clone(),
-                            decision: decision.record.clone(),
-                            revision: revision.record.clone(),
-                            route_receipt: current_receipt.map(|receipt| receipt.record.clone()),
-                        });
-                    }
-                }
-            }
-        }
-        for verified in &requests {
-            if request_conflicts.contains_key(&verified.record.request_id) {
-                continue;
-            }
-            let scope = (
-                verified.record.network_id.as_str(),
-                verified.record.candidate_did.as_str(),
-            );
-            if scoped_conflicts.contains_key(&(scope.0.to_string(), scope.1.to_string())) {
-                continue;
-            }
-            let scoped = revisions
-                .iter()
-                .filter(|revision| {
-                    revision.record.network_id == scope.0 && revision.record.member_did == scope.1
-                })
-                .collect::<Vec<_>>();
-            let Some(max_sequence) = scoped.iter().map(|row| row.record.sequence).max() else {
-                continue;
-            };
-            let maxima = scoped
-                .into_iter()
-                .filter(|row| row.record.sequence == max_sequence)
-                .collect::<Vec<_>>();
-            let [revision] = maxima.as_slice() else {
-                continue;
-            };
-            if revision.record.kind != WireRevisionKind::Revoked
-                || revision.record.request_id != verified.record.request_id
-            {
-                continue;
-            }
-            let Some([decision]) = decisions_by_request
-                .get(&verified.record.request_id)
-                .map(Vec::as_slice)
-            else {
-                continue;
-            };
-            if decision.record.decision != WireDecisionKind::Approved {
-                continue;
-            }
-            projection.revoked.push(RevokedEnrollment {
-                request_doc_id: verified.doc_id.clone(),
-                decision_doc_id: decision.doc_id.clone(),
-                revision_doc_id: revision.doc_id.clone(),
-                request: verified.record.clone(),
-                decision: decision.record.clone(),
-                revision: revision.record.clone(),
-            });
-        }
-        projection
-            .pending
-            .sort_by(|a, b| a.request.request_id.cmp(&b.request.request_id));
-        projection
-            .active
-            .sort_by(|a, b| a.request.request_id.cmp(&b.request.request_id));
-        let mut collision_scopes = BTreeSet::new();
-        for (index, active) in projection.active.iter().enumerate() {
-            for other in &projection.active[index + 1..] {
-                if active.request.candidate_peer == other.request.candidate_peer
-                    && (active.request.candidate_did != other.request.candidate_did
-                        || active.request.owner_node_did != other.request.owner_node_did)
-                {
-                    collision_scopes.insert((
-                        active.request.network_id.clone(),
-                        active.request.candidate_did.clone(),
-                    ));
-                    collision_scopes.insert((
-                        other.request.network_id.clone(),
-                        other.request.candidate_did.clone(),
-                    ));
-                }
-            }
-        }
-        for scope in collision_scopes {
-            add_scope_conflict(
-                &mut scoped_conflicts,
-                scope,
-                "current enrollment routes collide on one transport peer",
-            );
-        }
-        projection.active.retain(|active| {
-            !scoped_conflicts.contains_key(&(
-                active.request.network_id.clone(),
-                active.request.candidate_did.clone(),
-            ))
-        });
-        projection
-            .denied
-            .sort_by(|a, b| a.request.request_id.cmp(&b.request.request_id));
-        projection
-            .revoked
-            .sort_by(|a, b| a.request.request_id.cmp(&b.request.request_id));
-        projection.scoped_conflicts = finish_conflicts(scoped_conflicts);
-        projection.request_conflicts = finish_conflicts(request_conflicts);
-        projection.reused_challenge_requests = reused_challenge_requests;
-        Ok(projection)
+        project::project_decided(now, documents, &durable, &findings, &mut projection)?;
+        project::project_revoked(documents, &findings, &mut projection);
+        Ok(project::finish_projection(
+            projection,
+            findings,
+            reused_challenge_requests,
+        ))
     }
 
     async fn verify_request(
@@ -1955,6 +1735,7 @@ impl VerifiedRequest {
             server_peer: self.record.server_peer.clone(),
             candidate_did: self.record.candidate_did.clone(),
             candidate_peer: self.record.candidate_peer.clone(),
+            candidate_name: self.record.candidate_name.clone(),
             observed_candidate_peer: if terminal_witness {
                 self.record.candidate_peer.clone()
             } else {
@@ -2270,6 +2051,8 @@ pub(super) struct RequestRow {
     server_peer: String,
     candidate_did: String,
     candidate_peer: String,
+    #[serde(default)]
+    candidate_name: Option<String>,
     candidate_ticket: String,
     owner_node_did: String,
     profile: String,
@@ -2293,6 +2076,7 @@ impl RequestRow {
             server_peer: self.server_peer.clone(),
             candidate_did: self.candidate_did.clone(),
             candidate_peer: self.candidate_peer.clone(),
+            candidate_name: self.candidate_name.clone(),
             candidate_ticket: self.candidate_ticket.clone(),
             owner_node_did: self.owner_node_did.clone(),
             profile: self.profile.clone(),

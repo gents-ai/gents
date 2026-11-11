@@ -28,7 +28,6 @@ pub(crate) struct SubmittedRequest {
     pub(crate) request_doc_id: String,
     pub(crate) requester_did: Option<String>,
     pub(crate) input: Option<RequestInput>,
-    pub(crate) created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -400,110 +399,6 @@ pub(crate) async fn prepare_cli_goal_input(
     gents::goal::prepare_client_goal_input(access, &verifier, node_did, session_id, input).await
 }
 
-/// Exact retries use the same immutable submission key and converge to the
-/// already-committed pair; conflicting retries fail without mutating either
-/// document.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the request and its Goal are written together from these fields"
-)]
-pub(crate) async fn create_goal_backed_agent_request(
-    graphql: &GraphqlEndpoint,
-    node_did: &str,
-    content: &str,
-    session_id: &str,
-    agent_did: Option<&str>,
-    objective: &str,
-    token_budget: Option<i64>,
-    input: RequestInput,
-) -> Result<SubmittedRequest> {
-    use sha2::{Digest, Sha256};
-
-    let objective = require_non_empty("goal-objective", objective)?.trim();
-    anyhow::ensure!(
-        token_budget.is_none_or(|budget| budget > 0),
-        "goal-token-budget must be positive"
-    );
-    let digest = Sha256::digest(
-        format!("{node_did}\0{session_id}\0{objective}\0{token_budget:?}\0{content}").as_bytes(),
-    );
-    let request_id = format!(
-        "goal-submit-{}",
-        digest[..16]
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    );
-    let retry_key = format!(
-        "goal-submit:{}",
-        gents_protocol::goal::deterministic_goal_creation_key(node_did, session_id)
-    );
-    let prepared = prepare_agent_request_with_input(
-        graphql,
-        node_did,
-        content,
-        Some(session_id),
-        agent_did,
-        Some(request_id),
-        RequestSubmitOptions {
-            retry_key: Some(retry_key.clone()),
-            input: Some(input),
-            ..Default::default()
-        },
-    )
-    .await?;
-
-    let access = gents::ConfigAccess::Graphql(graphql.clone());
-    gents::goal::submit_goal_backed_request(
-        &access,
-        node_did,
-        session_id,
-        objective,
-        token_budget,
-        &prepared.create,
-    )
-    .await?;
-    committed_submitted_request(graphql, &prepared.create).await
-}
-
-#[allow(clippy::too_many_arguments)]
-#[cfg(unix)]
-pub(crate) async fn create_goal_backed_agent_request_local(
-    node: &std::sync::Arc<defra_node::Node>,
-    actor: identity::Did,
-    graphql: &GraphqlEndpoint,
-    node_did: &str,
-    objective: &str,
-    token_budget: Option<i64>,
-    session_id: &str,
-    agent_did: &str,
-    request_id: String,
-    mut options: RequestSubmitOptions,
-) -> Result<SubmittedRequest> {
-    options.retry_key = Some(format!("goal-request:{request_id}"));
-    let prepared = prepare_agent_request_with_input(
-        graphql,
-        node_did,
-        objective,
-        Some(session_id),
-        Some(agent_did),
-        Some(request_id),
-        options,
-    )
-    .await?;
-    gents::goal::submit_goal_backed_request_local(
-        node,
-        actor,
-        node_did,
-        session_id,
-        objective,
-        token_budget,
-        &prepared.create,
-    )
-    .await?;
-    committed_submitted_request(graphql, &prepared.create).await
-}
-
 pub(crate) async fn submit_prepared_agent_request_committed(
     graphql: &GraphqlEndpoint,
     prepared: &PreparedAgentRequest,
@@ -528,16 +423,6 @@ pub(crate) async fn submit_prepared_agent_request_committed(
     submitted_from_receipt(row)
 }
 
-async fn committed_submitted_request(
-    graphql: &GraphqlEndpoint,
-    create: &AgentRequestCreate,
-) -> Result<SubmittedRequest> {
-    let row = read_submitted_receipt(graphql, create)
-        .await?
-        .context("committed signed request receipt is missing")?;
-    submitted_from_receipt(row)
-}
-
 fn submitted_from_receipt(row: AgentRequestRow) -> Result<SubmittedRequest> {
     Ok(SubmittedRequest {
         request_doc_id: row
@@ -550,7 +435,6 @@ fn submitted_from_receipt(row: AgentRequestRow) -> Result<SubmittedRequest> {
         requester_did: row.requester_did,
         agent_did: row.agent_did,
         input: row.input,
-        created_at: row.created_at,
     })
 }
 
@@ -991,7 +875,7 @@ where
 
 pub(crate) fn request_diagnostic_hint(request_id: &str) -> String {
     format!(
-        "Next:\n  1. Run `gents request show {request_id}`\n  2. Run `gents response show {request_id}`\n  3. Inspect the runtime with `gents status`"
+        "Next:\n  1. Run `gents utils debug request show {request_id}`\n  2. Run `gents utils debug response show {request_id}`\n  3. Inspect the runtime with `gents status`"
     )
 }
 
@@ -1085,16 +969,17 @@ pub(crate) fn print_ndjson(value: &Value) -> Result<()> {
         .context("writing NDJSON record to stdout")
 }
 
-pub(crate) async fn capture_report<F>(command: F) -> Result<Value>
+pub(crate) async fn capture_report<F, E>(command: F) -> Result<Value, E>
 where
-    F: std::future::Future<Output = Result<()>>,
+    F: std::future::Future<Output = Result<(), E>>,
+    E: From<anyhow::Error>,
 {
     CAPTURED_REPORT
         .scope(std::cell::RefCell::new(None), async move {
             command.await?;
             CAPTURED_REPORT
                 .with(|report| report.borrow_mut().take())
-                .ok_or_else(|| anyhow::anyhow!("the command produced no report"))
+                .ok_or_else(|| anyhow::anyhow!("the command produced no report").into())
         })
         .await
 }

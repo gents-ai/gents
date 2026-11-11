@@ -28,7 +28,11 @@ pub(super) fn installs_kind(kind: &crate::pack::PackKind) -> bool {
     )
 }
 
-pub(super) struct ConfigPackDistribution(pub(super) crate::pack::resolve::ResolvedNamedPack);
+/// A resolved pack and the provenance its installation records.
+pub(super) struct ConfigPackDistribution(
+    pub(super) crate::pack::resolve::ResolvedNamedPack,
+    pub(super) crate::pack::PackSource,
+);
 
 impl ConfigPackDistribution {
     pub(super) fn manifest(&self) -> &crate::pack::PackManifest {
@@ -40,11 +44,7 @@ impl ConfigPackDistribution {
     }
 
     pub(super) fn source(&self) -> &'static str {
-        match self.0.from {
-            crate::pack::resolve::ResolvedFrom::Installed => "installed",
-            crate::pack::resolve::ResolvedFrom::Store => "store",
-            crate::pack::resolve::ResolvedFrom::Registry { .. } => "registry",
-        }
+        self.1.kind()
     }
 
     /// Pin the preview's resolution so applying it resolves the same pack
@@ -116,6 +116,7 @@ impl PackInstaller {
         self.validate(args)?;
         let coordinate = args.package.trim();
         if let Some(local) = crate::pack::local::classify(coordinate) {
+            let source = crate::pack::PackSource::of_local_name(&local);
             let home = self
                 .home
                 .as_deref()
@@ -170,6 +171,7 @@ impl PackInstaller {
                     archive,
                     from: crate::pack::resolve::ResolvedFrom::Store,
                 },
+                source,
             ));
         }
         let registry_url = crate::pack::registry::resolve_registry_url(None);
@@ -207,7 +209,8 @@ impl PackInstaller {
             },
         )
         .await?;
-        let distribution = ConfigPackDistribution(resolved);
+        let source = crate::pack::PackSource::of_resolution(&resolved);
+        let distribution = ConfigPackDistribution(resolved, source);
         anyhow::ensure!(
             operation == "get" || installs_kind(&distribution.manifest().metadata.kind),
             "pack {:?} is {:?}; the model-facing installer supports document and plugins-only packs",
@@ -266,6 +269,7 @@ impl PackInstaller {
                             plugin,
                             false,
                         )
+                        .map_err(anyhow::Error::from)
                     });
                 result
                     .err()

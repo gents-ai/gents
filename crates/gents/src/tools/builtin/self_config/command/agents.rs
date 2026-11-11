@@ -1,4 +1,7 @@
 use super::*;
+use gents_protocol::operations::agent::{
+    AgentCreateInput, AgentCreateOperation, AGENT_CLONE, AGENT_CREATE,
+};
 
 impl ConfigCommandTool {
     pub(super) async fn agent(&self, argv: &[String]) -> Result<String> {
@@ -75,10 +78,15 @@ impl ConfigCommandTool {
                         )
                         .await;
                 }
-                let mut params = agent_params("preview", Some(operation.clone()), &argv[2..])?;
-                self.resolve_agent_dids(operation, &mut params).await?;
+                let options = agent_options(operation, &argv[2..])?;
+                if let Some(creation) = AgentCreateOperation::for_verb(operation) {
+                    let input = self.agent_create_input(creation, options).await?;
+                    return agent_management::model_agent_create_preview(&self.core, &input).await;
+                }
+                let mut params = options.params("preview", Some(operation.clone()));
+                self.resolve_agent_dids(&mut params).await?;
                 self.ensure_agent_mutation(operation, params.agent_did.as_deref())?;
-                self.ensure_default_selection(&params)?;
+                self.ensure_default_selection(params.make_default)?;
                 self.ensure_agent_stays_enabled(operation, params.agent_did.as_deref())?;
                 agent_management::model_agent_preview(&self.core, &params).await
             }
@@ -108,10 +116,21 @@ impl ConfigCommandTool {
                 let identity = self.identity.as_deref().context(
                     "agent configuration requires its selected actor signer; reads remain available",
                 )?;
-                let mut params = agent_params(verb, None, &argv[1..])?;
-                self.resolve_agent_dids(verb, &mut params).await?;
+                let options = agent_options(verb, &argv[1..])?;
+                if let Some(creation) = AgentCreateOperation::for_verb(verb) {
+                    let input = self.agent_create_input(creation, options).await?;
+                    self.execution.enter_mutation();
+                    return match agent_management::model_agent_create(&self.core, identity, &input)
+                        .await
+                    {
+                        Ok(receipt) => agent_management::receipt_text(&receipt),
+                        Err(error) => Err(guidance::agent_create_failure(error, creation)),
+                    };
+                }
+                let mut params = options.params(verb, None);
+                self.resolve_agent_dids(&mut params).await?;
                 self.ensure_agent_mutation(verb, params.agent_did.as_deref())?;
-                self.ensure_default_selection(&params)?;
+                self.ensure_default_selection(params.make_default)?;
                 self.ensure_agent_stays_enabled(verb, params.agent_did.as_deref())?;
                 self.execution.enter_mutation();
                 agent_management::model_agent_mutate(&self.core, identity, &params).await
@@ -306,23 +325,43 @@ impl ConfigCommandTool {
         })
     }
 
-    async fn resolve_agent_dids(
-        &self,
-        operation: &str,
-        params: &mut ConfigureAgentParams,
-    ) -> Result<()> {
-        if matches!(operation, "create" | "clone") {
-            anyhow::ensure!(
-                params.agent_did.is_none(),
-                "agent {operation} provisions a fresh agent DID and returns it; remove options.id"
-            );
-        } else if let Some(id) = params.agent_did.take() {
+    async fn resolve_agent_dids(&self, params: &mut ConfigureAgentParams) -> Result<()> {
+        if let Some(id) = params.agent_did.take() {
             params.agent_did = Some(self.resolve_agent_did(&id).await?);
         }
         if let Some(source) = params.clone_from.take() {
             params.clone_from = Some(self.resolve_agent_did(&source).await?);
         }
         Ok(())
+    }
+
+    async fn agent_create_input(
+        &self,
+        operation: AgentCreateOperation,
+        options: AgentOptions,
+    ) -> Result<AgentCreateInput> {
+        let verb = operation.declaration().verb;
+        anyhow::ensure!(
+            options.id.is_none(),
+            "agent {verb} provisions a fresh agent DID and returns it; remove options.id"
+        );
+        let clone_from = match options.from.as_deref() {
+            Some(source) => Some(self.resolve_agent_did(source).await?),
+            None => None,
+        };
+        self.ensure_agent_mutation(verb, None)?;
+        self.ensure_default_selection(options.make_default)?;
+        Ok(AgentCreateInput {
+            operation,
+            clone_from: clone_from.filter(|_| operation == AgentCreateOperation::Clone),
+            display_name: options.display_name.owned_value().unwrap_or_default(),
+            description: options.description,
+            system_prompt: options.system_prompt,
+            profile_id: options.profile_id.owned_value().unwrap_or_default(),
+            preset: options.preset.owned_value(),
+            root: options.root,
+            make_default: options.make_default,
+        })
     }
 
     /// Core for the Agent whose configuration an operation touches. `category`
@@ -365,32 +404,68 @@ pub(super) fn default_agent_params(action: &str, agent_did: &str) -> ConfigureAg
     }
 }
 
+#[cfg(test)]
 pub(in crate::tools::builtin::self_config) fn agent_params(
     action: &str,
     operation: Option<String>,
     argv: &[String],
 ) -> Result<ConfigureAgentParams> {
-    let parsed = ParsedArgs::parse(argv)?;
-    let allowed = [
-        "id",
-        "from",
-        "display-name",
-        "description",
-        "system-prompt",
-        "root",
-        "preset",
-        "profile",
-        "clear",
-    ];
     let verb = operation.as_deref().unwrap_or(action);
-    let usage = match verb {
-        "create" => "agent create takes options.display-name, system-prompt, preset and profile; it allocates the ID and Context/Tools. Use agent update for an existing role",
-        "clone" => "agent clone takes options.from and display-name, with profile, optional system-prompt and root overrides; it inherits source tools and allocates a new ID",
-        "disable" => "agent disable takes options.id for the existing agent",
+    Ok(agent_options(verb, argv)?.params(action, operation))
+}
+
+struct AgentOptions {
+    id: Option<String>,
+    from: Option<String>,
+    display_name: StringUpdate,
+    description: StringUpdate,
+    system_prompt: StringUpdate,
+    root: StringUpdate,
+    preset: StringUpdate,
+    profile_id: StringUpdate,
+    make_default: bool,
+}
+
+impl AgentOptions {
+    fn params(self, action: &str, operation: Option<String>) -> ConfigureAgentParams {
+        ConfigureAgentParams {
+            identity_binding: None,
+            action: action.to_owned(),
+            operation,
+            display_name: self.display_name,
+            description: self.description,
+            system_prompt: self.system_prompt,
+            agent_did: self.id,
+            clone_from: self.from,
+            root: self.root,
+            preset: self.preset,
+            profile_id: self.profile_id,
+            make_default: self.make_default,
+            enable_lsp: None,
+            network_mode: None,
+        }
+    }
+}
+
+/// The agent verbs share one option vocabulary: what create and clone
+/// declare, `id` (disable's target, refused by name on create and clone) and
+/// `clear`.
+fn agent_options(verb: &str, argv: &[String]) -> Result<AgentOptions> {
+    let parsed = ParsedArgs::parse(argv)?;
+    let allowed = |option: &str| {
+        matches!(option, "id" | "clear")
+            || [AGENT_CREATE, AGENT_CLONE]
+                .iter()
+                .flat_map(|declaration| declaration.options)
+                .any(|declared| declared.name == option)
+    };
+    let usage = match (AgentCreateOperation::for_verb(verb), verb) {
+        (Some(operation), _) => operation.declaration().usage,
+        (None, "disable") => "agent disable takes options.id for the existing agent",
         _ => "agent options use hyphenated names; see the command help",
     };
     for option in parsed.options.keys() {
-        if !allowed.contains(&option.as_str()) {
+        if !allowed(option) {
             return Err(CommandGuidance {
                 message: format!("unknown agent option --{option}. {usage}; do not supply set fields to this command"),
                 next_call: json!({"argv":["agent",verb,"--help"]}),
@@ -433,20 +508,15 @@ pub(in crate::tools::builtin::self_config) fn agent_params(
             None => StringUpdate::Omitted,
         })
     };
-    Ok(ConfigureAgentParams {
-        identity_binding: None,
-        action: action.to_owned(),
-        operation,
+    Ok(AgentOptions {
         display_name: update("display-name", "display_name")?,
         description: update("description", "description")?,
         system_prompt: update("system-prompt", "system_prompt")?,
-        agent_did: parsed.one("id")?.map(ToOwned::to_owned),
-        clone_from: parsed.one("from")?.map(ToOwned::to_owned),
+        id: parsed.one("id")?.map(ToOwned::to_owned),
+        from: parsed.one("from")?.map(ToOwned::to_owned),
         root: update("root", "root")?,
         preset: update("preset", "preset")?,
         profile_id: update("profile", "profile_id")?,
         make_default: parsed.switches.contains("default"),
-        enable_lsp: None,
-        network_mode: None,
     })
 }

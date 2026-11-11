@@ -8,6 +8,7 @@ import {
   type Route as ShellRoute,
 } from "@gents/shell";
 
+import { flag } from "@/preferences";
 import { isAppLink, linkRoute, parseLink } from "./links";
 
 /* the desktop's routes: the kit's, and a UX plugin's own page. The kit's
@@ -15,21 +16,42 @@ import { isAppLink, linkRoute, parseLink } from "./links";
    extra route costs it nothing; only the path functions must know it. */
 export type Route =
   | ShellRoute
-  | { name: "plugin"; pluginId: string }
+  /* `path`: a place within the page, which the page reads off the route */
+  | { name: "plugin"; pluginId: string; path?: string }
   /* the sessions one session started, a level down the sessions list */
   | { name: "sessionsUnder"; session: string }
   /* the sessions archived out of the list */
   | { name: "sessionsArchived" }
   /* what runs on its own on the active node; `item` opens one automation */
-  | { name: "automations"; item?: string };
+  | { name: "automations"; item?: string }
+  /* the active node's packs; `item` opens one pack, or `local:<id>` a plugin
+     loaded from the home folder; `review` a pack previewed from a file or a
+     link, by its preview key; `doc` one document it would add, as
+     `<collection>:<id>` */
+  | { name: "packs"; item?: string; review?: string; doc?: string };
 
 export function pathFor(route: Route): string {
-  if (route.name === "plugin") return `/plugins/${encodeURIComponent(route.pluginId)}`;
+  if (route.name === "plugin") {
+    const page = `/plugins/${encodeURIComponent(route.pluginId)}`;
+    return route.path
+      ? `${page}/${route.path.split("/").map(encodeURIComponent).join("/")}`
+      : page;
+  }
   if (route.name === "sessionsArchived") return "/sessions/archived";
   if (route.name === "automations") {
     return route.item
       ? `/automations/${encodeURIComponent(route.item)}`
       : "/automations";
+  }
+  if (route.name === "packs") {
+    const page = route.review
+      ? `/packs/review/${encodeURIComponent(route.review)}`
+      : route.item
+        ? `/packs/${encodeURIComponent(route.item)}`
+        : "/packs";
+    return route.doc && page !== "/packs"
+      ? `${page}/${encodeURIComponent(route.doc)}`
+      : page;
   }
   if (route.name === "sessionsUnder") {
     return `/sessions/under/${encodeURIComponent(route.session)}`;
@@ -40,12 +62,27 @@ export function pathFor(route: Route): string {
 export function parseRoute(path: string): Route {
   const parts = path.replace(/^#\/?/, "").replace(/^\//, "").split("/").filter(Boolean);
   if (parts[0] === "plugins" && parts[1]) {
-    return { name: "plugin", pluginId: decodeURIComponent(parts[1]) };
+    const path = parts.slice(2).map(decodeURIComponent).join("/");
+    return {
+      name: "plugin",
+      pluginId: decodeURIComponent(parts[1]),
+      ...(path ? { path } : {}),
+    };
   }
   if (parts[0] === "automations") {
     return parts[1]
       ? { name: "automations", item: decodeURIComponent(parts[1]) }
       : { name: "automations" };
+  }
+  if (parts[0] === "packs") {
+    /* a pack's name is one encoded segment, so `review` can't be one */
+    const [page, doc] =
+      parts[1] === "review" && parts[2]
+        ? [{ review: decodeURIComponent(parts[2]) }, parts[3]]
+        : parts[1]
+          ? [{ item: decodeURIComponent(parts[1]) }, parts[2]]
+          : [{}, undefined];
+    return { name: "packs", ...page, ...(doc ? { doc: decodeURIComponent(doc) } : {}) };
   }
   if (parts[0] === "sessions" && parts[1] === "archived") {
     return { name: "sessionsArchived" };
@@ -120,11 +157,13 @@ export function navigate(route: Route) {
 }
 
 /** Follows a `gents:` link, from a message or from outside the app. A link
-    only goes somewhere: it never installs, joins or sends. False when the
-    link names nothing this app opens, or the person stayed where they were. */
+    only goes somewhere: it never installs, joins or sends. A pack link opens
+    that pack's page with what it would add, which installs only when the
+    person chooses Install there and again in its review. False when the link
+    names nothing this app opens, or the person stayed where they were. */
 export function openLink(href: string): boolean {
   const link = parseLink(href);
-  if (!link) {
+  if (!link || (link.kind === "pack" && !flag("packs"))) {
     console.warn("ignored a gents link this app doesn't open", href);
     return false;
   }

@@ -690,3 +690,26 @@ fn legacy_runtime_cannot_begin_an_unfenced_managed_handoff() {
     );
     assert!(execute::require_startup_fence(&capabilities).is_err());
 }
+
+#[test]
+fn a_running_helper_keeps_its_registration_from_duplicate_submissions() {
+    let dir = tempfile::tempdir().unwrap();
+    let running = files::lock(&dir.path().join("helper.lock")).unwrap();
+    let mut registered = false;
+    assert!(!register_unless_helper_runs(dir.path(), || {
+        registered = true;
+        Ok(())
+    })
+    .unwrap());
+    assert!(
+        !registered,
+        "re-registered beside the running helper's cleanup"
+    );
+    drop(running);
+    assert!(register_unless_helper_runs(dir.path(), || {
+        registered = true;
+        Ok(())
+    })
+    .unwrap());
+    assert!(registered);
+}

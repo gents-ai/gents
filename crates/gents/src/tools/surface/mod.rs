@@ -21,7 +21,8 @@ pub use build::resolve_effective_tool_root;
 pub use explain::{ToolSurfaceExplanation, ToolSurfaceWarning};
 pub use modes::{BashMode, FileToolMode, ToolCeiling};
 pub(crate) use output_budget::configured_output_budget;
-pub(crate) use policy::{configured_self_config_category_set, ToolNodeOperationSource};
+pub use policy::configured_self_config_category_set;
+pub(crate) use policy::ToolNodeOperationSource;
 pub use policy::{
     EndpointScope, RuntimeToolAvailability, ToolPolicyBash, ToolPolicySurface, ToolPolicyVersion,
     TOOL_POLICY_V1,
@@ -61,11 +62,13 @@ pub(crate) fn configured_plugin_refs(
 pub use root_admission::{
     admit_authored_root, canonicalize_tools_root, ensure_configured_root_published,
     ensure_root_published_for_node, load_workspace_root_policy, project_workspace_root_policy,
-    resolve_configured_tool_root, WorkspaceRootDocument, WorkspaceRootPolicy,
+    refuse_too_broad_root, resolve_configured_tool_root, TooBroadRoot, WorkspaceRootDocument,
+    WorkspaceRootPolicy,
 };
+pub use root_admission::{agent_tool_root_reader, ToolRootReader};
 pub(crate) use root_admission::{
     load_workspace_root_policy_in_txn, published_root_covering_in_txn, reader_grant_step,
-    resolve_admitted_tool_root, RootExecutionGuard,
+    resolve_admitted_tool_root, tools_root_reader_in_txn, RootExecutionGuard,
 };
 pub use root_publication::{
     delete_workspace_root, grant_workspace_root_reader, revoke_workspace_root_reader,

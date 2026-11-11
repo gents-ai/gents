@@ -76,13 +76,22 @@ pub(crate) async fn request_preview_in_txn<'a>(
     ) {
         return Ok(&request.content);
     }
-    let query = format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{
-        _docID request_id node_did agent_did session_id
-    }} }}"#,
-        crate::store::graphql::escape_graphql_string(parent_id)
-    );
-    let response = txn.execute_local_response(&query).await?;
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(
+            Selection::doc_id()
+                .field(fields::REQUEST_ID)
+                .field(fields::NODE_DID)
+                .field(fields::AGENT_DID)
+                .field(fields::SESSION_ID),
+        )
+        .filter(Filter::eq(fields::DOC_ID, parent_id))
+        .limit(2)
+        .render()
+    };
+    let response = txn.run_local_response(&query).await?;
     let parents = crate::store::graphql::rows::<gents_protocol::row::AgentRequestRow>(
         &response,
         "AgentRequest",

@@ -283,3 +283,112 @@ async fn live_read_observes_exact_request_lifecycle_and_every_crdt_record_withou
         .requests
         .is_empty());
 }
+
+#[tokio::test]
+async fn session_live_text_reads_the_running_turn_and_ends_with_its_lifecycle() {
+    use gents_protocol::output::rows::OutputSegmentRow;
+    use gents_protocol::output::{
+        OutputSegment, OutputSource, OutputWriter, SegmentRun, StreamDeclaration, StreamPayload,
+    };
+    use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+
+    let request = AgentRequestRow {
+        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+        doc_id: Some("physical".into()),
+        request_id: "logical".into(),
+        session_id: Some("session".into()),
+        node_did: Some("node".into()),
+        lifecycle_state: Some(RequestLifecycleState::Processing),
+        execution_generation: Some("generation".into()),
+        execution_lease_secs: Some(300),
+        execution_lease_expires_at: Some("2026-10-07T12:05:00Z".into()),
+        ..Default::default()
+    };
+    let session: gents_protocol::session::AgentSession =
+        serde_json::from_value(serde_json::json!({
+            "session_id": "session", "node_did": "node", "agent_did": "agent",
+            "created_at": "2026-10-07T12:00:00Z",
+        }))
+        .unwrap();
+    let observed = ClientStore::from_rows(ClientStoreRows {
+        requests: vec![request.clone()],
+        sessions: vec![session],
+        ..Default::default()
+    });
+    let segment = OutputSegmentRow {
+        doc_id: "segment-0".into(),
+        segment: OutputSegment {
+            node_did: "node".into(),
+            requester_did: None,
+            session_id: "session".into(),
+            request_doc_id: "physical".into(),
+            source: OutputSource::ProviderTurn {
+                scope: CaptureScope {
+                    kind: CaptureScopeKind::Inference,
+                    seq: 0,
+                },
+                turn_index: 0,
+                attempt: 0,
+            },
+            writer: OutputWriter::RequestExecution {
+                execution_generation: "generation".into(),
+            },
+            ordinal: Some(0),
+            runs: vec![SegmentRun {
+                stream: 0,
+                bytes: 5,
+                declaration: Some(StreamDeclaration {
+                    block_index: 0,
+                    part_index: 0,
+                    payload: StreamPayload::Text,
+                }),
+            }],
+            payload: "hello".into(),
+            close: None,
+            created_at: "2026-10-07T12:00:00Z".into(),
+        },
+    };
+    let mut segment_json = serde_json::to_value(&segment.segment).unwrap();
+    segment_json["_docID"] = serde_json::json!(segment.doc_id);
+    let mut body = serde_json::json!({"data": {
+        "AgentRequest": [request],
+        "AgentMessage": [],
+        "AgentOutputSegment": [segment_json],
+    }});
+    body["data"]["AgentRequest"][0]["_docID"] = serde_json::json!("physical");
+    let server = wiremock::MockServer::start().await;
+    let access = ConfigAccess::graphql(format!("{}/api/v0/graphql", server.uri()));
+    let mount = |body: Value| {
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/v0/graphql"))
+            .and(wiremock::matchers::body_string_contains(
+                "DesktopSessionTip",
+            ))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(body))
+            .expect(1)
+    };
+    mount(body.clone()).mount(&server).await;
+    let live = load_session_live_text_on(&access, &observed, "session", "node")
+        .await
+        .unwrap()
+        .expect("running turn has live text");
+    assert_eq!(live.content, "hello");
+    assert!(live.reasoning.is_empty());
+    server.verify().await;
+    server.reset().await;
+    body["data"]["AgentRequest"][0]["lifecycle_state"] = serde_json::json!("completed");
+    mount(body).mount(&server).await;
+    assert!(
+        load_session_live_text_on(&access, &observed, "session", "node")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    server.verify().await;
+    assert!(
+        load_session_live_text_on(&access, &observed, "session", "other")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}

@@ -673,6 +673,32 @@ Denies the desktop_default_agent_set command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-ended-access-dismiss`
+
+</td>
+<td>
+
+Enables the desktop_ended_access_dismiss command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-ended-access-dismiss`
+
+</td>
+<td>
+
+Denies the desktop_ended_access_dismiss command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-event-source-delete`
 
 </td>
@@ -1108,6 +1134,110 @@ Enables the desktop_job_control command without any pre-configured scope.
 <td>
 
 Denies the desktop_job_control command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-join-history-read`
+
+</td>
+<td>
+
+Enables the desktop_join_history_read command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-join-history-read`
+
+</td>
+<td>
+
+Denies the desktop_join_history_read command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-join-members-list`
+
+</td>
+<td>
+
+Enables the desktop_join_members_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-join-members-list`
+
+</td>
+<td>
+
+Denies the desktop_join_members_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-join-request-decide`
+
+</td>
+<td>
+
+Enables the desktop_join_request_decide command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-join-request-decide`
+
+</td>
+<td>
+
+Denies the desktop_join_request_decide command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-join-requests-list`
+
+</td>
+<td>
+
+Enables the desktop_join_requests_list command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-join-requests-list`
+
+</td>
+<td>
+
+Denies the desktop_join_requests_list command without any pre-configured scope.
 
 </td>
 </tr>
@@ -3850,7 +3980,7 @@ Allow, change and remove plugin folders, and answer a plugin question
 </td>
 <td>
 
-Authenticated peer enrollment, removal and rename
+Authenticated peer enrollment, removal and rename, and ended access
 
 </td>
 </tr>
@@ -3889,7 +4019,7 @@ Interrupt request execution
 </td>
 <td>
 
-Local runtime provisioning and managed server lifecycle
+Local runtime provisioning, managed server lifecycle and its join requests
 
 </td>
 </tr>

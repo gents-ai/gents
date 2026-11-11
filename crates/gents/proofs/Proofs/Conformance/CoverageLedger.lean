@@ -239,15 +239,11 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.operatorUi]
     , deferred := []
     }
-  , { feature := "codex-shim"
-    , required := [Surface.api, Surface.runtimeInternal]
-    , deferred := []
-    }
   , { feature := "durable-goals"
     , required := [Surface.agentFacing, Surface.runtimeInternal, Surface.operatorCli]
     , deferred :=
         [ (Surface.operatorUi, "Bind goal projection to emitted cases; current card tests check rendering, not the continuation decision.")
-        , (Surface.api, "Bind goal protocol operations to emitted decisions; current shim round-trip tests check persistence only.")
+        , (Surface.api, "Bind goal protocol operations to emitted decisions.")
         ]
     }
   , { feature := "command-policy"
@@ -793,6 +789,26 @@ def caseCoverage : List CoverageEntry :=
       "pack::installation::hosted::tests::hosted_home_publication_conforms_to_lean"
       "Binds actual home record write and failure to modeled success; native commit and cancellation ordering are exercised by the transaction owner.")
       "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "pack_document_ownership_cases"
+      "PackDocumentOwnershipCases"
+      "pack::provenance::ownership_tests::document_ownership_matches_executable_model")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "pack_source_selection_cases"
+      "PackSourceSelectionCases"
+      "pack::installation::tests::install_source_selection_matches_lean")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "pack_install_variable_cases"
+      "PackInstallVariableCases"
+      "pack::interpolate::install_variable_conformance::variable_precedence_matches_the_executable_model")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "pack_install_upgrade_cases"
+      "PackInstallUpgradeCases"
+      "pack::interpolate::install_variable_conformance::upgrade_variable_precedence_matches_the_executable_model")
+      "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "agent_steer_disposition_cases"
       "AgentSteerDispositionCases"
@@ -893,6 +909,11 @@ def caseCoverage : List CoverageEntry :=
       "SessionTargetAuthorityCases"
       "session_message::agent_tools_tests::session_target_authority_matches_lean_owner")
       "request-lifecycle" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "causal_hop_contract"
+      "SessionListEntryCases"
+      "session_message::agent_tools_tests::session_list_entries_match_lean_owner")
+      "request-lifecycle" [Surface.agentFacing]
   , tagged (followUpCoverage
       "title_request_admission_cases"
       "TitleRequestAdmissionCases"
@@ -937,7 +958,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "pack_eval_subject_cases"
       "PackEvalSubjectCases"
-      "eval::runner::subject_binding::tests::selected_subject_resolution_matches_lean")
+      "runner::subject_binding::tests::selected_subject_resolution_matches_lean")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "pack_identity_cases"
@@ -1045,6 +1066,11 @@ def caseCoverage : List CoverageEntry :=
       "SelfConfigCases"
       "conformance::generated_self_config_cases_fence_patch_merge"
       "Covers production patch admissibility and accepted merges, replays every Tools row through the always-on operator-grant guard (guard_tools_keep_grants) and every Context and Agent row, clone rows included, through reselection_keeps_grants, and replays guarded rows through the production Tools/Agent no-lockout guards, the Backend auth fence and the Profile account choice fence. Reference validation and unchanged stored state after rejection require the shared configuration transaction owner.")
+      "self-config" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "self_config_scope_cases"
+      "SelfConfigScopeCases"
+      "tools::builtin::self_config::command::grants::scope_tests::yolo_group_is_the_engineer_preset")
       "self-config" [Surface.agentFacing]
   , tagged (consumerCoverage
       "agent_decision_cases"
@@ -1538,6 +1564,11 @@ def caseCoverage : List CoverageEntry :=
       "pack_placement_reader_cases"
       "PackPlacementReaderCases"
       "pack::installation::tests::pack_install_applies_exactly_the_declared_placement_readers")
+      "identity-permission" [Surface.runtimeInternal, Surface.api]
+  , tagged (consumerCoverage
+      "agent_target_access_cases"
+      "AgentTargetAccessCases"
+      "store::config_client::desired_state::agent_target_access::tests::configured_agent_targets_grant_exactly_session_writer")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
       "native_route_cases"
@@ -2080,6 +2111,16 @@ def caseCoverage : List CoverageEntry :=
       "gents_desktop_bridge::commands::goal::tests::generated_session_goal_views_name_their_cause")
       "durable-goals" [Surface.operatorUi]
   , tagged (consumerCoverage
+      "goal_session_observation_cases"
+      "GoalSessionObservationCases"
+      "apps/gents-desktop/tests/lean-conformance/session-goal-view.test.ts::session Goal view shows each modeled Goal state as its view and offers only its next action")
+      "durable-goals" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "goal_session_fold_cases"
+      "GoalSessionFoldCases"
+      "apps/gents-desktop/tests/lean-conformance/session-goal-view.test.ts::session Goal view shows and offers what the modeled fold of reads does")
+      "durable-goals" [Surface.operatorUi]
+  , tagged (consumerCoverage
       "plugin_approval_cases"
       "PluginApprovalCases"
       "plugin::approval::contract_tests::generated_approval_traces_drive_native_queue_and_grants")
@@ -2219,53 +2260,6 @@ def caseCoverage : List CoverageEntry :=
       "InterruptDispositionCases"
       "hook::tests::generated_interrupt_dispositions_drive_in_flight_interrupt")
       "background-tools" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "codex_shim_projection_cases"
-      "CodexShimProjectionCases"
-      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping"
-      "Exercises the canonical persisted-attempt projector, followed by test-local phase/status mapping. Drive the gents-cli Codex shim mapping and local-interrupt override before claiming end-to-end shim projection coverage.")
-      "codex-shim" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "codex_shim_reasoning_projection_cases"
-      "CodexShimReasoningProjectionCases"
-      "commands::codex_shim::turn_projection::tests::generated_reasoning_projection_cases_drive_turn_projection_notifications")
-      "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "codex_shim_thread_status_cases"
-      "CodexShimThreadStatusCases"
-      "commands::codex_shim::thread_projection::conformance::generated_thread_status_cases_drive_thread_projection")
-      "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "codex_shim_agent_selection_cases"
-      "CodexShimAgentSelectionCases"
-      "commands::codex_shim::thread_projection::conformance::generated_agent_selection_cases_drive_scoped_model_binding")
-      "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "codex_shim_tool_metadata_cases"
-      "CodexShimToolMetadataCases"
-      "commands::codex_shim::turn_projection::tests::generated_tool_metadata_cases_drive_the_tool_item_owner"
-      "Generated cases exercise the shipping tool-item owner for diagnostic priority and duration. Generated event-timestamp expectations still need binding to the notification sender; separate sender tests cover persisted-time precedence and clock fallback, not these generated inputs.")
-      "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "codex_shim_context_usage_cases"
-      "CodexShimContextUsageCases"
-      "The conformance suite's copied mappings and fixture-field assertions do not exercise the gents-cli Codex shim owner. Route these generated inputs through its production projection before claiming adapter coverage.")
-      "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "codex_shim_compaction_projection_cases"
-      "CodexShimCompactionProjectionCases"
-      "The conformance suite's copied mappings and fixture-field assertions do not exercise the gents-cli Codex shim owner. Route these generated inputs through its production projection before claiming adapter coverage.")
-      "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "codex_shim_turn_lifecycle_cases"
-      "CodexShimTurnLifecycleCases"
-      "The conformance suite's copied mappings and fixture-field assertions do not exercise the gents-cli Codex shim owner. Route these generated inputs through its production projection before claiming adapter coverage.")
-      "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "codex_shim_binding_cases"
-      "CodexShimBindingCases"
-      "conformance::generated_codex_shim_binding_cases_pin_runnable_gated_binding")
-      "codex-shim" [Surface.api, Surface.runtimeInternal]
   , tagged (followUpCoverage
       "transcript_cases"
       "TranscriptConformanceCases"

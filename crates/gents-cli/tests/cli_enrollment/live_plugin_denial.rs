@@ -217,7 +217,7 @@ async fn live_glm_plugin_denial_rolls_back_data_and_terminalizes_tool() -> Resul
     wait_for_port(port, &mut server)?;
     server.capturing(async {
         wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
-        run_cli_json_with_env(&home, &["pack", "install", pack.to_str().context("pack path UTF-8")?, "--home", home_arg, "--graphql", &graphql], &owner_env)?;
+        run_cli_json_with_env(&home, &["config", "pack", "install", pack.to_str().context("pack path UTF-8")?, "--home", home_arg, "--graphql", &graphql], &owner_env)?;
         let installed = gents::plugin::store::read_record(&home, "fixture", "job_fixture")?;
         let grant = installed.data_grant().context("installed plugin data grant missing")?;
         let writes: Vec<gents_protocol::job::DataWrite> = serde_json::from_value(args["args"]["plan"][0]["output"]["writes"].clone())?;
@@ -230,8 +230,8 @@ async fn live_glm_plugin_denial_rolls_back_data_and_terminalizes_tool() -> Resul
         let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}")).await?;
         let pending = core.request_status_enrollment_with_label(&status, Some("plugin denial")).await?;
         wait_for_runtime_enrollment_request(&graphql, &pending.request_id).await?;
-        run_cli_json_with_env(&home, &["p2p", "enrollment", "grant", &pending.request_id, "--home", home_arg], &owner_env)?;
-        run_cli_json_with_env(&home, &["p2p", "enrollment", "approve", &pending.request_id, "--home", home_arg], &owner_env)?;
+        run_cli_json_with_env(&home, &["runtime", "p2p", "enrollment", "grant", &pending.request_id, "--home", home_arg], &owner_env)?;
+        run_cli_json_with_env(&home, &["runtime", "p2p", "enrollment", "approve", &pending.request_id, "--home", home_arg], &owner_env)?;
         wait_for_chat_ready_enrollment(&core, &node_did).await?;
         wait_for_client_node_readiness(&core, &node_did).await?;
         let snapshot = core.store().snapshot();

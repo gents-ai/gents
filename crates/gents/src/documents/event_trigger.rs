@@ -16,20 +16,29 @@ pub(crate) struct TriggerRuntimeUpdate {
     pub(crate) fire_count_delta: Option<i64>,
 }
 
-fn render_trigger_runtime_mutation(
-    escaped_owner: &str,
-    escaped_trigger_id: &str,
-    entries: &[String],
-) -> String {
-    let input_literal = format!("{{ {} }}", entries.join(", "));
-    format!(
-        r#"mutation {{
-            update_Trigger(
-                filter: {{ node_did: {{ _eq: "{escaped_owner}" }}, trigger_id: {{ _eq: "{escaped_trigger_id}" }} }},
-                input: {input_literal}
-            ) {{ _docID }}
-        }}"#
-    )
+fn trigger_runtime_input(
+    updates: &TriggerRuntimeUpdate,
+) -> gents_protocol::document_query::Input<gents_protocol::document_query::fields::trigger::Doc> {
+    use gents_protocol::document_query::{fields::trigger as fields, Input};
+    let mut input = Input::new();
+    if let Some(value) = &updates.next_run_at {
+        input = input.set(fields::NEXT_RUN_AT, value);
+    }
+    if let Some(value) = &updates.last_attempt_at {
+        input = input.set(fields::LAST_ATTEMPT_AT, value);
+    }
+    if let Some(value) = &updates.last_fired_source_doc_id {
+        input = input.set(fields::LAST_FIRED_SOURCE_DOC_ID, value);
+    }
+    if let Some(value) = &updates.last_status {
+        input = input.set(fields::LAST_STATUS, value);
+    }
+    if let Some(value) = &updates.last_error {
+        input = input.set(fields::LAST_ERROR, value);
+    } else if updates.last_status.is_some() {
+        input = input.set_null(fields::LAST_ERROR);
+    }
+    input
 }
 
 pub(crate) async fn load_trigger_next_run_at_batch(
@@ -177,7 +186,9 @@ pub(crate) async fn update_trigger_runtime_fields(
     trigger_id: &str,
     updates: TriggerRuntimeUpdate,
 ) -> Result<()> {
-    let escaped_owner = escape_graphql_string(node_did);
+    use gents_protocol::document_query::{
+        fields::trigger as fields, Filter, Query, Selection, Update,
+    };
     anyhow::ensure!(
         !node_did.is_empty(),
         "trigger observation owner is required"
@@ -192,38 +203,18 @@ pub(crate) async fn update_trigger_runtime_fields(
         return Ok(());
     }
 
-    // Build the input literal with only the requested fields so apply-owned
+    // Build the input with only the requested fields so apply-owned
     // fields are never overwritten.
-    let mut entries: Vec<String> = Vec::new();
-    if let Some(value) = &updates.next_run_at {
-        entries.push(format!("next_run_at: \"{}\"", escape_graphql_string(value)));
-    }
-    if let Some(v) = updates.last_attempt_at.as_ref() {
-        entries.push(format!("last_attempt_at: \"{}\"", escape_graphql_string(v)));
-    }
-    if let Some(v) = updates.last_fired_source_doc_id.as_ref() {
-        entries.push(format!(
-            "last_fired_source_doc_id: \"{}\"",
-            escape_graphql_string(v)
-        ));
-    }
-    if let Some(v) = updates.last_status.as_ref() {
-        entries.push(format!("last_status: \"{}\"", escape_graphql_string(v)));
-    }
-    if let Some(v) = updates.last_error.as_ref() {
-        entries.push(format!("last_error: \"{}\"", escape_graphql_string(v)));
-    }
-    if updates.last_error.is_none() && updates.last_status.is_some() {
-        entries.push("last_error: null".into());
-    }
-    let escaped_trigger_id = escape_graphql_string(trigger_id);
     let Some(fire_count_delta) = updates.fire_count_delta else {
-        let mutation =
-            render_trigger_runtime_mutation(&escaped_owner, &escaped_trigger_id, &entries);
-        crate::store::config_client::ConfigAccess::write_local(
+        let rendered = Update::matching(
+            Filter::eq(fields::NODE_DID, node_did).and(Filter::eq(fields::TRIGGER_ID, trigger_id)),
+            trigger_runtime_input(&updates),
+        )
+        .render();
+        crate::store::config_client::ConfigAccess::write_local_rendered(
             node,
             "document.update_trigger_runtime",
-            &mutation,
+            &rendered,
         )
         .await?;
         return Ok(());
@@ -232,24 +223,22 @@ pub(crate) async fn update_trigger_runtime_fields(
     // Read and write in one transaction. Conflict retries rerun this whole
     // read-modify-write against a fresh snapshot, so concurrent committed
     // deltas cannot overwrite one another.
+    let input = trigger_runtime_input(&updates);
     crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "document.update_trigger_runtime",
         |txn| {
-            let escaped_owner = escaped_owner.clone();
-            let escaped_trigger_id = escaped_trigger_id.clone();
-            let mut entries = entries.clone();
+            let input = input.clone();
             Box::pin(async move {
-                let query = format!(
-                    r#"{{
-                        Trigger(
-                            filter: {{ node_did: {{ _eq: "{escaped_owner}" }}, trigger_id: {{ _eq: "{escaped_trigger_id}" }} }},
-                            limit: 2
-                        ) {{ fire_count }}
-                    }}"#
-                );
-                let response = txn.execute(&query).await?;
+                let query = Query::select(Selection::new().field(fields::FIRE_COUNT))
+                    .filter(
+                        Filter::eq(fields::NODE_DID, node_did)
+                            .and(Filter::eq(fields::TRIGGER_ID, trigger_id)),
+                    )
+                    .limit(2)
+                    .render();
+                let response = txn.run(&query).await?;
                 let rows = response
                     .get("data")
                     .and_then(|data| data.get("Trigger"))
@@ -268,16 +257,17 @@ pub(crate) async fn update_trigger_runtime_fields(
                     .get("fire_count")
                     .and_then(serde_json::Value::as_i64)
                     .unwrap_or(0);
-                entries.push(format!(
-                    "fire_count: {}",
-                    current_fire_count.saturating_add(fire_count_delta)
-                ));
-                let mutation = render_trigger_runtime_mutation(
-                    &escaped_owner,
-                    &escaped_trigger_id,
-                    &entries,
+                let input = input.set(
+                    fields::FIRE_COUNT,
+                    current_fire_count.saturating_add(fire_count_delta),
                 );
-                txn.execute(&mutation).await?;
+                let mutation = Update::matching(
+                    Filter::eq(fields::NODE_DID, node_did)
+                        .and(Filter::eq(fields::TRIGGER_ID, trigger_id)),
+                    input,
+                )
+                .render();
+                txn.run(&mutation).await?;
                 Ok(())
             })
         },

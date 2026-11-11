@@ -38,6 +38,9 @@ pub struct SessionRequestCause {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SessionLineage {
     pub started_by: Option<SessionLink>,
+    /// The DID whose signature verified the creation receipt that names
+    /// `started_by`: the starting Agent for an `agent_new` or plugin-job cause.
+    pub started_by_signer: Option<String>,
     pub started: Vec<SessionLink>,
     pub sent: Vec<SessionLink>,
     pub received: Vec<SessionLink>,
@@ -103,6 +106,11 @@ fn decode_indexed_session(row: &Value) -> Result<gents_protocol::session::Sessio
 /// immutable index columns, never the mutable provenance, select verification,
 /// and an unindexed row has no starter.
 pub fn recorded_starter(row: &Value) -> Option<SessionLink> {
+    signed_recorded_starter(row).map(|(link, _)| link)
+}
+
+/// [`recorded_starter`] and the DID whose signature verified its receipt.
+fn signed_recorded_starter(row: &Value) -> Option<(SessionLink, String)> {
     let index = |field: &str| row.get(field).and_then(Value::as_str);
     let (Some(_), Some(_)) = (index("started_by_node_did"), index("started_by_session_id")) else {
         return None;
@@ -111,6 +119,12 @@ pub fn recorded_starter(row: &Value) -> Option<SessionLink> {
     let provenance = owner.session.provenance.as_ref()?;
     let receipt = provenance.creation_receipt.as_ref()?;
     let verified = verified_creation_receipt(&owner.session, &owner.doc_id, receipt.cause)?;
+    let signer = creation_receipt_signer(
+        verified.cause,
+        owner.session.requester_did.as_deref(),
+        &owner.session.agent_did,
+    )?
+    .to_owned();
     let starter = verified.starter.as_ref()?;
     if provenance.started_by.as_ref() != Some(&starter.source)
         || provenance.parent_request_doc_id.as_deref()
@@ -124,16 +138,32 @@ pub fn recorded_starter(row: &Value) -> Option<SessionLink> {
     {
         return None;
     }
-    Some(SessionLink {
-        scope: SessionScope::from(&starter.source),
-        cause_request_doc_id: starter.parent_request_doc_id.clone(),
-    })
+    Some((
+        SessionLink {
+            scope: SessionScope::from(&starter.source),
+            cause_request_doc_id: starter.parent_request_doc_id.clone(),
+        },
+        signer,
+    ))
 }
 
 pub async fn verified_recorded_starter<R>(
     access: &R,
     scope: &SessionScope,
 ) -> Result<Option<SessionLink>>
+where
+    R: ConfigRead + ?Sized,
+{
+    Ok(signed_verified_starter(access, scope)
+        .await?
+        .map(|(link, _)| link))
+}
+
+/// [`verified_recorded_starter`] and the DID whose signature verified its receipt.
+async fn signed_verified_starter<R>(
+    access: &R,
+    scope: &SessionScope,
+) -> Result<Option<(SessionLink, String)>>
 where
     R: ConfigRead + ?Sized,
 {
@@ -152,7 +182,7 @@ where
     Ok(rows.first().and_then(|row| {
         let owner = decode_indexed_session(row).ok()?;
         (SessionScope::from(&owner.session) == *scope)
-            .then(|| recorded_starter(row))
+            .then(|| signed_recorded_starter(row))
             .flatten()
     }))
 }
@@ -572,7 +602,7 @@ pub async fn lineage(access: &ConfigAccess, scope: &SessionScope) -> Result<Sess
         &scope.session_id,
         scope.requester_did.as_deref(),
     );
-    let started_by = started_by(access, scope).await?;
+    let (started_by, started_by_signer) = signed_verified_starter(access, scope).await?.unzip();
 
     let own_requests = collection(
         access,
@@ -665,6 +695,7 @@ pub async fn lineage(access: &ConfigAccess, scope: &SessionScope) -> Result<Sess
     if own_doc_ids.is_empty() {
         return Ok(SessionLineage {
             started_by,
+            started_by_signer,
             started,
             received,
             request_causes,
@@ -701,6 +732,7 @@ pub async fn lineage(access: &ConfigAccess, scope: &SessionScope) -> Result<Sess
     }
     Ok(SessionLineage {
         started_by,
+        started_by_signer,
         started,
         sent,
         received,
@@ -726,13 +758,18 @@ pub(crate) async fn verified_starter_in_txn(
     ) else {
         return Ok(None);
     };
-    let response = txn
-        .execute(&format!(
-            "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
-            escape_graphql_string(opening),
+    let response = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        let rendered = Query::select(Selection::owned(
             gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ))
-        .await?;
+        .filter(Filter::eq(fields::DOC_ID, opening))
+        .limit(2)
+        .render();
+        txn.run(&rendered).await?
+    };
     let Some([row]) = response["data"]["AgentRequest"]
         .as_array()
         .map(Vec::as_slice)
@@ -785,13 +822,18 @@ pub(crate) async fn issue_creation_receipt_in_txn(
     let Some(opening) = opening else {
         return Ok(None);
     };
-    let response = txn
-        .execute(&format!(
-            "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
-            escape_graphql_string(opening),
+    let response = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        let rendered = Query::select(Selection::owned(
             gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
         ))
-        .await?;
+        .filter(Filter::eq(fields::DOC_ID, opening))
+        .limit(2)
+        .render();
+        txn.run(&rendered).await?
+    };
     let Some(rows) = response["data"]["AgentRequest"].as_array() else {
         return Ok(None);
     };

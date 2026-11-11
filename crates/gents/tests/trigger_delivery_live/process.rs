@@ -221,7 +221,7 @@ fn retained_keys(state: &Value) -> Result<BTreeMap<String, String>> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "real inference/process crash: GENTS_TRIGGER_DELIVERY_LIVE=1 and both delivery endpoints"]
+#[ignore = "real inference/process crash: GENTS_TRIGGER_DELIVERY_LIVE=1; GENTS_DELIVERY_ENDPOINT_1/2 and GENTS_DELIVERY_MODEL_1/2"]
 async fn real_process_crashes_recover_disabled_and_offline_arrivals_exactly_once() -> Result<()> {
     ensure!(
         std::env::var("GENTS_TRIGGER_DELIVERY_LIVE").as_deref() == Ok("1"),
@@ -294,19 +294,16 @@ async fn delivery_crash_child() -> Result<()> {
         PathBuf::from(std::env::var_os(CHILD_ARTIFACTS).context("child artifact path")?);
     let home_path = artifacts.join("home");
     let home = if phase == "seed" {
-        gents::eval::runner::embedded::EmbeddedHome::create_retained(&home_path).await?
+        gents::runtime::embedded::EmbeddedHome::create_retained(&home_path).await?
     } else {
-        gents::eval::runner::embedded::EmbeddedHome::open_retained(&home_path).await?
+        gents::runtime::embedded::EmbeddedHome::open_retained(&home_path).await?
     };
     let db = support::test_db_from_home(home);
     let owner = db.node_identity.did().to_owned();
     // Later phases reopen the retained home and act as its retained User.
     let access = if phase == "seed" {
-        let endpoints = [
-            std::env::var("GENTS_DELIVERY_ENDPOINT_1")?,
-            std::env::var("GENTS_DELIVERY_ENDPOINT_2")?,
-        ];
-        let (fixture, _) = configure(&db, &endpoints).await?;
+        let lanes = delivery_lanes()?;
+        let (fixture, _) = configure(&db, &lanes).await?;
         configure_worker(&fixture.access, &owner, false).await?;
         apply(&fixture.access, &owner, vec![(Collection::Trigger, json!({
             "trigger_id":"delivery-inbox", "task_id":"delivery-inbox", "enabled":false,

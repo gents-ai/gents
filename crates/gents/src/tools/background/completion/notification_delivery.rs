@@ -202,11 +202,14 @@ fn published_notification_budget(
 }
 
 async fn load_tool_call_id(access: &crate::ConfigAccess, tool_call_doc_id: &str) -> Result<String> {
-    let doc_id = escape_graphql_string(tool_call_doc_id);
-    let query = format!(
-        r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 2) {{ _docID tool_call_id }} }}"#
-    );
-    let response = access.execute(&query).await?;
+    use gents_protocol::document_query::{
+        fields::agent_tool_call as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(Selection::doc_id().field(fields::TOOL_CALL_ID))
+        .filter(Filter::eq(fields::DOC_ID, tool_call_doc_id))
+        .limit(2)
+        .render();
+    let response = access.read(&query).await?;
     let rows: Vec<serde_json::Value> =
         serde_json::from_value(response["data"]["AgentToolCall"].clone())?;
     anyhow::ensure!(
@@ -270,27 +273,22 @@ async fn mark_background_tool_notification_delivered(
     parent_request_id: &str,
     tool_call_doc_id: &str,
 ) -> Result<()> {
-    let node_did = escape_graphql_string(node_did);
-    let parent_request_id = escape_graphql_string(parent_request_id);
-    let tool_call_doc_id = escape_graphql_string(tool_call_doc_id);
-    let delivered_at = escape_graphql_string(&Utc::now().to_rfc3339());
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentToolCall(
-                filter: {{
-                    node_did: {{ _eq: "{node_did}" }},
-                    request_id: {{ _eq: "{parent_request_id}" }},
-                    _docID: {{ _eq: "{tool_call_doc_id}" }},
-                    completion_notification_delivered_at: {{ _eq: null }}
-                }},
-                input: {{
-                    completion_notification_delivered_at: "{delivered_at}"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
+    use gents_protocol::document_query::{
+        fields::agent_tool_call as fields, Filter, Input, Update,
+    };
+    let delivered_at = Utc::now().to_rfc3339();
+    let mutation = Update::matching(
+        Filter::eq(fields::NODE_DID, node_did)
+            .and(Filter::eq(fields::REQUEST_ID, parent_request_id))
+            .and(Filter::eq(fields::DOC_ID, tool_call_doc_id))
+            .and(Filter::is_null(
+                fields::COMPLETION_NOTIFICATION_DELIVERED_AT,
+            )),
+        Input::new().set(fields::COMPLETION_NOTIFICATION_DELIVERED_AT, &delivered_at),
+    )
+    .render();
     access
-        .write("mark_background_tool_notification_delivered", &mutation)
+        .write_rendered("mark_background_tool_notification_delivered", &mutation)
         .await?;
     Ok(())
 }
@@ -299,16 +297,18 @@ async fn mark_background_tool_completion_side_effects_done(
     access: &crate::ConfigAccess,
     tool_call_doc_id: &str,
 ) -> Result<()> {
-    let tool_call_doc_id = escape_graphql_string(tool_call_doc_id);
-    let query = format!(
-        r#"{{
-            AgentToolCall(
-                filter: {{ _docID: {{ _eq: "{tool_call_doc_id}" }} }},
-                limit: 1
-            ) {{ _docID status lifecycle_state }}
-        }}"#
-    );
-    let response = access.execute(&query).await?;
+    use gents_protocol::document_query::{
+        fields::agent_tool_call as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::doc_id()
+            .field(fields::STATUS)
+            .field(fields::LIFECYCLE_STATE),
+    )
+    .filter(Filter::eq(fields::DOC_ID, tool_call_doc_id))
+    .limit(1)
+    .render();
+    let response = access.read(&query).await?;
     let row = response
         .get("data")
         .and_then(|data| data.get("AgentToolCall"))

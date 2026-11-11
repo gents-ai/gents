@@ -60,6 +60,7 @@ export function createBridgeHttpAdapter(
     provisionAgentIdentity: unsupported("provisionAgentIdentity"),
     removePeer: unsupported("removePeer"),
     renamePeer: unsupported("renamePeer"),
+    dismissEndedAccess: unsupported("dismissEndedAccess"),
     listWorkspace: unsupported("listWorkspace"),
     fetchRequestTimeline: unsupported("fetchRequestTimeline"),
     fetchSessionGoal: unsupported("fetchSessionGoal"),
@@ -94,9 +95,8 @@ export function createBridgeHttpAdapter(
     searchPacks: (query, page) =>
       client.postJson("/desktop/packs/search", { query, page }),
     packInfo: (pack) => client.postJson("/desktop/packs/info", { package: pack }),
-    installPack: async (request) => {
-      await client.postJson("/desktop/packs/install", request, 300_000);
-    },
+    installPack: (request) =>
+      client.postJson("/desktop/packs/install", request, 300_000),
     updatePack: unsupported("updatePack"),
     removePack: unsupported("removePack"),
     bindPackPlugin: unsupported("bindPackPlugin"),

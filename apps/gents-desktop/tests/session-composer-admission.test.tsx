@@ -24,6 +24,7 @@ import { deployment } from "./config-panel-wiring/fixtures";
 import { MemoryNavProvider } from "@gents/shell";
 import { writeSession } from "../src/hooks/sessionStore";
 import { composerText, typeInComposer, typeText } from "./composer-field";
+import { goalControl, observedGoal } from "./goal-state-fixture";
 
 const navigate = vi.hoisted(() => vi.fn());
 const markdownRender = vi.hoisted(() => vi.fn());
@@ -581,7 +582,7 @@ describe("SessionScreen automated inputs", () => {
           },
           {
             kind: "automatedInput",
-            origin: { kind: "backgroundCompletion" },
+            origin: { kind: "backgroundCompletion", notification: true },
             content: "<agent-notification>done</agent-notification>",
             ...durable("background", 5),
           },
@@ -727,19 +728,19 @@ describe("SessionScreen automated inputs", () => {
           },
           {
             kind: "automatedInput",
-            origin: { kind: "backgroundCompletion" },
+            origin: { kind: "backgroundCompletion", notification: true },
             content: completion("call-test", "completed"),
             ...durable("first", 2),
           },
           {
             kind: "automatedInput",
-            origin: { kind: "backgroundCompletion" },
+            origin: { kind: "backgroundCompletion", notification: true },
             content: completion("call-worker", "completed"),
             ...durable("worker", 3),
           },
           {
             kind: "automatedInput",
-            origin: { kind: "backgroundCompletion" },
+            origin: { kind: "backgroundCompletion", notification: true },
             content: completion("call-elsewhere", "failed"),
             ...durable("second", 4),
           },
@@ -787,7 +788,7 @@ describe("SessionScreen automated inputs", () => {
     const completion = `<tool-completion tool_call_id="call-x" tool_name="bash" status="completed">\n  <result>ok</result>\n</tool-completion>`;
     const background = (key: string, sequence: number, content: string) => ({
       kind: "automatedInput",
-      origin: { kind: "backgroundCompletion" },
+      origin: { kind: "backgroundCompletion", notification: content !== wake },
       content,
       ...durable(key, sequence),
     });
@@ -994,21 +995,18 @@ describe("SessionScreen automated inputs", () => {
 });
 
 describe("SessionScreen goal label", () => {
-  const goal = (status: string, wrapupCompleted: boolean) => ({
-    goalId: "g",
-    status,
-    objective: "Unfinished work",
-    wrapupRequested: true,
-    wrapupCompleted,
-    tokensUsed: 1000,
-    tokenBudget: 1000,
-    consecutiveBlockedAudits: 0,
-    activeTimeSeconds: 12,
-    continuationSequence: 1,
-    lastBlockedReason: null,
-    lastFailure: null,
-    completionEvidence: null,
-  });
+  const goal = (status: string, wrapupCompleted: boolean) =>
+    observedGoal(
+      goalControl(status, {
+        objective: "Unfinished work",
+        wrapupRequested: true,
+        wrapupCompleted,
+        tokensUsed: "1000",
+        tokenBudget: "1000",
+        activeTimeSeconds: "12",
+        continuationSequence: "1",
+      }),
+    );
 
   it("does not report a wrapped-up budget-limited goal as met", () => {
     const { app } = screenApp({

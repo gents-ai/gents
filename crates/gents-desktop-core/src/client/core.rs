@@ -32,7 +32,7 @@ use tokio::task::JoinHandle;
 
 use super::observe::{ObservedStore, ObserverHandle};
 use super::paths::DesktopPaths;
-use super::peer_directory::PeerRecord;
+use super::peer_directory::{EndedAccess, PeerRecord};
 use super::principal_identity::PrincipalIdentity;
 use super::query::{
     load_full_snapshot_with_peer_records, load_node_scoped_snapshot_with_peer_records,
@@ -40,6 +40,7 @@ use super::query::{
 use crate::remote_admin::PairingErrorClass;
 
 pub use enrollment::EnrollmentRequestResult;
+pub use file_review::tool_file_changes_on;
 pub use goal::{GoalSubmissionReference, RetainedGoalSubmission};
 pub use inference_observation::{InferenceActivity, InferenceObservation, InferenceTarget};
 pub use observation_scope::ClientObservationAttachment;
@@ -568,6 +569,14 @@ impl ClientCore {
 
     pub async fn peer_records(&self) -> Vec<PeerRecord> {
         self.sync_state.records()
+    }
+
+    pub async fn ended_access(&self) -> Vec<EndedAccess> {
+        self.sync_state.ended_access().await
+    }
+
+    pub async fn dismiss_ended_access(&self, node_did: &str) -> Result<bool> {
+        self.sync_state.dismiss_ended_access(node_did).await
     }
 
     pub fn store(&self) -> &Arc<ObservedStore> {

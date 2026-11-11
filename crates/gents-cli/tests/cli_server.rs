@@ -265,13 +265,13 @@ async fn server_error_after_runtime_spawn_drains_the_runtime() -> Result<()> {
         .env("RUST_LOG", "error")
         .current_dir(&home_dir)
         .args(["server", "--http-port", &port.to_string()])
-        .args(["--no-codex-shim", "--p2p-transport", "none"])
+        .args(["--p2p-transport", "none"])
         .stdout(Stdio::piped())
         .stderr(Stdio::from(
             stderr_log.reopen().context("opening gents stderr log")?,
         ));
     support::process::configure_foreground_server_env(&mut command, &[]);
-    let mut child = command.spawn().context("spawning gents server")?;
+    let mut child = command.spawn().context("spawning gents runtime server")?;
     drop(child.stdout.take());
     let mut serve = ServeProcess {
         child,
@@ -544,15 +544,7 @@ fn server_refuses_a_secure_enclave_home_before_building_a_node() -> Result<()> {
         .to_string(),
     )?;
     let port = allocate_port()?;
-    let stderr = run_cli_failure_stderr(
-        &home_dir,
-        &[
-            "server",
-            "--http-port",
-            &port.to_string(),
-            "--no-codex-shim",
-        ],
-    )?;
+    let stderr = run_cli_failure_stderr(&home_dir, &["server", "--http-port", &port.to_string()])?;
     assert!(stderr.contains("macos-secure-enclave"), "{stderr}");
     assert!(stderr.contains("--identity-backend file"), "{stderr}");
     let store_entries = fs::read_dir(gents_home.join("data"))
@@ -603,8 +595,11 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
         .write("test.nac.signed", &mutation)
         .await
         .with_context(|| format!("{phase}: principal-signed HTTP write"))?;
-        let replicators = run_cli_json(&home_dir, &["p2p", "admin", "replicators", "list"])
-            .with_context(|| format!("{phase}: CLI P2P administration over HTTP"))?;
+        let replicators = run_cli_json(
+            &home_dir,
+            &["runtime", "p2p", "admin", "replicators", "list"],
+        )
+        .with_context(|| format!("{phase}: CLI P2P administration over HTTP"))?;
         assert_eq!(replicators["status"], "ok", "{phase}: {replicators}");
         let anonymous_rows = gents::store::config_client::ConfigAccess::graphql(graphql.clone())
             .execute(r#"{ CompactionEntry(filter: { node_did: { _eq: "did:test:nac" } }) { compaction_key } }"#)
@@ -682,103 +677,6 @@ fn port_replacement_requires_address_in_use_for_the_requested_address() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "grok shim is being removed"]
-async fn fresh_home_apply_root_precedes_grok_agent_binding() -> Result<()> {
-    const APPLIED_BACKEND: &str = "fresh-applied-grok-backend";
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let home_dir = tempdir.path().join("home");
-    let root = tempdir.path().join("pack");
-    fs::create_dir_all(&home_dir)?;
-    let model_name = format!("mock-grok-apply-model-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
-    let agent_name = format!("cli-grok-apply-{}", Uuid::new_v4().simple());
-    let init = run_init_json(
-        &home_dir,
-        &[
-            "--node-name",
-            &agent_name,
-            "--model-name",
-            &model_name,
-            "--inference-url",
-            mock_endpoint.endpoint(),
-        ],
-    )?;
-    // The applied Agent is a new Node-derived identity, published by the
-    // pack with its creation nonce.
-    let grok_agent = gents::store::identity::provision_agent_identity(&identity_from_init(&init)?)?;
-    run_cli_text(
-        &home_dir,
-        &["config", "export", "--root", &root.to_string_lossy()],
-    )?;
-    let config_path = root.join("pack_config.json");
-    let mut config = read_json_file(&config_path)?;
-    let mut backend = config["inference_backends"][0].clone();
-    backend["backend_id"] = Value::String(APPLIED_BACKEND.to_string());
-    if let Some(object) = backend.as_object_mut() {
-        object.remove("probe_status");
-        object.remove("last_probe");
-    }
-    config["inference_backends"]
-        .as_array_mut()
-        .context("inference_backends is not an array")?
-        .push(backend);
-    let mut profile = config["inference_profiles"][0].clone();
-    let applied_profile = format!("{APPLIED_BACKEND}:profile");
-    profile["profile_id"] = Value::String(applied_profile.clone());
-    profile["backend_id"] = Value::String(APPLIED_BACKEND.to_string());
-    config["inference_profiles"]
-        .as_array_mut()
-        .context("inference_profiles is not an array")?
-        .push(profile);
-    let mut agent = config["agents"][0].clone();
-    agent["agent_did"] = Value::String(grok_agent.agent_did.clone());
-    agent["creation_nonce"] = Value::String(grok_agent.creation_nonce.clone());
-    agent["inference_profile_id"] = Value::String(applied_profile);
-    config["agents"]
-        .as_array_mut()
-        .context("agents is not an array")?
-        .push(agent);
-    write_json_file(&config_path, &config)?;
-    let port = allocate_port()?;
-    let socket_path = tempdir.path().join("grok.sock");
-    let (mut serve, readiness) = spawn_server_with_ready_json(
-        &home_dir,
-        port,
-        &[
-            "--p2p-transport",
-            "none",
-            "--apply-root",
-            root.to_str().context("pack root path is not UTF-8")?,
-            "--grok-shim",
-            "--grok-shim-socket-path",
-            socket_path.to_str().context("socket path is not UTF-8")?,
-            "--grok-shim-agent-did",
-            &grok_agent.agent_did,
-        ],
-        &[],
-    )?;
-    wait_for_port(port, &mut serve)?;
-    let (_stdout, stderr) = serve.captured_output()?;
-    assert_eq!(
-        readiness.pointer("/apply_root/ok").and_then(Value::as_bool),
-        Some(true),
-        "the pack must apply before readiness: {readiness}"
-    );
-    assert_eq ! (readiness . pointer ("/grok_shim/bound") . and_then (Value :: as_bool) , Some (true) , "the agent supplied by --apply-root must bind in the same invocation: {readiness}; stderr: {stderr}");
-    assert_eq!(
-        readiness
-            .pointer("/grok_shim/socket")
-            .and_then(Value::as_str),
-        socket_path.to_str()
-    );
-    assert!(
-        socket_path.exists(),
-        "the bound Grok leader must publish its socket"
-    );
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -818,6 +716,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         run_cli_text(
             &register_home,
             &[
+                "config",
                 "mcp",
                 "register",
                 "--graphql",
@@ -1597,6 +1496,8 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
     let submitted = run_cli_json(
         &home_dir,
         &[
+            "utils",
+            "debug",
             "request",
             "submit",
             "--graphql",
@@ -1755,7 +1656,10 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
         Some(expected_agent_queued)
     );
 
-    let cli_snapshot = run_cli_json(&home_dir, &["fleet", "slots", "--graphql", &graphql])?;
+    let cli_snapshot = run_cli_json(
+        &home_dir,
+        &["utils", "debug", "fleet", "slots", "--graphql", &graphql],
+    )?;
     assert_eq!(
         cli_snapshot.pointer("/totals/assigned"),
         snapshot.pointer("/totals/assigned")
@@ -2060,6 +1964,37 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
         readiness.get("p2p_listen_addresses")
     );
 
+    Ok(())
+}
+
+#[test]
+fn a_home_still_set_to_grok_serves() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+    run_init_json(
+        &home_dir,
+        &[
+            "--inference-url",
+            "http://127.0.0.1:9/v1",
+            "--model-name",
+            "m",
+        ],
+    )?;
+    fs::write(
+        home_dir
+            .join(".gents")
+            .join(gents::store::local::home::CLIENT_CONFIG_FILE_NAME),
+        r#"{"client":"grok"}"#,
+    )?;
+    let (_serve, readiness) = spawn_server_with_ready_json(
+        &home_dir,
+        allocate_port()?,
+        &["--p2p-transport", "none"],
+        &[],
+    )?;
+
+    assert_eq!(readiness["status"], "serving", "{readiness}");
     Ok(())
 }
 
@@ -2383,7 +2318,7 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
     let output = run_cli_text(
         &home_dir,
         &[
-            "chat",
+            "-p",
             "backend auth should flow through the configured env var",
         ],
     )?;
@@ -2560,6 +2495,8 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let request = run_cli_json(
         &home_dir,
         &[
+            "utils",
+            "data",
             "query",
             "--graphql",
             &graphql,
@@ -2587,6 +2524,8 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let tool_calls = run_cli_json(
         &home_dir,
         &[
+            "utils",
+            "data",
             "query",
             "--graphql",
             &graphql,
@@ -2689,6 +2628,8 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let messages = run_cli_json(
         &home_dir,
         &[
+            "utils",
+            "data",
             "query",
             "--graphql",
             &graphql,
@@ -2725,6 +2666,8 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let denied = run_cli_failure_stderr(
         &home_dir,
         &[
+            "utils",
+            "data",
             "query",
             "--graphql",
             &graphql,
@@ -2742,6 +2685,8 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let diagnostic = run_cli_failure_stderr(
         &home_dir,
         &[
+            "utils",
+            "data",
             "query",
             "--graphql",
             &graphql,
@@ -2764,6 +2709,8 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     let inventory = run_cli_json(
         &home_dir,
         &[
+            "utils",
+            "data",
             "query",
             "--graphql",
             &graphql,
@@ -2823,7 +2770,7 @@ async fn trace_of_a_served_home_reads_only_as_its_user() -> Result<()> {
     .await
     .context("seeding the traced request")?;
 
-    let trace = ["trace", "timeline", "--graphql", &graphql];
+    let trace = ["utils", "debug", "trace", "timeline", "--graphql", &graphql];
     let request = ["--request-id", "home-trace-req"];
     // Every CLI caller holds its own User key: another User sees no such row.
     let foreign = run_cli_failure_stderr(&caller_dir, &[&trace[..], &request[..]].concat())?;
@@ -3201,7 +3148,16 @@ impl McpHome {
         let home_arg = home.to_str().context("home path is not UTF-8")?.to_owned();
         let init = run_init_json(
             tempdir.path(),
-            &["--node-name", label, "--home", home_arg.as_str()],
+            &[
+                "--node-name",
+                label,
+                "--home",
+                home_arg.as_str(),
+                "--inference-url",
+                "http://127.0.0.1:9/v1",
+                "--model-name",
+                "m",
+            ],
         )?;
         let owner_did = node_did_from_init(&init)?;
         let owner = identity_from_init(&init)?;

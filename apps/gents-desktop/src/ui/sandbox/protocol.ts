@@ -37,6 +37,8 @@ export interface LoadedPlugin {
   name?: string;
   description?: string;
   defaultEnabled?: boolean;
+  /** the module's declaration as it crossed; the host checks it */
+  notifications?: unknown;
 }
 
 export type HostToFrame =
@@ -76,6 +78,7 @@ export type FrameToHost =
 export const RPC_VERBS = [
   "plugin",
   "send",
+  "notify",
   "navigate",
   "toast",
   "storage.set",

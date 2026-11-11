@@ -292,7 +292,7 @@ async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node(
                 let home = grant_home.to_str().context("runtime home is not UTF-8")?;
                 let owner = grant_owner.to_str().context("bootstrap owner home is not UTF-8")?;
                 run_cli_json_with_env(&grant_home,
-                    &["p2p", "enrollment", "grant", &grant_request, "--home", home],
+                    &["runtime", "p2p", "enrollment", "grant", &grant_request, "--home", home],
                     &[("GENTS_DESKTOP_HOME", owner)],
                 )
             }).await.context("joining enrollment grant")?

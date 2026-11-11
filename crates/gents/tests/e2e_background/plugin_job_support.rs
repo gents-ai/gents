@@ -2,12 +2,12 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gents::documents::{AgentTools, IntegrationTools, PluginToolRef, Tools};
-use gents::eval::runner::embedded::EmbeddedHome;
 use gents::pack::archive::{pack_dir, PackArchive};
 use gents::pack::{
     install_prepared_document_pack, load_pack_config, prepare_document_pack_install, DriftPolicy,
     InstalledVia, PackInferenceBindings, PackInstallOptions,
 };
+use gents::runtime::embedded::EmbeddedHome;
 use gents::tools::background::job::job::{
     JobChildState, JobControlRequest, JobEffects, JobGuestPin, JobPolicy, JobReadError, JobSpawn,
     JobState, JobStepOutput, JobView, PluginJobSettings,
@@ -154,7 +154,6 @@ pub(crate) async fn install_job_fixture(
     let did = db.node_identity.did().to_string();
     let parent_did = fixture.binding.agent_did.clone();
     let child_did = child.agent_did;
-    crate::support::grant_agent_session_writer(db, &fixture.access, &child_did, &parent_did).await;
     let (bytes, _) = pack_dir(&fixture_dir()).expect("pack the job fixture");
     let archive = PackArchive::from_bytes(&bytes).expect("read the job fixture archive");
     let config = load_pack_config(
@@ -178,6 +177,7 @@ pub(crate) async fn install_job_fixture(
         Some(plugin_home),
         Some(&archive),
         &|_| None,
+        &Default::default(),
     )
     .await
     .expect("prepare the job fixture install");

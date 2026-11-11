@@ -326,13 +326,16 @@ fn publish_failed(sender: &watch::Sender<EnrollmentAuthorityState>, error: &anyh
 
 /// Authority rows plus the applied pairing witness that a route receipt
 /// records.
-const ENROLLMENT_SWEEP_COLLECTIONS: [&str; 6] = [
+const ENROLLMENT_SWEEP_COLLECTIONS: [&str; 9] = [
     "Network",
     "NetworkEnrollmentRequest",
     "NetworkEnrollmentDecision",
     "NetworkAuthorizationRevision",
     "NetworkEnrollmentRouteReceipt",
     "PeerPairingApplied",
+    "EnrollmentRenewalPolicy",
+    "EnrollmentRenewalIntent",
+    "EnrollmentRenewalOffer",
 ];
 
 /// Run the sole durable enrollment projection/effect loop. This loop publishes
@@ -347,6 +350,11 @@ pub async fn run_enrollment_reconciler(
     let pairing_admin = EmbeddedRemoteP2pAdmin::new(node.clone());
     let mut delivered = BTreeSet::new();
     let mut renewal_notices = super::enrollment_renewal::RenewalNotices::default();
+    let mut renewal_intent_cursor = None;
+    let mut expired_offer_cursor = None;
+    let mut member_renewal = super::enrollment_member_renewal::MemberRenewalState::default();
+    let renewal_offer_id = super::resolve_embedded_collection_id(&node, "EnrollmentRenewalOffer")?
+        .context("renewal offer collection is unavailable")?;
     let mut subscription = crate::subscribe_collections(&node, ENROLLMENT_SWEEP_COLLECTIONS)?;
     let mut subscription_open = true;
     let mut interval = tokio::time::interval(super::intervals::sweep_interval());
@@ -360,7 +368,12 @@ pub async fn run_enrollment_reconciler(
             &pairing_admin,
             &owner.sender,
             &mut delivered,
-            &mut renewal_notices,
+            (
+                &mut renewal_notices,
+                &mut renewal_intent_cursor,
+                &mut member_renewal,
+                &mut expired_offer_cursor,
+            ),
         );
         if !serve_authority_during_sweep(sweep, &store, &owner.sender, &mut owner.commands, &cancel)
             .await
@@ -372,15 +385,20 @@ pub async fn run_enrollment_reconciler(
                 biased;
                 _ = cancel.cancelled() => return Ok(()),
                 _ = interval.tick() => break,
+                _ = tokio::time::sleep(member_renewal.wait_duration()) => break,
+                _ = tokio::time::sleep(std::time::Duration::from_millis(250)), if renewal_intent_cursor.is_some() => break,
                 command = owner.commands.recv() => {
                     let Some(command) = command else { return Ok(()); };
                     handle_authority_command(&store, &owner.sender, command).await;
                 }
                 batch = subscription.recv(), if subscription_open => {
-                    if batch.is_none() {
+                    let Some(batch) = batch else {
                         tracing::warn!("enrollment change subscription closed; continuing periodic sweeps");
                         subscription_open = false;
                         continue;
+                    };
+                    if batch.resync_required || batch.changes.iter().any(|change| change.collection_id == renewal_offer_id) {
+                        member_renewal.wake();
                     }
                     break;
                 }
@@ -584,19 +602,116 @@ async fn sweep_enrollment(
     pairing_admin: &EmbeddedRemoteP2pAdmin,
     sender: &watch::Sender<EnrollmentAuthorityState>,
     delivered: &mut BTreeSet<String>,
-    renewal_notices: &mut super::enrollment_renewal::RenewalNotices,
+    renewal: (
+        &mut super::enrollment_renewal::RenewalNotices,
+        &mut Option<String>,
+        &mut super::enrollment_member_renewal::MemberRenewalState,
+        &mut Option<String>,
+    ),
 ) {
+    let (renewal_notices, renewal_intent_cursor, member_renewal, expired_offer_cursor) = renewal;
+    if let Err(error) = super::enrollment_exchange::prune_expired_offers(
+        node,
+        identity.as_ref(),
+        expired_offer_cursor,
+    )
+    .await
+    {
+        tracing::warn!(%error, "failed to prune expired renewal offers");
+    }
     let projection = match store.load_projection().await {
         Ok(projection) => projection,
         Err(error) => {
+            member_renewal.defer_after_error();
+            *renewal_intent_cursor = None;
             publish_failed(sender, &error);
             tracing::warn!(error = %error, "enrollment projection read failed; authority remains fail closed");
             return;
         }
     };
     publish_ready(sender, projection.clone());
+    if member_renewal.due() {
+        if let Err(error) = super::enrollment_member_renewal::sweep_member_renewals(
+            node,
+            identity.as_ref(),
+            member_renewal,
+        )
+        .await
+        {
+            member_renewal.defer_after_error();
+            tracing::debug!(error = %error, "member enrollment renewal sweep did not complete");
+        }
+    }
+    let mut automatic_renewal_enabled = false;
+    if let Some(network) = &projection.network_id {
+        match store.renewal_policy(network).await {
+            Ok(policy) if policy.enabled => {
+                automatic_renewal_enabled = true;
+                match super::enrollment_exchange::read_intent_page(
+                    node,
+                    identity.did(),
+                    renewal_intent_cursor,
+                )
+                .await
+                {
+                    Ok(intents) => {
+                        for intent in intents {
+                            if let Err(error) =
+                                super::enrollment_exchange::respond_to_renewal_intent(
+                                    node,
+                                    identity.as_ref(),
+                                    store,
+                                    &intent,
+                                )
+                                .await
+                            {
+                                tracing::debug!(intent_id = %intent.intent_id(), error = %error, "renewal offer delivery did not complete");
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        *renewal_intent_cursor = None;
+                        tracing::warn!(error = %error, "could not read renewal intents");
+                    }
+                }
+                for pending in projection
+                    .pending
+                    .iter()
+                    .filter(|pending| pending.request.challenge.starts_with("renewal-v1-"))
+                    .filter(|pending| {
+                        projection
+                            .renewal_lease_for(
+                                &pending.request.request_id,
+                                true,
+                                policy.lease_seconds,
+                                Utc::now(),
+                            )
+                            .is_ok()
+                    })
+                    .take(4)
+                {
+                    match store
+                        .decide_automatic_renewal(&pending.request.request_id)
+                        .await
+                    {
+                        Ok(_) => return,
+                        Err(error) => {
+                            tracing::debug!(request_id = %pending.request.request_id, error = %error, "automatic enrollment renewal was not approved")
+                        }
+                    }
+                }
+            }
+            Ok(_) => *renewal_intent_cursor = None,
+            Err(error) => {
+                *renewal_intent_cursor = None;
+                tracing::warn!(error = %error, "enrollment renewal policy could not be read; automatic renewal is disabled")
+            }
+        }
+    } else {
+        *renewal_intent_cursor = None;
+    }
     for notice in renewal_notices.observe(&projection, Utc::now()) {
-        super::enrollment_renewal::log_renewal_notice(&notice);
+        super::enrollment_renewal::log_renewal_notice(&notice, automatic_renewal_enabled);
     }
 
     if let Err(error) = reconcile_data_plane(node, identity.did(), store, &projection).await {
@@ -795,23 +910,49 @@ async fn reconcile_data_plane(
         .transact_readonly("p2p.query_enrollment_routes", |txn| {
             let runtime = &runtime;
             Box::pin(async move {
-                let response = txn.execute_local_response(
-                    r#"{
-                PeerPairingDesired {
-                    _docID peer_id node_did actor_did template source collections replicator_addresses
-                    enrollment_request_digest enrollment_authorization_sequence
-                    enrollment_authorization_expires_at
-                }
-            }"#,
-                )
-                .await?;
-                let ids = rows::<serde_json::Value>(&response, "PeerPairingDesired")?.into_iter()
-                    .map(|row| row["_docID"].as_str().map(str::to_owned).context("desired route has no ID"))
+                let read = {
+                    use gents_protocol::document_query::{
+                        fields::peer_pairing_desired as fields, Query, Selection,
+                    };
+                    Query::select(
+                        Selection::doc_id()
+                            .field(fields::PEER_ID)
+                            .field(fields::NODE_DID)
+                            .field(fields::ACTOR_DID)
+                            .field(fields::TEMPLATE)
+                            .field(fields::SOURCE)
+                            .field(fields::COLLECTIONS)
+                            .field(fields::REPLICATOR_ADDRESSES)
+                            .field(fields::ENROLLMENT_REQUEST_DIGEST)
+                            .field(fields::ENROLLMENT_AUTHORIZATION_SEQUENCE)
+                            .field(fields::ENROLLMENT_AUTHORIZATION_EXPIRES_AT),
+                    )
+                    .render()
+                };
+                let response = txn.run_local_response(&read).await?;
+                let ids = rows::<serde_json::Value>(&response, "PeerPairingDesired")?
+                    .into_iter()
+                    .map(|row| {
+                        row["_docID"]
+                            .as_str()
+                            .map(str::to_owned)
+                            .context("desired route has no ID")
+                    })
                     .collect::<Result<Vec<_>>>()?;
-                let owners = if ids.is_empty() { Vec::new() } else { txn.document_owners("PeerPairingDesired", &ids).await? };
-                anyhow::ensure!(owners.len() == ids.len(), "desired route ownership is incomplete");
-                let owned = owners.into_iter().filter(|row| row.visible && row.owner.as_ref() == Some(runtime))
-                    .map(|row| row.doc_id).collect::<BTreeSet<_>>();
+                let owners = if ids.is_empty() {
+                    Vec::new()
+                } else {
+                    txn.document_owners("PeerPairingDesired", &ids).await?
+                };
+                anyhow::ensure!(
+                    owners.len() == ids.len(),
+                    "desired route ownership is incomplete"
+                );
+                let owned = owners
+                    .into_iter()
+                    .filter(|row| row.visible && row.owner.as_ref() == Some(runtime))
+                    .map(|row| row.doc_id)
+                    .collect::<BTreeSet<_>>();
                 Ok::<_, anyhow::Error>((response, owned))
             })
         })
@@ -956,28 +1097,53 @@ async fn delete_enrollment_route(node: &std::sync::Arc<EmbeddedNode>, peer_id: &
     )?;
     let access = crate::store::config_client::ConfigAccess::local_as(node.clone(), runtime.clone());
     let mutation = delete_enrollment_route_mutation(peer_id, runtime.as_str());
-    let peer = crate::store::graphql::escape_graphql_string(peer_id);
-    let node_did = crate::store::graphql::escape_graphql_string(runtime.as_str());
-    access.transact_write("p2p.retract_enrollment_route_fenced", |txn| {
-        let runtime = &runtime;
-        let mutation = &mutation;
-        let peer = &peer;
-        let node_did = &node_did;
-        Box::pin(async move {
-            txn.validate_runtime_actor(runtime)?;
-            crate::store::graphql::fence_arrivals(txn, "PeerPairingDesired").await?;
-            let response = txn.execute(&format!(r#"{{ PeerPairingDesired(filter: {{peer_id: {{_eq: "{peer}"}}, node_did: {{_eq: "{node_did}"}}, actor_did: {{_eq: "{node_did}"}}, source: {{_eq: "enrollment"}}}}) {{_docID}} }}"#)).await?;
-            let ids = gents_protocol::graphql::graphql_rows_from_response(&response, "PeerPairingDesired")
-                .into_iter().map(|row| row["_docID"].as_str().map(str::to_owned).context("desired route has no ID"))
+    let route_query = {
+        use gents_protocol::document_query::{
+            fields::peer_pairing_desired as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::doc_id())
+            .filter(Filter::eq(fields::PEER_ID, peer_id))
+            .filter(Filter::eq(fields::NODE_DID, runtime.as_str()))
+            .filter(Filter::eq(fields::ACTOR_DID, runtime.as_str()))
+            .filter(Filter::eq(fields::SOURCE, "enrollment"))
+            .render()
+    };
+    access
+        .transact_write("p2p.retract_enrollment_route_fenced", |txn| {
+            let runtime = &runtime;
+            let mutation = &mutation;
+            let route_query = &route_query;
+            Box::pin(async move {
+                txn.validate_runtime_actor(runtime)?;
+                crate::store::graphql::fence_arrivals(txn, "PeerPairingDesired").await?;
+                let response = txn.run(route_query).await?;
+                let ids = gents_protocol::graphql::graphql_rows_from_response(
+                    &response,
+                    "PeerPairingDesired",
+                )
+                .into_iter()
+                .map(|row| {
+                    row["_docID"]
+                        .as_str()
+                        .map(str::to_owned)
+                        .context("desired route has no ID")
+                })
                 .collect::<Result<Vec<_>>>()?;
-            if !ids.is_empty() {
-                let owners = txn.document_owners("PeerPairingDesired", &ids).await?;
-                anyhow::ensure!(owners.len() == ids.len() && owners.iter().all(|row| row.visible && row.owner.as_ref() == Some(runtime)), "desired route has another native owner");
-            }
-            txn.execute(mutation).await?;
-            Ok::<_, anyhow::Error>(())
+                if !ids.is_empty() {
+                    let owners = txn.document_owners("PeerPairingDesired", &ids).await?;
+                    anyhow::ensure!(
+                        owners.len() == ids.len()
+                            && owners
+                                .iter()
+                                .all(|row| row.visible && row.owner.as_ref() == Some(runtime)),
+                        "desired route has another native owner"
+                    );
+                }
+                txn.execute(mutation).await?;
+                Ok::<_, anyhow::Error>(())
+            })
         })
-    }).await
+        .await
 }
 
 fn delete_enrollment_route_mutation(peer_id: &str, node_did: &str) -> String {
@@ -1271,6 +1437,7 @@ mod tests {
             server_peer: "server-peer".into(),
             candidate_did: "did:key:member-placeholder".into(),
             candidate_peer: "member-peer".into(),
+            candidate_name: None,
             candidate_ticket: "member-ticket".into(),
             owner_node_did: "did:key:owner-placeholder".into(),
             profile: "client".into(),

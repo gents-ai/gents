@@ -100,7 +100,8 @@ impl PackInstaller {
             &args.inference_slots,
             node_binding.as_ref(),
         )
-        .await?;
+        .await
+        .map_err(|error| error.into_anyhow())?;
         self.fence_bindings(&inference.bindings).await?;
         let notify_access = access.clone();
         let notify_node = self.core.node_did().to_owned();
@@ -113,6 +114,7 @@ impl PackInstaller {
             false,
             Some(self.core.node_did()),
             &inference.bindings,
+            distribution.1.clone(),
             move |identity, changes| {
                 let access = notify_access;
                 let node_did = notify_node;
@@ -140,7 +142,8 @@ impl PackInstaller {
                 }
             },
         )
-        .await?;
+        .await
+        .map_err(|error| error.into_anyhow())?;
         let discovery = plugin_discovery_calls(
             &plugins
                 .iter()

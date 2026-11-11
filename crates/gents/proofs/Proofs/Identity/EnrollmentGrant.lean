@@ -222,6 +222,42 @@ theorem grant_derives_all (s : State) (request member : String)
   · refine Or.inr (List.mem_map.mpr ⟨t, List.mem_filter.mpr ⟨?_, by rw [Bool.not_eq_true']; exact Bool.eq_false_iff.mpr h⟩, rfl⟩)
     exact List.mem_filter.mpr ⟨d, by simp [independent, h]⟩
 
+/-! ### Operator decisions -/
+
+/-- An operator's decision on a pending client enrollment. Only a client
+enrollment derives authority; approving another profile admits its route
+alone.
+
+Decision: approving is admission. `gents p2p enrollment grant` followed by
+an approval, desktop pairing, and the desktop's Approve all run `grant`
+(receipt first, then the derived tuples) before the approval commits, so an
+approval never stands without its authority, a failed grant approves nothing,
+and a retried approval finds the receipt and reissues it (`grant` is
+idempotent per request). Denying runs `revoke`, so a grant whose approval
+never committed is withdrawn and no derived authority outlives a denial.
+Rust owners: `server_host::admit_managed_enrollment` (grant, then approve) and
+the runtime enrollment store's denial, which withdraws the request's live
+receipt. -/
+inductive Decision where
+  | approve
+  | deny
+  deriving DecidableEq, Repr
+
+def applyDecision (s : State) (request member : String) : Decision → State
+  | .approve => grant s request member
+  | .deny => revoke s request
+
+/-- An approval leaves its member holding every derived tuple. -/
+theorem approve_derives_all (s : State) (request member : String)
+    (fresh : s.receipts.any (·.request == request) = false) (t : Tuple) (d : t ∈ derived) :
+    holds (applyDecision s request member .approve) member t = true :=
+  grant_derives_all s request member fresh t d
+
+/-- Denying a request no grant recorded changes nothing. -/
+theorem deny_without_grant_changes_nothing (s : State) (request member : String)
+    (h : liveReceipt s request = none) : applyDecision s request member .deny = s :=
+  revoke_of_no_live s request h
+
 /-! ### Executable fixtures -/
 
 def ops : List Tuple := GrantSet.operatorUser.permissions.map Tuple.permission
@@ -248,5 +284,21 @@ theorem shared_tuple_waits_for_last_enrollment :
     let s1 := grant (grant fresh "a" "member") "b" "member"
     heldOf (revoke s1 "a") "member" = derived.map Tuple.name ∧
       heldOf (revoke (revoke s1 "a") "b") "member" = [] := by decide
+
+
+/-- An approval grants exactly the enrolled-User authority: the Node
+`administrator` relation and every `operatorUser` permission. -/
+theorem approve_grants_node_administrator_and_operator_user :
+    heldOf (applyDecision fresh "request" "member" .approve) "member" =
+      "node-administrator" :: GrantSet.operatorUser.permissions := by decide
+
+/-- Denying after a grant whose approval did not commit withdraws it. -/
+theorem deny_withdraws_an_unapproved_grant :
+    let s := applyDecision (applyDecision fresh "request" "member" .approve) "request" "member" .deny
+    heldOf s "member" = [] ∧ heldOf s "owner" = ["node-administrator"] := by decide
+
+/-- Denying a request nothing was granted for grants nothing. -/
+theorem deny_grants_nothing :
+    heldOf (applyDecision fresh "request" "member" .deny) "member" = [] := by decide
 
 end Identity.EnrollmentGrant

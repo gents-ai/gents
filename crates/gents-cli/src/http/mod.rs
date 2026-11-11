@@ -23,6 +23,7 @@ pub(crate) mod router;
 pub(crate) mod runtime_control;
 pub(crate) mod self_view;
 pub(crate) mod sessions;
+pub(crate) mod shutdown_streams;
 pub(crate) mod version;
 
 pub(crate) use router::runtime_contract_router;

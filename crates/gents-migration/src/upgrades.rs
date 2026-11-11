@@ -4,40 +4,6 @@ use crate::error::{Error, Result};
 use crate::expectation::CollectionExpectation;
 use crate::registry::{BaselineCollection, MigrationStep};
 
-/// An rc0 `AgentMessage` after v1.0.0-rc1's `native_request_id` patch.
-const MESSAGE_REQUEST_ID_TARGET: &str =
-    "bafyreiawf2s2jdgsajh6rff4plix6e4fawkkqu22dy3ade5pnzaaomqtj4";
-/// `AgentMessage` as a store created by v1.0.0-rc1 registered it (with `native_request_id`).
-const MESSAGE_RC1_FRESH: &str = "bafyreih6qxw3cq3uswastxlatdplwmkpknqkf7csgecoswijez5o2uihhm";
-
-/// Versions earlier builds produced that are off this release's lineage, so a peer
-/// advertising one is named as the side to re-create rather than asked to update.
-/// `AgentMessage` is client-authored and registers its current SDL directly, so rc1's
-/// `native_request_id` column is off the lineage whether a store was created by rc1 or
-/// patched by it. A version this release registers is never listed: a fresh store's
-/// canonical version would otherwise be reported as off its own lineage.
-pub(crate) const KNOWN_OFF_LINEAGE: &[(&str, &str)] = &[
-    ("AgentMessage", MESSAGE_REQUEST_ID_TARGET),
-    ("AgentMessage", MESSAGE_RC1_FRESH),
-];
-
-/// Collections whose fresh store registers an older root and replays the versioned patches
-/// an upgraded store takes, so both land on one version ID (DefraDB derives a patched
-/// version ID from the version it patches, so a direct registration of the current SDL and
-/// a patched store never share one). Empty: every collection's fresh store registers its
-/// current SDL, which is the canonical version.
-///
-/// A collection added here names its root SDL and root version, and its
-/// [`crate::DEFAULT_BASELINE`] entry must register the same SDL and root.
-pub(crate) const CANONICAL_ROOTS: &[(&str, &str, &str)] = &[];
-
-fn canonical_root(name: &str) -> Option<&'static str> {
-    CANONICAL_ROOTS
-        .iter()
-        .find(|(collection, _, _)| *collection == name)
-        .map(|(_, _, root)| *root)
-}
-
 /// Native workflow documents carry the handoff route their producer stamps
 /// (Lean `Triggers.NativeRoute`); existing rows keep null route columns.
 const HANDOFF_ROUTE_FIELDS: [&str; 3] = ["handoff_id", "reply_session_id", "attempt"];
@@ -82,11 +48,6 @@ pub(crate) fn include_existing_by_version(
     baseline: &mut [BaselineCollection<'static>],
     steps: &mut Vec<MigrationStep<'static>>,
 ) -> Result<()> {
-    // A collection the store lacks is registered at its canonical root (the baseline entry),
-    // so it takes the same steps a store holding that root takes.
-    let get_version = &|name: &str| -> Result<Option<String>> {
-        Ok(get_version(name)?.or_else(|| canonical_root(name).map(str::to_owned)))
-    };
     for (name, root, target, id, patch, fields) in [
         (
             "Task",
@@ -103,6 +64,14 @@ pub(crate) fn include_existing_by_version(
             "repository-placement-add-declared-readers",
             r#"[{"op":"add","path":"/RepositoryPlacement/Fields/-","value":{"Name":"readers","Kind":"JSON"}}]"#,
             &["readers"][..],
+        ),
+        (
+            "ToolServiceRegistry",
+            "bafyreigckps33q33zvnrodzqlz72ri4osyodxleniwy6txwkfhnq7tgg3q",
+            "bafyreibvc5vydfmb6swugrjjff5c7eqfymcw6ckm5kn62wqz6tfmlvir2y",
+            "tool-service-registry-add-endpoint-url",
+            r#"[{"op":"add","path":"/ToolServiceRegistry/Fields/-","value":{"Name":"endpoint_url","Kind":"String"}}]"#,
+            &["endpoint_url"][..],
         ),
         (
             "CallbackResult",
@@ -127,6 +96,14 @@ pub(crate) fn include_existing_by_version(
             "workspace-receipt-add-handoff-route",
             handoff_route_patch!("WorkspaceReceipt"),
             &HANDOFF_ROUTE_FIELDS[..],
+        ),
+        (
+            "PackInstallation",
+            "bafyreia5f6iex3vrzfjzzlpm7jqkqehmnis3vqnbcdyuno2jlafyyrx3vu",
+            "bafyreif63c7rk5p7u66z6wvhab5gjh2544wt6uauq7ndmfszizfixsmwmi",
+            "pack-installation-add-source-and-variables",
+            r#"[{"op":"add","path":"/PackInstallation/Fields/-","value":{"Name":"source","Kind":"JSON"}},{"op":"add","path":"/PackInstallation/Fields/-","value":{"Name":"source_history","Kind":"JSON"}},{"op":"add","path":"/PackInstallation/Fields/-","value":{"Name":"variables","Kind":"JSON"}}]"#,
+            &["source", "source_history", "variables"][..],
         ),
     ] {
         let Some(current) = get_version(name)? else {

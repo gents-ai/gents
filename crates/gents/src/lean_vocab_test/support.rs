@@ -280,6 +280,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) workspace_quickstart_selection_cases: Vec<serde_json::Value>,
     pub(crate) workspace_callback_selection_cases: Vec<serde_json::Value>,
     pub(crate) pack_placement_reader_cases: Vec<serde_json::Value>,
+    pub(crate) agent_target_access_cases: Vec<serde_json::Value>,
     pub(crate) native_route_cases: Vec<serde_json::Value>,
     pub(crate) workspace_datastore_write_cases: Vec<serde_json::Value>,
     pub(crate) workspace_root_access_cases: Vec<serde_json::Value>,
@@ -382,6 +383,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) goal_client_receipt_cases: Vec<serde_json::Value>,
     pub(crate) goal_observation_cases: Vec<serde_json::Value>,
     pub(crate) goal_session_observation_cases: Vec<serde_json::Value>,
+    pub(crate) goal_session_fold_cases: Vec<serde_json::Value>,
     pub(crate) workspace_command_grant_answers: Vec<serde_json::Value>,
     pub(crate) workspace_command_grant_lookups: Vec<serde_json::Value>,
     pub(crate) workspace_command_grant_revocations: Vec<serde_json::Value>,
@@ -409,8 +411,11 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) client_sync_health_cases: Vec<serde_json::Value>,
     pub(crate) enrollment_route_readiness_cases: Vec<serde_json::Value>,
     pub(crate) enrollment_startup_cases: Vec<serde_json::Value>,
+    pub(crate) enrollment_candidate_name_cases: Vec<serde_json::Value>,
     pub(crate) enrollment_encoding_cases: Vec<LeanEnrollmentEncodingCase>,
     pub(crate) enrollment_digest_cases: Vec<LeanEnrollmentDigestCase>,
+    pub(crate) enrollment_auto_renewal_cases: Vec<serde_json::Value>,
+    pub(crate) enrollment_renewal_intent_cases: Vec<serde_json::Value>,
     pub(crate) agent_request_admission_cases: Vec<LeanAgentRequestAdmissionCase>,
     pub(crate) causal_hop_contract: LeanCausalHopContract,
     pub(crate) scope_collection_rules:
@@ -432,6 +437,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) request_lifecycle_operator_ui_cases: Vec<LeanClientShellCase>,
     pub(crate) client_live_delta_cases: Vec<serde_json::Value>,
     pub(crate) runtime_session_selection_cases: Vec<serde_json::Value>,
+    pub(crate) runtime_configuration_admission_cases: Vec<serde_json::Value>,
     pub(crate) runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
     pub(crate) client_agent_readiness_cases: Vec<LeanClientAgentReadinessCase>,
     pub(crate) startup_readiness_cases: Vec<LeanStartupReadinessCase>,
@@ -440,6 +446,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) claude_platform_cases: Vec<serde_json::Value>,
     pub(crate) plugin_reference_cases: Vec<serde_json::Value>,
     pub(crate) plugin_pin_cases: Vec<serde_json::Value>,
+    pub(crate) pack_document_ownership_cases: Vec<serde_json::Value>,
     pub(crate) pack_wire_lock_cases: Vec<serde_json::Value>,
     pub(crate) pack_operator_wire_cases: Vec<serde_json::Value>,
     pub(crate) pack_wire_target_cases: Vec<serde_json::Value>,
@@ -527,15 +534,6 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) r4c_background_work_cases: Vec<LeanR4cBackgroundWorkCase>,
     pub(crate) tool_output_paging_cases: Vec<LeanToolOutputPagingCase>,
     pub(crate) interrupt_disposition_cases: Vec<LeanInterruptDispositionCase>,
-    pub(crate) codex_shim_projection_cases: Vec<LeanCodexShimProjectionCase>,
-    pub(crate) codex_shim_reasoning_projection_cases: Vec<LeanCodexShimReasoningProjectionCase>,
-    pub(crate) codex_shim_thread_status_cases: Vec<LeanCodexShimThreadStatusCase>,
-    pub(crate) codex_shim_agent_selection_cases: Vec<LeanCodexShimAgentSelectionCase>,
-    pub(crate) codex_shim_tool_metadata_cases: Vec<LeanCodexShimToolMetadataCase>,
-    pub(crate) codex_shim_context_usage_cases: Vec<LeanCodexShimContextUsageCase>,
-    pub(crate) codex_shim_compaction_projection_cases: Vec<LeanCodexShimCompactionProjectionCase>,
-    pub(crate) codex_shim_turn_lifecycle_cases: Vec<LeanCodexShimTurnLifecycleCase>,
-    pub(crate) codex_shim_binding_cases: Vec<LeanCodexShimBindingCase>,
     pub(crate) r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
     pub(crate) composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
     pub(crate) r6_background_theorem_witnesses: Vec<LeanBackgroundTheoremWitness>,
@@ -2574,6 +2572,21 @@ pub(crate) struct LeanCausalHopContract {
     pub(crate) deferred_creation_cases: Vec<LeanDeferredCreationCase>,
     pub(crate) write_cases: Vec<LeanSessionMessageWriteCase>,
     pub(crate) session_target_cases: Vec<LeanSessionTargetCase>,
+    pub(crate) session_list_cases: Vec<LeanSessionListCase>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanSessionListCase {
+    pub(crate) same_requester: bool,
+    pub(crate) same_node: bool,
+    pub(crate) caused: bool,
+    pub(crate) allowed_target: bool,
+    pub(crate) verified_starter_receipt: bool,
+    pub(crate) interrupt_allowed: bool,
+    pub(crate) expected_listed: bool,
+    pub(crate) expected_can_message: bool,
+    pub(crate) expected_can_interrupt: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2743,8 +2756,6 @@ mod canonical_output;
 pub(crate) mod canonical_presentation;
 #[path = "client_session.rs"]
 mod client_session;
-#[path = "codex_shim.rs"]
-mod codex_shim;
 #[path = "command_identity_queue.rs"]
 mod command_identity_queue;
 #[path = "compaction_canonical_projection.rs"]
@@ -2794,7 +2805,6 @@ pub(crate) use canonical_execution::*;
 pub(crate) use canonical_output::*;
 pub(crate) use canonical_presentation::*;
 pub(crate) use client_session::*;
-pub(crate) use codex_shim::*;
 pub(crate) use command_identity_queue::*;
 pub(crate) use compaction_canonical_projection::*;
 pub(crate) use compaction_projection_join::*;
@@ -3243,55 +3253,6 @@ pub(crate) fn lean_r4c_background_work_case(witness: &str) -> &'static LeanR4cBa
         .iter()
         .find(|case| case.witness() == witness)
         .unwrap_or_else(|| panic!("Lean R4c background-work witness {witness:?} was not emitted"))
-}
-
-pub(crate) fn lean_codex_shim_projection_cases() -> &'static [LeanCodexShimProjectionCase] {
-    &lean_contract_snapshot().codex_shim_projection_cases
-}
-
-pub(crate) fn lean_codex_shim_projection_case(
-    witness: &str,
-) -> &'static LeanCodexShimProjectionCase {
-    lean_contract_snapshot()
-        .codex_shim_projection_cases
-        .iter()
-        .find(|case| case.witness == witness)
-        .unwrap_or_else(|| panic!("Lean Codex shim projection witness {witness:?} was not emitted"))
-}
-
-pub(crate) fn lean_codex_shim_reasoning_projection_cases(
-) -> &'static [LeanCodexShimReasoningProjectionCase] {
-    &lean_contract_snapshot().codex_shim_reasoning_projection_cases
-}
-
-pub(crate) fn lean_codex_shim_thread_status_cases() -> &'static [LeanCodexShimThreadStatusCase] {
-    &lean_contract_snapshot().codex_shim_thread_status_cases
-}
-
-pub(crate) fn lean_codex_shim_agent_selection_cases() -> &'static [LeanCodexShimAgentSelectionCase]
-{
-    &lean_contract_snapshot().codex_shim_agent_selection_cases
-}
-
-pub(crate) fn lean_codex_shim_tool_metadata_cases() -> &'static [LeanCodexShimToolMetadataCase] {
-    &lean_contract_snapshot().codex_shim_tool_metadata_cases
-}
-
-pub(crate) fn lean_codex_shim_context_usage_cases() -> &'static [LeanCodexShimContextUsageCase] {
-    &lean_contract_snapshot().codex_shim_context_usage_cases
-}
-
-pub(crate) fn lean_codex_shim_compaction_projection_cases(
-) -> &'static [LeanCodexShimCompactionProjectionCase] {
-    &lean_contract_snapshot().codex_shim_compaction_projection_cases
-}
-
-pub(crate) fn lean_codex_shim_turn_lifecycle_cases() -> &'static [LeanCodexShimTurnLifecycleCase] {
-    &lean_contract_snapshot().codex_shim_turn_lifecycle_cases
-}
-
-pub(crate) fn lean_codex_shim_binding_cases() -> &'static [LeanCodexShimBindingCase] {
-    &lean_contract_snapshot().codex_shim_binding_cases
 }
 
 pub(crate) fn lean_r6_backgrounding_cases() -> &'static [LeanR6BackgroundingCase] {

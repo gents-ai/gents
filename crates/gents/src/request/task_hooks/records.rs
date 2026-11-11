@@ -10,7 +10,6 @@ use tokio_util::sync::CancellationToken;
 
 use super::{run_finally, HookCommandResult, ManagedTaskHookExec, TaskHookCancellation};
 use crate::documents::{TaskHook, TaskHookPhase};
-use crate::store::graphql::escape_graphql_string;
 use crate::tools::exec::ownership::{
     HostRecord, HostRecordStore, ProcessIdentity, ProcessRecorder,
 };
@@ -266,12 +265,16 @@ async fn request_resolved(access: &crate::ConfigAccess, record: &TaskHookRecord)
     struct Row {
         lifecycle_state: Option<gents_protocol::request_lifecycle::RequestLifecycleState>,
     }
-    let doc_id = escape_graphql_string(&record.request_doc_id);
-    let node_did = escape_graphql_string(&record.node_did);
-    let agent_did = escape_graphql_string(&record.agent_did);
-    let response = access.execute(&format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{node_did}" }}, agent_did: {{ _eq: "{agent_did}" }} }}, limit: 2) {{ lifecycle_state }} }}"#,
-    )).await?;
+    use gents_protocol::document_query::{
+        fields::agent_request as request, Filter, Query, Selection,
+    };
+    let query = Query::select(Selection::new().field(request::LIFECYCLE_STATE))
+        .filter(Filter::eq(request::DOC_ID, &record.request_doc_id))
+        .filter(Filter::eq(request::NODE_DID, &record.node_did))
+        .filter(Filter::eq(request::AGENT_DID, &record.agent_did))
+        .limit(2)
+        .render();
+    let response = access.read(&query).await?;
     let rows = response["data"]["AgentRequest"]
         .as_array()
         .context("task hook recovery query omitted request rows")?;

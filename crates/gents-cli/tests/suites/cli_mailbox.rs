@@ -50,7 +50,10 @@ async fn mailbox_list_scopes_to_caller_and_dismisses_owned_item() -> Result<()> 
     let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&created, "MailboxItem")
         .with_context(|| format!("created mailbox doc id: {created}"))?;
 
-    let listed = run_cli_json(&home_dir, &["mailbox", "list", "--graphql", &graphql])?;
+    let listed = run_cli_json(
+        &home_dir,
+        &["automation", "mailbox", "list", "--graphql", &graphql],
+    )?;
     let rows = listed.as_array().context("mailbox list array")?;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["title"], Value::String("CLI attention".into()));
@@ -58,11 +61,98 @@ async fn mailbox_list_scopes_to_caller_and_dismisses_owned_item() -> Result<()> 
 
     let dismissed = run_cli_json(
         &home_dir,
-        &["mailbox", "dismiss", &doc_id, "--graphql", &graphql],
+        &[
+            "automation",
+            "mailbox",
+            "dismiss",
+            &doc_id,
+            "--graphql",
+            &graphql,
+        ],
     )?;
     assert_eq!(dismissed["status"], "dismissed");
-    let open = run_cli_json(&home_dir, &["mailbox", "list", "--graphql", &graphql])?;
+    let open = run_cli_json(
+        &home_dir,
+        &["automation", "mailbox", "list", "--graphql", &graphql],
+    )?;
     assert_eq!(open.as_array().map(Vec::len), Some(0));
+
+    serve.child.kill().ok();
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mailbox_dismiss_refuses_a_question_that_needs_an_answer() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+    let model_name = format!("mock-mailbox-question-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--node-name",
+            "cli-mailbox-question",
+            "--model-name",
+            &model_name,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let node_did = node_did_from_init(&init)?;
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
+
+    let question = serde_json::json!({
+        "version": 3,
+        "prompt": "Which channel ships?",
+        "options": [{ "id": "stable", "label": "Stable" }, { "id": "beta", "label": "Beta" }],
+    })
+    .to_string();
+    let mutation = format!(
+        r#"mutation {{ create_MailboxItem(input: {{
+            item_key: "runtime:request-doc:ask:2", requester_did: "{did}",
+            node_did: "{did}", status: "open", kind: "ask", action: "start_request",
+            title: "Release channel", summary: null, payload: "{payload}",
+            source_kind: "runtime", source_id: "request-doc", session_id: null,
+            request_id: null, cause_doc_id: null,
+            target_node_did: "{did}", target_agent_did: "default",
+            expected_collection: null, parent_item_id: null, deadline_at: null,
+            created_at: "2026-08-25T12:00:00Z", updated_at: "2026-08-25T12:00:00Z",
+            resolved_at: null, resolved_doc_id: null
+        }}) {{ _docID }} }}"#,
+        did = escape_graphql_string(&node_did),
+        payload = escape_graphql_string(&question),
+    );
+    let created = graphql_query(&graphql, &mutation).await?;
+    let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&created, "MailboxItem")
+        .with_context(|| format!("created mailbox doc id: {created}"))?;
+
+    let refused = run_cli_failure_stderr(
+        &home_dir,
+        &[
+            "automation",
+            "mailbox",
+            "dismiss",
+            &doc_id,
+            "--graphql",
+            &graphql,
+        ],
+    )?;
+    assert!(
+        refused.contains("reply to this question through its original item; use an answer or explicit Skip when optional"),
+        "{refused}"
+    );
+    let open = run_cli_json(
+        &home_dir,
+        &["automation", "mailbox", "list", "--graphql", &graphql],
+    )?;
+    let rows = open.as_array().context("mailbox list array")?;
+    assert_eq!(rows.len(), 1, "the question is still open: {open}");
+    assert_eq!(rows[0]["status"], "open");
 
     serve.child.kill().ok();
     Ok(())

@@ -131,7 +131,7 @@ instance (entry : QueueEntry) (key : QueueKey) : Decidable (entry.coalesceWellFo
 
 def queuedUserMessage (entry : QueueEntry) : Prop :=
   entry.source = .user ∧ entry.policy = .append ∧ entry.origin = .interactive ∧
-    entry.queuedAfter.isSome
+    entry.queuedAfter.isSome ∧ entry.delivery = .steer
 
 instance (entry : QueueEntry) : Decidable entry.queuedUserMessage := by
   unfold QueueEntry.queuedUserMessage

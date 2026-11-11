@@ -1,4 +1,4 @@
-// __NAME__: a workflow shipped as a job plugin. `gents pack build` wraps this file in a
+// __NAME__: a workflow shipped as a job plugin. `gents config pack build` wraps this file in a
 // stdin/stdout harness that calls `module.exports(input)` once per step with the host's
 // view of the run and acts on the one value returned: `effects` to start or steer
 // children, `job_calls` to read a completed child's text, and `result`, `suspend` or
@@ -8,7 +8,7 @@
 
 const NAME = "__NAME__";
 const TITLE = "__TITLE__";
-// The AgentTarget the pack ships; `gents pack wire --targets-from` puts it in the job block.
+// The AgentTarget the pack ships; `gents config pack wire --targets-from` puts it in the job block.
 const TARGET = "__TARGET__";
 const SLOT = "worker";
 const DEFAULT_BUDGET = 8;

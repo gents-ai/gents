@@ -1,9 +1,12 @@
 import {
+  listenToWindow,
+  NOTIFICATION_CLICKED_EVENT,
   notificationsGranted,
+  postClickableNotification,
   postNotification,
   requestNotifications,
 } from "../../../lib/nativeShell";
-import { IN_DESKTOP } from "@/screens/shortcutKeys";
+import { IN_DESKTOP, IS_MAC } from "@/screens/shortcutKeys";
 
 export type NotifyPermission = "granted" | "denied" | "default";
 
@@ -21,20 +24,72 @@ export type NotifyPlatform = {
   request(): Promise<NotifyPermission>;
   /** settles once the system took the notice, or fails with why it
       didn't; the system may still drop it after taking it (Focus, or
-      notifications switched off for the app), and nothing reports that */
-  show(notice: Notice): Promise<void>;
+      notifications switched off for the app), and nothing reports that.
+      `reportsClick: false` says this one notice's click won't reach
+      `onClick` although the platform's usually do. */
+  show(notice: Notice): Promise<void | { reportsClick: boolean }>;
   /** whether a click reaches `onClick`; where it doesn't, the click only
       brings the window forward */
   reportsClicks: boolean;
 };
+
+/* the notices whose click this view waits to hear about, by the id they
+   were posted under; the oldest go first past the cap, since the system
+   keeps a notice in Notification Center for as long as the person lets it */
+const CLICKS_KEPT = 64;
+
+export function clickRouter(listen: (heard: (id: string) => void) => Promise<unknown>) {
+  const clicks = new Map<string, () => void>();
+  let listening: Promise<unknown> | null = null;
+  return {
+    /** waits on `onClick` under a new id, once the view is listening */
+    async expect(onClick: (() => void) | undefined): Promise<string> {
+      listening ??= listen((id) => {
+        const clicked = clicks.get(id);
+        clicks.delete(id);
+        clicked?.();
+      });
+      await listening;
+      const id = crypto.randomUUID();
+      if (onClick) {
+        clicks.set(id, onClick);
+        for (const old of clicks.keys()) {
+          if (clicks.size <= CLICKS_KEPT) break;
+          clicks.delete(old);
+        }
+      }
+      return id;
+    },
+    forget(id: string) {
+      clicks.delete(id);
+    },
+  };
+}
+
+/* on macOS the shell waits on each notice and reports its click; elsewhere
+   the plugin's notice is fire and forget */
+const macClicks = clickRouter((heard) =>
+  listenToWindow<string>(NOTIFICATION_CLICKED_EVENT, heard),
+);
 
 const desktop: NotifyPlatform = {
   async permission() {
     return (await notificationsGranted()) ? "granted" : "default";
   },
   request: () => requestNotifications(),
-  show: ({ title, body }) => postNotification({ title, body }),
-  reportsClicks: false,
+  show: async ({ title, body, onClick }) => {
+    if (!IS_MAC) return postNotification({ title, body });
+    const id = await macClicks.expect(onClick);
+    try {
+      const posted = await postClickableNotification({ title, body, id });
+      if (!posted.reportsClick) macClicks.forget(id);
+      return posted;
+    } catch (error) {
+      macClicks.forget(id);
+      throw error;
+    }
+  },
+  reportsClicks: IS_MAC,
 };
 
 const browser: NotifyPlatform = {

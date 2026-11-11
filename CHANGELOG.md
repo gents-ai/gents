@@ -6,6 +6,18 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Rendered request captures cut the stable request fields (model, tool
+  schemas, settings) apart from the message list, and close shared manifest
+  groups after four entries at every second content key instead of eight at
+  every sixteenth, choosing group boundaries from block content alone rather
+  than from manifest node bytes. A session no longer stores its tool schemas
+  again while its opening messages change, which previously depended on
+  where the rolling hash fired around the Agent DID in the system prompt; a
+  call rewrites a short manifest tail whose size no longer grows with the
+  calls since its group last closed; and a payload's manifest shape no
+  longer varies with its session's document IDs. Existing captures stay
+  readable; the first capture after upgrading stores its leading block and
+  manifests once more (#3605).
 - Breaking: P2P carries only discovery and enrollment, so the agent-facing
   application-collection pairing and sync surface is removed. The `p2p` tool
   drops `pairings_list`, `pairings_get`, `pairings_preview`, `pairings_apply`,
@@ -29,6 +41,87 @@ source consistency checks, not a separate runtime compatibility version.
   `FileInventoryImageRequest` and `FileInventoryPage` collections leave the
   schema baseline; existing homes keep any stored rows untouched. A file
   inventory admission's request no longer carries `peer_id`.
+- The CLI has seven top-level commands: `accounts`, `automation`, `config`,
+  `runtime`, `sessions`, `status` and `utils`, and `gents --help` lists them
+  with a description each. The old names stop working; there are no
+  aliases, so update scripts that call them.
+
+  | Old | New |
+  | --- | --- |
+  | `chat MESSAGE` | `gents -p MESSAGE`; interactive `chat` is gone |
+  | `chat --session-id`, `--message-file`, `--output json` | `utils debug request submit --session-id`, `--content-file` |
+  | `codex-login`, `grok-login`, `claude-login`, `claude-gateway-login` | `accounts login codex`, `grok`, `claude`, `claude-gateway` |
+  | `cloud login` | `accounts login cloud` |
+  | `codex-auth-probe`, `grok-auth-probe` | `accounts probe codex`, `grok` |
+  | `accounts list`, `label`, `disable`, `remove` | unchanged |
+  | `session ...` | `sessions ...` |
+  | `goal`, `task`, `job`, `mailbox` | `automation goal`, `automation task`, `automation job`, `automation mailbox` |
+  | `tools explain` | `config tools explain` |
+  | `mcp register`, `mcp probe` | `config mcp register`, `config mcp probe` |
+  | `pack ...`, `plugin ...`, `ux ...` | `config pack ...`, `config pack plugin ...`, `config pack ux ...` |
+  | `server`, `service`, `provision`, `reset`, `diagnose`, `p2p`, `desktop`, `version` | `runtime server`, `runtime service`, and so on |
+  | `query`, `write`, `export`, `document`, `schema` | `utils data query`, and so on |
+  | `request`, `response`, `trace`, `background`, `fleet` | `utils debug request`, and so on |
+  | `eval`, `optimization` | `utils eval`, `utils optimization` |
+  | `codex` | removed; bare `gents` opens the built-in shell |
+  | `init`, `prepare-runtime` | hidden, still work |
+
+  `gents server` and `gents service` also still work, hidden: installed service
+  definitions run `gents server`, and an updater of another version runs
+  `gents service update-check`.
+- `gents -p MESSAGE` sends one message to the home's default agent, or to
+  `--agent DID`, prints only the reply and exits, as `claude -p` does. It brings
+  up the runtime as bare `gents` does, needs no terminal on a home that is set
+  up, and denies any approval the turn asks for.
+- `gents PROMPT` opens the built-in shell with PROMPT as its first message, as
+  `claude "query"` does. A PROMPT that is only a former command's name, such as
+  `reset` or `codex`, is refused with the command's new name rather than sent.
+- `gents --continue SESSION_ID` picks a session back up with the agent it had:
+  in the built-in shell's first tab, or for one more turn with `-p MESSAGE`,
+  which waits for a turn still running in that session. The shell takes no
+  PROMPT with it; type the next turn once the session opens. When the shell
+  closes, `gents` prints the `--continue` command for the session its center
+  pane showed.
+- `gents --yolo` opens the yolo agent, and `gents --yolo -p MESSAGE` messages it:
+  a general-purpose agent with a copy of the default agent's tools, The
+  Engineer's on a home `gents` set up. The first use makes it, later uses reuse
+  it.
+- `gents` with no command sets up a home on first run, brings up its runtime
+  through the native service without enabling it at login, and opens the
+  built-in shell. Setup seeds The
+  Engineer with the desktop's default authority (the `yolo` tool package;
+  commands run as you and the tool root is not a sandbox) and asks for a
+  provider, then its connection method, from the desktop's catalog. After
+  sign-in it lists the provider's models and asks each
+  value the desktop offers for the chosen model, showing its default. Without a terminal it prints help and exits 2, as a missing
+  subcommand did.
+- `gents --agent DID` opens any runnable agent in the shell's first tab, in as
+  many terminals side by side as you like, with no restart and no saved agent
+  setting.
+- First-run setup asks which folder agents should work in.
+  It refuses the filesystem root and anything above the person's home, as the desktop
+  does, and asks for confirmation before using the whole home.
+- The Grok Build interface is removed. The runtime no longer serves the Grok
+  socket, `gents runtime server` no longer takes `--grok-shim`,
+  `--grok-shim-socket-path` or `--grok-shim-agent-id`. Agents' `config
+  discovery scan` no longer reads Grok CLI configuration and refuses a `grok`
+  source. Grok as a model provider, including `accounts login grok`, is
+  unchanged.
+- The Codex interface and the runtime's Codex app-server are removed. Bare
+  `gents`, `gents PROMPT`, `gents --agent DID` and `gents --continue SESSION_ID`
+  open the built-in shell, which reads and writes the runtime over its signed
+  GraphQL endpoint, as the desktop does; `gents` waits for that endpoint and for
+  an agent the runtime reports ready. Removed: `gents codex`, `gents config
+  client set` and `show`, `gents runtime server --no-codex-shim` and its
+  `--codex-shim-bind-addr`, `--codex-shim-port`, `--codex-shim-auth-token-env`,
+  `--codex-shim-public-url`, `--codex-shim-agent-did`, `--codex-shim-timeout-secs`
+  and `--codex-shim-poll-ms`, `gents shell --codex-remote`, the server's
+  `codex_shim` ready output and `/healthz` `checks.codex_shim`. Scripts that pass
+  `--no-codex-shim` must drop it. A `client.json` left in a home, naming Codex or
+  Grok, is named when `gents` opens and otherwise ignored; delete it to stop the
+  notice. Codex as a model provider, including `accounts login codex`, is
+  unchanged.
+- `gents` remembers the home setup chose. This also moves the desktop's default home.
 
 ## 1.0.0-rc1 - 2026-11-03
 

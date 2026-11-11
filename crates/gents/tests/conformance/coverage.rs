@@ -500,6 +500,21 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "PackPlacementReaderCases",
         ),
         (
+            !snapshot.self_config_scope_cases.groups.is_empty(),
+            "self_config_scope_cases",
+            "SelfConfigScopeCases",
+        ),
+        (
+            !snapshot.pack_document_ownership_cases.is_empty(),
+            "pack_document_ownership_cases",
+            "PackDocumentOwnershipCases",
+        ),
+        (
+            !snapshot.agent_target_access_cases.is_empty(),
+            "agent_target_access_cases",
+            "AgentTargetAccessCases",
+        ),
+        (
             !snapshot.native_route_cases.is_empty(),
             "native_route_cases",
             "NativeRouteCases",
@@ -905,6 +920,33 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "hosted_pack_schema_cases".into(),
             "HostedPackSchemaCases".into(),
         ));
+    }
+    // Pack generators the proofs build as their own executables, outside the
+    // snapshot; their Rust consumers run them directly.
+    let lakefile = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("proofs/lakefile.lean"),
+    )
+    .expect("reading the proofs lakefile");
+    for (module, key, class) in [
+        (
+            "PackSourceSelection",
+            "pack_source_selection_cases",
+            "PackSourceSelectionCases",
+        ),
+        (
+            "PackInstallVariables",
+            "pack_install_variable_cases",
+            "PackInstallVariableCases",
+        ),
+        (
+            "PackInstallUpgrade",
+            "pack_install_upgrade_cases",
+            "PackInstallUpgradeCases",
+        ),
+    ] {
+        if lakefile.contains(&format!("`Proofs.Conformance.{module},")) {
+            emitted.insert((key.into(), class.into()));
+        }
     }
     if !snapshot.hosted_pack_home_cases.is_empty() {
         emitted.insert((
@@ -2138,54 +2180,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "R4cBackgroundWorkCases".to_string(),
         ));
     }
-    if !lean_codex_shim_projection_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_projection_cases".to_string(),
-            "CodexShimProjectionCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_reasoning_projection_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_reasoning_projection_cases".to_string(),
-            "CodexShimReasoningProjectionCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_thread_status_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_thread_status_cases".to_string(),
-            "CodexShimThreadStatusCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_agent_selection_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_agent_selection_cases".to_string(),
-            "CodexShimAgentSelectionCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_tool_metadata_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_tool_metadata_cases".to_string(),
-            "CodexShimToolMetadataCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_context_usage_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_context_usage_cases".to_string(),
-            "CodexShimContextUsageCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_compaction_projection_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_compaction_projection_cases".to_string(),
-            "CodexShimCompactionProjectionCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_binding_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_binding_cases".to_string(),
-            "CodexShimBindingCases".to_string(),
-        ));
-    }
     if !lean_plugin_reference_cases().is_empty() {
         emitted.insert((
             "plugin_reference_cases".to_string(),
@@ -2202,12 +2196,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "startup_readiness_cases".to_string(),
             "StartupReadinessCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_turn_lifecycle_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_turn_lifecycle_cases".to_string(),
-            "CodexShimTurnLifecycleCases".to_string(),
         ));
     }
     if !lean_r6_backgrounding_cases().is_empty() {
@@ -2280,6 +2268,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.goal_session_observation_cases,
             "goal_session_observation_cases",
             "GoalSessionObservationCases",
+        ),
+        (
+            &snapshot.goal_session_fold_cases,
+            "goal_session_fold_cases",
+            "GoalSessionFoldCases",
         ),
         (
             &snapshot.plugin_approval_cases,
@@ -2390,6 +2383,8 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "causal_hop_contract".into(),
         "SessionTargetAuthorityCases".into(),
     ));
+    assert!(!snapshot.causal_hop_contract.session_list_cases.is_empty());
+    emitted.insert(("causal_hop_contract".into(), "SessionListEntryCases".into()));
     assert!(!snapshot.title_text_cases["cases"]
         .as_array()
         .unwrap()

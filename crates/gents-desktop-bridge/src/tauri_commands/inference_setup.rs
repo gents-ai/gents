@@ -26,8 +26,6 @@ use tauri::{AppHandle, Emitter, Runtime, State};
 #[cfg(test)]
 use crate::accounts::{CredentialSave, PendingOAuthCredentials};
 use crate::error::{BridgeError, BridgeErrorCode};
-#[cfg(test)]
-use crate::inference_setup::discovery_account;
 pub use crate::inference_setup::{
     discover_inference_models_for_core, inference_backend_recommendation,
     inference_model_recommendation, InferenceBackendRecommendationRequest,
@@ -1676,6 +1674,7 @@ mod provider_account_tests {
     #[tokio::test]
     async fn discovery_reads_the_account_its_backend_names() {
         use gents::documents::BackendAuth;
+        use gents_desktop_core::inference::discovery_account;
 
         let runtime = served().await;
         let access = runtime.user_access();

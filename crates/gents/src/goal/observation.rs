@@ -50,7 +50,11 @@ pub(crate) async fn reconcile_goal_observations_with_identities(
             }
             let mut scopes = Vec::new();
             if full {
-                let response = txn.execute(&format!(r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{owner}" }}, agent_did: {{ _eq: "{agent_did}" }} }}) {{ session_id requester_did }} }}"#)).await?;
+                use gents_protocol::document_query::{fields::agent_session as session_fields, Filter, Query, Selection};
+                let rendered = Query::select(Selection::new().field(session_fields::SESSION_ID).field(session_fields::REQUESTER_DID))
+                    .filter(Filter::eq(session_fields::NODE_DID, identity.did()).and(Filter::eq(session_fields::AGENT_DID, agent.did())))
+                    .render();
+                let response = txn.run(&rendered).await?;
                 let rows = response["data"]["AgentSession"].as_array().context("goal session sweep omitted rows")?;
                 for row in rows {
                     if let Some(session) = row["session_id"].as_str().filter(|session| !session.trim().is_empty()) {
@@ -100,13 +104,23 @@ async fn rows_in_txn(
     txn: &ConfigApplyTxn<'_>,
     session: &SessionOwnerRow,
 ) -> Result<Vec<ObservationRow>> {
-    let response = txn.execute(&format!(
-        r#"{{ GoalObservation(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{
-            _docID node_did session_id session_doc_id requester_did observation_json
-        }} }}"#,
-        escape_graphql_string(&session.session.node_did),
-        escape_graphql_string(&session.session.session_id),
-    )).await?;
+    use gents_protocol::document_query::{
+        fields::goal_observation as fields, Filter, Query, Selection,
+    };
+    let rendered = Query::select(
+        Selection::doc_id()
+            .field(fields::NODE_DID)
+            .field(fields::SESSION_ID)
+            .field(fields::SESSION_DOC_ID)
+            .field(fields::REQUESTER_DID)
+            .field(fields::OBSERVATION_JSON),
+    )
+    .filter(
+        Filter::eq(fields::NODE_DID, &session.session.node_did)
+            .and(Filter::eq(fields::SESSION_ID, &session.session.session_id)),
+    )
+    .render();
+    let response = txn.run(&rendered).await?;
     decode_observation_rows(&response, session)
 }
 

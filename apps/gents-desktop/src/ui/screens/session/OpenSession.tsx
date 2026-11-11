@@ -310,12 +310,14 @@ export function OpenSession() {
                     </div>
                   )}
                   {summary &&
-                    !parentWork.parent &&
-                    (summary.taskId || summary.triggerId) && (
+                    (summary.taskOrigin ||
+                      summary.taskId ||
+                      (!parentWork.parent && summary.triggerId)) && (
                       <div className="mt-1 mb-1">
                         <StartedByAutomation
                           summary={summary}
                           nodeDid={deployment?.nodeDid ?? null}
+                          inherited={Boolean(parentWork.parent)}
                         />
                       </div>
                     )}
@@ -367,7 +369,6 @@ export function OpenSession() {
                 toBottom={toBottom}
                 stop={stop}
                 stopping={stopping}
-                goal={session?.goal ?? null}
                 agentDid={session?.agentDid ?? null}
               />
             </div>
@@ -397,7 +398,6 @@ type ScreenFacts = Pick<
   | "agentDid"
   | "title"
   | "context"
-  | "goal"
   | "latestRequestId"
   | "turnState"
   | "latestRequestOutcome"
@@ -411,7 +411,6 @@ function selectScreenFacts(session: DesktopSessionSnapshot | null): ScreenFacts 
     agentDid: session.agentDid,
     title: session.title,
     context: session.context,
-    goal: session.goal,
     latestRequestId: session.latestRequestId,
     turnState: session.turnState,
     latestRequestOutcome: session.latestRequestOutcome,

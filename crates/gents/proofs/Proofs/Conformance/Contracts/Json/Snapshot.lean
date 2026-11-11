@@ -36,6 +36,7 @@ import Proofs.Identity.NodeFileRequests
 import Proofs.Identity.MailboxAccess
 import Proofs.Identity.WorkspaceAndFileRequests
 import Proofs.Identity.PackPlacementReaders
+import Proofs.Identity.AgentTargetAccess
 import Proofs.Triggers.NativeRoute
 import Proofs.Identity.SessionInputEdit
 import Proofs.EventDelivery.WatcherConformance
@@ -49,6 +50,7 @@ import Proofs.Conformance.CountCarrier
 import Proofs.Conformance.ConfigurationScope
 import Proofs.Conformance.Initialization
 import Proofs.Conformance.EnrollmentPendingRequests
+import Proofs.Conformance.EnrollmentCandidateName
 import Proofs.Conformance.OperatorBaseFreeze
 import Proofs.Conformance.LogicalOutputObligation
 import Proofs.Conformance.InvalidToolProgress
@@ -82,7 +84,6 @@ import Proofs.Conformance.Contracts.Json.Lsp
 import Proofs.Conformance.Contracts.Json.ClientRuntime
 import Proofs.Conformance.Contracts.Json.BackgroundWork
 import Proofs.Conformance.Contracts.Json.ComposedInvariants
-import Proofs.Conformance.Contracts.Json.CodexShim
 import Proofs.Conformance.Contracts.Json.Workspace
 import Proofs.Conformance.Contracts.Json.Callback
 import Proofs.Conformance.Contracts.Json.SelfConfig
@@ -428,6 +429,7 @@ def snapshotGoalMutationCasesJson : String :=
     ++ "\"goal_client_delivery_cases\":" ++ Conformance.GoalClientDeliveryContracts.casesJson.compress ++ ","
     ++ "\"goal_observation_cases\":" ++ Conformance.GoalObservationContracts.casesJson ++ ","
     ++ "\"goal_session_observation_cases\":" ++ Conformance.GoalSessionObservationContracts.casesJson ++ ","
+    ++ "\"goal_session_fold_cases\":" ++ Conformance.GoalSessionObservationContracts.foldCasesJson ++ ","
     ++ "\"workspace_permission_write_cases\":" ++ workspacePermissionWriteCasesJson ++ ","
     ++ "\"workspace_permission_cases\":" ++ workspacePermissionCasesJson ++ ","
     ++ "\"workspace_command_root_cases\":" ++ Conformance.WorkspaceCommandRoot.casesJson.compress ++ ","
@@ -533,6 +535,8 @@ def snapshotSessionCasesJson : String :=
   ""
     ++ "\"file_inventory_closure_cases\":"
       ++ fileInventoryClosureCasesJson ++ ","
+    ++ "\"enrollment_auto_renewal_cases\":" ++ autoRenewalCasesJson ++ ","
+    ++ "\"enrollment_renewal_intent_cases\":" ++ renewalIntentCasesJson ++ ","
     ++ "\"enrollment_cases\":"
       ++ enrollmentCasesJson ++ ","
     ++ "\"enrollment_durable_projection_cases\":"
@@ -553,6 +557,8 @@ def snapshotSessionCasesJson : String :=
       ++ Conformance.EnrollmentPendingRequests.routeCasesJson ++ ","
     ++ "\"enrollment_startup_cases\":"
       ++ Conformance.EnrollmentPendingRequests.startupCasesJson ++ ","
+    ++ "\"enrollment_candidate_name_cases\":"
+      ++ Conformance.EnrollmentCandidateName.casesJson ++ ","
     ++ "\"enrollment_encoding_cases\":"
       ++ enrollmentEncodingCasesJson ++ ","
     ++ "\"enrollment_digest_cases\":"
@@ -644,6 +650,7 @@ def snapshotIdentityCasesJson : String :=
     ++ "\"workspace_quickstart_selection_cases\":" ++ Identity.WorkspaceAndFileRequests.quickstartSelectedAgentCasesJson ++ ","
     ++ "\"workspace_callback_selection_cases\":" ++ Identity.WorkspaceAndFileRequests.callbackSelectedAgentCasesJson ++ ","
     ++ "\"pack_placement_reader_cases\":" ++ Identity.PackPlacementReaders.casesJson ++ ","
+    ++ "\"agent_target_access_cases\":" ++ Identity.AgentTargetAccess.casesJson ++ ","
     ++ "\"native_route_cases\":" ++ Triggers.NativeRoute.casesJson ++ ","
     ++ "\"workspace_datastore_write_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceDatastoreWriteCasesJson ++ ","
     ++ "\"workspace_root_access_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceRootAccessCasesJson ++ ","
@@ -757,6 +764,7 @@ def snapshotClientCasesJson : String :=
     ++ "\"plugin_reference_cases\":"
       ++ PackInstallation.casesJson ++ ","
     ++ "\"plugin_pin_cases\":" ++ PackInstallation.pinCasesJson ++ ","
+    ++ "\"pack_document_ownership_cases\":" ++ PackInstallation.ownershipCasesJson ++ ","
     ++ "\"pack_wire_lock_cases\":" ++ PackInstallation.wireLockCasesJson ++ ","
     ++ "\"pack_wire_target_cases\":" ++ PackInstallation.wireTargetCasesJson ++ ","
     ++ "\"pack_operator_wire_cases\":" ++ PackInstallation.operatorWireCasesJson ++ ","
@@ -775,6 +783,7 @@ def snapshotClientCasesJson : String :=
     ++ "\"readiness_publication_cases\":"
       ++ readinessPublicationCasesJson ++ ","
     ++ "\"runtime_session_selection_cases\":" ++ sessionSelectionCasesJson ++ ","
+    ++ "\"runtime_configuration_admission_cases\":" ++ configurationAdmissionCasesJson ++ ","
     ++ "\"runtime_reconcile_cases\":"
       ++ jsonArray (runtimeReconcileCases.map runtimeReconcileCaseJson) ++ ","
     ++ "\"client_agent_readiness_cases\":"
@@ -951,24 +960,6 @@ def snapshotRecoveryCasesJson : String :=
     ++ "\"interrupt_disposition_cases\":"
       ++ jsonArray
         (interruptDispositionCases.map interruptDispositionCaseJson) ++ ","
-    ++ "\"codex_shim_projection_cases\":"
-      ++ codexShimProjectionCasesJson ++ ","
-    ++ "\"codex_shim_reasoning_projection_cases\":"
-      ++ codexShimReasoningProjectionCasesJson ++ ","
-    ++ "\"codex_shim_thread_status_cases\":"
-      ++ codexShimThreadStatusCasesJson ++ ","
-    ++ "\"codex_shim_agent_selection_cases\":"
-      ++ codexShimAgentSelectionCasesJson ++ ","
-    ++ "\"codex_shim_tool_metadata_cases\":"
-      ++ codexShimToolMetadataCasesJson ++ ","
-    ++ "\"codex_shim_context_usage_cases\":"
-      ++ codexShimContextUsageCasesJson ++ ","
-    ++ "\"codex_shim_compaction_projection_cases\":"
-      ++ codexShimCompactionProjectionCasesJson ++ ","
-    ++ "\"codex_shim_turn_lifecycle_cases\":"
-      ++ codexShimTurnLifecycleCasesJson ++ ","
-    ++ "\"codex_shim_binding_cases\":"
-      ++ codexShimBindingCasesJson ++ ","
     ++ "\"r6_backgrounding_cases\":"
       ++ jsonArray
         (r6BackgroundingCases.map r6BackgroundingCaseJson) ++ ","

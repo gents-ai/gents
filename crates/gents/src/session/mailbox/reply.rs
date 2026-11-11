@@ -1,6 +1,6 @@
 use super::{MailboxAction, MailboxItem, MailboxStatus};
 use crate::store::config_client::ConfigApplyTxn;
-use crate::store::graphql::{escape_graphql_string, rows, single_mutation_document};
+use crate::store::graphql::{rows, single_mutation_document};
 use anyhow::{ensure, Context, Result};
 use gents_protocol::row::AgentRequest;
 
@@ -15,12 +15,15 @@ pub(crate) async fn claim_reply_in_txn(
     let Some(source) = request.caused_by_source_doc_id.as_deref() else {
         return Ok(());
     };
-    let query = format!(
-        r#"{{ MailboxItem(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-        escape_graphql_string(source),
-        super::MAILBOX_FIELDS,
-    );
-    let response = txn.execute_local_response(&query).await?;
+    let query = {
+        use gents_protocol::document_query::{
+            fields::mailbox_item as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::owned(super::MAILBOX_FIELDS))
+            .filter(Filter::eq(fields::DOC_ID, source))
+            .render()
+    };
+    let response = txn.run_local_response(&query).await?;
     let items = rows::<MailboxItem>(&response, gents_protocol::row::MAILBOX_COLLECTION)?;
     let Some(item) = items.first() else {
         return Ok(());
@@ -28,12 +31,17 @@ pub(crate) async fn claim_reply_in_txn(
     if item.parsed_action() != Some(MailboxAction::StartRequest) {
         return Ok(());
     }
-    let query = format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-        escape_graphql_string(&request.doc_id),
-        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
-    );
-    let response = txn.execute_local_response(&query).await?;
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::owned(
+            gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
+        ))
+        .filter(Filter::eq(fields::DOC_ID, &request.doc_id))
+        .render()
+    };
+    let response = txn.run_local_response(&query).await?;
     let records = rows::<gents_protocol::row::AgentRequestRow>(&response, "AgentRequest")?;
     let record = records
         .into_iter()
@@ -99,17 +107,21 @@ pub(crate) async fn claim_reply_in_txn(
     if item.parsed_status() == Some(MailboxStatus::Acted) {
         return Ok(());
     }
-    let mutation = format!(
-        r#"mutation {{ update_MailboxItem(
-            filter: {{ _docID: {{ _eq: "{}" }}, status: {{ _eq: "open" }} }},
-            input: {{ status: "acted", resolved_doc_id: "{}", resolved_at: "{}", updated_at: "{}" }}
-        ) {{ _docID }} }}"#,
-        escape_graphql_string(&item.doc_id),
-        escape_graphql_string(&request.doc_id),
-        escape_graphql_string(now),
-        escape_graphql_string(now),
-    );
-    let response = txn.execute_local_response(&mutation).await?;
+    let mutation = {
+        use gents_protocol::document_query::{
+            fields::mailbox_item as fields, Filter, Input, Update,
+        };
+        Update::matching(
+            Filter::eq(fields::DOC_ID, &item.doc_id).and(Filter::eq(fields::STATUS, "open")),
+            Input::new()
+                .set(fields::STATUS, "acted")
+                .set(fields::RESOLVED_DOC_ID, &request.doc_id)
+                .set(fields::RESOLVED_AT, now)
+                .set(fields::UPDATED_AT, now),
+        )
+        .render()
+    };
+    let response = txn.run_local_response(&mutation).await?;
     ensure!(
         single_mutation_document(&response, "update_MailboxItem")?.is_some(),
         "mailbox reply claim did not consume an open item"

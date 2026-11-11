@@ -25,6 +25,7 @@ async fn install(home: &Path, package: String) -> anyhow::Result<Value> {
     crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
         package,
         inference_slots: Vec::new(),
+        dependency_variables: Vec::new(),
         preview: false,
         scope: scope(home),
         output: OutputFormat::Json,
@@ -37,6 +38,7 @@ async fn install(home: &Path, package: String) -> anyhow::Result<Value> {
         explicit: true,
     }))
     .await
+    .map_err(gents::pack::PackChangeError::into_anyhow)
 }
 
 async fn remove_pkg(home: &Path, package: &str) -> anyhow::Result<Value> {
@@ -46,6 +48,7 @@ async fn remove_pkg(home: &Path, package: &str) -> anyhow::Result<Value> {
         drift: PackDriftArgs::default(),
     }))
     .await
+    .map_err(gents::pack::PackChangeError::into_anyhow)
 }
 
 fn assets_fixture_spec() -> String {
@@ -487,7 +490,7 @@ async fn initialized_home() -> tempfile::TempDir {
         home.path().to_str().unwrap(),
     ])
     .unwrap();
-    let crate::cli::Command::Init(init_args) = cli.command else {
+    let Some(crate::cli::Command::Init(init_args)) = cli.command else {
         panic!("expected init")
     };
     crate::commands::init::init(init_args).await.unwrap();
@@ -729,6 +732,7 @@ async fn wiring_holds_store_lock_through_pin_commit() {
         false,
         Some(&owner),
         &std::collections::BTreeMap::new(),
+        gents::pack::PackSource::Local { file_name: None },
         move |identity, _| async move {
             gents::pack::record_plugin_store_change(
                 &notify_access,

@@ -2,7 +2,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{Context as _, Result};
-use gents::eval::checks::CheckRegistry;
+use gents_eval::checks::CheckRegistry;
 
 use self::contract::{first_turn, MAX_VALIDATION_ROUNDS, VALIDATION_PREFIX};
 use self::dossier::Dossier;
@@ -176,7 +176,7 @@ fn print_written(
     let scope = scope_flags(&ctx.scope);
     writeln!(
         out,
-        "\nnext:\n  gents config apply --root {} --bind-node-did home{scope}\n  gents eval run {} --cell baseline={}:{} --profile baseline={}{scope}",
+        "\nnext:\n  gents config apply --root {} --bind-node-did home{scope}\n  gents utils eval run {} --cell baseline={}:{} --profile baseline={}{scope}",
         written.out.display(),
         definition.definition_id,
         ctx.subject,
@@ -225,7 +225,7 @@ pub(crate) async fn preflight(args: &EvalInitArgs) -> Result<()> {
     };
     anyhow::ensure!(
         served,
-        "start `gents server` for this home and retry: the author runs on a served home"
+        "start `gents runtime server` for this home and retry: the author runs on a served home"
     );
     write::recover_output(&args.out, &home_dir)?;
     anyhow::ensure!(
@@ -244,7 +244,7 @@ pub(crate) async fn run(
 ) -> Result<()> {
     let gents::ConfigAccess::Graphql(graphql) = &ctx.access else {
         anyhow::bail!(
-            "start `gents server` for this home and retry: the author runs on a served home"
+            "start `gents runtime server` for this home and retry: the author runs on a served home"
         );
     };
 
@@ -359,7 +359,7 @@ pub(crate) async fn run(
     .await;
     writeln!(
         out,
-        "session {id}: continue it with `gents chat --session-id {id} --agent-did {}`",
+        "session {id}: continue it with `gents utils debug request submit --session-id {id} --agent-did {} --content MESSAGE`",
         author_agent,
         id = turn.session_id()
     )?;
@@ -376,7 +376,7 @@ pub(crate) async fn install_pack_slot(
     let manifest = pack.manifest();
     let requested = std::collections::BTreeMap::from([(slot.to_owned(), profile.to_owned())]);
     anyhow::ensure!(manifest.metadata.dependencies.is_empty(),
-        "eval author pack dependencies must be installed through `gents pack install` on the runtime host");
+        "eval author pack dependencies must be installed through `gents config pack install` on the runtime host");
     let prepared = gents::pack::prepare_document_pack_archive(
         access,
         owner,
@@ -386,8 +386,10 @@ pub(crate) async fn install_pack_slot(
         gents::pack::InstalledVia::Operator,
         None,
         &|_| None,
+        &Default::default(),
     )
-    .await?;
+    .await
+    .map_err(gents::pack::PackChangeError::into_anyhow)?;
     gents::pack::install_prepared_document_graph(
         access,
         owner,
@@ -638,9 +640,9 @@ mod tests {
     }
 
     /// A live smoke test: the author runs as a real request on a served
-    /// home, `gents eval init <subject> --agent fixture-worker`-style, the
+    /// home, `gents utils eval init <subject> --agent fixture-worker`-style, the
     /// operator answering every question with "draft". Needs `GENTS_EVAL_INIT_HOME`
-    /// pointing at a home `gents server` already serves, with a backend the
+    /// pointing at a home `gents runtime server` already serves, with a backend the
     /// resolved profile can reach. It asserts only that a pack was written
     /// and validated; everything else about the draft is the author's.
     #[tokio::test]
@@ -652,7 +654,7 @@ mod tests {
         );
         let state = crate::home_state::read_runtime_state(&home_dir)
             .unwrap()
-            .expect("a runtime state written by `gents server`");
+            .expect("a runtime state written by `gents runtime server`");
         crate::load_client_identity().await.unwrap();
         let graphql = crate::home_graphql_endpoint(&home_dir, state.graphql.clone()).unwrap();
         let access = gents::ConfigAccess::Graphql(graphql.clone());

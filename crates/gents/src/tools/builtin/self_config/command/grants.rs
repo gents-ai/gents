@@ -187,9 +187,9 @@ impl ConfigCommandTool {
         Ok(())
     }
 
-    pub(super) fn ensure_default_selection(&self, params: &ConfigureAgentParams) -> Result<()> {
+    pub(super) fn ensure_default_selection(&self, make_default: bool) -> Result<()> {
         anyhow::ensure!(
-            !params.make_default || may_create_agent(&self.categories),
+            !make_default || may_create_agent(&self.categories),
             "--default changes the node's agent selection and requires the agent catalog grant (category node)"
         );
         Ok(())
@@ -296,6 +296,26 @@ mod scope_tests {
         assert_eq!(granted, effective);
         assert!(may_edit(&categories(&granted), "tools", ConfigScope::Own));
         assert!(may_create_agent(&categories(&granted)));
+    }
+
+    /// Lean `SelfConfig.yoloGroup`: the group `gents --yolo` grants is the
+    /// Engineer preset, so the yolo agent edits its own configuration.
+    #[test]
+    fn yolo_group_is_the_engineer_preset() {
+        let LeanSelfConfigScopeCases { groups, .. } =
+            &crate::lean_vocab_test::lean_contract_snapshot().self_config_scope_cases;
+        let modeled = groups
+            .iter()
+            .find(|case| case.name == "yolo")
+            .expect("yolo row");
+        let mut granted = crate::tools::builtin::self_config::engineer_self_config()
+            .self_config_categories
+            .unwrap_or_default();
+        granted.sort();
+        let mut effective = modeled.effective.clone();
+        effective.sort();
+        assert_eq!(granted, effective);
+        assert!(may_edit(&categories(&granted), "tools", ConfigScope::Own));
     }
 
     #[test]

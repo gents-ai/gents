@@ -1,5 +1,3 @@
-use std::cmp::Reverse;
-
 use rapidhash::{HashMapExt, RapidHashMap};
 
 use gents_desktop_core::client::{ClientStore, TaskRecentRuns};
@@ -85,19 +83,14 @@ pub(super) fn recent_runs_for_task_views(
     })
 }
 
-pub(crate) type SessionSummaryOrderKey = (
-    Reverse<Option<String>>,
-    Reverse<Option<String>>,
-    String,
-    Option<String>,
-);
+pub(crate) use gents_desktop_core::client::SessionOrderKey as SessionSummaryOrderKey;
 
 pub(crate) fn session_summary_order_key(summary: &SessionSummary) -> SessionSummaryOrderKey {
-    (
-        Reverse(summary.updated_at.clone()),
-        Reverse(summary.created_at.clone()),
-        summary.session_id.clone(),
-        summary.requester_did.clone(),
+    gents_desktop_core::client::session_order_key(
+        summary.updated_at.as_deref(),
+        summary.created_at.as_deref(),
+        &summary.session_id,
+        summary.requester_did.as_deref(),
     )
 }
 
@@ -108,67 +101,17 @@ pub(crate) fn session_summaries(
     tasks: &[TaskView],
     triggers: &[TriggerView],
 ) -> Vec<SessionSummary> {
-    let mut requests_by_session: RapidHashMap<(&str, Option<&str>), Vec<&AgentRequestRow>> =
-        RapidHashMap::new();
-    for request in requests {
-        if request.node_did.as_deref() != Some(node_did) {
-            continue;
-        }
-        if let Some(session_id) = request.session_id.as_deref() {
-            requests_by_session
-                .entry((session_id, request.requester_did.as_deref()))
-                .or_default()
-                .push(request);
-        }
-    }
-    let mut summaries = sessions
-        .iter()
-        .filter(|session| session.node_did == node_did)
-        .map(|session| {
+    gents_desktop_core::client::session_summary_entries(sessions, requests, node_did)
+        .into_iter()
+        .map(|entry| {
+            let session = entry.session;
             let observation = session.observation.as_ref();
-            let indexed = observation.and_then(|value| value.latest_request.as_ref());
-            let session_requests = requests_by_session
-                .get(&(
-                    session.session_id.as_str(),
-                    session.requester_did.as_deref(),
-                ))
-                .map(Vec::as_slice)
-                .unwrap_or_default();
-            let mut exact_requests = session_requests.iter().copied().filter(|request| {
-                indexed.is_some_and(|indexed| {
-                    request.doc_id.as_deref() == Some(indexed.request_doc_id.as_str())
-                        && request.request_id == indexed.request_id
-                })
-            });
-            let candidate = exact_requests.next();
-            let exact = if exact_requests.next().is_none() {
-                candidate
-            } else {
-                None
-            };
-            let request = exact.map(|request| {
-                gents_desktop_core::client::session_display_request(session_requests, request)
-            });
-            let lifecycle = request
-                .and_then(|request| request.lifecycle_state)
-                .or_else(|| indexed.map(|indexed| indexed.lifecycle_state));
-            let opening_doc = session
-                .provenance
-                .as_ref()
-                .and_then(|provenance| provenance.opening_request_doc_id.as_deref());
-            let mut openings = session_requests.iter().copied().filter(|candidate| {
-                opening_doc.is_some()
-                    && candidate.doc_id.as_deref() == opening_doc
-                    && candidate.agent_did.as_deref() == Some(session.agent_did.as_str())
-            });
-            let opening = openings.next().filter(|_| openings.next().is_none());
-            let trigger_owner = opening
-                .filter(|request| request.caused_by_trigger_kind.is_some())
-                .or_else(|| request.filter(|request| request.caused_by_trigger_kind.is_some()))
-                .or_else(|| exact.filter(|request| request.caused_by_trigger_kind.is_some()));
-            let trigger_id = trigger_owner.and_then(|request| request.caused_by_trigger_id.clone());
-            let trigger_kind =
-                trigger_owner.and_then(|request| request.caused_by_trigger_kind.clone());
+            let trigger_id = entry
+                .trigger_request
+                .and_then(|request| request.caused_by_trigger_id.clone());
+            let trigger_kind = entry
+                .trigger_request
+                .and_then(|request| request.caused_by_trigger_kind.clone());
             let task_id = session
                 .provenance
                 .as_ref()
@@ -191,9 +134,7 @@ pub(crate) fn session_summaries(
                 session_id: session.session_id.clone(),
                 node_did: session.node_did.clone(),
                 requester_did: session.requester_did.clone(),
-                latest_request_doc_id: request
-                    .and_then(|request| request.doc_id.clone())
-                    .or_else(|| indexed.map(|indexed| indexed.request_doc_id.clone())),
+                latest_request_doc_id: entry.latest_request_doc_id.map(str::to_owned),
                 closed_at: session.closed_at.clone(),
                 archived_at: session.archived_at.clone(),
                 archive_revision: session.archive_revision.to_string(),
@@ -207,38 +148,28 @@ pub(crate) fn session_summaries(
                 reply_preview: observation
                     .and_then(|value| value.reply_preview.as_deref())
                     .map(session_reply_preview),
-                status: lifecycle.map(|state| state.as_str().to_owned()),
+                status: entry.lifecycle.map(|state| state.as_str().to_owned()),
                 agent_did: Some(session.agent_did.clone()),
-                latest_request_id: request
-                    .map(|request| request.request_id.clone())
-                    .or_else(|| indexed.map(|indexed| indexed.request_id.clone())),
+                latest_request_id: entry.latest_request_id.map(str::to_owned),
                 task_id,
                 task_name,
+                task_origin: None,
                 trigger_id,
                 trigger_kind,
                 created_at: Some(session.created_at.clone()),
                 updated_at: observation.map(|value| value.last_activity_at.clone()),
-                turn_state: lifecycle
-                    .and_then(|state| {
-                        gents_protocol::client_protocol::derive_persisted_attempt(
-                            state.as_str(),
-                            request.is_some_and(|request| request.superseded_by_request.is_some()),
-                        )
-                    })
-                    .map(turn_state_label)
-                    .map(str::to_owned),
+                turn_state: entry.turn_state.map(turn_state_label).map(str::to_owned),
                 message_count: None,
                 tool_call_count: None,
                 unreadable_reason: None,
                 unsendable_reason: None,
-                cwd: request
+                cwd: entry
+                    .request
                     .and_then(|request| request.input.as_ref())
                     .and_then(|input| input.cwd.clone()),
             }
         })
-        .collect::<Vec<_>>();
-    summaries.sort_by_cached_key(session_summary_order_key);
-    summaries
+        .collect()
 }
 
 pub(super) fn task_run_histories(
@@ -576,5 +507,132 @@ pub(super) fn apply_originating_tasks(
                 .find(|candidate| candidate.task_id == task)
                 .and_then(|candidate| candidate.name.clone());
         }
+    }
+}
+
+pub(super) fn apply_scoped_originating_tasks(
+    deployments: &mut [super::super::types::DeploymentView],
+) {
+    use super::task_lineage::{LineageIndex, Row, Scope};
+    use std::collections::BTreeMap;
+
+    let scope_of = |summary: &SessionSummary| Scope {
+        node: summary.node_did.clone(),
+        session: summary.session_id.clone(),
+        requester: summary.requester_did.clone(),
+    };
+    let rows = deployments
+        .iter()
+        .flat_map(|deployment| deployment.sessions.iter())
+        .map(|summary| Row {
+            scope: scope_of(summary),
+            task: summary
+                .provenance
+                .as_ref()
+                .and_then(|provenance| provenance.task_id.clone())
+                .or_else(|| summary.trigger_id.as_ref().and(summary.task_id.clone())),
+            starter: summary.started_by.as_ref().map(|starter| Scope {
+                node: starter.node_did.clone(),
+                session: starter.session_id.clone(),
+                requester: starter.requester_did.clone(),
+            }),
+        })
+        .collect();
+    let mut tasks = BTreeMap::new();
+    for deployment in deployments.iter() {
+        for task in &deployment.tasks {
+            tasks
+                .entry((deployment.node_did.clone(), task.task_id.clone()))
+                .and_modify(|entry: &mut Option<Option<String>>| *entry = None)
+                .or_insert(Some(task.name.clone()));
+        }
+    }
+    let mut index = LineageIndex::new(rows);
+    for summary in deployments
+        .iter_mut()
+        .flat_map(|deployment| deployment.sessions.iter_mut())
+    {
+        summary.task_origin = scoped_task_origin(&mut index, &scope_of(summary), &tasks);
+    }
+}
+
+fn scoped_task_origin(
+    index: &mut super::task_lineage::LineageIndex,
+    scope: &super::task_lineage::Scope,
+    tasks: &std::collections::BTreeMap<(String, String), Option<Option<String>>>,
+) -> Option<super::super::types::TaskOriginView> {
+    let origin = index.originating_scoped_task(scope)?;
+    let name = tasks
+        .get(&(origin.node.clone(), origin.task.clone()))?
+        .as_ref()?;
+    Some(super::super::types::TaskOriginView {
+        node_did: origin.node,
+        task_id: origin.task,
+        task_name: name.clone(),
+    })
+}
+
+#[cfg(test)]
+mod scoped_origin_tests {
+    use super::super::task_lineage::{LineageIndex, Row, Scope};
+    use super::scoped_task_origin;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn cross_node_task_requires_visible_unambiguous_task_and_parent() {
+        let parent = Scope {
+            node: "origin".into(),
+            session: "parent".into(),
+            requester: Some("person".into()),
+        };
+        let child = Scope {
+            node: "worker".into(),
+            session: "child".into(),
+            requester: Some("person".into()),
+        };
+        let rows = vec![
+            Row {
+                scope: parent.clone(),
+                task: Some("task".into()),
+                starter: None,
+            },
+            Row {
+                scope: child.clone(),
+                task: None,
+                starter: Some(parent.clone()),
+            },
+        ];
+        let mut index = LineageIndex::new(rows);
+        let mut visible = BTreeMap::new();
+        assert!(scoped_task_origin(&mut index, &child, &visible).is_none());
+        visible.insert(
+            ("origin".into(), "task".into()),
+            Some(Some("Review".into())),
+        );
+        let origin = scoped_task_origin(&mut index, &child, &visible).unwrap();
+        assert_eq!(
+            (
+                origin.node_did.as_str(),
+                origin.task_id.as_str(),
+                origin.task_name.as_deref()
+            ),
+            ("origin", "task", Some("Review"))
+        );
+        visible.insert(("origin".into(), "task".into()), None);
+        assert!(scoped_task_origin(&mut index, &child, &visible).is_none());
+        visible.insert(
+            ("origin".into(), "task".into()),
+            Some(Some("Review".into())),
+        );
+        let wrong_parent = Scope {
+            requester: None,
+            ..parent
+        };
+        let mut mismatched = LineageIndex::new(vec![Row {
+            scope: child.clone(),
+            task: None,
+            starter: Some(wrong_parent),
+        }]);
+        assert!(scoped_task_origin(&mut mismatched, &child, &visible).is_none());
     }
 }

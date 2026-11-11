@@ -29,31 +29,34 @@ pub(super) enum PortReadiness {
     },
 }
 
-/// The status reader is the desktop's User principal: the running client's
-/// identity, else the desktop's existing client key. The co-hosted runtime's
-/// node key is never a substitute.
-pub(super) async fn user_status_signer(state: &DesktopAppState) -> Option<ClientSigningCapability> {
+/// The status reader is the User key that administers `node_home`
+/// (`local_runtime::hosted_status_signer`), chosen from this desktop's peer
+/// directory: the running client's when it has one, else the stored file.
+pub(super) async fn user_status_signer(
+    state: &DesktopAppState,
+    node_home: &Path,
+) -> Option<ClientSigningCapability> {
     use gents::store::identity::NodeIdentity as _;
-    if let Some(core) = crate::state::current_core(state) {
-        return core.node_identity().client_signing_capability().ok();
-    }
-    let paths = state.policy.desktop_paths.clone();
-    match tokio::task::spawn_blocking(move || {
-        gents_desktop_core::client::PrincipalIdentity::load_existing(&paths)
-            .and_then(|user| Ok(user.client_signing_capability()?))
-    })
+    let paths = &state.policy.desktop_paths;
+    let core = crate::state::current_core(state);
+    let peers = match &core {
+        Some(core) => core.peer_records().await,
+        None => gents_desktop_core::client::load_peer_records(paths.peer_directory_path())
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!(target: "gents_desktop::managed_server", error = %format!("{error:#}"), "reading the peer directory to choose the status reader failed");
+                Vec::new()
+            }),
+    };
+    let running = core.and_then(|core| core.node_identity().client_signing_capability().ok());
+    let node_did = read_initialized_did(node_home).await;
+    gents_desktop_core::local_runtime::hosted_status_signer(
+        paths,
+        node_did.as_deref(),
+        &peers,
+        running,
+    )
     .await
-    {
-        Ok(Ok(capability)) => Some(capability),
-        Ok(Err(error)) => {
-            tracing::debug!(target: "gents_desktop::managed_server", error = %format!("{error:#}"), "no client identity to read managed runtime status");
-            None
-        }
-        Err(error) => {
-            tracing::warn!(target: "gents_desktop::managed_server", error = %error, "loading the client identity failed");
-            None
-        }
-    }
 }
 
 pub(super) fn status_unreadable_error(cause: &HostedRuntimeStatusError) -> BridgeError {
@@ -107,7 +110,7 @@ impl ForeignRuntime {
             None => (String::new(), "<its home>"),
         };
         format!(
-            "Port {port} is already served by a different Gents Node ({did}){located}, and the local Node needs that port. Stop the other Node with `gents service stop --home {home}` if it runs as a background service, or with Ctrl-C in the terminal running `gents server`. Or restart it on another port with `gents server --home {home} --http-port <port>`."
+            "Port {port} is already served by a different Gents Node ({did}){located}, and the local Node needs that port. Stop the other Node with `gents runtime service stop --home {home}` if it runs as a background service, or with Ctrl-C in the terminal running `gents runtime server`. Or restart it on another port with `gents runtime server --home {home} --http-port <port>`."
         )
     }
 }

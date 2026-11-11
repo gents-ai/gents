@@ -4,10 +4,10 @@ use std::io::Write;
 
 use anyhow::{anyhow, Context, Result};
 use gents::documents::EvalSplit;
-use gents::eval::report::{load_report, EvalReport, SlotClass};
-use gents::eval::runner::{self, Capture, TrialLocator};
 use gents::eval::scoring::PILOT_PURPOSE;
 use gents::eval::OutcomeKind;
+use gents_eval::report::{load_report, EvalReport, SlotClass};
+use gents_eval::runner::{self, Capture, TrialLocator};
 use serde_json::{json, Value};
 
 use super::draft::parse_reply;
@@ -239,7 +239,7 @@ async fn run_split(
     .await?;
     anyhow::ensure!(
         !outcome.cancelled && outcome.abandoned == 0,
-        "pilot run {run_id} stopped before it finished; the pack stays as written; `gents eval resume {run_id}` continues it"
+        "pilot run {run_id} stopped before it finished; the pack stays as written; `gents utils eval resume {run_id}` continues it"
     );
     Ok(())
 }
@@ -437,8 +437,8 @@ async fn revise(
 mod tests {
     use std::path::Path;
 
-    use gents::eval::checks::CheckRegistry;
-    use gents::eval::report::load_runs;
+    use gents_eval::checks::CheckRegistry;
+    use gents_eval::report::load_runs;
     use serde_json::json;
 
     use super::super::tests::draft_block;

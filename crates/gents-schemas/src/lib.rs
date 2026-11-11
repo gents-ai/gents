@@ -168,6 +168,15 @@ pub const NETWORK_ENROLLMENT_GRANT: &str =
 pub const ENROLLMENT_OPERATOR_NONCE_NAME: &str = "EnrollmentOperatorNonce";
 pub const ENROLLMENT_OPERATOR_NONCE: &str =
     include_str!("../schemas/agent/enrollment_operator_nonce.graphql");
+pub const ENROLLMENT_RENEWAL_POLICY_NAME: &str = "EnrollmentRenewalPolicy";
+pub const ENROLLMENT_RENEWAL_POLICY: &str =
+    include_str!("../schemas/agent/enrollment_renewal_policy.graphql");
+pub const ENROLLMENT_RENEWAL_INTENT_NAME: &str = "EnrollmentRenewalIntent";
+pub const ENROLLMENT_RENEWAL_INTENT: &str =
+    include_str!("../schemas/agent/enrollment_renewal_intent.graphql");
+pub const ENROLLMENT_RENEWAL_OFFER_NAME: &str = "EnrollmentRenewalOffer";
+pub const ENROLLMENT_RENEWAL_OFFER: &str =
+    include_str!("../schemas/agent/enrollment_renewal_offer.graphql");
 pub const FILE_INVENTORY_REQUEST_NAME: &str = "FileInventoryRequest";
 pub const FILE_INVENTORY_REQUEST: &str =
     include_str!("../schemas/agent/file_inventory_request.graphql");
@@ -251,6 +260,9 @@ pub const ALL: &[&str] = &[
     NETWORK_ENROLLMENT_ROUTE_RECEIPT,
     ENROLLMENT_OPERATOR_NONCE,
     NETWORK_ENROLLMENT_GRANT,
+    ENROLLMENT_RENEWAL_POLICY,
+    ENROLLMENT_RENEWAL_INTENT,
+    ENROLLMENT_RENEWAL_OFFER,
     FILE_INVENTORY_REQUEST,
     FILE_INVENTORY_REPLY,
     FILE_INVENTORY_PROGRESS,
@@ -328,6 +340,9 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME,
     ENROLLMENT_OPERATOR_NONCE_NAME,
     NETWORK_ENROLLMENT_GRANT_NAME,
+    ENROLLMENT_RENEWAL_POLICY_NAME,
+    ENROLLMENT_RENEWAL_INTENT_NAME,
+    ENROLLMENT_RENEWAL_OFFER_NAME,
     FILE_INVENTORY_REQUEST_NAME,
     FILE_INVENTORY_REPLY_NAME,
     FILE_INVENTORY_PROGRESS_NAME,
@@ -354,6 +369,8 @@ pub const REPLICATED_PROTOCOL_COLLECTION_NAMES: &[&str] = &[
     NETWORK_ENROLLMENT_DECISION_NAME,
     NETWORK_AUTHORIZATION_REVISION_NAME,
     NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME,
+    ENROLLMENT_RENEWAL_INTENT_NAME,
+    ENROLLMENT_RENEWAL_OFFER_NAME,
 ];
 
 pub fn is_replicated_protocol_collection(name: &str) -> bool {
@@ -382,6 +399,7 @@ pub const LOCAL_ONLY_COLLECTION_NAMES: &[&str] = &[
     NETWORK_ADMIN_PIN_NAME,
     ENROLLMENT_OPERATOR_NONCE_NAME,
     NETWORK_ENROLLMENT_GRANT_NAME,
+    ENROLLMENT_RENEWAL_POLICY_NAME,
     FILE_INVENTORY_REPLY_NAME,
     FILE_INVENTORY_PROGRESS_NAME,
     PENDING_CHAT_SUBMISSION_NAME,
@@ -393,4 +411,115 @@ pub fn is_local_audit_collection(name: &str) -> bool {
 
 pub fn is_local_only_collection(name: &str) -> bool {
     !is_replicated_protocol_collection(name)
+}
+
+/// A schema collection, named exactly as its SDL `type`.
+pub trait Collection {
+    const NAME: &'static str;
+}
+
+/// A collection keyed by the node, session and requester that own a session.
+/// Implemented by the generator for every type that declares all three.
+pub trait SessionScoped: Collection + Sized {
+    const NODE_DID: Field<Self, kind::Str>;
+    const SESSION_ID: Field<Self, kind::Str>;
+    const REQUESTER_DID: Field<Self, kind::Str>;
+}
+
+/// Scalar kinds a schema field can declare. They select which Rust values a
+/// field accepts in filters and inputs, and the GraphQL variable type that
+/// carries them.
+pub mod kind {
+    pub trait Kind {
+        const GRAPHQL: &'static str;
+    }
+
+    macro_rules! kinds {
+        ($($name:ident => $graphql:literal),* $(,)?) => {
+            $(
+                #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+                pub enum $name {}
+                impl Kind for $name {
+                    const GRAPHQL: &'static str = $graphql;
+                }
+            )*
+        };
+    }
+
+    kinds! {
+        Str => "String",
+        Int => "Int",
+        Float => "Float",
+        Bool => "Boolean",
+        DateTime => "DateTime",
+        Json => "JSON",
+        Blob => "Blob",
+        StrList => "[String!]",
+        DocId => "String",
+    }
+}
+
+/// One field of collection `C` holding a value of kind `K`. Generated from the
+/// SDL, so a name that leaves the schema stops compiling at every use.
+pub struct Field<C, K> {
+    name: &'static str,
+    marker: std::marker::PhantomData<fn() -> (C, K)>,
+}
+
+impl<C, K> Field<C, K> {
+    pub const fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            marker: std::marker::PhantomData,
+        }
+    }
+
+    pub const fn name(&self) -> &'static str {
+        self.name
+    }
+}
+
+impl<C, K> Clone for Field<C, K> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<C, K> Copy for Field<C, K> {}
+
+impl<C, K> std::fmt::Debug for Field<C, K> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name)
+    }
+}
+
+/// Field constants for every collection in the bundle, one module per type.
+pub mod fields {
+    include!(concat!(env!("OUT_DIR"), "/fields.rs"));
+}
+
+#[cfg(test)]
+mod field_tests {
+    use super::fields::{agent_request, callback_invocation};
+    use super::Collection;
+
+    #[test]
+    fn generated_fields_follow_the_sdl() {
+        assert_eq!(
+            <agent_request::Doc as Collection>::NAME,
+            AGENT_REQUEST_NAME_CHECK
+        );
+        assert_eq!(agent_request::LIFECYCLE_STATE.name(), "lifecycle_state");
+        assert_eq!(agent_request::DOC_ID.name(), "_docID");
+        for name in agent_request::FIELD_NAMES {
+            assert!(super::AGENT_REQUEST.contains(&format!("{name}:")));
+        }
+        assert_eq!(
+            <callback_invocation::Doc as Collection>::NAME,
+            "CallbackInvocation"
+        );
+        assert!(callback_invocation::FIELD_NAMES.contains(&"invocation_id"));
+    }
+
+    const AGENT_REQUEST_NAME_CHECK: &str = super::AGENT_REQUEST_NAME;
 }

@@ -48,7 +48,7 @@ fn parse_case(case: &SeedCase) -> InitArgs {
             argv.extend([flag.to_string(), value]);
         }
     }
-    let Command::Init(args) = Cli::try_parse_from(argv).unwrap().command else {
+    let Some(Command::Init(args)) = Cli::try_parse_from(argv).unwrap().command else {
         panic!("expected init");
     };
     assert_eq!(case.local_default, crate::DEFAULT_INIT_MODEL_NAME);
@@ -65,7 +65,7 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
     assert!(!snapshot.initial_inference_cases.is_empty());
     for case in snapshot.initial_inference_cases {
         let args = parse_case(&case);
-        let home = gents::eval::runner::embedded::EmbeddedHome::create_temp("init-seed").await?;
+        let home = gents::runtime::embedded::EmbeddedHome::create_temp("init-seed").await?;
         let identity = home.identity.clone();
         let owner = home.did();
         let node = home.node.clone();
@@ -81,6 +81,7 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
             identity.as_ref(),
             resolve_initial_tool_package(&args)?,
             Some(binding),
+            None,
         )
         .await;
         let Some(expected) = &case.expected else {
@@ -189,7 +190,7 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
                 "{case:?}",
             );
             drop(runtime);
-            let steps = init_next_steps(&summary, false, false, false);
+            let steps = init_next_steps(&summary, Path::new("/srv/home"), false, false, false);
             assert!(
                 !steps
                     .iter()
@@ -204,10 +205,11 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
 
 #[tokio::test]
 async fn provider_selection_after_unconfigured_init_uses_the_discovered_limits() -> Result<()> {
-    let Command::Init(args) = Cli::try_parse_from(["gents", "init", "--engineer"])?.command else {
+    let Some(Command::Init(args)) = Cli::try_parse_from(["gents", "init", "--engineer"])?.command
+    else {
         panic!("expected init");
     };
-    let home = gents::eval::runner::embedded::EmbeddedHome::create_temp("init-seed").await?;
+    let home = gents::runtime::embedded::EmbeddedHome::create_temp("init-seed").await?;
     let identity = home.identity.clone();
     let owner = home.did();
     let node = home.node.clone();
@@ -225,6 +227,7 @@ async fn provider_selection_after_unconfigured_init_uses_the_discovered_limits()
         identity.as_ref(),
         resolve_initial_tool_package(&args)?,
         Some(binding),
+        None,
     )
     .await?;
     let mut backend = gents::inference::backends::registry::list_all_backends(&node)

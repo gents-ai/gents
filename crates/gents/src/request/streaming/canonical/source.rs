@@ -2,13 +2,12 @@ use anyhow::{Context, Result};
 use chrono::DateTime;
 use gents_protocol::output::reconstruction::ObservedSegment;
 use gents_protocol::output::{
-    MessageBlock, OutputOutcome, OutputSegment, OutputSource, OutputWriter, PayloadPresentation,
-    PayloadRef, PresentedPayload, ReconstructionError, SourceClose, StreamPayload,
+    MessageBlock, OutputOutcome, OutputSegment, OutputSource, OutputWriter, ReconstructionError,
+    SourceClose,
 };
 use gents_protocol::row::AgentRequestRow;
 
 use crate::store::config_client::ConfigApplyTxn;
-use crate::store::graphql::escape_graphql_string;
 use gents_protocol::output::rows::OutputSegmentRow;
 
 pub(crate) fn retained_partial_blocks(
@@ -43,27 +42,12 @@ pub(crate) fn retained_partial_blocks(
     if source.is_auxiliary_audit() {
         return Ok(Vec::new());
     }
-    let mut retained = Vec::new();
-    for (stream, reconstructed) in extent.streams.iter().enumerate() {
-        if matches!(reconstructed.declaration.payload, StreamPayload::Text)
-            && reconstructed.declaration.part_index == 0
-        {
-            retained.push((
-                reconstructed.declaration.block_index,
-                MessageBlock::Text {
-                    text: PresentedPayload {
-                        output: PayloadRef {
-                            close_doc_id: closing.doc_id.clone(),
-                            stream: u32::try_from(stream)?,
-                        },
-                        presentation: PayloadPresentation::Full,
-                    },
-                },
-            ));
-        }
-    }
-    retained.sort_by_key(|(block, _)| *block);
-    Ok(retained.into_iter().map(|(_, block)| block).collect())
+    Ok(
+        gents_protocol::output::recovery::retained_blocks_from_validated_extent(
+            &extent,
+            &closing.doc_id,
+        )?,
+    )
 }
 
 fn invalid_source(detail: impl Into<String>) -> ReconstructionError {
@@ -165,17 +149,28 @@ pub(super) async fn load_request_in_txn(
     txn: &ConfigApplyTxn<'_>,
     prepared: &OutputSegment,
 ) -> Result<AgentRequestRow> {
-    let id = escape_graphql_string(&prepared.request_doc_id);
-    let response = txn
-        .execute_local_response(&format!(
-            r#"{{ AgentRequest(
-        filter: {{ _docID: {{ _eq: "{id}" }} }}) {{
-        _docID request_id purpose node_did requester_did session_id lifecycle_state
-        execution_generation execution_lease_expires_at request_hop
-        workspace_id workspace_owner_node_did workspace_authority workspace_seal_hash
-    }} }}"#
-        ))
-        .await?;
+    use gents_protocol::document_query::{
+        fields::agent_request as fields, Filter, Query, Selection,
+    };
+    let rendered = Query::select(
+        Selection::doc_id()
+            .field(fields::REQUEST_ID)
+            .field(fields::PURPOSE)
+            .field(fields::NODE_DID)
+            .field(fields::REQUESTER_DID)
+            .field(fields::SESSION_ID)
+            .field(fields::LIFECYCLE_STATE)
+            .field(fields::EXECUTION_GENERATION)
+            .field(fields::EXECUTION_LEASE_EXPIRES_AT)
+            .field(fields::REQUEST_HOP)
+            .field(fields::WORKSPACE_ID)
+            .field(fields::WORKSPACE_OWNER_NODE_DID)
+            .field(fields::WORKSPACE_AUTHORITY)
+            .field(fields::WORKSPACE_SEAL_HASH),
+    )
+    .filter(Filter::eq(fields::DOC_ID, &prepared.request_doc_id))
+    .render();
+    let response = txn.run_local_response(&rendered).await?;
     let mut rows: Vec<AgentRequestRow> = crate::store::graphql::rows(&response, "AgentRequest")?;
     anyhow::ensure!(
         rows.len() == 1,

@@ -681,14 +681,15 @@ const SessionRow = memo(function SessionRow({
         <ListedSessionStatus session={session} />
         <div className="min-w-0">
           <div className="flex min-w-0 items-center gap-1.5 text-sm">
-            {!parent && session.taskId && (
+            {(session.taskOrigin || session.taskId) && (
               <Play
                 className="relative z-10 size-3.5 shrink-0 text-muted-foreground"
                 role="img"
-                aria-label={`Started by ${session.taskName ?? "a task"}`}
+                aria-label={`${parent ? "From task" : "Started by"} ${session.taskOrigin?.taskName ?? session.taskName ?? "a task"}`}
               >
                 <title>
-                  Started by {session.taskName ?? "a task"}
+                  {parent ? "From task" : "Started by"}{" "}
+                  {session.taskOrigin?.taskName ?? session.taskName ?? "a task"}
                   {session.triggerKind ? ` · ${session.triggerKind}` : ""}
                 </title>
               </Play>

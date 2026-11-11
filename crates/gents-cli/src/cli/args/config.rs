@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 use super::{
     BackendDiscoverModelsArgs, BackendPoolArgs, BackendSetArgs, ConfigApplyArgs, ConfigDiffArgs,
     ConfigExportArgs, ConfigMcpCommand, ConfigScheduleCommand, ConfigTriggerCommand,
-    ConfigValidateArgs, InferenceProfileCommand,
+    ConfigValidateArgs, InferenceProfileCommand, PackCommand,
 };
 use crate::cli::output_format::OutputFormat;
-use crate::CONFIG_EXPORT_AFTER_HELP;
+use crate::{CONFIG_EXPORT_AFTER_HELP, TOOLS_AFTER_HELP};
 
 #[derive(Subcommand)]
 pub(crate) enum ConfigCommand {
@@ -66,6 +66,11 @@ pub(crate) enum ConfigCommand {
     },
     #[command(about = "Export desired configuration documents", after_help = CONFIG_EXPORT_AFTER_HELP)]
     Export(ConfigExportArgs),
+    #[command(about = "List, inspect, build, publish, install and exercise packs")]
+    Pack {
+        #[command(subcommand)]
+        command: PackCommand,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, ValueEnum, PartialEq, Eq)]
@@ -177,6 +182,8 @@ pub(crate) enum ToolsConfigCommand {
         about = "Emit a canonical AgentTarget document"
     )]
     AgentTargetEntry(AgentTargetEntryArgs),
+    #[command(flatten)]
+    Explain(ToolsCommand),
 }
 
 #[derive(Debug, clap::Args)]
@@ -225,7 +232,8 @@ pub(crate) enum SkillCommand {
 pub(crate) enum ToolsCommand {
     #[command(
         name = "explain",
-        about = "Explain final model-callable tools per agent"
+        about = "Explain final model-callable tools per agent",
+        after_help = TOOLS_AFTER_HELP
     )]
     Explain(ToolExplainArgs),
 }

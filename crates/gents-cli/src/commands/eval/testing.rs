@@ -4,20 +4,20 @@ use std::time::Duration;
 use clap::Parser;
 use gents::documents::apply_desired_state_plan;
 use gents::documents::EvalSplit;
-use gents::eval::checks::CheckRegistry;
-use gents::eval::runner::embedded::EmbeddedHome;
-use gents::eval::runner::{
+use gents::runtime::embedded::EmbeddedHome;
+use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents::{Collection, ConfigAccess, NodeIdentity};
+use gents_eval::checks::CheckRegistry;
+use gents_eval::runner::{
     run, CellRequest, CellSource, RunOptions, RunOutcome, RunRequest, ScriptKey, ScriptedExecutor,
     TrialEvidence, TrialExecutor,
 };
-use gents::store::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::{Collection, ConfigAccess, NodeIdentity};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 use super::{execute, Deps, EvalContext};
-use crate::cli::{Cli, Command, EvalCommand};
+use crate::cli::{Cli, Command, EvalCommand, UtilsCommand};
 
 pub(crate) const DEFINITION: &str = "cli-def";
 pub(crate) const TRAIN_CASES: [&str; 1] = ["train-a"];
@@ -197,10 +197,16 @@ pub(crate) fn executor(failing_baseline_cases: &[&str]) -> ScriptedExecutor {
 }
 
 pub(crate) fn eval_command(argv: &[&str]) -> EvalCommand {
-    let cli = Cli::try_parse_from(["gents", "eval"].into_iter().chain(argv.iter().copied()))
-        .unwrap_or_else(|error| panic!("{error}"));
+    let cli = Cli::try_parse_from(
+        ["gents", "utils", "eval"]
+            .into_iter()
+            .chain(argv.iter().copied()),
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
     match cli.command {
-        Command::Eval { command } => command,
+        Some(Command::Utils {
+            command: UtilsCommand::Eval { command },
+        }) => command,
         _ => panic!("not an eval command"),
     }
 }

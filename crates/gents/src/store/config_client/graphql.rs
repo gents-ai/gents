@@ -25,16 +25,24 @@ pub(super) async fn http_client() -> Result<&'static reqwest::Client> {
         .await
 }
 
-pub(super) async fn auto_commit(endpoint: &GraphqlEndpoint, mutation: &str) -> Result<Value> {
+pub(super) async fn auto_commit(
+    endpoint: &GraphqlEndpoint,
+    mutation: &str,
+    variables: Option<&Value>,
+) -> Result<Value> {
     if !super::client_signed_agent::ordinary_mutation_allowed(
         endpoint.client_signed_agent_creates,
         true,
     ) {
         return Err(ConfigClientError::ClientUnsignedMutationUnsupported);
     }
+    let body = match variables {
+        Some(variables) => serde_json::json!({"query": mutation, "variables": variables}),
+        None => serde_json::json!({"query": mutation}),
+    };
     let response = endpoint
         .authorize(http_client().await?.post(endpoint.url()))?
-        .json(&serde_json::json!({"query": mutation}))
+        .json(&body)
         .send()
         .await
         .map_err(|source| ConfigClientError::PostMutation {
@@ -67,11 +75,26 @@ pub(super) async fn auto_commit(endpoint: &GraphqlEndpoint, mutation: &str) -> R
 pub(super) async fn query_with_options(
     endpoint: &GraphqlEndpoint,
     query: &str,
+    variables: Option<&Value>,
     options: GraphqlRequestOptions,
 ) -> Result<Value> {
     ensure_query_document(query)?;
     let authorization = endpoint.authorization()?;
-    Ok(execute_graphql_async(endpoint.url(), authorization.as_deref(), query, options).await?)
+    Ok(match variables {
+        Some(variables) => {
+            gents_protocol::graphql::execute_graphql_with_variables_async(
+                endpoint.url(),
+                authorization.as_deref(),
+                query,
+                variables,
+                options,
+            )
+            .await?
+        }
+        None => {
+            execute_graphql_async(endpoint.url(), authorization.as_deref(), query, options).await?
+        }
+    })
 }
 
 pub(super) async fn txn_begin(

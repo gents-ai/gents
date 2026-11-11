@@ -68,10 +68,17 @@ fn waiting_question_ids(
     (!ids.is_empty()).then_some(ids)
 }
 
+/// The desktop's Goal view. A signed projection carries the runtime's raw
+/// counters and text, so this is where they are made displayable: a counter
+/// below zero shows as zero, and text that is only whitespace shows as absent
+/// (empty for the always-present objective and status).
 fn goal_view(
     observation: SessionGoalObservation,
     waiting_question_ids: Option<Vec<String>>,
 ) -> SessionGoalView {
+    let present = |value: String| Some(value).filter(|value| !value.trim().is_empty());
+    let shown = |value: String| present(value).unwrap_or_default();
+    let count = |value: i64| value.max(0).to_string();
     SessionGoalView {
         waiting_question_ids,
         node_did: observation.node_did,
@@ -83,15 +90,17 @@ fn goal_view(
             GoalControlView {
                 goal_id: snapshot.goal_id,
                 revision: goal.revision,
-                objective: snapshot.objective,
-                status: snapshot.status,
+                objective: shown(snapshot.objective),
+                status: shown(snapshot.status),
                 token_budget: snapshot.token_budget.map(|budget| budget.to_string()),
-                tokens_used: snapshot.tokens_used.to_string(),
-                active_time_seconds: snapshot.active_time_seconds.to_string(),
-                continuation_sequence: snapshot.continuation_sequence.to_string(),
-                last_blocked_reason: snapshot.last_blocked_reason,
-                last_failure: snapshot.last_failure,
-                completion_evidence: snapshot.completion_evidence,
+                tokens_used: count(snapshot.tokens_used),
+                active_time_seconds: count(snapshot.active_time_seconds),
+                continuation_sequence: count(snapshot.continuation_sequence),
+                wrapup_requested: snapshot.wrapup_requested,
+                wrapup_completed: snapshot.wrapup_completed,
+                last_blocked_reason: snapshot.last_blocked_reason.and_then(present),
+                last_failure: snapshot.last_failure.and_then(present),
+                completion_evidence: snapshot.completion_evidence.and_then(present),
             }
         }),
     }
@@ -315,6 +324,36 @@ mod tests {
             }),
             signature: Vec::new(),
         }
+    }
+
+    #[test]
+    fn goal_view_clamps_negative_counters_and_blanks_whitespace_text() {
+        let mut observation = modeled_observation(&json!({"goal": 1, "root": null}));
+        let snapshot = &mut observation.goal.as_mut().unwrap().snapshot;
+        snapshot.objective = "  \n".into();
+        snapshot.status = "\t".into();
+        snapshot.tokens_used = -5;
+        snapshot.active_time_seconds = -1;
+        snapshot.continuation_sequence = -2;
+        snapshot.last_blocked_reason = Some(" ".into());
+        snapshot.last_failure = Some("usage_limited: out".into());
+        snapshot.completion_evidence = Some(String::new());
+
+        let shown = goal_view(observation, None).goal.unwrap();
+
+        assert_eq!(
+            (
+                shown.objective.as_str(),
+                shown.status.as_str(),
+                shown.tokens_used.as_str(),
+                shown.active_time_seconds.as_str(),
+                shown.continuation_sequence.as_str(),
+            ),
+            ("", "", "0", "0", "0")
+        );
+        assert_eq!(shown.last_blocked_reason, None);
+        assert_eq!(shown.last_failure.as_deref(), Some("usage_limited: out"));
+        assert_eq!(shown.completion_evidence, None);
     }
 
     /// Replays Lean `SessionObservation.view`, `next` and `refusal` through

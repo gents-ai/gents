@@ -53,7 +53,21 @@ async fn stage_reset_resume(
     {
         return Ok(None);
     }
-    let sessions = txn.execute(&format!(r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}, limit: 2) {{ agent_did }} }}"#, escape_graphql_string(node_did), escape_graphql_string(session_id))).await?;
+    let sessions = {
+        use gents_protocol::document_query::{
+            fields::agent_session as session_fields, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(Selection::new().field(session_fields::AGENT_DID))
+                .filter(
+                    Filter::eq(session_fields::NODE_DID, node_did)
+                        .and(Filter::eq(session_fields::SESSION_ID, session_id)),
+                )
+                .limit(2)
+                .render(),
+        )
+        .await?
+    };
     let sessions = sessions
         .pointer("/data/AgentSession")
         .and_then(serde_json::Value::as_array)

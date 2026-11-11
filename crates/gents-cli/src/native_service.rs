@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 
 mod environment;
+mod systemd_status;
 pub(crate) mod update;
 pub use environment::read_environment_file;
 
@@ -772,7 +773,12 @@ where
                 if !enabled.success
                     && !matches!(
                         enabled.stdout.as_str(),
-                        "disabled" | "masked" | "static" | "indirect" | "generated"
+                        "disabled"
+                            | "masked"
+                            | "masked-runtime"
+                            | "static"
+                            | "indirect"
+                            | "generated"
                     )
                 {
                     bail!(
@@ -787,7 +793,7 @@ where
                         active.stdout.as_str(),
                         "active" | "activating" | "deactivating" | "reloading"
                     ),
-                    enabled: enabled.success && enabled.stdout == "enabled",
+                    enabled: systemd_status::is_enabled(enabled.success, &enabled.stdout),
                     requires_approval: false,
                     background_item: BackgroundItemStatus::Unavailable,
                     failed: active.stdout == "failed",
@@ -899,7 +905,7 @@ where
         let path = self.config.definition_path(self.platform);
         if !path.is_file() {
             bail!(
-                "native service is not installed at {}; run `gents service install` first",
+                "native service is not installed at {}; run `gents runtime service install` first",
                 path.display()
             );
         }
@@ -1102,8 +1108,13 @@ fn render_launchd(config: &NativeServiceConfig) -> Result<String> {
         })
         .transpose()?
         .unwrap_or_default();
+    // launchd starts a LaunchAgent with the account's own HOME, not the one
+    // the installing process ran with; the runtime resolves HOME-relative
+    // state (the CLI client key, the remembered home) from it, so it must be
+    // the installer's.
+    let user_home = xml_path(&config.user_home, "user home")?;
     let environment = format!(
-        "\n  <key>EnvironmentVariables</key>\n  <dict><key>GENTS_SYSTEM_LOG</key><string>1</string>{search_path}</dict>"
+        "\n  <key>EnvironmentVariables</key>\n  <dict><key>GENTS_SYSTEM_LOG</key><string>1</string><key>HOME</key><string>{user_home}</string>{search_path}</dict>"
     );
     let stderr = config
         .stderr_path

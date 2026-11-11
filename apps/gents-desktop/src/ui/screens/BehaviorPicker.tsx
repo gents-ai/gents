@@ -9,7 +9,7 @@ import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { AgentSheet } from "./agent/BehaviorSheet";
 import { packOrigin, usePackGroups } from "./agent/ListDetail";
-import { shortAccess } from "./behavior";
+import { didTail, isShared, sharedNames, shortAccess } from "./behavior";
 import { AgentInitials } from "./parts";
 import { agentReadiness } from "@/lib/agent-readiness";
 import { useNodeConfigReadOnly } from "@/hooks/useClient";
@@ -120,6 +120,14 @@ function MountedAgentPicker({
   ).sort();
   const packGroups = usePackGroups("agent-picker");
   const openByDefault = own.length === 0;
+  /* agents that share a name show their DIDs' tails, however the list is searched */
+  const shared = sharedNames(agents);
+  const tail = (b: NodeView["agents"][number]) =>
+    isShared(shared, b.displayName) && (
+      <span className="shrink-0 text-xs text-muted-foreground">
+        {didTail(b.agentDid)}
+      </span>
+    );
   const row = (b: NodeView["agents"][number]) => {
     const e = env(b.agentDid);
     const selected = b.agentDid === chosen.agentDid;
@@ -144,8 +152,14 @@ function MountedAgentPicker({
             selected && "bg-muted",
           )}
         >
-          <AgentInitials name={b.displayName} className="size-5 shrink-0 text-[9px]" />
+          <AgentInitials
+            name={b.displayName}
+            agentDid={b.agentDid}
+            shared={isShared(shared, b.displayName)}
+            className="size-5 shrink-0 text-[9px]"
+          />
           <span className="shrink-0 font-medium">{b.displayName}</span>
+          {tail(b)}
           {b.isDefault && (
             <span className="shrink-0 text-xs text-muted-foreground">default</span>
           )}
@@ -190,8 +204,14 @@ function MountedAgentPicker({
           }
           aria-label="Agent"
         >
-          <AgentInitials name={chosen.displayName} className="size-5 text-[9px]" />
+          <AgentInitials
+            name={chosen.displayName}
+            agentDid={chosen.agentDid}
+            shared={isShared(shared, chosen.displayName)}
+            className="size-5 text-[9px]"
+          />
           <span>{chosen.displayName}</span>
+          {tail(chosen)}
           <ChevronDown className="size-3 text-muted-foreground" />
         </PopoverTrigger>
         <PopoverContent

@@ -711,6 +711,21 @@ fn manifest_turn_fixture(
     rendered
 }
 
+/// An edit that replaces the first twelve of twenty messages with one short
+/// message and appends one stores 5 leaf rows, all of them new content: the
+/// replacement message (1), the appended message (2) and the turn's new trace
+/// message (2). Every leaf of the eight intact messages is reused.
+///
+/// It stores 6 manifest node rows. Groups close after four entries at keys
+/// ending in an even hex digit (`MANIFEST_MIN_GROUP`, #3605), so the 26-leaf
+/// edited body is three levels deep: the edit rewrites the level-one groups
+/// holding the replaced head, the appended tail and one group in between
+/// whose boundaries re-synchronize only at its close, then one level-two node
+/// and the root, and the trace payload adds its own root. Before #3605 a
+/// group closed after eight entries at one key in sixteen, so this body was a
+/// single 26-entry root (7 rows in all), but every append rewrote a tail group
+/// of up to ~24 entries. The five rewritten body nodes measure 4,400 bytes,
+/// less than that one root at ~231 bytes per entry.
 #[tokio::test]
 async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
     const TURNS: usize = 20;
@@ -767,7 +782,8 @@ async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
     let edited_container: Value = serde_json::from_str(&edited_stored).unwrap();
     let post_edit_body =
         manifest_payload_keys(db.node.as_ref(), &edited_container, "request_body").await;
-    manifest_payload_keys(db.node.as_ref(), &edited_container, "provenance_payload").await;
+    let post_edit_trace =
+        manifest_payload_keys(db.node.as_ref(), &edited_container, "provenance_payload").await;
 
     assert!(
         pre_edit_body
@@ -784,12 +800,23 @@ async fn a_mid_history_edit_reuses_the_intact_tail_blocks() {
     );
     let blocks_after = stored_block_keys(db.node.as_ref()).await;
     let new_blocks: Vec<_> = blocks_after.difference(&blocks_before).collect();
+    let (new_leaves, new_nodes): (Vec<&String>, Vec<&String>) = new_blocks
+        .iter()
+        .copied()
+        .partition(|key| post_edit_body.contains(*key) || post_edit_trace.contains(*key));
     assert!(
-        new_blocks.len() <= 8,
-        "{} new block rows for an edit that replaced an early span of a {}-block body \
+        new_leaves.len() <= 5,
+        "{} new leaf rows for an edit that replaced an early span of a {}-block body \
          and appended one message: the writer re-stored content it already had",
-        new_blocks.len(),
+        new_leaves.len(),
         pre_edit_body.len()
+    );
+    assert!(
+        new_nodes.len() <= 6,
+        "{} new manifest node rows for one edit at the head and one append at the tail \
+         of a {}-leaf body: the edit rewrote groups whose entries it did not change",
+        new_nodes.len(),
+        post_edit_body.len()
     );
     assert_eq!(
         blocks_after.len() - blocks_before.len(),

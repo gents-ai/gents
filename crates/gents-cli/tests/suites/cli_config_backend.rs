@@ -43,7 +43,17 @@ async fn config_backend_set_accepts_canonical_document_and_supports_discovery() 
     let endpoint = MockModelEndpoint::start(&model)?;
     let port = allocate_port()?;
     let graphql = graphql_url(port);
-    let init = run_init_json(&home, &["--node-name", "backend-agent"])?;
+    let init = run_init_json(
+        &home,
+        &[
+            "--node-name",
+            "backend-agent",
+            "--inference-url",
+            "http://127.0.0.1:9/v1",
+            "--model-name",
+            "m",
+        ],
+    )?;
     let owner = node_did_from_init(&init)?;
     let mut server = spawn_server(&home, port)?;
     wait_for_port(port, &mut server)?;
