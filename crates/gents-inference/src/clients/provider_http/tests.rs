@@ -314,11 +314,11 @@ async fn usage_client(
     cache: &std::sync::Arc<crate::usage_observation::UsageCache>,
     backend_id: &str,
 ) -> (
-    crate::support::TestDb,
+    crate::test_support::TestDb,
     crate::usage_observation::UsageAccount,
     ProviderHttpClient,
 ) {
-    let db = crate::support::test_db("provider-http-usage").await;
+    let db = crate::test_support::test_db("provider-http-usage").await;
     let account = usage_account(db.node_identity.did(), backend_id);
     let reporter = crate::usage_observation::UsageReporter::new(
         cache.clone(),

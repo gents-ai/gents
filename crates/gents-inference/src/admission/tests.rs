@@ -21,14 +21,15 @@ use gents_lean_vocab::{
     LeanContractVocabulary, LeanFleetSlotAccountingCase,
 };
 use gents_protocol::row::AgentRequest;
+use gents_store::identity::NodeIdentity as _;
 
 pub(super) async fn test_node() -> (
-    crate::support::TestDb,
+    crate::test_support::TestDb,
     gents_store::identity::ManagedAgentSigner,
 ) {
     lean_inference_slot_accounting_cases();
     let (db, _user, _access, binding) =
-        crate::test_support::root::signed_test_node("inference-admission").await;
+        crate::test_support::signed_test_node("inference-admission").await;
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
     let signer = agent.managed_agent_signer().unwrap();
@@ -37,7 +38,7 @@ pub(super) async fn test_node() -> (
 }
 
 pub(super) async fn grant_test_agent(
-    db: &crate::support::TestDb,
+    db: &crate::test_support::TestDb,
     signer: &gents_store::identity::ManagedAgentSigner,
 ) {
     use gents_store::config_client::NodePermission;
@@ -132,9 +133,7 @@ pub(super) async fn seeded_request(
         "2026-04-15T00:00:00Z",
         AgentRequestAdmissionRecord::local_self(signer.did()),
     );
-    crate::sign_agent_request_create(signer, &mut create)
-        .await
-        .unwrap();
+    create.admission.signature = signer.sign(&create.signing_payload()).await.unwrap();
     let mutation = create.graphql_mutation().unwrap();
     let doc_id = access.transact_write("test.inference.seed_request", |txn| {
         let mutation = &mutation;
@@ -150,12 +149,13 @@ pub(super) async fn seeded_request(
                     "requester_did": signer.did(), "session_id": session_id, "created_at": "2026-04-15T00:00:00Z"}}),
             ).await?;
             let session_doc = gents_store::graphql::created_doc_id(&response, "AgentSession")?;
-            crate::session::stage_session_relationships_in_txn(txn, &session_doc, &agent_doc, actor).await?;
+            txn.add_resource_relationship("AgentSession", &session_doc, "parent", "agents", &agent_doc).await?;
+            txn.add_actor_relationship("AgentSession", &session_doc, "working_agent", actor).await?;
             let response = txn.execute(mutation).await?;
             let request_doc = gents_store::graphql::created_doc_id(&response, "AgentRequest")?;
-            crate::request::lifecycle::stage_request_relationships_in_txn(
-                txn, &request_doc, &agent_doc, &session_doc, signer.did(),
-            ).await?;
+            txn.add_resource_relationship("AgentRequest", &request_doc, "parent", "agents", &agent_doc).await?;
+            txn.add_resource_relationship("AgentRequest", &request_doc, "session", "sessions", &session_doc).await?;
+            txn.add_actor_relationship("AgentRequest", &request_doc, "working_agent", &identity::Did::new(signer.did())?).await?;
             Ok::<_, anyhow::Error>(request_doc)
         })
     }).await.expect("publish signed Agent session and request");

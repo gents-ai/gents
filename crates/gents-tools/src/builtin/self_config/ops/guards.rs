@@ -236,3 +236,6 @@ pub(crate) async fn profile_backend_id(
         .and_then(|(_, doc)| doc.get("backend_id")?.as_str().map(ToOwned::to_owned))
         .with_context(|| format!("InferenceProfile {profile_id:?} not found"))
 }
+
+#[cfg(test)]
+mod cloud_credentials_tests;

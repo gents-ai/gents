@@ -1266,7 +1266,7 @@ fn usage_wiring_claude_live_messages_records_unified_headers() {
         .build()
         .expect("runtime")
         .block_on(async {
-            let db = crate::support::test_db("claude-live-usage").await;
+            let db = crate::test_support::test_db("claude-live-usage").await;
             let node = db.node.clone();
             let cache: std::sync::Arc<crate::usage_observation::UsageCache> =
                 std::sync::Arc::default();

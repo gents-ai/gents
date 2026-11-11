@@ -14,7 +14,7 @@ const CANCELLED_BY_INTERRUPT_MSG: &str = "inference cancelled by request interru
 /// Admission refused, cancelled, or could not record a provider call.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("{0}")]
-pub(crate) struct AdmissionError(pub(crate) String);
+pub struct AdmissionError(pub(crate) String);
 
 /// A provider call that did not complete under admission.
 #[derive(Debug)]

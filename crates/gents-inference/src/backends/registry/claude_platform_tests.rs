@@ -320,31 +320,6 @@ fn cloud_credentials_decode_and_never_print_their_secrets() {
 }
 
 #[test]
-fn the_self_configuration_guard_keeps_cloud_credentials_operator_managed() {
-    let doc = |auth: Value| match json!({ "auth": auth }) {
-        Value::Object(map) => map,
-        _ => unreachable!(),
-    };
-    for credentials in [aws(), google()] {
-        let kept = crate::tools::builtin::self_config::guard_backend_auth(
-            &doc(credentials.clone()),
-            &doc(credentials.clone()),
-        );
-        assert!(kept.is_ok(), "{kept:?}");
-        let introduced =
-            crate::tools::builtin::self_config::guard_backend_auth(&doc(key()), &doc(credentials));
-        let message = introduced.unwrap_err().to_string();
-        assert!(message.contains("operator-managed"), "{message}");
-        assert!(!message.contains("secret"), "{message}");
-    }
-    let mut changed = aws();
-    changed["secret_access_key"] = "another-secret".into();
-    assert!(
-        crate::tools::builtin::self_config::guard_backend_auth(&doc(aws()), &doc(changed)).is_err()
-    );
-}
-
-#[test]
 fn the_connection_identity_covers_the_platform_settings() {
     let base = backend(
         "ClaudeAnthropicAws",

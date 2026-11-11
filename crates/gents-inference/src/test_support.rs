@@ -1,3 +1,9 @@
+mod embedded;
+pub use embedded::{
+    signed_test_node, signed_test_node_from_db, signed_test_node_without_agent,
+    signed_test_node_without_agent_from_db, test_db, TestDb,
+};
+
 use gents_documents::test_support::{
     ensure_test_node, set_test_default_agent_as, test_agent_documents,
 };
@@ -132,4 +138,65 @@ pub async fn install_test_agent_binding_with_access(
     crate::backends::registry::set_backend_probe_status_as(access, owner, &backend, "healthy")
         .await
         .unwrap();
+}
+
+/// A static-configuration agent over `identity`, with the owner's defaults.
+/// `binding` fixes the agent identity; absent, one is provisioned.
+pub fn resolved_agent(
+    identity: std::sync::Arc<dyn gents_store::identity::NodeIdentity>,
+    binding: Option<gents_protocol::agent_identity::AgentIdentityBinding>,
+) -> crate::resolved::ResolvedAgent {
+    use crate::resolved::{
+        MaxTurnsProvenance, ResolvedAgent, ResolvedConfiguration, DEFAULT_CONTEXT_WINDOW,
+        DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS, DEFAULT_MODEL_NAME,
+        DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS,
+    };
+    use gents_documents::inference_defaults::{
+        DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+    };
+    use std::time::Duration;
+    let binding = binding.unwrap_or_else(|| {
+        gents_store::identity::provision_agent_identity(identity.as_ref()).unwrap()
+    });
+    let agent_identity =
+        gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
+    let node = std::sync::Arc::new(gents_store::identity::RuntimeNode {
+        node_did: identity.did().to_string(),
+        identity,
+        default_agent_did: binding.agent_did.clone(),
+        display_name: None,
+        enabled: true,
+    });
+    ResolvedAgent {
+        configuration: ResolvedConfiguration::Static,
+        profile_id: None,
+        agent_did: binding.agent_did,
+        agent_identity,
+        node,
+        backend_id: None,
+        backend_provider_kind: crate::backends::provider::BackendProviderKind::OpenAiCompatible,
+        openai_wire_api: gents_loop::openai_wire::OpenAiWireApi::ChatCompletions,
+        backend_endpoint: "http://127.0.0.1:1/v1".to_string(),
+        backend_auth: gents_documents::BackendAuth::Unauthenticated,
+        claude_platform: None,
+        model_name: DEFAULT_MODEL_NAME.to_string(),
+        service_tier: None,
+        resolved_reasoning_efforts: None,
+        context_window: DEFAULT_CONTEXT_WINDOW,
+        max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
+        max_turns: DEFAULT_MAX_TURNS,
+        max_turns_provenance: MaxTurnsProvenance::Default,
+        system_prompt: String::new(),
+        compaction: None,
+        compaction_inference: None,
+        max_total_tokens: None,
+        stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
+        stream_liveness_timeout: Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS),
+        provider_idle_timeout: Duration::from_secs(DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS),
+        deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
+        completion_retry: Default::default(),
+        sampling: Default::default(),
+        skills: Vec::new(),
+        oauth_pool: Vec::new(),
+    }
 }

@@ -948,8 +948,6 @@ mod tests;
 #[cfg(test)]
 mod claude_platform_tests;
 
-#[cfg(test)]
-mod read_ownership_tests;
 
 #[cfg(test)]
 mod client_signed_backend_tests;
