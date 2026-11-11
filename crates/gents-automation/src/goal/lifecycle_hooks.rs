@@ -41,6 +41,7 @@ pub(super) fn manifest() -> Manifest {
             grants: SESSION_CHILD_GRANTS,
         }],
         bound: EFFECTS_PER_POINT,
+        history: vec!["Goal"],
     }
 }
 
