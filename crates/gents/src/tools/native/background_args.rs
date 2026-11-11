@@ -126,13 +126,6 @@ pub struct ReadToolOutputResponse {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct BackgroundToolArgs {
-    pub tool_name: String,
-    pub args: serde_json::Map<String, serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
 pub struct WaitToolArgs {
     pub tool_call_id: String,
     #[serde(default)]

@@ -16,8 +16,9 @@ use crate::session::message::{
     AgentInterruptArgs, AgentListArgs, AgentMessageArgs, AgentNewArgs, AgentSessionListArgs,
     AgentSessionReadArgs,
 };
+use crate::session::tool_output_rows::BackgroundToolArgs;
 use crate::tools::native::background_args::{
-    BackgroundToolArgs, CancelToolArgs, ListBackgroundToolsArgs, ReadToolOutputArgs, WaitToolArgs,
+    CancelToolArgs, ListBackgroundToolsArgs, ReadToolOutputArgs, WaitToolArgs,
 };
 use crate::tools::surface::BackgroundToolConfig;
 

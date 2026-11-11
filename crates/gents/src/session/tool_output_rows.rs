@@ -4,6 +4,7 @@ use gents_protocol::output::rows::{
     decode_scoped_request_output_segments, request_output_segments_query,
 };
 use gents_protocol::output::{OutputSource, OutputWriter, PayloadRef};
+use serde::Deserialize;
 
 /// Reads without an actor. Output segments are Agent-owned and invisible to
 /// it, so it exists only for unowned fixtures; runtime readers use
@@ -138,4 +139,11 @@ pub fn canonical_tool_output_from_rows(
         "tool output source stream is not a ToolOutput stream"
     );
     Ok(CanonicalToolOutputObservation::Closed(stream.text))
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BackgroundToolArgs {
+    pub tool_name: String,
+    pub args: serde_json::Map<String, serde_json::Value>,
 }

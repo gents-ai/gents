@@ -415,7 +415,7 @@ pub(super) fn resolve_tool_payloads(
                         name == gents_protocol::tool_names::SPAWN_PROCESS_TOOL_NAME,
                         "spawned tool parent is not an accepted spawn_process invocation"
                     );
-                    let input: crate::tools::native::background_args::BackgroundToolArgs =
+                    let input: crate::session::tool_output_rows::BackgroundToolArgs =
                         serde_json::from_value(native.function.arguments.clone())?;
                     anyhow::ensure!(
                         input.tool_name == row.tool_name,
