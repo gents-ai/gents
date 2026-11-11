@@ -7,13 +7,14 @@ use std::sync::{
 use std::task::{Context, Poll};
 
 use futures::{Stream, StreamExt};
-use serde::Deserialize;
+use gents_lean_vocab::families::storage_write_gate_stream_waiter_schedule as family;
+use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
 use super::{MutationWriteGate, MutationWriteGuard};
 use crate::config_client::write_telemetry::WriteOperation;
 
-#[derive(Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Event {
     PollNext,
@@ -27,20 +28,6 @@ enum Event {
     FlushWriteReturned,
     DropGenerator,
     FlushOnlyPoll,
-}
-
-#[derive(Deserialize)]
-struct Case {
-    name: String,
-    events: Vec<Event>,
-    flush_waiter: String,
-    gate_held: bool,
-    initial_guard_held: bool,
-    owner_operation: String,
-    stream_acquired: bool,
-    flush_acquire_ready: bool,
-    buffered_item_count: usize,
-    generator_dropped: bool,
 }
 
 type AcquireFuture = Pin<Box<dyn Future<Output = super::Result<MutationWriteGuard>>>>;
@@ -94,19 +81,7 @@ fn actual_owner(gate: &MutationWriteGate) -> String {
 
 #[tokio::test]
 async fn lean_stream_waiter_schedules_match_the_canonical_write_gate() {
-    let cases: Vec<Case> = serde_json::from_value(serde_json::Value::from(
-        tokio::task::spawn_blocking(|| {
-            gents_lean_vocab::lean_contract_snapshot()
-                .storage_write_gate_stream_waiter_cases
-                .clone()
-        })
-        .await
-        .expect("Lean snapshot load"),
-    ))
-    .expect("Lean stream waiter fixture");
-    assert_eq!(cases.len(), 4);
-
-    for case in cases {
+    for case in family::cases::<Event>() {
         let gate = Arc::new(MutationWriteGate::new());
         let mut initial_guard = Some(
             gate.acquire(write_operation("test.stream_waiter.initial"))
@@ -148,9 +123,9 @@ async fn lean_stream_waiter_schedules_match_the_canonical_write_gate() {
             }));
         let mut flush_future: Option<AcquireFuture> = None;
         let mut flush_guard: Option<MutationWriteGuard> = None;
-        let mut buffered_item_count = 0;
+        let mut buffered_item_count = 0_u64;
 
-        let mut events = case.events.into_iter();
+        let mut events = case.input.events.clone().into_iter();
         {
             let stream_ref = stream.as_mut().expect("stream generator is alive");
             let mut borrowed_next = Box::pin(stream_ref.next());
@@ -205,7 +180,7 @@ async fn lean_stream_waiter_schedules_match_the_canonical_write_gate() {
                             stream_acquired.load(Ordering::Acquire),
                             "co-poll advances the retained generator through gate acquisition"
                         );
-                        assert_eq!(actual_owner(&gate), "stream", "{}", case.name);
+                        assert_eq!(actual_owner(&gate), "stream", "{}", case.input.name);
                         assert!(matches!(events.next(), Some(Event::StreamWriteReturned)));
                         release_stream_tx
                             .take()
@@ -218,7 +193,7 @@ async fn lean_stream_waiter_schedules_match_the_canonical_write_gate() {
                             }
                             Poll::Ready((result, item)) => {
                                 flush_guard = Some(result.expect("flush gate acquisition"));
-                                buffered_item_count = usize::from(item.flatten().is_some());
+                                buffered_item_count = u64::from(item.flatten().is_some());
                             }
                         }
                         assert_eq!(yielded.load(Ordering::SeqCst), 1);
@@ -236,59 +211,15 @@ async fn lean_stream_waiter_schedules_match_the_canonical_write_gate() {
         }
 
         let owner_operation = actual_owner(&gate);
-        let tracked_operations: Vec<_> = gate
-            .owners
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .values()
-            .map(|owner| owner.operation.as_str())
-            .collect();
-        assert_eq!(
-            case.gate_held,
-            owner_operation != "none",
-            "{}: mapped owner={owner_operation}, tracked operations={tracked_operations:?}, \
-             available permits={}, flush guard={}, stream acquired={}",
-            case.name,
-            gate.permits.available_permits(),
-            flush_guard.is_some(),
-            stream_acquired.load(Ordering::Acquire)
-        );
-        assert_eq!(
-            case.initial_guard_held,
-            actual_owner(&gate) == "initial_guard",
-            "{}",
-            case.name
-        );
-        assert_eq!(case.owner_operation, actual_owner(&gate), "{}", case.name);
-        assert_eq!(
-            case.flush_acquire_ready,
-            flush_guard.is_some(),
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            case.stream_acquired,
-            stream_acquired.load(Ordering::Acquire),
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            case.buffered_item_count, buffered_item_count,
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            case.generator_dropped,
-            generator_dropped.load(Ordering::Acquire),
-            "{}",
-            case.name
-        );
-        assert_eq!(
-            case.flush_waiter == "acquired",
-            flush_guard.is_some(),
-            "{}",
-            case.name
-        );
+        case.check(family::Output {
+            gate_held: owner_operation != "none",
+            initial_guard_held: owner_operation == "initial_guard",
+            owner_operation,
+            stream_acquired: stream_acquired.load(Ordering::Acquire),
+            flush_acquire_ready: flush_guard.is_some(),
+            buffered_item_count,
+            generator_dropped: generator_dropped.load(Ordering::Acquire),
+        });
 
         drop(stream.take());
         drop(flush_guard.take());

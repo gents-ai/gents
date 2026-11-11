@@ -12,7 +12,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
 use axum::{Json, Router};
 use defra_node::Node as EmbeddedNode;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::{Barrier, Notify};
 use tracing::field::{Field, Visit};
@@ -1291,108 +1291,61 @@ async fn stalled_cancellation_cleanup_releases_the_embedded_write_gate() {
     );
 }
 
-#[derive(Deserialize)]
-struct StorageWriteGateCase {
-    name: String,
-    independently_scheduled: bool,
-    rollback_owner_scheduled: bool,
-    cleanup_times_out: bool,
-    expected_gate_held_after_owner_handoff: bool,
-    expected_gate_held: bool,
-}
-
 /// Embedded workers run outside the paused Tokio clock; real setup and shutdown
 /// must complete before and after the modeled cleanup-timeout interval.
 #[tokio::test]
 async fn lean_cancelled_rollback_timeout_releases_actual_transaction_gate() {
-    let cases: Vec<StorageWriteGateCase> = serde_json::from_value(serde_json::Value::from(
-        tokio::task::spawn_blocking(|| {
-            gents_lean_vocab::lean_contract_snapshot()
-                .storage_write_gate_cases
-                .clone()
-        })
-        .await
-        .expect("Lean snapshot load"),
-    ))
-    .expect("Lean storage write-gate fixture");
-    let scenario = cases
-        .iter()
-        .find(|case| case.name == "cancelled_rollback_timeout_releases_canonical_gate")
-        .expect("generated cancellation and rollback-timeout scenario");
-    assert!(!scenario.independently_scheduled);
-    assert!(scenario.rollback_owner_scheduled && scenario.cleanup_times_out);
-    assert!(!scenario.expected_gate_held);
+    use gents_lean_vocab::families::storage_write_gate_contracts_handoff as family;
 
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    let started = Arc::new(Notify::new());
-    let release = Arc::new(Notify::new());
-    let mut txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
-    txn.pause_drop_rollback_for_test(Arc::new(super::RollbackDropCleanupPause {
-        started: started.clone(),
-        release,
-    }));
-    tokio::time::pause();
-    drop(txn);
+    for case in family::cases() {
+        let scenario = &case.input;
+        assert!(!scenario.independently_scheduled);
+        assert!(scenario.cleanup_times_out);
 
-    let gate = super::mutation_write_gate(&node);
-    started.notified().await;
-    let gate_held = gate.permits.available_permits() < super::MUTATION_WRITE_GATE_CAPACITY;
-    assert_eq!(
-        gate_held, scenario.expected_gate_held_after_owner_handoff,
-        "native gate observation must match the Lean handoff state"
-    );
-    if scenario.cleanup_times_out {
-        tokio::time::advance(super::EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT).await;
-    }
-    tokio::time::resume();
-    if !scenario.expected_gate_held {
-        tokio::time::timeout(Duration::from_secs(1), async {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let mut txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
+        txn.pause_drop_rollback_for_test(Arc::new(super::RollbackDropCleanupPause {
+            started: started.clone(),
+            release,
+        }));
+        tokio::time::pause();
+        drop(txn);
+
+        let gate = super::mutation_write_gate(&node);
+        started.notified().await;
+        let gate_held_after_owner_handoff =
+            gate.permits.available_permits() < super::MUTATION_WRITE_GATE_CAPACITY;
+        if scenario.cleanup_times_out {
+            tokio::time::advance(super::EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT).await;
+        }
+        tokio::time::resume();
+        let released = tokio::time::timeout(Duration::from_secs(1), async {
             while gate.permits.available_permits() < super::MUTATION_WRITE_GATE_CAPACITY {
                 tokio::task::yield_now().await;
             }
         })
         .await
-        .expect("cleanup timeout releases all modeled permits");
+        .is_ok();
+        case.check(family::Output {
+            gate_held_after_owner_handoff,
+            gate_held: !released,
+        });
+        node.shutdown().await.expect("node shutdown");
     }
-    let gate_held = gate.permits.available_permits() < super::MUTATION_WRITE_GATE_CAPACITY;
-    assert_eq!(
-        gate_held, scenario.expected_gate_held,
-        "native gate observation must match the Lean cleanup-timeout state"
-    );
-    node.shutdown().await.expect("node shutdown");
 }
 
-#[derive(Deserialize)]
-struct WriteAdmissionScenario {
-    name: String,
-    capacity: usize,
-    initial_claimed: bool,
-    actions: Vec<WriteAdmissionAction>,
-    checkpoints: Vec<WriteAdmissionCheckpoint>,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum WriteAdmissionStepKind {
+    Request,
+    Observe,
+    Release,
 }
 
-#[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum WriteAdmissionAction {
-    Request { owner: usize },
-    Observe { owner: usize, event: String },
-    Release { owner: usize },
-}
-
-#[derive(Deserialize)]
-struct WriteAdmissionCheckpoint {
-    after_actions: usize,
-    active_count: usize,
-    active_owners: Vec<usize>,
-    waiting: Vec<usize>,
-    leases: Vec<WriteAdmissionLease>,
-    store_claim_held: bool,
-}
-
-#[derive(Deserialize)]
-struct WriteAdmissionLease {
-    owner: usize,
-    phase: String,
+fn count_u64(count: usize) -> u64 {
+    u64::try_from(count).expect("count fits in u64")
 }
 
 async fn wait_for_gate_waiters(gate: &super::MutationWriteGate, expected: usize) {
@@ -1408,26 +1361,29 @@ async fn wait_for_gate_waiters(gate: &super::MutationWriteGate, expected: usize)
     .expect("native gate waiter registrations match the Lean trace");
 }
 
+async fn settle_gate(gate: &super::MutationWriteGate, outstanding: usize) -> usize {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let waiting = lock(&gate.pending_acquires).len();
+            let active = lock(&gate.owners).len();
+            let permits_in_use =
+                super::MUTATION_WRITE_GATE_CAPACITY - gate.permits.available_permits();
+            if permits_in_use == active && waiting + active == outstanding {
+                return active;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("native gate settles with every outstanding lease active or waiting")
+}
+
 #[tokio::test]
 async fn lean_write_admission_traces_match_native_independent_leases_and_capacity() {
-    let scenarios: Vec<WriteAdmissionScenario> = serde_json::from_value(serde_json::Value::from(
-        tokio::task::spawn_blocking(|| {
-            gents_lean_vocab::lean_contract_snapshot()
-                .storage_write_gate_admission_cases
-                .clone()
-        })
-        .await
-        .expect("Lean snapshot load"),
-    ))
-    .expect("Lean write-admission traces");
+    use gents_lean_vocab::families::storage_write_gate_admission_lease_trace as family;
 
-    for scenario in scenarios {
-        assert_eq!(
-            scenario.capacity,
-            super::MUTATION_WRITE_GATE_CAPACITY,
-            "{}: model and native gate capacity",
-            scenario.name
-        );
+    for case in family::cases::<String, WriteAdmissionStepKind>() {
+        let scenario = &case.input;
         let home = tempfile::tempdir().unwrap();
         let data = home.path().join("data");
         std::fs::create_dir_all(&data).unwrap();
@@ -1451,17 +1407,17 @@ async fn lean_write_admission_traces_match_native_independent_leases_and_capacit
         };
         let gate = super::mutation_write_gate(&node);
         let mut held = BTreeMap::new();
+        let mut pending: Vec<u64> = Vec::new();
+        let mut outstanding = 0_usize;
         let mut acquiring = tokio::task::JoinSet::new();
+        let mut snapshots = Vec::new();
 
-        for (index, action) in scenario.actions.into_iter().enumerate() {
-            let checkpoint = scenario
-                .checkpoints
-                .get(index)
-                .expect("Lean emits one checkpoint per action");
-            assert_eq!(checkpoint.after_actions, index + 1, "{}", scenario.name);
-
-            match action {
-                WriteAdmissionAction::Request { owner } => {
+        for step in &scenario.actions {
+            let owner = step.owner;
+            match step.kind {
+                WriteAdmissionStepKind::Request => {
+                    pending.push(owner);
+                    outstanding += 1;
                     let gate = Arc::clone(&gate);
                     acquiring.spawn(async move {
                         let operation = crate::config_client::write_telemetry::WriteOperation::new(
@@ -1470,77 +1426,73 @@ async fn lean_write_admission_traces_match_native_independent_leases_and_capacit
                         Ok::<_, TestError>((owner, gate.acquire(operation).await?))
                     });
                 }
-                WriteAdmissionAction::Observe { owner, event } => {
-                    let phase = checkpoint
-                        .leases
-                        .iter()
-                        .find(|lease| lease.owner == owner)
-                        .map(|lease| lease.phase.as_str());
+                WriteAdmissionStepKind::Observe => {
                     assert!(
-                        phase.is_some(),
-                        "{}: observed lease disappeared",
+                        held.contains_key(&owner),
+                        "{}: observed lease is not admitted",
                         scenario.name
                     );
                     assert!(
-                        matches!(event.as_str(), "storage_returned" | "release"),
-                        "{}: unexpected modeled event {event}",
-                        scenario.name
+                        matches!(
+                            step.event.as_deref(),
+                            Some("storage_returned" | "release")
+                        ),
+                        "{}: unexpected modeled event {:?}",
+                        scenario.name,
+                        step.event
                     );
                 }
-                WriteAdmissionAction::Release { owner } => {
+                WriteAdmissionStepKind::Release => {
                     drop(
                         held.remove(&owner)
                             .expect("Lean only releases an admitted lease"),
                     );
+                    outstanding -= 1;
                 }
             }
 
-            while held.len() < checkpoint.active_count {
+            let active = settle_gate(&gate, outstanding).await;
+            while held.len() < active {
                 let acquired = tokio::time::timeout(Duration::from_secs(5), acquiring.join_next())
                     .await
                     .expect("native write permit admission made progress")
                     .expect("one lease acquisition remains to be joined")
                     .expect("lease task did not panic")
                     .expect("native lease acquisition succeeded");
+                pending.retain(|waiting| *waiting != acquired.0);
                 assert!(held.insert(acquired.0, acquired.1).is_none());
             }
-            wait_for_gate_waiters(&gate, checkpoint.waiting.len()).await;
 
-            let held_owners: Vec<_> = held.keys().copied().collect();
-            assert_eq!(held_owners, checkpoint.active_owners, "{}", scenario.name);
             assert_eq!(
                 lock(&gate.owners).len(),
-                checkpoint.active_count,
+                held.len(),
                 "{}: native owner metadata",
                 scenario.name
             );
             assert_eq!(
                 gate.permits.available_permits(),
-                scenario.capacity.saturating_sub(checkpoint.active_count),
+                super::MUTATION_WRITE_GATE_CAPACITY - held.len(),
                 "{}: native permits",
                 scenario.name
             );
             assert_eq!(
                 lock(&gate.pending_acquires).len(),
-                checkpoint.waiting.len(),
+                pending.len(),
                 "{}: native waiters",
                 scenario.name
             );
-            assert_eq!(gate.store_claim().is_some(), checkpoint.store_claim_held);
-            for lease in &checkpoint.leases {
-                assert!(held.contains_key(&lease.owner), "{}", scenario.name);
-                assert!(
-                    matches!(
-                        lease.phase.as_str(),
-                        "storage" | "cleanup" | "dropping" | "releasable" | "released"
-                    ),
-                    "{}: unknown model lifecycle phase {}",
-                    scenario.name,
-                    lease.phase
-                );
-            }
+            snapshots.push(family::Snapshot {
+                active_count: count_u64(held.len()),
+                active_owners: held.keys().copied().collect(),
+                waiting: pending.clone(),
+                store_claim_held: gate.store_claim().is_some(),
+            });
         }
 
+        case.check(family::Output {
+            capacity: count_u64(super::MUTATION_WRITE_GATE_CAPACITY),
+            snapshots,
+        });
         acquiring.abort_all();
         while acquiring.join_next().await.is_some() {}
         held.clear();
