@@ -2,6 +2,7 @@ use std::fmt::Write as _;
 use std::sync::LazyLock;
 
 use super::*;
+use crate::session::output_render::Ordered;
 use gents_protocol::operations::agent::{AgentCreateOperation, AGENT_CLONE, AGENT_CREATE};
 
 macro_rules! mailbox_identity_choice {

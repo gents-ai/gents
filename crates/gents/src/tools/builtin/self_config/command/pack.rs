@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::output_render::ordered;
 
 impl ConfigCommandTool {
     pub(super) fn plugin(&self, argv: &[String]) -> Result<String> {

@@ -709,7 +709,7 @@ impl SchemaTool {
                         output["loss"] = loss;
                     }
                     serde_json::to_string(
-                        &crate::tools::builtin::self_config::Ordered::reading_order(
+                        &crate::session::output_render::Ordered::reading_order(
                             output,
                             &["effect", "loss", "warnings", "next_call", "metadata"],
                         ),

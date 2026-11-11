@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 
-pub(crate) struct Ordered(
+pub struct Ordered(
     Vec<(
         std::borrow::Cow<'static, str>,
         Box<serde_json::value::RawValue>,
@@ -67,7 +67,7 @@ impl serde::Serialize for Ordered {
 }
 
 impl Ordered {
-    pub(crate) fn entry(
+    pub fn entry(
         key: impl Into<std::borrow::Cow<'static, str>>,
         value: &impl serde::Serialize,
     ) -> (
@@ -80,7 +80,7 @@ impl Ordered {
         )
     }
 
-    pub(crate) fn new(
+    pub fn new(
         entries: Vec<(
             std::borrow::Cow<'static, str>,
             Box<serde_json::value::RawValue>,
@@ -91,12 +91,12 @@ impl Ordered {
 
     /// A serializable struct's fields in declaration order, each value in
     /// its compact form.
-    pub(crate) fn from_serialize(value: &impl serde::Serialize) -> Result<Self> {
+    pub fn from_serialize(value: &impl serde::Serialize) -> Result<Self> {
         let Fields(fields) = serde_json::from_str(&serde_json::to_string(value)?)?;
         Ok(Self(fields, true))
     }
 
-    pub(crate) fn reading_order(value: Value, first: &[&'static str]) -> Self {
+    pub fn reading_order(value: Value, first: &[&'static str]) -> Self {
         let Value::Object(mut object) = value else {
             return Self(vec![Self::entry("value", &value)], true);
         };
@@ -112,13 +112,13 @@ impl Ordered {
         Self(entries, true)
     }
 
-    pub(crate) fn preserving_nulls(value: Value, first: &[&'static str]) -> Self {
+    pub fn preserving_nulls(value: Value, first: &[&'static str]) -> Self {
         let mut ordered = Self::reading_order(value, first);
         ordered.1 = false;
         ordered
     }
 
-    pub(crate) fn push(
+    pub fn push(
         &mut self,
         entry: (
             std::borrow::Cow<'static, str>,
@@ -128,19 +128,19 @@ impl Ordered {
         self.0.push(entry);
     }
 
-    pub(crate) fn pretty(&self) -> Result<String> {
+    pub fn pretty(&self) -> Result<String> {
         serde_json::to_string_pretty(self).map_err(|error| anyhow!("serialize result: {error}"))
     }
 }
 
 macro_rules! ordered {
     ($($key:literal : $value:expr),* $(,)?) => {
-        $crate::tools::output::Ordered::new(vec![$($crate::tools::output::Ordered::entry($key, &$value)),*])
+        $crate::session::output_render::Ordered::new(vec![$($crate::session::output_render::Ordered::entry($key, &$value)),*])
     };
 }
-pub(crate) use ordered;
+pub use ordered;
 
-pub(crate) fn terminal_output_tail(source: &str, budget: usize) -> &str {
+pub fn terminal_output_tail(source: &str, budget: usize) -> &str {
     let mut start = source.len().saturating_sub(budget);
     while !source.is_char_boundary(start) {
         start += 1;
@@ -148,7 +148,7 @@ pub(crate) fn terminal_output_tail(source: &str, budget: usize) -> &str {
     &source[start..]
 }
 
-pub(crate) fn render(value: &impl serde::Serialize, first: &[&'static str]) -> Result<String> {
+pub fn render(value: &impl serde::Serialize, first: &[&'static str]) -> Result<String> {
     let original = serde_json::to_string_pretty(value)?;
     let value = serde_json::to_value(value)?;
     if !value.is_object() {
@@ -157,7 +157,7 @@ pub(crate) fn render(value: &impl serde::Serialize, first: &[&'static str]) -> R
     render_value_or_original(value, original, first)
 }
 
-pub(crate) fn render_json_text(original: String, first: &[&'static str]) -> Result<String> {
+pub fn render_json_text(original: String, first: &[&'static str]) -> Result<String> {
     let Ok(Value::Object(value)) = serde_json::from_str::<Value>(&original) else {
         return Ok(original);
     };

@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::output_render::{ordered, Ordered};
 use crate::documents::{
     validate_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };

@@ -75,8 +75,6 @@ pub fn engineer_self_config() -> crate::documents::SelfConfigTools {
         .expect("bundled Engineer grant must match canonical SelfConfigTools")
 }
 
-pub(crate) use crate::tools::output::{ordered, Ordered};
-
 const EFFECTIVE_ORDER: &[&str] = &[
     "execution_settings",
     "agent_did",

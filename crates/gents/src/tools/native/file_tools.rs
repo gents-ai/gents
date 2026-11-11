@@ -127,7 +127,7 @@ pub(super) fn render_tool_output(
     raw_json: bool,
 ) -> Result<String> {
     if raw_json {
-        return crate::tools::output::render(
+        return crate::session::output_render::render(
             raw_value,
             &["content", "entries", "matches", "diff", "status", "ok"],
         );

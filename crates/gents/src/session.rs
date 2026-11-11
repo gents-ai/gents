@@ -22,6 +22,7 @@ mod history;
 mod model_test_support;
 mod observations;
 mod output;
+pub mod output_render;
 mod preview;
 pub mod provider_context_reduction;
 pub(crate) use preview::{request_preview_in_txn, visible_reply_preview};

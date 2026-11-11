@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use super::*;
+use crate::session::output_render::ordered;
 use crate::pack::authoring::{
     check_dir, export::collection_sdl, export_pack, pack_built, pack_name, plugins_with_source,
     read_manifest, scaffold, selectable_kind, source as source_pack, verify_pack_file, CheckReport,

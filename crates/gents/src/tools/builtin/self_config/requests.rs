@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) fn outcome_text(outcome: &PatchOutcome) -> Result<String> {
-    crate::tools::output::Ordered::reading_order(
+    crate::session::output_render::Ordered::reading_order(
         serde_json::to_value(outcome)?,
         &[
             "committed",

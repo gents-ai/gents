@@ -4,7 +4,6 @@ pub mod call;
 pub mod exec;
 pub mod mcp;
 pub mod native;
-pub(crate) mod output;
 pub mod plugin_host;
 mod rendering;
 pub(crate) mod runtime_context;

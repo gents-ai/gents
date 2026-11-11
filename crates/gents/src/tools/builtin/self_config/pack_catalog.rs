@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::output_render::ordered;
 
 impl PackInstaller {
     pub(super) async fn list(&self, limit: usize, cursor: Option<&str>) -> anyhow::Result<String> {

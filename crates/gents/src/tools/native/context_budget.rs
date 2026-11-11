@@ -246,7 +246,7 @@ impl Tool for ContextBudgetTool {
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
         let scope = ContextBudgetScope::from_tool_runtime(&self.node_did)?;
         let snapshot = load_context_budget_snapshot(&self.node, &scope).await?;
-        crate::tools::output::render(
+        crate::session::output_render::render(
             &snapshot,
             &[
                 "current_estimate",
