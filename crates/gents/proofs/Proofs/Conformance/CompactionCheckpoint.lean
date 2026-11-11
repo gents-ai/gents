@@ -97,6 +97,15 @@ private def schema : Json := Json.mkObj [
   ("properties", Json.mkObj [("goal", Json.mkObj [("type", .str "string")])]),
   ("required", toJson ["goal"])]
 
+/-- Lean's `Json.compress` lists object keys in reverse order; the wire schema text is
+rendered with ascending keys so a native renderer can reproduce it. -/
+private partial def canonical : Json → String
+  | .arr items => "[" ++ String.intercalate "," (items.toList.map canonical) ++ "]"
+  | .obj fields => "{" ++ String.intercalate ","
+      ((fields.fold (fun acc key value => acc ++ [(key, value)]) []).map fun (key, value) =>
+        (Json.str key).compress ++ ":" ++ canonical value) ++ "}"
+  | other => other.compress
+
 structure OutputInput where
   schema : Option String
   supported : Option (List String)
@@ -129,6 +138,6 @@ def claudeOutputConfig : Conformance.Family OutputInput (Option OutputConfig) wh
       ({ effort := (config.getObjValAs? String "effort").toOption
          format := (config.getObjVal? "format").toOption.map fun format =>
            ({ kind := (format.getObjValAs? String "type").toOption.getD ""
-              schema := (format.getObjValD "schema").compress } : OutputFormat) } : OutputConfig)
+              schema := canonical (format.getObjValD "schema") } : OutputFormat) } : OutputConfig)
 
 end Conformance.CompactionCheckpoint
