@@ -87,139 +87,87 @@ async fn publication_observer_refuses_local_transactions_before_callback() {
 
 #[test]
 fn modeled_publication_journal_traces_drive_the_native_owner() {
-    use super::client_agent_publication::{ClientAgentJournal, PublicationStage};
-    use gents_lean_vocab::{
-        LeanIdentityClientAgentJournalAction as Action,
-        LeanIdentityClientAgentJournalStage as Stage,
+    use super::client_agent_publication::{
+        ClientAgentJournal, PublicationStage, PublicationStatus,
     };
+    use gents_lean_vocab::families::client_agent_journal_publication_traces as family;
 
-    fn stage(value: &Stage) -> PublicationStage {
-        match value {
-            Stage::Commit => PublicationStage::Commit,
-            Stage::Parent => PublicationStage::Parent,
-            Stage::Executor => PublicationStage::Executor,
+    fn observed(
+        journal: &ClientAgentJournal,
+    ) -> family::Journal<PublicationStage, PublicationStatus> {
+        family::Journal {
+            client: journal.client.clone(),
+            agent_did: journal.agent_did.clone(),
+            node_did: journal.node_did.clone(),
+            agent_doc: journal.agent_doc.clone(),
+            node_doc: journal.node_doc.clone(),
+            commit: journal.commit,
+            parent: journal.parent,
+            executor: journal.executor,
+            permit: journal.permit,
         }
     }
-    fn check(
-        actual: &ClientAgentJournal,
-        expected: &gents_lean_vocab::LeanIdentityClientAgentJournalState,
-        name: &str,
-    ) {
-        assert_eq!(actual.client, expected.client, "{name}");
-        assert_eq!(actual.agent_did, expected.agent_did, "{name}");
-        assert_eq!(actual.node_did, expected.node_did, "{name}");
-        assert_eq!(actual.agent_doc, expected.agent_doc, "{name}");
-        assert_eq!(actual.node_doc, expected.node_doc, "{name}");
-        assert_eq!(
-            format!("{:?}", actual.commit),
-            format!("{:?}", expected.commit),
-            "{name}"
-        );
-        assert_eq!(
-            format!("{:?}", actual.parent),
-            format!("{:?}", expected.parent),
-            "{name}"
-        );
-        assert_eq!(
-            format!("{:?}", actual.executor),
-            format!("{:?}", expected.executor),
-            "{name}"
-        );
-        assert_eq!(
-            format!("{:?}", actual.permit),
-            format!("{:?}", expected.permit),
-            "{name}"
-        );
-    }
-    for case in &gents_lean_vocab::lean_contract_snapshot().identity_client_agent_journal_cases {
-        let initial = &case.initial;
+    family::replay::<String, PublicationStage, PublicationStatus>(|i| {
         let mut journal = ClientAgentJournal::new(
-            initial.client.clone(),
-            initial.agent_did.clone(),
-            initial.node_did.clone(),
-            initial.agent_doc.clone(),
-            initial.node_doc.clone(),
+            i.initial.client.clone(),
+            i.initial.agent_did.clone(),
+            i.initial.node_did.clone(),
+            i.initial.agent_doc.clone(),
+            i.initial.node_doc.clone(),
         );
-        check(&journal, initial, &case.name);
-        for step in &case.steps {
-            check(&journal, &step.before, &case.name);
-            match &step.action {
-                Action::Record {
-                    stage: value,
-                    durable,
-                } => journal.record_attempt(stage(value), *durable),
-                Action::Dispatch { stage: value } => journal.dispatch(stage(value)),
-                Action::Finish {
-                    stage: value,
-                    success,
-                    confirmed_failure,
-                } => journal.finish_attempt(stage(value), *success, *confirmed_failure),
-                Action::Restart => journal.restart(),
-                Action::SaveUnrelated => {}
+        let mut steps = Vec::new();
+        for step in &i.actions {
+            let before = observed(&journal);
+            match step.action.as_str() {
+                "record" => journal.record_attempt(step.stage, step.durable),
+                "dispatch" => journal.dispatch(step.stage),
+                "finish" => {
+                    journal.finish_attempt(step.stage, step.success, step.confirmed_failure)
+                }
+                "restart" => journal.restart(),
+                "save_unrelated" => {}
+                other => panic!("unknown modeled action {other}"),
             }
-            check(&journal, &step.after, &case.name);
+            steps.push(family::Step {
+                before,
+                after: observed(&journal),
+            });
         }
-    }
+        steps
+    });
 }
 
-#[test]
-fn modeled_agent_create_intent_drives_the_transaction_route() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().identity_client_agent_creation_cases;
-    let mut covered = 0;
-    for case in cases {
-        if !case.signer_available
-            || !case.supported
-            || !case.signer_matches_bearer
-            || !case.input_matches_graph
-            || !case.trusted_schema
-            || !case.graph_verified
-            || !case.transport_ready
-        {
-            continue;
-        }
-        let actual = create_route(
-            case.client_intent,
-            case.agent_collection,
-            case.create,
-            case.http,
-        );
-        let expected = match case.expected_route.as_str() {
-            "native" => CreateRoute::Native,
-            "signed" => CreateRoute::Signed,
-            "refuse" => CreateRoute::Refuse,
-            value => panic!("unknown modeled route {value}"),
-        };
-        assert_eq!(actual, expected, "{}", case.name);
-        covered += 1;
-    }
-    assert!(covered > 0);
-}
+#[tokio::test]
+async fn modeled_agent_create_route_drives_the_transaction_route() {
+    use gents_lean_vocab::families::client_agent_creation_agent_route as family;
 
-#[test]
-fn modeled_authored_document_creation_requires_trusted_schema_and_held_user() {
-    use super::authored_document::{document_create_allowed, DocumentSchemaSource};
-    for case in &gents_lean_vocab::lean_contract_snapshot().identity_client_document_creation_cases
-    {
-        let flag = |name: &str| case[name].as_bool().expect("modeled boolean");
-        let source = match case["source"].as_str().expect("modeled schema source") {
-            "authored" => DocumentSchemaSource::UserAuthored,
-            "remote" => DocumentSchemaSource::RemoteObservation,
-            other => panic!("unknown schema source {other}"),
+    for case in family::cases::<CreateRoute>() {
+        let i = &case.input;
+        let actual = if i.signer_available {
+            create_route(i.client_intent, i.agent_collection, i.create, i.http)
+        } else {
+            let endpoint = super::GraphqlEndpoint::as_principal(
+                "http://127.0.0.1:1/api/v0/graphql",
+                "did:key:missing-client-signer",
+            )
+            .with_client_signed_agent_creates();
+            let error = super::client_signed_agent::execute(
+                &endpoint,
+                "1",
+                "mutation { create_Agent(input: {}) { _docID } }",
+                &serde_json::json!({"input": {}}),
+                gents_protocol::schemas::AGENT.to_owned(),
+                "Agent".to_owned(),
+            )
+            .await
+            .expect_err("a missing signer cannot fall back to the runtime");
+            assert!(matches!(
+                error,
+                super::ConfigClientError::ClientAgentSignerRequired
+            ));
+            CreateRoute::Refuse
         };
-        let actual = document_create_allowed(
-            source,
-            flag("single_collection"),
-            flag("application_collection"),
-            flag("matches_live"),
-            flag("held_signer"),
-            flag("http"),
-        );
-        assert_eq!(
-            actual,
-            case["expected_route"] == "signed",
-            "{}",
-            case["name"]
-        );
+        case.check(actual);
     }
 }
 
@@ -398,35 +346,6 @@ fn modeled_held_signer_binds_the_actor_and_bearer() -> anyhow::Result<()> {
         assert_eq!(result.is_ok(), observation.allowed, "{observation:?}");
     }
     Ok(())
-}
-
-#[tokio::test]
-async fn modeled_missing_client_signer_fails_before_connecting() {
-    let case = gents_lean_vocab::lean_contract_snapshot()
-        .identity_client_agent_creation_cases
-        .iter()
-        .find(|case| case.name == "no-signer")
-        .expect("modeled missing-signer case");
-    let endpoint = super::GraphqlEndpoint::as_principal(
-        "http://127.0.0.1:1/api/v0/graphql",
-        "did:key:missing-client-signer",
-    )
-    .with_client_signed_agent_creates();
-    let error = super::client_signed_agent::execute(
-        &endpoint,
-        "1",
-        "mutation { create_Agent(input: {}) { _docID } }",
-        &serde_json::json!({"input": {}}),
-        gents_protocol::schemas::AGENT.to_owned(),
-        "Agent".to_owned(),
-    )
-    .await
-    .expect_err("a missing signer cannot fall back to the runtime");
-    assert_eq!(case.expected_route, "refuse");
-    assert!(matches!(
-        error,
-        super::ConfigClientError::ClientAgentSignerRequired
-    ));
 }
 
 #[tokio::test]

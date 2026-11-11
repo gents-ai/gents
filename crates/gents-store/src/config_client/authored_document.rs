@@ -250,4 +250,80 @@ mod tests {
         node.shutdown().await?;
         Ok(())
     }
+
+    #[tokio::test]
+    async fn modeled_document_creation_matches_the_publication_owner() -> anyhow::Result<()> {
+        use super::super::client_signed_agent::CreateRoute;
+        use gents_lean_vocab::families::client_agent_creation_document_route as family;
+
+        const SDL: &str = "type ModeledDocumentFixture { name: String }";
+        const MISMATCH: &str = "type ModeledDocumentFixture { name: Int }";
+        const SIBLING: &str = "type ModeledDocumentFixture { name: String } type ModeledDocumentSibling { name: String }";
+        let directory = tempfile::tempdir()?;
+        let root =
+            crate::identity::KeyIdentity::load_or_create(directory.path().join("node"), None)?;
+        let user =
+            crate::identity::KeyIdentity::load_or_create(directory.path().join("user"), None)?;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let url = format!("http://{}/api/v0/graphql", listener.local_addr()?);
+        let node = std::sync::Arc::new(
+            defra_node::Node::builder()
+                .with_node_identity_did(root.did())
+                .with_http(defra_node::HttpConfig::with_listener(listener)?)
+                .build()
+                .await?,
+        );
+        node.add_collection(SDL).await?;
+        let local = ConfigAccess::local_as(node.clone(), identity::Did::new(user.did()).unwrap());
+        let routed = local.clone().with_client_signed_writes_through(
+            super::super::GraphqlEndpoint::as_principal(&url, user.did())
+                .with_client_signing_capability(user.client_signing_capability()?)?,
+        )?;
+        let unsigned = ConfigAccess::Graphql(super::super::GraphqlEndpoint::as_principal(
+            &url,
+            user.did(),
+        ));
+        for case in family::cases::<String, CreateRoute>() {
+            let i = &case.input;
+            let source = match i.source.as_str() {
+                "authored" => DocumentSchemaSource::UserAuthored,
+                "remote" => DocumentSchemaSource::RemoteObservation,
+                other => panic!("unknown modeled schema source {other}"),
+            };
+            let access = if !i.http {
+                &local
+            } else if i.held_signer {
+                &routed
+            } else {
+                &unsigned
+            };
+            let collection = if i.application_collection {
+                "ModeledDocumentFixture"
+            } else {
+                "Agent"
+            };
+            let sdl = if !i.single_collection {
+                SIBLING
+            } else if !i.matches_live {
+                MISMATCH
+            } else {
+                SDL
+            };
+            let created = create_authored_document(
+                access,
+                collection,
+                &json!({"name": "modeled"}),
+                source,
+                sdl,
+            )
+            .await;
+            case.check(if created.is_ok() {
+                CreateRoute::Signed
+            } else {
+                CreateRoute::Refuse
+            });
+        }
+        node.shutdown().await?;
+        Ok(())
+    }
 }
