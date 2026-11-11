@@ -528,7 +528,7 @@ impl BackgroundExecutionRegistry {
         self.process_records.list()
     }
 
-    pub(crate) fn try_process_record_list(
+    pub fn try_process_record_list(
         &self,
     ) -> anyhow::Result<Vec<gents_session::exec::ownership::ProcessRecord>> {
         self.process_records.try_list()
@@ -844,7 +844,7 @@ impl BackgroundExecutionRegistry {
             .is_some_and(|execution| execution.tool_call_id == tool_call_id)
     }
 
-    pub(crate) fn active_tool_call_doc_ids(&self) -> Vec<String> {
+    pub fn active_tool_call_doc_ids(&self) -> Vec<String> {
         self.lock_executions()
             .values()
             .map(|execution| execution.tool_call_doc_id.clone())

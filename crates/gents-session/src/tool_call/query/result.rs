@@ -114,10 +114,10 @@ impl ReadSource<'_, '_> {
 pub struct CanonicalToolCallRead {
     pub(crate) accepted_header_doc_id: String,
     pub(crate) execution_generation: String,
-    pub(crate) request_doc_id: String,
+    pub request_doc_id: String,
     pub tool_name: String,
     pub lifecycle_state: ToolCallState,
-    pub(crate) arguments: String,
+    pub arguments: String,
     pub result: Option<Message>,
     pub raw_result: Option<String>,
 }

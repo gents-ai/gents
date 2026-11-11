@@ -6,7 +6,7 @@ pub enum TriggerKind {
 }
 
 impl TriggerKind {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             TriggerKind::Schedule => "schedule",
             TriggerKind::Event => "event",

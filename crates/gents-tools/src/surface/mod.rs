@@ -173,7 +173,7 @@ impl ToolSurface {
         self.root_execution_guard.as_ref()
     }
 
-    pub(crate) fn source_fill_fields(&self) -> std::collections::BTreeSet<String> {
+    pub fn source_fill_fields(&self) -> std::collections::BTreeSet<String> {
         let mut fields = self
             .write_tools
             .iter()
@@ -274,7 +274,7 @@ impl ToolSurface {
         &self.background_tools
     }
 
-    pub(crate) fn retain_agent_targets(
+    pub fn retain_agent_targets(
         &mut self,
         own_node_did: &str,
         active_agent_dids: &RapidHashSet<String>,

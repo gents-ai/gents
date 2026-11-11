@@ -242,7 +242,7 @@ impl JobDriver {
         &self.runtime
     }
 
-    pub(crate) fn in_flight_row_ids(&self) -> Vec<String> {
+    pub fn in_flight_row_ids(&self) -> Vec<String> {
         self.in_flight
             .lock()
             .expect("in-flight rows lock")

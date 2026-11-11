@@ -13,7 +13,7 @@ use super::{graphql, graphql_api_base, retry, ConfigApplyTxn, ConfigClientError,
 use crate::config_client::write_telemetry::{record_slow_native_phase, ConflictSource};
 
 impl ConfigApplyTxn<'_> {
-    pub(crate) async fn delete_verified_configuration_document(
+    pub async fn delete_verified_configuration_document(
         &self,
         collection: &str,
         doc_id: &str,

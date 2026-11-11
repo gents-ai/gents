@@ -151,7 +151,7 @@ async fn observe_waits(
     }
     let mut running = false;
     for control_doc_id in controls {
-        let accepted = query::load_tool_call_read_in_txn(
+        let accepted = gents_session::tool_call::query::result::load_tool_call_read_in_txn(
             txn,
             &control_doc_id,
             node_did,
@@ -243,7 +243,7 @@ async fn observe_waits(
                     == format!("{spawn_parent_doc_id}:spawned-background"),
             "spawned background handle conflicts with its physical parent"
         );
-        let spawn_parent = query::load_tool_call_read_in_txn(
+        let spawn_parent = gents_session::tool_call::query::result::load_tool_call_read_in_txn(
             txn,
             spawn_parent_doc_id,
             node_did,

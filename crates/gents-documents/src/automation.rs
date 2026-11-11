@@ -21,7 +21,7 @@ pub struct ResolvedTask {
 }
 
 impl ResolvedTask {
-    pub(crate) fn display_label(&self) -> &str {
+    pub fn display_label(&self) -> &str {
         self.name
             .as_deref()
             .map(str::trim)
@@ -86,11 +86,11 @@ pub struct ResolvedEventTrigger {
 
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedAutomation {
-    pub(crate) tasks: RapidHashMap<String, ResolvedTask>,
-    pub(crate) schedules: RapidHashMap<String, ResolvedSchedule>,
-    pub(crate) unavailable_schedules: RapidHashSet<String>,
-    pub(crate) event_triggers: RapidHashMap<String, ResolvedEventTrigger>,
-    pub(crate) unavailable_event_triggers: RapidHashSet<String>,
+    pub tasks: RapidHashMap<String, ResolvedTask>,
+    pub schedules: RapidHashMap<String, ResolvedSchedule>,
+    pub unavailable_schedules: RapidHashSet<String>,
+    pub event_triggers: RapidHashMap<String, ResolvedEventTrigger>,
+    pub unavailable_event_triggers: RapidHashSet<String>,
 }
 
 pub fn seed_schedule_next_run_at(

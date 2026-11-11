@@ -215,7 +215,7 @@ impl Default for PluginExecutor {
 }
 
 impl PluginExecutor {
-    pub(crate) fn call_sealed_artifact(
+    pub fn call_sealed_artifact(
         artifact: &[u8],
         input: &serde_json::Value,
         budget: PluginBudget,
@@ -223,7 +223,7 @@ impl PluginExecutor {
         Self::sealed_artifact_runner(artifact)?.call(input, &budget)
     }
 
-    pub(crate) fn validate_sealed_artifact(artifact: &[u8]) -> Result<()> {
+    pub fn validate_sealed_artifact(artifact: &[u8]) -> Result<()> {
         Self::sealed_artifact_runner(artifact).map(|_| ())
     }
 
@@ -659,7 +659,7 @@ impl PluginExecutor {
         self.run(record, input, bound, None, data, None, None).await
     }
 
-    pub(crate) async fn call_bound_data_as(
+    pub async fn call_bound_data_as(
         &self,
         record: &InstalledPlugin,
         input: serde_json::Value,

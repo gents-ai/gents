@@ -210,7 +210,7 @@ impl HostAction {
         }
     }
 
-    pub(crate) fn workspace_id(&self) -> &str {
+    pub fn workspace_id(&self) -> &str {
         match self {
             Self::CreateWorkspace(action) => &action.workspace_id,
             Self::FreezeWorkspaceBase(action) => &action.workspace_id,
@@ -319,7 +319,7 @@ fn reject_illegal_plan_value(value: &Value) -> Result<(), String> {
 }
 
 impl ActionPlan {
-    pub(crate) fn validate_against(&self, capabilities: &BTreeSet<String>) -> Result<()> {
+    pub fn validate_against(&self, capabilities: &BTreeSet<String>) -> Result<()> {
         if self.abi != ACTION_PLAN_ABI {
             bail!("unsupported ActionPlan abi {}", self.abi);
         }
