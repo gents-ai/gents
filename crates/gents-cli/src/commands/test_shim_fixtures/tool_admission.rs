@@ -71,12 +71,20 @@ pub(crate) async fn seed_canonical_tool_call(
     let spawned_by = spawned_by_tool_call_doc_id
         .map(|id| format!("\"{}\"", gents::store::graphql::escape_graphql_string(id)))
         .unwrap_or_else(|| "null".into());
+    // The lifecycle owner admits a spawned child only as a background
+    // invocation; a fixture row without the mode is not a row it can write.
+    let await_mode = if spawned_by_tool_call_doc_id.is_some() {
+        "\"background\""
+    } else {
+        "null"
+    };
     let tool_mutation = format!(
         r#"mutation {{ create_AgentToolCall(input: {{
         tool_call_key: "{}:{}", request_id: "{}", request_doc_id: "{}",
         node_did: "{}", requester_did: {requester}, session_id: "{}",
         tool_call_id: "{}", tool_name: "{}", message_sequence: {sequence},
-        lifecycle_state: "{}", spawned_by_tool_call_doc_id: {spawned_by}, started_at: "{}"
+        lifecycle_state: "{}", spawned_by_tool_call_doc_id: {spawned_by},
+        await_mode: {await_mode}, started_at: "{}"
     }}) {{_docID}} }}"#,
         gents::store::graphql::escape_graphql_string(request_doc_id),
         gents::store::graphql::escape_graphql_string(tool_call_id),

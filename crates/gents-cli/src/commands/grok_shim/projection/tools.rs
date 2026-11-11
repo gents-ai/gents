@@ -2212,7 +2212,7 @@ mod tests {
         assert_eq!(
             live.raw_output
                 .as_ref()
-                .and_then(|output| output.get("output"))
+                .and_then(|output| output.get("output_for_prompt"))
                 .and_then(Value::as_str),
             Some("gents-"),
             "the live window streams through rawOutput while the call runs"
@@ -2276,7 +2276,7 @@ mod tests {
             terminal
                 .raw_output
                 .as_ref()
-                .and_then(|output| output.get("output"))
+                .and_then(|output| output.get("output_for_prompt"))
                 .and_then(Value::as_str),
             Some("gents-subprocess-probe"),
             "the durable result replaces the live window at terminalization"
