@@ -623,8 +623,13 @@ impl FakeGraphql {
     /// Returns once `count` posted GraphQL documents contain `text`.
     async fn posted(&self, text: &str, count: usize) {
         let mut queries = self.shared.queries.subscribe();
-        let found =
-            |queries: &Vec<String>| queries.iter().filter(|query| query.contains(text)).count();
+        let text = without_whitespace(text);
+        let found = |queries: &Vec<String>| {
+            queries
+                .iter()
+                .filter(|query| without_whitespace(query).contains(&text))
+                .count()
+        };
         within(queries.wait_for(|queries| found(queries) >= count))
             .await
             .expect("the fake keeps its queries");
@@ -716,7 +721,7 @@ async fn serve(State(shared): State<Arc<Shared>>, request: axum::extract::Reques
     let body = axum::body::to_bytes(body, usize::MAX).await.unwrap();
     if parts.uri.path() == "/api/v0/graphql" {
         let posted: Value = serde_json::from_slice(&body).unwrap_or_default();
-        let query = posted["query"].as_str().unwrap_or_default().to_string();
+        let query = posted_query(&posted);
         shared
             .queries
             .send_modify(|queries| queries.push(query.clone()));
@@ -2331,11 +2336,29 @@ fn background_row(tool: &str, state: &str) -> Value {
     })
 }
 
-/// The start of `list_jobs`' row read.
-const JOB_LIST: &str = "{ AgentToolCall(filter: { job_pin: { _ne: null }";
+/// A posted query as the scripts match it: a typed query sends its values as
+/// variables, so they are written back in as literals.
+fn posted_query(posted: &Value) -> String {
+    let mut query = posted["query"].as_str().unwrap_or_default().to_string();
+    if let Some(variables) = posted["variables"].as_object() {
+        let mut names: Vec<_> = variables.keys().collect();
+        names.sort_by_key(|name| std::cmp::Reverse(name.len()));
+        for name in names {
+            query = query.replace(&format!("${name}"), &variables[name].to_string());
+        }
+    }
+    query
+}
+
+fn without_whitespace(text: &str) -> String {
+    text.chars().filter(|ch| !ch.is_whitespace()).collect()
+}
+
+/// The filter that opens `list_jobs`' row read.
+const JOB_LIST: &str = "AgentToolCall(filter: { job_pin: { _ne: null }";
 
 fn is_job_list(query: &str) -> bool {
-    query.starts_with(JOB_LIST)
+    without_whitespace(query).contains(&without_whitespace(JOB_LIST))
 }
 
 /// The background owner's read of the running calls.
@@ -2347,8 +2370,12 @@ fn is_call_list(query: &str) -> bool {
 /// them, and the background owner's with `calls`. The node answers the rest.
 fn work_answer(query: &str, jobs: &[Value], calls: &[Value]) -> Option<Value> {
     if is_job_list(query) {
+        let asked = without_whitespace(query);
         let named = |job: &&Value| {
-            query.contains(&format!(r#"session_id: {{ _eq: {} }}"#, job["session_id"]))
+            asked.contains(&without_whitespace(&format!(
+                r#"session_id: {{ _eq: {} }}"#,
+                job["session_id"]
+            )))
         };
         let jobs: Vec<_> = jobs.iter().filter(named).collect();
         Some(json!({ "data": { "AgentToolCall": jobs } }))
@@ -2554,7 +2581,7 @@ async fn jobs_are_read_per_open_session_in_every_state() {
     let asked = job_reads(&fake);
     assert_eq!(asked.len(), 1, "{asked:?}");
     assert!(
-        asked[0].contains(r#"session_id: { _eq: "s1" }"#),
+        without_whitespace(&asked[0]).contains(r#"session_id:{_eq:"s1"}"#),
         "{asked:?}"
     );
 
@@ -2586,8 +2613,11 @@ async fn jobs_are_read_per_open_session_in_every_state() {
     assert_eq!(listed, all);
     let asked = &job_reads(&fake)[1..];
     for session in ["s1", "s2"] {
-        let named = format!(r#"session_id: {{ _eq: "{session}" }}"#);
-        let reads = asked.iter().filter(|query| query.contains(&named)).count();
+        let named = format!(r#"session_id:{{_eq:"{session}"}}"#);
+        let reads = asked
+            .iter()
+            .filter(|query| without_whitespace(query).contains(&named))
+            .count();
         assert_eq!(reads, 1, "{session}: {asked:?}");
     }
 }
