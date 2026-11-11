@@ -405,7 +405,7 @@ pub(crate) async fn status(
                         PackState::Ready
                     };
                     status.version = Some(resolved.source.manifest().version.clone());
-                    status.digest = Some(resolved.source.digest().to_owned());
+                    status.digest = Some(resolved.approval_digest());
                     status.requested = resolved.requested;
                 }
                 Some(Err(error)) => {
@@ -497,6 +497,35 @@ struct Resolved {
 }
 
 impl Resolved {
+    /// What an approval of this pack names back: the pack's own digest, or
+    /// with dependencies a digest over it and each dependency's, since what
+    /// the approval shows (`requested`, `turns_on`) is computed from all of
+    /// them. An approval of other archives is refused before any write.
+    fn approval_digest(&self) -> String {
+        if self.dependencies.is_empty() {
+            return self.source.digest().to_owned();
+        }
+        let mut dependencies: Vec<String> = self
+            .dependencies
+            .iter()
+            .map(|dependency| {
+                format!(
+                    "{}/{}={}",
+                    dependency.manifest().metadata.namespace,
+                    dependency.manifest().name,
+                    dependency.digest()
+                )
+            })
+            .collect();
+        dependencies.sort();
+        format!(
+            "sha256:{}",
+            gents::plugin::store::content_digest_hex(
+                format!("{}\n{}", self.source.digest(), dependencies.join("\n")).as_bytes()
+            )
+        )
+    }
+
     fn asks(&self) -> bool {
         self.requested
             .as_array()
@@ -563,13 +592,14 @@ async fn install_one(
     approval: Approval,
     expect_digest: Option<&str>,
 ) -> Result<Outcome> {
+    let resolved = resolved?;
+    command::check_expected_digest(expect_digest, &resolved.approval_digest())?;
     let Resolved {
         source,
         requested,
         dependencies,
         host_tools,
-    } = resolved?;
-    command::check_expected_digest(expect_digest, source.digest())?;
+    } = resolved;
     let wire = !source.manifest().metadata.plugins.is_empty();
     let asks = requested.as_array().is_some_and(|asks| !asks.is_empty());
     let tool_calls = TOOL_CALLS_ON_APPROVAL.contains(&pack);
@@ -658,6 +688,25 @@ async fn install_one(
     let attached = async {
         let installing = installing?;
         installed?;
+        // The Engineer's install resolves the dependencies again; what it
+        // installed must be the archives the approval covered.
+        for dependency in &dependencies {
+            let dependency_coordinate = format!(
+                "{}/{}",
+                dependency.manifest().metadata.namespace,
+                dependency.manifest().name
+            );
+            let installed =
+                gents::pack::read_installed_pack(&access, &owner, &dependency_coordinate).await?;
+            anyhow::ensure!(
+                installed
+                    .as_ref()
+                    .is_none_or(|installed| installed.digest == dependency.digest()),
+                "{pack} is installed, but its dependency {dependency_coordinate} is at {}, not the approved {}. Remove {pack} or approve it again",
+                installed.map(|installed| installed.digest).unwrap_or_default(),
+                dependency.digest()
+            );
+        }
         // The Engineer installed the pack, so its rootless Tools took the
         // Engineer's root: the one root this approval grants reader on.
         let host_tool_roots = async {
@@ -747,12 +796,43 @@ pub(crate) async fn starter(args: crate::cli::PackStarterArgs) -> Result<()> {
             "packs": status(&home, ENGINEER_DEFAULT_PACKS, registry).await?,
         }));
     }
-    let approved: Vec<_> = args
-        .approve
-        .iter()
-        .map(|pack| (pack.clone(), None))
-        .collect();
-    let report = approve(&home, ENGINEER_DEFAULT_PACKS, &approved, registry).await?;
+    // The approval is of what this command shows: each named pack's
+    // permissions and consents as resolved now, pinned by digest for the
+    // install that follows.
+    let listed = status(&home, ENGINEER_DEFAULT_PACKS, registry).await?;
+    let mut approved = Vec::new();
+    let mut approving = Vec::new();
+    for pack in &args.approve {
+        let shown = listed
+            .iter()
+            .find(|status| status.pack == *pack)
+            .filter(|status| status.state != PackState::Installed);
+        if let Some(status) = shown {
+            eprintln!(
+                "Approving {pack} at {}:",
+                status.digest.as_deref().unwrap_or("an unresolved archive")
+            );
+            for ask in status.requested.as_array().into_iter().flatten() {
+                eprintln!(
+                    "  {}: {}",
+                    ask["plugin"].as_str().unwrap_or_default(),
+                    ask["asks"].as_str().unwrap_or_default()
+                );
+            }
+            for turned_on in &status.turns_on {
+                eprintln!("  {turned_on}");
+            }
+            approving.push(json!({
+                "pack": pack,
+                "digest": status.digest,
+                "requested_permissions": status.requested,
+                "turns_on": status.turns_on,
+            }));
+        }
+        approved.push((pack.clone(), shown.and_then(|status| status.digest.clone())));
+    }
+    let mut report = approve(&home, ENGINEER_DEFAULT_PACKS, &approved, registry).await?;
+    report["approved"] = approving.into();
     crate::print_json(&report)?;
     anyhow::ensure!(
         report["failed"].as_array().is_none_or(Vec::is_empty),
@@ -1621,6 +1701,94 @@ mod tests {
             "the grant is for the Engineer's own root: {report}"
         );
         assert!(granted[0]["reader_on"].is_string(), "{report}");
+    }
+
+    /// An approval covers the dependencies it was shown with: the digest a
+    /// status lists for a pack with dependencies is over all of them, so the
+    /// root archive's digest alone no longer approves it.
+    #[tokio::test]
+    async fn an_approval_pins_the_dependencies_it_was_shown_with() {
+        let home = tempfile::tempdir().unwrap();
+        let cli = crate::cli::Cli::try_parse_from([
+            "gents",
+            "init",
+            "--store-key-custody",
+            "file",
+            "--engineer",
+            "--no-default-packs",
+            "--inference-url",
+            "http://127.0.0.1:9/v1",
+            "--home",
+            home.path().to_str().unwrap(),
+        ])
+        .unwrap();
+        let Some(crate::cli::Command::Init(args)) = cli.command else {
+            panic!("expected init")
+        };
+        crate::commands::init::init_home(args).await.unwrap();
+        let packs = tempfile::tempdir().unwrap();
+        let skills_pack = |name: &str, dependencies: Value| {
+            let dir = packs.path().join(name);
+            write_pack(
+                &dir,
+                json!({
+                    "manifest_version": 1, "name": name, "namespace": "fixture",
+                    "version": "1.0.0", "description": "A skill",
+                    "authors": ["tests"], "tags": [], "kind": "documents",
+                    "assets": ["README.md", "pack_config.json"], "dependencies": dependencies,
+                    "config": "pack_config.json",
+                }),
+                &[(
+                    "pack_config.json",
+                    serde_json::to_vec(&json!({
+                        "node": {"node_did": "${GENTS_PACK_NODE_DID}"},
+                        "skills": [{"skill_id": format!("fixture-{name}"),
+                            "node_did": "${GENTS_PACK_NODE_DID}", "name": name,
+                            "description": "A skill.", "instructions": "Use it."}],
+                    }))
+                    .unwrap(),
+                )],
+            );
+            gents::pack::local::open(&gents::pack::local::LocalName::Path(&dir), home.path())
+                .unwrap()
+                .digest()
+                .to_owned()
+        };
+        skills_pack("base", json!([]));
+        let root_digest = skills_pack("dependent", json!(["fixture/base"]));
+        let names = ["fixture/dependent"];
+        let unreachable = Some("http://127.0.0.1:9");
+
+        let listed = status(home.path(), &names, unreachable).await.unwrap();
+        let shown = listed[0].digest.clone().unwrap();
+        assert_ne!(
+            shown, root_digest,
+            "the approval digest covers the dependency: {listed:?}"
+        );
+        let approving =
+            |digest: &str| vec![("fixture/dependent".to_owned(), Some(digest.to_owned()))];
+        let root_only = approve(home.path(), &names, &approving(&root_digest), unreachable)
+            .await
+            .unwrap();
+        assert!(
+            root_only["failed"][0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("not the expected"),
+            "{root_only}"
+        );
+        assert_eq!(
+            gents::pack::read_home_install(home.path(), "fixture/dependent").unwrap(),
+            None
+        );
+        let approved = approve(home.path(), &names, &approving(&shown), unreachable)
+            .await
+            .unwrap();
+        assert_eq!(approved["failed"], json!([]), "{approved}");
+        assert_eq!(
+            approved["installed"][0]["pack"], "fixture/dependent",
+            "{approved}"
+        );
     }
 
     /// A registry that accepts connections and never answers holds init for
