@@ -35,12 +35,10 @@ mod sessions;
 pub use sessions::{close_session_with_access, recover_agent_session_relationships_with_access};
 pub mod title_text;
 pub use title_text::display_session_title;
-#[cfg(test)]
-mod tests;
-#[cfg(test)]
-pub(crate) use tests::import_history_observation_as;
-#[cfg(test)]
-pub use tests::{import_history_observation, publish_signed_history};
+#[cfg(any(test, feature = "test-fixtures"))]
+mod history_fixtures;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use history_fixtures::{import_history_observation, import_history_observation_as};
 
 pub use crate::tool_call::query::result::{
     load_tool_call_arguments, load_tool_call_presentation, load_tool_call_result,
