@@ -1,8 +1,12 @@
 use std::sync::Arc;
 
 use defra_node::Node as EmbeddedNode;
-use gents_inference::rendered_request::sink::DefraRenderedRequestSink;
+use gents_inference::rendered_request::sink::{
+    BlockScope, DefraRenderedRequestSink, CAPTURE_BLOCK_CREATE_BATCH,
+    RENDERED_REQUEST_BLOCK_COLLECTION, RENDERED_REQUEST_COLLECTION,
+};
 use gents_inference::rendered_request::*;
+use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
 use serde_json::{json, Value};
 
@@ -130,10 +134,10 @@ impl CaptureFixture {
 }
 
 fn fixture_sink(node: &Arc<EmbeddedNode>) -> DefraRenderedRequestSink {
-    DefraRenderedRequestSink {
-        node: node.clone(),
-        agent_signer: Some(fixture_identities().1.managed_agent_signer().unwrap()),
-    }
+    DefraRenderedRequestSink::with_signer(
+        node.clone(),
+        fixture_identities().1.managed_agent_signer().unwrap(),
+    )
 }
 
 #[tokio::test]
@@ -1238,10 +1242,7 @@ async fn title_capture_uses_parent_session_and_managed_agent_native_signatures()
             rendered.assembly_trace.clone(),
         ))
         .unwrap();
-    let sink = DefraRenderedRequestSink {
-        node: node.clone(),
-        agent_signer: Some(signer),
-    };
+    let sink = DefraRenderedRequestSink::with_signer(node.clone(), signer);
     sink.capture(rendered.clone()).await.unwrap();
 
     let response = agent_access.execute(&format!(r#"{{ RenderedRequest(filter: {{capture_key: {{_eq: "{}"}}}}) {{ _docID session_doc_id requester_did agent_did request_doc_id capture_scope request_json }} RenderedRequestBlock {{ _docID session_doc_id agent_did payload }} }}"#, escape_graphql_string(&rendered.capture_key))).await.unwrap();

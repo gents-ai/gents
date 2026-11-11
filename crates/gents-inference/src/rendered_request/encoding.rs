@@ -379,7 +379,7 @@ pub fn capture_block_layout(value: &Value) -> Result<CaptureLayout> {
     Ok(CaptureLayout { json, stable_len })
 }
 
-pub(crate) fn chunk_capture_body(encoded: &str) -> Vec<ChunkedBlock> {
+pub fn chunk_capture_body(encoded: &str) -> Vec<ChunkedBlock> {
     let bytes = encoded.as_bytes();
     let mut blocks = Vec::new();
     let mut start = 0;
@@ -652,8 +652,8 @@ where
 
 pub(crate) const MANIFEST_RESOLUTION_FUEL: usize = MAX_MANIFEST_BLOCKS + 2;
 
-#[cfg(test)]
-pub(crate) fn encode_manifest(blocks: &[ManifestEntry]) -> Result<EncodedJson> {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn encode_manifest(blocks: &[ManifestEntry]) -> Result<EncodedJson> {
     anyhow::ensure!(
         blocks.len() <= MAX_MANIFEST_BLOCKS,
         "capture manifest names {} blocks, above the {MAX_MANIFEST_BLOCKS} the reader resolves",
