@@ -3,10 +3,10 @@ use super::native::TxnHost;
 use super::prepared::{admit, inputs_digest, prepare, Binding, Stale};
 use super::queue_scope::{QueueScopes, SessionRequests};
 use super::registry::{
-    AdmitShown, ClaimCandidate, OperationContext, QueueScopeAsk, Registry, RequestTerminal,
-    SessionHalt, SessionResume,
+    AdmitShown, ClaimApplied, ClaimCandidate, OperationContext, QueueScopeAsk, Registry,
+    RequestTerminal, SessionHalt, SessionResume,
 };
-use super::stage::{gate, stage, stage_dropping, HookError, Staged};
+use super::stage::{gate, stage, stage_dropping, stage_naming, HookError, Staged};
 use crate::request::admission::{
     load_exact_parent_request, required_row_string, AdmissionResult, AgentRequestAdmissionError,
 };
@@ -19,7 +19,9 @@ use gents_store::config_client::ConfigApplyTxn;
 fn surface(error: HookError) -> anyhow::Error {
     match error {
         HookError::Store(error) => error.into(),
-        HookError::Operation(error) | HookError::Revisions(error) => error,
+        HookError::Operation(error) | HookError::Revisions(error) | HookError::CoreRead(error) => {
+            error
+        }
         other => other.into(),
     }
 }
@@ -131,6 +133,64 @@ pub async fn claim_gate(
             .await
             .map_err(surface)?,
     ))
+}
+
+/// `request.claim.applied` (may refuse). Called after core's claim affected
+/// the request's row, in the same transaction; a refusal aborts the claim with
+/// the plugin's reason. Core reads the request's Task fire receipt (Triggers
+/// are core) and shows it in the event, so a plugin that needs nothing for a
+/// request without one declares no reads.
+pub async fn claim_applied(
+    txn: &ConfigApplyTxn<'_>,
+    request: &gents_protocol::row::AgentRequest,
+    claimed_at: &str,
+) -> anyhow::Result<()> {
+    let registry = Registry::for_transaction(txn)?;
+    claim_applied_in(txn, &registry, request, claimed_at).await
+}
+
+/// `claim_applied` against an explicit registry.
+pub async fn claim_applied_in(
+    txn: &ConfigApplyTxn<'_>,
+    registry: &Registry,
+    request: &gents_protocol::row::AgentRequest,
+    claimed_at: &str,
+) -> anyhow::Result<()> {
+    use gents_protocol::document_query::{fields::trigger_fire as fields, Filter, Query, Selection};
+    let response = txn
+        .run_local_response(
+            &Query::select(
+                Selection::doc_id()
+                    .field(fields::SESSION_ID)
+                    .field(fields::GOAL_ID)
+                    .field(fields::GOAL_OBJECTIVE)
+                    .field(fields::GOAL_TOKEN_BUDGET)
+                    .field(fields::GOAL_ASSIGNMENT_APPLIED),
+            )
+                .filter(Filter::eq(fields::OWNER_DID, &request.node_did))
+                .filter(Filter::eq(fields::REQUEST_ID, &request.request_id))
+                .render(),
+        )
+        .await?;
+    let mut fires: Vec<serde_json::Value> =
+        gents_store::graphql::rows(&response, "TriggerFire")?;
+    anyhow::ensure!(fires.len() <= 1, "request has multiple Task fire receipts");
+    let event = ClaimApplied {
+        request: request.clone(),
+        fire: fires.pop(),
+        actor: txn.actor_did().map(str::to_owned),
+        at: claimed_at.to_owned(),
+    };
+    let host = TxnHost::new(txn, registry, OperationContext::default());
+    stage_naming(
+        &host,
+        &registry.claim_applied,
+        &event,
+        std::slice::from_ref(&request.agent_did),
+    )
+    .await
+    .map_err(surface)?;
+    Ok(())
 }
 
 /// `request.admit.verify` (may refuse): each prepared-decision plugin that

@@ -130,7 +130,8 @@ async fn pack_install_applies_exactly_the_declared_placement_readers() {
     let runtime = db.node_identity.clone();
     let root = tempfile::tempdir().unwrap();
     let host_path = root.path().to_string_lossy().into_owned();
-    let (_guard, dir) = gents_pack::test_support::fixture_pack_copy("placement_fixture", &json!({}));
+    let (_guard, dir) =
+        gents_pack::test_support::fixture_pack_copy("placement_fixture", &json!({}));
     let (bytes, _) = gents_pack::pack::archive::pack_dir(&dir).unwrap();
     let archive = gents_pack::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
     let local = ConfigAccess::local_as(db.node.clone(), identity::Did::new(user.did()).unwrap());

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use gents_tools::surface::AgentWithTools;
 use gents_store::identity::RuntimeNode;
+use gents_tools::surface::AgentWithTools;
 
 #[derive(Debug)]
 pub struct AgentBuildError {

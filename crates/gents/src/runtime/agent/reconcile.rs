@@ -12,9 +12,9 @@ use crate::runtime::status::RuntimeStatusHandle;
 use gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use gents_automation::triggers::runtime_snapshot::ResolvedRuntimeSnapshot;
 use gents_inference::admission::AdmissionRegistry;
-use gents_tools::surface::AgentWithTools;
 use gents_protocol::node_readiness::ReconcilePhase;
 use gents_protocol::row::AgentRequest;
+use gents_tools::surface::AgentWithTools;
 use gents_tools::surface::ToolSurface;
 
 mod diff;

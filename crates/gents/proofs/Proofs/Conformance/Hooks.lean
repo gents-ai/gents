@@ -1,4 +1,5 @@
 import Proofs.Hooks.Claim
+import Proofs.Hooks.Grant
 import Proofs.Hooks.MustCommit
 import Proofs.Hooks.Prepared
 import Proofs.Hooks.QueueScope
@@ -251,6 +252,85 @@ private def effectCaseJson (c : EffectCase) : String :=
     ",\"committed\":" ++ ((c.committed.map stateJson).getD "null") ++ "}"
 
 def effectCasesJson : String := jsonArray (effectCases.map effectCaseJson)
+
+/-! Create grants: `Hooks.grantsValid` (decision 2026-11-11, maintainer-approved). -/
+
+structure GrantCase where
+  name : String
+  declared : List Grantable := sessionChildGrants "Goal"
+  named : Named String := ⟨["did:key:z6MkSessionAgent"], [ref "AgentSession" "s1"]⟩
+  effects : List HookEffect := [create "Goal" "g1" "goal"]
+  grants : List (Grant String)
+
+def GrantCase.valid (c : GrantCase) : Bool :=
+  Hooks.grantsValid c.declared caller c.named c.effects c.grants
+
+private def parentGrant (target session : String) : Grant String :=
+  ⟨ref "Goal" target, "parent", .document (ref "AgentSession" session)⟩
+
+private def agentGrant (target did : String) : Grant String :=
+  ⟨ref "Goal" target, "working_agent", .actor did⟩
+
+def grantCases : List GrantCase :=
+  [ { name := "no_grants_are_valid", grants := [] }
+  , { name := "session_child_grants_on_the_created_goal"
+    , grants := [parentGrant "g1" "s1", agentGrant "g1" caller] }
+  , { name := "working_agent_to_an_actor_the_event_names"
+    , grants := [agentGrant "g1" "did:key:z6MkSessionAgent"] }
+  , { name := "grant_on_a_document_the_result_does_not_create"
+    , grants := [parentGrant "g2" "s1"] }
+  , { name := "grant_on_an_updated_document_is_not_a_create"
+    , effects := [update "Goal" "g1" 0 "goal"], grants := [agentGrant "g1" caller] }
+  , { name := "working_agent_to_an_unnamed_actor"
+    , grants := [agentGrant "g1" "did:key:z6MkStranger"] }
+  , { name := "parent_to_an_unnamed_session"
+    , grants := [parentGrant "g1" "s9"] }
+  , { name := "parent_to_a_named_document_of_another_collection"
+    , named := ⟨[], [ref "AgentSession" "s1", ref "Agent" "a1"]⟩
+    , grants := [⟨ref "Goal" "g1", "parent", .document (ref "Agent" "a1")⟩] }
+  , { name := "undeclared_reader_relation"
+    , grants := [⟨ref "Goal" "g1", "reader", .actor caller⟩] }
+  , { name := "working_agent_to_a_document"
+    , grants := [⟨ref "Goal" "g1", "working_agent", .document (ref "AgentSession" "s1")⟩] }
+  , { name := "relations_are_declared_per_collection"
+    , effects := [create "Note" "n1" "note"]
+    , grants := [⟨ref "Note" "n1", "working_agent", .actor caller⟩] }
+  , { name := "one_invalid_grant_invalidates_the_result"
+    , grants := [parentGrant "g1" "s1", agentGrant "g1" "did:key:z6MkStranger"] }
+  , { name := "grants_on_two_created_documents"
+    , effects := [create "Goal" "g1" "a", create "Goal" "g2" "b"]
+    , grants := [agentGrant "g1" caller, parentGrant "g2" "s1"] } ]
+
+private def subjectKindJson : SubjectKind → String
+  | .actor => "{\"kind\":\"actor\"}"
+  | .document resource collection =>
+      "{\"kind\":\"document\",\"resource\":" ++ jsonString resource ++
+        ",\"collection\":" ++ jsonString collection ++ "}"
+
+private def grantableJson (entry : Grantable) : String :=
+  "{\"collection\":" ++ jsonString entry.collection ++
+    ",\"relation\":" ++ jsonString entry.relation ++
+    ",\"subject\":" ++ subjectKindJson entry.subject ++ "}"
+
+private def subjectJson : Subject String → String
+  | .actor did => "{\"kind\":\"actor\",\"did\":" ++ jsonString did ++ "}"
+  | .document target => "{\"kind\":\"document\"," ++ refFields target ++ "}"
+
+private def grantJson (grant : Grant String) : String :=
+  "{\"target\":{" ++ refFields grant.target ++ "},\"relation\":" ++ jsonString grant.relation ++
+    ",\"subject\":" ++ subjectJson grant.subject ++ "}"
+
+private def grantCaseJson (c : GrantCase) : String :=
+  "{\"name\":" ++ jsonString c.name ++
+    ",\"declared\":" ++ jsonArray (c.declared.map grantableJson) ++
+    ",\"actor\":" ++ jsonString caller ++
+    ",\"named_actors\":" ++ jsonStringArray c.named.actors ++
+    ",\"named_docs\":" ++ jsonArray (c.named.docs.map fun target => "{" ++ refFields target ++ "}") ++
+    ",\"effects\":" ++ effectsJson c.effects ++
+    ",\"grants\":" ++ jsonArray (c.grants.map grantJson) ++
+    ",\"valid\":" ++ boolJson c.valid ++ "}"
+
+def grantCasesJson : String := jsonArray (grantCases.map grantCaseJson)
 
 /-! Staging at refusable points: `Hooks.stage` and `Hooks.settle`. -/
 

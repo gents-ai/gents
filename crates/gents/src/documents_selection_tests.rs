@@ -310,7 +310,8 @@ mod self_config_inference {
                 let runtime = &runtime;
                 let agent_did = &binding.agent_did;
                 Box::pin(async move {
-                    gents_documents::grant_selected_self_configuration(txn, runtime, agent_did).await
+                    gents_documents::grant_selected_self_configuration(txn, runtime, agent_did)
+                        .await
                 })
             })
             .await?;

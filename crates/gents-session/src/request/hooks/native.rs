@@ -3,7 +3,7 @@ use std::sync::Mutex;
 
 use serde_json::Value;
 
-use super::effect::{Access, DocRef, Effect, Manifest, Row, Write};
+use super::effect::{Access, DocRef, Effect, Grant, InvalidEffects, Manifest, Row, Subject, SubjectKind, Write};
 use super::hook::{Direction, Query};
 use super::registry::{OperationContext, Registry};
 use super::stage::{ApplyFailure, HookError, Host};
@@ -187,7 +187,7 @@ impl<'a, 'txn> TxnHost<'a, 'txn> {
         let schema = manifest.owned(collection).and_then(|owned| owned.schema);
         let target = escape_graphql_string(&doc.doc_id);
         match write {
-            Write::Create { value, .. } => {
+            Write::Create { value, grants, .. } => {
                 let document = format!(
                     "mutation($input: {collection}MutationInputArg!) {{ create_{collection}(input: $input) {{ _docID }} }}"
                 );
@@ -208,6 +208,9 @@ impl<'a, 'txn> TxnHost<'a, 'txn> {
                     .map_err(|_| HookError::Conflict { plugin })?;
                 if !doc.doc_id.is_empty() && created != doc.doc_id {
                     return Err(HookError::Conflict { plugin });
+                }
+                for grant in grants {
+                    self.grant(manifest, collection, &created, grant).await?;
                 }
             }
             Write::Update { value, .. } => {
@@ -244,6 +247,62 @@ impl<'a, 'txn> TxnHost<'a, 'txn> {
         Ok(())
     }
 
+    /// Publishes one validated grant on the created document `doc_id` with the
+    /// transaction's relationship methods, under its actor.
+    async fn grant(
+        &self,
+        manifest: &Manifest,
+        collection: &str,
+        doc_id: &str,
+        grant: &Grant,
+    ) -> Result<(), HookError> {
+        let declared = manifest
+            .owned(collection)
+            .and_then(|owned| owned.grantable(grant))
+            .ok_or_else(|| HookError::Invalid {
+                plugin: manifest.name,
+                cause: InvalidEffects::UndeclaredGrant {
+                    collection: collection.to_owned(),
+                    relation: grant.relation.clone(),
+                },
+            })?;
+        match (&grant.subject, declared.subject) {
+            (Subject::Actor(did), SubjectKind::Actor) => {
+                let did = identity::Did::new(did.as_str()).map_err(|_| HookError::Invalid {
+                    plugin: manifest.name,
+                    cause: InvalidEffects::UnnamedGrantSubject {
+                        collection: collection.to_owned(),
+                        relation: grant.relation.clone(),
+                    },
+                })?;
+                self.txn
+                    .add_actor_relationship(collection, doc_id, &grant.relation, &did)
+                    .await?;
+            }
+            (Subject::Document(target), SubjectKind::Document { resource, .. }) => {
+                self.txn
+                    .add_resource_relationship(
+                        collection,
+                        doc_id,
+                        &grant.relation,
+                        resource,
+                        &target.doc_id,
+                    )
+                    .await?;
+            }
+            _ => {
+                return Err(HookError::Invalid {
+                    plugin: manifest.name,
+                    cause: InvalidEffects::UndeclaredGrant {
+                        collection: collection.to_owned(),
+                        relation: grant.relation.clone(),
+                    },
+                })
+            }
+        }
+        Ok(())
+    }
+
     async fn effect(&self, manifest: &Manifest, effect: &Effect) -> Result<(), HookError> {
         let plugin = manifest.name;
         match effect {
@@ -266,7 +325,29 @@ impl<'a, 'txn> TxnHost<'a, 'txn> {
 
 #[async_trait::async_trait]
 impl Host for TxnHost<'_, '_> {
+    fn actor(&self) -> Option<String> {
+        self.txn.actor_did().map(str::to_owned)
+    }
+
     async fn select(&self, query: &Query) -> Result<Vec<Row>, HookError> {
+        if let Some(args) = &query.core {
+            let read = self
+                .registry
+                .read(&query.collection)
+                .ok_or_else(|| HookError::UnknownRead(query.collection.clone()))?;
+            let values = read
+                .read(self.txn, args)
+                .await
+                .map_err(HookError::CoreRead)?;
+            return Ok(values
+                .into_iter()
+                .map(|value| Row {
+                    doc: DocRef::new(query.collection.clone(), ""),
+                    revision: revision(&value),
+                    value,
+                })
+                .collect());
+        }
         if let Some(links) = &query.revisions {
             identifier(&query.collection)?;
             selection(&query.fields)?;
@@ -296,6 +377,27 @@ impl Host for TxnHost<'_, '_> {
     async fn apply(&self, manifest: &Manifest, effects: &[Effect]) -> Result<(), ApplyFailure> {
         let plugin = manifest.name;
         let clean = |error| ApplyFailure { clean: true, error };
+        for effect in effects {
+            let Effect::Core(requested) = effect else {
+                continue;
+            };
+            let operation = self.registry.operation(&requested.name).ok_or_else(|| {
+                clean(HookError::UnknownOperation {
+                    plugin,
+                    operation: requested.name.clone(),
+                })
+            })?;
+            let extent = operation.extent(&requested.args);
+            if extent > manifest.bound {
+                return Err(clean(HookError::Invalid {
+                    plugin,
+                    cause: InvalidEffects::OverBound {
+                        returned: extent,
+                        bound: manifest.bound,
+                    },
+                }));
+            }
+        }
         for effect in effects {
             let (doc, expected) = match effect {
                 Effect::Write(Write::Update { doc, expected, .. })

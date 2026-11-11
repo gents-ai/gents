@@ -1482,6 +1482,12 @@ def caseCoverage : List CoverageEntry :=
       "conformance::hooks::generated_lifecycle_hook_admit_cases_drive_prepared_admission")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "lifecycle_hook_grant_cases"
+      "LifecycleHookGrantCases"
+      "conformance::hooks::generated_lifecycle_hook_grant_cases_drive_create_grant_validation"
+      "Production validate decides every representable case. A native grant rides on its create, so a grant on a document the result does not create cannot be expressed and is checked to be invalid in the model. The DefraDB host's relationship publication and the Goals listener (goal::lifecycle_hooks::TaskGoalAssignment) are not driven by these cases.")
+      "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "fold_queue_cases"
       "FoldQueueCases"
       "lifecycle::queue::tests::folding::generated_fold_queue_cases_bind_to_native_claims"

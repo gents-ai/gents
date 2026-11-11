@@ -239,10 +239,7 @@ pub(super) async fn resolve_behavior_surfaces(
 pub(super) fn retain_active_agent_targets(
     own_node_did: &str,
     behavior_surfaces: Vec<(AgentWithTools, ToolSurface)>,
-) -> (
-    Vec<AgentWithTools>,
-    RapidHashMap<String, Arc<ToolSurface>>,
-) {
+) -> (Vec<AgentWithTools>, RapidHashMap<String, Arc<ToolSurface>>) {
     let active_agent_dids = behavior_surfaces
         .iter()
         .map(|(agent_config, _)| agent_config.agent.agent_did.clone())

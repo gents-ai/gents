@@ -631,6 +631,7 @@ pub struct LeanContractSnapshot {
     pub lifecycle_hook_queue_scope_cases: Vec<LeanLifecycleHookQueueScopeCase>,
     pub lifecycle_hook_delivery_cases: Vec<LeanLifecycleHookDeliveryCase>,
     pub lifecycle_hook_admit_cases: Vec<LeanLifecycleHookAdmitCase>,
+    pub lifecycle_hook_grant_cases: Vec<LeanLifecycleHookGrantCase>,
     pub follow_up_hooks: Vec<String>,
     pub coverage_ledger: Vec<LeanCoverageEntry>,
     pub feature_surface_requirements: Vec<LeanFeatureSurfaceRequirement>,
@@ -3014,6 +3015,10 @@ pub fn lean_lifecycle_hook_delivery_cases() -> &'static [LeanLifecycleHookDelive
 
 pub fn lean_lifecycle_hook_admit_cases() -> &'static [LeanLifecycleHookAdmitCase] {
     &lean_contract_snapshot().lifecycle_hook_admit_cases
+}
+
+pub fn lean_lifecycle_hook_grant_cases() -> &'static [LeanLifecycleHookGrantCase] {
+    &lean_contract_snapshot().lifecycle_hook_grant_cases
 }
 
 pub fn lean_request_execution_lease_cases() -> &'static [LeanRequestExecutionLeaseCase] {

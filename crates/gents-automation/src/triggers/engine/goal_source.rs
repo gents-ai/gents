@@ -103,10 +103,7 @@ impl GoalSource {
         }
     }
 
-    pub fn with_runtime_status(
-        mut self,
-        status: impl GoalReconcileSettled + 'static,
-    ) -> Self {
+    pub fn with_runtime_status(mut self, status: impl GoalReconcileSettled + 'static) -> Self {
         self.runtime_status = Some(Arc::new(status));
         self
     }

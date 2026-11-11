@@ -6,8 +6,9 @@ use anyhow::{anyhow, Context, Result};
 use defra_node::Node as EmbeddedNode;
 use gents_loop::tool::ToolDyn;
 
-pub(crate) type AgentFactory =
-    Box<dyn FnOnce(Arc<RuntimeNode>) -> std::result::Result<AgentWithTools, AgentBuildError> + Send>;
+pub(crate) type AgentFactory = Box<
+    dyn FnOnce(Arc<RuntimeNode>) -> std::result::Result<AgentWithTools, AgentBuildError> + Send,
+>;
 
 use super::{assemble_node_and_agents, runtime, AgentBuildError, Gents, ProcessLifecycleObserver};
 use crate::runtime::agent::retry::RetryPolicy;
