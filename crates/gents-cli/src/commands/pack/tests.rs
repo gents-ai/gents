@@ -953,6 +953,11 @@ async fn an_install_grants_reader_only_on_its_own_root_and_only_with_the_flag() 
         "{preview}"
     );
     assert_eq!(
+        preview["host_tool_roots"]["agents"],
+        json!(["rootless worker"]),
+        "{preview}"
+    );
+    assert_eq!(
         preview["host_tool_roots"]["root"], engineer_root,
         "{preview}"
     );

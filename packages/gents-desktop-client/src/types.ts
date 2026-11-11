@@ -169,6 +169,7 @@ export type {
   PackInstallReport,
   PackReviewDocument,
   PackAuthorityAsk,
+  PackFolderAccess,
   PackInferenceNeeds,
   PackInferenceSlotNeed,
   PackPluginSlot,

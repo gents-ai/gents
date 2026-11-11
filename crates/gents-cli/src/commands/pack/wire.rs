@@ -214,14 +214,24 @@ fn grant_reader_command(root: &str, agent: &str) -> String {
     )
 }
 
-/// The Tools `pack` ships that select host tools and name no root, by
-/// `tools_id`: the ones an install runs under its installer's own root, and
-/// whose agents an approved install grants reader there. A config that does
-/// not load offline is an error, never "no such Tools": what was not read was
-/// not shown, and a grant follows only what was shown.
-pub(crate) fn tools_taking_installer_root(pack: &super::PackSource) -> Result<Vec<String>> {
+/// The Tools `pack` ships that select host tools and name no root: the ones
+/// an install runs under its installer's own root, and whose agents an
+/// approved install grants reader there.
+#[derive(Default)]
+pub(crate) struct InstallerRootTools {
+    /// By `tools_id`.
+    pub(crate) tools: Vec<String>,
+    /// The agents whose Context selects one of them, by the name the pack
+    /// gives each: who a review says will read the folder.
+    pub(crate) agents: Vec<String>,
+}
+
+/// [`InstallerRootTools`] of `pack`. A config that does not load offline is
+/// an error, never "no such Tools": what was not read was not shown, and a
+/// grant follows only what was shown.
+pub(crate) fn tools_taking_installer_root(pack: &super::PackSource) -> Result<InstallerRootTools> {
     if pack.manifest().config.is_none() {
-        return Ok(Vec::new());
+        return Ok(InstallerRootTools::default());
     }
     gents::pack::load_pack_authoring_config(
         pack.manifest(),
@@ -231,7 +241,29 @@ pub(crate) fn tools_taking_installer_root(pack: &super::PackSource) -> Result<Ve
         &|path| Ok(pack.asset(path)?.to_vec()),
         &|name| std::env::var(name).ok(),
     )
-    .and_then(|authored| gents::pack::tools_taking_installer_root(&authored.documents.tools))
+    .and_then(|authored| {
+        let tools = gents::pack::tools_taking_installer_root(&authored.documents.tools)?;
+        // An authored agent names a slot, not a DID, so it is read as written.
+        let rows = |key: &str| authored.value[key].as_array().into_iter().flatten();
+        let agents = rows("agents")
+            .filter(|agent| {
+                rows("contexts").any(|context| {
+                    context["context_id"].is_string()
+                        && context["context_id"] == agent["context_id"]
+                        && context["tools_id"]
+                            .as_str()
+                            .is_some_and(|selected| tools.iter().any(|id| id == selected))
+                })
+            })
+            .filter_map(|agent| {
+                ["display_name", "agent_slot", "agent_did"]
+                    .iter()
+                    .find_map(|field| agent[*field].as_str())
+                    .map(ToOwned::to_owned)
+            })
+            .collect();
+        Ok(InstallerRootTools { tools, agents })
+    })
     .with_context(|| {
         format!(
             "{}/{} did not load for its host tool review, so the folder its agents would read is unknown",
@@ -255,9 +287,13 @@ pub(crate) async fn supplied_tool_root(
 ) -> Result<Option<Value>> {
     use gents::tools::surface::ToolRootReader;
     let mut tools = Vec::new();
+    let mut agents = Vec::new();
     for pack in packs {
         match tools_taking_installer_root(pack) {
-            Ok(shipped) => tools.extend(shipped),
+            Ok(shipped) => {
+                tools.extend(shipped.tools);
+                agents.extend(shipped.agents);
+            }
             // An install variable the offline load cannot see may be what the
             // install itself resolves, so the install goes on; with nothing
             // listed, no root is supplied to the grant and none is made.
@@ -276,12 +312,12 @@ pub(crate) async fn supplied_tool_root(
     Ok(
         match gents::tools::surface::tool_root_reader(access, owner, &root).await? {
             ToolRootReader::NotNeeded => None,
-            ToolRootReader::Published(published) => {
-                Some(json!({"tools": tools, "root": root, "reader_on": published}))
-            }
-            ToolRootReader::Unpublished(_) => {
-                Some(json!({"tools": tools, "root": root, "unpublished_root": root}))
-            }
+            ToolRootReader::Published(published) => Some(
+                json!({"tools": tools, "agents": agents, "root": root, "reader_on": published}),
+            ),
+            ToolRootReader::Unpublished(_) => Some(
+                json!({"tools": tools, "agents": agents, "root": root, "unpublished_root": root}),
+            ),
         },
     )
 }

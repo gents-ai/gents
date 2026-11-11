@@ -588,7 +588,7 @@ async fn resolve(home: &Path, pack: &str, registry: Option<&str>) -> Result<Reso
     )?;
     let mut host_tools = Vec::new();
     for pack in std::iter::once(&source).chain(&dependencies) {
-        host_tools.extend(command::wire::tools_taking_installer_root(pack)?);
+        host_tools.extend(command::wire::tools_taking_installer_root(pack)?.tools);
     }
     Ok(Resolved {
         source,
