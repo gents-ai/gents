@@ -1,5 +1,5 @@
-import Proofs.ClientShell.ChatReadiness
-import Proofs.ClientShell.RoutePairing
+import Proofs.Clients.ClientShell.ChatReadiness
+import Proofs.Clients.ClientShell.RoutePairing
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.ChatReadinessCases

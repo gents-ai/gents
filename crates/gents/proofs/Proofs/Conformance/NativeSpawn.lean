@@ -1,4 +1,4 @@
-import Proofs.NativeSpawn
+import Proofs.Session.NativeSpawn
 import Lean
 
 /-! Generated native spawn cases: every platform and first/retry outcome pair,

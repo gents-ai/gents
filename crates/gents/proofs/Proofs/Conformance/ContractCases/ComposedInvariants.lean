@@ -1,5 +1,5 @@
 import Proofs.Conformance.ContractCases.Types
-import Proofs.CrossMachineComposed.Reachability
+import Proofs.Runtime.CrossMachineComposed.Reachability
 
 namespace Conformance.ContractCases
 

@@ -1,4 +1,4 @@
-import Proofs.Workspace.OperatorBaseFreeze
+import Proofs.Session.Workspace.OperatorBaseFreeze
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.OperatorBaseFreezeContracts

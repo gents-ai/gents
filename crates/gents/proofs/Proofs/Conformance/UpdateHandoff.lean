@@ -1,4 +1,4 @@
-import Proofs.RuntimeReconcile.UpdateHandoff
+import Proofs.Runtime.RuntimeReconcile.UpdateHandoff
 import Lean
 namespace Conformance.UpdateHandoff
 open Lean _root_.RuntimeReconcile.UpdateHandoff

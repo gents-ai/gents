@@ -1,4 +1,4 @@
-import Proofs.Optimization
+import Proofs.Runtime.Optimization
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.Optimization

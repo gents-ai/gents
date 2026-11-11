@@ -1,6 +1,6 @@
-import Proofs.Background.Observation
-import Proofs.Background.ProcessControl
-import Proofs.PluginJob.TargetResolution
+import Proofs.ToolCalls.Background.Observation
+import Proofs.ToolCalls.Background.ProcessControl
+import Proofs.ToolCalls.PluginJob.TargetResolution
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.NativeRefinement

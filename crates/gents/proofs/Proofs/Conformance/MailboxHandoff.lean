@@ -1,4 +1,4 @@
-import Proofs.Mailbox.Handoff
+import Proofs.Automation.Mailbox.Handoff
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.MailboxHandoffContracts

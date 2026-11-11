@@ -1,4 +1,4 @@
-import Proofs.ClientShell.Telemetry
+import Proofs.Clients.ClientShell.Telemetry
 
 namespace Conformance.ClientTelemetry
 open _root_.ClientTelemetry

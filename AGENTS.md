@@ -259,7 +259,7 @@ its implementation layers.
 
 The session-message spec layer (`gents_protocol::request_admission`, the
 AgentRequest/AgentToolCall/Node SDL, `AgentTools` and
-`Proofs/Request/CausalHop.lean`) removes the privileged subagent position.
+`Proofs/Session/Request/CausalHop.lean`) removes the privileged subagent position.
 Keep it intentionally red: no Rust builds, tests or compatibility shims. Stack
 L1 spec, L2 conformance, L3 runtime, L4 CLI/shims, L5 desktop, each on its
 parent. The spec layer never merges alone; validate the integrated stack

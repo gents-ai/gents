@@ -1,8 +1,8 @@
-import Proofs.Request.BackendWake
-import Proofs.RenderedCapture
-import Proofs.EventDelivery.Watcher
-import Proofs.Request.ResumeAdmission
-import Proofs.RequestExecutionLease.Transition
+import Proofs.Session.Request.BackendWake
+import Proofs.Shared.RenderedCapture
+import Proofs.Automation.EventDelivery.Watcher
+import Proofs.Session.Request.ResumeAdmission
+import Proofs.Session.RequestExecutionLease.Transition
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.BackendWake

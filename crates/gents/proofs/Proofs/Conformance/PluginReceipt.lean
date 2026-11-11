@@ -1,5 +1,5 @@
 import Lean
-import Proofs.ToolPolicy.PluginReceipt
+import Proofs.Tools.ToolPolicy.PluginReceipt
 
 namespace Conformance.PluginReceipt
 open Lean

@@ -1,4 +1,4 @@
-import Proofs.Process
+import Proofs.Automation.Process
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.Contracts

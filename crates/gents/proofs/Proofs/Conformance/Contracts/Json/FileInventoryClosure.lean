@@ -1,4 +1,4 @@
-import Proofs.FileInventory.Source
+import Proofs.Observe.FileInventory.Source
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases.Types
 

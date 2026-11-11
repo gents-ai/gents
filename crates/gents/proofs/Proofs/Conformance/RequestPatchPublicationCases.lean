@@ -1,4 +1,4 @@
-import Proofs.ClientShell.RequestPatchPublication
+import Proofs.Clients.ClientShell.RequestPatchPublication
 
 namespace Conformance.RequestPatchPublicationCases
 

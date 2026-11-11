@@ -1,4 +1,4 @@
-import Proofs.CanonicalOutput.Hydration
+import Proofs.Session.CanonicalOutput.Hydration
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.Contracts.TerminalSelection

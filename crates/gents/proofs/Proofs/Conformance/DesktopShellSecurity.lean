@@ -1,5 +1,5 @@
 import Lean
-import Proofs.ClientShell.Security
+import Proofs.Clients.ClientShell.Security
 
 namespace Conformance.DesktopShellSecurity
 open Lean ClientShell.Security

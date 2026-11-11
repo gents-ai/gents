@@ -1,5 +1,5 @@
-import Proofs.TitleText
-import Proofs.PromptAssembly.CapturedContext
+import Proofs.Session.TitleText
+import Proofs.Session.PromptAssembly.CapturedContext
 import Lean
 
 namespace Conformance.TitleText

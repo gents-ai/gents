@@ -1,6 +1,6 @@
-import Proofs.CanonicalOutput.Execution.GateCases
-import Proofs.CanonicalOutput.Execution.CompactionCases
-import Proofs.CanonicalOutput.Execution.AuxiliaryCases
+import Proofs.Runtime.CanonicalOutput.Execution.GateCases
+import Proofs.Runtime.CanonicalOutput.Execution.CompactionCases
+import Proofs.Runtime.CanonicalOutput.Execution.AuxiliaryCases
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.Contracts.Json.ClientRuntime
 import Proofs.Conformance.RequestExecutionLease

@@ -1,5 +1,5 @@
-import Proofs.Mailbox.Reply
-import Proofs.Mailbox.Executable
+import Proofs.Automation.Mailbox.Reply
+import Proofs.Automation.Mailbox.Executable
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.MailboxReplyContracts

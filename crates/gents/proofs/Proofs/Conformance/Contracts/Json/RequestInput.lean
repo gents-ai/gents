@@ -1,6 +1,6 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases.RequestInput
-import Proofs.PromptAssembly.CapturedContext
+import Proofs.Session.PromptAssembly.CapturedContext
 
 namespace Conformance.Contracts
 open Conformance.ContractCases

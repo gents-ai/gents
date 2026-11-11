@@ -1,4 +1,4 @@
-import Proofs.CompletionRetry.LogicalOutputObligation
+import Proofs.Runtime.CompletionRetry.LogicalOutputObligation
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.LogicalOutputObligationContracts

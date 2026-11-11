@@ -1,5 +1,5 @@
 import Proofs.Conformance.ContractCases.Types
-import Proofs.Compaction.DurableReduction
+import Proofs.Session.Compaction.DurableReduction
 
 namespace Conformance.ContractCases
 

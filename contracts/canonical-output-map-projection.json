@@ -2,12 +2,12 @@
     {
       "id": "projection-canonical-reconstruction-and-output",
       "model_symbols": [
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Reconstruction.lean", "symbol": "CanonicalOutput.reconstructExtent" },
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Reconstruction.lean", "symbol": "CanonicalOutput.reconstructPayload" },
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.reconstructMessage" },
-        { "file": "crates/gents/proofs/Proofs/StreamingResponse/State.lean", "symbol": "StreamingResponse.project" },
-        { "file": "crates/gents/proofs/Proofs/StreamingResponse/Executable.lean", "symbol": "StreamingResponse.outputProjectionCases" },
-        { "file": "crates/gents/proofs/Proofs/StreamingResponse/Executable.lean", "symbol": "StreamingResponse.renderedKinds" }
+        { "file": "crates/gents/proofs/Proofs/Session/CanonicalOutput/Reconstruction.lean", "symbol": "CanonicalOutput.reconstructExtent" },
+        { "file": "crates/gents/proofs/Proofs/Session/CanonicalOutput/Reconstruction.lean", "symbol": "CanonicalOutput.reconstructPayload" },
+        { "file": "crates/gents/proofs/Proofs/Session/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.reconstructMessage" },
+        { "file": "crates/gents/proofs/Proofs/Session/StreamingResponse/State.lean", "symbol": "StreamingResponse.project" },
+        { "file": "crates/gents/proofs/Proofs/Session/StreamingResponse/Executable.lean", "symbol": "StreamingResponse.outputProjectionCases" },
+        { "file": "crates/gents/proofs/Proofs/Session/StreamingResponse/Executable.lean", "symbol": "StreamingResponse.renderedKinds" }
       ],
       "generated_groups": ["canonical_output_projection_cases"],
       "fixture_status": "concrete_inputs",
@@ -59,12 +59,12 @@
     {
       "id": "projection-canonical-compaction-and-provider-input",
       "model_symbols": [
-        { "file": "crates/gents/proofs/Proofs/Compaction/Strip.lean", "symbol": "Compaction.strip" },
-        { "file": "crates/gents/proofs/Proofs/Compaction/ProviderView.lean", "symbol": "Compaction.providerViewGlobal" },
-        { "file": "crates/gents/proofs/Proofs/Compaction/ProviderView.lean", "symbol": "Compaction.providerViewTurn" },
-        { "file": "crates/gents/proofs/Proofs/Compaction/Executable.lean", "symbol": "Compaction.compactionReducerCases" },
-        { "file": "crates/gents/proofs/Proofs/Compaction/Executable.lean", "symbol": "Compaction.compactionCursorCases" },
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Compaction.lean", "symbol": "CanonicalOutput.Execution.Compaction.advanceCursor?" }
+        { "file": "crates/gents/proofs/Proofs/Session/Compaction/Strip.lean", "symbol": "Compaction.strip" },
+        { "file": "crates/gents/proofs/Proofs/Session/Compaction/ProviderView.lean", "symbol": "Compaction.providerViewGlobal" },
+        { "file": "crates/gents/proofs/Proofs/Session/Compaction/ProviderView.lean", "symbol": "Compaction.providerViewTurn" },
+        { "file": "crates/gents/proofs/Proofs/Session/Compaction/Executable.lean", "symbol": "Compaction.compactionReducerCases" },
+        { "file": "crates/gents/proofs/Proofs/Session/Compaction/Executable.lean", "symbol": "Compaction.compactionCursorCases" },
+        { "file": "crates/gents/proofs/Proofs/Runtime/CanonicalOutput/Execution/Compaction.lean", "symbol": "CanonicalOutput.Execution.Compaction.advanceCursor?" }
       ],
       "generated_groups": ["compaction_reducer_cases", "compaction_cursor_cases"],
       "fixture_status": "summary_only",
@@ -106,12 +106,12 @@
     {
       "id": "projection-compaction-threshold-join",
       "model_symbols": [
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Compaction.lean", "symbol": "CanonicalOutput.Execution.Compaction.reduceCanonicalRebuildAndAuthorize" },
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Compaction.lean", "symbol": "CanonicalOutput.Execution.Compaction.canonical_composed_dispatch_binds_reconstruction" },
-        { "file": "crates/gents/proofs/Proofs/Compaction/ReductionEngine.lean", "symbol": "Compaction.ReductionEngine.reduceRebuildAndAuthorize" },
-        { "file": "crates/gents/proofs/Proofs/Compaction/ReductionEngine.lean", "symbol": "Compaction.ReductionEngine.projectAndAuthorize" },
-        { "file": "crates/gents/proofs/Proofs/Compaction/ReductionEngine.lean", "symbol": "Compaction.ReductionEngine.composed_dispatch_binds_exact_source" },
-        { "file": "crates/gents/proofs/Proofs/Compaction/ReductionEngine.lean", "symbol": "Compaction.ReductionEngine.composed_dispatch_is_authorized" }
+        { "file": "crates/gents/proofs/Proofs/Runtime/CanonicalOutput/Execution/Compaction.lean", "symbol": "CanonicalOutput.Execution.Compaction.reduceCanonicalRebuildAndAuthorize" },
+        { "file": "crates/gents/proofs/Proofs/Runtime/CanonicalOutput/Execution/Compaction.lean", "symbol": "CanonicalOutput.Execution.Compaction.canonical_composed_dispatch_binds_reconstruction" },
+        { "file": "crates/gents/proofs/Proofs/Session/Compaction/ReductionEngine.lean", "symbol": "Compaction.ReductionEngine.reduceRebuildAndAuthorize" },
+        { "file": "crates/gents/proofs/Proofs/Session/Compaction/ReductionEngine.lean", "symbol": "Compaction.ReductionEngine.projectAndAuthorize" },
+        { "file": "crates/gents/proofs/Proofs/Session/Compaction/ReductionEngine.lean", "symbol": "Compaction.ReductionEngine.composed_dispatch_binds_exact_source" },
+        { "file": "crates/gents/proofs/Proofs/Session/Compaction/ReductionEngine.lean", "symbol": "Compaction.ReductionEngine.composed_dispatch_is_authorized" }
       ],
       "constructors": [],
       "generated_groups": ["compaction_projection_join_cases", "compaction_canonical_projection_cases", "repaired_projection_admission_cases"],
@@ -131,9 +131,9 @@
     {
       "id": "projection-payload-presentation",
       "model_symbols": [
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.terminalDiagnosticPresentation" },
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.terminalTailStart_is_longest" },
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.terminalDiagnosticPresentation_renders" },
+        { "file": "crates/gents/proofs/Proofs/Session/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.terminalDiagnosticPresentation" },
+        { "file": "crates/gents/proofs/Proofs/Session/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.terminalTailStart_is_longest" },
+        { "file": "crates/gents/proofs/Proofs/Session/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.terminalDiagnosticPresentation_renders" },
         { "file": "crates/gents/proofs/Proofs/Conformance/Contracts/Json/PayloadPresentation.lean", "symbol": "Conformance.TerminalDiagnosticContracts.result" },
         { "file": "crates/gents/proofs/Proofs/Conformance/Contracts/Json/PayloadPresentation.lean", "symbol": "Conformance.TerminalDiagnosticReplayContracts.accepted" },
         { "file": "crates/gents/proofs/Proofs/Conformance/Contracts/Json/PayloadPresentation.lean", "symbol": "Conformance.PayloadPresentationContracts.payloadLengths" },
@@ -158,11 +158,11 @@
     {
       "id": "projection-live-prefix-observation-order",
       "model_symbols": [
-        { "file": "crates/gents/proofs/Proofs/StreamingResponse/Transition.lean", "symbol": "StreamingResponse.Transition" },
-        { "file": "crates/gents/proofs/Proofs/StreamingResponse/Transition.lean", "symbol": "StreamingResponse.Trace" },
-        { "file": "crates/gents/proofs/Proofs/StreamingResponse/PrefixGrowth.lean", "symbol": "StreamingResponse.BenignSourceExtension" },
-        { "file": "crates/gents/proofs/Proofs/StreamingResponse/PrefixGrowth.lean", "symbol": "StreamingResponse.reconstructOpen_grows_under_benign_arrival" },
-        { "file": "crates/gents/proofs/Proofs/StreamingResponse/PrefixGrowth.lean", "symbol": "StreamingResponse.live_views_do_not_rewind_under_benign_arrival" }
+        { "file": "crates/gents/proofs/Proofs/Session/StreamingResponse/Transition.lean", "symbol": "StreamingResponse.Transition" },
+        { "file": "crates/gents/proofs/Proofs/Session/StreamingResponse/Transition.lean", "symbol": "StreamingResponse.Trace" },
+        { "file": "crates/gents/proofs/Proofs/Session/StreamingResponse/PrefixGrowth.lean", "symbol": "StreamingResponse.BenignSourceExtension" },
+        { "file": "crates/gents/proofs/Proofs/Session/StreamingResponse/PrefixGrowth.lean", "symbol": "StreamingResponse.reconstructOpen_grows_under_benign_arrival" },
+        { "file": "crates/gents/proofs/Proofs/Session/StreamingResponse/PrefixGrowth.lean", "symbol": "StreamingResponse.live_views_do_not_rewind_under_benign_arrival" }
       ],
       "generated_groups": [],
       "fixture_status": "not_exported",
@@ -201,10 +201,10 @@
     {
       "id": "projection-canonical-fork-and-hydration",
       "model_symbols": [
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Reconstruction.lean", "symbol": "CanonicalOutput.forkHeader" },
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Hydration.lean", "symbol": "CanonicalOutput.Hydration.forkMetadataMatches" },
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Hydration.lean", "symbol": "CanonicalOutput.Hydration.buildManifest" },
-        { "file": "crates/gents/proofs/Proofs/FileInventory/Source.lean", "symbol": "FileInventory.buildDocuments" }
+        { "file": "crates/gents/proofs/Proofs/Session/CanonicalOutput/Reconstruction.lean", "symbol": "CanonicalOutput.forkHeader" },
+        { "file": "crates/gents/proofs/Proofs/Session/CanonicalOutput/Hydration.lean", "symbol": "CanonicalOutput.Hydration.forkMetadataMatches" },
+        { "file": "crates/gents/proofs/Proofs/Session/CanonicalOutput/Hydration.lean", "symbol": "CanonicalOutput.Hydration.buildManifest" },
+        { "file": "crates/gents/proofs/Proofs/Observe/FileInventory/Source.lean", "symbol": "FileInventory.buildDocuments" }
       ],
       "generated_groups": [
         "file_inventory_closure_cases"
@@ -242,11 +242,11 @@
     {
       "id": "projection-terminal-selection-and-agent-request-final-result",
       "model_symbols": [
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Terminal.lean", "symbol": "CanonicalOutput.resolveTerminal" },
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Terminal.lean", "symbol": "CanonicalOutput.terminalPublicationEligible" },
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/TerminalPayload.lean", "symbol": "CanonicalOutput.resolveTerminalPayload" },
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/TerminalPayload.lean", "symbol": "CanonicalOutput.absent_terminal_selection_has_no_answer" },
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/TerminalPayload.lean", "symbol": "CanonicalOutput.unknown_selected_header_is_not_latest" }
+        { "file": "crates/gents/proofs/Proofs/Session/CanonicalOutput/Terminal.lean", "symbol": "CanonicalOutput.resolveTerminal" },
+        { "file": "crates/gents/proofs/Proofs/Session/CanonicalOutput/Terminal.lean", "symbol": "CanonicalOutput.terminalPublicationEligible" },
+        { "file": "crates/gents/proofs/Proofs/Session/CanonicalOutput/TerminalPayload.lean", "symbol": "CanonicalOutput.resolveTerminalPayload" },
+        { "file": "crates/gents/proofs/Proofs/Session/CanonicalOutput/TerminalPayload.lean", "symbol": "CanonicalOutput.absent_terminal_selection_has_no_answer" },
+        { "file": "crates/gents/proofs/Proofs/Session/CanonicalOutput/TerminalPayload.lean", "symbol": "CanonicalOutput.unknown_selected_header_is_not_latest" }
       ],
       "generated_groups": [],
       "fixture_status": "not_exported",
@@ -283,11 +283,11 @@
     {
       "id": "projection-provider-input-materialization-and-narrowing",
       "model_symbols": [
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.reconstructMessage" },
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.validateMessageStructure" },
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.validateProviderOrder" },
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.validateExactProviderPositions" },
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.resolveMessagePayload" }
+        { "file": "crates/gents/proofs/Proofs/Session/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.reconstructMessage" },
+        { "file": "crates/gents/proofs/Proofs/Session/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.validateMessageStructure" },
+        { "file": "crates/gents/proofs/Proofs/Session/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.validateProviderOrder" },
+        { "file": "crates/gents/proofs/Proofs/Session/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.validateExactProviderPositions" },
+        { "file": "crates/gents/proofs/Proofs/Session/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.resolveMessagePayload" }
       ],
       "generated_groups": [],
       "fixture_status": "not_exported",
@@ -326,10 +326,10 @@
     {
       "id": "projection-canonical-client-observation-join",
       "model_symbols": [
-        { "file": "crates/gents/proofs/Proofs/Client/Output.lean", "symbol": "Client.projectOutput" },
-        { "file": "crates/gents/proofs/Proofs/Client/Output.lean", "symbol": "Client.outputMissing" },
-        { "file": "crates/gents/proofs/Proofs/Client/Types.lean", "symbol": "projectHead" },
-        { "file": "crates/gents/proofs/Proofs/StreamingResponse/State.lean", "symbol": "StreamingResponse.project" }
+        { "file": "crates/gents/proofs/Proofs/Session/Client/Output.lean", "symbol": "Client.projectOutput" },
+        { "file": "crates/gents/proofs/Proofs/Session/Client/Output.lean", "symbol": "Client.outputMissing" },
+        { "file": "crates/gents/proofs/Proofs/Session/Client/Types.lean", "symbol": "projectHead" },
+        { "file": "crates/gents/proofs/Proofs/Session/StreamingResponse/State.lean", "symbol": "StreamingResponse.project" }
       ],
       "generated_groups": [],
       "fixture_status": "not_exported",

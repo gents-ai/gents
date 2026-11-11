@@ -1,8 +1,8 @@
 # Client Turn Observation Protocol
 
-Formal derivation reference: `Proofs/Client.lean`
+Formal derivation reference: `Proofs/Session/Client.lean`
 
-Shell workflow reference: `Proofs/ClientShell.lean`
+Shell workflow reference: `Proofs/Clients/ClientShell.lean`
 
 Rust reference implementation:
 `crates/gents-protocol/src/client_protocol.rs`
@@ -163,7 +163,7 @@ Key fields: `call_kind`, `call_state`, `queued_at`, `started_at`, `ended_at`,
 
 Rendering: debug or operations surfaces can show backend-admission progress.
 The formal call-state vocabulary is `queued`, `running`, `cancelled`,
-`completed`, and `failed` in `Proofs/InferenceCall.lean`. For interrupted
+`completed`, and `failed` in `Proofs/Runtime/InferenceCall.lean`. For interrupted
 requests, queued or running linked calls have a model path to `cancelled`.
 Backend-gone/controller-drain paths also use `cancelled` as a terminal call
 state, independent of request interruption. Rust currently checks the admission
@@ -295,11 +295,11 @@ so that row-level merges converge to the same state a full reload would produce.
 
 These invariants preserve T1 — equivalent merged observations converge before
 derivation — and therefore preserve the `deriveTurn` properties (T2-T5)
-proved in `Proofs/Client.lean`.
+proved in `Proofs/Session/Client.lean`.
 
 ## Formal Notes
 
-T2-T5 are proven in `Proofs/Client.lean`. T1 is documented there as a merge-layer
+T2-T5 are proven in `Proofs/Session/Client.lean`. T1 is documented there as a merge-layer
 assumption; the current theorem only states that `deriveTurn` is deterministic
 on an already normalized attempt list.
 
@@ -311,7 +311,7 @@ on an already normalized attempt list.
 | T4 Totality | Defined for every observation with at least one attempt |
 | T5 Turn replacement | Chain extension derives from the new tip; supersession is monotonic; retry restart is the one allowed rank decrease |
 
-`Proofs/ClientShell.lean` models local shell workflow above this per-turn
+`Proofs/Clients/ClientShell.lean` models local shell workflow above this per-turn
 projection. It proves that selection changes are local and transport-independent,
 that transport input does not mutate shell state, and that awaiting submission
 state retires only after observing the matching request tip.
@@ -339,7 +339,7 @@ list keeps all generated rows for TypeScript projection coverage; the desktop
 list contains selected-session rows that the Rust session-snapshot bridge can
 own directly, including the selected-but-absent snapshot case. Future shell
 changes that add workflow states, blocker reasons, agent-mismatch handling,
-or transport coupling should extend `Proofs.ClientShell` first and update this
+or transport coupling should extend `Proofs.Clients.ClientShell` first and update this
 generated contract surface in the same change. The emitted frontend and desktop
 ClientShell domains are also listed in `Proofs.Conformance.CoverageLedger`, so
 future contract additions must name a runtime consumer or an accepted boundary.

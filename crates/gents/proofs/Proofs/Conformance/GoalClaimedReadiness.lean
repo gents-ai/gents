@@ -1,4 +1,4 @@
-import Proofs.GoalAutomation.ReadinessGate
+import Proofs.Automation.GoalAutomation.ReadinessGate
 import Lean
 
 namespace Conformance.GoalClaimedReadiness

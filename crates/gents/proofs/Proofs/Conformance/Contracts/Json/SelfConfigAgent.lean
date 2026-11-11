@@ -1,6 +1,6 @@
 import Proofs.Conformance.Contracts.Json.Helpers
-import Proofs.SelfConfig.Cases
-import Proofs.SelfConfig.Selection
+import Proofs.Tools.SelfConfig.Cases
+import Proofs.Tools.SelfConfig.Selection
 import Proofs.Conformance.Contracts.Json.SelfConfig
 
 namespace Conformance.Contracts

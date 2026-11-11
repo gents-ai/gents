@@ -1,6 +1,6 @@
-import Proofs.Goals
-import Proofs.GoalAutomation
-import Proofs.GoalAutomation.ReadinessGate
+import Proofs.Automation.Goals
+import Proofs.Automation.GoalAutomation
+import Proofs.Automation.GoalAutomation.ReadinessGate
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases.Types
 

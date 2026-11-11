@@ -1,4 +1,4 @@
-import Proofs.ClientShell.Settings
+import Proofs.Clients.ClientShell.Settings
 import Lean
 
 open Lean ClientShell.Settings

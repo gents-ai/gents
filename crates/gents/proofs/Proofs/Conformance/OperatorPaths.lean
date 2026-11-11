@@ -1,4 +1,4 @@
-import Proofs.ToolPolicy.OperatorPaths
+import Proofs.Tools.ToolPolicy.OperatorPaths
 import Lean
 
 namespace Conformance.OperatorPaths

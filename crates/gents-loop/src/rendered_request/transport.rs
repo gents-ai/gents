@@ -40,7 +40,7 @@ enum TransportError {
 }
 
 /// Persist the exact provider body before sending; a failed capture refuses
-/// the request (`capture_failure_blocks_send` in `Proofs/RenderedCapture.lean`).
+/// the request (`capture_failure_blocks_send` in `Proofs/Shared/RenderedCapture.lean`).
 #[derive(Clone, Debug, Default)]
 pub struct RenderedRequestCapturingHttpClient<H> {
     inner: H,

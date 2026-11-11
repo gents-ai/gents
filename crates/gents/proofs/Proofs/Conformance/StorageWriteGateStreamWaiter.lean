@@ -1,4 +1,4 @@
-import Proofs.StorageWriteGate.StreamWaiter
+import Proofs.Store.StorageWriteGate.StreamWaiter
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.StorageWriteGateStreamWaiter

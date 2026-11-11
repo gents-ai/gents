@@ -1,5 +1,5 @@
-import Proofs.ManagedExec
-import Proofs.Background.ProcessControl
+import Proofs.Session.ManagedExec
+import Proofs.ToolCalls.Background.ProcessControl
 import Proofs.Conformance.ContractCases.Types
 
 namespace Conformance.ContractCases

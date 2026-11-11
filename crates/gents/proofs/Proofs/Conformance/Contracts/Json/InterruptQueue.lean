@@ -1,4 +1,4 @@
-import Proofs.Session.InterruptCases
+import Proofs.Session.SessionQueue.InterruptCases
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.InterruptQueueContracts

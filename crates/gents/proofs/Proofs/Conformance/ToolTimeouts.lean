@@ -1,4 +1,4 @@
-import Proofs.ToolPolicy.Configuration
+import Proofs.Tools.ToolPolicy.Configuration
 import Lean
 
 

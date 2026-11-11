@@ -1,0 +1,216 @@
+import Proofs.Session.Workspace.Transition
+import Proofs.Session.CommandPolicy.ArtifactAuthority
+
+namespace IsolatedWorkspace
+
+open CommandPolicy
+
+def ReadWriteOk (w : IsolatedWorkspace) (b : WorkspaceBinding) : Prop :=
+  (b.authority = .readWrite ∧ b.state = .active) → w.state = .ready
+
+instance (w : IsolatedWorkspace) (b : WorkspaceBinding) :
+    Decidable (ReadWriteOk w b) := by
+  unfold ReadWriteOk
+  infer_instance
+
+def activeReadWriteCount (workspaceId : String) (bindings : List WorkspaceBinding) : Nat :=
+  (bindings.filter fun b =>
+      decide (b.workspaceId = workspaceId) &&
+        decide (b.authority = .readWrite) &&
+        decide (b.state = .active)).length
+
+def UniqueActiveReadWrite (workspaceId : String) (bindings : List WorkspaceBinding) : Prop :=
+  activeReadWriteCount workspaceId bindings ≤ 1
+
+instance (workspaceId : String) (bindings : List WorkspaceBinding) :
+    Decidable (UniqueActiveReadWrite workspaceId bindings) :=
+  Nat.decLe (activeReadWriteCount workspaceId bindings) 1
+
+def activeIntegrateCount (workspaceId : String) (bindings : List WorkspaceBinding) : Nat :=
+  (bindings.filter fun b =>
+      decide (b.workspaceId = workspaceId) &&
+        decide (b.authority = .integrate) &&
+        decide (b.state = .active)).length
+
+def UniqueActiveIntegrate (workspaceId : String) (bindings : List WorkspaceBinding) : Prop :=
+  activeIntegrateCount workspaceId bindings ≤ 1
+
+instance (workspaceId : String) (bindings : List WorkspaceBinding) :
+    Decidable (UniqueActiveIntegrate workspaceId bindings) :=
+  Nat.decLe (activeIntegrateCount workspaceId bindings) 1
+
+def ReadOnlyAllowed (w : IsolatedWorkspace) : Prop :=
+  w.state = .ready ∨ w.state = .sealed
+
+instance (w : IsolatedWorkspace) : Decidable (ReadOnlyAllowed w) := by
+  unfold ReadOnlyAllowed
+  infer_instance
+
+def ReadOnlyOk (w : IsolatedWorkspace) (b : WorkspaceBinding) : Prop :=
+  b.authority = .readOnly →
+    ReadOnlyAllowed w ∧ (w.state = .sealed → b.sealHash = w.sealHash)
+
+instance (w : IsolatedWorkspace) (b : WorkspaceBinding) :
+    Decidable (ReadOnlyOk w b) := by
+  unfold ReadOnlyOk
+  infer_instance
+
+def ReadOnlyConcurrent (w : IsolatedWorkspace) (bindings : List WorkspaceBinding) : Prop :=
+  ReadOnlyAllowed w →
+    bindings.all (fun b =>
+      !decide (b.authority = .readOnly ∧ b.state = .active) ||
+        decide (ReadOnlyOk w b)) = true
+
+instance (w : IsolatedWorkspace) (bindings : List WorkspaceBinding) :
+    Decidable (ReadOnlyConcurrent w bindings) := by
+  unfold ReadOnlyConcurrent
+  infer_instance
+
+def IntegrateOk (w : IsolatedWorkspace) (b : WorkspaceBinding) : Prop :=
+  b.authority = .integrate → w.state = .sealed ∧ b.sealHash = w.sealHash
+
+instance (w : IsolatedWorkspace) (b : WorkspaceBinding) :
+    Decidable (IntegrateOk w b) := by
+  unfold IntegrateOk
+  infer_instance
+
+def OwnerClaimable (nodeDid : String) (w : IsolatedWorkspace) : Prop :=
+  w.ownerNodeDid = nodeDid ∧ WorkspaceState.bindable w.state
+
+instance (nodeDid : String) (w : IsolatedWorkspace) :
+    Decidable (OwnerClaimable nodeDid w) := by
+  unfold OwnerClaimable
+  infer_instance
+
+def GitMetadataWriteOk (policy : CreationPolicy) (authority : BindingAuthority) : Prop :=
+  ¬ (policy = .gitWorktreeDiff ∧ authority = .readWrite)
+
+instance (policy : CreationPolicy) (authority : BindingAuthority) :
+    Decidable (GitMetadataWriteOk policy authority) := by
+  unfold GitMetadataWriteOk
+  infer_instance
+
+def BindingAuthority.commandMode : BindingAuthority → ExecutionMode
+  | .readOnly => .readOnly
+  | .readWrite => .workspaceWrite
+  | .integrate => .readOnly
+
+def authorityMeet (agent : ExecutionMode) (authority : BindingAuthority) : ExecutionMode :=
+  agent.meet (BindingAuthority.commandMode authority)
+
+def effectiveBoundCommand (requested : ExecutionMode)
+    (binding : Option ArtifactBinding) : Option ExecutionMode :=
+  if requested = .artifactWrite then
+    if admitArtifact requested binding then some .artifactWrite else none
+  else binding.map fun c => authorityMeet requested c.authority
+
+theorem ordinary_workspace_write_stays_readonly (c : ArtifactBinding)
+    (h : c.authority = .readOnly) :
+    effectiveBoundCommand .workspaceWrite (some c) = some .readOnly := by
+  simp [effectiveBoundCommand, authorityMeet, h, BindingAuthority.commandMode,
+    ExecutionMode.meet]
+
+theorem artifact_binding_required (c : Option ArtifactBinding)
+    (h : effectiveBoundCommand .artifactWrite c = some .artifactWrite) :
+    admitArtifact .artifactWrite c = true := by
+  simpa [effectiveBoundCommand] using h
+
+def AuthorityMeetOk (agent : ExecutionMode) (authority : BindingAuthority) : Prop :=
+  ¬ (authority = .readWrite ∧ authorityMeet agent authority = .unrestricted)
+
+instance (agent : ExecutionMode) (authority : BindingAuthority) :
+    Decidable (AuthorityMeetOk agent authority) := by
+  unfold AuthorityMeetOk
+  infer_instance
+
+theorem identity_fields_preserved
+    {pre post : IsolatedWorkspace}
+    (h : Transition pre post) :
+    post.workspaceId = pre.workspaceId ∧
+    post.workUnitId = pre.workUnitId ∧
+    post.repositoryId = pre.repositoryId ∧
+    post.baseSha = pre.baseSha ∧
+    post.branch = pre.branch ∧
+    post.creationPolicy = pre.creationPolicy ∧
+    post.ownerNodeDid = pre.ownerNodeDid ∧
+    post.pathCapability = pre.pathCapability := by
+  cases h <;> simp_all
+
+theorem seal_requires_hash
+    {pre post : IsolatedWorkspace}
+    (h : Transition pre post)
+    (hsealed : post.state = .sealed) :
+    pre.sealHash.isSome = true := by
+  cases h <;> simp_all
+
+theorem sealed_not_terminal : ¬ isTerminal WorkspaceState.sealed := by
+  decide
+
+theorem provisionFailed_not_terminal : ¬ isTerminal WorkspaceState.provisionFailed := by
+  decide
+
+theorem cleaned_terminal : isTerminal WorkspaceState.cleaned := by
+  decide
+
+theorem sealed_not_cleaned
+    {pre post : IsolatedWorkspace}
+    (h : Transition pre post)
+    (hpre : pre.state = .sealed) :
+    post.state ≠ .cleaned := by
+  cases h <;> simp_all
+
+theorem git_worktree_diff_readWrite_denies_git_metadata :
+    ¬ GitMetadataWriteOk .gitWorktreeDiff .readWrite := by
+  decide
+
+theorem meet_readWrite_ne_unrestricted (agent : ExecutionMode) :
+    authorityMeet agent .readWrite ≠ .unrestricted := by
+  cases agent <;> simp [authorityMeet, BindingAuthority.commandMode, ExecutionMode.meet]
+
+theorem meet_unrestricted_readWrite_is_workspaceWrite :
+    authorityMeet .unrestricted .readWrite = .workspaceWrite := by
+  simp [authorityMeet, BindingAuthority.commandMode, ExecutionMode.meet]
+
+theorem AuthorityMeetOk_readWrite (agent : ExecutionMode) :
+    AuthorityMeetOk agent .readWrite := by
+  intro h
+  exact meet_readWrite_ne_unrestricted agent h.2
+
+theorem unique_active_readWrite_nil (workspaceId : String) :
+    UniqueActiveReadWrite workspaceId [] := by
+  simp [UniqueActiveReadWrite, activeReadWriteCount]
+
+theorem readWrite_active_requires_ready
+    (w : IsolatedWorkspace) (b : WorkspaceBinding)
+    (h : ReadWriteOk w b)
+    (hauth : b.authority = .readWrite)
+    (hactive : b.state = .active) :
+    w.state = .ready :=
+  h ⟨hauth, hactive⟩
+
+theorem integrate_requires_matching_seal
+    (w : IsolatedWorkspace) (b : WorkspaceBinding)
+    (h : IntegrateOk w b)
+    (hauth : b.authority = .integrate) :
+    w.state = .sealed ∧ b.sealHash = w.sealHash :=
+  h hauth
+
+theorem owner_claimable_requires_owner
+    (nodeDid : String) (w : IsolatedWorkspace)
+    (h : OwnerClaimable nodeDid w) :
+    w.ownerNodeDid = nodeDid :=
+  h.1
+
+theorem owner_claimable_requires_bindable
+    (nodeDid : String) (w : IsolatedWorkspace)
+    (h : OwnerClaimable nodeDid w) :
+    WorkspaceState.bindable w.state :=
+  h.2
+
+theorem step?_of_legal
+    (pre : IsolatedWorkspace) (postState : WorkspaceState)
+    (h : transitionLegal pre postState = true) :
+    step? pre postState = some { pre with state := postState } := by
+  simp [step?, h]
+
+end IsolatedWorkspace

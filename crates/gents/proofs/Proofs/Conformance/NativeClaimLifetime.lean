@@ -1,4 +1,4 @@
-import Proofs.NativeClaimLifetime
+import Proofs.Store.NativeClaimLifetime
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.NativeClaimLifetime

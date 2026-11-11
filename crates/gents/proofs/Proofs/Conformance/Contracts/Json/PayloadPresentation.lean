@@ -1,4 +1,4 @@
-import Proofs.CanonicalOutput.Execution.GateCases
+import Proofs.Runtime.CanonicalOutput.Execution.GateCases
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.Contracts.Json.ClientRuntime
 

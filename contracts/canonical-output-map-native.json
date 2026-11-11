@@ -2,12 +2,12 @@
     {
       "id": "native.dispatch-observation",
       "model_symbols": [
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/DispatchObservation.lean", "symbol": "CanonicalOutput.Execution.DispatchObservation.attempt" },
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/DispatchObservation.lean", "symbol": "CanonicalOutput.Execution.DispatchObservation.replay_after_commit_never_authorizes" },
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/DispatchObservationCases.lean", "symbol": "CanonicalOutput.Execution.DispatchObservation.Cases.completionProbe" },
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/DispatchObservationCases.lean", "symbol": "CanonicalOutput.Execution.DispatchObservation.Cases.afterPolicySettlement" },
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/DispatchObservationCases.lean", "symbol": "CanonicalOutput.Execution.DispatchObservation.Cases.afterSpawnedTargetRejection" },
-        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/DispatchObservationCases.lean", "symbol": "CanonicalOutput.Execution.DispatchObservation.Cases.afterParentFailureRecovery" },
+        { "file": "crates/gents/proofs/Proofs/Runtime/CanonicalOutput/Execution/DispatchObservation.lean", "symbol": "CanonicalOutput.Execution.DispatchObservation.attempt" },
+        { "file": "crates/gents/proofs/Proofs/Runtime/CanonicalOutput/Execution/DispatchObservation.lean", "symbol": "CanonicalOutput.Execution.DispatchObservation.replay_after_commit_never_authorizes" },
+        { "file": "crates/gents/proofs/Proofs/Runtime/CanonicalOutput/Execution/DispatchObservationCases.lean", "symbol": "CanonicalOutput.Execution.DispatchObservation.Cases.completionProbe" },
+        { "file": "crates/gents/proofs/Proofs/Runtime/CanonicalOutput/Execution/DispatchObservationCases.lean", "symbol": "CanonicalOutput.Execution.DispatchObservation.Cases.afterPolicySettlement" },
+        { "file": "crates/gents/proofs/Proofs/Runtime/CanonicalOutput/Execution/DispatchObservationCases.lean", "symbol": "CanonicalOutput.Execution.DispatchObservation.Cases.afterSpawnedTargetRejection" },
+        { "file": "crates/gents/proofs/Proofs/Runtime/CanonicalOutput/Execution/DispatchObservationCases.lean", "symbol": "CanonicalOutput.Execution.DispatchObservation.Cases.afterParentFailureRecovery" },
         { "file": "crates/gents/proofs/Proofs/Conformance/Contracts/Json/DispatchObservation.lean", "symbol": "Conformance.DispatchObservationContracts.cases" }
       ],
       "constructors": [],
@@ -32,7 +32,7 @@
     {
       "id": "native.request-execution-lease",
       "model_symbols": [
-        { "file": "crates/gents/proofs/Proofs/RequestExecutionLease/Transition.lean", "symbol": "RequestExecutionLease.Action" },
+        { "file": "crates/gents/proofs/Proofs/Session/RequestExecutionLease/Transition.lean", "symbol": "RequestExecutionLease.Action" },
         { "file": "crates/gents/proofs/Proofs/Conformance/RequestExecutionLease.lean", "symbol": "Conformance.RequestExecutionLeaseContracts.leaseCases" },
         { "file": "crates/gents/proofs/Proofs/Conformance/RequestExecutionLease.lean", "symbol": "Conformance.RequestExecutionLeaseContracts.leaseTraceCases" }
       ],
@@ -140,7 +140,7 @@
     {
       "id": "native.external-projected-request-threshold",
       "model_symbols": [
-        { "file": "crates/gents/proofs/Proofs/Compaction/ReductionEngine.lean", "symbol": "Compaction.ReductionEngine.decideThreshold" }
+        { "file": "crates/gents/proofs/Proofs/Session/Compaction/ReductionEngine.lean", "symbol": "Compaction.ReductionEngine.decideThreshold" }
       ],
       "constructors": [],
       "generated_groups": [],

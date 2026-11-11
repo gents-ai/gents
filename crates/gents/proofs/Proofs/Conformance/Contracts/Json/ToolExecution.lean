@@ -1,8 +1,8 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases
-import Proofs.ToolExecution
-import Proofs.MCPHealth.Executable
-import Proofs.BackendHealth.Executable
+import Proofs.Session.ToolExecution
+import Proofs.Tools.MCPHealth.Executable
+import Proofs.Runtime.BackendHealth.Executable
 
 namespace Conformance.Contracts
 

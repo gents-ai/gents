@@ -1,8 +1,8 @@
 import Proofs.Conformance.Contracts.Json.Helpers
-import Proofs.SelfConfig.Cases
-import Proofs.SelfConfig.Auth
-import Proofs.SelfConfig.Scope
-import Proofs.Identity.GrantSets
+import Proofs.Tools.SelfConfig.Cases
+import Proofs.Tools.SelfConfig.Auth
+import Proofs.Tools.SelfConfig.Scope
+import Proofs.Store.Identity.GrantSets
 
 namespace Conformance.Contracts
 

@@ -1,7 +1,7 @@
-import Proofs.Session.FoldCases
-import Proofs.Session.ManagementCases
-import Proofs.Session.InputEditCases
-import Proofs.CanonicalOutput.Execution.FoldPublicationCases
+import Proofs.Session.SessionQueue.FoldCases
+import Proofs.Session.SessionQueue.ManagementCases
+import Proofs.Session.SessionQueue.InputEditCases
+import Proofs.Runtime.CanonicalOutput.Execution.FoldPublicationCases
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.FoldQueueContracts

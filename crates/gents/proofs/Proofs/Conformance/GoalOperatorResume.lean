@@ -1,4 +1,4 @@
-import Proofs.GoalAutomation.OperatorResume
+import Proofs.Automation.GoalAutomation.OperatorResume
 import Proofs.Conformance.ContractTypes
 import Lean.Data.Json.FromToJson
 namespace Conformance.GoalOperatorResumeContracts

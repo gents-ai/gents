@@ -1,5 +1,5 @@
-import Proofs.Configuration
-import Proofs.Identity.State
+import Proofs.Documents.Configuration
+import Proofs.Store.Identity.State
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.Contracts.PackInstallation

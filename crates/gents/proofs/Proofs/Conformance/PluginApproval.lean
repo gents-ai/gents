@@ -1,6 +1,6 @@
 import Lean
-import Proofs.ToolPolicy.PluginApproval
-import Proofs.ToolPolicy.WorkspacePermissions
+import Proofs.Tools.ToolPolicy.PluginApproval
+import Proofs.Tools.ToolPolicy.WorkspacePermissions
 
 namespace Conformance.PluginApproval
 

@@ -1,4 +1,4 @@
-import Proofs.PairingReconcile
+import Proofs.P2P.PairingReconcile
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.Contracts

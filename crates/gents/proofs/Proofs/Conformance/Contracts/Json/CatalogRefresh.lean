@@ -1,4 +1,4 @@
-import Proofs.Configuration.CatalogRefresh
+import Proofs.Documents.Configuration.CatalogRefresh
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.Contracts.CatalogRefresh

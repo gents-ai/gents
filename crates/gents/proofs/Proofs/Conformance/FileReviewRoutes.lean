@@ -1,4 +1,4 @@
-import Proofs.ScopeTemplates
+import Proofs.Documents.ScopeTemplates
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.FileReviewRouteContracts
