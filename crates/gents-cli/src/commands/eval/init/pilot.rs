@@ -16,7 +16,7 @@ use super::validate::Assembled;
 use super::write::{commit, rewrite_readme, split_name, PilotNote};
 use super::{checked, print_written, InitContext, InitOutcome};
 use crate::cli::{CellArg, EvalRunArgs, EvalScopeArgs};
-use crate::commands::eval::render::wire;
+use crate::shared::wire;
 use crate::commands::eval::run::{follow, run_request};
 use crate::commands::eval::{Deps, EvalContext};
 

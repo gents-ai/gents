@@ -25,6 +25,7 @@ use crate::cli::output_format::OutputFormat;
 use crate::commands::chat::streaming::sanitize_summary_text;
 use crate::home_state::resolve_node_did;
 use crate::request_helpers::print_ndjson;
+use crate::shared::wire;
 use crate::{print_json, resolve_config_access};
 
 pub(crate) mod promote;
@@ -180,7 +181,7 @@ fn terminal_line(view: &JobView) -> Value {
     let pause_reason = progress.and_then(|progress| progress.pause_reason);
     let next = next_calls(view.state, &view.address).into_iter().next();
     let mut line = json!({
-        "state": state_name(view.state),
+        "state": wire(&view.state),
         "address": view.address,
         "handle": view.handle,
         "outcome": view.outcome,
@@ -398,7 +399,7 @@ pub(crate) fn control_lines(
         }) => {
             let mut lines = vec![format!(
                 "{}  {verb} applied  {killed_children} children interrupted",
-                state_name(state)
+                wire(&state)
             )];
             lines.push("next:".to_owned());
             for call in next_calls(state, &view.address) {
@@ -408,7 +409,7 @@ pub(crate) fn control_lines(
         }
         Ok(JobControlOutcome::AlreadyTerminal { state }) => Ok(vec![
             "workflow_control_not_applicable".to_owned(),
-            format!("state: {}", state_name(state)),
+            format!("state: {}", wire(&state)),
             "next:".to_owned(),
             format!("  gents automation job show {}", view.address),
         ]),
@@ -607,7 +608,7 @@ pub(crate) fn clean(text: &str) -> String {
 fn show_lines(view: &JobView) -> Vec<String> {
     let progress = view.progress.as_ref();
     let title = progress.map_or_else(|| clean(&view.handle), |progress| clean(&progress.title));
-    let mut lines = vec![format!("{}  {title}", state_name(view.state))];
+    let mut lines = vec![format!("{}  {title}", wire(&view.state))];
     if let Some(outcome) = &view.outcome {
         lines.push(format!(
             "outcome: {}  {}",
@@ -625,7 +626,7 @@ fn show_lines(view: &JobView) -> Vec<String> {
             for phase in &progress.phases {
                 lines.push(format!(
                     "  {}  {}",
-                    phase_state_name(phase.state),
+                    wire(&phase.state),
                     clean(&phase.title)
                 ));
             }
@@ -639,7 +640,7 @@ fn show_lines(view: &JobView) -> Vec<String> {
                 clean(&child.slot),
                 child.attempt,
                 clean(&child.title),
-                child_state_name(child.state),
+                wire(&child.state),
                 child.usage.total,
                 age(child.duration_ms)
             ));
@@ -680,25 +681,6 @@ fn pause_reason_name(reason: JobPauseReason) -> &'static str {
     }
 }
 
-fn phase_state_name(state: JobPhaseState) -> &'static str {
-    match state {
-        JobPhaseState::Pending => "pending",
-        JobPhaseState::Active => "active",
-        JobPhaseState::Done => "done",
-        JobPhaseState::Failed => "failed",
-    }
-}
-
-fn child_state_name(state: JobChildState) -> &'static str {
-    match state {
-        JobChildState::Live => "live",
-        JobChildState::Completed => "completed",
-        JobChildState::Failed => "failed",
-        JobChildState::Interrupted => "interrupted",
-        JobChildState::Other => "other",
-    }
-}
-
 fn origin_name(origin: JobOrigin) -> &'static str {
     match origin {
         JobOrigin::Installed => "installed",
@@ -724,7 +706,7 @@ fn row_cells(view: &JobView, now_ms: u64) -> [String; 9] {
     [
         clean(&view.handle),
         view.pin.plugin_ref.clone(),
-        state_name(view.state).to_owned(),
+        wire(&view.state),
         phase.unwrap_or_else(|| "-".to_owned()),
         progress.map_or_else(
             || "-".to_owned(),
@@ -738,18 +720,6 @@ fn row_cells(view: &JobView, now_ms: u64) -> [String; 9] {
         view.session_id.clone(),
         view.address.clone(),
     ]
-}
-
-pub(crate) fn state_name(state: JobState) -> &'static str {
-    match state {
-        JobState::Running => "running",
-        JobState::Paused => "paused",
-        JobState::AwaitingUser => "awaiting_user",
-        JobState::Completed => "completed",
-        JobState::Failed => "failed",
-        JobState::Cancelled => "cancelled",
-        JobState::TimedOut => "timed_out",
-    }
 }
 
 fn age(ms: u64) -> String {

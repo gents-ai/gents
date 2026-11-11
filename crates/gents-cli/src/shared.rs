@@ -266,3 +266,15 @@ pub(crate) async fn load_backend_observation(
 
 #[cfg(test)]
 pub(crate) mod test_support;
+
+/// The serde spelling of a unit-like wire value, as its owner serializes it.
+pub(crate) fn wire<T>(value: &T) -> String
+where
+    T: Serialize,
+{
+    match serde_json::to_value(value) {
+        Ok(serde_json::Value::String(text)) => text,
+        Ok(other) => other.to_string(),
+        Err(_) => "?".to_owned(),
+    }
+}
