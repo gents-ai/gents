@@ -415,8 +415,10 @@ where
 }
 
 /// What an approval did to the packs before its node restart failed. A
-/// failed pack that is on the node with its permissions granted is told
-/// apart from one that was not installed: approving it again finishes it.
+/// failed pack the report marks `installed` has a home install record and
+/// nothing more is known of it: its own install may have stopped partway, or
+/// an older install may have been there before a refused approval. So it is
+/// said to be installed but not finished, with what finishes it.
 fn installed_before_restart(report: &serde_json::Value) -> String {
     let names = |packs: Vec<&serde_json::Value>| {
         packs
@@ -428,33 +430,39 @@ fn installed_before_restart(report: &serde_json::Value) -> String {
     let listed = |key: &str| report[key].as_array().into_iter().flatten();
     let (unfinished, absent): (Vec<_>, Vec<_>) =
         listed("failed").partition(|pack| pack["installed"] == true);
-    let part = |packs: String, some: &str, none: &str| {
-        if packs.is_empty() {
-            none.to_owned()
-        } else {
-            format!("{some}: {packs}.")
+    let (installed, unfinished, absent) = (
+        names(listed("installed").collect()),
+        names(unfinished),
+        names(absent),
+    );
+    let mut clauses = Vec::new();
+    if !installed.is_empty() {
+        clauses.push(format!("these starter packs were installed: {installed}."));
+    }
+    if !unfinished.is_empty() {
+        clauses.push(format!(
+            "these are installed but not finished: {unfinished}. Approve them again once the node starts."
+        ));
+    }
+    if clauses.is_empty() {
+        clauses.push("no starter pack was installed.".to_owned());
+    }
+    if !absent.is_empty() {
+        clauses.push(format!("these were not installed: {absent}."));
+    }
+    let mut message = "Before the local node failed to start again,".to_owned();
+    for (index, clause) in clauses.iter().enumerate() {
+        message.push(' ');
+        let mut letters = clause.chars();
+        match letters.next().filter(|_| index > 0) {
+            Some(first) => {
+                message.extend(first.to_uppercase());
+                message.push_str(letters.as_str());
+            }
+            None => message.push_str(clause),
         }
-    };
-    [
-        format!(
-            "Before the local node failed to start again, {}",
-            part(
-                names(listed("installed").collect()),
-                "these starter packs were installed",
-                "no starter pack was installed."
-            )
-        ),
-        part(
-            names(unfinished),
-            "These are installed with their permissions granted, but setting them up for the Engineer didn't finish",
-            "",
-        ),
-        part(names(absent), "These were not installed", ""),
-    ]
-    .into_iter()
-    .filter(|sentence| !sentence.is_empty())
-    .collect::<Vec<_>>()
-    .join(" ")
+    }
+    message
 }
 
 async fn restart_managed_server<R, P, WhileStopped>(
