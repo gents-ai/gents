@@ -45,7 +45,7 @@ fn encode_bindings(bindings: &PackAgentBindings) -> Vec<BindingRow> {
 
 #[test]
 fn binding_plan_matches_lean() {
-    plan_family::replay(|i| {
+    gents_lean_vocab::families::contracts_pack_installation_identity_plan::replay(|i| {
         let recorded: Vec<BindingRow> = recode(&i.recorded);
         let provisioned: Vec<BindingRow> = recode(&i.provisioned);
         let actual = decode_bindings(&recorded).and_then(|recorded| {
@@ -287,7 +287,7 @@ async fn installed_agents_reuse_bindings_and_reject_stale_preparation() {
 
 #[test]
 fn dependency_reference_matches_lean() {
-    reference_family::replay(|i| {
+    gents_lean_vocab::families::contracts_pack_installation_identity_reference::replay(|i| {
         let actual = (|| -> Result<AgentIdentityBinding> {
             let mut available = BTreeMap::new();
             for dependency in &i.available {

@@ -52,7 +52,6 @@ import Proofs.Store.Identity.DirectoryPublication
 import Proofs.Store.Identity.StartupReadiness
 import Proofs.Store.Identity.NodeProvisioningConformance
 import Proofs.Store.Identity.GrantSetsConformance
-import Proofs.Store.Identity.EnrollmentGrantConformance
 import Proofs.Store.Identity.ClientAgentCreation
 import Proofs.Store.Identity.AgentBlockSigning
 import Proofs.ToolCalls.Identity.ClientAgentJournal
@@ -129,8 +128,9 @@ import Proofs.Conformance.Contracts.Json.BackgroundWakeRows
 import Proofs.Conformance.Contracts.Json.SessionDocuments
 import Proofs.Conformance.Contracts.Json.RequestInput
 import Proofs.Conformance.Contracts.Json.AggregateBudget
-import Proofs.Conformance.Contracts.Json.RollingCompaction
-import Proofs.Conformance.Contracts.Json.ReductionEngine
+import Proofs.Conformance.ContractCases.RollingCompaction
+import Proofs.Conformance.ContractCases.ReductionEngine
+import Proofs.Conformance.ContractCases.RenderedCapture
 import Proofs.Conformance.Contracts.Json.CompactionProjectionJoin
 import Proofs.Conformance.Contracts.Json.CompactionCanonicalProjection
 import Proofs.Conformance.CompletionRetry.Contracts
@@ -338,8 +338,6 @@ def snapshotCoverageTailJson : String :=
       ++ featureSurfaceRequirementsJson
     ++ ",\"feature_matrix\":"
       ++ featureMatrixJson
-    ++ ",\"identity_structural_cases\":"
-      ++ Identity.Conformance.structuralCasesJson
     ++ ",\"identity_permission_cases\":"
       ++ Identity.Conformance.identityPermissionCasesJson
     ++ ",\"identity_household_cases\":"

@@ -98,7 +98,7 @@ structure OauthAuth where
   key : Option String := none
   id : Option String := none
   version : Option String := none
-  variable : Option String := none
+  variableName : Option String := none
   accountRef : Option String := none
   allowOverage : Option Bool := none
   accessKeyId : Option String := none
@@ -111,7 +111,7 @@ private def OauthAuth.ofBackend : BackendAuth → OauthAuth
   | .unauthenticated => { kind := "unauthenticated" }
   | .apiKey key => { kind := "api_key", key := some key }
   | .credential id version => { kind := "credential", id := some id, version := some version }
-  | .environment name => { kind := "environment", variable := some name }
+  | .environment name => { kind := "environment", variableName := some name }
   | .nodeOAuth account => { kind := "node_oauth", accountRef := account }
   | .nodeOAuthPool allowOverage => { kind := "node_oauth_pool", allowOverage := some allowOverage }
   | .awsCredentials id secret token =>
@@ -124,7 +124,7 @@ private def OauthAuth.toBackend (a : OauthAuth) : BackendAuth :=
   | "unauthenticated" => .unauthenticated
   | "api_key" => .apiKey (a.key.getD "")
   | "credential" => .credential (a.id.getD "") (a.version.getD "")
-  | "environment" => .environment (a.variable.getD "")
+  | "environment" => .environment (a.variableName.getD "")
   | "node_oauth" => .nodeOAuth a.accountRef
   | "node_oauth_pool" => .nodeOAuthPool (a.allowOverage.getD false)
   | "aws_credentials" =>

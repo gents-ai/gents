@@ -132,9 +132,7 @@ mod tests {
     use super::*;
 
     use gents_lean_vocab::families::{
-        access_review_completion_acceptance as completion,
-        access_review_context_selection as context, access_review_denial_trace as trace,
-        access_review_reply_decision as reply, access_review_review_route as route,
+        access_review_denial_trace as trace, access_review_review_route as route,
     };
     use policy::Scope;
 
@@ -168,12 +166,12 @@ mod tests {
 
     #[test]
     fn generated_access_review_replies_match_the_native_decoder() {
-        reply::replay(|i| wire(&decode_reply(&i.action, &i.raw)));
+        gents_lean_vocab::families::access_review_reply_decision::replay(|i| wire(&decode_reply(&i.action, &i.raw)));
     }
 
     #[test]
     fn generated_access_review_traces_match_the_native_history() {
-        trace::replay(|i| {
+        gents_lean_vocab::families::access_review_denial_trace::replay(|i| {
             let mut history = History::default();
             i.verdicts
                 .iter()
@@ -190,7 +188,7 @@ mod tests {
 
     #[test]
     fn generated_access_review_routes_match_the_native_evaluation() {
-        route::replay(|i| {
+        gents_lean_vocab::families::access_review_review_route::replay(|i| {
             let input = Input {
                 current: Scope {
                     workspace: i.input.current.workspace,
@@ -220,12 +218,12 @@ mod tests {
 
     #[test]
     fn generated_access_review_completions_match_the_native_gate() {
-        completion::replay(|i| accepts_completion(parsed(&i.purpose), i.has_tools));
+        gents_lean_vocab::families::access_review_completion_acceptance::replay(|i| accepts_completion(parsed(&i.purpose), i.has_tools));
     }
 
     #[test]
     fn generated_access_review_contexts_match_the_native_selection() {
-        context::replay(|i| {
+        gents_lean_vocab::families::access_review_context_selection::replay(|i| {
             select_context(i.required, i.limit, i.costs.iter().copied()).map(|count| count as u64)
         });
     }

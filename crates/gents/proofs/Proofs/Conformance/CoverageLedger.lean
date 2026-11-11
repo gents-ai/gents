@@ -484,24 +484,10 @@ def stateMachineCoverage : List CoverageEntry :=
 
 def caseCoverage : List CoverageEntry :=
   [ tagged (followUpCoverage
-      "identity_bootstrap_startup_cases" "IdentityBootstrapStartupCases"
-      "The snapshot emits and the decoder accepts these cases; no native test reads them.")
-      "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
       "identity_client_agent_recovery_cases" "IdentityClientAgentRecoveryCases"
       "The snapshot emits and the decoder accepts these cases; no native test reads them.")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "identity_network_protocol_cases" "IdentityNetworkProtocolCases"
-      "The snapshot emits and the decoder accepts these cases; no native test reads them.")
-      "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "identity_relationship_replay_cases" "IdentityRelationshipReplayCases"
-      "The snapshot emits and the decoder accepts these cases; no native test reads them.")
-      "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "identity_relationship_replay_producer_cases" "IdentityRelationshipReplayProducerCases"
-      "The snapshot emits and the decoder accepts these cases; no native test reads them.")
+  , tagged (consumerCoverage "family" "network_protocol_resource")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "identity_secret_publication_cases" "IdentitySecretPublicationCases"
@@ -2165,7 +2151,27 @@ def caseCoverage : List CoverageEntry :=
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
-      "access_review_reply_decision, access_review_denial_trace, access_review_review_route, access_review_completion_acceptance, access_review_context_selection"
+      "access_review_reply_decision"
+      "Generated JSON replies bind exact invocation IDs, complete decisions and UTF-8 byte limits. Context cases bind required-envelope limits and whole-entry selection in newest-first order, including fixed-width overflow boundaries. Traces bind denial windows and scoped routing. Native encoders must supply honest wire costs; signed review execution, physical request binding, cancellation, tool and hook exclusion, and reviewer accuracy require adapter checks.")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "family"
+      "access_review_denial_trace"
+      "Generated JSON replies bind exact invocation IDs, complete decisions and UTF-8 byte limits. Context cases bind required-envelope limits and whole-entry selection in newest-first order, including fixed-width overflow boundaries. Traces bind denial windows and scoped routing. Native encoders must supply honest wire costs; signed review execution, physical request binding, cancellation, tool and hook exclusion, and reviewer accuracy require adapter checks.")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "family"
+      "access_review_review_route"
+      "Generated JSON replies bind exact invocation IDs, complete decisions and UTF-8 byte limits. Context cases bind required-envelope limits and whole-entry selection in newest-first order, including fixed-width overflow boundaries. Traces bind denial windows and scoped routing. Native encoders must supply honest wire costs; signed review execution, physical request binding, cancellation, tool and hook exclusion, and reviewer accuracy require adapter checks.")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "family"
+      "access_review_completion_acceptance"
+      "Generated JSON replies bind exact invocation IDs, complete decisions and UTF-8 byte limits. Context cases bind required-envelope limits and whole-entry selection in newest-first order, including fixed-width overflow boundaries. Traces bind denial windows and scoped routing. Native encoders must supply honest wire costs; signed review execution, physical request binding, cancellation, tool and hook exclusion, and reviewer accuracy require adapter checks.")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "family"
+      "access_review_context_selection"
       "Generated JSON replies bind exact invocation IDs, complete decisions and UTF-8 byte limits. Context cases bind required-envelope limits and whole-entry selection in newest-first order, including fixed-width overflow boundaries. Traces bind denial windows and scoped routing. Native encoders must supply honest wire costs; signed review execution, physical request binding, cancellation, tool and hook exclusion, and reviewer accuracy require adapter checks.")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
@@ -2489,13 +2495,22 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage "background_wake_row_cases" "BackgroundWakeRowCases"
       "Consume exact physical-parent and cross-requester authoritative rows through background publication after its owner migrates. Existing DB wake tests do not establish every generated row verdict.")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp "configuration_scope_cases" "ConfigurationScopeCases"
+  , tagged (consumerWithFollowUp "family" "configuration_scope_context_bounds"
+      "Resolve same-label documents through the real owner-qualified context/inference registry; do not rebuild Lean lookup in tests.")
+      "apply-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp "family" "configuration_scope_default_agent_publication"
+      "Resolve same-label documents through the real owner-qualified context/inference registry; do not rebuild Lean lookup in tests.")
+      "apply-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp "family" "configuration_scope_default_replacement"
+      "Resolve same-label documents through the real owner-qualified context/inference registry; do not rebuild Lean lookup in tests.")
+      "apply-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp "family" "configuration_scope_oauth_account"
       "Resolve same-label documents through the real owner-qualified context/inference registry; do not rebuild Lean lookup in tests.")
       "apply-reconcile" [Surface.runtimeInternal]
   , tagged (followUpCoverage "discovery_scope_cases" "DiscoveryScopeCases"
       "Exercise backend-owner and credential-scoped catalog selection in the production discovery owner, including shared/OAuth and foreign-owner rejection.")
       "apply-reconcile" [Surface.runtimeInternal]
-  , tagged (consumerCoverage "initial_inference_cases" "InitialInferenceCases")
+  , tagged (consumerCoverage "family" "initialization_initial_inference")
       "apply-reconcile" [Surface.operatorCli]
   , tagged (followUpCoverage "event_group_clock_cases" "EventGroupClockCases"
       "Drive the existing durable group clock owner after typed trigger/callback identity migration; preserve first-seen and quiescence across restart.")

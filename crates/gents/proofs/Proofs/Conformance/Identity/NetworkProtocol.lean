@@ -14,7 +14,7 @@ def resource : Family ResourceInput (Option String) where
   inputs := ["Network", "NetworkEnrollmentRequest", "NetworkEnrollmentDecision",
     "NetworkEnrollmentRouteReceipt", "NetworkAuthorizationRevision",
     "EnrollmentRenewalIntent", "EnrollmentRenewalOffer", "NodeDirectoryEntry",
-    "PeerRegistry", "UnclassifiedCollection"].map fun collection => { collection }
+    "PeerRegistry", "AgentSession", "UnclassifiedCollection"].map fun collection => { collection }
   model := fun i => networkProtocolResource i.collection
 
 end Conformance.NetworkProtocol
