@@ -23,12 +23,11 @@ def ClaimVerdict.severity : ClaimVerdict → Nat
 def ClaimVerdict.narrow (current next : ClaimVerdict) : ClaimVerdict :=
   if current.severity < next.severity then next else current
 
-/-- Design choice: verdicts combine by severity, and the first plugin in the
-fixed order supplies the reason among equals. The alternative is the first
-non-allow verdict in plugin order, which is what the hand-written sequence in
-`request/lifecycle/claim.rs` does today. Severity was chosen so that a denial
-is never masked by another plugin's softer answer and so that which transition
-core performs does not depend on plugin order. -/
+/-- Decision (maintainer, gents-ai/gents#3656): the most severe verdict wins,
+reject over retire over leave queued over allow, independent of plugin order;
+the first plugin in the fixed order supplies the reason among equals. A denial
+is never masked by another plugin's softer answer. The hand-written sequence
+in `request/lifecycle/claim.rs` takes the first non-allow answer instead. -/
 def combine (verdicts : List ClaimVerdict) : ClaimVerdict :=
   verdicts.foldl ClaimVerdict.narrow .allow
 

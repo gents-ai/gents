@@ -67,8 +67,12 @@ def Hook.run (host : Host Core Q Doc Val Op) (hook : Hook Q Ev V Doc Val Op) (ev
 
 variable [DecidableEq Doc]
 
-/-- Every plugin at a point decides against the same `snapshot`; results are
-validated and applied in list order onto `staged`.
+/-- Staging at a point where a plugin may refuse: work is about to start or
+continue (request creation, claim, resume, fork). Any refusal, invalid result
+or miss aborts the transaction. Interrupt, stop and terminal transitions use
+`Hooks.stageDropping` instead. Every plugin at a point decides against the
+same `snapshot`; results are validated and applied in list order onto
+`staged`.
 
 Design choice: a later plugin sees none of an earlier plugin's staged effects
 at the same point. The alternative is to show it all of them. None was chosen
@@ -173,10 +177,12 @@ private theorem stageFrom_ok (host : Host Core Q Doc Val Op) (actor : Actor) (ev
               · exact allValid candidate member
       · simp [accepted] at ok
 
-/-- No partial commit: a staged point is exactly the snapshot plus every
-plugin's effects, in plugin order. So a plugin's rows and core's rows change
-together or not at all, and a plugin's state cannot disagree with core's when
-the hook is in the lifecycle transaction. -/
+/-- No partial commit, at a point where refusal is allowed: a staged point is
+exactly the snapshot plus every plugin's effects, in plugin order. So a
+plugin's rows and core's rows change together or not at all, and a plugin's
+state cannot disagree with core's. At a point whose transition must commit
+this holds only while no plugin is dropped
+(`Hooks.undropped_staging_applies_every_plugin`). -/
 theorem staged_state_applies_every_plugin (host : Host Core Q Doc Val Op)
     (plugins : List (Plugin Q Ev V Doc Val Op)) (actor : Actor) (event : Ev)
     (snapshot final : State Core Doc Val) (values : List V)

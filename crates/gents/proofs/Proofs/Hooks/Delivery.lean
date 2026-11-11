@@ -5,8 +5,12 @@ namespace Hooks.Delivery
 /-- Delivery after commit. The terminal outcome and the keys of the
 deliveries it owes are published by one transaction; each delivery then runs
 in its own transaction through the same data contract (rows in, effects out).
-`owed` is the durable redrive record: `runtime.recover.sweep` in
-gents-ai/gents#3642 is the loop over `pending`, not a hook of its own.
+A plugin whose staging was dropped at a must-commit point is owed the same
+way (`Hooks.owed`). `owed` is the durable redrive record:
+`runtime.recover.sweep` in gents-ai/gents#3642 is the loop over `pending`, not
+a hook of its own. A delivery has no caller's transaction; it runs under the
+actor recorded when it was owed, the actor of the owing transaction, never a
+plugin or node identity (`Hooks.Safety.perform`).
 
 Design choice: the record of what is owed is core's, keyed by the physical
 subject and the plugin. The alternative, each feature keeping its own redrive
