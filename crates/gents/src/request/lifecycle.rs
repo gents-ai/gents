@@ -758,7 +758,7 @@ impl TerminalRepairReport {
 
 #[async_trait::async_trait]
 impl gents_loop::request_lifecycle::RequestLifecycleControl for RequestLifecycle {
-    type Error = crate::runtime::agent::stream_processor::RuntimeSeamError;
+    type Error = crate::request::seam_error::RuntimeSeamError;
 
     async fn validate_owned_execution(&self) -> Result<(), Self::Error> {
         Ok(RequestLifecycle::validate_owned_execution(self).await?)

@@ -2116,7 +2116,7 @@ impl gents_loop::session_hook::CanonicalSessionHook<crate::request::streaming::A
 
 #[async_trait::async_trait]
 impl gents_loop::session_hook::SessionHook for DefraSessionHook {
-    type Error = crate::runtime::agent::stream_processor::RuntimeSeamError;
+    type Error = crate::request::seam_error::RuntimeSeamError;
     async fn bind_tool_surface(&self, tools: SharedLoopTools) {
         *self.selected_loop_tools.lock().await = Some(tools);
     }
