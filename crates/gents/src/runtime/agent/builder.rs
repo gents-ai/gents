@@ -295,7 +295,7 @@ impl GentsBuilder {
             operator_tool_root: self.tool_ceiling.root().map(std::path::PathBuf::from),
             plugins: Arc::new(crate::runtime::agent::plugin_executor(
                 self.plugin_home,
-                crate::plugin::model_calls::AccessModels(
+                crate::plugin::model_binding::AccessModels(
                     crate::store::config_client::ConfigAccess::local(plugin_node),
                 ),
             )),

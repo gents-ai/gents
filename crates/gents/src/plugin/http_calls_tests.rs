@@ -659,14 +659,14 @@ async fn a_round_asking_both_services_is_bad_output() {
 
 struct Endpoint;
 
-impl crate::plugin::model_calls::ModelResolver for Endpoint {
+impl crate::plugin::model_binding::ModelResolver for Endpoint {
     fn resolve<'a>(
         &'a self,
         _: &'a crate::plugin::model_binding::ModelBinding,
         _: Option<&'a identity::Did>,
-    ) -> BoxFuture<'a, Result<crate::plugin::model_calls::ModelEndpoint>> {
+    ) -> BoxFuture<'a, Result<crate::plugin::model_binding::ModelEndpoint>> {
         Box::pin(async {
-            Ok(crate::plugin::model_calls::ModelEndpoint {
+            Ok(crate::plugin::model_binding::ModelEndpoint {
                 url: "http://127.0.0.1:9/v1/chat/completions".into(),
                 api_key: None,
                 model: "m".into(),

@@ -252,7 +252,7 @@ pub struct Gents {
 
 pub(crate) fn plugin_executor(
     home: Option<PathBuf>,
-    models: crate::plugin::model_calls::AccessModels<crate::store::config_client::ConfigAccess>,
+    models: crate::plugin::model_binding::AccessModels<crate::store::config_client::ConfigAccess>,
 ) -> crate::plugin::executor::PluginExecutor {
     crate::plugin::executor::PluginExecutor::new(home).with_models(Arc::new(models))
 }
@@ -282,7 +282,7 @@ impl Gents {
         backend_admission.validate(&node).await?;
         migration::ensure_all_runtime_migrations(node.clone()).await?;
         let backend_health = options.backend_health.clone().unwrap_or_default();
-        let plugin_models = crate::plugin::model_calls::AccessModels(
+        let plugin_models = crate::plugin::model_binding::AccessModels(
             crate::store::config_client::ConfigAccess::local(node.clone()),
         );
         let plugins = Arc::new(plugin_executor(options.plugin_home, plugin_models));

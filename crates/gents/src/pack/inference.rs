@@ -231,8 +231,7 @@ pub(crate) async fn preview_pack_inference_bindings_with_node_binding(
         node_binding,
     )
     .await?;
-    use crate::plugin::model_binding::ModelBinding;
-    use crate::plugin::model_calls::{AccessModels, ModelResolver};
+    use crate::plugin::model_binding::{AccessModels, ModelBinding, ModelResolver};
     let models = AccessModels(access);
     for slot in manifest
         .metadata
