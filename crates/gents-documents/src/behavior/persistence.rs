@@ -95,7 +95,7 @@ mod tests {
                         crate::apply_desired_state_plan(
                             txn,
                             plan,
-                            &crate::inference::resolved::ProviderProfilePolicy,
+                            &crate::test_support::AdmitAllProfiles,
                         )
                         .await
                         .map(|_| ())
@@ -108,7 +108,7 @@ mod tests {
             write_inference_profile_document(
                 &access,
                 &profile,
-                &crate::inference::resolved::ProviderProfilePolicy,
+                &crate::test_support::AdmitAllProfiles,
             )
             .await?;
         }
@@ -119,7 +119,7 @@ mod tests {
         let original_id = write_agent_document(
             &access,
             &behavior,
-            &crate::inference::resolved::ProviderProfilePolicy,
+            &crate::test_support::AdmitAllProfiles,
         )
         .await?;
         let mut foreign = behavior.clone();
@@ -128,7 +128,7 @@ mod tests {
         let foreign_id = write_agent_document(
             &access,
             &foreign,
-            &crate::inference::resolved::ProviderProfilePolicy,
+            &crate::test_support::AdmitAllProfiles,
         )
         .await?;
         assert_ne!(original_id, foreign_id);
@@ -139,7 +139,7 @@ mod tests {
             write_agent_document(
                 &access,
                 &behavior,
-                &crate::inference::resolved::ProviderProfilePolicy
+                &crate::test_support::AdmitAllProfiles
             )
             .await?,
             original_id
@@ -167,7 +167,7 @@ mod tests {
         assert!(write_agent_document(
             &access,
             &invalid,
-            &crate::inference::resolved::ProviderProfilePolicy
+            &crate::test_support::AdmitAllProfiles
         )
         .await
         .is_err());

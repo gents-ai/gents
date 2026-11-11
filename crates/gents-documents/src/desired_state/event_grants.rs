@@ -6,9 +6,6 @@ use gents_store::collection::Collection;
 use gents_store::config_client::ConfigApplyTxn;
 use std::collections::{BTreeMap, BTreeSet};
 
-#[cfg(test)]
-mod tests;
-
 #[derive(Clone, PartialEq, Eq)]
 struct Selection {
     agent: String,

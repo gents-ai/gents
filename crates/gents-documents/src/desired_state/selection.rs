@@ -9,12 +9,12 @@ use gents_store::collection::Collection;
 use gents_store::config_client::ConfigApplyTxn;
 use gents_store::config_client::ConfigClientError;
 
-pub(super) struct Change {
-    pub(super) collection: Collection,
-    pub(super) node_did: String,
-    pub(super) doc_id: String,
-    pub(super) before: Option<Value>,
-    pub(super) after: Value,
+pub struct Change {
+    pub collection: Collection,
+    pub node_did: String,
+    pub doc_id: String,
+    pub before: Option<Value>,
+    pub after: Value,
 }
 
 /// Selected IDs per target collection, from the canonical reference owner.
@@ -68,7 +68,7 @@ pub(super) fn context_hierarchy_enabled(bound: fn(Collection) -> bool) -> bool {
 /// decision: it may drop a removed source only when
 /// `DestructiveAuthority::decide` allows it, which needs a complete inventory
 /// no Gents read provides, so it is refused with a typed reason.
-pub(super) async fn apply_selection_changes(
+pub async fn apply_selection_changes(
     txn: &ConfigApplyTxn<'_>,
     changes: &[Change],
     bound: fn(Collection) -> bool,
@@ -157,7 +157,5 @@ pub(super) async fn apply_selection_changes(
     Ok(())
 }
 
-#[cfg(test)]
-mod compaction_tests;
 #[cfg(test)]
 pub(super) mod tests;

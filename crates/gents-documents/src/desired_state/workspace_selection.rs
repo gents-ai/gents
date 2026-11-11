@@ -236,7 +236,7 @@ mod tests {
                     crate::apply_desired_state_plan(
                         txn,
                         plan,
-                        &crate::inference::resolved::ProviderProfilePolicy,
+                        &crate::test_support::AdmitAllProfiles,
                     )
                     .await
                 })
@@ -296,7 +296,7 @@ mod tests {
                     crate::apply_desired_state_plan(
                         txn,
                         plan,
-                        &crate::inference::resolved::ProviderProfilePolicy,
+                        &crate::test_support::AdmitAllProfiles,
                     )
                     .await
                 })
@@ -337,7 +337,7 @@ mod tests {
                         crate::apply_desired_state_plan(
                             txn,
                             changed,
-                            &crate::inference::resolved::ProviderProfilePolicy,
+                            &crate::test_support::AdmitAllProfiles,
                         )
                         .await
                     })

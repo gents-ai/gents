@@ -1,6 +1,6 @@
-use super::*;
-use crate::apply_desired_state_plan;
-use crate::DesiredStateApplyDocument;
+use anyhow::{Context, Result};
+use gents_documents::{apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
@@ -24,7 +24,7 @@ async fn apply(access: &ConfigAccess, documents: Vec<DesiredStateApplyDocument>)
                 apply_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &gents_documents::test_support::AdmitAllProfiles,
                 )
                 .await
                 .map(|_| ())
@@ -41,7 +41,7 @@ async fn event_admitted(
     access
         .transact_readonly("test.event_grants.admission", |txn| {
             Box::pin(async move {
-                crate::event_consumer::validate_event_admission(txn, fire, generation).await
+                gents_documents::event_consumer::validate_event_admission(txn, fire, generation).await
             })
         })
         .await
@@ -291,13 +291,13 @@ async fn event_configuration_publication_rebinding_and_revocation_use_native_gra
     let trigger_doc = rows["data"]["Trigger"][0]["_docID"].as_str().unwrap();
     let source_doc = rows["data"]["EventSource"][0]["_docID"].as_str().unwrap();
     let task_doc = rows["data"]["Task"][0]["_docID"].as_str().unwrap();
-    let ids = crate::automation::EventConfigDocIds {
+    let ids = gents_documents::automation::EventConfigDocIds {
         trigger: trigger_doc,
         source: source_doc,
         task: task_doc,
     };
     let generation_for = |agent: &str| {
-        crate::automation::event_admission_generation(
+        gents_documents::automation::event_admission_generation(
             &serde_json::from_value(source.clone())?,
             &serde_json::from_value(trigger.clone())?,
             &serde_json::from_value(task(agent))?,
@@ -425,12 +425,12 @@ async fn event_configuration_publication_rebinding_and_revocation_use_native_gra
         event_admitted(&first_access, &fire, &generation).await,
         agent_expected("allowed")
     );
-    let spec = crate::request::lifecycle::materialize::pending_agent_request_spec(
+    let spec = gents_session::request::lifecycle::materialize::pending_agent_request_spec(
         root.did(),
         first.did(),
         "hello",
         gents_loop::execution_origin::ExecutionOrigin::Scheduled,
-        crate::request::lifecycle::TriggerLineage {
+        gents_session::request::lifecycle::TriggerLineage {
             trigger_id: Some("trigger".into()),
             trigger_kind: Some("event".into()),
             source_doc_id: Some(fire.identity.source_doc_id.clone()),
@@ -445,16 +445,16 @@ async fn event_configuration_publication_rebinding_and_revocation_use_native_gra
         None,
         Some(trigger_doc),
     )?;
-    let create = crate::request::lifecycle::build_signed_request(
+    let create = gents_session::request::lifecycle::build_signed_request(
         spec,
-        crate::request::lifecycle::RequestSigner::Identity(first.as_ref()),
+        gents_session::request::lifecycle::RequestSigner::Identity(first.as_ref()),
     )
     .await?;
     let prepared = crate::triggers::engine::durable::PreparedFire {
         receipt: fire.clone(),
         target_existing: false,
         create_session: false,
-        max_fires_per_hour: crate::DEFAULT_MAX_FIRES_PER_HOUR,
+        max_fires_per_hour: gents_documents::DEFAULT_MAX_FIRES_PER_HOUR,
         replace_prior: false,
         event_source_generation: Some(generation.clone()),
     };
@@ -581,7 +581,7 @@ async fn event_configuration_publication_rebinding_and_revocation_use_native_gra
     let advanced = second_access
         .transact_write("test.event_rebind_uncheckpointed", |txn| {
             Box::pin(async move {
-                crate::event_consumer::checkpoint_prefix(
+                gents_documents::event_consumer::checkpoint_prefix(
                     txn,
                     owner_did,
                     &gents_protocol::event_delivery::EventConsumer::Trigger {
@@ -716,12 +716,12 @@ async fn event_configuration_publication_rebinding_and_revocation_use_native_gra
     let modeled_source_doc = modeled_rows["data"]["EventSource"][0]["_docID"]
         .as_str()
         .unwrap();
-    let modeled_ids = crate::automation::EventConfigDocIds {
+    let modeled_ids = gents_documents::automation::EventConfigDocIds {
         trigger: modeled_trigger_doc,
         source: modeled_source_doc,
         task: task_doc,
     };
-    let modeled_generation = crate::automation::event_admission_generation(
+    let modeled_generation = gents_documents::automation::event_admission_generation(
         &serde_json::from_value(modeled_source(initial, root.did()))?,
         &serde_json::from_value(modeled_trigger.clone())?,
         &serde_json::from_value(task(second.did()))?,
@@ -750,7 +750,7 @@ async fn event_configuration_publication_rebinding_and_revocation_use_native_gra
             let modeled_generation = &modeled_generation;
             Box::pin(async move {
                 crate::triggers::engine::durable::stage_fire_receipt(txn, modeled_fire).await?;
-                crate::event_consumer::validate_event_admission(
+                gents_documents::event_consumer::validate_event_admission(
                     txn,
                     modeled_fire,
                     modeled_generation,
@@ -807,7 +807,7 @@ async fn event_configuration_publication_rebinding_and_revocation_use_native_gra
         ],
     )
     .await?;
-    let execution_generation = crate::automation::event_admission_generation(
+    let execution_generation = gents_documents::automation::event_admission_generation(
         &serde_json::from_value(modeled_source(initial, root.did()))?,
         &serde_json::from_value(execution_trigger(original_execution))?,
         &serde_json::from_value(execution_task(original_execution))?,
@@ -861,7 +861,7 @@ async fn event_configuration_publication_rebinding_and_revocation_use_native_gra
         configuration_generation: None,
         claimed_callback: None,
         input: json!({}),
-        origin: crate::CallbackInvocationOrigin::Event {
+        origin: gents_documents::CallbackInvocationOrigin::Event {
             binding_id: "binding".into(),
             source_collection: "EventPolicyInputNext".into(),
             source_doc_id: "rebind-source".into(),

@@ -1573,12 +1573,12 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "pack_placement_reader_cases"
       "PackPlacementReaderCases"
-      "pack::installation::tests::pack_install_applies_exactly_the_declared_placement_readers")
+      "pack_installation_root_tests::pack_install_applies_exactly_the_declared_placement_readers")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
       "agent_target_access_cases"
       "AgentTargetAccessCases"
-      "store::config_client::desired_state::agent_target_access::tests::configured_agent_targets_grant_exactly_session_writer")
+      "documents_selection_tests::agent_target_access::configured_agent_targets_grant_exactly_session_writer")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerCoverage
       "native_route_cases"

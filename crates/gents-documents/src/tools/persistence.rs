@@ -65,7 +65,7 @@ mod tests {
         let first_id = write_tools_document(
             &access,
             &tools,
-            &crate::inference::resolved::ProviderProfilePolicy,
+            &crate::test_support::AdmitAllProfiles,
         )
         .await?;
         let mut foreign = tools.clone();
@@ -74,7 +74,7 @@ mod tests {
             write_tools_document(
                 &access,
                 &foreign,
-                &crate::inference::resolved::ProviderProfilePolicy
+                &crate::test_support::AdmitAllProfiles
             )
             .await?,
             first_id
@@ -86,7 +86,7 @@ mod tests {
             write_tools_document(
                 &access,
                 &tools,
-                &crate::inference::resolved::ProviderProfilePolicy
+                &crate::test_support::AdmitAllProfiles
             )
             .await?,
             first_id

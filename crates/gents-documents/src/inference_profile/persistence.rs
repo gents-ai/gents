@@ -90,7 +90,7 @@ mod tests {
                         crate::apply_desired_state_plan(
                             txn,
                             plan,
-                            &crate::inference::resolved::ProviderProfilePolicy,
+                            &crate::test_support::AdmitAllProfiles,
                         )
                         .await
                         .map(|_| ())
@@ -105,7 +105,7 @@ mod tests {
         let first_id = write_inference_profile_document(
             &access,
             &initial,
-            &crate::inference::resolved::ProviderProfilePolicy,
+            &crate::test_support::AdmitAllProfiles,
         )
         .await?;
         let mut foreign = initial.clone();
@@ -114,7 +114,7 @@ mod tests {
             write_inference_profile_document(
                 &access,
                 &foreign,
-                &crate::inference::resolved::ProviderProfilePolicy
+                &crate::test_support::AdmitAllProfiles
             )
             .await?,
             first_id
@@ -126,7 +126,7 @@ mod tests {
             write_inference_profile_document(
                 &access,
                 &initial,
-                &crate::inference::resolved::ProviderProfilePolicy
+                &crate::test_support::AdmitAllProfiles
             )
             .await?,
             first_id
