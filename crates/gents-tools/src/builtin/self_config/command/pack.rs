@@ -183,17 +183,23 @@ impl ConfigCommandTool {
                         .wire(&package, agent.as_deref(), remove, false)
                         .await;
                 }
-                anyhow::ensure!(
-                    matches!(operation.as_str(), "install" | "update"),
-                    "pack preview supports install, update, remove and wire"
-                );
-                let (change, _) = parse_pack_change(&argv[2..])?;
+                let operation = PackOperation::for_verb(operation)
+                    .filter(|operation| {
+                        matches!(operation, PackOperation::Install | PackOperation::Update)
+                    })
+                    .context("pack preview supports install, update, remove and wire")?;
+                let (change, _) = parse_pack_change(operation, &argv[2..])?;
                 installer.preview(operation, change).await
             }
             "install" | "update" => {
-                let (change, edited) = parse_pack_change(&argv[1..])?;
+                let operation = if verb == "install" {
+                    PackOperation::Install
+                } else {
+                    PackOperation::Update
+                };
+                let (change, edited) = parse_pack_change(operation, &argv[1..])?;
                 self.execution.enter_mutation();
-                installer.apply(verb, change, edited.as_deref(), argv).await
+                installer.apply(operation, change, edited, argv).await
             }
             "remove" => {
                 let rest = argv[1..]
@@ -254,7 +260,10 @@ impl ConfigCommandTool {
     }
 }
 
-fn parse_pack_change(argv: &[String]) -> Result<(PackChange, Option<String>)> {
+fn parse_pack_change(
+    operation: PackOperation,
+    argv: &[String],
+) -> Result<(PackChangeInput, EditedDocuments)> {
     let package = argv
         .first()
         .context("pack operation requires PACKAGE")?
@@ -273,30 +282,19 @@ fn parse_pack_change(argv: &[String]) -> Result<(PackChange, Option<String>)> {
             "unknown pack option --{name}; accepted: --inference-slot, --var, --digest, --edited"
         );
     }
-    let pairs = |name: &str| -> Result<BTreeMap<String, String>> {
-        let mut values = BTreeMap::new();
-        for binding in parsed.options.get(name).into_iter().flatten() {
-            let (key, value) = binding
-                .split_once('=')
-                .with_context(|| format!("--{name} must be NAME=VALUE"))?;
-            anyhow::ensure!(
-                !key.is_empty() && !value.is_empty(),
-                "--{name} requires non-empty NAME and VALUE"
-            );
-            anyhow::ensure!(
-                values.insert(key.to_owned(), value.to_owned()).is_none(),
-                "duplicate --{name} name {key:?}"
-            );
-        }
-        Ok(values)
-    };
+    let refusal = |error| PackInstaller::refusal(operation, &package, &[], error);
+    let values = |name: &str| parsed.options.get(name).cloned().unwrap_or_default();
     Ok((
-        PackChange {
-            package,
-            variables: pairs("var")?,
-            inference_slots: pairs("inference-slot")?,
+        PackChangeInput {
+            variables: gents_pack::operations::pack::parse_variables(&values("var"))
+                .map_err(refusal)?,
+            inference_slots: gents_pack::operations::pack::parse_inference_slots(&values(
+                "inference-slot",
+            ))
+            .map_err(refusal)?,
             expected_digest: parsed.one("digest")?.map(ToOwned::to_owned),
+            package: package.clone(),
         },
-        parsed.one("edited")?.map(ToOwned::to_owned),
+        EditedDocuments::decision(parsed.one("edited")?).map_err(refusal)?,
     ))
 }

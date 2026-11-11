@@ -28,12 +28,12 @@ impl PackInstaller {
     pub async fn resolve(
         &self,
         operation: &str,
-        args: &PackChange,
+        args: &PackChangeInput,
     ) -> anyhow::Result<Distribution> {
-        args.validate()?;
+        gents_pack::operations::pack::admit_input(args)?;
         let access = self.core.access()?;
         let packs = self.packs(&access);
-        let Some(requested_path) = args.local_path() else {
+        let Some(requested_path) = node_packs::local_path(args) else {
             return packs
                 .resolve_named(operation, args)
                 .await
@@ -199,94 +199,101 @@ impl PackInstaller {
         .into())
     }
 
-    /// Refuses a change that would meet edited documents without a decision,
-    /// as the same call with the decision that loses nothing; the message
-    /// names the other one. `words` is the pack command as it was called.
-    pub async fn require_edited_decision(
-        &self,
-        coordinate: &str,
-        removal: bool,
-        edited: DriftPolicy,
+    /// The model's rendering of a refused pack operation: what happened and
+    /// the call its error names, on `package` as `words` called it.
+    pub fn refusal(
+        operation: PackOperation,
+        package: &str,
         words: &[String],
-    ) -> anyhow::Result<()> {
-        if edited != DriftPolicy::Refuse {
-            return Ok(());
-        }
-        let Some(found) = self.edited_documents(coordinate, removal).await? else {
-            return Ok(());
-        };
-        let call = |decision: &str| {
+        error: PackOperationError,
+    ) -> anyhow::Error {
+        use gents_protocol::operations::agent::NextCall;
+        let repeat = |decision: &str| {
             let mut argv = vec!["pack".to_owned()];
             argv.extend(words.iter().cloned());
             json!({"argv": argv, "options": {"edited": decision}})
         };
-        let documents = found["documents"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>()
-            .join(", ");
-        Err(command::CommandGuidance {
-            message: format!(
-                "nothing was changed: {documents} of {coordinate} were edited since it was installed. Repeat the call with options.edited: \"keep\" {}; \"overwrite\" {}. Overwrite: {}",
-                found["keep"].as_str().unwrap_or_default(),
-                found["overwrite"].as_str().unwrap_or_default(),
-                call("overwrite")
+        let (message, next_call) = match &error {
+            PackOperationError::EditedUndecided { .. } => (
+                format!(
+                    "{error}. Repeat the call with options.edited: the call below keeps them; to overwrite: {}",
+                    repeat("overwrite")
+                ),
+                repeat("keep"),
             ),
-            next_call: call("keep"),
-        }
-        .into())
+            PackOperationError::Passthrough(_) => return anyhow::Error::new(error),
+            _ => (
+                error.to_string(),
+                match error.recovery(operation) {
+                    NextCall::Preview { resource, verb } => {
+                        json!({"argv": [resource, "preview", verb, package]})
+                    }
+                    NextCall::List { resource } => json!({"argv": [resource, "list"]}),
+                    NextCall::VerbHelp { resource, .. }
+                    | NextCall::ResourceHelp { resource }
+                    | NextCall::Inspect { resource } => json!({"argv": ["help", resource]}),
+                },
+            ),
+        };
+        command::CommandGuidance { message, next_call }.into()
     }
 
     pub async fn preview(
         &self,
-        operation: &str,
-        args: PackChange,
+        operation: PackOperation,
+        args: PackChangeInput,
     ) -> anyhow::Result<String> {
-        let distribution = self.resolve(operation, &args).await?;
-        if let Some(expected) = args.expected_digest.as_deref() {
-            anyhow::ensure!(
-                expected == distribution.digest(),
-                "pack digest changed: requested {expected:?}, resolved {:?}; preview again",
-                distribution.digest()
-            );
-        }
+        let verb = operation.as_str();
+        let distribution = self.resolve(verb, &args).await?;
+        gents_pack::operations::pack::admit_digest(
+            PackActor::Agent,
+            operation,
+            false,
+            args.expected_digest.as_deref(),
+            distribution.digest(),
+        )
+        .map_err(|error| Self::refusal(operation, &args.package, &[], error))?;
         if distribution.is_documents() {
-            self.documents(operation, &args, &distribution, false, Default::default())
+            self.documents(verb, &args, &distribution, false, Default::default())
                 .await
         } else {
-            self.plugins_pack(operation, &args, &distribution, false)
-                .await
+            self.plugins_pack(verb, &args, &distribution, false).await
         }
     }
 
     pub async fn apply(
         &self,
-        operation: &str,
-        args: PackChange,
-        edited: Option<&str>,
+        operation: PackOperation,
+        args: PackChangeInput,
+        edited: EditedDocuments,
         words: &[String],
     ) -> anyhow::Result<String> {
-        let edited = node_packs::edited_policy(edited)?;
-        let distribution = self.resolve(operation, &args).await?;
-        let expected = args.expected_digest.as_deref().context(
-            "pack install/update requires --digest from config pack preview; preview pins the exact artifact being authorized",
-        )?;
-        anyhow::ensure!(
-            expected == distribution.digest(),
-            "pack digest changed: preview authorized {expected:?}, resolved {:?}; preview again",
-            distribution.digest()
-        );
+        let verb = operation.as_str();
+        let distribution = self.resolve(verb, &args).await?;
+        gents_pack::operations::pack::admit_digest(
+            PackActor::Agent,
+            operation,
+            true,
+            args.expected_digest.as_deref(),
+            distribution.digest(),
+        )
+        .map_err(|error| Self::refusal(operation, &args.package, words, error))?;
         self.require_pins_follow(&distribution).await?;
         if distribution.is_documents() {
-            self.require_edited_decision(&distribution.coordinate(), false, edited, words)
-                .await?;
-            self.documents(operation, &args, &distribution, true, edited)
+            let access = self.core.access()?;
+            gents_pack::operations::pack::admit_edited(
+                &access,
+                self.core.node_did(),
+                &distribution.coordinate(),
+                false,
+                edited,
+            )
+            .await
+            .map_err(|error| Self::refusal(operation, &args.package, words, error))?;
+            self.documents(verb, &args, &distribution, true, edited)
                 .await
         } else {
-            self.plugins_pack(operation, &args, &distribution, true)
-                .await
+            self.plugins_pack(verb, &args, &distribution, true).await
         }
     }
 }

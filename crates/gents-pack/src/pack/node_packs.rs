@@ -18,6 +18,7 @@ use super::{
     PackSource, PreparedDocumentPackInstall, RemoveReport,
 };
 use gents_documents::ConfigurationNodeBinding;
+use gents_protocol::operations::pack::{PackActor, PackChangeInput};
 use gents_store::config_client::{ConfigAccess, SchemaInstallPlan};
 
 pub use super::registry::split_pack_coordinate;
@@ -28,77 +29,12 @@ pub use super::{
 };
 pub use super::{DriftPolicy, PluginPinConflict, PluginSelection};
 
-/// One requested install, update or inspection of a pack.
-#[derive(Debug, Clone)]
-pub struct PackChange {
-    pub package: String,
-    pub variables: BTreeMap<String, String>,
-    pub inference_slots: PackInferenceBindings,
-    pub expected_digest: Option<String>,
-}
-
-impl PackChange {
-    /// `package` with no variables, bindings or expected digest.
-    pub fn of(package: &str) -> Self {
-        Self {
-            package: package.to_owned(),
-            variables: BTreeMap::new(),
-            inference_slots: BTreeMap::new(),
-            expected_digest: None,
-        }
-    }
-
-    pub fn validate(&self) -> Result<()> {
-        let coordinate = self.package.trim();
-        anyhow::ensure!(!coordinate.is_empty(), "pack name must not be blank");
-        if local::classify(coordinate).is_none() {
-            gents_documents::pack_spec::parse_pack_spec(coordinate)?;
-        }
-        anyhow::ensure!(
-            self.variables.len() <= 32,
-            "pack variables exceed the 32-entry limit"
-        );
-        for (name, value) in &self.variables {
-            anyhow::ensure!(
-                name != "GENTS_PACK_NODE_DID"
-                    && !name.is_empty()
-                    && name.len() <= 128
-                    && name.bytes().all(|byte| {
-                        byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_'
-                    }),
-                "invalid or protected pack variable name {name:?}"
-            );
-            anyhow::ensure!(
-                !name.ends_with("_MODEL") && !name.ends_with("_ENDPOINT"),
-                "inference variable {name:?} is unsupported; bind declared roles with --inference-slot NAME=PROFILE_ID"
-            );
-            anyhow::ensure!(value.len() <= 4096, "pack variable {name:?} is too large");
-        }
-        anyhow::ensure!(
-            self.inference_slots.len() <= 32,
-            "pack inference slot bindings exceed the 32-entry limit"
-        );
-        Ok(())
-    }
-
-    /// The file or directory `package` names. The caller admits it under its
-    /// own file authority before [`NodePacks::open_path`] reads it.
-    pub fn local_path(&self) -> Option<&Path> {
-        match local::classify(self.package.trim()) {
-            Some(local::LocalName::Path(path)) => Some(path),
-            _ => None,
-        }
-    }
-}
-
-/// `options.edited`: what an install, update or removal does with documents
-/// edited since the pack was installed. Absent refuses them.
-pub fn edited_policy(word: Option<&str>) -> Result<DriftPolicy> {
-    match word {
-        None => Ok(DriftPolicy::Refuse),
-        Some(word) => DriftPolicy::parse(word).with_context(|| {
-            format!("options.edited is \"overwrite\" or \"keep\", not {word:?}; pack preview says what each does")
-        }),
+/// The file or directory `change` names. The caller admits it under its own
+/// file authority before [`NodePacks::open_path`] reads it.
+pub fn local_path(change: &PackChangeInput) -> Option<&Path> {
+    match local::classify(change.package.trim()) {
+        Some(local::LocalName::Path(path)) => Some(path),
+        _ => None,
     }
 }
 
@@ -267,9 +203,9 @@ impl NodePacks<'_> {
     pub async fn resolve_named(
         &self,
         operation: &str,
-        change: &PackChange,
+        change: &PackChangeInput,
     ) -> Result<Distribution, LocalPackError> {
-        change.validate()?;
+        crate::operations::pack::admit_input(change).map_err(anyhow::Error::new)?;
         let coordinate = change.package.trim();
         match local::classify(coordinate) {
             Some(local::LocalName::Digest(digest)) => {
@@ -464,7 +400,7 @@ impl NodePacks<'_> {
     pub async fn plan_documents(
         &self,
         operation: &str,
-        change: &PackChange,
+        change: &PackChangeInput,
         distribution: &Distribution,
         node_binding: Option<&ConfigurationNodeBinding>,
     ) -> Result<DocumentsPlan> {
@@ -479,9 +415,9 @@ impl NodePacks<'_> {
             dependencies.push(
                 self.resolve_named(
                     "get",
-                    &PackChange {
+                    &PackChangeInput {
                         variables: change.variables.clone(),
-                        ..PackChange::of(coordinate)
+                        ..PackChangeInput::of(coordinate)
                     },
                 )
                 .await
@@ -542,12 +478,14 @@ impl NodePacks<'_> {
     /// node, recording where each archive came from. Nothing is written.
     pub async fn prepare_documents(
         &self,
-        change: &PackChange,
+        change: &PackChangeInput,
         distribution: &Distribution,
         dependencies: &[Distribution],
         provisioner: Option<&AgentProvisioner<'_>>,
     ) -> Result<PreparedDocumentPackInstall> {
-        let environment = |name: &str| change.variables.get(name).cloned();
+        let environment = |name: &str| {
+            crate::operations::pack::install_value(PackActor::Agent, &change.variables, name)
+        };
         let mut prepared = super::prepare_document_pack_archive_with_provisioner(
             self.access,
             self.node_did,
@@ -562,7 +500,7 @@ impl NodePacks<'_> {
             self.home,
             &environment,
             provisioner,
-            &Default::default(),
+            &crate::operations::pack::dependency_overrides(&change.variables),
         )
         .await?;
         for source in std::iter::once(distribution).chain(dependencies) {
@@ -640,7 +578,7 @@ impl NodePacks<'_> {
     pub async fn plan_plugins(
         &self,
         operation: &str,
-        change: &PackChange,
+        change: &PackChangeInput,
         distribution: &Distribution,
         node_binding: Option<&ConfigurationNodeBinding>,
     ) -> Result<PluginsPlan> {
@@ -956,46 +894,5 @@ impl NodePacks<'_> {
             }
         }
         Ok(report)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The words a caller passes are decided here: the drift decision, the
-    /// coordinate a removal names, and what a change may carry.
-    #[test]
-    fn a_callers_words_are_decided_by_the_pack_owner() {
-        assert_eq!(edited_policy(None).unwrap(), DriftPolicy::Refuse);
-        assert_eq!(edited_policy(Some("keep")).unwrap(), DriftPolicy::Keep);
-        assert_eq!(
-            edited_policy(Some("overwrite")).unwrap(),
-            DriftPolicy::Overwrite
-        );
-        let refused = edited_policy(Some("replace")).unwrap_err();
-        assert!(format!("{refused:#}").contains("\"overwrite\" or \"keep\""));
-
-        assert_eq!(coordinate_of(" acme/demo ", true).unwrap(), "acme/demo");
-        assert_eq!(
-            coordinate_of("acme/demo@1.2.0", false).unwrap(),
-            "acme/demo"
-        );
-        let versioned = coordinate_of("acme/demo@1.2.0", true).unwrap_err();
-        assert!(format!("{versioned:#}").contains("remove acme/demo"));
-
-        assert_eq!(
-            PackChange::of("./demo").local_path(),
-            Some(Path::new("./demo"))
-        );
-        assert_eq!(PackChange::of("acme/demo").local_path(), None);
-        assert_eq!(PackChange::of("sha256:00").local_path(), None);
-        PackChange::of("acme/demo").validate().unwrap();
-        PackChange::of(" ").validate().unwrap_err();
-        let mut change = PackChange::of("acme/demo");
-        change
-            .variables
-            .insert("GENTS_PACK_NODE_DID".into(), "did:key:x".into());
-        change.validate().unwrap_err();
     }
 }

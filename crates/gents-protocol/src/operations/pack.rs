@@ -206,7 +206,7 @@ pub enum PackOperationError {
     PackageBlank,
     #[error("pack {} writes the artifact a preview pinned, and this call names no digest; nothing was written. Preview it, then repeat the call with the digest the preview returns", .0.as_str())]
     PreviewRequired(PackOperation),
-    #[error("the pack's digest is {resolved}, not the expected {expected}; nothing was written. Review the pack again before repeating the call")]
+    #[error("the pack's digest is {resolved}, not the expected {expected}; nothing was written; preview again, then repeat the call with what it reports")]
     DigestChanged { expected: String, resolved: String },
     #[error(
         "nothing was changed: {} of {coordinate} {} edited since it was installed. Overwrite {}; keep {}",
@@ -250,11 +250,7 @@ impl PackOperationError {
     /// The call that lets the caller correct this failure of `operation`.
     pub fn recovery(&self, operation: PackOperation) -> NextCall {
         match self {
-            Self::PreviewRequired(operation) => NextCall::Preview {
-                resource: "pack",
-                verb: operation.as_str(),
-            },
-            Self::DigestChanged { .. } | Self::EditedUndecided { .. } => NextCall::Preview {
+            Self::PreviewRequired(_) | Self::DigestChanged { .. } | Self::EditedUndecided { .. } => NextCall::Preview {
                 resource: "pack",
                 verb: operation.as_str(),
             },

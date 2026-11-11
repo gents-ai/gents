@@ -48,7 +48,7 @@ impl PackInstaller {
     }
 
     pub(super) async fn get(&self, package: &str) -> anyhow::Result<String> {
-        let distribution = self.resolve("get", &PackChange::of(package)).await?;
+        let distribution = self.resolve("get", &PackChangeInput::of(package)).await?;
         let access = self.core.access()?;
         let packs = self.packs(&access);
         let node_binding = self.core.refresh_node_binding().await?;
@@ -232,8 +232,11 @@ impl PackInstaller {
         edited: Option<&str>,
         words: &[String],
     ) -> anyhow::Result<String> {
-        let edited = node_packs::edited_policy(edited)?;
-        PackChange::of(package).validate()?;
+        let refusal =
+            |error| Self::refusal(PackOperation::Remove, package, words, error);
+        let edited = EditedDocuments::decision(edited).map_err(refusal)?;
+        gents_pack::operations::pack::admit_input(&PackChangeInput::of(package))
+            .map_err(refusal)?;
         let coordinate = node_packs::coordinate_of(package, true)?;
         let access = self.core.access()?;
         let packs = self.packs(&access);
@@ -294,12 +297,19 @@ impl PackInstaller {
         } else {
             crate::collection_use::PackCollections::default()
         };
-        self.require_edited_decision(&coordinate, true, edited, words)
-            .await?;
+        gents_pack::operations::pack::admit_edited(
+            &access,
+            self.core.node_did(),
+            &coordinate,
+            true,
+            edited,
+        )
+        .await
+        .map_err(refusal)?;
         let report = match packs
             .remove_documents(
                 &coordinate,
-                edited,
+                gents_pack::operations::pack::drift_policy(edited),
                 &gents_inference::resolved::ProviderProfilePolicy,
             )
             .await

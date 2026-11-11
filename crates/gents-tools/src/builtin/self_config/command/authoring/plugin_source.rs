@@ -230,9 +230,9 @@ impl ConfigCommandTool {
                     } else {
                         "install"
                     },
-                    &PackChange {
+                    &PackChangeInput {
                         expected_digest: Some(distribution.digest().to_owned()),
-                        ..PackChange::of(&coordinate)
+                        ..PackChangeInput::of(&coordinate)
                     },
                     &distribution,
                     true,
