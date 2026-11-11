@@ -5,10 +5,10 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use futures::future::BoxFuture;
 use futures::StreamExt;
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use tokio::sync::Semaphore;
 
+use super::model_binding::ModelBinding;
 use crate::documents::{InferenceBackend, InferenceProfile};
 use crate::openai_wire::OpenAiWireApi;
 use crate::store::config_client::ConfigAccess;
@@ -25,13 +25,6 @@ const DEFAULT_CONNECT_TIMEOUT_SECS: i64 = 10;
 /// wall-clock budget, so a stalled endpoint cannot occupy its permit for the
 /// entire guest lifetime.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-pub struct ModelBinding {
-    pub node_did: String,
-    pub profile_id: String,
-}
 
 pub struct ModelEndpoint {
     pub url: String,

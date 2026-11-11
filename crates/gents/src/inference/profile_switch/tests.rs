@@ -615,7 +615,8 @@ async fn the_plan_holds_no_secret() {
 
 #[tokio::test]
 async fn a_bound_plugin_slot_counts_and_keeps_serving_after_the_switch() {
-    use crate::plugin::model_calls::{AccessModels, ModelBinding, ModelResolver};
+    use crate::plugin::model_binding::ModelBinding;
+    use crate::plugin::model_calls::{AccessModels, ModelResolver};
     use crate::plugin::store;
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     let did_owned = node.node_identity_did().unwrap().to_owned();

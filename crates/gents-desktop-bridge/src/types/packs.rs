@@ -314,7 +314,7 @@ pub struct PackPluginSlotView {
 #[derive(Debug, Serialize, Deserialize, TS)]
 pub struct PackPluginBindingView {
     pub plugin: String,
-    pub bound: Option<gents::plugin::model_calls::ModelBinding>,
+    pub bound: Option<gents::plugin::model_binding::ModelBinding>,
 }
 
 /// The JSON `gents automation job promote` reports for a promoted dynamic run.

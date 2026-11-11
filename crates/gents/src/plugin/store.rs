@@ -59,7 +59,7 @@ pub struct InstalledPlugin {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_pack_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_binding: Option<super::model_calls::ModelBinding>,
+    pub model_binding: Option<super::model_binding::ModelBinding>,
     /// Each collection of `declaration.data` and the field sets of its
     /// `@index(unique: true)` declarations in the pack's own SDL, computed at
     /// install so a call never reads SDL.

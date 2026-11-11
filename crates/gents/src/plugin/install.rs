@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use super::authority::{describe_plugin_authority, GrantError};
-use super::model_calls::ModelBinding;
+use super::model_binding::ModelBinding;
 use super::store::{self, InstalledPlugin};
 use super::{Manifold, PluginRunner};
 use crate::pack::{PackManifest, PackPlugin};

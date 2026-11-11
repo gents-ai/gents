@@ -638,7 +638,7 @@ async fn a_round_asking_both_services_is_bad_output() {
         json!({"fs": "None", "net": {"OutboundHttp": ["api.example.com"]}, "env": "None", "crypto": false, "child_process": false}),
     );
     record.declaration.model_slot = Some("slot".into());
-    record.model_binding = Some(crate::plugin::model_calls::ModelBinding {
+    record.model_binding = Some(crate::plugin::model_binding::ModelBinding {
         node_did: "did:key:owner".into(),
         profile_id: "p".into(),
     });
@@ -662,7 +662,7 @@ struct Endpoint;
 impl crate::plugin::model_calls::ModelResolver for Endpoint {
     fn resolve<'a>(
         &'a self,
-        _: &'a crate::plugin::model_calls::ModelBinding,
+        _: &'a crate::plugin::model_binding::ModelBinding,
         _: Option<&'a identity::Did>,
     ) -> BoxFuture<'a, Result<crate::plugin::model_calls::ModelEndpoint>> {
         Box::pin(async {

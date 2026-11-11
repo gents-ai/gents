@@ -715,6 +715,7 @@ pub mod host_imports;
 pub mod http_calls;
 pub mod install;
 pub mod job_calls;
+pub mod model_binding;
 pub mod model_calls;
 mod rounds;
 pub(crate) mod script_engine;
