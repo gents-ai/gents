@@ -123,14 +123,14 @@ fn ensure_request_deadline_open(deadline: RequestDeadline, context: &str) -> Res
 
 pub(super) fn render_request_context_message(
     _node: &defra_node::Node,
-    agent_config: &ResolvedAgent,
+    tool_config: &gents_tools::surface::AgentToolSurfaceConfig,
     request: &AgentRequest,
     frozen_instruction_manifest: Option<&str>,
 ) -> Result<Option<Message>> {
     Ok(assemble_request_context_message(
         frozen_instruction_manifest,
         gents_session::workspace::request_workspace_cwd(request).as_deref(),
-        agent_config.tools.host_tools().read_root(),
+        tool_config.host_tools().read_root(),
     ))
 }
 

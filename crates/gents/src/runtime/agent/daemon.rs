@@ -129,6 +129,7 @@ where
     node: Arc<defra_node::Node>,
     backend_health: Option<gents_inference::backends::health::BackendHealthMap>,
     agent_config: Arc<ResolvedAgent>,
+    tool_config: Arc<gents_tools::surface::AgentToolSurfaceConfig>,
     provider_family: Option<String>,
     replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
     account_hops: u32,
@@ -205,6 +206,7 @@ where
 {
     pub(super) node: Arc<defra_node::Node>,
     pub(super) agent_config: Arc<ResolvedAgent>,
+    pub(super) tool_config: Arc<gents_tools::surface::AgentToolSurfaceConfig>,
     pub(super) provider_family: Option<String>,
     pub(super) model: Arc<M>,
     pub(super) preamble: String,

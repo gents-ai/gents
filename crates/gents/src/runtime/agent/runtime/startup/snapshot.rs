@@ -131,13 +131,16 @@ pub(in crate::runtime::agent::runtime) async fn validate_startup_snapshot(
 
 async fn resolve_tool_surfaces(
     node: &std::sync::Arc<defra_node::Node>,
-    agents: &[Arc<gents_inference::resolved::ResolvedAgent>],
+    agents: &[gents_tools::surface::AgentWithTools],
     plugins: &gents_toolcalls::plugin::executor::PluginExecutor,
 ) -> Result<RapidHashMap<String, Arc<ToolSurface>>> {
     let mut tool_surfaces = RapidHashMap::with_capacity(agents.len());
     for agent in agents {
-        let tool_surface = agent.tools.resolve(node, agent.node_did(), plugins).await?;
-        tool_surfaces.insert(agent.agent_did.clone(), Arc::new(tool_surface));
+        let tool_surface = agent
+            .tools
+            .resolve(node, agent.agent.node_did(), plugins)
+            .await?;
+        tool_surfaces.insert(agent.agent.agent_did.clone(), Arc::new(tool_surface));
     }
     Ok(tool_surfaces)
 }
@@ -172,10 +175,11 @@ pub(in crate::runtime::agent::runtime) async fn resolve_startup_snapshot(
 
 async fn resolve_backend_admission_configs(
     node: &std::sync::Arc<defra_node::Node>,
-    agents: &[Arc<gents_inference::resolved::ResolvedAgent>],
+    agents: &[gents_tools::surface::AgentWithTools],
 ) -> Result<RapidHashMap<String, BackendAdmissionConfig>> {
     let mut configs = RapidHashMap::new();
     for agent in agents {
+        let agent = &agent.agent;
         let Some(backend_id) = agent
             .backend_id
             .as_deref()

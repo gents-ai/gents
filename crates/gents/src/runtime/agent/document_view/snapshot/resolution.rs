@@ -12,8 +12,7 @@ use std::sync::Arc;
 use crate::runtime::agent::tool_selection_from_document;
 use gents_automation::triggers::runtime_snapshot::UnavailableAgent;
 use gents_documents::AgentToolConfig;
-use gents_inference::resolved::ResolvedAgent;
-use gents_tools::surface::{ResolvedToolSelection, ToolSurface};
+use gents_tools::surface::{AgentWithTools, ResolvedToolSelection, ToolSurface};
 
 type AgentContextDocuments = (
     Option<gents_documents::AgentContext>,
@@ -202,12 +201,12 @@ pub(super) async fn resolve_behavior_surfaces(
     node: &Arc<EmbeddedNode>,
     context: &DocumentResolveContext,
     own_node_did: &str,
-    agents: Vec<Arc<ResolvedAgent>>,
+    agents: Vec<AgentWithTools>,
     unavailable_agents: &mut RapidHashMap<String, UnavailableAgent>,
-) -> Vec<(Arc<ResolvedAgent>, ToolSurface)> {
+) -> Vec<(AgentWithTools, ToolSurface)> {
     let candidate_agent_dids = agents
         .iter()
-        .map(|agent_config| agent_config.agent_did.clone())
+        .map(|agent_config| agent_config.agent.agent_did.clone())
         .collect::<RapidHashSet<_>>();
     let mut behavior_surfaces = Vec::with_capacity(agents.len());
     for agent_config in agents {
@@ -224,7 +223,7 @@ pub(super) async fn resolve_behavior_surfaces(
             Ok(tool_surface) => behavior_surfaces.push((agent_config, tool_surface)),
             Err(error) => {
                 unavailable_agents.insert(
-                    agent_config.agent_did.clone(),
+                    agent_config.agent.agent_did.clone(),
                     UnavailableAgent::new(
                         AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
                         error.to_string(),
@@ -239,14 +238,14 @@ pub(super) async fn resolve_behavior_surfaces(
 
 pub(super) fn retain_active_agent_targets(
     own_node_did: &str,
-    behavior_surfaces: Vec<(Arc<ResolvedAgent>, ToolSurface)>,
+    behavior_surfaces: Vec<(AgentWithTools, ToolSurface)>,
 ) -> (
-    Vec<Arc<ResolvedAgent>>,
+    Vec<AgentWithTools>,
     RapidHashMap<String, Arc<ToolSurface>>,
 ) {
     let active_agent_dids = behavior_surfaces
         .iter()
-        .map(|(agent_config, _)| agent_config.agent_did.clone())
+        .map(|(agent_config, _)| agent_config.agent.agent_did.clone())
         .collect::<RapidHashSet<_>>();
     let mut agents = Vec::with_capacity(behavior_surfaces.len());
     let mut tool_surfaces = RapidHashMap::with_capacity(behavior_surfaces.len());
@@ -256,7 +255,7 @@ pub(super) fn retain_active_agent_targets(
                 && !active_agent_dids.contains(&target.agent_did)
             {
                 tracing::warn!(
-                    agent_did = %agent_config.agent_did,
+                    agent_did = %agent_config.agent.agent_did,
                     target_name = %target.name,
                     target_agent_did = %target.agent_did,
                     "dropping LOCAL agent target: target agent is not active \
@@ -265,7 +264,7 @@ pub(super) fn retain_active_agent_targets(
             }
         }
         tool_surface.retain_agent_targets(own_node_did, &active_agent_dids);
-        tool_surfaces.insert(agent_config.agent_did.clone(), Arc::new(tool_surface));
+        tool_surfaces.insert(agent_config.agent.agent_did.clone(), Arc::new(tool_surface));
         agents.push(agent_config);
     }
     (agents, tool_surfaces)

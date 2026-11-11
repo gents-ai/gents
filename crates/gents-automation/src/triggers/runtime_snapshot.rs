@@ -26,7 +26,7 @@ use gents_tools::surface::{AgentToolSurfaceConfig, AgentWithTools, ToolSurface};
 pub type DispatcherMap = RapidHashMap<String, mpsc::Sender<AgentRequest>>;
 
 #[derive(Clone)]
-pub struct ResolvedWatcherIdentity(pub(crate) Arc<dyn gents_store::identity::NodeIdentity>);
+pub struct ResolvedWatcherIdentity(pub Arc<dyn gents_store::identity::NodeIdentity>);
 
 impl std::fmt::Debug for ResolvedWatcherIdentity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -47,7 +47,7 @@ impl Eq for ResolvedWatcherIdentity {}
 pub struct UnavailableAgent {
     pub public_reason: AgentReadinessUnavailableReason,
     pub diagnostic: String,
-    pub(crate) watcher_identity: Option<ResolvedWatcherIdentity>,
+    pub watcher_identity: Option<ResolvedWatcherIdentity>,
 }
 
 impl UnavailableAgent {
@@ -110,14 +110,14 @@ pub fn effective_agent_admission<'a>(
 
 #[derive(Clone, Debug)]
 pub struct ResolvedRuntimeSnapshot {
-    pub(crate) node: Option<Arc<RuntimeNode>>,
+    pub node: Option<Arc<RuntimeNode>>,
     pub(crate) local_did: String,
-    pub(crate) default_agent_did: String,
-    pub(crate) agents: RapidHashMap<String, Arc<ResolvedAgent>>,
-    pub(crate) tool_configs: RapidHashMap<String, Arc<AgentToolSurfaceConfig>>,
-    pub(crate) tool_surfaces: RapidHashMap<String, Arc<ToolSurface>>,
-    pub(crate) backend_admission_configs: RapidHashMap<String, BackendAdmissionConfig>,
-    pub(crate) unavailable_agents: RapidHashMap<String, UnavailableAgent>,
+    pub default_agent_did: String,
+    pub agents: RapidHashMap<String, Arc<ResolvedAgent>>,
+    pub tool_configs: RapidHashMap<String, Arc<AgentToolSurfaceConfig>>,
+    pub tool_surfaces: RapidHashMap<String, Arc<ToolSurface>>,
+    pub backend_admission_configs: RapidHashMap<String, BackendAdmissionConfig>,
+    pub unavailable_agents: RapidHashMap<String, UnavailableAgent>,
     pub(crate) active_schedules: RapidHashMap<String, ResolvedSchedule>,
     pub(crate) unavailable_schedules: RapidHashSet<String>,
     pub(crate) active_event_triggers: RapidHashMap<String, ResolvedEventTrigger>,
@@ -126,7 +126,7 @@ pub struct ResolvedRuntimeSnapshot {
 }
 
 impl ResolvedRuntimeSnapshot {
-    pub(crate) fn validate_node_readiness_source(&self) -> Result<()> {
+    pub fn validate_node_readiness_source(&self) -> Result<()> {
         let canonical = |value: &str| !value.is_empty() && value == value.trim();
         if !canonical(&self.default_agent_did) {
             anyhow::bail!(
@@ -194,7 +194,7 @@ impl ResolvedRuntimeSnapshot {
         )
     }
 
-    pub(crate) fn from_parts_with_admission_configs(
+    pub fn from_parts_with_admission_configs(
         default_agent_did: String,
         agents: Vec<AgentWithTools>,
         tool_surfaces: RapidHashMap<String, Arc<ToolSurface>>,
@@ -224,17 +224,37 @@ impl ResolvedRuntimeSnapshot {
         }
     }
 
-    pub(crate) fn with_node(mut self, node: Arc<RuntimeNode>) -> Self {
+    /// A runnable Agent paired with the tool surface configuration it was resolved with.
+    pub fn agent_with_tools(&self, agent_did: &str) -> Option<AgentWithTools> {
+        Some(AgentWithTools {
+            agent: self.agents.get(agent_did)?.clone(),
+            tools: self.tool_configs.get(agent_did)?.clone(),
+        })
+    }
+
+    /// Every runnable Agent paired with the tool surface configuration it was resolved with.
+    pub fn agents_with_tools(&self) -> Result<Vec<AgentWithTools>> {
+        self.agents
+            .keys()
+            .map(|agent_did| {
+                self.agent_with_tools(agent_did).ok_or_else(|| {
+                    anyhow::anyhow!("runnable agent {agent_did} has no tool surface configuration")
+                })
+            })
+            .collect()
+    }
+
+    pub fn with_node(mut self, node: Arc<RuntimeNode>) -> Self {
         self.node = Some(node);
         self
     }
 
-    pub(crate) fn with_local_did(mut self, local_did: String) -> Self {
+    pub fn with_local_did(mut self, local_did: String) -> Self {
         self.local_did = local_did;
         self
     }
 
-    pub(crate) fn with_automation(mut self, automation: ResolvedAutomation) -> Self {
+    pub fn with_automation(mut self, automation: ResolvedAutomation) -> Self {
         self.active_tasks = automation.tasks;
         self.active_schedules = automation.schedules;
         self.unavailable_schedules = automation.unavailable_schedules;
@@ -246,7 +266,7 @@ impl ResolvedRuntimeSnapshot {
     /// Applies the unavailable-agent cascades that resolution runs for agents it
     /// rejects: drop local agent targets of the agent, and mark its tasks,
     /// schedules and event triggers unavailable.
-    pub(crate) fn demote_agent(&mut self, agent_did: &str, reason: UnavailableAgent) {
+    pub fn demote_agent(&mut self, agent_did: &str, reason: UnavailableAgent) {
         let identity = self
             .agents
             .remove(agent_did)
@@ -304,7 +324,7 @@ impl ResolvedRuntimeSnapshot {
         )
     }
 
-    pub(crate) fn activate_with_executor_metadata(
+    pub fn activate_with_executor_metadata(
         self,
         generation: u64,
         dispatchers: DispatcherMap,
@@ -338,7 +358,7 @@ impl ResolvedRuntimeSnapshot {
         }
     }
 
-    pub(crate) fn configuration_fingerprint(&self) -> String {
+    pub fn configuration_fingerprint(&self) -> String {
         configuration_fingerprint(
             &self.default_agent_did,
             &self.local_did,
@@ -382,7 +402,7 @@ pub struct ActiveRuntimeSnapshot {
 pub struct ActiveSnapshotAgentIdentities(watch::Receiver<Arc<ActiveRuntimeSnapshot>>);
 
 impl ActiveSnapshotAgentIdentities {
-    pub(crate) fn boxed(
+    pub fn boxed(
         snapshots: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     ) -> Box<dyn AgentIdentityWatch> {
         Box::new(Self(snapshots))
@@ -408,14 +428,14 @@ impl AgentIdentityWatch for ActiveSnapshotAgentIdentities {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct AgentExecutorStatus {
-    pub(crate) worker_capacity: usize,
-    pub(crate) queue_depth: usize,
+pub struct AgentExecutorStatus {
+    pub worker_capacity: usize,
+    pub queue_depth: usize,
     pub(crate) queue_capacity: usize,
 }
 
 impl ActiveRuntimeSnapshot {
-    pub(crate) fn watcher_identities(
+    pub fn watcher_identities(
         &self,
     ) -> Result<Vec<Arc<dyn gents_store::identity::NodeIdentity>>> {
         let mut identities = self
@@ -441,7 +461,7 @@ impl ActiveRuntimeSnapshot {
         Ok(identities)
     }
 
-    pub(crate) fn agent(&self, agent_did: &str) -> Option<&Arc<ResolvedAgent>> {
+    pub fn agent(&self, agent_did: &str) -> Option<&Arc<ResolvedAgent>> {
         self.agents.get(agent_did)
     }
 
@@ -453,7 +473,7 @@ impl ActiveRuntimeSnapshot {
         &self.active_event_triggers
     }
 
-    pub(crate) fn tool_config(&self, agent_did: &str) -> Option<&Arc<AgentToolSurfaceConfig>> {
+    pub fn tool_config(&self, agent_did: &str) -> Option<&Arc<AgentToolSurfaceConfig>> {
         self.tool_configs.get(agent_did)
     }
 
@@ -467,7 +487,7 @@ impl ActiveRuntimeSnapshot {
             .map(UnavailableAgent::public_message)
     }
 
-    pub(crate) fn agent_executor_statuses(&self) -> BTreeMap<String, AgentExecutorStatus> {
+    pub fn agent_executor_statuses(&self) -> BTreeMap<String, AgentExecutorStatus> {
         let mut agent_dids = self
             .agents
             .keys()
@@ -507,7 +527,7 @@ impl ActiveRuntimeSnapshot {
             .collect()
     }
 
-    pub(crate) fn configuration_fingerprint(&self) -> String {
+    pub fn configuration_fingerprint(&self) -> String {
         configuration_fingerprint(
             &self.default_agent_did,
             &self.local_did,

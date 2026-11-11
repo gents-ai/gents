@@ -7,7 +7,7 @@ use defra_node::Node as EmbeddedNode;
 use gents_loop::tool::ToolDyn;
 
 pub(crate) type AgentFactory =
-    Box<dyn FnOnce(Arc<RuntimeNode>) -> std::result::Result<ResolvedAgent, AgentBuildError> + Send>;
+    Box<dyn FnOnce(Arc<RuntimeNode>) -> std::result::Result<AgentWithTools, AgentBuildError> + Send>;
 
 use super::{assemble_node_and_agents, runtime, AgentBuildError, Gents, ProcessLifecycleObserver};
 use crate::runtime::agent::retry::RetryPolicy;
@@ -32,7 +32,7 @@ use gents_toolcalls::call::hook::{BackgroundExecutionRegistry, FailurePolicy};
 use gents_tools::mcp::health::HealthCheckerOptions;
 use gents_tools::mcp::pool::McpPool;
 use gents_tools::surface::{
-    AgentToolSurfaceConfig, CustomToolFactory, ResolvedToolSelection, ToolCeiling,
+    AgentToolSurfaceConfig, AgentWithTools, CustomToolFactory, ResolvedToolSelection, ToolCeiling,
 };
 
 #[cfg(test)]
@@ -252,11 +252,11 @@ impl GentsBuilder {
             agents.push(agent_arc);
         }
         agents.sort_by(|left, right| {
-            let left_is_default = left.agent_did == default_agent_did;
-            let right_is_default = right.agent_did == default_agent_did;
+            let left_is_default = left.agent.agent_did == default_agent_did;
+            let right_is_default = right.agent.agent_did == default_agent_did;
             right_is_default
                 .cmp(&left_is_default)
-                .then_with(|| left.agent_did.cmp(&right.agent_did))
+                .then_with(|| left.agent.agent_did.cmp(&right.agent.agent_did))
         });
 
         let plugin_node = node.clone();
@@ -630,7 +630,7 @@ impl PendingAgent {
         principal: Arc<RuntimeNode>,
         backend_fields: gents_inference::backends::registry::BackendFields,
         tool_ceiling: &ToolCeiling,
-    ) -> Result<ResolvedAgent> {
+    ) -> Result<AgentWithTools> {
         let agent_name = self.name.clone();
         self.sampling.validate_for_provider(
             backend_fields.backend_provider_kind,
@@ -657,7 +657,13 @@ impl PendingAgent {
             .ok_or_else(|| anyhow!("agent {agent_name:?} identity was not provisioned"))?;
         let agent_identity =
             gents_store::identity::resolve_agent_identity(principal.identity.as_ref(), binding)?;
-        Ok(ResolvedAgent {
+        let tools = AgentToolSurfaceConfig::from_selection(
+            &binding.agent_did,
+            self.tool_selection,
+            tool_ceiling,
+            self.custom_tools,
+        )?;
+        let agent = ResolvedAgent {
             configuration: gents_inference::resolved::ResolvedConfiguration::Static,
             profile_id: None,
             agent_did: binding.agent_did.clone(),
@@ -681,12 +687,6 @@ impl PendingAgent {
                 gents_inference::resolved::MaxTurnsProvenance::Default
             },
             system_prompt: self.system_prompt,
-            tools: AgentToolSurfaceConfig::from_selection(
-                &binding.agent_did,
-                self.tool_selection,
-                tool_ceiling,
-                self.custom_tools,
-            )?,
             compaction: Some(compaction),
             compaction_inference: None,
             max_total_tokens: None,
@@ -698,7 +698,8 @@ impl PendingAgent {
             sampling: self.sampling,
             skills: self.skills,
             oauth_pool: Vec::new(),
-        })
+        };
+        Ok(AgentWithTools::new(agent, tools))
     }
 }
 
@@ -712,7 +713,7 @@ impl PendingAgent {
         self
     }
 
-    pub(crate) fn build_with_identity_for_test<I>(self, identity: I) -> ResolvedAgent
+    pub(crate) fn build_with_identity_for_test<I>(self, identity: I) -> AgentWithTools
     where
         I: NodeIdentity + 'static,
     {
@@ -722,7 +723,7 @@ impl PendingAgent {
     pub(crate) fn build_with_identity_arc_for_test(
         mut self,
         identity: Arc<dyn NodeIdentity>,
-    ) -> ResolvedAgent {
+    ) -> AgentWithTools {
         let backend_id = self.backend_id.clone();
         let backend_endpoint = self.backend_endpoint.clone();
         let binding = self.identity_binding.get_or_insert_with(|| {

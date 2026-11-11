@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gents_inference::resolved::ResolvedAgent;
+use gents_tools::surface::AgentWithTools;
 use gents_store::identity::RuntimeNode;
 
 #[derive(Debug)]
@@ -20,16 +20,16 @@ pub fn assemble_node_and_agents<I, F, E>(
     agent_factories: I,
 ) -> (
     Arc<RuntimeNode>,
-    Vec<std::result::Result<Arc<ResolvedAgent>, E>>,
+    Vec<std::result::Result<AgentWithTools, E>>,
 )
 where
     I: IntoIterator<Item = F>,
-    F: FnOnce(Arc<RuntimeNode>) -> std::result::Result<ResolvedAgent, E> + Send,
+    F: FnOnce(Arc<RuntimeNode>) -> std::result::Result<AgentWithTools, E> + Send,
 {
     let node = Arc::new(node_data);
     let agents = agent_factories
         .into_iter()
-        .map(|factory| factory(node.clone()).map(Arc::new))
+        .map(|factory| factory(node.clone()))
         .collect();
     (node, agents)
 }

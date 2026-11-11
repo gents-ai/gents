@@ -24,7 +24,9 @@ use gents_store::schema::migration;
 use gents_toolcalls::call::hook::{BackgroundExecutionRegistry, FailurePolicy};
 use gents_tools::mcp::health::HealthCheckerOptions;
 use gents_tools::mcp::pool::McpPool;
-use gents_tools::surface::{AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling};
+use gents_tools::surface::{
+    AgentToolSurfaceConfig, AgentWithTools, ResolvedToolSelection, ToolCeiling,
+};
 
 mod builder;
 pub(crate) mod daemon;
@@ -193,7 +195,7 @@ pub struct Gents {
     usage_cache: Arc<gents_inference::usage_observation::UsageCache>,
     node: Arc<EmbeddedNode>,
     runtime_node: Arc<RuntimeNode>,
-    agents: Vec<Arc<ResolvedAgent>>,
+    agents: Vec<AgentWithTools>,
     unavailable_agents: RapidHashMap<String, UnavailableAgent>,
     active_snapshot: Arc<
         std::sync::RwLock<
@@ -282,17 +284,13 @@ impl Gents {
             .clone()
             .context("resolved document runtime snapshot is missing its node owner")?;
         let default_agent_did = runtime_node.default_agent_did.clone();
-        let mut agents = resolved_snapshot
-            .agents
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
+        let mut agents = resolved_snapshot.agents_with_tools()?;
         agents.sort_by(|left, right| {
-            let left_is_default = left.agent_did == default_agent_did;
-            let right_is_default = right.agent_did == default_agent_did;
+            let left_is_default = left.agent.agent_did == default_agent_did;
+            let right_is_default = right.agent.agent_did == default_agent_did;
             right_is_default
                 .cmp(&left_is_default)
-                .then_with(|| left.agent_did.cmp(&right.agent_did))
+                .then_with(|| left.agent.agent_did.cmp(&right.agent.agent_did))
         });
 
         Ok(Self {
@@ -355,7 +353,7 @@ impl Gents {
         self.backend_health.clone()
     }
 
-    pub fn agents(&self) -> &[Arc<ResolvedAgent>] {
+    pub fn agents(&self) -> &[AgentWithTools] {
         &self.agents
     }
 
@@ -398,7 +396,7 @@ impl Gents {
                 let mut identities: Vec<Arc<dyn NodeIdentity>> = self
                     .agents
                     .iter()
-                    .map(|agent| agent.agent_identity.clone())
+                    .map(|agent| agent.agent.agent_identity.clone())
                     .collect();
                 identities.extend(self.unavailable_agents.values().filter_map(|agent| {
                     agent
@@ -554,7 +552,7 @@ pub(crate) struct AgentDocumentInputs<'a> {
 pub(crate) fn agent_config_from_documents(
     principal: Arc<RuntimeNode>,
     inputs: AgentDocumentInputs<'_>,
-) -> anyhow::Result<ResolvedAgent> {
+) -> anyhow::Result<AgentWithTools> {
     let AgentDocumentInputs {
         agent_config,
         node,
@@ -616,11 +614,22 @@ pub(crate) fn agent_config_from_documents(
         principal.identity.as_ref(),
         &agent_config.identity_binding(),
     )?;
-    Ok(ResolvedAgent {
+    // Evaluated in the order the fallible fields of the former single literal were.
+    let actor = identity::Did::new(agent_identity.did())?;
+    let context_window = inference.context_window()?;
+    let max_output_tokens = inference.max_output_tokens()?;
+    let tools = AgentToolSurfaceConfig::from_selection_with_agent_tools(
+        &agent_config.agent_did,
+        tool_selection,
+        tool_ceiling,
+        agent_tools,
+        Vec::new(),
+    )?;
+    let agent = ResolvedAgent {
         configuration: gents_inference::resolved::ResolvedConfiguration::Documents(
             gents_inference::resolved::SelectedConfiguration::new(
                 node,
-                identity::Did::new(agent_identity.did())?,
+                actor,
                 configuration_documents,
             ),
         ),
@@ -637,21 +646,14 @@ pub(crate) fn agent_config_from_documents(
         model_name: inference.profile.model_name.clone(),
         service_tier: inference.profile.service_tier,
         resolved_reasoning_efforts: inference.resolved_reasoning_efforts(),
-        context_window: inference.context_window()?,
-        max_output_tokens: inference.max_output_tokens()?,
+        context_window,
+        max_output_tokens,
         max_turns: resolved_max_turns.value,
         max_turns_provenance: resolved_max_turns.provenance,
         max_total_tokens,
         system_prompt: context
             .and_then(|context| context.system_prompt.clone())
             .unwrap_or_default(),
-        tools: AgentToolSurfaceConfig::from_selection_with_agent_tools(
-            &agent_config.agent_did,
-            tool_selection,
-            tool_ceiling,
-            agent_tools,
-            Vec::new(),
-        )?,
         compaction,
         compaction_inference,
         stream_batch_ms,
@@ -668,7 +670,8 @@ pub(crate) fn agent_config_from_documents(
         sampling: inference.sampling_config()?,
         skills,
         oauth_pool,
-    })
+    };
+    Ok(AgentWithTools::new(agent, tools))
 }
 
 fn positive_duration_secs_or_default(

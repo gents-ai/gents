@@ -12,7 +12,7 @@ use crate::runtime::status::RuntimeStatusHandle;
 use gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use gents_automation::triggers::runtime_snapshot::ResolvedRuntimeSnapshot;
 use gents_inference::admission::AdmissionRegistry;
-use gents_inference::resolved::ResolvedAgent;
+use gents_tools::surface::AgentWithTools;
 use gents_protocol::node_readiness::ReconcilePhase;
 use gents_protocol::row::AgentRequest;
 use gents_tools::surface::ToolSurface;
@@ -121,7 +121,7 @@ impl StagedSlots {
 impl<F, Fut> GenerationSupervisor<F>
 where
     F: Fn(
-            Arc<ResolvedAgent>,
+            AgentWithTools,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
             Arc<WorkerCapacity>,
@@ -349,10 +349,13 @@ where
                 .expect("validated runnable/tool-surface keyset parity");
             let executor_capacity =
                 agent_executor_capacity(agent, &resolved_snapshot.backend_admission_configs);
+            let agent = resolved_snapshot
+                .agent_with_tools(agent_did)
+                .expect("validated runnable/tool-configuration keyset parity");
             if self
                 .active_slots
                 .get(agent_did)
-                .is_none_or(|slot| !slot.matches(agent, tool_surface, executor_capacity))
+                .is_none_or(|slot| !slot.matches(&agent, tool_surface, executor_capacity))
             {
                 recreated_agent_dids.push(agent_did.clone());
             }
@@ -387,7 +390,9 @@ where
                 agent_did.clone(),
                 spawn_slot_with_capacity(
                     SlotConfig {
-                        agent_config: agent.clone(),
+                        agent_config: resolved_snapshot
+                            .agent_with_tools(agent_did)
+                            .expect("validated runnable/tool-configuration keyset parity"),
                         tool_surface,
                         generation,
                         retry_policy: self.retry_policy.clone(),

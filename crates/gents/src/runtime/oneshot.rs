@@ -19,7 +19,7 @@ use gents_session::request::lifecycle::{
 };
 use gents_session::request::streaming::DefraStreamWriter;
 use gents_toolcalls::call::hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
-use gents_tools::surface::{self, ToolRuntimeContext};
+use gents_tools::surface::{self, AgentToolSurfaceConfig, AgentWithTools, ToolRuntimeContext};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OneshotRunResult {
@@ -29,7 +29,7 @@ pub struct OneshotRunResult {
 
 pub async fn run_openai_oneshot_admitted(
     node: Arc<EmbeddedNode>,
-    agent: &ResolvedAgent,
+    agent: &AgentWithTools,
     prompt: &str,
     admission: &gents_store::local::backend_protection::BackendAdmission,
 ) -> Result<OneshotRunResult> {
@@ -38,11 +38,13 @@ pub async fn run_openai_oneshot_admitted(
 
 pub async fn run_openai_oneshot_with_tools_admitted(
     node: Arc<EmbeddedNode>,
-    agent: &ResolvedAgent,
+    agent: &AgentWithTools,
     extra_tools: Vec<Box<dyn ToolDyn>>,
     prompt: &str,
     admission: &gents_store::local::backend_protection::BackendAdmission,
 ) -> Result<OneshotRunResult> {
+    let tool_config = agent.tools.as_ref();
+    let agent = agent.agent.as_ref();
     admission.validate(&node).await?;
     gents_store::schema::migration::ensure_all_runtime_migrations(node.clone()).await?;
 
@@ -56,8 +58,7 @@ pub async fn run_openai_oneshot_with_tools_admitted(
     };
     let tool_runtime =
         ToolRuntimeContext::oneshot_with_node_did(node.clone(), agent.node_did()).for_agent(agent);
-    let tool_surface = agent
-        .tools
+    let tool_surface = tool_config
         .resolve(
             &node,
             agent.node_did(),
@@ -93,6 +94,7 @@ pub async fn run_openai_oneshot_with_tools_admitted(
             node,
             agent,
             OneshotInputs {
+                tool_config,
                 provider_family,
                 replay_issuer,
                 prompt,
@@ -109,6 +111,7 @@ pub async fn run_openai_oneshot_with_tools_admitted(
 }
 
 struct OneshotInputs<'a> {
+    tool_config: &'a AgentToolSurfaceConfig,
     provider_family: Option<String>,
     replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
     prompt: &'a str,
@@ -129,6 +132,7 @@ where
     C: ProviderClient,
 {
     let OneshotInputs {
+        tool_config,
         provider_family,
         replay_issuer,
         prompt,
@@ -153,6 +157,7 @@ where
     run_oneshot_owned(
         node,
         agent,
+        tool_config,
         provider_family,
         &prompt_builder,
         model,
@@ -197,6 +202,7 @@ async fn persist_oneshot_failure(lifecycle: &mut RequestLifecycle, reason: &str)
 async fn run_oneshot_owned<M>(
     node: Arc<EmbeddedNode>,
     agent: &ResolvedAgent,
+    tool_config: &AgentToolSurfaceConfig,
     provider_family: Option<String>,
     prompt_builder: &LayeredPromptBuilder,
     model: M,
@@ -321,8 +327,8 @@ where
                 gents_automation::goal::session_message::SessionGoals,
             ))
             .with_goal_tool_authority(
-                agent.tools.goal_tools_requested(),
-                agent.tools.goal_creation_requested(),
+                tool_config.goal_tools_requested(),
+                tool_config.goal_creation_requested(),
             ),
         Err(error) => {
             return Err(terminalize_oneshot_setup_failure(&mut lifecycle, &lsp_pool, error).await);

@@ -9,7 +9,7 @@ use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 use gents_automation::triggers::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
 use gents_documents::Agent as AgentDocument;
 use gents_inference::admission::BackendAvailability;
-use gents_inference::resolved::ResolvedAgent;
+use gents_tools::surface::AgentWithTools;
 
 use super::DocumentRuntimeView;
 
@@ -116,10 +116,10 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
 
     let (principal, agent_results) = assemble_node_and_agents(node_data, agent_factories);
 
-    let mut agents = Vec::<Arc<ResolvedAgent>>::new();
+    let mut agents = Vec::<AgentWithTools>::new();
     for result in agent_results {
         match result {
-            Ok(agent_arc) => agents.push(agent_arc),
+            Ok(agent) => agents.push(agent),
             Err(AgentBuildError { agent_did, error }) => {
                 unavailable_agents.insert(
                     agent_did,

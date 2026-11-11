@@ -118,13 +118,17 @@ impl StartupBarrier {
 impl RuntimeContext {
     pub(super) async fn run_agent(
         &self,
-        agent_config: Arc<gents_inference::resolved::ResolvedAgent>,
+        agent: gents_tools::surface::AgentWithTools,
         tool_surface: Arc<ToolSurface>,
         request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
         capacity: Arc<crate::runtime::agent::worker_capacity::WorkerCapacity>,
         slot_generation: u64,
         shutdown: watch::Receiver<bool>,
     ) -> Result<()> {
+        let gents_tools::surface::AgentWithTools {
+            agent: agent_config,
+            tools: tool_config,
+        } = agent;
         let tool_names = tool_surface.tool_names();
         let api_key = if agent_config.backend_auth.uses_node_oauth()
             || matches!(
@@ -186,6 +190,7 @@ impl RuntimeContext {
         gents_inference::llm::backend_client::with_backend_client!(client, |client| {
             Box::pin(self.run_agent_with_client(
                 agent_config,
+                tool_config,
                 provider_family,
                 replay_issuer,
                 account_hops,
@@ -213,6 +218,7 @@ impl RuntimeContext {
     pub(super) async fn run_agent_with_client<C>(
         &self,
         agent_config: Arc<gents_inference::resolved::ResolvedAgent>,
+        tool_config: Arc<gents_tools::surface::AgentToolSurfaceConfig>,
         provider_family: Option<String>,
         replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
         account_hops: u32,
@@ -264,6 +270,7 @@ impl RuntimeContext {
         let mut daemon = AgentDaemon::new(AgentDaemonInit {
             node: self.node.clone(),
             agent_config,
+            tool_config,
             provider_family,
             model,
             preamble,

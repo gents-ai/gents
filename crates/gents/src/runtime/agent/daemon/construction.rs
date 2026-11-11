@@ -15,6 +15,7 @@ where
         let AgentDaemonInit {
             node,
             agent_config,
+            tool_config,
             provider_family,
             model,
             preamble,
@@ -47,6 +48,7 @@ where
             node,
             backend_health: None,
             agent_config,
+            tool_config,
             provider_family: provider_family.clone(),
             replay_issuer: None,
             account_hops: 0,

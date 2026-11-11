@@ -381,8 +381,8 @@ where
         .with_remote_tools(self.remote_tools.clone())
         .with_job_tools(self.job_tools.clone())
         .with_goal_tool_authority(
-            self.agent_config.tools.goal_tools_requested(),
-            self.agent_config.tools.goal_creation_requested(),
+            self.tool_config.goal_tools_requested(),
+            self.tool_config.goal_creation_requested(),
         )
         .with_output_obligation_gate(output_obligation_gate.clone())
         .with_session_goals(Arc::new(

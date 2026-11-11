@@ -170,7 +170,7 @@ where
             self.agent_config.agent_identity.as_ref(),
             request,
             lifecycle.execution_generation()?,
-            self.agent_config.tools.static_policy().bash.execution_mode
+            self.tool_config.static_policy().bash.execution_mode
                 == gents_tools::native::CommandExecutionMode::ArtifactWrite,
             self.operator_tool_root.as_deref(),
         )
@@ -180,7 +180,7 @@ where
                 .map(str::to_owned);
         let request_context_message = super::super::inference::render_request_context_message(
             self.node.as_ref(),
-            &self.agent_config,
+            &self.tool_config,
             request,
             frozen_instruction_manifest.as_deref(),
         )?;
