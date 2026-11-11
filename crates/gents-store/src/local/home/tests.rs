@@ -202,169 +202,210 @@ fn write(path: &Path, contents: &str) {
     fs::write(path, contents).unwrap();
 }
 
-#[test]
-fn home_entries_own_only_the_runtime_inventory() {
-    let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join(".gents");
-    write(&home.join("init.json"), "{}");
-    write(&home.join("data/MANIFEST"), "REGOMAN");
-    write(&home.join("keys/agent.key"), "key");
-    write(&home.join("runtime.json"), "{}");
-    write(&home.join("packs/registry-cache/x.tar.gz"), "pack");
-    write(&home.join("data.lock"), "123");
-    write(&home.join("backups/legacy-store-1/data/MANIFEST"), "old");
-    write(&home.join("notes.md"), "mine");
-    write(&home.join(".env"), "SECRET=1");
-    write(&home.join("grok-port-home/init.json"), "{}");
-    write(
-        &home.join("half-onboarded/data/MANIFEST"),
-        "live store, no init.json yet",
-    );
-    write(&home.join("a/b/c/d/e/init.json"), "{}");
-    write(&home.join("desktop/peers.json"), "{}");
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(temp.path(), home.join("keys-link")).unwrap();
+#[cfg(unix)]
+mod retirement {
+    use super::*;
 
-    let entries = home_entries(&home, &[]).unwrap();
-
-    assert_eq!(
-        entries.owned,
-        vec![
-            home.join("data"),
-            home.join("init.json"),
-            home.join("keys"),
-            home.join("packs"),
-            home.join("runtime.json"),
-        ]
-    );
-    for retained in [
-        ".env",
-        "a",
-        "backups",
-        "data.lock",
-        "desktop",
-        "grok-port-home",
-        "half-onboarded",
-        "notes.md",
-    ] {
-        assert!(
-            entries.retained.contains(&home.join(retained)),
-            "{retained}"
-        );
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum Role {
+        Inventory,
+        Lock,
+        Maintenance,
+        Foreign,
     }
-    assert_eq!(
-        home_entries(&temp.path().join("absent"), &[]).unwrap(),
-        HomeEntries::default()
-    );
-}
 
-#[test]
-fn permission_locks_remain_in_place_when_owned_state_is_retired() {
-    let home = tempfile::tempdir().unwrap();
-    let open = |name: &str| {
-        fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(home.path().join(name))
-            .unwrap()
-    };
-    let _held: Vec<_> = RUNTIME_HOME_LOCK_FILES
-        .iter()
-        .map(|name| crate::local::file_lock::FileLock::exclusive(open(name)).unwrap())
-        .collect();
-    fs::write(home.path().join(ALLOWED_DIRS_FILE_NAME), b"{}").unwrap();
-    fs::write(home.path().join(WORKSPACE_APPROVALS_FILE_NAME), b"{}").unwrap();
-    let staging = home.path().join(PERMISSION_STAGING_DIR_NAME);
-    fs::create_dir(&staging).unwrap();
-    fs::write(staging.join("pending"), b"{}").unwrap();
-    let entries = home_entries(home.path(), &[]).unwrap();
-    retire_entries(
-        &[RetireGroup {
-            name: "runtime",
-            entries: &entries.owned,
-        }],
-        RetireDisposition::Delete,
-    )
-    .unwrap();
-    assert!(!home.path().join(ALLOWED_DIRS_FILE_NAME).exists());
-    assert!(!home.path().join(WORKSPACE_APPROVALS_FILE_NAME).exists());
-    assert!(!staging.exists());
-    for name in RUNTIME_HOME_LOCK_FILES {
-        assert!(
-            matches!(
-                crate::local::file_lock::FileLock::try_exclusive(open(name)),
-                Err(fs::TryLockError::WouldBlock)
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum Reference {
+        Unreferenced,
+        OtherHome,
+        Exclusion,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum Presence {
+        File,
+        Directory,
+        Link,
+        Vanished,
+        Uninspectable,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum Disposition {
+        Archive,
+        ArchiveOntoBackup,
+        Delete,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum Outcome {
+        Retired,
+        RolledBack,
+        Refused,
+        Stopped,
+    }
+
+    use gents_lean_vocab::families::home_retirement_retire as family;
+
+    type RetirementScenario = family::Scenario<Disposition, Presence, Reference, Role>;
+    type RetirementResult = family::Retirement<Outcome>;
+
+    fn retire_scenario(scenario: &RetirementScenario) -> RetirementResult {
+        let temp = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(temp.path()).unwrap();
+        let (home, outside, backup) =
+            (root.join("home"), root.join("outside"), root.join("backup"));
+        let mut inventory = RUNTIME_HOME_ENTRIES.to_vec();
+        inventory.sort_unstable();
+        let mut names = [
+            inventory.iter(),
+            RUNTIME_HOME_LOCK_FILES.iter(),
+            RUNTIME_HOME_RETAINED_ENTRIES.iter(),
+        ];
+        let mut exclude = Vec::new();
+        let mut kept = Vec::new();
+        let paths: Vec<PathBuf> = scenario
+            .items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| {
+                let path = match item.role {
+                    Role::Inventory => home.join(names[0].next().unwrap()),
+                    Role::Lock => home.join(names[1].next().unwrap()),
+                    Role::Maintenance => home.join(names[2].next().unwrap()),
+                    Role::Foreign => home.join(format!("notes-{index}.md")),
+                };
+                let inside = match item.presence {
+                    Presence::Directory => {
+                        write(&path.join("child"), "child");
+                        path.join("child")
+                    }
+                    Presence::Link => {
+                        let target = outside.join(index.to_string());
+                        write(&target.join("keep.txt"), "keep");
+                        kept.push(target.join("keep.txt"));
+                        fs::create_dir_all(&home).unwrap();
+                        std::os::unix::fs::symlink(&target, &path).unwrap();
+                        path.join("keep.txt")
+                    }
+                    Presence::File | Presence::Vanished | Presence::Uninspectable => {
+                        write(&path, "entry");
+                        path.clone()
+                    }
+                };
+                match item.reference {
+                    Reference::Unreferenced => {}
+                    Reference::Exclusion => exclude.push(inside),
+                    Reference::OtherHome => {
+                        let other = home.join(format!("other-home-{index}"));
+                        let field = ["key_path", "tool_root"][index % 2];
+                        write(
+                            &other.join("init.json"),
+                            &serde_json::json!({"home": other, field: inside}).to_string(),
+                        );
+                    }
+                }
+                path
+            })
+            .collect();
+
+        let entries = home_entries(&home, &exclude).unwrap();
+        for path in &paths {
+            assert_ne!(
+                entries.owned.contains(path),
+                entries.retained.contains(path),
+                "{} is listed once",
+                path.display()
+            );
+        }
+        let flags = |listed: &[PathBuf]| paths.iter().map(|path| listed.contains(path)).collect();
+        let owned: Vec<bool> = flags(&entries.owned);
+
+        let mut denied = Vec::new();
+        for (item, path) in scenario.items.iter().zip(&paths) {
+            match item.presence {
+                Presence::Vanished => fs::remove_file(path).unwrap(),
+                Presence::Uninspectable => denied.push(path.clone()),
+                _ => {}
+            }
+        }
+        let inspect = |path: &Path| {
+            if denied.iter().any(|denied| denied == path) {
+                Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+            } else {
+                fs::symlink_metadata(path).map(|metadata| metadata.is_dir())
+            }
+        };
+        let first = entries.owned.len().min(1);
+        let split = match scenario.passes {
+            1 => vec![&entries.owned[..]],
+            _ => vec![&entries.owned[..first], &entries.owned[first..]],
+        };
+        let groups: Vec<RetireGroup<'_>> = split
+            .into_iter()
+            .map(|entries| RetireGroup {
+                name: "home",
+                entries,
+            })
+            .collect();
+        let disposition = match scenario.disposition {
+            Disposition::Delete => RetireDisposition::Delete,
+            Disposition::Archive => RetireDisposition::Archive { backup: &backup },
+            Disposition::ArchiveOntoBackup => {
+                fs::create_dir(&backup).unwrap();
+                RetireDisposition::Archive { backup: &backup }
+            }
+        };
+        let (outcome, reported) = match retire_entries_with(&groups, disposition, inspect) {
+            Ok(reported) => (Outcome::Retired, reported),
+            Err(HomeError::ArchiveRolledBack { .. }) => (Outcome::RolledBack, Vec::new()),
+            Err(HomeError::CreateBackup { .. }) => (Outcome::Refused, Vec::new()),
+            Err(HomeError::DeleteStopped { removed, .. }) => (
+                Outcome::Stopped,
+                removed
+                    .split(", ")
+                    .filter(|path| !path.is_empty())
+                    .map(PathBuf::from)
+                    .collect(),
             ),
-            "{name}"
-        );
+            Err(error) => panic!("{}", ErrorChain(&error)),
+        };
+
+        use std::os::unix::fs::PermissionsExt;
+        let mode =
+            |path: &Path| u64::from(fs::metadata(path).unwrap().permissions().mode() & 0o777);
+        let archived = |path: &PathBuf| {
+            fs::symlink_metadata(backup.join("home").join(path.file_name().unwrap())).is_ok()
+        };
+        RetirementResult {
+            outcome,
+            owned,
+            reported: flags(&reported),
+            in_home: paths
+                .iter()
+                .map(|path| fs::symlink_metadata(path).is_ok())
+                .collect(),
+            archived: paths.iter().map(archived).collect(),
+            backup: backup.exists(),
+            backup_mode: (outcome == Outcome::Retired && backup.exists()).then(|| {
+                assert_eq!(mode(&backup), mode(&backup.join("home")));
+                mode(&backup)
+            }),
+            outside_intact: kept.iter().all(|path| path.is_file()),
+        }
     }
-}
 
-#[test]
-fn archive_accepts_a_group_retired_in_two_passes() {
-    let temp = tempfile::tempdir().unwrap();
-    let root = fs::canonicalize(temp.path()).unwrap();
-    let (logs, record) = (root.join("logs"), root.join("init.json"));
-    write(&logs.join("a.log"), "log");
-    write(&record, "{}");
-    let backup = root.join("backup");
-    let (first, second) = (vec![logs.clone()], vec![record.clone()]);
-    let groups = [
-        RetireGroup {
-            name: "home",
-            entries: &first,
-        },
-        RetireGroup {
-            name: "home",
-            entries: &second,
-        },
-    ];
-    retire_entries(&groups, RetireDisposition::Archive { backup: &backup }).unwrap();
-    assert!(backup.join("home/logs/a.log").is_file());
-    assert!(backup.join("home/init.json").is_file());
-}
-
-#[test]
-fn owned_entries_another_home_or_an_exclusion_points_into_are_retained() {
-    let temp = tempfile::tempdir().unwrap();
-    let home = fs::canonicalize(temp.path()).unwrap().join(".gents");
-    write(&home.join("keys/local.key"), "mine");
-    write(&home.join("keys/other.key"), "theirs");
-    write(&home.join("plugins/p/manifest.json"), "{}");
-    write(&home.join("data/MANIFEST"), "store");
-    write(
-        &home.join("other/init.json"),
-        &serde_json::json!({
-            "home": home.join("other"),
-            "key_path": home.join("keys/other.key"),
-            "tool_root": home.join("plugins/p"),
-        })
-        .to_string(),
-    );
-
-    let entries = home_entries(&home, &[home.join("data/client")]).unwrap();
-
-    assert!(entries.owned.is_empty(), "{:?}", entries.owned);
-    for retained in ["data", "keys", "other", "plugins"] {
-        assert!(
-            entries.retained.contains(&home.join(retained)),
-            "{retained}"
-        );
+    #[test]
+    fn retirement_matches_the_lean_model() {
+        for case in family::cases::<Disposition, Outcome, Presence, Reference, Role>() {
+            case.check(retire_scenario(&case.input));
+        }
     }
-}
-
-#[test]
-fn native_maintenance_state_is_retained_when_live_state_is_retired() {
-    let home = tempfile::tempdir().unwrap();
-    fs::create_dir(home.path().join(DATA_DIR_NAME)).unwrap();
-    fs::create_dir(home.path().join(SERVICE_UPDATES_DIR_NAME)).unwrap();
-    let entries = home_entries(home.path(), &[]).unwrap();
-    assert_eq!(entries.owned, vec![home.path().join(DATA_DIR_NAME)]);
-    assert!(entries
-        .retained
-        .contains(&home.path().join(SERVICE_UPDATES_DIR_NAME)));
 }
 
 #[test]
@@ -470,77 +511,6 @@ fn runtime_writers_name_home_entries_only_from_the_inventory() {
     assert!(
         unlisted.is_empty(),
         "home entries written outside the home inventories: {unlisted:#?}"
-    );
-}
-
-#[test]
-fn archive_moves_groups_into_private_dirs_and_delete_removes_links_without_following_them() {
-    let temp = tempfile::tempdir().unwrap();
-    let home = temp.path().join("home");
-    let outside = temp.path().join("outside");
-    write(&home.join("data/MANIFEST"), "store");
-    write(&home.join("init.json"), "{}");
-    write(&outside.join("keep.txt"), "keep");
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(&outside, home.join("keys")).unwrap();
-    let owned = home_entries(&home, &[]).unwrap().owned;
-
-    let backup = temp.path().join("home-backup");
-    archive_preflight(
-        &[RetireGroup {
-            name: "home",
-            entries: &owned,
-        }],
-        &backup,
-    )
-    .unwrap();
-    let moved = retire_entries(
-        &[RetireGroup {
-            name: "home",
-            entries: &owned,
-        }],
-        RetireDisposition::Archive { backup: &backup },
-    )
-    .unwrap();
-    assert_eq!(moved, owned);
-    assert_eq!(
-        fs::read_to_string(backup.join("home/data/MANIFEST")).unwrap(),
-        "store"
-    );
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        for dir in [backup.clone(), backup.join("home")] {
-            let mode = fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o700, "{}", dir.display());
-        }
-    }
-    assert!(!home.join("data").exists());
-    assert!(
-        retire_entries(
-            &[RetireGroup {
-                name: "home",
-                entries: &owned,
-            }],
-            RetireDisposition::Archive { backup: &backup },
-        )
-        .is_err(),
-        "an existing backup is never merged into"
-    );
-
-    let archived = home_entries(&backup.join("home"), &[]).unwrap().owned;
-    let removed = retire_entries(
-        &[RetireGroup {
-            name: "home",
-            entries: &archived,
-        }],
-        RetireDisposition::Delete,
-    )
-    .unwrap();
-    assert_eq!(removed, archived);
-    assert_eq!(
-        fs::read_to_string(outside.join("keep.txt")).unwrap(),
-        "keep"
     );
 }
 
