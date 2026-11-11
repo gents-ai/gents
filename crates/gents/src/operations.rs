@@ -1,0 +1,5 @@
+//! Callable entry points for the operations `gents_protocol::operations`
+//! declares. Front ends call these; the owners below keep the behaviour, and
+//! none of them names this module.
+
+pub mod agent;
