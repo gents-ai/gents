@@ -10,7 +10,9 @@ use serde_json::Value;
 use super::engine::durable::{publish_goal_outcomes, stage_outcome, OutcomeStage, FIRE_FIELDS};
 use gents_session::request::hooks::effect::{CoreOp, Effect, Manifest, Row};
 use gents_session::request::hooks::hook::{Hook, Outcome, Query};
-use gents_session::request::hooks::registry::{CoreOperation, Registry, RequestTerminal};
+use gents_session::request::hooks::registry::{
+    CoreOperation, OperationContext, Registry, RequestTerminal,
+};
 use gents_store::config_client::ConfigApplyTxn;
 
 pub(crate) const PUBLISH_FIRE_OUTCOME: &str = "trigger.fire_outcome.publish";
@@ -80,7 +82,12 @@ impl CoreOperation for PublishFireOutcomeOperation {
         PUBLISH_FIRE_OUTCOME
     }
 
-    async fn perform(&self, txn: &ConfigApplyTxn<'_>, args: &Value) -> anyhow::Result<()> {
+    async fn perform(
+        &self,
+        txn: &ConfigApplyTxn<'_>,
+        _context: OperationContext<'_>,
+        args: &Value,
+    ) -> anyhow::Result<()> {
         let mut args = PublishFireOutcome::deserialize(args)
             .context("decoding the fire outcome publication")?;
         if let Some(fire) = args.fire.as_object_mut() {
@@ -122,7 +129,12 @@ impl CoreOperation for SettleGoalOutcomesOperation {
         SETTLE_GOAL_OUTCOMES
     }
 
-    async fn perform(&self, txn: &ConfigApplyTxn<'_>, args: &Value) -> anyhow::Result<()> {
+    async fn perform(
+        &self,
+        txn: &ConfigApplyTxn<'_>,
+        _context: OperationContext<'_>,
+        args: &Value,
+    ) -> anyhow::Result<()> {
         let args = SettleGoalOutcomes::deserialize(args)
             .context("decoding the Goal outcome settlement")?;
         publish_goal_outcomes(txn, &args.owner_did, &args.goal_id, &args.reason, &args.at).await

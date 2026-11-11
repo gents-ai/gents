@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use super::effect::{Access, DocRef, Effect, Manifest, Row, Write};
 use super::hook::{Direction, Query};
-use super::registry::Registry;
+use super::registry::{OperationContext, Registry};
 use super::stage::{ApplyFailure, HookError, Host};
 use gents_store::config_client::ConfigApplyTxn;
 use gents_store::graphql::escape_graphql_string;
@@ -24,6 +24,7 @@ use gents_store::graphql::escape_graphql_string;
 pub(crate) struct TxnHost<'a, 'txn> {
     txn: &'a ConfigApplyTxn<'txn>,
     registry: &'a Registry,
+    context: OperationContext<'a>,
     shown: Mutex<Vec<(DocRef, String)>>,
 }
 
@@ -120,10 +121,15 @@ fn returned(response: &Value, root: &str) -> usize {
 }
 
 impl<'a, 'txn> TxnHost<'a, 'txn> {
-    pub(crate) fn new(txn: &'a ConfigApplyTxn<'txn>, registry: &'a Registry) -> Self {
+    pub(crate) fn new(
+        txn: &'a ConfigApplyTxn<'txn>,
+        registry: &'a Registry,
+        context: OperationContext<'a>,
+    ) -> Self {
         Self {
             txn,
             registry,
+            context,
             shown: Mutex::new(Vec::new()),
         }
     }
@@ -250,7 +256,7 @@ impl<'a, 'txn> TxnHost<'a, 'txn> {
                     }
                 })?;
                 operation
-                    .perform(self.txn, &requested.args)
+                    .perform(self.txn, self.context, &requested.args)
                     .await
                     .map_err(HookError::Operation)
             }
