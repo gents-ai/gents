@@ -353,7 +353,7 @@ impl<'a> ConfigApplyTxn<'a> {
         Ok(txn)
     }
 
-    pub(crate) fn affected_documents(&self) -> u64 {
+    pub fn affected_documents(&self) -> u64 {
         self.affected_documents.load(Ordering::Relaxed)
     }
 
