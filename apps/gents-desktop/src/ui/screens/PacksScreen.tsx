@@ -8,9 +8,16 @@ import {
   useState,
 } from "react";
 import { toast } from "sonner";
-import { Check, X } from "lucide-react";
+import { Check } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@gents/ui/components/select";
 import { Tabs, TabsList, TabsTrigger } from "@gents/ui/components/tabs";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import type { FoundPack } from "@source-inc/gents-desktop-client";
@@ -70,6 +77,7 @@ import {
   text,
   useInstalledPacks,
   usePacksListView,
+  usePacksAuthors,
   useRegistryAccount,
 } from "./packs/model";
 
@@ -310,6 +318,38 @@ function useKeptScroll(
   }, [scroller, view]);
 }
 
+/* the menu's value for no author: a namespace is never empty */
+const ALL_AUTHORS = "";
+
+/** Which publisher the registry list is narrowed to: everyone's packs, or
+    one publisher the registry has named. */
+function AuthorMenu({ author }: { author: string | null }) {
+  const named = usePacksAuthors();
+  const authors = author && !named.includes(author) ? [author, ...named] : named;
+  const items = [
+    { value: ALL_AUTHORS, label: "All authors" },
+    ...authors.map((a) => ({ value: a, label: a })),
+  ];
+  return (
+    <Select
+      items={items}
+      value={author ?? ALL_AUTHORS}
+      onValueChange={(next) => rememberPacksAuthor(next || null)}
+    >
+      <SelectTrigger size="sm" aria-label="Author" className="w-auto max-w-48 shrink-0">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {items.map((item) => (
+          <SelectItem key={item.value} value={item.value}>
+            {item.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 function PacksHome({
   node,
   local,
@@ -447,16 +487,7 @@ function PacksHome({
             aria-label="Search packs"
             className="min-w-48 flex-1"
           />
-          {view === "registry" && author && (
-            <button
-              type="button"
-              onClick={() => rememberPacksAuthor(null)}
-              aria-label={`Show packs from everyone, not only ${author}`}
-              className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-full bg-raised px-2.5 py-1 text-xs hover:bg-accent"
-            >
-              By {author} <X className="size-3 text-muted-foreground" />
-            </button>
-          )}
+          {view === "registry" && <AuthorMenu author={author} />}
         </div>
       </header>
 
