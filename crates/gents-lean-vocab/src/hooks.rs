@@ -123,8 +123,20 @@ pub struct LeanLifecycleHookScript<V> {
 pub enum LeanLifecycleHookVerdict {
     Allow,
     LeaveQueued,
-    Retire { reason: String },
-    Reject { reason: String },
+    Retire {
+        reason: String,
+        successor: LeanLifecycleHookSuccessor,
+    },
+    Reject {
+        reason: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanLifecycleHookSuccessor {
+    pub request_id: String,
+    pub request_doc_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

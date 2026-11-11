@@ -6,17 +6,18 @@ namespace Hooks
 cannot reach. `claim` is the pending to claimed compare-and-set with every
 guard core keeps (queue order, the session stop latch, client authorization);
 `none` means it affected no row. `retire` and `reject` are the shared pending
-terminal paths (superseded, failed) with their dependents. -/
+terminal paths (superseded, failed) with their dependents; `retire` records
+the successor the verdict names on the superseded row. -/
 structure ClaimCore (Core : Type) where
   claim : Core → Option Core
-  retire : String → Core → Option Core
+  retire : String → Successor → Core → Option Core
   reject : String → Core → Option Core
 
 inductive ClaimResult where
   | claimed
   | lost
   | queued
-  | retired (reason : String)
+  | retired (reason : String) (successor : Successor)
   | rejected (reason : String)
   deriving DecidableEq, Repr
 
@@ -66,10 +67,10 @@ def claimStep (host : Host Core Q Doc Val Op)
               | .error refusal => .error refusal
               | .ok (final, _) => .ok (final, .claimed)
       | .leaveQueued => .ok (state, .queued)
-      | .retire reason =>
-          match core.retire reason state.core with
+      | .retire reason successor =>
+          match core.retire reason successor state.core with
           | none => .error .core
-          | some next => .ok ({ state with core := next }, .retired reason)
+          | some next => .ok ({ state with core := next }, .retired reason successor)
       | .reject reason =>
           match core.reject reason state.core with
           | none => .error .core
@@ -137,9 +138,9 @@ theorem claimed_requires_every_gate_and_core (host : Host Core Q Doc Val Op)
           exact ⟨verdicts, next, rfl, (combined_allow_iff verdicts).mp combined, rfl,
             staging_moves_core_only_through_perform host applied actor _ _ last values staged⟩
     | leaveQueued => simp [combined] at claimed
-    | retire reason =>
+    | retire reason successor =>
       simp only [combined] at claimed
-      cases transition : core.retire reason state.core <;> simp [transition] at claimed
+      cases transition : core.retire reason successor state.core <;> simp [transition] at claimed
     | reject reason =>
       simp only [combined] at claimed
       cases transition : core.reject reason state.core <;> simp [transition] at claimed
@@ -179,9 +180,9 @@ theorem unclaimed_outcome_writes_no_plugin_rows (host : Host Core Q Doc Val Op)
     | leaveQueued =>
       simp only [combined, Except.ok.injEq, Prod.mk.injEq] at ok
       rw [← ok.1]
-    | retire reason =>
+    | retire reason successor =>
       simp only [combined] at ok
-      cases transition : core.retire reason state.core with
+      cases transition : core.retire reason successor state.core with
       | none => simp [transition] at ok
       | some next =>
         simp only [transition, Except.ok.injEq, Prod.mk.injEq] at ok
@@ -194,15 +195,16 @@ theorem unclaimed_outcome_writes_no_plugin_rows (host : Host Core Q Doc Val Op)
         simp only [transition, Except.ok.injEq, Prod.mk.injEq] at ok
         rw [← ok.1]
 
-/-- A retirement is core's `retire`, applied to the state the gate saw. -/
+/-- A retirement is core's `retire`, applied to the state the gate saw, with
+the successor the combined verdict names. -/
 theorem retired_is_cores_transition (host : Host Core Q Doc Val Op)
     (gates : List (Plugin Q EvG ClaimVerdict Doc Val Op))
     (applied : List (Plugin Q EvA Unit Doc Val Op)) (actor : Actor)
     (gateEvent : Core → EvG) (appliedEvent : Core → Core → EvA) (core : ClaimCore Core)
-    (state final : State Core Doc Val) (reason : String)
+    (state final : State Core Doc Val) (reason : String) (successor : Successor)
     (ok : claimStep host gates applied actor gateEvent appliedEvent core state =
-      .ok (final, .retired reason)) :
-    core.retire reason state.core = some final.core := by
+      .ok (final, .retired reason successor)) :
+    core.retire reason successor state.core = some final.core := by
   unfold claimStep at ok
   cases gated : gate host (gateEvent state.core) state gates with
   | error refusal => simp [gated] at ok
@@ -222,13 +224,13 @@ theorem retired_is_cores_transition (host : Host Core Q Doc Val Op)
           obtain ⟨last, values⟩ := staging
           simp [staged] at ok
     | leaveQueued => simp [combined] at ok
-    | retire given =>
+    | retire given named =>
       simp only [combined] at ok
-      cases transition : core.retire given state.core with
+      cases transition : core.retire given named state.core with
       | none => simp [transition] at ok
       | some next =>
         simp only [transition, Except.ok.injEq, Prod.mk.injEq, ClaimResult.retired.injEq] at ok
-        obtain ⟨rfl, rfl⟩ := ok
+        obtain ⟨rfl, rfl, rfl⟩ := ok
         exact transition
     | reject given =>
       simp only [combined] at ok

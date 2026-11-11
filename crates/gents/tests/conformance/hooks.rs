@@ -18,7 +18,7 @@ use gents_lean_vocab::{
     LeanLifecycleHookState, LeanLifecycleHookSubject, LeanLifecycleHookSubjectKind,
     LeanLifecycleHookVerdict, LeanLifecycleHookWorld,
 };
-use gents_session::request::hooks::claim::{combine, ClaimVerdict};
+use gents_session::request::hooks::claim::{combine, ClaimVerdict, Successor};
 use gents_session::request::hooks::delivery::DeliveryRecord;
 use gents_session::request::hooks::effect::{
     validate, Access, CoreOp, DocRef, Effect, Grant, Grantable, Manifest, Named, OwnedCollection,
@@ -123,9 +123,12 @@ fn verdict(lean: &LeanLifecycleHookVerdict) -> ClaimVerdict {
     match lean {
         LeanLifecycleHookVerdict::Allow => ClaimVerdict::Allow,
         LeanLifecycleHookVerdict::LeaveQueued => ClaimVerdict::LeaveQueued,
-        LeanLifecycleHookVerdict::Retire { reason } => ClaimVerdict::Retire {
+        LeanLifecycleHookVerdict::Retire { reason, successor } => ClaimVerdict::Retire {
             reason: reason.clone(),
-            successor: None,
+            successor: Successor {
+                request_id: successor.request_id.clone(),
+                request_doc_id: successor.request_doc_id.clone(),
+            },
         },
         LeanLifecycleHookVerdict::Reject { reason } => ClaimVerdict::Reject {
             reason: reason.clone(),

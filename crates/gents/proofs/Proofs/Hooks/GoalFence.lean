@@ -44,6 +44,14 @@ def retired : String := "superseded by a newer Task Goal assignment"
 
 def denied : String := "request authorization denied"
 
+/-- The request a stale continuation's retirement names as its successor: the
+entry the continuation resolves to and the current assignment's root document
+(`request_head::stale_assignment_continuations`, `survivor_request_id` and
+`survivor_doc_id`). The model names a request by its document number, so both
+are rendered from document numbers. -/
+def successor (assignment : Assignment) (found : Entry × Nat) : Successor :=
+  ⟨toString found.1.doc, toString (assignment.root.getD found.1.doc)⟩
+
 def goalOf : List (Row Nat Fact) → Option Assignment
   | [⟨_, _, .goal assignment⟩] => some assignment
   | _ => none
@@ -107,7 +115,7 @@ def fence (candidate : Candidate) (rows : List (List (Row Nat Fact))) :
                       if belongs assignment found.1 &&
                           candidate.triggerGoal == some assignment.goal then
                         .proceed .allow []
-                      else .proceed (.retire retired) []
+                      else .proceed (.retire retired (successor assignment found)) []
   | _ => .refuse "Goal claim fence was not shown its declared rows"
 
 def plugin : Plugin Query Candidate ClaimVerdict Nat Fact Empty :=
@@ -175,7 +183,8 @@ theorem stale_continuation_is_retired (candidate : Candidate)
     (opened : opening requestRows assignment = some start)
     (located : requestAt requestRows candidate.doc = some found)
     (stale : belongs assignment found.1 = false) :
-    fence candidate [goalRows, requestRows] = .proceed (.retire retired) [] := by
+    fence candidate [goalRows, requestRows] =
+      .proceed (.retire retired (successor assignment found)) [] := by
   simp [fence, triggered, native, pending, goal, bound, opened, located, stale]
 
 def observedRoot (entry : Entry) : Nat :=
@@ -212,11 +221,11 @@ supersede the fence performs itself today is this transition. -/
 theorem retired_continuation_is_superseded_by_core
     (host : Host Core Query Nat Fact Empty) (applied : List (Plugin Query EvA Unit Nat Fact Empty))
     (actor : Actor) (candidate : Candidate) (appliedEvent : Core → Core → EvA)
-    (core : ClaimCore Core) (state : State Core Nat Fact) (next : Core)
-    (decided : plugin.hook.run host candidate state = .proceed (.retire retired) [])
-    (superseded : core.retire retired state.core = some next) :
+    (core : ClaimCore Core) (state : State Core Nat Fact) (next : Core) (named : Successor)
+    (decided : plugin.hook.run host candidate state = .proceed (.retire retired named) [])
+    (superseded : core.retire retired named state.core = some next) :
     claimStep host [plugin] applied actor (fun _ => candidate) appliedEvent core state =
-      .ok ({ state with core := next }, .retired retired) := by
+      .ok ({ state with core := next }, .retired retired named) := by
   simp [claimStep, gate, decided, combine, ClaimVerdict.narrow, ClaimVerdict.severity,
     superseded]
 

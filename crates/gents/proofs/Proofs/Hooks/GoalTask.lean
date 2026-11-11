@@ -125,7 +125,7 @@ def claimCore (fire : Identity) : ClaimCore TaskCore :=
         some { core with requests := core.requests.map fun request =>
           if request.fire.identity == fire then { request with running := true } else request }
       else none
-    retire := fun _ _ => none
+    retire := fun _ _ _ => none
     reject := fun _ _ => none }
 
 def embed (state : Triggers.Durable.State) : Hooks.State TaskCore GoalDoc Goals.Status :=

@@ -364,10 +364,10 @@ impl ClaimFence {
             None => ClaimVerdict::Allow,
             Some(stale) => ClaimVerdict::Retire {
                 reason: request_head::STALE_ASSIGNMENT_REASON.into(),
-                successor: Some(Successor {
+                successor: Successor {
                     request_id: stale.survivor_request_id,
                     request_doc_id: stale.survivor_doc_id,
-                }),
+                },
             },
         })
     }

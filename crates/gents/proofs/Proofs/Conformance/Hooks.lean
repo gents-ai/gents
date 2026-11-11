@@ -166,7 +166,10 @@ private def scriptJson {V : Type} (valueJson : V → String) (script : Script V)
 private def verdictJson : ClaimVerdict → String
   | .allow => "{\"kind\":\"allow\"}"
   | .leaveQueued => "{\"kind\":\"leave_queued\"}"
-  | .retire reason => "{\"kind\":\"retire\",\"reason\":" ++ jsonString reason ++ "}"
+  | .retire reason successor =>
+      "{\"kind\":\"retire\",\"reason\":" ++ jsonString reason ++
+        ",\"successor\":{\"request_id\":" ++ jsonString successor.request ++
+        ",\"request_doc_id\":" ++ jsonString successor.doc ++ "}}"
   | .reject reason => "{\"kind\":\"reject\",\"reason\":" ++ jsonString reason ++ "}"
 
 /-! Effect validation and application: `Hooks.valid` and `Hooks.commit`. -/
@@ -479,6 +482,9 @@ def mustCommitCasesJson : String := jsonArray (mustCommitCases.map mustCommitCas
 
 /-! Claim verdicts: `Hooks.combine` and `Hooks.gate`. -/
 
+/-- A successor named by its request id; its document id is derived. -/
+private def successorOf (request : String) : Successor := ⟨request, request ++ "-doc"⟩
+
 structure CombineCase where
   name : String
   verdicts : List ClaimVerdict
@@ -487,13 +493,20 @@ def combineCases : List CombineCase :=
   [ { name := "no_plugins_allow", verdicts := [] }
   , { name := "all_allow", verdicts := [.allow, .allow, .allow] }
   , { name := "leave_queued_over_allow", verdicts := [.allow, .leaveQueued, .allow] }
-  , { name := "retire_over_leave_queued", verdicts := [.leaveQueued, .retire "superseded", .allow] }
-  , { name := "reject_over_retire", verdicts := [.retire "superseded", .reject "denied", .leaveQueued] }
-  , { name := "reject_over_retire_permuted", verdicts := [.leaveQueued, .reject "denied", .retire "superseded"] }
-  , { name := "reject_first_permuted", verdicts := [.reject "denied", .leaveQueued, .retire "superseded"] }
+  , { name := "retire_over_leave_queued"
+    , verdicts := [.leaveQueued, .retire "superseded" (successorOf "r2"), .allow] }
+  , { name := "reject_over_retire"
+    , verdicts := [.retire "superseded" (successorOf "r2"), .reject "denied", .leaveQueued] }
+  , { name := "reject_over_retire_permuted"
+    , verdicts := [.leaveQueued, .reject "denied", .retire "superseded" (successorOf "r2")] }
+  , { name := "reject_first_permuted"
+    , verdicts := [.reject "denied", .leaveQueued, .retire "superseded" (successorOf "r2")] }
   , { name := "equal_rejects_first_reason_wins", verdicts := [.allow, .reject "first", .reject "second"] }
   , { name := "equal_rejects_swapped_first_reason_wins", verdicts := [.reject "second", .allow, .reject "first"] }
-  , { name := "equal_retires_first_reason_wins", verdicts := [.retire "older", .leaveQueued, .retire "newer"] }
+  , { name := "equal_retires_first_reason_and_successor_win"
+    , verdicts := [.retire "older" (successorOf "r2"), .leaveQueued, .retire "newer" (successorOf "r3")] }
+  , { name := "equal_reasons_first_successor_wins"
+    , verdicts := [.retire "superseded" (successorOf "r3"), .retire "superseded" (successorOf "r2")] }
   , { name := "single_leave_queued", verdicts := [.leaveQueued] } ]
 
 private def combineCaseJson (c : CombineCase) : String :=
@@ -513,7 +526,7 @@ def GateCase.result (c : GateCase) : Except Refusal (List ClaimVerdict) :=
 
 private def fence : Script ClaimVerdict :=
   { name := "goal-fence", owns := ["GoalFence"], bound := 1, reads := ["Note"]
-  , decision := .byShown 1 (.retire "goal superseded", []) (.allow, []) }
+  , decision := .byShown 1 (.retire "goal superseded" (successorOf "r2"), []) (.allow, []) }
 
 private def mailbox : Script ClaimVerdict :=
   { name := "mailbox", owns := ["Mailbox"], bound := 1
@@ -533,7 +546,8 @@ def gateCases : List GateCase :=
     , plugins := [fence, mailbox.deciding (.refuse "mailbox closed")] }
   , { name := "verdict_with_effects_is_invalid", world := stageWorld
     , plugins := [fence.deciding
-        (.proceed (.retire "goal superseded") [create "GoalFence" "f1" "retired"]), mailbox] }
+        (.proceed (.retire "goal superseded" (successorOf "r2")) [create "GoalFence" "f1" "retired"]),
+        mailbox] }
   , { name := "effects_rejected_even_when_allowing", world := stageWorld
     , plugins := [mailbox, fence.deciding (.proceed .allow [coreOp "request.supersede"])] } ]
 
