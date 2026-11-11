@@ -10,6 +10,7 @@ import { CircleCheck, CircleX, History, Pause, Square } from "lucide-react";
 import type { JobChildState } from "@source-inc/gents-desktop-client/generated/JobChildState";
 import { AsciiLoader } from "@gents/ui/components/ascii-loader";
 import { Button } from "@gents/ui/components/button";
+import { Hint } from "./Hint";
 import { cn } from "@gents/ui/lib/utils";
 import { useApp } from "@/app/AppContext";
 import { duration } from "@/lib/duration";
@@ -172,14 +173,26 @@ export function WorkflowRunSheet({
                 </span>
                 {view.state === "running" && (
                   <span className="ml-auto flex gap-0.5">
-                    <Button size="xs" variant="quiet" onClick={() => control("pause")}>
-                      <Pause />
-                      Pause
-                    </Button>
-                    <Button size="xs" variant="quiet" onClick={() => control("stop")}>
-                      <Square />
-                      Stop
-                    </Button>
+                    <Hint label="Pause">
+                      <Button
+                        size="icon-xs"
+                        variant="quiet"
+                        aria-label="Pause"
+                        onClick={() => control("pause")}
+                      >
+                        <Pause />
+                      </Button>
+                    </Hint>
+                    <Hint label="Stop">
+                      <Button
+                        size="icon-xs"
+                        variant="quiet"
+                        aria-label="Stop"
+                        onClick={() => control("stop")}
+                      >
+                        <Square />
+                      </Button>
+                    </Hint>
                   </span>
                 )}
               </div>

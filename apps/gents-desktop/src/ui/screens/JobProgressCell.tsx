@@ -8,6 +8,7 @@ import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import type { JobControlKind } from "@source-inc/gents-desktop-client/generated/JobControlKind";
 import { PanelRightOpen, Pause, Square } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
+import { Hint } from "./Hint";
 import { toastFailure } from "../lib/failure";
 import { useApp } from "../app/AppContext";
 import { PromoteWorkflowDialog } from "./PromoteWorkflowDialog";
@@ -95,24 +96,28 @@ export function JobProgressCell({ tool }: { tool: RenderedToolCallView }) {
         <span className="ml-auto flex shrink-0 items-center gap-0.5">
           {state === "running" && (
             <>
-              <Button
-                size="xs"
-                variant="quiet"
-                disabled={!tool.toolCallDocId || !tool.nodeDid}
-                onClick={() => control("pause")}
-              >
-                <Pause />
-                Pause
-              </Button>
-              <Button
-                size="xs"
-                variant="quiet"
-                disabled={!tool.toolCallDocId || !tool.nodeDid}
-                onClick={() => control("stop")}
-              >
-                <Square />
-                Stop
-              </Button>
+              <Hint label="Pause">
+                <Button
+                  size="icon-xs"
+                  variant="quiet"
+                  disabled={!tool.toolCallDocId || !tool.nodeDid}
+                  aria-label="Pause"
+                  onClick={() => control("pause")}
+                >
+                  <Pause />
+                </Button>
+              </Hint>
+              <Hint label="Stop">
+                <Button
+                  size="icon-xs"
+                  variant="quiet"
+                  disabled={!tool.toolCallDocId || !tool.nodeDid}
+                  aria-label="Stop"
+                  onClick={() => control("stop")}
+                >
+                  <Square />
+                </Button>
+              </Hint>
             </>
           )}
           {tool.toolCallDocId && tool.nodeDid && (
