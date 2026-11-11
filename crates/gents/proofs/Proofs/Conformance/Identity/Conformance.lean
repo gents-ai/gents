@@ -106,12 +106,6 @@ def structuralCases : List IdentityStructuralCase :=
 theorem structural_scope_cases_pinned : structuralCases.map (·.wellFormed) =
     [true, true, false, false, true] := by native_decide
 
-def identityStructuralCaseJson (c : IdentityStructuralCase) : Json := Json.mkObj
-  [("name", toJson c.name), ("nodes", toJson c.nodes),
-   ("agents", toJson (c.agents.map agentCaseJson)), ("well_formed", toJson c.wellFormed)]
-
-def structuralCasesJson : String := (toJson (structuralCases.map identityStructuralCaseJson)).compress
-
 structure PermissionGrantCase where
   actor : String
   permission : String

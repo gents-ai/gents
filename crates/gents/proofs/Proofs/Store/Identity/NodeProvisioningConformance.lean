@@ -61,13 +61,6 @@ def reservationCasesJson : String := (toJson ([
       ("directory_synced", toJson directorySynced),
       ("expected", toJson (reservationConfirmed created fileSynced directorySynced))])).compress
 
-def startupCasesJson : String := (toJson ([
-  ("none", ([] : List String)),
-  ("partial", ["read-document", "add-dac-relation"]),
-  ("all", requiredPermissions)].map fun (name, before) =>
-    Json.mkObj [("name", toJson name), ("before", toJson before),
-      ("expected_after", toJson (nodeOwnerGrantsAfterStartup before))])).compress
-
 def runtimeNacCasesJson : String := (toJson ([NacStatus.notConfigured, .enabled,
   .disabledTemporarily].map fun status =>
     Json.mkObj [("status", toJson status.name),
