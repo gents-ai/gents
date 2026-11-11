@@ -587,10 +587,10 @@ pub mod test_support {
             let target = root.join(&path);
             std::fs::create_dir_all(target.parent().expect("a parent")).expect("mkdir");
             if artifacts.contains(path.as_str()) {
-                let wat = crate::plugin::tests::constant_output_wat(
+                let wat = crate::plugin::test_fixtures::constant_output_wat(
                     &serde_json::to_vec(plugin_output).expect("encode plugin output"),
                 );
-                std::fs::write(&target, crate::plugin::tests::build_plugin_afb(&wat))
+                std::fs::write(&target, crate::plugin::test_fixtures::build_plugin_afb(&wat))
                     .expect("write artifact");
             } else {
                 std::fs::copy(source.join(&path), &target)

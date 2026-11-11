@@ -268,7 +268,7 @@ async fn non_pin_notification_rejection_restores_previous_plugin_and_home_record
         .await
         .unwrap();
     let bytes = tokio::task::spawn_blocking(|| {
-        crate::plugin::tests::build_plugin_afb(&crate::plugin::tests::constant_output_wat(
+        crate::plugin::test_fixtures::build_plugin_afb(&crate::plugin::test_fixtures::constant_output_wat(
             br#"{"replacement":true}"#,
         ))
     })

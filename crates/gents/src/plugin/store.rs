@@ -1,7 +1,8 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use gents_protocol::job::PluginDataDeclaration;
 use serde::{Deserialize, Serialize};
 
 fn plugins_root(home: &Path) -> PathBuf {
@@ -95,14 +96,24 @@ pub struct InstalledPlugin {
     pub data_collection_schemas: std::collections::BTreeMap<String, String>,
 }
 
+/// A plugin's data grant: the manifest's `data` declaration, the field names
+/// of each declared collection in the pack's own SDL, and the field sets of
+/// each collection's unique indexes (`InstalledPlugin.data_unique_keys`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginData {
+    pub declaration: PluginDataDeclaration,
+    pub collection_fields: BTreeMap<String, Vec<String>>,
+    pub unique_keys: BTreeMap<String, Vec<Vec<String>>>,
+}
+
 impl InstalledPlugin {
     /// The data grant this record carries, or `None` when the plugin declares
     /// no data.
-    pub fn data_grant(&self) -> Option<crate::plugin::data::PluginData> {
+    pub fn data_grant(&self) -> Option<PluginData> {
         self.declaration
             .data
             .clone()
-            .map(|declaration| crate::plugin::data::PluginData {
+            .map(|declaration| PluginData {
                 declaration,
                 collection_fields: self.data_collection_fields.clone(),
                 unique_keys: self.data_unique_keys.clone(),

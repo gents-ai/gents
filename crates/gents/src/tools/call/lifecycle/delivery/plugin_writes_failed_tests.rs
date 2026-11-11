@@ -83,7 +83,7 @@ async fn denied_plugin_write_rolls_back_completed_terminal_and_settles_failed() 
     );
     fixture.tool.plugin_writes = Some(PluginToolWrites {
         actor: fixture.tool.actor.clone(),
-        grant: crate::plugin::data::PluginData {
+        grant: crate::plugin::store::PluginData {
             declaration: PluginDataDeclaration {
                 collections: vec!["TerminalNote".into(), "TerminalParcel".into()],
                 ops: vec!["insert".into(), "update".into()],

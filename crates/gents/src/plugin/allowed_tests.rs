@@ -563,8 +563,8 @@ fn the_file_tools_refuse_the_allowed_folders_file_and_the_approval_queue() {
             .join(crate::store::local::home::ALLOWED_DIRS_FILE_NAME)
     ));
     for name in [
-        crate::plugin::approval::workspace::FILE,
-        crate::plugin::approval::workspace::LOCK,
+        crate::store::local::home::WORKSPACE_APPROVALS_FILE_NAME,
+        crate::store::local::home::WORKSPACE_APPROVALS_LOCK_FILE_NAME,
     ] {
         assert!(is_protected(&world.gents.join(name)));
     }

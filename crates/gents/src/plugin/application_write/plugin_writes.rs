@@ -4,8 +4,9 @@ use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::plugin::data::{
-    admit_write, insert_note, AdmittedWrite, InsertOutcome, OnConflict, PluginData, StampContext,
+    admit_write, insert_note, AdmittedWrite, InsertOutcome, OnConflict, StampContext,
 };
+use crate::plugin::store::PluginData;
 use crate::store::config_client::ConfigApplyTxn;
 
 /// Applies a plugin's data writes in the caller's transaction and returns one

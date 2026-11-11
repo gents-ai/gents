@@ -38,7 +38,8 @@ use super::records::{
 use gents_protocol::job_settings::effective_ceiling;
 use super::JobBinding;
 use crate::plugin::data::StampContext;
-use crate::plugin::data::{DataCaller, PluginData};
+use crate::plugin::data::DataCaller;
+use crate::plugin::store::PluginData;
 use crate::plugin::job_calls::JobCaller;
 use crate::plugin::store::InstalledPlugin;
 use crate::plugin::PluginVerdict;

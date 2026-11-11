@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::{build_plugin_pack, ECHO_WAT};
+use crate::plugin::test_fixtures::{build_plugin_pack, ECHO_WAT};
 use crate::documents::PluginToolRef;
 use crate::inference::llm::tool::ToolDyn;
 use crate::plugin::executor::PluginExecutor;
@@ -1300,7 +1300,7 @@ async fn execution_receipts_distinguish_refusal_bad_output_and_guest_trap() {
     use gents_protocol::plugin::PluginExecutionVerdict;
     for (wat, verdict) in [
         (
-            crate::plugin::tests::constant_output_wat(b"invalid JSON"),
+            crate::plugin::test_fixtures::constant_output_wat(b"invalid JSON"),
             PluginExecutionVerdict::BadOutput,
         ),
         (

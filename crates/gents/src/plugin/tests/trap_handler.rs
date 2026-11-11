@@ -1,4 +1,4 @@
-use super::{build_plugin_pack, ECHO_WAT};
+use crate::plugin::test_fixtures::{build_plugin_pack, ECHO_WAT};
 use crate::plugin::{PluginBudget, PluginRunner, PluginVerdict};
 
 const CHILD_ENV: &str = "GENTS_PLUGIN_TRAP_HANDLER_SIGNAL_CHILD";

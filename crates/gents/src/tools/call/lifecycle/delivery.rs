@@ -37,7 +37,7 @@ pub(crate) enum ToolDispatchRejection {
 #[derive(Clone)]
 pub(crate) struct PluginToolWrites {
     pub(crate) actor: identity::Did,
-    pub(crate) grant: crate::plugin::data::PluginData,
+    pub(crate) grant: crate::plugin::store::PluginData,
     pub(crate) writes: Vec<gents_protocol::job::DataWrite>,
 }
 

@@ -178,7 +178,7 @@ fn install_plugin(
 ) {
     let later = later.output();
     let wat = if imports {
-        crate::plugin::tests::IMPORTING_WAT.to_owned()
+        crate::plugin::test_fixtures::IMPORTING_WAT.to_owned()
     } else {
         branching_wat(output.to_string().as_bytes(), later.to_string().as_bytes())
     };

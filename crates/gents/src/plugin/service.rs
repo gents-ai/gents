@@ -602,7 +602,7 @@ wait"#
         }
         std::fs::write(
             source.path().join("plugins/plugin.afb"),
-            super::super::tests::build_plugin_afb(super::super::tests::ECHO_WAT),
+            crate::plugin::test_fixtures::build_plugin_afb(crate::plugin::test_fixtures::ECHO_WAT),
         )
         .unwrap();
         for optional in [false, true] {

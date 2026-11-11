@@ -661,4 +661,6 @@ mod wasi_runtime;
 pub use afterburner_core::manifold::Manifold;
 
 #[cfg(test)]
+pub(crate) mod test_fixtures;
+#[cfg(test)]
 pub(crate) mod tests;

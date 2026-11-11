@@ -585,7 +585,7 @@ fn plugin_image_tool(image_bytes: usize) -> (tempfile::TempDir, Box<dyn ToolDyn>
     const PREFIX: &[u8] = br#"{"response":{"width":2,"height":2},"parts":[{"type":"image","mimeType":"image/png","data":""#;
     const SUFFIX: &[u8] = br#""}]}"#;
     let (home, record) = crate::plugin::tests::executor::installed_plugin(
-        &crate::plugin::tests::filled_output_wat(PREFIX, image_bytes, SUFFIX),
+        &crate::plugin::test_fixtures::filled_output_wat(PREFIX, image_bytes, SUFFIX),
         None,
     );
     let executor = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(

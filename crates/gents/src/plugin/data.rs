@@ -12,6 +12,7 @@ pub use gents_protocol::job::OnConflict;
 pub use gents_protocol::job::StampedField as Stamp;
 
 use crate::plugin::application_write::Observation;
+use crate::plugin::store::PluginData;
 
 const MAX_WRITES: usize = 100;
 
@@ -213,16 +214,6 @@ pub fn admit_write_observation(observation: &WriteObservation) -> Result<(), Wri
     } else {
         Err(WriteRefusal::Other)
     }
-}
-
-/// A plugin's data grant: the manifest's `data` declaration, the field names
-/// of each declared collection in the pack's own SDL, and the field sets of
-/// each collection's unique indexes (`InstalledPlugin.data_unique_keys`).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PluginData {
-    pub declaration: PluginDataDeclaration,
-    pub collection_fields: BTreeMap<String, Vec<String>>,
-    pub unique_keys: BTreeMap<String, Vec<Vec<String>>>,
 }
 
 /// Lean `PluginData.InsertOutcome`.

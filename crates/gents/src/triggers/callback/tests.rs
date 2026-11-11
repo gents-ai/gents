@@ -1046,7 +1046,7 @@ async fn first_seen_source_create_materializes_owner_invocation() {
 }
 
 fn artifact_bytes_for_id() -> Vec<u8> {
-    crate::plugin::tests::build_plugin_afb(&crate::plugin::tests::constant_output_wat(b"{}"))
+    crate::plugin::test_fixtures::build_plugin_afb(&crate::plugin::test_fixtures::constant_output_wat(b"{}"))
 }
 
 fn module_doc(wasm: &[u8], args: &serde_json::Value, signer: &str) -> CallbackModuleDoc {
@@ -1075,7 +1075,7 @@ fn trusted(signer: &str) -> BTreeSet<String> {
 }
 
 fn wat_returns_json(json: &str) -> Vec<u8> {
-    crate::plugin::tests::build_plugin_afb(&crate::plugin::tests::constant_output_wat(
+    crate::plugin::test_fixtures::build_plugin_afb(&crate::plugin::test_fixtures::constant_output_wat(
         json.as_bytes(),
     ))
 }
@@ -1139,14 +1139,14 @@ fn signer_policy_fail_closes_when_missing_or_untrusted() {
 
 #[test]
 fn planner_uses_shared_plugin_fuel_memory_and_output_limits() {
-    let infinite = crate::plugin::tests::build_plugin_afb(
+    let infinite = crate::plugin::test_fixtures::build_plugin_afb(
         r#"(module (memory (export "memory") 1)
           (func (export "_start") (loop $spin (br $spin))))"#,
     );
     let error = invoke_plugin_planner(&infinite, &tight_limits(100, 1, 1024, 1024), &json!({}))
         .unwrap_err();
     assert!(error.contains("OutOfFuel"), "{error}");
-    let memory = crate::plugin::tests::build_plugin_afb(
+    let memory = crate::plugin::test_fixtures::build_plugin_afb(
         r#"(module (memory (export "memory") 8) (func (export "_start")))"#,
     );
     assert!(
@@ -3124,7 +3124,7 @@ fn callback_artifact_identity_and_output_are_host_validated() {
     module.abi_version = Some(99);
     assert!(validate_callback_module(&module, &trusted("did:key:zTrusted")).is_err());
 
-    let trap = crate::plugin::tests::build_plugin_afb(
+    let trap = crate::plugin::test_fixtures::build_plugin_afb(
         r#"(module (memory (export "memory") 1) (func (export "_start") unreachable))"#,
     );
     let module = module_doc(&trap, &json!({}), "did:key:zTrusted");

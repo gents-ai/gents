@@ -346,8 +346,8 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("source");
         std::fs::create_dir_all(source.join("plugins")).unwrap();
-        let wat = crate::plugin::tests::constant_output_wat(br#"{"native_pack_echo":"ok"}"#);
-        let afb = crate::plugin::tests::build_plugin_afb(&wat);
+        let wat = crate::plugin::test_fixtures::constant_output_wat(br#"{"native_pack_echo":"ok"}"#);
+        let afb = crate::plugin::test_fixtures::build_plugin_afb(&wat);
         std::fs::write(source.join("plugins/native_echo.afb"), afb).unwrap();
         let mut plugin = json!({"name":"native_echo","description":"Deterministic sealed native pack fixture","artifact":"plugins/native_echo.afb","language":"rust","input_schema":{"type":"object","properties":{},"additionalProperties":false}});
         if authority {

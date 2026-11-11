@@ -357,7 +357,8 @@ async fn a_collection_grant_cannot_bypass_native_document_acp() {
 
 mod plugin {
     use super::*;
-    use crate::plugin::data::{OnConflict, PluginData, Stamp, StampContext};
+    use crate::plugin::data::{OnConflict, Stamp, StampContext};
+    use crate::plugin::store::PluginData;
     use gents_protocol::job::{DataOp, DataWrite, PluginDataDeclaration};
     use std::collections::BTreeMap;
 

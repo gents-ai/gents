@@ -6818,10 +6818,10 @@ async fn pack_install_blocks_a_dependency_plugin_without_operator_authority() {
     let (_dependee, dependee_dir) =
         crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
     std::fs::create_dir_all(dependee_dir.join("plugins")).unwrap();
-    let wat = crate::plugin::tests::constant_output_wat(b"{}");
+    let wat = crate::plugin::test_fixtures::constant_output_wat(b"{}");
     std::fs::write(
         dependee_dir.join("plugins/echo.afb"),
-        crate::plugin::tests::build_plugin_afb(&wat),
+        crate::plugin::test_fixtures::build_plugin_afb(&wat),
     )
     .unwrap();
     edit(&dependee_dir, &|manifest| {
@@ -8220,10 +8220,10 @@ async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin
     std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     let plugins_dir = directory.join("plugins");
     std::fs::create_dir_all(&plugins_dir).unwrap();
-    let wat = crate::plugin::tests::constant_output_wat(br#"{"native_mixed_echo":"ok"}"#);
+    let wat = crate::plugin::test_fixtures::constant_output_wat(br#"{"native_mixed_echo":"ok"}"#);
     std::fs::write(
         plugins_dir.join("fixture_notifier.afb"),
-        crate::plugin::tests::build_plugin_afb(&wat),
+        crate::plugin::test_fixtures::build_plugin_afb(&wat),
     )
     .unwrap();
 

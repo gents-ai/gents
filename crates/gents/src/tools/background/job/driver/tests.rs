@@ -642,7 +642,7 @@ async fn read_step_row_in_txn_sees_the_transactions_own_writes() {
 
 use crate::pack::{write_home_install, HomePackInstall, PackKind};
 use crate::plugin::store;
-use crate::plugin::tests::constant_output_wat;
+use crate::plugin::test_fixtures::constant_output_wat;
 use crate::plugin::tests::executor::installed_plugin;
 use crate::tools::background::job::input::tests::{agent_did, insert_as, node_did, Job};
 use gents_protocol::job::{

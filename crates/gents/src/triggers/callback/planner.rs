@@ -234,7 +234,7 @@ pub(crate) fn fixture_create_workspace_artifact() -> Option<&'static [u8]> {
     ARTIFACT
         .get_or_init(|| {
             gents_callback_fixture_create_workspace::WASI_COMMAND
-                .map(crate::plugin::tests::build_plugin_afb_bytes)
+                .map(crate::plugin::test_fixtures::build_plugin_afb_bytes)
         })
         .as_deref()
 }

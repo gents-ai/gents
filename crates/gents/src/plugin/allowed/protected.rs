@@ -12,9 +12,9 @@ fn reserved_paths(home: &Path) -> [PathBuf; 7] {
     [
         super::file(home),
         super::lock_file(home),
-        crate::plugin::approval::lock_file(home),
-        home.join(crate::plugin::approval::workspace::FILE),
-        home.join(crate::plugin::approval::workspace::LOCK),
+        home.join(crate::store::local::home::PLUGIN_APPROVALS_LOCK_FILE_NAME),
+        home.join(crate::store::local::home::WORKSPACE_APPROVALS_FILE_NAME),
+        home.join(crate::store::local::home::WORKSPACE_APPROVALS_LOCK_FILE_NAME),
         home.join(crate::store::local::home::PLUGIN_APPROVALS_DIR_NAME),
         home.join(crate::store::local::home::PERMISSION_STAGING_DIR_NAME),
     ]
