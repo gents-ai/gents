@@ -1584,33 +1584,33 @@ pub(crate) mod tests {
         managed_agent().did()
     }
 
-    fn agent_snapshot() -> Arc<crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot> {
-        let mut unavailable_agents = rapidhash::RapidHashMap::default();
-        unavailable_agents.insert(
-            agent_did().to_owned(),
-            crate::triggers::runtime_snapshot::UnavailableAgent::new(
-                gents_protocol::node_readiness::AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
-                "fixture agent",
-            ).with_watcher_identity(managed_agent().clone()),
-        );
-        Arc::new(crate::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
-            generation: 1,
-            node: None,
-            local_did: node_did().to_owned(),
-            default_agent_did: agent_did().to_owned(),
-            agents: Default::default(),
-            tool_surfaces: Default::default(),
-            backend_admission_configs: Default::default(),
-            unavailable_agents,
-            active_schedules: Default::default(),
-            unavailable_schedules: Default::default(),
-            active_event_triggers: Default::default(),
-            unavailable_event_triggers: Default::default(),
-            active_tasks: Default::default(),
-            dispatchers: Default::default(),
-            agent_executor_capacities: Default::default(),
-            agent_executor_queue_capacities: Default::default(),
-        })
+    /// The runtime's Agent signers as a job fixture observes them: the
+    /// watched signers, no active Agent, and a publisher that has closed.
+    pub(crate) struct WatchedAgentSigners(
+        pub(crate) Vec<Arc<dyn gents_store::identity::NodeIdentity>>,
+    );
+
+    impl gents_store::agent_identity_watch::AgentIdentityWatch for WatchedAgentSigners {
+        fn watcher_identities(
+            &self,
+        ) -> anyhow::Result<Vec<Arc<dyn gents_store::identity::NodeIdentity>>> {
+            Ok(self.0.clone())
+        }
+
+        fn watched_and_active_agents(
+            &self,
+        ) -> anyhow::Result<gents_store::agent_identity_watch::WatchedAndActiveAgents> {
+            Ok((self.0.clone(), Default::default()))
+        }
+
+        fn changed(
+            &mut self,
+        ) -> futures::future::BoxFuture<
+            '_,
+            Result<(), gents_store::agent_identity_watch::AgentIdentityWatchClosed>,
+        > {
+            Box::pin(async { Err(gents_store::agent_identity_watch::AgentIdentityWatchClosed) })
+        }
     }
 
     pub(crate) fn agent_actor() -> identity::Did {
@@ -1789,13 +1789,8 @@ pub(crate) mod tests {
             agent_snapshots: Default::default(),
             session_goals: Arc::new(gents_session::session::message::NoSessionMessageGoals),
         };
-        let (_snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(agent_snapshot());
         runtime
-            .bind_snapshot(
-                crate::triggers::runtime_snapshot::ActiveSnapshotAgentIdentities::boxed(
-                    snapshot_rx,
-                ),
-            )
+            .bind_snapshot(Box::new(WatchedAgentSigners(vec![managed_agent().clone()])))
             .unwrap();
         Job {
             node,
