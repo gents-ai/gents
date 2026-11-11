@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::documents::{Agent, AgentContext, InferenceBackend, InferenceProfile};
 use crate::store::config_client::patch::SelfConfigPatch;
 use anyhow::{ensure, Result};
+use gents_protocol::operations::agent::AgentOperationError;
 
 #[derive(Clone, Debug, Default)]
 pub struct AgentCatalogView {
@@ -27,92 +28,100 @@ pub enum AgentOperation {
     Disable,
 }
 
+pub(super) fn admit(
+    admitted: bool,
+    refusal: AgentOperationError,
+) -> Result<(), AgentOperationError> {
+    if admitted {
+        Ok(())
+    } else {
+        Err(refusal)
+    }
+}
+
 pub fn decide_agent_operation(
     view: &AgentCatalogView,
     op: &AgentOperation,
     target: &str,
     make_default: bool,
-) -> Result<()> {
+) -> Result<(), AgentOperationError> {
     match op {
         AgentOperation::Create(input) => {
-            ensure!(
+            admit(
                 !view.agents.contains_key(target),
-                "agent {target:?} already exists"
-            );
-            ensure!(!input.display_name.is_empty(), "display_name is required");
-            ensure!(
+                AgentOperationError::AgentExists(target.to_owned()),
+            )?;
+            admit(
+                !input.display_name.is_empty(),
+                AgentOperationError::DisplayNameRequired,
+            )?;
+            admit(
                 !input.inference_profile_id.trim().is_empty()
                     && view
                         .published_profiles
                         .contains(&input.inference_profile_id),
-                "select a published inference profile"
-            );
+                AgentOperationError::ProfileNotPublished,
+            )?;
             let source = input.clone_from.as_deref().unwrap_or("");
-            ensure!(
+            admit(
                 !source.is_empty() || !input.system_prompt.trim().is_empty(),
-                "fresh agents require system_prompt"
-            );
-            ensure!(
+                AgentOperationError::SystemPromptRequired,
+            )?;
+            admit(
                 source.is_empty() || view.agents.get(source) == Some(&true),
-                "clone source must be an enabled agent"
-            );
+                AgentOperationError::CloneSourceNotEnabled,
+            )?;
         }
         AgentOperation::Edit(patch) => {
-            ensure!(
+            admit(
                 view.agents.contains_key(target),
-                "agent {target:?} does not exist"
-            );
-            ensure!(
+                AgentOperationError::AgentMissing(target.to_owned()),
+            )?;
+            admit(
                 !view.protected_ids.contains(target),
-                "protected agent cannot be edited"
-            );
+                AgentOperationError::ProtectedAgentEdit,
+            )?;
             for (field, value) in patch {
-                ensure!(
+                admit(
                     matches!(
                         field.as_str(),
                         "display_name" | "description" | "system_prompt" | "inference_profile_id"
                     ),
-                    "unsupported agent edit field {field:?}"
-                );
+                    AgentOperationError::UnsupportedEditField(field.clone()),
+                )?;
                 match (field.as_str(), value) {
-                    ("display_name", Some(value)) => ensure!(
+                    ("display_name", Some(value)) => admit(
                         value.as_str().is_some_and(|s| !s.is_empty()),
-                        "display_name cannot be empty"
-                    ),
-                    ("system_prompt", Some(value)) => ensure!(
+                        AgentOperationError::DisplayNameEmpty,
+                    )?,
+                    ("system_prompt", Some(value)) => admit(
                         value.as_str().is_some_and(|s| !s.trim().is_empty()),
-                        "system_prompt cannot be blank"
-                    ),
-                    ("inference_profile_id", value) => ensure!(
-                        value
-                            .as_ref()
-                            .and_then(|v| v.as_str())
-                            .is_some_and(
-                                |s| !s.trim().is_empty() && view.published_profiles.contains(s)
-                            ),
-                        "select a published inference profile"
-                    ),
+                        AgentOperationError::SystemPromptBlank,
+                    )?,
+                    ("inference_profile_id", value) => admit(
+                        value.as_ref().and_then(|v| v.as_str()).is_some_and(|s| {
+                            !s.trim().is_empty() && view.published_profiles.contains(s)
+                        }),
+                        AgentOperationError::ProfileNotPublished,
+                    )?,
                     _ => {}
                 }
             }
         }
         AgentOperation::Disable => {
-            ensure!(
+            admit(
                 view.agents.contains_key(target),
-                "agent {target:?} does not exist"
-            );
-            ensure!(
+                AgentOperationError::AgentMissing(target.to_owned()),
+            )?;
+            admit(
                 !view.protected_ids.contains(target),
-                "protected agent cannot be disabled"
-            );
-            ensure!(
-                !make_default,
-                "agent disable cannot also make the target default"
-            );
-            ensure!(
+                AgentOperationError::ProtectedAgentDisable,
+            )?;
+            admit(!make_default, AgentOperationError::DisableMakesDefault)?;
+            admit(
                 view.default_id.as_deref() != Some(target),
-                "default agent cannot be disabled"
-            );
+                AgentOperationError::DefaultAgentDisable,
+            )?;
         }
     }
     Ok(())

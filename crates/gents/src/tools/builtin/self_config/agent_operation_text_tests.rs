@@ -213,12 +213,12 @@ async fn agent_create_and_clone_text_is_pinned() {
 
 const PINNED: &str = r###"## help ["agent","create","--help"] (ok)
 agent [preview] create  options: display-name, system-prompt, preset (readonly|write), profile; readonly permits shell commands; to forbid shell set host.bash.mode Off; optional description, root; argv switch --default
-ID is allocated from options.display-name and returned with Context/Tools IDs; omit target_id and set/clear. For later changes use agent update or context update with the returned ID.
+ID is allocated by the runtime as a fresh agent_did, not from options.display-name; the receipt returns it with the new Context ID in agent.context_id. Omit target_id and set/clear. For later changes use agent update or context update with the returned ID.
 A new Agent with host tools needs a User to grant it WorkspaceRoot access; the receipt's host_root_access gives the User's command. Never widen your own Tools or categories for it.
 Page and recipe: ["help","agent"]
 ## help ["agent","clone","--help"] (ok)
-agent [preview] clone  options: from, display-name; optional profile, system-prompt, root, preset
-ID is allocated from options.display-name and returned with Context/Tools IDs; omit target_id and set/clear. For later changes use agent update or context update with the returned ID.
+agent [preview] clone  options: from, display-name, profile; optional system-prompt, root, description; argv switch --default
+ID is allocated by the runtime as a fresh agent_did, not from options.display-name; the receipt returns it with the new Context ID in agent.context_id. Omit target_id and set/clear. For later changes use agent update or context update with the returned ID.
 A new Agent with host tools needs a User to grant it WorkspaceRoot access; the receipt's host_root_access gives the User's command. Never widen your own Tools or categories for it.
 Page and recipe: ["help","agent"]
 ## help ["agent","preview","--help"] (ok)

@@ -1,4 +1,30 @@
 use super::*;
+use agent_management::AgentApplyError;
+use gents_protocol::operations::agent::{AgentCreateOperation, NextCall};
+
+fn next_call(next: NextCall) -> Value {
+    match next {
+        NextCall::VerbHelp { resource, verb } => json!({"argv":[resource, verb, "--help"]}),
+        NextCall::ResourceHelp { resource } => json!({"argv":["help", resource]}),
+    }
+}
+
+/// A refused create or clone answers with the recovery its error declares.
+/// Another owner's failure passes on unchanged to that owner's classifiers
+/// in `failure_guidance`.
+pub(super) fn agent_create_failure(
+    error: AgentApplyError,
+    operation: AgentCreateOperation,
+) -> anyhow::Error {
+    match error {
+        AgentApplyError::Operation(error) => CommandGuidance {
+            message: gents_protocol::error_chain::ErrorChain(&error).to_string(),
+            next_call: next_call(error.recovery(operation)),
+        }
+        .into(),
+        AgentApplyError::Other(error) => error,
+    }
+}
 
 fn missing_reference_next_step(
     missing: &crate::documents::MissingReference,

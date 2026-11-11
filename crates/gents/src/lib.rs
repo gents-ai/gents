@@ -20,6 +20,7 @@ pub mod inference;
 pub(crate) mod lean_vocab_test;
 pub mod observe;
 pub mod openai_wire;
+pub mod operations;
 pub mod pack;
 pub mod plugin;
 pub use gents_loop::provider_input::ProviderInputProfile;

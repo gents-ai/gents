@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
 use gents::documents::Agent;
 use gents::store::graphql::escape_graphql_string;
-use gents::tools::builtin::self_config::{configure_agent, ConfigureAgentParams, StringUpdate};
+use gents::tools::builtin::self_config::{configure_agent, ConfigureAgentParams};
 use gents::tools::surface::presets;
 use gents::Collection;
+use gents_protocol::operations::StringUpdate;
 use serde_json::{json, Value};
 
 use crate::cli::output_format::OutputFormat;

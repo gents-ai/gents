@@ -4,8 +4,9 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, ensure, Context, Result};
 use gents::store::config_client::GraphqlEndpoint;
 use gents::store::graphql::escape_graphql_string;
-use gents::tools::builtin::self_config::{configure_agent, ConfigureAgentParams, StringUpdate};
+use gents::tools::builtin::self_config::{configure_agent, ConfigureAgentParams};
 use gents_protocol::node_readiness::{AgentReadinessEntry, AgentReadinessState};
+use gents_protocol::operations::StringUpdate;
 use gents_protocol::row::{decode_node_readiness_snapshot, NodeReadinessRow};
 use serde_json::Value;
 
