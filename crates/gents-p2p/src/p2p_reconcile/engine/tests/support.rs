@@ -18,13 +18,6 @@ fn one_filter(collection: &str, field: &str, value: &str) -> PairingFilters {
     filters
 }
 
-fn merge_desired(
-    base: Option<PairingDesired>,
-    data_plane: Option<PairingDesired>,
-) -> Option<PairingDesired> {
-    merge_layered_desired("did:key:local", "did:key:peer", base, data_plane)
-}
-
 /// The mock mirrors the real adapter's name→collection-id distinctness; a
 /// name-echo (id == name) would hide the id-space mismatch the engine must
 /// reconcile. The prefix guarantees id != name.
