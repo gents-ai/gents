@@ -1,5 +1,6 @@
 use defra_node::Node as EmbeddedNode;
 use gents_automation::triggers::engine::goal_source::GoalSource;
+use gents_automation::triggers::engine::TriggerSource as _;
 use gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot;
 use gents_documents::TriggerSource;
 use gents_protocol::request_lifecycle::RequestLifecycleState;

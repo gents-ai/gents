@@ -261,8 +261,8 @@ use gents_store::graphql::escape_graphql_string;
         assert_eq!(receipt.execution_generation, "lean-generation-7");
         assert_eq!(receipt.lease_ms, 5_000);
         assert_eq!(lifecycle.state, LocalLifecycleState::Pending);
-        assert!(lifecycle.execution_lease.is_none());
-        assert!(lifecycle.renewal_task.is_none());
+        assert!(!lifecycle.holds_execution_lease());
+        assert!(!lifecycle.holds_renewal_task());
 
         let claimed = durable_request_row(&node, &doc_id).await;
         assert_eq!(

@@ -1,5 +1,5 @@
 use super::*;
-use crate::support::{test_db, TestDb};
+use gents_session::request::lifecycle::test_support::{test_db, TestDb};
 use gents_protocol::row::AgentRequest;
 use gents_store::graphql::escape_graphql_string;
 

@@ -1,26 +1,16 @@
-use gents_session::session::provider_context_reduction::capture_source_boundary;
-use std::sync::Arc;
-use defra_node::Node as EmbeddedNode;
 use gents_protocol::message::Message;
-use gents_protocol::output::{
-    MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
-    OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, ReasoningPart, SegmentRun,
-    SourceClose, StreamDeclaration, StreamPayload, TranscriptMessage,
-};
+use gents_protocol::output::OutputSource;
 use gents_protocol::rendered_request::RenderedRequestSource;
-use gents_store::identity::NodeIdentity;
 use gents_session::session::output::replay_candidates::load_canonical_assistant_candidates;
-use gents_session::session::output::replay_request::ReplayRequestReader;
 use gents_session::session::output::CanonicalReplayScope;
 use gents_protocol::output::rows::{
-    output_segment_create_variables, transcript_message_create_variables,
-    CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    transcript_message_create_variables, CREATE_AGENT_MESSAGE_MUTATION,
 };
-use gents_protocol::transcript::SourceBoundary;
-use gents_loop::claude_messages_body::{
-    replay_stage, select_replay, ReplayIssuer, ReplayTag, ReplayWire, TaggedAssistantRow,
+use gents_loop::claude_messages_body::{select_replay, ReplayTag, ReplayWire, TaggedAssistantRow};
+use gents_session::session::output_replay_fixture::{
+    fixture_query, fixture_with_provider_payload_and_scope_and_tool, fixture_write, signed_fixture,
+    ReplayFixture, SESSION_ID,
 };
-use gents_loop::provider_input::replay_frontier::flatten;
 
 #[tokio::test]
 async fn non_required_signed_history_with_wrong_provider_scope_stays_permissive() {

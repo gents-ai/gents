@@ -27,7 +27,7 @@ async fn renewal_fixture() -> (
     let access = agent_access(&node, &identity, &agent);
     let epoch = Utc::now();
     let lifecycle = observed_case_request(&node, &identity, &agent, case, epoch).await;
-    let row = request_row(&access, &lifecycle.request.doc_id).await;
+    let row = request_row(&access, &lifecycle.request().doc_id).await;
     let deadline = DateTime::parse_from_rfc3339(row.execution_lease_expires_at.as_deref().unwrap())
         .unwrap()
         .with_timezone(&Utc);
@@ -78,7 +78,7 @@ async fn bump_admission_sequence(access: &gents_store::config_client::ConfigAcce
 async fn background_admission_bump_invalidates_an_open_renewal() {
     let (node, _dir, identity, agent, access, lifecycle, row, deadline, now) =
         renewal_fixture().await;
-    let doc_id = lifecycle.request.doc_id.clone();
+    let doc_id = lifecycle.request().doc_id.clone();
     let renewal =
         gents_store::config_client::ConfigApplyTxn::begin_execution_renewal_for_test_with_signer(
             &node,
@@ -121,7 +121,7 @@ async fn background_admission_bump_invalidates_an_open_renewal() {
 async fn renewal_poll_exhausted_by_sibling_admissions_is_redriven_before_expiry() {
     let (_node, _dir, _identity, _agent, access, lifecycle, row, deadline, now) =
         renewal_fixture().await;
-    let doc_id = lifecycle.request.doc_id.clone();
+    let doc_id = lifecycle.request().doc_id.clone();
     let poll_attempts = 4;
     let reached = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Notify::new());
@@ -181,7 +181,7 @@ async fn renewal_poll_exhausted_by_sibling_admissions_is_redriven_before_expiry(
 async fn committed_renewal_invalidates_an_open_background_admission() {
     let (node, _dir, identity, agent, access, lifecycle, row, deadline, now) =
         renewal_fixture().await;
-    let doc_id = lifecycle.request.doc_id.clone();
+    let doc_id = lifecycle.request().doc_id.clone();
     let admission = gents_store::config_client::ConfigApplyTxn::begin_local_with_signer(
         &node,
         identity::Did::new(&agent.agent_did).unwrap(),

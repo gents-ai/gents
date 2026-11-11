@@ -377,7 +377,7 @@ async fn lean_periodic_renewal_waits_for_abandoned_native_operation_before_next_
 
         let access = agent_access(&node, &identity, &agent);
         let mut lifecycle = owner(&node, &identity, &agent).await;
-        drop(lifecycle.renewal_task.take());
+        lifecycle.drop_renewal_task();
         let doc_id = lifecycle.request().doc_id.clone();
         let row = request_row(&access, &doc_id).await;
         let generation = row

@@ -37,6 +37,8 @@ pub mod title_text;
 pub use title_text::display_session_title;
 #[cfg(any(test, feature = "test-fixtures"))]
 mod history_fixture;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod output_replay_fixture;
 #[cfg(test)]
 mod tests;
 #[cfg(any(test, feature = "test-fixtures"))]
