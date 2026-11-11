@@ -1,4 +1,6 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(test, serde(rename_all = "snake_case"))]
 pub enum Phase {
     Accepting,
     Stopping,
@@ -80,66 +82,55 @@ impl State {
 }
 
 #[cfg(test)]
-mod tests {
+mod conformance {
     use super::*;
-    use serde_json::Value;
-
-    fn state(value: &Value) -> State {
-        State {
-            phase: match value["phase"].as_str().unwrap() {
-                "accepting" => Phase::Accepting,
-                "stopping" => Phase::Stopping,
-                "released" => Phase::Released,
-                other => panic!("unknown modeled phase {other}"),
-            },
-            executions: value["executions"].as_u64().unwrap().try_into().unwrap(),
-            native_outstanding: value["nativeOutstanding"]
-                .as_u64()
-                .unwrap()
-                .try_into()
-                .unwrap(),
-        }
-    }
+    use gents_lean_vocab::families::runtime_service_replacement_traces as family;
 
     #[test]
-    fn generated_replacement_traces_match_authenticated_admission_and_release_guards() {
-        let snapshot: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases = snapshot["runtime_service_replacement_cases"]
-            .as_array()
-            .unwrap();
-        assert!(!cases.is_empty());
-        for case in cases {
-            let mut current = state(&case["initial"]);
-            for step in case["trace"].as_array().unwrap() {
-                let raw = &step["action"];
-                let action = match raw["kind"].as_str().unwrap() {
-                    "admit" => Action::Admit,
-                    "finish" => Action::Finish,
-                    "nativeStarted" => Action::NativeStarted,
-                    "nativeReturned" => Action::NativeReturned,
-                    "retire" => Action::Retire(RetirementAuthority {
-                        operator_authenticated: raw["operatorAuthenticated"].as_bool().unwrap(),
-                        observed_build_matches: raw["observedBuildMatches"].as_bool().unwrap(),
-                    }),
-                    "release" => Action::Release {
-                        store_released: raw["storeReleased"].as_bool().unwrap(),
-                    },
-                    "replace" => Action::Replace {
-                        startup_reserved: raw["startupReserved"].as_bool().unwrap(),
-                    },
-                    other => panic!("unknown modeled action {other}"),
-                };
-                let next = current.step(action);
-                assert_eq!(
-                    next.is_some(),
-                    step["accepted"].as_bool().unwrap(),
-                    "{case}"
-                );
-                if let Some(next) = next {
-                    current = next;
-                }
-                assert_eq!(current, state(&step["state"]), "{case}");
-            }
-        }
+    fn service_replacement_traces_match_lean() {
+        family::replay::<String, Phase>(|scenario| {
+            let mut current = State {
+                phase: scenario.initial.phase,
+                executions: scenario.initial.executions.try_into().unwrap(),
+                native_outstanding: scenario.initial.native_outstanding.try_into().unwrap(),
+            };
+            let results = scenario
+                .steps
+                .iter()
+                .map(|step| {
+                    let action = match step.kind.as_str() {
+                        "admit" => Action::Admit,
+                        "finish" => Action::Finish,
+                        "native_started" => Action::NativeStarted,
+                        "native_returned" => Action::NativeReturned,
+                        "retire" => Action::Retire(RetirementAuthority {
+                            operator_authenticated: step.operator_authenticated,
+                            observed_build_matches: step.observed_build_matches,
+                        }),
+                        "release" => Action::Release {
+                            store_released: step.store_released,
+                        },
+                        "replace" => Action::Replace {
+                            startup_reserved: step.startup_reserved,
+                        },
+                        other => panic!("unknown modeled action {other}"),
+                    };
+                    let next = current.step(action);
+                    let accepted = next.is_some();
+                    if let Some(next) = next {
+                        current = next;
+                    }
+                    family::StepResult {
+                        accepted,
+                        state: family::State {
+                            phase: current.phase,
+                            executions: current.executions.try_into().unwrap(),
+                            native_outstanding: current.native_outstanding.try_into().unwrap(),
+                        },
+                    }
+                })
+                .collect::<Vec<_>>();
+            family::Outcome { results }
+        });
     }
 }

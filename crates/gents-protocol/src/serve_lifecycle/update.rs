@@ -55,51 +55,28 @@ impl Phase {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn handoff_matches_executable_lean_owner() {
-        let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases = snapshot["update_handoff_cases"].as_array().unwrap();
-        assert!(!cases.is_empty());
-        for case in cases {
-            let phase: Phase = serde_json::from_value(case["phase"].clone()).unwrap();
-            let flag = case["flag"].as_bool().unwrap();
-            assert_eq!(
-                phase.can_restore_prior(flag, false),
-                case["can_restore"].as_bool().unwrap(),
-                "{case}"
-            );
-            assert_eq!(
-                phase.can_restore_prior(flag, true),
-                case["can_restore_same_build"].as_bool().unwrap(),
-                "{case}"
-            );
-            let action = match case["action"].as_str().unwrap() {
-                "register" => Action::Register(flag),
-                "acknowledge" => Action::Acknowledge,
-                "retire" => Action::Retire(flag),
-                "release" => Action::Release(flag),
-                "backup" => Action::Backup(flag),
-                "install" => Action::Install(flag),
-                "verify" => Action::Verify(flag),
-                "fail" => Action::Fail,
-                other => panic!("unknown modeled action {other}"),
-            };
-            let expected: Option<Phase> = serde_json::from_value(case["next"].clone()).unwrap();
-            assert_eq!(phase.step(action), expected, "{case}");
-        }
-    }
-}
-
-#[cfg(test)]
 mod conformance {
     use super::*;
 
     #[test]
-    fn update_handoff_restore_matches_lean() {
-        gents_lean_vocab::families::runtime_reconcile_update_handoff_can_restore::replay(|i| {
-            Phase::can_restore_prior(i.phase, i.candidate_may_have_opened, i.same_build)
+    fn update_handoff_transitions_match_lean() {
+        gents_lean_vocab::families::update_handoff_transitions::replay::<String, Phase>(|i| {
+            let action = match i.action.as_str() {
+                "register" => Action::Register(i.flag),
+                "acknowledge" => Action::Acknowledge,
+                "retire" => Action::Retire(i.flag),
+                "release" => Action::Release(i.flag),
+                "backup" => Action::Backup(i.flag),
+                "install" => Action::Install(i.flag),
+                "verify" => Action::Verify(i.flag),
+                "fail" => Action::Fail,
+                other => panic!("unknown modeled action {other}"),
+            };
+            gents_lean_vocab::families::update_handoff_transitions::HandoffVerdict {
+                can_restore: i.phase.can_restore_prior(i.flag, false),
+                can_restore_same_build: i.phase.can_restore_prior(i.flag, true),
+                next: i.phase.step(action),
+            }
         });
     }
 }
