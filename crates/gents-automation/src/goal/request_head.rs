@@ -145,10 +145,7 @@ pub(super) fn verify_goal_continuation_receipt(
 }
 
 pub(crate) fn request_selection_fields() -> String {
-    format!(
-        "{} failure_reason superseded_by_request superseded_by_request_doc_id",
-        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
-    )
+    gents_session::request::hooks::queue_scope::session_request_fields()
 }
 
 pub(crate) fn latest_goal_request<'a>(
@@ -678,21 +675,6 @@ pub(super) async fn load_session_requests(
     node_did: &str,
     session_id: &str,
 ) -> Result<Vec<AgentRequestRow>> {
-    let fields = request_selection_fields();
-    let escaped_did = escape_graphql_string(node_did);
-    let escaped_session = escape_graphql_string(session_id);
-    let response = txn
-        .execute_read(&format!(
-            r#"{{ AgentRequest(filter: {{
-        node_did: {{ _eq: "{escaped_did}" }}, session_id: {{ _eq: "{escaped_session}" }}
-    }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {fields} }} }}"#
-        ))
-        .await?;
-    serde_json::from_value(
-        response
-            .pointer("/data/AgentRequest")
-            .cloned()
-            .context("request query omitted rows")?,
-    )
-    .map_err(Into::into)
+    gents_session::request::hooks::queue_scope::load_session_request_rows(txn, node_did, session_id)
+        .await
 }

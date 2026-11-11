@@ -1,6 +1,7 @@
 use super::GoalDocument;
 use gents_protocol::goal::RequestAssignmentScope;
 use gents_protocol::row::AgentRequestRow;
+use gents_session::request::hooks::queue_scope::SessionRequests;
 use gents_store::identity::request_receipt::verify_request_receipt_signature;
 
 /// Historical display uses the immutable signed request, independently of the
@@ -290,10 +291,7 @@ async fn assignment_snapshot_for_request(
 }
 
 pub(crate) struct RequestAssignments {
-    owner: String,
-    session: String,
-    rows: Vec<AgentRequestRow>,
-    index: rapidhash::RapidHashMap<String, usize>,
+    requests: std::sync::Arc<SessionRequests>,
     goals: Vec<GoalDocument>,
     scopes: std::sync::Mutex<rapidhash::RapidHashMap<String, RequestAssignmentScope>>,
 }
@@ -305,10 +303,10 @@ impl RequestAssignments {
         request_id: &str,
     ) -> anyhow::Result<(&AgentRequestRow, RequestAssignmentObservation)> {
         use anyhow::Context;
-        let request = &self.rows[*self
-            .index
-            .get(doc)
-            .context("Goal tool caller is absent or ambiguous in its owner/session")?];
+        let request = self
+            .requests
+            .row(doc)
+            .context("Goal tool caller is absent or ambiguous in its owner/session")?;
         anyhow::ensure!(
             request.request_id == request_id,
             "Goal tool caller differs from its physical request identity"
@@ -318,30 +316,23 @@ impl RequestAssignments {
     }
 
     pub(crate) fn request(&self, doc: &str) -> anyhow::Result<&AgentRequestRow> {
-        use anyhow::Context;
-        let row = &self.rows[*self
-            .index
-            .get(doc)
-            .context("request is absent from its owner/session observation")?];
-        anyhow::ensure!(
-            row.purpose == Some(gents_protocol::request_admission::RequestPurpose::Normal),
-            "assignment request is auxiliary"
-        );
-        verify_request_receipt_signature(row)?;
-        Ok(row)
+        self.requests.request(doc)
     }
 
     fn entry(&self, doc: &str) -> anyhow::Result<&AgentRequestRow> {
         use anyhow::Context;
-        let by_doc =
-            super::request_head::request_rows_by_doc(&self.owner, &self.session, &self.rows)?;
+        let by_doc = super::request_head::request_rows_by_doc(
+            self.requests.owner(),
+            self.requests.session(),
+            self.requests.rows(),
+        )?;
         let current = by_doc
             .get(doc)
             .context("assignment request is absent from its owner/session")?;
         let openings = super::request_head::assignment_openings(&self.goals);
         super::request_head::authenticated_assignment_entry(
-            &self.owner,
-            &self.session,
+            self.requests.owner(),
+            self.requests.session(),
             current,
             &by_doc,
             None,
@@ -358,16 +349,16 @@ impl RequestAssignments {
             .doc_id
             .as_deref()
             .context("assignment request has no physical identity")?;
-        let current = &self.rows[*self
-            .index
-            .get(doc)
-            .context("assignment request is absent from its owner/session")?];
+        let current = self
+            .requests
+            .row(doc)
+            .context("assignment request is absent from its owner/session")?;
         anyhow::ensure!(
             current.request_id == request.request_id
                 && current.purpose
                     == Some(gents_protocol::request_admission::RequestPurpose::Normal)
-                && request.node_did.as_deref() == Some(self.owner.as_str())
-                && request.session_id.as_deref() == Some(self.session.as_str()),
+                && request.node_did.as_deref() == Some(self.requests.owner())
+                && request.session_id.as_deref() == Some(self.requests.session()),
             "assignment request differs from its physical owner/session observation"
         );
         let entry = self.entry(doc)?;
@@ -411,26 +402,42 @@ fn request_assignments(
     rows: Vec<AgentRequestRow>,
     goals: Vec<GoalDocument>,
 ) -> anyhow::Result<RequestAssignments> {
-    let by_doc = super::request_head::request_rows_by_doc(owner, session, &rows)?;
-    let index = rows
-        .iter()
-        .enumerate()
-        .filter_map(|(position, row)| {
-            let doc = row.doc_id.as_deref()?;
-            by_doc
-                .get(doc)
-                .is_some_and(|indexed| std::ptr::eq(*indexed, row))
-                .then(|| (doc.to_owned(), position))
-        })
-        .collect();
-    Ok(RequestAssignments {
-        owner: owner.to_owned(),
-        session: session.to_owned(),
-        rows,
-        index,
+    Ok(RequestAssignments::over(
+        std::sync::Arc::new(SessionRequests::new(owner, session, rows)?),
         goals,
-        scopes: Default::default(),
+    ))
+}
+
+impl RequestAssignments {
+    pub(super) fn over(requests: std::sync::Arc<SessionRequests>, goals: Vec<GoalDocument>) -> Self {
+        Self {
+            requests,
+            goals,
+            scopes: Default::default(),
+        }
+    }
+}
+
+/// Whether answering `asked` needs the session's retained Goal assignments: a
+/// request that is a verified normal request without an authenticated signed
+/// reference is resolved from them.
+pub(super) fn scopes_need_history(requests: &RequestAssignments, asked: &[String]) -> bool {
+    asked.iter().any(|doc| {
+        requests.request(doc).is_ok() && !matches!(signed_scope(requests, doc), Ok(Some(_)))
     })
+}
+
+/// The scope of one request, from its signed reference or, failing that, the
+/// retained assignments `requests` holds.
+pub(super) fn assignment_scope(
+    requests: &RequestAssignments,
+    doc: &str,
+) -> anyhow::Result<RequestAssignmentScope> {
+    requests.request(doc)?;
+    match signed_scope(requests, doc) {
+        Ok(Some(scope)) => Ok(scope),
+        _ => requests.scope(doc),
+    }
 }
 
 pub(crate) struct RequestAssignmentScopes<'a, R>
@@ -455,23 +462,17 @@ where
         if let Some(scope) = self.scopes.get(doc) {
             return Ok(scope.clone());
         }
-        self.requests.request(doc)?;
-        let scope = match signed_scope(&self.requests, doc) {
-            Ok(Some(scope)) => scope,
-            _ => {
-                if !self.history_loaded {
-                    let versions = super::load_assignment_versions_for_session(
-                        self.access,
-                        &self.requests.owner,
-                        &self.requests.session,
-                    )
-                    .await?;
-                    self.requests.goals = latest_assignment_goals(&versions)?;
-                    self.history_loaded = true;
-                }
-                self.requests.scope(doc)?
-            }
-        };
+        if !self.history_loaded && scopes_need_history(&self.requests, &[doc.to_owned()]) {
+            let versions = super::load_assignment_versions_for_session(
+                self.access,
+                self.requests.requests.owner(),
+                self.requests.requests.session(),
+            )
+            .await?;
+            self.requests.goals = latest_assignment_goals(&versions)?;
+            self.history_loaded = true;
+        }
+        let scope = assignment_scope(&self.requests, doc)?;
         self.scopes.insert(doc.to_owned(), scope.clone());
         Ok(scope)
     }
@@ -497,14 +498,14 @@ fn signed_scope(
     doc: &str,
 ) -> anyhow::Result<Option<RequestAssignmentScope>> {
     let by_doc = super::request_head::request_rows_by_doc(
-        &requests.owner,
-        &requests.session,
-        &requests.rows,
+        requests.requests.owner(),
+        requests.requests.session(),
+        requests.requests.rows(),
     )?;
     let current = requests.request(doc)?;
     let entry = super::request_head::authenticated_entry(
-        &requests.owner,
-        &requests.session,
+        requests.requests.owner(),
+        requests.requests.session(),
         current,
         &by_doc,
         None,
