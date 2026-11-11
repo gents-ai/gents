@@ -1,7 +1,7 @@
 use gents_toolcalls::call::lifecycle::admission_fixture::{
     published_session_message, PublishedAdmissionOptions,
 };
-use super::plan::PlannedWrite;
+use gents_session::session::message::plan::PlannedWrite;
 use gents_session::session::message::*;
 use gents_protocol::tool_call::AwaitMode;
 

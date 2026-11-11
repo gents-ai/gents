@@ -158,7 +158,7 @@ pub enum SteerAdmissionRefusal {
     Blocked,
 }
 
-pub(crate) fn steer_reachable(
+pub fn steer_reachable(
     head: &AgentRequest,
     mut pending: Vec<AgentRequestRow>,
     candidate_doc_id: &str,

@@ -1,5 +1,4 @@
 use gents_session::workspace::{bind_integrate, git, git_worktree_caps, integrate_writer, seal_writer, Fixture};
-use gents_session::workspace::tests::*;
 use gents_session::request::lifecycle::{RequestLifecycle, RequestTerminalOutcome, WorkspaceLineage};
 use anyhow::Context;
 use gents_store::identity::NodeIdentity;

@@ -25,7 +25,7 @@ pub struct Plan {
     pub(super) hop: u32,
     pub(super) steer_head: Option<Option<String>>,
     pub(super) interrupt_before_publish: bool,
-    pub(super) write: PlannedWrite,
+    pub write: PlannedWrite,
 }
 
 impl Plan {
@@ -79,7 +79,7 @@ impl Plan {
         }
     }
 
-    pub(crate) fn delivery(&self) -> Delivery {
+    pub fn delivery(&self) -> Delivery {
         match self.write {
             PlannedWrite::Request { delivery, .. } => delivery,
             PlannedWrite::Goal { .. } => Delivery::Request,

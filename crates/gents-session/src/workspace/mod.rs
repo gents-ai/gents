@@ -4,7 +4,7 @@ mod artifact;
 pub use artifact::ArtifactGrant;
 mod binding;
 mod documents;
-mod executor;
+pub mod executor;
 mod instructions;
 pub mod journal;
 pub mod overlay;
@@ -12,7 +12,7 @@ mod path_capability;
 mod publication;
 mod quickstart;
 pub mod root_resolution;
-mod runtime;
+pub mod runtime;
 pub mod sandbox;
 
 pub use action_plan::{

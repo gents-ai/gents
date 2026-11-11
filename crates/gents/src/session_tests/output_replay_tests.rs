@@ -1,4 +1,4 @@
-use super::provider_context_reduction::capture_source_boundary;
+use gents_session::session::provider_context_reduction::capture_source_boundary;
 use std::sync::Arc;
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::message::Message;
@@ -9,9 +9,9 @@ use gents_protocol::output::{
 };
 use gents_protocol::rendered_request::RenderedRequestSource;
 use gents_store::identity::NodeIdentity;
-use super::output::replay_candidates::load_canonical_assistant_candidates;
-use super::output::replay_request::ReplayRequestReader;
-use super::output::CanonicalReplayScope;
+use gents_session::session::output::replay_candidates::load_canonical_assistant_candidates;
+use gents_session::session::output::replay_request::ReplayRequestReader;
+use gents_session::session::output::CanonicalReplayScope;
 use gents_protocol::output::rows::{
     output_segment_create_variables, transcript_message_create_variables,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,

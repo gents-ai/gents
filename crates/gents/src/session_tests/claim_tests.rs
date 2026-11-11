@@ -1197,7 +1197,7 @@ use gents_session::request::lifecycle::claim::*;
 
     #[tokio::test]
     async fn pending_interrupt_and_expiry_release_workspace_bindings_atomically() {
-        use gents_session::request::admission::workspace_cleanup_tests::Fixture;
+        use crate::session_tests::admission_workspace_cleanup_tests::Fixture;
 
         for interrupted in [true, false] {
             let fixture = Fixture::new().await;
@@ -1251,7 +1251,7 @@ use gents_session::request::lifecycle::claim::*;
 
     #[tokio::test]
     async fn pending_interrupt_and_expiry_cannot_release_a_claimed_workspace_binding() {
-        use gents_session::request::admission::workspace_cleanup_tests::Fixture;
+        use crate::session_tests::admission_workspace_cleanup_tests::Fixture;
 
         for interrupted in [true, false] {
             let fixture = Fixture::new().await;

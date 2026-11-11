@@ -630,7 +630,7 @@ impl RequestLifecycle {
             .await
     }
 
-    async fn transition_pending_to_interrupted(&mut self, _interrupt_at: &str) -> Result<()> {
+    pub async fn transition_pending_to_interrupted(&mut self, _interrupt_at: &str) -> Result<()> {
         let terminalized_at = chrono::Utc::now().to_rfc3339();
         let mutation = {
             use gents_protocol::document_query::{
@@ -725,7 +725,7 @@ impl RequestLifecycle {
         Ok(())
     }
 
-    async fn transition_pending_to_dead_stale(&mut self) -> Result<()> {
+    pub async fn transition_pending_to_dead_stale(&mut self) -> Result<()> {
         let terminalized_at = chrono::Utc::now().to_rfc3339();
         let mutation = {
             use gents_protocol::document_query::{

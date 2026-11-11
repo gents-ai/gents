@@ -587,7 +587,7 @@ pub fn session_message_sender_header(cause: &SessionMessageCause, at: &str) -> S
     clippy::too_many_arguments,
     reason = "called from session_message with this shape"
 )]
-pub(crate) async fn build_session_message_request(
+pub async fn build_session_message_request(
     cause: &SessionMessageCause,
     target: &SessionMessageTarget,
     content: &str,

@@ -151,7 +151,7 @@ pub(crate) enum Delivery {
 }
 
 impl Delivery {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Request => "request",
             Self::Queued => "queue",

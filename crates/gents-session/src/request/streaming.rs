@@ -48,7 +48,7 @@ pub use gents_loop::stream_writer::StreamWriter;
 
 pub struct DefraStreamWriter {
     actor_did: String,
-    agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
+    pub agent_signer: Option<gents_store::identity::ManagedAgentSigner>,
     node: Arc<EmbeddedNode>,
     batch_interval: Duration,
     buffers: Mutex<RapidHashMap<String, StreamBuffer>>,
@@ -241,7 +241,7 @@ impl DefraStreamWriter {
         );
     }
 
-    pub(crate) async fn flush_native_partial(
+    pub async fn flush_native_partial(
         &self,
         lifecycle: &crate::request::lifecycle::RequestLifecycle,
         message: &gents_protocol::message::Message,

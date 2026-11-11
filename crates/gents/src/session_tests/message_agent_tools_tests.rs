@@ -1,7 +1,7 @@
 use gents_toolcalls::call::lifecycle::admission_fixture::{
     published_session_message, PublishedAdmissionOptions, PublishedSessionMessage,
 };
-use super::target::session_target_allowed;
+use gents_session::session::message::target::session_target_allowed;
 use gents_session::session::message::*;
 use gents_protocol::tool_call::AwaitMode;
 use gents_store::identity::NodeIdentity as _;

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
-use super::cooldown::ProcessedMark;
+use gents_session::request::watcher::cooldown::ProcessedMark;
 use gents_session::request::watcher::*;
 
 #[tokio::test]

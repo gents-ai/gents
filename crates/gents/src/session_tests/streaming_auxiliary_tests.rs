@@ -13,7 +13,7 @@ use gents_protocol::output::{
     OutputSegment, OutputSource, OutputWriter, SegmentRun, SourceClose, StreamPayload,
 };
 use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
-use super::{auxiliary, canonical, native_encoding, DefraStreamWriter};
+use gents_session::request::streaming::{auxiliary, canonical, native_encoding, DefraStreamWriter};
 use gents_session::request::lifecycle::{ClaimOutcome, RequestLifecycle};
 use gents_lean_vocab::{
     lean_auxiliary_output_cases, LeanAuxiliaryKind, LeanAuxiliaryOutputCase, LeanCanonicalClosure,
