@@ -180,7 +180,7 @@ pub struct PublishedAdmission {
     pub node: Arc<EmbeddedNode>,
     /// Holds the store lock until dropped, so a test that shuts the node down
     /// and drops this can reopen the retained store at `path`.
-    pub home: crate::test_support::TestHome,
+    pub home: gents_inference::test_support::TestDb,
     pub path: PathBuf,
     pub tool: ToolCallLifecycle,
     pub node_did: String,
@@ -570,9 +570,9 @@ pub async fn published_admission_with_owner(
     let path =
         std::env::temp_dir().join(format!("admission-fixture-{name}-{}", uuid::Uuid::new_v4()));
     let p2p = options.p2p.then(test_p2p_config);
-    let home = crate::test_support::TestHome::create_at(&path, p2p).await?;
+    let db = gents_inference::test_support::test_db_at(&path, p2p).await?;
     let (db, user, owner, binding) =
-        crate::test_support::signed_test_node_from_home(home, &name).await;
+        gents_inference::test_support::signed_test_node_from_db(db, &name).await;
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
     let node_did = runtime.did().to_owned();
