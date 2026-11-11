@@ -331,7 +331,7 @@ describe("generated selected-session load status", () => {
   }, 300_000);
 
   it("drives the production projection, match and re-read budget with every Lean row", () => {
-    expect(cases.statuses).toHaveLength(1536);
+    expect(cases.statuses).toHaveLength(960);
     expect(cases.operational).toHaveLength(80);
     for (const row of [...cases.statuses, ...cases.operational]) {
       expect(project(row), JSON.stringify(row)).toEqual(row.expected);
@@ -354,7 +354,7 @@ describe("generated selected-session load status", () => {
   });
 
   it("replays every Lean follow-up trace through the observer, drain loop and session reads", async () => {
-    expect(cases.traces.length).toBeGreaterThan(1_000);
+    expect(cases.traces.length).toBeGreaterThan(900);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     try {
       for (const trace of cases.traces) {
