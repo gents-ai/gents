@@ -4732,7 +4732,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
 
         crate::runtime::agent::process_owned_request_with_model_for_test(
             node.clone(),
-            runtime_agent.clone(),
+            runtime_agent.agent.clone(),
             surface.clone(),
             &runtime,
             RootReadModel {

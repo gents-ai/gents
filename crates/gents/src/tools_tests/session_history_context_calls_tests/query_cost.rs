@@ -1,3 +1,4 @@
+use serde_json::json;
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -25,6 +26,20 @@ impl<'a> MeasuredRead<'a> {
             "max_query_bytes": self.max_bytes.load(Ordering::Relaxed),
             "total_query_bytes": self.total_bytes.load(Ordering::Relaxed),
         })
+    }
+}
+
+#[async_trait::async_trait]
+impl gents_store::config_client::ConfigRead for MeasuredRead<'_> {
+    async fn execute_read(
+        &self,
+        document: &str,
+    ) -> Result<Value, gents_store::config_client::ConfigClientError> {
+        self.queries.fetch_add(1, Ordering::Relaxed);
+        self.max_bytes.fetch_max(document.len(), Ordering::Relaxed);
+        self.total_bytes
+            .fetch_add(document.len(), Ordering::Relaxed);
+        self.access.execute(document).await
     }
 }
 

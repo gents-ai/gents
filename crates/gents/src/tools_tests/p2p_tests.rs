@@ -1,3 +1,4 @@
+use serde_json::json;
 use gents_tools::builtin::p2p::*;
 use crate::support::enrollment::{signed_enrollment_offer, wait_for_peer_identity};
 

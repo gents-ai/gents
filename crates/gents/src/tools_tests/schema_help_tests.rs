@@ -1,3 +1,5 @@
+use gents_loop::tool::Tool as _;
+use serde_json::json;
 use gents_tools::builtin::schema_help::*;
 use gents_tools::surface::{AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling};
 use gents_protocol::tool_names::SCHEMA_TOOL_NAME;

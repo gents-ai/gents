@@ -2184,7 +2184,7 @@ async fn ux_preview_reports_text_first_through_the_config_tool() {
 /// Ceilings sit a little above the text as written; a text that outgrows its
 /// ceiling moves detail one layer down (a verb page, a field, an explicit
 /// read) instead of raising the number.
-pub(in gents_tools::builtin::self_config) fn assert_sizes(rows: &[(String, usize, usize)]) {
+pub(crate) fn assert_sizes(rows: &[(String, usize, usize)]) {
     let table = rows
         .iter()
         .map(|(name, len, ceiling)| format!("{name}: {len} chars (ceiling {ceiling})"))

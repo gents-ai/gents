@@ -1,3 +1,4 @@
+use base64::Engine as _;
 use gents_tools::native::file_tools::change_capture::*;
 use gents_tools::native::args::WriteFileArgs;
 use gents_tools::native::file_tools::file_mutation_lock_for;
