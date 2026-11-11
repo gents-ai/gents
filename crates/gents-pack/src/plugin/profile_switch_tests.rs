@@ -2,9 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use chrono::Utc;
-use gents_documents::{
-    apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
+use gents_documents::{apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents_inference::profile_switch::{switch_candidates, switch_profile_account};
 use gents_inference::resolved::ProviderProfilePolicy;
 use gents_protocol::agent_identity::AgentIdentityBinding;
@@ -76,7 +74,10 @@ async fn a_bound_plugin_slot_counts_and_keeps_serving_after_the_switch() {
     let access = ConfigAccess::local_as(node.clone(), identity::Did::new(did).unwrap());
     gents_documents::test_support::bootstrap_signed_test_node(&access, did).await;
     let agents = provision_agents(did, &["reader"]);
-    let fixture = Fixture { node: node.clone(), access };
+    let fixture = Fixture {
+        node: node.clone(),
+        access,
+    };
     for (id, port) in [("k1", 1), ("k2", 2)] {
         let backend: gents_documents::InferenceBackend = serde_json::from_value(json!({
             "node_did": did, "backend_id": id, "name": format!("name-{id}"),

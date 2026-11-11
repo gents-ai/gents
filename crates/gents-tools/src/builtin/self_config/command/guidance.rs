@@ -9,6 +9,7 @@ pub(super) fn next_call(next: NextCall) -> Value {
         NextCall::ResourceHelp { resource } => json!({"argv":["help", resource]}),
         NextCall::Inspect { resource } => json!({"argv":[resource, "get"]}),
         NextCall::List { resource } => json!({"argv":[resource, "list"]}),
+        NextCall::Preview { resource, verb } => json!({"argv":[resource, "preview", verb]}),
     }
 }
 

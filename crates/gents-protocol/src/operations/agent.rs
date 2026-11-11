@@ -140,6 +140,12 @@ pub enum NextCall {
     List {
         resource: &'static str,
     },
+    /// Preview `verb` on the same target, which reports what the commit
+    /// would do and the values the commit takes.
+    Preview {
+        resource: &'static str,
+        verb: &'static str,
+    },
 }
 
 /// Lean `SelfConfig.AgentRefusal`: the admission check that refused.

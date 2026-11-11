@@ -225,6 +225,7 @@ fn refusal_message(message: &str, next_call: gents::operations::agent::NextCall)
         NextCall::VerbHelp { .. } | NextCall::ResourceHelp { .. } => {
             "Review the agent's fields and save again."
         }
+        NextCall::Preview { .. } => "Review the change again, then confirm it.",
     };
     format!("{}. {next}", message.trim_end_matches('.'))
 }
