@@ -212,6 +212,3 @@ fn descending_cursor_filter(row: &Value) -> Result<String> {
     );
     Ok(format!("{{_or: [{}]}}", branches.join(", ")))
 }
-
-#[cfg(test)]
-mod tests;

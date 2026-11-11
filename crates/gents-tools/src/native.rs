@@ -665,7 +665,7 @@ pub(crate) fn build_agent_tools(config: AgentToolConfig) -> Vec<Box<dyn ToolDyn>
     tools
 }
 
-pub(crate) fn background_tool_names(config: &BackgroundToolConfig) -> Vec<String> {
+pub fn background_tool_names(config: &BackgroundToolConfig) -> Vec<String> {
     if !config.tools_enabled() {
         return Vec::new();
     }

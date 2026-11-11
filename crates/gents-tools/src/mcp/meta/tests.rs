@@ -215,7 +215,7 @@ async fn service_enablement_at_use_matches_model() {
     wrong_actor.configuration = gents_inference::resolved::ResolvedConfiguration::Documents(
         gents_inference::resolved::SelectedConfiguration::new(
             node.clone(),
-            identity::Did::new(crate::triggers::callback::test_agent_did()).unwrap(),
+            identity::Did::new(crate::test_support::test_agent_did()).unwrap(),
             vec![],
         ),
     );

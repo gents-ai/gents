@@ -103,7 +103,7 @@ fn catalog_from_documents(
     Ok(view)
 }
 
-pub(super) async fn load_agent_catalog(core: &SelfConfigCore) -> Result<agent::AgentCatalogView> {
+pub async fn load_agent_catalog(core: &SelfConfigCore) -> Result<agent::AgentCatalogView> {
     let node = core.node_handle();
     let owner = core.node_did();
     ConfigAccess::transact_local_readonly(
@@ -135,7 +135,7 @@ fn replacement(
 
 /// The receipt as the model reads it: fields in declaration order, each
 /// value compact.
-pub(super) fn receipt_text(receipt: &AgentReceipt<Agent>) -> Result<String> {
+pub fn receipt_text(receipt: &AgentReceipt<Agent>) -> Result<String> {
     Ordered::from_serialize(receipt)?.pretty()
 }
 
@@ -164,7 +164,7 @@ fn create_params(input: &AgentCreateInput, preview: bool) -> ConfigureAgentParam
 }
 
 #[cfg(test)]
-pub(super) async fn agent_mutate(
+pub async fn agent_mutate(
     node: &Arc<EmbeddedNode>,
     owner: &str,
     identity: &dyn NodeIdentity,
@@ -232,7 +232,7 @@ async fn agent_apply(
     receipt_text(&receipt)
 }
 
-pub(super) async fn model_agent_preview(
+pub async fn model_agent_preview(
     core: &SelfConfigCore,
     args: &ConfigureAgentParams,
 ) -> Result<String> {
@@ -267,14 +267,14 @@ pub(super) async fn model_agent_preview(
     }
 }
 
-pub(super) async fn model_agent_create_preview(
+pub async fn model_agent_create_preview(
     core: &SelfConfigCore,
     input: &AgentCreateInput,
 ) -> Result<String> {
     model_agent_preview(core, &create_params(input, true)).await
 }
 
-pub(super) async fn model_agent_mutate(
+pub async fn model_agent_mutate(
     core: &SelfConfigCore,
     identity: &dyn NodeIdentity,
     args: &ConfigureAgentParams,
@@ -283,7 +283,7 @@ pub(super) async fn model_agent_mutate(
     receipt_text(&receipt)
 }
 
-pub(super) async fn model_agent_create(
+pub async fn model_agent_create(
     core: &SelfConfigCore,
     identity: &dyn NodeIdentity,
     input: &AgentCreateInput,

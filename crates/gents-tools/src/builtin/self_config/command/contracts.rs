@@ -11,7 +11,7 @@ fn patch_contract(target: SelfConfigTarget, field_shapes: Value) -> Value {
     })
 }
 
-pub(in crate::builtin::self_config) fn help_patch_contracts(resource: Option<&str>) -> Value {
+pub fn help_patch_contracts(resource: Option<&str>) -> Value {
     if let Some(name) = resource {
         let family = match name {
             "context" => Some("agent"),
@@ -207,7 +207,7 @@ pub(in crate::builtin::self_config) fn help_patch_contracts(resource: Option<&st
     Value::Array(contracts)
 }
 
-pub(in crate::builtin::self_config) fn field_shape(collection: &str, path: &str) -> Option<Value> {
+pub fn field_shape(collection: &str, path: &str) -> Option<Value> {
     let contract = [
         "agent",
         "tools",

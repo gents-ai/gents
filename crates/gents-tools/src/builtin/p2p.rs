@@ -16,9 +16,6 @@ use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::{escape_graphql_string, validate_collection_identifier};
 use gents_store::identity::NodeIdentity;
 
-#[cfg(test)]
-mod tests;
-
 pub const P2P_TOOL_NAME: &str = "p2p";
 
 #[derive(Clone)]

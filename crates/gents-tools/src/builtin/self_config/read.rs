@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::path::Path;
 
-pub(super) fn execution_settings(document: Option<&Value>) -> Result<Value> {
+pub fn execution_settings(document: Option<&Value>) -> Result<Value> {
     use gents_documents::inference_defaults::{
         DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
     };
@@ -35,7 +35,7 @@ pub(super) fn execution_settings(document: Option<&Value>) -> Result<Value> {
 }
 
 impl SelfConfigCore {
-    pub(crate) async fn read_effective_config(
+    pub async fn read_effective_config(
         &self,
         categories: &BTreeSet<String>,
         no_lockout: bool,
@@ -303,7 +303,7 @@ impl SelfConfigCore {
         Ok(effective)
     }
 
-    pub(crate) async fn task_owned(
+    pub async fn task_owned(
         &self,
         txn: &ConfigApplyTxn<'_>,
         _anchor: &AgentAnchor,

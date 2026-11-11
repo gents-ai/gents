@@ -4,16 +4,16 @@ use super::*;
 /// asks the node's pack owner ([`NodePacks`]) for each decision and renders
 /// the answer with the call to make next.
 pub(super) struct PackInstaller {
-    pub(super) core: SelfConfigCore,
-    pub(super) node: Arc<EmbeddedNode>,
-    pub(super) actor: Option<Arc<dyn NodeIdentity>>,
+    pub core: SelfConfigCore,
+    pub node: Arc<EmbeddedNode>,
+    pub actor: Option<Arc<dyn NodeIdentity>>,
     /// `None` resolves from the registry in memory and installs no plugins.
-    pub(super) home: Option<std::path::PathBuf>,
+    pub home: Option<std::path::PathBuf>,
 }
 
 impl PackInstaller {
     /// This agent's pack operations on its node, through `access`.
-    pub(super) fn packs<'a>(
+    pub fn packs<'a>(
         &'a self,
         access: &'a gents_store::config_client::ConfigAccess,
     ) -> NodePacks<'a> {
@@ -25,7 +25,7 @@ impl PackInstaller {
         }
     }
 
-    pub(super) async fn resolve(
+    pub async fn resolve(
         &self,
         operation: &str,
         args: &PackChange,
@@ -113,7 +113,7 @@ impl PackInstaller {
 
     /// Pack slots have no current backend: each bound profile must be
     /// account-free or on its provider's default account.
-    pub(super) async fn fence_bindings(
+    pub async fn fence_bindings(
         &self,
         bindings: &BTreeMap<String, String>,
     ) -> anyhow::Result<()> {
@@ -135,7 +135,7 @@ impl PackInstaller {
     /// What a preview says about documents edited since the install: which
     /// they are and what each `options.edited` choice does to them. Absent
     /// when nothing was edited.
-    pub(super) async fn edited_documents(
+    pub async fn edited_documents(
         &self,
         coordinate: &str,
         removal: bool,
@@ -156,7 +156,7 @@ impl PackInstaller {
     }
 
     /// The selections whose pins refuse the plugins `distribution` publishes.
-    pub(super) async fn pin_conflicts(
+    pub async fn pin_conflicts(
         &self,
         distribution: &Distribution,
     ) -> anyhow::Result<Vec<PluginPinConflict>> {
@@ -202,7 +202,7 @@ impl PackInstaller {
     /// Refuses a change that would meet edited documents without a decision,
     /// as the same call with the decision that loses nothing; the message
     /// names the other one. `words` is the pack command as it was called.
-    pub(super) async fn require_edited_decision(
+    pub async fn require_edited_decision(
         &self,
         coordinate: &str,
         removal: bool,
@@ -239,7 +239,7 @@ impl PackInstaller {
         .into())
     }
 
-    pub(super) async fn preview(
+    pub async fn preview(
         &self,
         operation: &str,
         args: PackChange,
@@ -261,7 +261,7 @@ impl PackInstaller {
         }
     }
 
-    pub(super) async fn apply(
+    pub async fn apply(
         &self,
         operation: &str,
         args: PackChange,
@@ -292,7 +292,7 @@ impl PackInstaller {
 }
 
 /// The Tools edit that sets `conflict`'s selecting Tools to `integrations`.
-pub(super) fn pin_edit(conflict: &PluginPinConflict, integrations: &Value) -> Vec<String> {
+pub fn pin_edit(conflict: &PluginPinConflict, integrations: &Value) -> Vec<String> {
     vec![
         "tools".to_owned(),
         "edit".to_owned(),
@@ -307,7 +307,7 @@ pub(super) fn pin_edit(conflict: &PluginPinConflict, integrations: &Value) -> Ve
 
 /// The `tools update` that moves `conflict`'s pins to the replacement. The
 /// whole `integrations` field is sent because `set` replaces a field.
-pub(super) fn pin_move_call(conflict: &PluginPinConflict) -> Value {
+pub fn pin_move_call(conflict: &PluginPinConflict) -> Value {
     json!({
         "argv": ["tools", "update"],
         "options": {"agent": conflict.agent, "shared": "acknowledge"},
