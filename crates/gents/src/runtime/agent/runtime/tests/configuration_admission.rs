@@ -7,7 +7,7 @@ use crate::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use crate::inference::resolved::{ResolvedConfiguration, SelectedConfiguration};
 use crate::runtime::agent::{resolve_document_runtime_snapshot, DocumentResolveContext};
 use crate::store::identity::NodeIdentity;
-use crate::turn::provider_input::configuration::ConfigurationVisibilityError;
+use crate::inference::resolved::visibility::ConfigurationVisibilityError;
 use crate::Collection;
 use serde_json::json;
 

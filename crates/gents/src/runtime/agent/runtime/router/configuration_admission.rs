@@ -4,7 +4,7 @@
 //! no longer holds until a newer generation is active.
 
 use crate::inference::resolved::ResolvedConfiguration;
-use crate::turn::provider_input::configuration::ConfigurationVisibilityError;
+use crate::inference::resolved::visibility::ConfigurationVisibilityError;
 use gents_protocol::row::AgentRequest;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
