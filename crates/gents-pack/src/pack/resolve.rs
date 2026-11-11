@@ -141,101 +141,67 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn a_store_hit_needs_no_registry() {
-        let home = tempfile::tempdir().unwrap();
-        let store = PackStore::new(home.path());
-        let (bytes, header) = build_pack("resolve_fixture_a", "1.0.0");
-        store.import(bytes.as_slice(), None).unwrap();
-
-        let options = ResolveOptions {
-            home: Some(home.path()),
-            registry_url: UNROUTABLE_REGISTRY.to_owned(),
-            installed: &[],
-        };
-        let resolved = resolve_named("gents/resolve_fixture_a", &options)
-            .await
-            .expect("resolved from the store, without touching the network");
-        assert!(matches!(resolved.from, ResolvedFrom::Store));
-        assert_eq!(resolved.archive.digest(), header.digest);
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum Origin {
+        Installed,
+        Store,
+        Registry,
     }
 
     #[tokio::test]
-    async fn an_at_version_pin_resolves_exactly_that_version() {
-        let home = tempfile::tempdir().unwrap();
-        let store = PackStore::new(home.path());
-        let (v1_bytes, v1) = build_pack("resolve_fixture_b", "1.0.0");
-        let (v2_bytes, v2) = build_pack("resolve_fixture_b", "2.0.0");
-        store.import(v1_bytes.as_slice(), None).unwrap();
-        store.import(v2_bytes.as_slice(), None).unwrap();
+    async fn resolution_conforms_to_the_model() {
+        use gents_lean_vocab::families::pack_resolution as family;
 
-        let options = ResolveOptions {
-            home: Some(home.path()),
-            registry_url: UNROUTABLE_REGISTRY.to_owned(),
-            installed: &[],
-        };
-        let resolved = resolve_named("gents/resolve_fixture_b@1.0.0", &options)
-            .await
-            .unwrap();
-        assert_eq!(resolved.archive.digest(), v1.digest);
-        let resolved = resolve_named("gents/resolve_fixture_b@2.0.0", &options)
-            .await
-            .unwrap();
-        assert_eq!(resolved.archive.digest(), v2.digest);
-    }
-
-    #[tokio::test]
-    async fn an_installed_record_is_preferred_over_a_different_stored_version() {
-        let home = tempfile::tempdir().unwrap();
-        let store = PackStore::new(home.path());
-        let (older_bytes, older) = build_pack("resolve_fixture_c", "1.0.0");
-        let (newer_bytes, _newer) = build_pack("resolve_fixture_c", "2.0.0");
-        store.import(older_bytes.as_slice(), None).unwrap();
-        store.import(newer_bytes.as_slice(), None).unwrap();
-
-        let installed = [InstalledPack {
-            coordinate: "gents/resolve_fixture_c".to_owned(),
-            version: older.version.clone(),
-            digest: older.digest.clone(),
-        }];
-        let options = ResolveOptions {
-            home: Some(home.path()),
-            registry_url: UNROUTABLE_REGISTRY.to_owned(),
-            installed: &installed,
-        };
-        let resolved = resolve_named("gents/resolve_fixture_c", &options)
-            .await
-            .unwrap();
-        assert!(matches!(resolved.from, ResolvedFrom::Installed));
-        assert_eq!(
-            resolved.archive.digest(),
-            older.digest,
-            "the installed version wins even though a newer one is stored"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_stale_installed_record_falls_through_to_the_store() {
-        let home = tempfile::tempdir().unwrap();
-        let store = PackStore::new(home.path());
-        let (bytes, header) = build_pack("resolve_fixture_d", "1.0.0");
-        store.import(bytes.as_slice(), None).unwrap();
-
-        let installed = [InstalledPack {
-            coordinate: "gents/resolve_fixture_d".to_owned(),
-            version: "0.9.0".to_owned(),
-            digest: format!("sha256:{}", "0".repeat(64)),
-        }];
-        let options = ResolveOptions {
-            home: Some(home.path()),
-            registry_url: UNROUTABLE_REGISTRY.to_owned(),
-            installed: &installed,
-        };
-        let resolved = resolve_named("gents/resolve_fixture_d", &options)
-            .await
-            .unwrap();
-        assert!(matches!(resolved.from, ResolvedFrom::Store));
-        assert_eq!(resolved.archive.digest(), header.digest);
+        for case in family::cases::<Origin>() {
+            let input = &case.input;
+            let home = tempfile::tempdir().unwrap();
+            let store = PackStore::new(home.path());
+            for pack in &input.received {
+                let (bytes, _) = build_pack(&pack.name, &pack.version.text);
+                store.import(bytes.as_slice(), None).unwrap();
+            }
+            for pack in &input.lost {
+                let (_, header) = build_pack(&pack.name, &pack.version.text);
+                std::fs::remove_file(store.path(&header.digest).unwrap()).unwrap();
+            }
+            let installed: Vec<InstalledPack> = input
+                .installed
+                .iter()
+                .map(|pack| {
+                    let (_, header) = build_pack(&pack.name, &pack.version.text);
+                    InstalledPack {
+                        coordinate: format!("gents/{}", pack.name),
+                        version: pack.version.text.clone(),
+                        digest: header.digest,
+                    }
+                })
+                .collect();
+            let options = ResolveOptions {
+                home: Some(home.path()),
+                registry_url: UNROUTABLE_REGISTRY.to_owned(),
+                installed: &installed,
+            };
+            let spec = match &input.version {
+                Some(version) => format!("gents/{}@{version}", input.ask),
+                None => format!("gents/{}", input.ask),
+            };
+            let resolved = match resolve_named(&spec, &options).await {
+                Ok(resolved) => family::Resolution {
+                    origin: match resolved.from {
+                        ResolvedFrom::Installed => Origin::Installed,
+                        ResolvedFrom::Store => Origin::Store,
+                        ResolvedFrom::Registry { .. } => Origin::Registry,
+                    },
+                    version: Some(resolved.archive.header().version.clone()),
+                },
+                Err(_) => family::Resolution {
+                    origin: Origin::Registry,
+                    version: None,
+                },
+            };
+            case.check(resolved);
+        }
     }
 
     #[tokio::test]
