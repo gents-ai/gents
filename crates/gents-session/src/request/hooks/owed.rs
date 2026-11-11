@@ -538,7 +538,7 @@ pub async fn redrive_pending(
     if rows.is_empty() {
         return Ok(0);
     }
-    let registry = Registry::current().map_err(anyhow::Error::from)?;
+    let registry = Registry::for_node(node).map_err(anyhow::Error::from)?;
     let mut settled = 0;
     for row in &rows {
         let Some(doc_id) = row.doc_id.as_deref() else {
