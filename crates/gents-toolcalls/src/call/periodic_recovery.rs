@@ -37,7 +37,7 @@ pub enum PeriodicRecoverySweepOutcome {
     InferenceCalls(InferenceCallRecoveryReport),
     SessionMessageRows(usize),
     TaskHookRecords(usize),
-    OwedDeliveries(usize),
+    OwedDeliveries(gents_session::request::hooks::owed::OwedSweepReport),
 }
 
 impl PeriodicRecoverySweepOutcome {
@@ -50,7 +50,7 @@ impl PeriodicRecoverySweepOutcome {
             Self::InferenceCalls(report) => report.calls_recovered == 0,
             Self::SessionMessageRows(settled) => *settled == 0,
             Self::TaskHookRecords(started) => *started == 0,
-            Self::OwedDeliveries(settled) => *settled == 0,
+            Self::OwedDeliveries(report) => report.is_noop(),
         }
     }
 }

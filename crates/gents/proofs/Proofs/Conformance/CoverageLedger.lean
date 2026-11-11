@@ -1482,7 +1482,7 @@ def caseCoverage : List CoverageEntry :=
       "lifecycle_hook_owed_delivery_cases"
       "LifecycleHookOwedDeliveryCases"
       "conformance::hooks::generated_lifecycle_hook_owed_delivery_cases_drive_the_redrive_record"
-      "The production record (hooks::owed::Record) is driven by every case. Its publication through the store's post-commit runtime write and the redrive's actor-scoped observation of core rows are not driven by these cases.")
+      "The production record (hooks::owed::Record, owe_runner, derive_halts, prunable) is driven by every case. Its publication through the store's post-commit runtime write, the redrive's and the halt derivation's observation of core rows as the owning Agent, and the deletion of pruned rows are not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "lifecycle_hook_admit_cases"

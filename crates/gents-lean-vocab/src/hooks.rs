@@ -365,28 +365,51 @@ pub enum LeanLifecycleHookOwedSettlement {
     Dropped,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LeanLifecycleHookOwedKind {
+    Staging,
+    OnBehalf,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanLifecycleHookOwedRecord {
     pub key: LeanLifecycleHookOwedKey,
-    pub actor: String,
+    pub kind: LeanLifecycleHookOwedKind,
+    pub actor: Option<String>,
+    pub runner: String,
     pub attempts: u64,
     pub last_error: Option<String>,
     pub settled: Option<LeanLifecycleHookOwedSettlement>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanLifecycleHookOwedWrite {
+    pub subject: String,
+    pub doc: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LeanLifecycleHookOwedAttempt {
-    Applied,
-    Failed { error: String },
+    Applied {
+        writes: Vec<LeanLifecycleHookOwedWrite>,
+    },
+    Failed {
+        error: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LeanLifecycleHookOwedStep {
-    Publish {
-        actor: String,
+    Owe {
+        point: String,
+        actor: Option<String>,
+        owner: Option<String>,
+        signable: Vec<String>,
         keys: Vec<LeanLifecycleHookOwedKey>,
         commit: bool,
     },
@@ -395,6 +418,7 @@ pub enum LeanLifecycleHookOwedStep {
         authorized: bool,
         current: bool,
         attempt: LeanLifecycleHookOwedAttempt,
+        refused: Vec<LeanLifecycleHookOwedWrite>,
     },
 }
 
@@ -402,15 +426,66 @@ pub enum LeanLifecycleHookOwedStep {
 #[serde(deny_unknown_fields)]
 pub struct LeanLifecycleHookOwedTraceStep {
     pub step: LeanLifecycleHookOwedStep,
+    pub runner: Option<String>,
     pub records: Vec<LeanLifecycleHookOwedRecord>,
     pub performed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookOwedDeliveryCase {
+pub struct LeanLifecycleHookOwedTraceCase {
     pub name: String,
     pub trace: Vec<LeanLifecycleHookOwedTraceStep>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanLifecycleHookHaltedSession {
+    pub session: String,
+    pub owner: Option<String>,
+    pub latched_at: Option<String>,
+    pub current: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanLifecycleHookDerivedHalt {
+    pub session: String,
+    pub at: String,
+    pub owner: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanLifecycleHookOwedDeriveCase {
+    pub name: String,
+    pub bound: usize,
+    pub sessions: Vec<LeanLifecycleHookHaltedSession>,
+    pub derived: Vec<LeanLifecycleHookDerivedHalt>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanLifecycleHookAgedOwedRecord {
+    pub record: LeanLifecycleHookOwedRecord,
+    pub age: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanLifecycleHookOwedPruneCase {
+    pub name: String,
+    pub retention: u64,
+    pub records: Vec<LeanLifecycleHookAgedOwedRecord>,
+    pub kept: Vec<LeanLifecycleHookAgedOwedRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct LeanLifecycleHookOwedDeliveryCases {
+    pub traces: Vec<LeanLifecycleHookOwedTraceCase>,
+    pub derive: Vec<LeanLifecycleHookOwedDeriveCase>,
+    pub prune: Vec<LeanLifecycleHookOwedPruneCase>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

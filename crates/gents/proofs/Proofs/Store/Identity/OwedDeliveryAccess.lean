@@ -8,9 +8,10 @@ open Identity.Household
 made a Node administrator, a `runtime_reader`, an `agent_manager`, and one
 Agent `a` with a session `s` it works in. The node key `runtime-key` has
 published one owed delivery `owed` of a halt `a` performed on `s`, linked to
-the Node by `parent`. `a` is that delivery's recorded actor; the plugin whose
-delivery it is has no identity of its own and acts only as the recorded actor
-(`Hooks.Safety.perform`). -/
+the Node by `parent`. `a` owns `s`, so it is both that delivery's recorded
+actor and the identity its redrive runs as (`Hooks.OwedDelivery.owe`); the
+plugin whose delivery it is has no identity of its own and acts only as that
+runner. -/
 def fixture : State :=
   let base : State :=
     { objects := [⟨"nodes", "node", "user"⟩, ⟨"sessions", "s", "a"⟩,
@@ -46,8 +47,8 @@ theorem node_administration_reads_owed_delivery :
       [(true, false, false), (true, false, false), (true, false, false)] := by
   native_decide
 
-/-- An Agent, including the delivery's own recorded actor and the session it
-works in, neither reads nor writes the record; nor do the narrow Node readers
+/-- An Agent, including the delivery's own recorded actor and runner,
+neither reads nor writes the record; nor do the narrow Node readers
 (`runtime_reader`, `agent_manager`) or an unrelated actor. -/
 theorem agents_and_non_administrators_cannot_access_owed_delivery :
     ["a", "reader", "manager", "stranger"].map access =
@@ -67,7 +68,7 @@ theorem owed_delivery_relations_are_runtime_managed :
 
 /-- No resource names `owed_deliveries` as a relation type, and none inherits a
 permission from it, so a record is never a channel to another document: a
-plugin's delivery reaches only what its recorded actor's own grants reach. -/
+plugin's delivery reaches only what its runner's own grants reach. -/
 theorem owed_deliveries_reach_nothing :
     policy.all (fun resource => resource.relations.all (fun relation =>
       relation.types.all (fun type =>

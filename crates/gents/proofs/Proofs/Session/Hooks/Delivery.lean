@@ -8,9 +8,13 @@ in its own transaction through the same data contract (rows in, effects out).
 A plugin whose staging was dropped at a must-commit point is owed the same
 way (`Hooks.owed`). `owed` is the durable redrive record:
 `runtime.recover.sweep` in gents-ai/gents#3642 is the loop over `pending`, not
-a hook of its own. A delivery has no caller's transaction; it runs under the
-actor recorded when it was owed, the actor of the owing transaction, never a
-plugin or node identity (`Hooks.Safety.perform`).
+a hook of its own. A delivery has no caller's transaction and never runs as a
+plugin or node identity. A delivery that asks core to act for someone runs
+under the actor recorded when it was owed (`Hooks.Safety.perform`); the dropped
+staging of a must-commit transition runs as the Agent owning its subject
+session (`Hooks.OwedDelivery.Kind`, decision 2026-11-11, maintainer-approved).
+The durable record's publication is not atomic with the transition
+(`Hooks.OwedDelivery.publish`, the publication window).
 
 Design choice: the record of what is owed is core's, keyed by the physical
 subject and the plugin. The alternative, each feature keeping its own redrive

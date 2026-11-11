@@ -6,31 +6,37 @@ namespace Recovery
 open Hooks.OwedDelivery
 
 /-- One owed delivery as the periodic sweep sees it: the record, what the
-redrive observed as the recorded actor, and how the plugin's staging went.
-Decision 2026-11-11, maintainer-approved: the sweep over pending
-`OwedDelivery` records is the loop over `Hooks.Delivery.pending` that the
-delivery contract leaves to recovery. -/
+redrive observed as the record's runner, how the plugin's staging went, and the
+writes native ACP refused the runner. Decision 2026-11-11, maintainer-approved:
+the sweep over pending `OwedDelivery` records is the loop over
+`Hooks.Delivery.pending` that the delivery contract leaves to recovery. The same
+sweep re-derives owed halts from core state (`Hooks.OwedDelivery.deriveHalts`)
+and prunes settled records past the retention (`Hooks.OwedDelivery.prune`);
+those actions keep no row of their own and are modelled there. -/
 structure OwedDeliveryRow where
   record : Record
   observed : Observation
   attempt : Attempt
+  refused : List Write
   deriving DecidableEq, Repr
 
-/-- The rows one redrive settles: an owed record whose actor lost its
-authority, whose transition is no longer current, or whose staging commits.
+def OwedDeliveryRow.mayWrite (row : OwedDeliveryRow) (write : Write) : Bool :=
+  !row.refused.contains write
+
+/-- The rows one redrive settles: an owed record whose subject is no longer the
+runner's, whose transition is no longer current, or whose staging is performed.
 An owed record whose staging fails stays owed for a later sweep; it is not
 stale. -/
 def owedDeliveryStale (row : OwedDeliveryRow) : Prop :=
   row.record.pending = true ∧
-    (row.observed.authorized = false ∨ row.observed.current = false ∨
-      row.attempt = .applied)
+    (redrive row.record row.observed row.attempt row.mayWrite).pending = false
 
 instance (row : OwedDeliveryRow) : Decidable (owedDeliveryStale row) := by
   unfold owedDeliveryStale
   infer_instance
 
 def owedDeliveryRecover (row : OwedDeliveryRow) : OwedDeliveryRow :=
-  { row with record := redrive row.record row.observed row.attempt }
+  { row with record := redrive row.record row.observed row.attempt row.mayWrite }
 
 def owedDeliveryMeasure (row : OwedDeliveryRow) : Nat :=
   if owedDeliveryStale row then 1 else 0
@@ -42,15 +48,8 @@ theorem owedDelivery_stale_positive :
 
 theorem owedDelivery_recover_settled :
     ∀ row, owedDeliveryStale row → (owedDeliveryRecover row).record.pending = false := by
-  intro row ⟨pending, cause⟩
-  have unsettled : row.record.settled = none := by
-    simpa [Record.pending, Option.isNone_iff_eq_none] using pending
-  rcases cause with revoked | stale | applied
-  · simp [owedDeliveryRecover, redrive, unsettled, revoked, Record.pending]
-  · simp [owedDeliveryRecover, redrive, unsettled, stale, Record.pending]
-  · cases authorized : row.observed.authorized <;> cases current : row.observed.current <;>
-      simp [owedDeliveryRecover, redrive, unsettled, authorized, current, applied,
-        Record.pending]
+  intro row stale
+  exact stale.2
 
 theorem owedDelivery_recover_zero :
     ∀ row, owedDeliveryStale row → owedDeliveryMeasure (owedDeliveryRecover row) = 0 := by

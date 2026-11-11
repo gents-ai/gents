@@ -126,6 +126,16 @@ impl PauseOnHalt {
         let now = DateTime::parse_from_rfc3339(&event.at)
             .context("halt time is not RFC 3339")?
             .with_timezone(&Utc);
+        // A halt redriven or re-derived after the Goal changed (a resume, a
+        // new Goal) is older than that change and does not pause it.
+        if goal
+            .updated_at
+            .as_deref()
+            .and_then(|updated| DateTime::parse_from_rfc3339(updated).ok())
+            .is_some_and(|updated| updated.with_timezone(&Utc) > now)
+        {
+            return Ok(Vec::new());
+        }
         let paused = apply_operator_status_transition(state, GoalStatus::Paused)?;
         let input = serde_json::json!({
             "objective": goal.objective,
