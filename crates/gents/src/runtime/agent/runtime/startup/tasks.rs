@@ -467,6 +467,7 @@ pub(super) fn spawn_request_tasks(
                 control_node_did,
                 control_executions,
                 control_agents,
+                crate::runtime::agent::p2p_reconcile::intervals::sweep_interval(),
                 control_cancel,
             )
             .await,
