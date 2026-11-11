@@ -684,7 +684,7 @@ mod tests {
         grown.oauth_pool = vec!["claude-a".to_string(), "claude-b".to_string()];
         let mut shrunk = grown.clone();
         shrunk.oauth_pool.pop();
-        let fingerprint = crate::turn::completion_factory::agent_slot_fingerprint;
+        let fingerprint = crate::inference::connection_fingerprint::agent_slot_fingerprint;
         assert_ne!(fingerprint(&agent), fingerprint(&grown));
         assert_ne!(fingerprint(&grown), fingerprint(&shrunk));
         assert_eq!(fingerprint(&grown), fingerprint(&grown.clone()));

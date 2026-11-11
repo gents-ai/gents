@@ -1,4 +1,5 @@
 pub(crate) mod admission;
+pub(crate) mod aggregate_token_limit;
 pub(crate) mod binding;
 pub mod failure_text;
 pub mod interrupt;

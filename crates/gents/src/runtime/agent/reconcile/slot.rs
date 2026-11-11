@@ -54,7 +54,7 @@ impl AgentSlot {
         executor_capacity: usize,
     ) -> bool {
         self.agent_fingerprint
-            == crate::turn::completion_factory::agent_slot_fingerprint(agent_config)
+            == crate::inference::connection_fingerprint::agent_slot_fingerprint(agent_config)
             && self.tool_surface_fingerprint == format!("{tool_surface:?}")
             && self.executor_capacity == executor_capacity
     }
@@ -308,7 +308,8 @@ where
     let (dispatcher, request_rx) = mpsc::channel(AGENT_EXECUTOR_QUEUE_CAPACITY);
     let request_rx = Arc::new(Mutex::new(request_rx));
     let (state_tx, state_rx) = watch::channel(AgentSlotState::Active);
-    let agent_fingerprint = crate::turn::completion_factory::agent_slot_fingerprint(&agent_config);
+    let agent_fingerprint =
+        crate::inference::connection_fingerprint::agent_slot_fingerprint(&agent_config);
     let tool_surface_fingerprint = format!("{tool_surface:?}");
 
     let standing = Arc::new(std::sync::Mutex::new(BuildStanding::seeded()));

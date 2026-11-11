@@ -892,7 +892,7 @@ impl RequestLifecycle {
         } else {
             // Do not rewrite the durable allowance, including explicit zero or
             // unlimited null, from edited configuration on reclaim.
-            crate::turn::completion_factory::parse_aggregate_token_limit(
+            crate::request::aggregate_token_limit::parse_aggregate_token_limit(
                 self.request.max_total_tokens,
             )?;
             String::new()

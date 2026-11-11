@@ -5,11 +5,13 @@ use serde::Deserialize;
 
 use crate::inference::admission::{AdmissionRegistry, AdmittedCompletionModel};
 use crate::inference::backends::provider::BackendProviderKind;
+use crate::inference::connection_fingerprint::agent_connection_fingerprint;
 use crate::inference::rendered_request::CaptureScopeKind;
 use crate::documents::inference_defaults::ReasoningEffort;
 use crate::inference::resolved::ResolvedAgent;
 use crate::openai_wire::OpenAiWireApi;
 use crate::provider_usage;
+use crate::request::aggregate_token_limit::parse_aggregate_token_limit;
 use crate::request::lifecycle::ExecutionOrigin;
 use crate::runtime::agent::completion_retry::CompletionRetryPolicy;
 use crate::runtime::agent::loop_stream::{AggregateTokenBudget, LoopConfig};
@@ -21,35 +23,6 @@ pub(crate) fn effective_max_tokens(
     sampling_max_tokens: Option<u64>,
 ) -> Option<u64> {
     sampling_max_tokens.or_else(|| u64::try_from(max_output_tokens).ok())
-}
-
-pub(crate) fn agent_connection_fingerprint(agent_config: &ResolvedAgent) -> String {
-    crate::inference::admission::backend_connection_fingerprint(
-        &crate::inference::backends::registry::BackendFields {
-            backend_id: agent_config.backend_id.clone(),
-            backend_provider_kind: agent_config.backend_provider_kind,
-            openai_wire_api: agent_config.openai_wire_api,
-            backend_endpoint: agent_config.backend_endpoint.clone(),
-            backend_auth: agent_config.backend_auth.clone(),
-            claude_platform: agent_config.claude_platform.clone(),
-        },
-    )
-}
-
-/// Identity of everything an agent_config slot builds once and keeps: its resolved
-/// configuration plus the keyed connection identity of its inference and
-/// compaction clients. `ResolvedAgent`'s Debug redacts credentials, so a
-/// key rotation is visible only through the keyed fingerprints.
-pub(crate) fn agent_slot_fingerprint(agent_config: &ResolvedAgent) -> String {
-    let compaction = agent_config.compaction_inference.as_ref().map(|inference| {
-        crate::inference::admission::backend_connection_fingerprint(
-            &inference.backend.backend_fields(),
-        )
-    });
-    format!(
-        "{agent_config:?}|connection={}|compaction_connection={compaction:?}",
-        agent_connection_fingerprint(agent_config)
-    )
 }
 
 pub(crate) fn build_admitted_model<C>(
@@ -215,20 +188,6 @@ pub(crate) fn loop_config_for_request(
     };
     config.deadline = parse_request_deadline(request.deadline.as_deref());
     Ok(config)
-}
-
-/// Decode the execution owner's pinned request limit. Zero is a valid
-/// exhausted durable state; configured limits are validated positive before claim.
-pub(crate) fn parse_aggregate_token_limit(
-    max_total_tokens: Option<i64>,
-) -> anyhow::Result<Option<u64>> {
-    max_total_tokens
-        .map(|limit| {
-            let limit = u64::try_from(limit)
-                .map_err(|_| anyhow::anyhow!("pinned max_total_tokens must not be negative"))?;
-            Ok(limit)
-        })
-        .transpose()
 }
 
 /// Mint the single monotone provider-usage ledger for one durable request,
