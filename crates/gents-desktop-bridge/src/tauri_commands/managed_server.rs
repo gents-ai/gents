@@ -540,8 +540,8 @@ where
     let token = begin_start_wait(state).await;
     emit_status(app, state).await;
     let launch = NativeLaunch {
-        app: app,
-        state: state,
+        app,
+        state,
         node_home: &node_home,
         enable_at_login: was_enabled,
     };

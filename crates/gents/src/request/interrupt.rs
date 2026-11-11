@@ -205,15 +205,21 @@ pub(crate) async fn interrupt_active_session_in_txn(
     node_did: &str,
     requester_did: Option<&str>,
 ) -> Result<Option<String>> {
-    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
-    let response = txn
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ {scope}, purpose: {{ _eq: "normal" }},
-                lifecycle_state: {{ _in: {claimed_or_processing} }} }}, limit: 2)
-                {{ _docID request_id }} }}"#,
-            claimed_or_processing = RequestLifecycleState::unsettled_execution_graphql_list()
-        ))
-        .await?;
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, session_scope, Filter, Query, Selection,
+        };
+        Query::select(Selection::doc_id().field(fields::REQUEST_ID))
+            .filter(session_scope(node_did, session_id, requester_did))
+            .filter(Filter::eq(fields::PURPOSE, "normal"))
+            .filter(Filter::any_of(
+                fields::LIFECYCLE_STATE,
+                RequestLifecycleState::unsettled_execution().map(RequestLifecycleState::as_str),
+            ))
+            .limit(2)
+            .render()
+    };
+    let response = txn.run(&rendered).await?;
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(serde_json::Value::as_array)

@@ -31,10 +31,19 @@ pub(crate) async fn recover_outcomes_with_access(
         access.actor_did().as_deref() == Some(agent_did),
         "trigger recovery actor differs from access actor"
     );
-    let response = access.execute(&format!(
-        r#"{{TriggerFire(filter: {{owner_did: {{_eq: "{}"}}, emit_outcome: {{_eq: true}}}}) {{{FIRE_FIELDS}}}}}"#,
-        crate::store::graphql::escape_graphql_string(owner)
-    )).await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::trigger_fire as fields, Filter, Query, Selection,
+        };
+        access
+            .read(
+                &Query::select(Selection::owned(FIRE_FIELDS))
+                    .filter(Filter::eq(fields::OWNER_DID, owner))
+                    .filter(Filter::eq(fields::EMIT_OUTCOME, true))
+                    .render(),
+            )
+            .await?
+    };
     let fires: Vec<TriggerFire> = serde_json::from_value(response["data"]["TriggerFire"].clone())?;
     let now = chrono::Utc::now().to_rfc3339();
     let mut recovered = 0;
@@ -56,10 +65,18 @@ pub(crate) async fn recover_outcomes_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     owner: &str,
 ) -> Result<usize> {
-    let response = txn.execute_local_response(&format!(
-        r#"{{TriggerFire(filter: {{owner_did: {{_eq: "{}"}}, emit_outcome: {{_eq: true}}}}) {{{FIRE_FIELDS}}}}}"#,
-        crate::store::graphql::escape_graphql_string(owner)
-    )).await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::trigger_fire as fields, Filter, Query, Selection,
+        };
+        txn.run_local_response(
+            &Query::select(Selection::owned(FIRE_FIELDS))
+                .filter(Filter::eq(fields::OWNER_DID, owner))
+                .filter(Filter::eq(fields::EMIT_OUTCOME, true))
+                .render(),
+        )
+        .await?
+    };
     let fires: Vec<TriggerFire> = crate::store::graphql::rows(&response, "TriggerFire")?;
     let now = chrono::Utc::now().to_rfc3339();
     let mut recovered = 0;
@@ -79,15 +96,24 @@ async fn recover_fire_outcome_in_txn(
     if outcome_published(txn, fire).await? {
         return Ok(0);
     }
-    let response = txn
-        .execute_local_response(&format!(
-            r#"{{AgentRequest(filter: {{
-        node_did: {{_eq: "{}"}}, request_id: {{_eq: "{}"}}
-    }}) {{request_id agent_did lifecycle_state failure_reason}}}}"#,
-            crate::store::graphql::escape_graphql_string(owner),
-            crate::store::graphql::escape_graphql_string(&fire.request_id)
-        ))
-        .await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        txn.run_local_response(
+            &Query::select(
+                Selection::new()
+                    .field(fields::REQUEST_ID)
+                    .field(fields::AGENT_DID)
+                    .field(fields::LIFECYCLE_STATE)
+                    .field(fields::FAILURE_REASON),
+            )
+            .filter(Filter::eq(fields::NODE_DID, owner))
+            .filter(Filter::eq(fields::REQUEST_ID, &fire.request_id))
+            .render(),
+        )
+        .await?
+    };
     let requests: Vec<gents_protocol::row::AgentRequestRow> =
         crate::store::graphql::rows(&response, "AgentRequest")?;
     if requests.is_empty() && agent_did.is_some() {

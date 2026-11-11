@@ -139,12 +139,14 @@ impl RequestLifecycleState {
         )
     }
 
+    pub fn unsettled_execution() -> impl Iterator<Item = Self> {
+        Self::ALL
+            .into_iter()
+            .filter(|state| state.is_unsettled_execution())
+    }
+
     pub fn unsettled_execution_graphql_list() -> String {
-        Self::graphql_list(
-            Self::ALL
-                .into_iter()
-                .filter(|state| state.is_unsettled_execution()),
-        )
+        Self::graphql_list(Self::unsettled_execution())
     }
 
     pub fn nonterminal_graphql_list() -> String {

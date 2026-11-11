@@ -54,39 +54,40 @@ async fn recover_active_requests(
     identities: &[std::sync::Arc<dyn crate::store::identity::NodeIdentity>],
 ) -> Result<ActiveRequestRecoveryReport> {
     let accesses = configured_agent_accesses(node, node_did, identities)?;
-    let active_states = RequestLifecycleState::graphql_list([
-        RequestLifecycleState::Claimed,
-        RequestLifecycleState::Processing,
-        RequestLifecycleState::ResumingBackend,
-    ]);
-    let escaped_node_did = escape_graphql_string(node_did);
     let mut rows = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
     for (actor, access) in &accesses {
-        let escaped_agent_did = escape_graphql_string(actor);
-        let query = format!(
-            r#"{{
-            AgentRequest(
-                filter: {{
-                    node_did: {{ _eq: "{escaped_node_did}" }},
-                    agent_did: {{ _eq: "{escaped_agent_did}" }},
-                    lifecycle_state: {{ _in: {active_states} }}
-                }}
-            ) {{
-                _docID
-                request_id
-                lifecycle_state
-                node_did
-                requester_did
-                agent_did
-                session_id
-                interrupt_requested_at
-                execution_generation
-                execution_lease_expires_at
-            }}
-        }}"#
-        );
-        let response = access.execute(&query).await?;
+        let query = {
+            use gents_protocol::document_query::{
+                fields::agent_request as fields, Filter, Query, Selection,
+            };
+            Query::select(
+                Selection::doc_id()
+                    .field(fields::REQUEST_ID)
+                    .field(fields::LIFECYCLE_STATE)
+                    .field(fields::NODE_DID)
+                    .field(fields::REQUESTER_DID)
+                    .field(fields::AGENT_DID)
+                    .field(fields::SESSION_ID)
+                    .field(fields::INTERRUPT_REQUESTED_AT)
+                    .field(fields::EXECUTION_GENERATION)
+                    .field(fields::EXECUTION_LEASE_EXPIRES_AT),
+            )
+            .filter(Filter::eq(fields::NODE_DID, node_did))
+            .filter(Filter::eq(fields::AGENT_DID, actor))
+            .filter(Filter::any_of(
+                fields::LIFECYCLE_STATE,
+                [
+                    RequestLifecycleState::Claimed,
+                    RequestLifecycleState::Processing,
+                    RequestLifecycleState::ResumingBackend,
+                ]
+                .into_iter()
+                .map(RequestLifecycleState::as_str),
+            ))
+            .render()
+        };
+        let response = access.read(&query).await?;
         let agent_rows: Vec<AgentRequestRow> =
             serde_json::from_value(response["data"]["AgentRequest"].clone())
                 .context("decoding active requests for recovery")?;

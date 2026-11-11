@@ -712,6 +712,7 @@ impl NodePacks<'_> {
             node_binding,
         )
         .await
+        .map_err(super::SlotBindingError::into_anyhow)
     }
 
     /// Installs a plugins or assets pack into the home and tells the node as

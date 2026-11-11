@@ -22,18 +22,21 @@ pub async fn prepare_user_message_input(
         }),
         "user messages require an ordinary user queue entry"
     );
-    let response = access
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{
-            node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }},
-            purpose: {{ _eq: "normal" }},
-            lifecycle_state: {{ _in: {claimed_or_processing} }}
-        }}) {{ _docID request_id }} }}"#,
-            escape_graphql_string(node_did),
-            escape_graphql_string(session_id),
-            claimed_or_processing = RequestLifecycleState::unsettled_execution_graphql_list()
-        ))
-        .await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        let query = Query::select(Selection::doc_id().field(fields::REQUEST_ID))
+            .filter(Filter::eq(fields::NODE_DID, node_did))
+            .filter(Filter::eq(fields::SESSION_ID, session_id))
+            .filter(Filter::eq(fields::PURPOSE, "normal"))
+            .filter(Filter::any_of(
+                fields::LIFECYCLE_STATE,
+                RequestLifecycleState::unsettled_execution().map(RequestLifecycleState::as_str),
+            ))
+            .render();
+        access.read(&query).await?
+    };
     let rows: Vec<AgentRequestRow> =
         serde_json::from_value(response["data"]["AgentRequest"].clone())?;
     anyhow::ensure!(rows.len() <= 1, "session has conflicting active requests");

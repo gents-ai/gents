@@ -59,21 +59,10 @@ fn render_healthz_payload_at(
                 ProjectedNodeReadinessSummary::Unknown(_) => false,
             };
             let liveness_degraded = data.liveness.expired_processing_count > 0;
-            let codex_shim = state
-                .codex_shim_health
-                .as_ref()
-                .and_then(|handle| handle.read().ok().map(|health| health.clone()));
-            let codex_shim_degraded = codex_shim
-                .as_ref()
-                .is_some_and(|health| health.is_degraded());
             let ok = runtime_ready;
             let status = if !runtime_ready {
                 "unhealthy"
-            } else if runtime_degraded
-                || backend_degraded
-                || liveness_degraded
-                || codex_shim_degraded
-            {
+            } else if runtime_degraded || backend_degraded || liveness_degraded {
                 "degraded"
             } else {
                 "ok"
@@ -90,7 +79,7 @@ fn render_healthz_payload_at(
             let backend_status = if backend_degraded { "degraded" } else { "ok" };
             let liveness_status = if liveness_degraded { "degraded" } else { "ok" };
 
-            let mut checks = json!({
+            let checks = json!({
                     "http": {
                         "status": "ok",
                     },
@@ -118,9 +107,6 @@ fn render_healthz_payload_at(
                         "ignored_foreign_tool_call_count": data.liveness.ignored_foreign_tool_call_count,
                     },
             });
-            if let Some(health) = codex_shim.as_ref() {
-                checks["codex_shim"] = health.to_json();
-            }
 
             json!({
                 "status": status,
@@ -204,7 +190,6 @@ mod tests {
             p2p_admission: None,
             p2p_metrics_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
             store_size: crate::http::prometheus::StoreSizeCache::new(None),
-            codex_shim_health: None,
             enrollment_offer_issuer: crate::http::enrollment::empty_issuer_handle(),
             enrollment_decisions: crate::http::enrollment::empty_decision_service_handle(),
             activation_runtime,
@@ -478,12 +463,6 @@ mod tests {
         );
     }
 
-    fn state_with_shim(health: crate::shared::CodexShimHealth) -> RuntimeHttpState {
-        let mut state = state();
-        state.codex_shim_health = Some(std::sync::Arc::new(std::sync::RwLock::new(health)));
-        state
-    }
-
     fn healthy_data() -> MetricsQueryData {
         MetricsQueryData {
             node_runtimes: vec![ready_runtime()],
@@ -491,75 +470,5 @@ mod tests {
             inference_backends: vec![healthy_backend()],
             liveness: RuntimeLivenessSnapshot::default(),
         }
-    }
-
-    #[test]
-    fn healthz_reports_a_pending_shim_as_degraded() {
-        let state = state_with_shim(crate::shared::CodexShimHealth::Pending {
-            bound_agent_did: "default".to_string(),
-            reason: "no Agent document with that agent_did exists".to_string(),
-        });
-        let payload = render_healthz_payload_at(&state, Some(&healthy_data()), None, observed_at());
-
-        assert_eq!(
-            payload
-                .pointer("/checks/codex_shim/status")
-                .and_then(Value::as_str),
-            Some("pending"),
-        );
-        assert_eq!(
-            payload.get("status").and_then(Value::as_str),
-            Some("degraded"),
-        );
-        assert_eq!(
-            payload.get("ok").and_then(Value::as_bool),
-            Some(true),
-            "the runtime is still serving, so /healthz stays 200 OK"
-        );
-    }
-
-    #[test]
-    fn healthz_reports_a_listening_shim_as_ok() {
-        let state = state_with_shim(crate::shared::CodexShimHealth::Listening {
-            websocket: "ws://127.0.0.1:9292/".to_string(),
-            auth_required: true,
-            bound_node_did: "did:key:agent".to_string(),
-            bound_agent_did: "did:key:agent:default".to_string(),
-        });
-        let payload = render_healthz_payload_at(&state, Some(&healthy_data()), None, observed_at());
-
-        assert_eq!(
-            payload
-                .pointer("/checks/codex_shim/status")
-                .and_then(Value::as_str),
-            Some("ok")
-        );
-        assert_eq!(
-            payload
-                .pointer("/checks/codex_shim/auth_required")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            payload
-                .pointer("/checks/codex_shim/bound_node_did")
-                .and_then(Value::as_str),
-            Some("did:key:agent")
-        );
-        assert_eq!(payload.get("status").and_then(Value::as_str), Some("ok"));
-    }
-
-    #[test]
-    fn healthz_does_not_degrade_when_the_shim_is_switched_off() {
-        let state = state_with_shim(crate::shared::CodexShimHealth::Off);
-        let payload = render_healthz_payload_at(&state, Some(&healthy_data()), None, observed_at());
-
-        assert_eq!(
-            payload
-                .pointer("/checks/codex_shim/status")
-                .and_then(Value::as_str),
-            Some("off")
-        );
-        assert_eq!(payload.get("status").and_then(Value::as_str), Some("ok"));
     }
 }

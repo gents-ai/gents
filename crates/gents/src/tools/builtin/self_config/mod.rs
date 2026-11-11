@@ -5,6 +5,7 @@ mod agent_management;
 mod agent_queries;
 #[cfg(test)]
 use agent_management::agent_mutate;
+pub(crate) use agent_management::create_agent;
 use agent_management::load_agent_catalog;
 pub use agent_management::{configure_agent, grant_own_self_configuration};
 #[cfg(test)]
@@ -37,6 +38,8 @@ use requests::{
     refuse_uninstalled_plugins, tools_request,
 };
 #[cfg(test)]
+mod agent_operation_text_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod text_tests;
@@ -61,6 +64,7 @@ use crate::tools::surface::presets::{builtin_preset_names, preset_fields};
 use crate::tools::surface::SelfConfigToolConfig;
 use crate::NodeIdentity;
 use defra_node::Node as EmbeddedNode;
+use gents_protocol::operations::StringUpdate;
 use ops::{decode_merged, validate_merged_selection, ApplyRequest};
 
 pub const ENGINEER_AGENT_TAG: &str = "gents:engineer";
@@ -109,45 +113,6 @@ impl std::error::Error for SelfConfigError {
 impl From<anyhow::Error> for SelfConfigError {
     fn from(error: anyhow::Error) -> Self {
         Self(error)
-    }
-}
-
-/// Model-facing tri-state for agent edits. A present JSON null is `Clear`;
-/// the property must be absent to stay `Omitted`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub enum StringUpdate {
-    #[default]
-    Omitted,
-    Clear,
-    Set(String),
-}
-
-impl<'de> serde::Deserialize<'de> for StringUpdate {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        Option::<String>::deserialize(deserializer).map(|value| match value {
-            Some(value) => Self::Set(value),
-            None => Self::Clear,
-        })
-    }
-}
-
-impl StringUpdate {
-    fn is_present(&self) -> bool {
-        !matches!(self, Self::Omitted)
-    }
-
-    fn value(&self) -> Option<&str> {
-        match self {
-            Self::Set(value) => Some(value),
-            Self::Omitted | Self::Clear => None,
-        }
-    }
-
-    fn owned_value(&self) -> Option<String> {
-        self.value().map(ToOwned::to_owned)
     }
 }
 

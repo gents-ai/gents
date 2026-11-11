@@ -169,11 +169,19 @@ async fn observe_goal_outcome_binding(
     {
         return Ok(current_binding);
     }
-    let response = txn.execute(&format!(
-        r#"{{AgentRequest(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, request_id: {{_eq: "{}"}}}}) {{_docID}}}}"#,
-        escape_graphql_string(&fire.identity.owner_did), escape_graphql_string(&fire.session_id),
-        escape_graphql_string(&fire.request_id)
-    )).await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(Selection::doc_id())
+                .filter(Filter::eq(fields::NODE_DID, &fire.identity.owner_did))
+                .filter(Filter::eq(fields::SESSION_ID, &fire.session_id))
+                .filter(Filter::eq(fields::REQUEST_ID, &fire.request_id))
+                .render(),
+        )
+        .await?
+    };
     let requests = response["data"]["AgentRequest"]
         .as_array()
         .context("Task assignment request query omitted rows")?;
@@ -288,12 +296,17 @@ pub(crate) async fn stage_fire_receipt(
         fire.request_id == fire.identity.request_id(),
         "noncanonical fire request ID"
     );
-    let prior = txn
-        .execute(&format!(
-            "{{ TriggerFire(filter: {{fire_key: {{_eq: \"{}\"}}}}) {{ request_id }} }}",
-            escape_graphql_string(&fire.fire_key)
-        ))
-        .await?;
+    let prior = {
+        use gents_protocol::document_query::{
+            fields::trigger_fire as fields, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(Selection::new().field(fields::REQUEST_ID))
+                .filter(Filter::eq(fields::FIRE_KEY, &fire.fire_key))
+                .render(),
+        )
+        .await?
+    };
     if prior["data"]["TriggerFire"]
         .as_array()
         .is_some_and(|rows| !rows.is_empty())
@@ -471,12 +484,17 @@ pub(crate) async fn stage_outcome_reader(
 const FIRE_FIELDS: &str = "fire_key owner_did trigger_id source_collection source_doc_id task_id request_id session_id goal_id goal_objective goal_token_budget goal_assignment_applied emit_outcome queued_serial source_handoff_id reply_session_id shard_id attempt created_at";
 
 async fn outcome_published(txn: &ConfigApplyTxn<'_>, fire: &TriggerFire) -> Result<bool> {
-    let response = txn
-        .execute(&format!(
-            "{{ FireOutcome(filter: {{handoff_id: {{_eq: \"{}\"}}}}) {{ handoff_id }} }}",
-            escape_graphql_string(&fire.identity.outcome_id())
-        ))
-        .await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::fire_outcome as fields, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(Selection::new().field(fields::HANDOFF_ID))
+                .filter(Filter::eq(fields::HANDOFF_ID, fire.identity.outcome_id()))
+                .render(),
+        )
+        .await?
+    };
     Ok(!response["data"]["FireOutcome"]
         .as_array()
         .context("Task outcome query omitted rows")?
@@ -491,7 +509,18 @@ pub(crate) async fn publish_request_outcome(
     reason: &str,
     now: &str,
 ) -> Result<()> {
-    let response = txn.execute(&format!("{{ TriggerFire(filter: {{owner_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}) {{ {FIRE_FIELDS} }} }}", escape_graphql_string(owner), escape_graphql_string(request_id))).await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::trigger_fire as fields, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(Selection::owned(FIRE_FIELDS))
+                .filter(Filter::eq(fields::OWNER_DID, owner))
+                .filter(Filter::eq(fields::REQUEST_ID, request_id))
+                .render(),
+        )
+        .await?
+    };
     let rows: Vec<TriggerFire> = serde_json::from_value(response["data"]["TriggerFire"].clone())?;
     for fire in rows {
         let stage = OutcomeStage {
@@ -513,7 +542,18 @@ pub(crate) async fn publish_goal_outcomes(
     reason: &str,
     now: &str,
 ) -> Result<()> {
-    let response = txn.execute(&format!("{{ TriggerFire(filter: {{owner_did: {{_eq: \"{}\"}}, goal_id: {{_eq: \"{}\"}}}}) {{ {FIRE_FIELDS} }} }}", escape_graphql_string(owner), escape_graphql_string(goal_id))).await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::trigger_fire as fields, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(Selection::owned(FIRE_FIELDS))
+                .filter(Filter::eq(fields::OWNER_DID, owner))
+                .filter(Filter::eq(fields::GOAL_ID, goal_id))
+                .render(),
+        )
+        .await?
+    };
     let rows: Vec<TriggerFire> = serde_json::from_value(response["data"]["TriggerFire"].clone())?;
     for fire in rows {
         if outcome_published(txn, &fire).await? {

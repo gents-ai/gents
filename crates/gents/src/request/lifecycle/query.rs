@@ -24,27 +24,26 @@ pub(super) async fn request_view(
     actor: &identity::Did,
     request_doc_id: &str,
 ) -> Result<Option<AgentRequestRow>> {
-    let doc_id = escape_graphql_string(request_doc_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
-                limit: 1
-            ) {{
-                request_id
-                lifecycle_state
-                backend_id
-                execution_generation
-                execution_lease_expires_at
-                execution_origin
-                failure_reason
-                terminal_output
-            }}
-        }}"#,
-    );
+    use gents_protocol::document_query::{
+        fields::agent_request as request, Filter, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::new()
+            .field(request::REQUEST_ID)
+            .field(request::LIFECYCLE_STATE)
+            .field(request::BACKEND_ID)
+            .field(request::EXECUTION_GENERATION)
+            .field(request::EXECUTION_LEASE_EXPIRES_AT)
+            .field(request::EXECUTION_ORIGIN)
+            .field(request::FAILURE_REASON)
+            .field(request::TERMINAL_OUTPUT),
+    )
+    .filter(Filter::eq(request::DOC_ID, request_doc_id))
+    .limit(1)
+    .render();
 
     let response = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor.clone())
-        .execute(&query)
+        .read(&query)
         .await?;
     let data = response
         .get("data")
@@ -69,16 +68,30 @@ pub(super) async fn claim_queue_allows(
             .into_iter()
             .filter(|state| !state.is_terminal()),
     );
-    let candidate_doc_id = escape_graphql_string(&request.doc_id);
-    let response = txn
-        .execute_local_response(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{candidate_doc_id}" }},
-            node_did: {{ _eq: "{owner}" }}, purpose: {{ _eq: "normal" }},
-            lifecycle_state: {{ _in: {nonterminal} }} }}, limit: 1) {{
-            _docID request_id session_id lifecycle_state
-        }} }}"#,
+    let candidate = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(
+            Selection::doc_id()
+                .field(fields::REQUEST_ID)
+                .field(fields::SESSION_ID)
+                .field(fields::LIFECYCLE_STATE),
+        )
+        .filter(Filter::eq(fields::DOC_ID, &request.doc_id))
+        .filter(Filter::eq(fields::NODE_DID, &request.node_did))
+        .filter(Filter::eq(fields::PURPOSE, "normal"))
+        .filter(Filter::any_of(
+            fields::LIFECYCLE_STATE,
+            RequestLifecycleState::ALL
+                .into_iter()
+                .filter(|state| !state.is_terminal())
+                .map(RequestLifecycleState::as_str),
         ))
-        .await?;
+        .limit(1)
+        .render()
+    };
+    let response = txn.run_local_response(&candidate).await?;
     let Some(candidate_row) =
         crate::store::graphql::first_row::<AgentRequestRow>(&response, "AgentRequest")?
     else {

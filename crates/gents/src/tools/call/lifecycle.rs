@@ -118,7 +118,7 @@ pub use crate::tools::native::file_contents::ContentDocument;
 pub use query::{
     load_tool_call_arguments, load_tool_call_file_changes, load_tool_call_presentation,
     load_tool_call_result, load_tool_file_change_observation, render_tool_result,
-    CanonicalToolCallPresentation, ToolFileChangeRead,
+    ToolFileChangeRead,
 };
 pub(crate) mod plugin_receipt;
 pub use plugin_receipt::ReceiptDecision;

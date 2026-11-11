@@ -40,6 +40,7 @@ pub(crate) use source::{
 use std::collections::BTreeMap;
 
 use gents::pack::materialize::CacheRelease;
+use gents::pack::PackChangeError;
 
 pub(crate) fn parse_inference_slot_bindings(
     values: &[String],
@@ -78,12 +79,16 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
         PackCommand::Diff(args) => inspect::diff(args).await,
         PackCommand::Test(args) => test::test(args).await,
         PackCommand::Check(args) => check::check(args).await,
-        PackCommand::Install(args) => install(args).await,
+        PackCommand::Install(args) => install(args).await.map_err(PackChangeError::into_anyhow),
         PackCommand::Wire(args) => wire::wire(args).await,
         PackCommand::Starter(args) => crate::commands::init::default_packs::starter(args).await,
-        PackCommand::Remove(args) => remove::remove(args).await,
+        PackCommand::Remove(args) => remove::remove(args)
+            .await
+            .map_err(PackChangeError::into_anyhow),
         PackCommand::Outdated(args) => update::outdated(args).await,
-        PackCommand::Update(args) => update::update(args).await,
+        PackCommand::Update(args) => update::update(args)
+            .await
+            .map_err(PackChangeError::into_anyhow),
         PackCommand::Prune(args) => cache::prune(args).await,
         PackCommand::Scenario(PackScenarioCommand::Run(args)) => scenario::run(args).await,
         PackCommand::Scenario(PackScenarioCommand::Init(args)) => scenario::init_pack(args).await,

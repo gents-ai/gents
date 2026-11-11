@@ -495,11 +495,16 @@ fn session_summary(mut session: Value) -> Value {
 }
 
 async fn authorized_session(txn: &ConfigApplyTxn<'_>, id: &str) -> Result<Value> {
+    use gents_protocol::document_query::{
+        fields::agent_session as session_fields, Filter, Query, Selection,
+    };
     let mut session = rows(
-        txn.execute(&format!(
-            "{{AgentSession(filter: {{session_id: {{_eq: {}}}}}, limit: 2) {{{FIELDS}}}}}",
-            quoted(id)
-        ))
+        txn.run(
+            &Query::select(Selection::owned(FIELDS))
+                .filter(Filter::eq(session_fields::SESSION_ID, id))
+                .limit(2)
+                .render(),
+        )
         .await?,
         "AgentSession",
     )?;

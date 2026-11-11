@@ -2190,60 +2190,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "R4cBackgroundWorkCases".to_string(),
         ));
     }
-    if !lean_codex_shim_projection_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_projection_cases".to_string(),
-            "CodexShimProjectionCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_reasoning_projection_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_reasoning_projection_cases".to_string(),
-            "CodexShimReasoningProjectionCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_thread_status_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_thread_status_cases".to_string(),
-            "CodexShimThreadStatusCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_agent_selection_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_agent_selection_cases".to_string(),
-            "CodexShimAgentSelectionCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_tool_metadata_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_tool_metadata_cases".to_string(),
-            "CodexShimToolMetadataCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_context_usage_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_context_usage_cases".to_string(),
-            "CodexShimContextUsageCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_compaction_projection_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_compaction_projection_cases".to_string(),
-            "CodexShimCompactionProjectionCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_binding_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_binding_cases".to_string(),
-            "CodexShimBindingCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_connection_admission_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_connection_admission_cases".to_string(),
-            "CodexShimConnectionAdmissionCases".to_string(),
-        ));
-    }
     if !lean_plugin_reference_cases().is_empty() {
         emitted.insert((
             "plugin_reference_cases".to_string(),
@@ -2260,12 +2206,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "startup_readiness_cases".to_string(),
             "StartupReadinessCases".to_string(),
-        ));
-    }
-    if !lean_codex_shim_turn_lifecycle_cases().is_empty() {
-        emitted.insert((
-            "codex_shim_turn_lifecycle_cases".to_string(),
-            "CodexShimTurnLifecycleCases".to_string(),
         ));
     }
     if !lean_r6_backgrounding_cases().is_empty() {

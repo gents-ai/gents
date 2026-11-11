@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::documents::PackConfig;
+use crate::plugin::authority::GrantError;
 use crate::store::config_client::{
     ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
@@ -27,11 +28,11 @@ pub use declared_access::declared_readers;
 pub use documents::{
     apply_hosted_document_graph, apply_prepared_dependency_schemas, assemble_document_graph_report,
     collections_install_creates, document_pack_schema_paths, hosted_document_graph,
-    install_documents_with_plugins, install_prepared_document_graph,
-    install_prepared_document_pack, plugin_data_unique_keys, prepare_document_pack_archive,
-    prepare_document_pack_archive_with_runtime, prepare_document_pack_install,
-    prepare_hosted_document_pack_archive, DependencyVariableOverrides, HostedDocumentGraph,
-    HostedPackPreparation, PreparedDependency, PreparedDocumentPackInstall,
+    install_prepared_document_graph, install_prepared_document_pack, plugin_data_unique_keys,
+    prepare_document_pack_archive, prepare_document_pack_archive_with_runtime,
+    prepare_document_pack_install, prepare_hosted_document_pack_archive,
+    DependencyVariableOverrides, HostedDocumentGraph, HostedPackPreparation, PreparedDependency,
+    PreparedDocumentPackInstall,
 };
 pub use hosted::{stage_hosted_pack, HostedHomePublication, HostedPackStage, HostedPackStageError};
 pub use removal::{
@@ -224,38 +225,6 @@ impl DriftPolicy {
     }
 }
 
-/// An install, update or removal that met documents whose content is not what
-/// the pack recorded, under [`DriftPolicy::Refuse`]. The decision is the
-/// caller's: the operator CLI's `--overwrite`/`--keep`, the agent pack
-/// command's `options.edited`.
-#[derive(Debug, thiserror::Error)]
-pub enum PackDriftError {
-    #[error(
-        "{} of {coordinate}'s documents were edited since it was installed: {}. Overwrite replaces \
-         them with the pack's versions (a removal deletes them); keep leaves them as edited. \
-         Decide with --overwrite or --keep on `gents config pack install`, `gents config pack update` or \
-         `gents config pack remove`, or options.edited on the agent pack command",
-        edited.len(),
-        edited.join(", ")
-    )]
-    Edited {
-        coordinate: String,
-        edited: Vec<String>,
-    },
-    #[error(
-        "{} of {coordinate}'s documents already exist on this node with different content: {}; \
-         the pack adopts an existing document only when it matches. Rename or remove them, or \
-         decide: overwrite replaces them with the pack's versions, keep leaves them as they are \
-         (--overwrite or --keep on `gents config pack install`, options.edited on the agent pack command)",
-        differing.len(),
-        differing.join(", ")
-    )]
-    Differing {
-        coordinate: String,
-        differing: Vec<String>,
-    },
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum PackRemovalError {
     #[error("pack-owned {collection} {id:?} is unavailable to the removing actor")]
@@ -428,13 +397,29 @@ fn is_reserved(document: &RecordedDocument) -> bool {
 }
 
 async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) -> Result<Record> {
-    let response = txn
-        .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID version digest agent_bindings documents variables plugins history source source_history required_by explicit plugin_store }} }}"#,
-            escape_graphql_string(owner),
-            escape_graphql_string(coordinate)
-        ))
-        .await?;
+    use gents_protocol::document_query::{
+        fields::pack_installation as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::doc_id()
+            .field(fields::VERSION)
+            .field(fields::DIGEST)
+            .field(fields::AGENT_BINDINGS)
+            .field(fields::DOCUMENTS)
+            .field(fields::VARIABLES)
+            .field(fields::PLUGINS)
+            .field(fields::HISTORY)
+            .field(fields::SOURCE)
+            .field(fields::SOURCE_HISTORY)
+            .field(fields::REQUIRED_BY)
+            .field(fields::EXPLICIT)
+            .field(fields::PLUGIN_STORE),
+    )
+    .filter(Filter::eq(fields::NODE_DID, owner))
+    .filter(Filter::eq(fields::COORDINATE, coordinate))
+    .limit(2)
+    .render();
+    let response = txn.run(&query).await?;
     let rows = response["data"][RECORD]
         .as_array()
         .context("reading the pack installation record")?;
@@ -556,14 +541,6 @@ async fn ensure_removal_origin(
         }
     }
     Ok(())
-}
-
-fn edited_error(coordinate: &str, edited: &[String]) -> anyhow::Error {
-    PackDriftError::Edited {
-        coordinate: coordinate.to_owned(),
-        edited: edited.to_vec(),
-    }
-    .into()
 }
 
 /// The documents `coordinate` installed whose live content is no longer what
@@ -766,33 +743,37 @@ pub(crate) async fn install_in_txn(
     node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
     source: Option<&PackSource>,
     variables: Option<&BTreeMap<String, Option<String>>>,
-) -> Result<InstallReport> {
+) -> Result<InstallReport, PackChangeError> {
     let mut prior = read_record(txn, owner, &pack.coordinate).await?;
     if let Some(variables) = variables {
         prior.variables.clone_from(variables);
     }
     super::agent_bindings::validate_bindings(&pack.agent_bindings)?;
-    if !pack.agent_bindings.is_empty() {
-        anyhow::ensure!(
-            prior.doc_id == pack.installation_doc_id,
+    if !pack.agent_bindings.is_empty() && prior.doc_id != pack.installation_doc_id {
+        return Err(anyhow::anyhow!(
             "pack installation changed after preparation; prepare the installation again"
-        );
+        )
+        .into());
     }
     for (slot, binding) in &prior.agent_bindings {
-        anyhow::ensure!(
-            pack.agent_bindings.get(slot) == Some(binding),
-            "pack agent bindings changed after preparation; prepare the installation again"
-        );
+        if pack.agent_bindings.get(slot) != Some(binding) {
+            return Err(anyhow::anyhow!(
+                "pack agent bindings changed after preparation; prepare the installation again"
+            )
+            .into());
+        }
     }
     for binding in pack.agent_bindings.values() {
         if let Some(agent) = documents.iter().find(|document| {
             document.collection == Collection::Agent
                 && document.add["agent_did"].as_str() == Some(binding.agent_did.as_str())
         }) {
-            anyhow::ensure!(
-                agent.add["creation_nonce"].as_str() == Some(binding.creation_nonce.as_str()),
-                "pack agent creation nonce does not match its installation binding"
-            );
+            if agent.add["creation_nonce"].as_str() != Some(binding.creation_nonce.as_str()) {
+                return Err(anyhow::anyhow!(
+                    "pack agent creation nonce does not match its installation binding"
+                )
+                .into());
+            }
         }
     }
     let mut report = InstallReport {
@@ -926,14 +907,16 @@ pub(crate) async fn install_in_txn(
         }
     }
     if !edited.is_empty() {
-        return Err(edited_error(&pack.coordinate, &edited));
+        return Err(PackChangeError::Edited {
+            coordinate: pack.coordinate.clone(),
+            edited,
+        });
     }
     if !differing.is_empty() {
-        return Err(PackDriftError::Differing {
+        return Err(PackChangeError::Differing {
             coordinate: pack.coordinate.clone(),
             differing,
-        }
-        .into());
+        });
     }
 
     ensure_removal_origin(txn, owner, &pack.coordinate, &removals).await?;
@@ -1050,6 +1033,82 @@ impl crate::store::config_client::TransactionFailure for PluginStoreChangeError 
         match self {
             Self::PinConflict(_) => None,
             Self::Rejected(error) | Self::Unconfirmed(error) => {
+                crate::store::config_client::TransactionFailure::config_client_error(error)
+            }
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PackChangeError {
+    #[error(
+        "{} of {coordinate}'s documents were edited since it was installed: {}. Overwrite replaces \
+         them with the pack's versions (a removal deletes them); keep leaves them as edited. \
+         Decide with --overwrite or --keep on `gents config pack install`, `gents config pack update` or \
+         `gents config pack remove`, or options.edited on the agent pack command",
+        .edited.len(),
+        .edited.join(", ")
+    )]
+    Edited {
+        coordinate: String,
+        edited: Vec<String>,
+    },
+    #[error(
+        "{} of {coordinate}'s documents already exist on this node with different content: {}; \
+         the pack adopts an existing document only when it matches. Rename or remove them, or \
+         decide: overwrite replaces them with the pack's versions, keep leaves them as they are \
+         (--overwrite or --keep on `gents config pack install`, options.edited on the agent pack command)",
+        .differing.len(),
+        .differing.join(", ")
+    )]
+    Differing {
+        coordinate: String,
+        differing: Vec<String>,
+    },
+    #[error(transparent)]
+    Grant(#[from] GrantError),
+    #[error(transparent)]
+    Slots(#[from] super::SlotBindingError),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+impl PackChangeError {
+    /// Erasing through `anyhow::Error::from` would hide an access error at the
+    /// top of `Other`: a transparent variant's `source()` skips its own inner
+    /// error, so a transaction owner or classifier searching the chain could
+    /// not find it.
+    pub fn into_anyhow(self) -> anyhow::Error {
+        match self {
+            Self::Other(error) | Self::Grant(GrantError::Other(error)) => error,
+            Self::Slots(error) => error.into_anyhow(),
+            refusal => refusal.into(),
+        }
+    }
+}
+
+impl From<PackRemovalError> for PackChangeError {
+    fn from(error: PackRemovalError) -> Self {
+        Self::Other(error.into())
+    }
+}
+
+impl From<crate::store::config_client::ConfigClientError> for PackChangeError {
+    fn from(error: crate::store::config_client::ConfigClientError) -> Self {
+        Self::Other(error.into())
+    }
+}
+
+impl crate::store::config_client::TransactionFailure for PackChangeError {
+    fn config_client_error(&self) -> Option<&crate::store::config_client::ConfigClientError> {
+        match self {
+            Self::Edited { .. }
+            | Self::Differing { .. }
+            | Self::Grant(GrantError::Ungranted { .. })
+            | Self::Slots(super::SlotBindingError::Unbound { .. }) => None,
+            Self::Other(error)
+            | Self::Grant(GrantError::Other(error))
+            | Self::Slots(super::SlotBindingError::Other(error)) => {
                 crate::store::config_client::TransactionFailure::config_client_error(error)
             }
         }
@@ -1368,7 +1427,7 @@ async fn write_plugin_record(
             return remove_record_in_txn(txn, owner, coordinate, &prior, DriftPolicy::Refuse)
                 .await
                 .map(|_| ())
-                .map_err(Into::into);
+                .map_err(|error| error.into_anyhow().into());
         }
         _ => {}
     }
@@ -1413,7 +1472,7 @@ async fn remove_record_in_txn(
     coordinate: &str,
     record: &Record,
     policy: DriftPolicy,
-) -> Result<RemoveReport> {
+) -> Result<RemoveReport, PackChangeError> {
     let doc_id = record
         .doc_id
         .clone()
@@ -1482,7 +1541,10 @@ async fn remove_record_in_txn(
         removals.push((collection, owner.to_owned(), document.id.clone()));
     }
     if !edited.is_empty() {
-        return Err(edited_error(coordinate, &edited));
+        return Err(PackChangeError::Edited {
+            coordinate: coordinate.to_owned(),
+            edited,
+        });
     }
     ensure_removal_origin(txn, owner, coordinate, &removals).await?;
 
@@ -1500,28 +1562,32 @@ pub async fn remove_pack(
     owner: &str,
     coordinate: &str,
     policy: DriftPolicy,
-) -> Result<RemoveReport> {
+) -> Result<RemoveReport, PackChangeError> {
     access
         .transact_write("pack.remove", |txn| {
             Box::pin(async move {
                 let record = read_record(txn, owner, coordinate).await?;
-                anyhow::ensure!(
-                    record.doc_id.is_some(),
-                    "{coordinate} is not installed for {owner}"
-                );
-                anyhow::ensure!(
-                    !record.plugin_store,
-                    "{coordinate} is not installed as a pack for {owner}: only its plugins \
-                     are, through gents config pack plugin install; remove them with gents config pack plugin remove"
-                );
+                if record.doc_id.is_none() {
+                    return Err(
+                        anyhow::anyhow!("{coordinate} is not installed for {owner}").into(),
+                    );
+                }
+                if record.plugin_store {
+                    return Err(anyhow::anyhow!(
+                        "{coordinate} is not installed as a pack for {owner}: only its plugins \
+                         are, through gents config pack plugin install; remove them with gents config pack plugin remove"
+                    )
+                    .into());
+                }
                 if !record.required_by.is_empty() {
                     let dependents: Vec<&str> =
                         record.required_by.iter().map(String::as_str).collect();
-                    anyhow::bail!(
+                    return Err(anyhow::anyhow!(
                         "{coordinate} is required by {}; remove {} first",
                         dependents.join(", "),
                         if dependents.len() == 1 { "it" } else { "them" }
-                    );
+                    )
+                    .into());
                 }
                 let mut report =
                     remove_record_in_txn(txn, owner, coordinate, &record, policy).await?;
@@ -1557,12 +1623,20 @@ pub async fn list_installed_packs(
     access: &ConfigAccess,
     owner: &str,
 ) -> Result<Vec<InstalledPack>> {
-    let response = access
-        .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }} }}, order: {{ coordinate: ASC }}) {{ _docID coordinate version digest plugin_store }} }}"#,
-            escape_graphql_string(owner)
-        ))
-        .await?;
+    use gents_protocol::document_query::{
+        fields::pack_installation as fields, Direction, Filter, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::doc_id()
+            .field(fields::COORDINATE)
+            .field(fields::VERSION)
+            .field(fields::DIGEST)
+            .field(fields::PLUGIN_STORE),
+    )
+    .filter(Filter::eq(fields::NODE_DID, owner))
+    .order_by(fields::COORDINATE, Direction::Asc)
+    .render();
+    let response = access.read(&query).await?;
     response["data"][RECORD]
         .as_array()
         .context("reading the pack installation records")?
@@ -1583,13 +1657,21 @@ pub async fn read_installed_pack(
     owner: &str,
     coordinate: &str,
 ) -> Result<Option<InstalledPack>> {
-    let response = access
-        .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID coordinate version digest plugin_store }} }}"#,
-            escape_graphql_string(owner),
-            escape_graphql_string(coordinate)
-        ))
-        .await?;
+    use gents_protocol::document_query::{
+        fields::pack_installation as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::doc_id()
+            .field(fields::COORDINATE)
+            .field(fields::VERSION)
+            .field(fields::DIGEST)
+            .field(fields::PLUGIN_STORE),
+    )
+    .filter(Filter::eq(fields::NODE_DID, owner))
+    .filter(Filter::eq(fields::COORDINATE, coordinate))
+    .limit(2)
+    .render();
+    let response = access.read(&query).await?;
     let rows = response["data"][RECORD]
         .as_array()
         .context("reading the pack installation records")?;
@@ -1617,13 +1699,19 @@ pub async fn installed_pack_documents(
     owner: &str,
     coordinate: &str,
 ) -> Result<Vec<(Collection, String)>> {
-    let response = access
-        .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ node_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID documents plugin_store }} }}"#,
-            escape_graphql_string(owner),
-            escape_graphql_string(coordinate)
-        ))
-        .await?;
+    use gents_protocol::document_query::{
+        fields::pack_installation as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::doc_id()
+            .field(fields::DOCUMENTS)
+            .field(fields::PLUGIN_STORE),
+    )
+    .filter(Filter::eq(fields::NODE_DID, owner))
+    .filter(Filter::eq(fields::COORDINATE, coordinate))
+    .limit(2)
+    .render();
+    let response = access.read(&query).await?;
     let rows = response["data"][RECORD]
         .as_array()
         .context("reading the pack installation record")?;
@@ -1676,9 +1764,16 @@ pub async fn referenced_pack_digests(
         digests.insert(record.digest);
     }
     if let Some(access) = node {
-        let response = access
-            .execute(&format!("{{ {RECORD} {{ digest history }} }}"))
-            .await?;
+        use gents_protocol::document_query::{
+            fields::pack_installation as fields, Query, Selection,
+        };
+        let query = Query::select(
+            Selection::new()
+                .field(fields::DIGEST)
+                .field(fields::HISTORY),
+        )
+        .render();
+        let response = access.read(&query).await?;
         for row in response["data"][RECORD]
             .as_array()
             .context("reading the pack installation records")?

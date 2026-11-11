@@ -104,13 +104,26 @@ impl ToolCallLifecycle {
                 let key = key.clone(); let internal_id = internal_id.clone();
                 Box::pin(async move {
                     let request_id = validate_parent(txn, &binding, &header, &generation, sequence, deadline, true).await?;
-                    let scope = gents_protocol::session::session_scope_filter(&binding.node_did, &binding.session_id,
-                        binding.requester_did.as_deref());
                     let parent = escape_graphql_string(&binding.tool_call_doc_id);
-                    let result = txn.execute(&format!(r#"{{ AgentToolCall(filter: {{ {scope},
-                        plugin_parent_tool_call_doc_id: {{ _eq: "{parent}" }}, plugin_effect_ordinal: {{ _eq: {ordinal} }}
-                    }}, limit: 2) {{ _docID tool_call_key tool_call_id tool_name request_id request_doc_id message_sequence
-                        deadline_at spawned_by_tool_call_doc_id }} }}"#)).await?;
+                    let result = {
+                        use gents_protocol::document_query::{fields::agent_tool_call as fields, session_scope, Filter, Query, Selection};
+                        txn.run(&Query::select(
+                            Selection::doc_id()
+                                .field(fields::TOOL_CALL_KEY)
+                                .field(fields::TOOL_CALL_ID)
+                                .field(fields::TOOL_NAME)
+                                .field(fields::REQUEST_ID)
+                                .field(fields::REQUEST_DOC_ID)
+                                .field(fields::MESSAGE_SEQUENCE)
+                                .field(fields::DEADLINE_AT)
+                                .field(fields::SPAWNED_BY_TOOL_CALL_DOC_ID),
+                        )
+                        .filter(session_scope(&binding.node_did, &binding.session_id, binding.requester_did.as_deref()))
+                        .filter(Filter::eq(fields::PLUGIN_PARENT_TOOL_CALL_DOC_ID, &binding.tool_call_doc_id))
+                        .filter(Filter::eq(fields::PLUGIN_EFFECT_ORDINAL, ordinal))
+                        .limit(2)
+                        .render()).await?
+                    };
                     let rows = result["data"]["AgentToolCall"].as_array().context("plugin effect lookup omitted rows")?;
                     anyhow::ensure!(rows.len() <= 1, "plugin effect has conflicting physical identities");
                     if let Some(row) = rows.first() {
@@ -327,15 +340,35 @@ pub(super) async fn validate_parent(
         true,
     )
     .await?;
-    let scope = gents_protocol::session::session_scope_filter(
-        &binding.node_did,
-        &binding.session_id,
-        binding.requester_did.as_deref(),
-    );
-    let rows = txn.execute(&format!(r#"{{ AgentToolCall(filter: {{ {scope}, _docID: {{ _eq: "{}" }},
-        request_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{ tool_call_id tool_name message_sequence lifecycle_state
-        spawned_by_tool_call_doc_id plugin_parent_tool_call_doc_id plugin_effect_ordinal deadline_at await_mode }} }}"#,
-        escape_graphql_string(&binding.tool_call_doc_id), escape_graphql_string(&binding.request_doc_id))).await?;
+    let rows = {
+        use gents_protocol::document_query::{
+            fields::agent_tool_call as fields, session_scope, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(
+                Selection::new()
+                    .field(fields::TOOL_CALL_ID)
+                    .field(fields::TOOL_NAME)
+                    .field(fields::MESSAGE_SEQUENCE)
+                    .field(fields::LIFECYCLE_STATE)
+                    .field(fields::SPAWNED_BY_TOOL_CALL_DOC_ID)
+                    .field(fields::PLUGIN_PARENT_TOOL_CALL_DOC_ID)
+                    .field(fields::PLUGIN_EFFECT_ORDINAL)
+                    .field(fields::DEADLINE_AT)
+                    .field(fields::AWAIT_MODE),
+            )
+            .filter(session_scope(
+                &binding.node_did,
+                &binding.session_id,
+                binding.requester_did.as_deref(),
+            ))
+            .filter(Filter::eq(fields::DOC_ID, &binding.tool_call_doc_id))
+            .filter(Filter::eq(fields::REQUEST_DOC_ID, &binding.request_doc_id))
+            .limit(2)
+            .render(),
+        )
+        .await?
+    };
     let rows = rows["data"]["AgentToolCall"]
         .as_array()
         .context("plugin parent lookup omitted rows")?;
@@ -365,14 +398,30 @@ pub(super) async fn validate_parent(
             && Some(accepted.tool_name.as_str()) == parent["tool_name"].as_str(),
         "plugin effect has no exact accepted parent"
     );
-    let rows = txn
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ {scope}, _docID: {{ _eq: "{}" }} }}, limit: 2) {{
-        request_id lifecycle_state execution_generation execution_lease_expires_at interrupt_requested_at
-    }} }}"#,
-            escape_graphql_string(&binding.request_doc_id)
-        ))
-        .await?;
+    let rows = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, session_scope, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(
+                Selection::new()
+                    .field(fields::REQUEST_ID)
+                    .field(fields::LIFECYCLE_STATE)
+                    .field(fields::EXECUTION_GENERATION)
+                    .field(fields::EXECUTION_LEASE_EXPIRES_AT)
+                    .field(fields::INTERRUPT_REQUESTED_AT),
+            )
+            .filter(session_scope(
+                &binding.node_did,
+                &binding.session_id,
+                binding.requester_did.as_deref(),
+            ))
+            .filter(Filter::eq(fields::DOC_ID, &binding.request_doc_id))
+            .limit(2)
+            .render(),
+        )
+        .await?
+    };
     let rows = rows["data"]["AgentRequest"]
         .as_array()
         .context("plugin request lookup omitted rows")?;

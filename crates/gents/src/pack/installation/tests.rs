@@ -139,17 +139,64 @@ fn install_source_selection_matches_lean() {
 
 #[test]
 fn edited_pack_error_names_the_decision_on_both_surfaces() {
-    let error = edited_error("acme/demo", &["Tools/t1".to_owned()]);
-    assert!(matches!(
-        error.downcast_ref::<PackDriftError>(),
-        Some(PackDriftError::Edited { edited, .. }) if edited == &["Tools/t1"]
-    ));
-    let error = error.to_string();
+    let error = PackChangeError::Edited {
+        coordinate: "acme/demo".into(),
+        edited: vec!["Tools/t1".into()],
+    }
+    .to_string();
     assert!(error.contains("Tools/t1"));
     assert!(error.contains("`gents config pack install`"));
     assert!(error.contains("--overwrite"));
     assert!(error.contains("--keep"));
     assert!(error.contains("options.edited on the agent pack command"));
+}
+
+#[test]
+fn pack_change_errors_keep_conflict_retry() {
+    use crate::store::config_client::{
+        classified_conflict_for_test, is_classified_transaction_conflict, TransactionFailure,
+    };
+    let other = || PackChangeError::Other(classified_conflict_for_test().into());
+    let grant_other =
+        || PackChangeError::Grant(GrantError::Other(classified_conflict_for_test().into()));
+    let slots_other = || {
+        let other = crate::pack::SlotBindingError::Other(classified_conflict_for_test().into());
+        PackChangeError::Slots(other)
+    };
+    for error in [other(), grant_other(), slots_other()] {
+        assert!(error.config_client_error().is_some(), "{error:#}");
+        assert!(is_classified_transaction_conflict(&error.into_anyhow()));
+    }
+    assert!(
+        !is_classified_transaction_conflict(&anyhow::Error::from(other())),
+        "a transparent wrapper hides its inner error from the chain"
+    );
+    let edited = PackChangeError::Edited {
+        coordinate: "acme/demo".into(),
+        edited: vec!["Tools/t1".into()],
+    };
+    assert!(edited.config_client_error().is_none());
+    let ungranted = PackChangeError::Grant(GrantError::Ungranted {
+        plugin: "fetcher".into(),
+        asks: "HTTP to api.example.com".into(),
+    });
+    assert!(ungranted.config_client_error().is_none());
+    let unbound = PackChangeError::Slots(crate::pack::SlotBindingError::Unbound {
+        pack: "web".into(),
+        slots: vec!["web_researcher".into()],
+        profiles: Vec::new(),
+    });
+    assert!(unbound.config_client_error().is_none());
+}
+
+#[test]
+fn other_renders_as_its_anyhow_error() {
+    let error = anyhow::anyhow!("root").context("ctx");
+    let rendered = format!("{error:#}");
+    assert_eq!(
+        format!("{:#}", anyhow::Error::from(PackChangeError::Other(error))),
+        rendered
+    );
 }
 
 #[test]
@@ -617,6 +664,29 @@ async fn an_edited_document_stops_an_upgrade_by_name() {
         .await
         .unwrap();
     assert_eq!(overwritten.replaced, vec!["Tools/alpha", "Tools/beta"]);
+}
+
+#[tokio::test]
+async fn an_edited_document_is_a_typed_refusal_on_remove() {
+    let access = access().await;
+    install(
+        &access,
+        "1",
+        &config(&[("alpha", "Alpha"), ("beta", "Beta")]),
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    edit_tools(&access, "alpha", "Alpha, edited by the operator").await;
+
+    let error = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+        .await
+        .unwrap_err();
+    let PackChangeError::Edited { coordinate, edited } = &error else {
+        panic!("{error:#}")
+    };
+    assert_eq!(coordinate, "acme/demo");
+    assert_eq!(edited, &["Tools/alpha"]);
 }
 
 #[tokio::test]
@@ -2323,6 +2393,38 @@ async fn pack_job_block_is_refused_on_a_self_config_install() {
     prepare(crate::pack::InstalledVia::Operator).await.unwrap();
 }
 
+#[tokio::test]
+async fn prepare_returns_the_slot_it_cannot_pick_a_model_for() {
+    let manifest: crate::pack::PackManifest = serde_json::from_value(json!({
+        "manifest_version": 1, "name": "web", "version": "1", "description": "Web",
+        "kind": "documents", "authors": ["Demo"],
+        "assets": ["README.md", "pack_config.json"], "config": "pack_config.json",
+        "inference_slots": [{"name": "web_researcher", "description": "researches", "agents": ["web"]}],
+    }))
+    .unwrap();
+    let (node, access) = dependency_fixture().await;
+    let refused = prepare_document_pack_install(
+        &access,
+        OWNER,
+        &manifest,
+        &config(&[]),
+        &Default::default(),
+        &[],
+        crate::pack::InstalledVia::Operator,
+        None,
+        None,
+        &|_| None,
+        &Default::default(),
+    )
+    .await;
+    let Err(PackChangeError::Slots(crate::pack::SlotBindingError::Unbound { slots, .. })) = refused
+    else {
+        panic!("more than one usable profile leaves the slot to the person installing");
+    };
+    assert_eq!(slots, ["web_researcher"]);
+    node.shutdown().await.expect("node shutdown");
+}
+
 #[test]
 fn pack_job_block_targets_outside_pack_and_dependencies_are_refused() {
     operator_refusal(json!({"agent_targets": ["wf-run", "elsewhere"]}));
@@ -2623,6 +2725,7 @@ async fn prepare_graph(
         overrides,
     )
     .await
+    .map_err(super::PackChangeError::into_anyhow)
 }
 
 async fn install_prepared_graph(
@@ -3178,6 +3281,7 @@ async fn prepare_naming_plugin(
         &Default::default(),
     )
     .await
+    .map_err(PackChangeError::into_anyhow)
 }
 
 #[tokio::test]
@@ -3244,6 +3348,7 @@ async fn remote_install_refuses_unverifiable_plugin_before_writes_and_installs_p
             &Default::default(),
         )
         .await
+        .map_err(PackChangeError::into_anyhow)
     }
     let error = match prepare_remote(
         &access,

@@ -31,6 +31,8 @@ use gents_protocol::row::AgentRequest;
 
 use super::{FireIntent, FireResult, TriggerKind, TriggerSource};
 
+mod intent_phases;
+
 const GOAL_RESCAN_INTERVAL: Duration = Duration::from_secs(2);
 
 pub(crate) fn goal_candidate_in_scope(
@@ -290,38 +292,46 @@ impl GoalSource {
     ) -> Result<Option<FireIntent>> {
         let goal_ref = &goal;
         let canonical = ConfigAccess::transact_local_readonly(
-            &self.node, Some(actor.clone()), "goal.reconcile_candidate", |txn| Box::pin(async move {
-                let selected = txn.execute(&format!(r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}, limit: 2) {{ agent_did }} }}"#, escape_graphql_string(&goal_ref.node_did), escape_graphql_string(&goal_ref.session_id))).await?;
-                let sessions = selected.pointer("/data/AgentSession").and_then(serde_json::Value::as_array).context("goal session query omitted rows")?;
-                if sessions.len() != 1 || sessions[0]["agent_did"].as_str() != Some(actor.as_str()) { return Ok::<_, anyhow::Error>(None); }
-                crate::goal::load_canonical_goal_in_txn(txn, &goal_ref.node_did, &goal_ref.session_id).await
-            }),
-        ).await?;
+            &self.node,
+            Some(actor.clone()),
+            "goal.reconcile_candidate",
+            |txn| {
+                Box::pin(async move {
+                    let selected = {
+                        use gents_protocol::document_query::{
+                            fields::agent_session as session, Filter, Query, Selection,
+                        };
+                        let rendered = Query::select(Selection::new().field(session::AGENT_DID))
+                            .filter(Filter::eq(session::NODE_DID, &goal_ref.node_did))
+                            .filter(Filter::eq(session::SESSION_ID, &goal_ref.session_id))
+                            .limit(2)
+                            .render();
+                        txn.run(&rendered).await?
+                    };
+                    let sessions = selected
+                        .pointer("/data/AgentSession")
+                        .and_then(serde_json::Value::as_array)
+                        .context("goal session query omitted rows")?;
+                    if sessions.len() != 1
+                        || sessions[0]["agent_did"].as_str() != Some(actor.as_str())
+                    {
+                        return Ok::<_, anyhow::Error>(None);
+                    }
+                    crate::goal::load_canonical_goal_in_txn(
+                        txn,
+                        &goal_ref.node_did,
+                        &goal_ref.session_id,
+                    )
+                    .await
+                })
+            },
+        )
+        .await?;
         let Some(canonical) = canonical else {
             return Ok(None);
         };
         if canonical.doc_id != goal.doc_id {
-            if goal.parsed_status() == Some(GoalStatus::Active) {
-                let now = Utc::now();
-                let active_time = goal.current_active_time_seconds(now);
-                let updated_at = escape_graphql_string(&now.to_rfc3339());
-                let _ = update_goal_fields_if_status_from_access(
-                    &self.agent_access(actor)?,
-                    &goal,
-                    GoalStatus::Active,
-                    &format!(
-                        r#"status: "paused", active_time_seconds: {active_time}, active_started_at: null, last_failure: "duplicate non-canonical goal", updated_at: "{updated_at}""#
-                    ),
-                )
-                .await?;
-            } else {
-                tracing::warn!(
-                    goal_id = %goal.goal_id,
-                    doc_id = %goal.doc_id,
-                    status = %goal.status,
-                    "ignored non-canonical goal without applying an illegal status transition"
-                );
-            }
+            self.reject_non_canonical_goal(actor, &goal).await?;
             return Ok(None);
         }
 
@@ -437,39 +447,11 @@ impl GoalSource {
             bail!("goal continuation reconciliation produced an invalid phase");
         }
 
-        if status == GoalStatus::Active
-            && matches!(
-                terminal,
-                GoalRequestTerminal::Failed | GoalRequestTerminal::Dead
-            )
+        if self
+            .handle_usage_limit(actor, &goal, status, terminal, &latest)
+            .await?
         {
-            if let Some(reason) = self
-                .request_usage_limit_failure(actor, &goal.node_did, &latest.request_id)
-                .await?
-            {
-                let post = goal
-                    .state()
-                    .and_then(|state| state.step(GoalAction::UsageLimit))
-                    .context("usage-limit transition must be legal from active")?;
-                let now = Utc::now();
-                let active_time = goal.current_active_time_seconds(now);
-                let updated_at = escape_graphql_string(&now.to_rfc3339());
-                let reason = escape_graphql_string(&reason);
-                if !update_goal_fields_if_status_from_access(
-                    &self.agent_access(actor)?,
-                    &goal,
-                    GoalStatus::Active,
-                    &format!(
-                        r#"status: "{}", active_time_seconds: {active_time}, active_started_at: null, last_failure: "{reason}", updated_at: "{updated_at}""#,
-                        post.status.as_str()
-                    ),
-                )
-                .await?
-                {
-                    return Ok(None);
-                }
-                return Ok(None);
-            }
+            return Ok(None);
         }
 
         let request_is_wrapup = request_is_goal_wrapup(&latest, &goal.goal_id);
@@ -582,19 +564,7 @@ impl GoalSource {
         let retry_prefix = match decision {
             GoalDecision::None => return Ok(None),
             GoalDecision::Pause => {
-                let reason = match terminal {
-                    GoalRequestTerminal::Interrupted => "interrupted",
-                    GoalRequestTerminal::Superseded => "superseded",
-                    GoalRequestTerminal::Completed if control_unavailable => {
-                        "Goal control attribution remained unavailable after the bounded recovery attempts"
-                    }
-                    GoalRequestTerminal::Completed => {
-                        "completed request produced no model or tool activity"
-                    }
-                    GoalRequestTerminal::Failed | GoalRequestTerminal::Dead => {
-                        "infrastructure retry budget exhausted"
-                    }
-                };
+                let reason = intent_phases::pause_reason(terminal, control_unavailable);
                 if !self.pause_goal(actor, &goal, status, reason).await? {
                     return Ok(None);
                 }
@@ -644,74 +614,25 @@ impl GoalSource {
             }
         };
 
-        if terminal == GoalRequestTerminal::Completed
-            && goal.consecutive_blocked_audits.unwrap_or_default() > 0
-            && goal.last_blocked_request_id.as_deref() != Some(latest.request_id.as_str())
-        {
-            let updated_at = escape_graphql_string(&Utc::now().to_rfc3339());
-            if !update_goal_fields_if_status_from_access(
-                &self.agent_access(actor)?,
-                &goal,
-                status,
-                &format!(
-                    r#"consecutive_blocked_audits: 0, last_blocked_request_id: null, last_blocked_reason: null, updated_at: "{updated_at}""#
-                ),
-            )
+        if !self
+            .reset_blocked_audits(actor, &mut goal, status, terminal, &latest)
             .await?
-            {
-                return Ok(None);
-            }
-            goal.consecutive_blocked_audits = Some(0);
-            goal.last_blocked_request_id = None;
-            goal.last_blocked_reason = None;
+        {
+            return Ok(None);
         }
 
         let wrapup = decision == GoalDecision::Wrapup
             || (decision == GoalDecision::Retry && status == GoalStatus::BudgetLimited);
-        if wrapup && status == GoalStatus::Active {
-            let now = Utc::now();
-            let active_time = goal.current_active_time_seconds(now);
-            let updated_at = escape_graphql_string(&now.to_rfc3339());
-            if !update_goal_fields_if_status_from_access(
-                &self.agent_access(actor)?,
-                &goal,
-                GoalStatus::Active,
-                &format!(
-                    r#"status: "budget_limited", wrapup_requested: true, active_time_seconds: {active_time}, active_started_at: null, updated_at: "{updated_at}""#
-                ),
-            )
-            .await?
-            {
-                return Ok(None);
-            }
-            goal.status = GoalStatus::BudgetLimited.as_str().to_string();
-            goal.wrapup_requested = Some(true);
-        }
-
-        let claimed = if decision == GoalDecision::Retry {
-            claim_retry_continuation_from_access(
-                &self.agent_access(actor)?,
-                &goal,
-                &latest.request_id,
-                goal.infrastructure_retry_count.unwrap_or_default(),
-                failure_name,
-            )
-            .await?
-        } else {
-            claim_continuation_from_access(&self.agent_access(actor)?, &goal, &latest.request_id)
-                .await?
-        };
-        let claimed_phase = goal_continuation_materialization_step(
-            GoalContinuationPhase::Unclaimed,
-            GoalContinuationAction::Claim(claimed),
-        );
-        if claimed_phase != GoalContinuationPhase::Claimed {
+        if !self.begin_wrapup(actor, &mut goal, status, wrapup).await? {
             return Ok(None);
         }
-        let materialization_phase = goal_continuation_materialization_step(
-            claimed_phase,
-            GoalContinuationAction::Materialize,
-        );
+
+        let Some(materialization_phase) = self
+            .claim_decided_continuation(actor, &goal, &latest, decision, failure_name)
+            .await?
+        else {
+            return Ok(None);
+        };
 
         goal.continuation_sequence = Some(
             goal.continuation_sequence()
@@ -873,27 +794,25 @@ impl GoalSource {
         goal: &GoalDocument,
         parent_request_id: &str,
     ) -> Result<bool> {
-        let node_did = escape_graphql_string(&goal.node_did);
-        let session_id = escape_graphql_string(&goal.session_id);
-        let goal_id = escape_graphql_string(&goal.goal_id);
-        let parent_request_id = escape_graphql_string(parent_request_id);
-        let query = format!(
-            r#"{{
-                AgentRequest(
-                    filter: {{
-                        node_did: {{ _eq: "{node_did}" }},
-                        session_id: {{ _eq: "{session_id}" }},
-                        purpose: {{ _eq: "normal" }},
-                        caused_by_trigger_id: {{ _eq: "{goal_id}" }},
-                        caused_by_trigger_kind: {{ _eq: "goal" }},
-                        caused_by_parent_request_id: {{ _eq: "{parent_request_id}" }}
-                    }},
-                    limit: 1
-                ) {{ _docID }}
-            }}"#
-        );
+        let rendered = {
+            use gents_protocol::document_query::{
+                fields::agent_request as fields, Filter, Query, Selection,
+            };
+            Query::select(Selection::doc_id())
+                .filter(Filter::eq(fields::NODE_DID, &goal.node_did))
+                .filter(Filter::eq(fields::SESSION_ID, &goal.session_id))
+                .filter(Filter::eq(fields::PURPOSE, "normal"))
+                .filter(Filter::eq(fields::CAUSED_BY_TRIGGER_ID, &goal.goal_id))
+                .filter(Filter::eq(fields::CAUSED_BY_TRIGGER_KIND, "goal"))
+                .filter(Filter::eq(
+                    fields::CAUSED_BY_PARENT_REQUEST_ID,
+                    parent_request_id,
+                ))
+                .limit(1)
+                .render()
+        };
         let response = ConfigAccess::local_as(self.node.clone(), actor.clone())
-            .execute(&query)
+            .read(&rendered)
             .await?;
         Ok(response
             .pointer("/data/AgentRequest")

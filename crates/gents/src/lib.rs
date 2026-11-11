@@ -8,7 +8,6 @@ pub mod support;
 
 pub mod claude_gateway_login;
 mod claude_request_context;
-pub mod codex_shim_binding;
 mod collection_use;
 pub mod documents;
 pub mod drop_cleanup;
@@ -21,6 +20,7 @@ pub mod inference;
 pub(crate) mod lean_vocab_test;
 pub mod observe;
 pub mod openai_wire;
+pub mod operations;
 pub mod pack;
 pub mod plugin;
 pub use gents_loop::provider_input::ProviderInputProfile;
@@ -835,7 +835,6 @@ pub use tools::background::diagnostics::{
     load_background_completion_diagnostics, BackgroundCompletionDiagnostics,
     BackgroundCompletionEpochDiagnostic,
 };
-pub use tools::background::status::load_caused_request_terminal;
 pub use tools::background::status::status_projection::OutputEvidence;
 pub use tools::call::control::{cancel_background_tool_call, CancelBackgroundToolCallOutcome};
 pub use tools::call::hook::{
@@ -921,6 +920,5 @@ pub mod __test_internals {
         QueueSource,
     };
     pub use crate::runtime::agent::principal_assembly::AgentBuildError;
-    pub use crate::store::config_client::TXN_TRACING_TARGET;
     pub use gents_protocol::request_lifecycle::EnqueuedAgentRequest;
 }

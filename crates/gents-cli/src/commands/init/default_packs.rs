@@ -683,6 +683,30 @@ async fn install_as_engineer(
     serde_json::from_str(&receipt).context("the Engineer's install receipt is not JSON")
 }
 
+/// The Agent document's identity binding, read as the node that owns it.
+async fn agent_identity_binding(
+    access: &gents::ConfigAccess,
+    owner: &str,
+    agent_did: &str,
+) -> Result<gents_protocol::agent_identity::AgentIdentityBinding> {
+    access
+        .transact_readonly("cli.init.agent_binding", |txn| {
+            Box::pin(async move {
+                let (_, value) = gents::store::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    gents::Collection::Agent,
+                    owner,
+                    agent_did,
+                )
+                .await?
+                .with_context(|| format!("agent {agent_did:?} missing for {owner:?}"))?;
+                let agent: gents::documents::Agent = serde_json::from_value(value)?;
+                Ok(agent.identity_binding())
+            })
+        })
+        .await
+}
+
 /// The config tool as the runtime gives it to the Engineer `engineer`, with
 /// the grants its own Tools hold. `access` holds the home's node.
 async fn engineer_config(
@@ -698,9 +722,7 @@ async fn engineer_config(
         .clone();
     let stored = crate::home_state::read_init_config(home)?.context("home is not initialized")?;
     let runtime = crate::home_state::load_initialized_home_identity(home, &stored)?;
-    let binding =
-        crate::commands::inference_binding::load_bound_agent_binding(&node, owner, engineer)
-            .await?;
+    let binding = agent_identity_binding(access, owner, engineer).await?;
     let agent = gents::store::identity::resolve_agent_identity(runtime.as_ref(), &binding)?;
     let held = access
         .transact_readonly("cli.init.engineer_grants", |txn| {
@@ -1239,10 +1261,9 @@ mod tests {
             .unwrap();
         let runtime =
             crate::home_state::load_initialized_home_identity(home.path(), &stored).unwrap();
-        let binding =
-            crate::commands::inference_binding::load_bound_agent_binding(&node, &owner, &worker)
-                .await
-                .unwrap();
+        let binding = agent_identity_binding(&access, &owner, &worker)
+            .await
+            .unwrap();
         let worker_identity =
             gents::store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
         let as_worker = gents::ConfigAccess::local_managed_agent(

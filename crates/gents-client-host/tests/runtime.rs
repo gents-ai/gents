@@ -2948,8 +2948,7 @@ fn runtime_server_command(binary: &Path, root: &Path, home: &Path, port: u16) ->
         .args(["server", "--home"])
         .arg(home)
         .arg("--http-port")
-        .arg(port.to_string())
-        .arg("--no-codex-shim");
+        .arg(port.to_string());
     command
 }
 

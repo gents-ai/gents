@@ -1,6 +1,6 @@
 //! A client's read of one plugin job row, through any [`ConfigAccess`].
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use gents_protocol::job::{
     JobChildRow, JobChildView, JobOutcome, JobPin, JobPinSummary, JobProgress, JobReadError,
@@ -11,7 +11,6 @@ use serde_json::Value;
 
 use crate::plugin::job_calls::job_state;
 use crate::store::config_client::ConfigAccess;
-use crate::store::graphql::escape_graphql_string;
 use crate::tools::background::job::admit::StepChild;
 use crate::tools::background::job::input::{chain_of, derive_children, derive_children_for_jobs};
 use crate::tools::background::job::keys::job_spawn_key;
@@ -30,7 +29,23 @@ pub enum JobKey {
     },
 }
 
-const FIELDS: &str = "_docID session_id tool_call_id request_id request_doc_id node_did requester_did lifecycle_state started_at completed_at job_pin job_progress";
+fn job_row_selection() -> gents_protocol::document_query::Selection<
+    gents_protocol::document_query::fields::agent_tool_call::Doc,
+> {
+    use gents_protocol::document_query::{fields::agent_tool_call as fields, Selection};
+    Selection::doc_id()
+        .field(fields::SESSION_ID)
+        .field(fields::TOOL_CALL_ID)
+        .field(fields::REQUEST_ID)
+        .field(fields::REQUEST_DOC_ID)
+        .field(fields::NODE_DID)
+        .field(fields::REQUESTER_DID)
+        .field(fields::LIFECYCLE_STATE)
+        .field(fields::STARTED_AT)
+        .field(fields::COMPLETED_AT)
+        .field(fields::JOB_PIN)
+        .field(fields::JOB_PROGRESS)
+}
 
 #[derive(Deserialize)]
 struct Owner {
@@ -186,25 +201,21 @@ pub async fn load_job_view(
     scope: Option<&ProcessControlScope>,
     key: JobKey,
 ) -> Result<JobView, JobReadError> {
-    let filter = match &key {
-        JobKey::RowDocId(doc_id) => {
-            format!(r#"_docID: {{ _eq: "{}" }}"#, escape_graphql_string(doc_id))
+    let query = {
+        use gents_protocol::document_query::{fields::agent_tool_call as fields, Filter, Query};
+        let query = Query::select(job_row_selection());
+        match &key {
+            JobKey::RowDocId(doc_id) => query.filter(Filter::eq(fields::DOC_ID, doc_id)),
+            JobKey::Address {
+                session_id,
+                tool_call_id,
+            } => query
+                .filter(Filter::eq(fields::SESSION_ID, session_id))
+                .filter(Filter::eq(fields::TOOL_CALL_ID, tool_call_id)),
         }
-        JobKey::Address {
-            session_id,
-            tool_call_id,
-        } => format!(
-            r#"session_id: {{ _eq: "{}" }}, tool_call_id: {{ _eq: "{}" }}"#,
-            escape_graphql_string(session_id),
-            escape_graphql_string(tool_call_id)
-        ),
+        .render()
     };
-    let response = access
-        .execute(&format!(
-            "{{ AgentToolCall(filter: {{ {filter} }}) {{ {FIELDS} }} }}"
-        ))
-        .await
-        .map_err(unavailable)?;
+    let response = access.read(&query).await.map_err(unavailable)?;
     let Some(row) = response
         .pointer("/data/AgentToolCall/0")
         .filter(|row| !row.is_null())
@@ -233,14 +244,11 @@ pub async fn load_job_view(
     Ok(assemble(decoded, outcome, children))
 }
 
-/// Which job rows [`list_jobs`] returns. Serves L3's Grok discovery
-/// (session, requester, `NotTerminalOrUndelivered`) and `gents automation job list`
-/// (optional session, a `JobState` set, optional plugin). `None` does not filter.
+/// Which job rows [`list_jobs`] returns: an optional session, a `JobState` set and an
+/// optional plugin. `None` does not filter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JobFilter {
     pub session_id: Option<String>,
-    /// The requester principal's DID, matched against the row's `requester_did`.
-    pub requester: Option<String>,
     pub state: StateFilter,
     /// `namespace/name`, matched against `JobView.pin.plugin_ref`.
     pub plugin: Option<String>,
@@ -250,19 +258,12 @@ pub struct JobFilter {
 pub enum StateFilter {
     /// Rows whose `JobView.state` is one of these.
     States(Vec<JobState>),
-    /// Rows whose state is `JobState::Running`, and rows in any other state
-    /// whose `row_doc_id` is not in `delivered`. The host records no client
-    /// delivery, so the caller passes the rows it has already delivered.
-    NotTerminalOrUndelivered { delivered: BTreeSet<String> },
 }
 
 impl StateFilter {
     fn keeps(&self, view: &Decoded) -> bool {
         match self {
             StateFilter::States(states) => states.contains(&view.state),
-            StateFilter::NotTerminalOrUndelivered { delivered } => {
-                view.state == JobState::Running || !delivered.contains(&view.stored.doc_id)
-            }
         }
     }
 }
@@ -273,26 +274,16 @@ pub async fn list_jobs(
     access: &ConfigAccess,
     filter: &JobFilter,
 ) -> Result<Vec<JobView>, JobReadError> {
-    let mut clauses = vec!["job_pin: { _ne: null }".to_owned()];
-    if let Some(session_id) = &filter.session_id {
-        clauses.push(format!(
-            r#"session_id: {{ _eq: "{}" }}"#,
-            escape_graphql_string(session_id)
-        ));
-    }
-    if let Some(requester) = &filter.requester {
-        clauses.push(format!(
-            r#"requester_did: {{ _eq: "{}" }}"#,
-            escape_graphql_string(requester)
-        ));
-    }
-    let response = access
-        .execute(&format!(
-            "{{ AgentToolCall(filter: {{ {} }}) {{ {FIELDS} }} }}",
-            clauses.join(", ")
-        ))
-        .await
-        .map_err(unavailable)?;
+    let rendered = {
+        use gents_protocol::document_query::{fields::agent_tool_call as fields, Filter, Query};
+        let mut query =
+            Query::select(job_row_selection()).filter(Filter::not_null(fields::JOB_PIN));
+        if let Some(session_id) = &filter.session_id {
+            query = query.filter(Filter::eq(fields::SESSION_ID, session_id));
+        }
+        query.render()
+    };
+    let response = access.read(&rendered).await.map_err(unavailable)?;
     let rows = response
         .pointer("/data/AgentToolCall")
         .and_then(Value::as_array)

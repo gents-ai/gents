@@ -1762,6 +1762,7 @@ const OWNER_MODULES: &[&str] = &[
     "crates/gents-protocol/src",
     "crates/gents-loop/src",
     "crates/gents-migration/src",
+    "crates/gents/src/operations",
     "crates/gents/src/store/config_client/common.rs",
     "crates/gents/src/store/config_client/error.rs",
     "crates/gents/src/store/config_client/graphql.rs",
@@ -1938,19 +1939,16 @@ fn owner_interface_fence_counts_anyhow_names_outside_tests() {
 #[rustfmt::skip]
 const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-cli/src/commands/eval/manage.rs", 1),
-    ("crates/gents-cli/src/commands/grok_shim/acp/errors.rs", 2),
-    ("crates/gents-cli/src/commands/grok_shim/job_runs.rs", 2),
-    ("crates/gents-cli/src/commands/grok_shim/workflow_command.rs", 1),
     ("crates/gents-cli/src/commands/prepare_runtime.rs", 1),
     ("crates/gents-client-host/src/editor_store.rs", 1),
     ("crates/gents-desktop-bridge/src/host/local/windows.rs", 1),
-    ("crates/gents-desktop-bridge/src/inference_setup.rs", 2),
     ("crates/gents-desktop-bridge/src/local_pairing.rs", 1),
     ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/launch.rs", 4),
     ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/native.rs", 1),
     ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/readiness.rs", 3),
     ("crates/gents-desktop-core/src/client/core/route_manager.rs", 2),
     ("crates/gents-desktop-core/src/error.rs", 1),
+    ("crates/gents-desktop-core/src/inference.rs", 2),
     ("crates/gents-loop/src/loop_stream/aggregate_budget.rs", 4),
     ("crates/gents-protocol/src/database_error.rs", 1),
     ("crates/gents-protocol/src/error_chain.rs", 1),
@@ -2557,6 +2555,7 @@ const LAYERS: &[&[&str]] = &[
     &[
         "request", "session", "goal", "triggers", "tools", "plugin", "pack",
     ],
+    &["operations"],
     &["observe"],
     &["turn"],
     &["runtime"],
@@ -2796,5 +2795,7 @@ fn layer_edges_count_upward_and_peer_references_outside_tests() {
         ]
     );
     assert!(!layer_edge_violates("eval", "store"));
+    assert!(layer_edge_violates("tools", "operations"));
+    assert!(!layer_edge_violates("operations", "tools"));
     assert!(!layer_edge_violates("request", "agent"));
 }

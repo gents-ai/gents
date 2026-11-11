@@ -4,7 +4,9 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use super::{HomePackInstall, InstalledPackPlugin, InstalledVia, PackIdentity, PackKind};
+use super::{
+    HomePackInstall, InstalledPackPlugin, InstalledVia, PackChangeError, PackIdentity, PackKind,
+};
 use crate::plugin::{install, store};
 pub(super) use store::InstalledPlugin;
 
@@ -35,17 +37,16 @@ pub async fn install<F>(
     installed_via: InstalledVia,
     source: super::PackSource,
     notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
-) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>)>
+) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>), PackChangeError>
 where
     F: Future<Output = std::result::Result<(), super::PluginStoreChangeError>> + Send + 'static,
 {
-    anyhow::ensure!(
-        matches!(
-            archive.manifest().metadata.kind,
-            PackKind::Plugins | PackKind::Assets
-        ),
-        "expected a plugins or assets pack"
-    );
+    if !matches!(
+        archive.manifest().metadata.kind,
+        PackKind::Plugins | PackKind::Assets
+    ) {
+        return Err(anyhow::anyhow!("expected a plugins or assets pack").into());
+    }
     install_owned(
         home,
         archive,
@@ -85,6 +86,7 @@ where
         notify,
     )
     .await
+    .map_err(PackChangeError::into_anyhow)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -97,19 +99,22 @@ async fn install_owned<F>(
     installed_via: InstalledVia,
     source: super::PackSource,
     notify: impl FnOnce(PackIdentity, PluginStageChanges) -> F + Send + 'static,
-) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>)>
+) -> Result<(HomePackInstall, Vec<store::InstalledPlugin>), PackChangeError>
 where
     F: Future<Output = std::result::Result<(), super::PluginStoreChangeError>> + Send + 'static,
 {
-    anyhow::ensure!(
-        bindings.is_empty() || owner.is_some_and(|owner| !owner.is_empty()),
-        "plugin slot bindings require an owner"
-    );
+    if !bindings.is_empty() && !owner.is_some_and(|owner| !owner.is_empty()) {
+        return Err(anyhow::anyhow!("plugin slot bindings require an owner").into());
+    }
     let manifest = archive.manifest().clone();
     let digest = archive.digest().to_owned();
     let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
     let (root, cache_lease) = super::materialize::cached(home, archive)?;
-    let relative_root = root.strip_prefix(home)?.to_string_lossy().into_owned();
+    let relative_root = root
+        .strip_prefix(home)
+        .map_err(anyhow::Error::from)?
+        .to_string_lossy()
+        .into_owned();
     let mut assets = BTreeMap::new();
     for path in install::stage_asset_paths(&manifest)? {
         assets.insert(path.to_owned(), archive.asset(path)?.to_vec());
@@ -147,10 +152,10 @@ where
                 return Err(error);
             }
             Ok((previous, publish_record))
-        }).await?;
+        }).await.map_err(anyhow::Error::from)?;
         let (previous, record) = match previous {
             Ok(previous) => previous,
-            Err(error) => { stage.finish(false).await?; return Err(error).context("publishing the local pack install record"); }
+            Err(error) => { stage.finish(false).await?; return Err(error.context("publishing the local pack install record").into()); }
         };
         let notification = if record.plugins.is_empty() { Ok(()) } else {
             notify(PackIdentity::new(&manifest, &digest, record.plugins.clone()), changes).await
@@ -161,10 +166,10 @@ where
             let restored = tokio::task::spawn_blocking(move || match previous {
                 Some(previous) => super::write_home_install(&restore_home, &previous),
                 None => super::forget_home_install(&restore_home, &restore_coordinate),
-            }).await?;
+            }).await.map_err(anyhow::Error::from)?;
             stage.finish(false).await?;
             restored?;
-            return notification.map(|_| (record, plugins)).map_err(Into::into);
+            return notification.map(|_| (record, plugins)).map_err(|error| anyhow::Error::from(error).into());
         }
         stage.finish(true).await?;
         notification.context("the pack was installed locally, but its node notification was not confirmed; retry the pack operation to reconcile the node record")?;
@@ -210,6 +215,7 @@ pub fn install_blockers(
             home.context("this runtime has no plugin home")
                 .and_then(|home| {
                     store::grant_on_install(home, &manifest.metadata.namespace, plugin, consent)
+                        .map_err(anyhow::Error::from)
                 })
                 .err()
                 .map(

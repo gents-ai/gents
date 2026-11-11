@@ -54,11 +54,14 @@ pub async fn provision_agent_identity_authorized(
     let decision = access
         .transact_readonly("agent.provision_authorization", |txn| {
             Box::pin(async move {
-                let query = format!(
-                    r#"{{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 2) {{ _docID }} }}"#,
-                    crate::store::graphql::escape_graphql_string(node_did)
-                );
-                let response = txn.execute(&query).await?;
+                use gents_protocol::document_query::{
+                    fields::node as fields, Filter, Query, Selection,
+                };
+                let rendered = Query::select(Selection::doc_id())
+                    .filter(Filter::eq(fields::NODE_DID, node_did))
+                    .limit(2)
+                    .render();
+                let response = txn.run(&rendered).await?;
                 let Some([row]) = response["data"]["Node"].as_array().map(Vec::as_slice) else {
                     return Ok::<_, crate::store::config_client::ConfigClientError>(None);
                 };
@@ -109,21 +112,36 @@ pub async fn provision_agent_identity_for_agent(
     let caller = identity::Did::new(actor.did()).map_err(IdentityError::from)?;
     let access = ConfigAccess::local_managed_agent(node.clone(), caller, actor)
         .map_err(|_| AgentProvisionError::InvalidAgentSigner)?;
-    let binding = access.transact_readonly("agent.creator_binding", |txn| {
-        Box::pin(async move {
-            let query = format!(r#"{{ Agent(filter: {{ agent_did: {{ _eq: "{}" }} }}, limit: 2) {{ agent_did creation_nonce }} }}"#,
-                crate::store::graphql::escape_graphql_string(selected_agent_did));
-            let response = txn.execute(&query).await?;
-            let binding = response["data"]["Agent"].as_array().and_then(|rows| match rows.as_slice() {
-                [row] => Some(AgentIdentityBinding {
-                    agent_did: row["agent_did"].as_str()?.to_owned(),
-                    creation_nonce: row["creation_nonce"].as_str()?.to_owned(),
-                }),
-                _ => None,
-            });
-            Ok::<_, crate::store::config_client::ConfigClientError>(binding)
+    let binding = access
+        .transact_readonly("agent.creator_binding", |txn| {
+            Box::pin(async move {
+                use gents_protocol::document_query::{
+                    fields::agent as fields, Filter, Query, Selection,
+                };
+                let rendered = Query::select(
+                    Selection::new()
+                        .field(fields::AGENT_DID)
+                        .field(fields::CREATION_NONCE),
+                )
+                .filter(Filter::eq(fields::AGENT_DID, selected_agent_did))
+                .limit(2)
+                .render();
+                let response = txn.run(&rendered).await?;
+                let binding =
+                    response["data"]["Agent"]
+                        .as_array()
+                        .and_then(|rows| match rows.as_slice() {
+                            [row] => Some(AgentIdentityBinding {
+                                agent_did: row["agent_did"].as_str()?.to_owned(),
+                                creation_nonce: row["creation_nonce"].as_str()?.to_owned(),
+                            }),
+                            _ => None,
+                        });
+                Ok::<_, crate::store::config_client::ConfigClientError>(binding)
+            })
         })
-    }).await?.ok_or(AgentProvisionError::InvalidAgentSigner)?;
+        .await?
+        .ok_or(AgentProvisionError::InvalidAgentSigner)?;
     let expected = resolve_agent_identity(runtime, &binding)
         .map_err(|_| AgentProvisionError::InvalidAgentSigner)?;
     let challenge = b"gents/agent-provision/selected-signer/v1";

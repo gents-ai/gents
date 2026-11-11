@@ -260,7 +260,9 @@ pub async fn promote(
     let installed = async {
         let source =
             crate::commands::pack::resolve_pack_source(&install.package, None, home).await?;
-        crate::commands::pack::install_documents_pack(access, actor, &source, &install, true).await
+        crate::commands::pack::install_documents_pack(access, actor, &source, &install, true)
+            .await
+            .map_err(gents::pack::PackChangeError::into_anyhow)
     }
     .await
     .context("promote install failed")?;

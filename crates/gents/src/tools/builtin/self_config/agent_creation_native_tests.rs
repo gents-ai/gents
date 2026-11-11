@@ -838,7 +838,8 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         crate::pack::DriftPolicy::Refuse,
     )
     .await
-    .unwrap_err();
+    .unwrap_err()
+    .into_anyhow();
     assert!(
         gents_protocol::error_chain::find_map_source(error.as_ref(), |cause| {
             matches!(cause.downcast_ref::<crate::pack::PackRemovalError>(),

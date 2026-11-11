@@ -85,7 +85,6 @@ import Proofs.Conformance.Contracts.Json.Lsp
 import Proofs.Conformance.Contracts.Json.ClientRuntime
 import Proofs.Conformance.Contracts.Json.BackgroundWork
 import Proofs.Conformance.Contracts.Json.ComposedInvariants
-import Proofs.Conformance.Contracts.Json.CodexShim
 import Proofs.Conformance.Contracts.Json.Workspace
 import Proofs.Conformance.Contracts.Json.Callback
 import Proofs.Conformance.Contracts.Json.SelfConfig
@@ -969,26 +968,6 @@ def snapshotRecoveryCasesJson : String :=
     ++ "\"interrupt_disposition_cases\":"
       ++ jsonArray
         (interruptDispositionCases.map interruptDispositionCaseJson) ++ ","
-    ++ "\"codex_shim_projection_cases\":"
-      ++ codexShimProjectionCasesJson ++ ","
-    ++ "\"codex_shim_reasoning_projection_cases\":"
-      ++ codexShimReasoningProjectionCasesJson ++ ","
-    ++ "\"codex_shim_thread_status_cases\":"
-      ++ codexShimThreadStatusCasesJson ++ ","
-    ++ "\"codex_shim_agent_selection_cases\":"
-      ++ codexShimAgentSelectionCasesJson ++ ","
-    ++ "\"codex_shim_tool_metadata_cases\":"
-      ++ codexShimToolMetadataCasesJson ++ ","
-    ++ "\"codex_shim_context_usage_cases\":"
-      ++ codexShimContextUsageCasesJson ++ ","
-    ++ "\"codex_shim_compaction_projection_cases\":"
-      ++ codexShimCompactionProjectionCasesJson ++ ","
-    ++ "\"codex_shim_turn_lifecycle_cases\":"
-      ++ codexShimTurnLifecycleCasesJson ++ ","
-    ++ "\"codex_shim_binding_cases\":"
-      ++ codexShimBindingCasesJson ++ ","
-    ++ "\"codex_shim_connection_admission_cases\":"
-      ++ codexShimConnectionAdmissionCasesJson ++ ","
     ++ "\"r6_backgrounding_cases\":"
       ++ jsonArray
         (r6BackgroundingCases.map r6BackgroundingCaseJson) ++ ","

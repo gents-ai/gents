@@ -5,7 +5,6 @@ use serde::Deserialize;
 
 use std::sync::Arc;
 
-use crate::store::graphql::escape_graphql_string;
 use gents_protocol::request_lifecycle::SessionMessageCause;
 
 use super::plan::{Plan, PlannedWrite};
@@ -244,11 +243,18 @@ where
             {
                 return Ok(None);
             }
-            let doc = escape_graphql_string(&receipt.request_doc_id);
-            let response = access.execute(&format!(
-                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}, limit: 2) {{ {} }} }}"#,
-                gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
-            )).await?;
+            let rendered = {
+                use gents_protocol::document_query::{
+                    fields::agent_request as fields, Filter, Query, Selection,
+                };
+                Query::select(Selection::owned(
+                    gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
+                ))
+                .filter(Filter::eq(fields::DOC_ID, &receipt.request_doc_id))
+                .limit(2)
+                .render()
+            };
+            let response = access.read(&rendered).await?;
             let Some([row]) = response["data"]["AgentRequest"].as_array().map(Vec::as_slice) else {
                 return Ok(None);
             };
@@ -628,10 +634,18 @@ pub(crate) async fn stage_planned_write_in_txn(
                     )
                     .await?;
                 }
-                let response = txn.execute(&format!(
-                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ {} }} }}"#,
-                escape_graphql_string(&doc_id), gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
-            )).await?;
+                let rendered = {
+                    use gents_protocol::document_query::{
+                        fields::agent_request as fields, Filter, Query, Selection,
+                    };
+                    Query::select(Selection::owned(
+                        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS,
+                    ))
+                    .filter(Filter::eq(fields::DOC_ID, &doc_id))
+                    .limit(2)
+                    .render()
+                };
+                let response = txn.run(&rendered).await?;
                 let [row] = response["data"]["AgentRequest"]
                     .as_array()
                     .context("session message observation unavailable")?
@@ -692,15 +706,26 @@ async fn validate_steer_in_txn(
     candidate_doc_id: &str,
     expected_head: Option<&str>,
 ) -> Result<std::result::Result<(), crate::request::lifecycle::queue::SteerAdmissionRefusal>> {
-    let response = txn.execute(&format!(
-        r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }},
-            purpose: {{ _eq: "normal" }}, lifecycle_state: {{ _in: {claimed_or_processing} }} }}, limit: 2) {{
-            {} execution_lease_secs interrupt_requested_at
-        }} }}"#,
-        escape_graphql_string(&create.node_did),
-        escape_graphql_string(&create.session_id),
-        gents_protocol::request_admission::SIGNED_REQUEST_FIELDS, claimed_or_processing = RequestLifecycleState::unsettled_execution_graphql_list()
-    )).await?;
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(
+            Selection::owned(gents_protocol::request_admission::SIGNED_REQUEST_FIELDS)
+                .field(fields::EXECUTION_LEASE_SECS)
+                .field(fields::INTERRUPT_REQUESTED_AT),
+        )
+        .filter(Filter::eq(fields::NODE_DID, &create.node_did))
+        .filter(Filter::eq(fields::SESSION_ID, &create.session_id))
+        .filter(Filter::eq(fields::PURPOSE, "normal"))
+        .filter(Filter::any_of(
+            fields::LIFECYCLE_STATE,
+            RequestLifecycleState::unsettled_execution().map(RequestLifecycleState::as_str),
+        ))
+        .limit(2)
+        .render()
+    };
+    let response = txn.run(&rendered).await?;
     let rows: Vec<gents_protocol::row::AgentRequestRow> =
         serde_json::from_value(response["data"]["AgentRequest"].clone())?;
     anyhow::ensure!(

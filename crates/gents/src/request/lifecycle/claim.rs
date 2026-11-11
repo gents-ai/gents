@@ -238,8 +238,14 @@ where
                         crate::store::identity::request_receipt::verify_runtime_local_control_receipt(current,
                             &request.node_did, &parent.request_id,
                             request.requester_did.as_deref().unwrap_or(&request.agent_did))?;
-                        let receipt = txn.execute(&format!(r#"{{AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}) {{background_completion_input_through_sequence background_completion_notification_keys_json}}}}"#,
-                            escape_graphql_string(parent_doc))).await?;
+                        use gents_protocol::document_query::{
+                            fields::agent_request as fields, Filter, Query, Selection,
+                        };
+                        let receipt = txn.run(&Query::select(Selection::new()
+                            .field(fields::BACKGROUND_COMPLETION_INPUT_THROUGH_SEQUENCE)
+                            .field(fields::BACKGROUND_COMPLETION_NOTIFICATION_KEYS_JSON))
+                            .filter(Filter::eq(fields::DOC_ID, parent_doc))
+                            .render()).await?;
                         let receipt = receipt.pointer("/data/AgentRequest/0").context("failed wake receipt disappeared")?;
                         let retained = receipt["background_completion_notification_keys_json"].as_str()
                             .map(crate::tools::background::completion::notification_receipt_keys).transpose()?.unwrap_or_default();
@@ -319,21 +325,20 @@ async fn fetch_interrupt_and_ttl(
     actor: identity::Did,
     doc_id: &str,
 ) -> Result<(Option<String>, Option<String>)> {
-    let escaped_doc_id = escape_graphql_string(doc_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
-                limit: 1
-            ) {{
-                request_id
-                interrupt_requested_at
-                valid_until
-            }}
-        }}"#
-    );
+    use gents_protocol::document_query::{
+        fields::agent_request as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::new()
+            .field(fields::REQUEST_ID)
+            .field(fields::INTERRUPT_REQUESTED_AT)
+            .field(fields::VALID_UNTIL),
+    )
+    .filter(Filter::eq(fields::DOC_ID, doc_id))
+    .limit(1)
+    .render();
     let response = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor)
-        .execute(&query)
+        .read(&query)
         .await?;
     let rows = response
         .pointer("/data/AgentRequest")
@@ -463,77 +468,130 @@ impl RequestLifecycle {
         let generation = generation.to_owned();
         let request_doc_id = request_doc_id.to_owned();
         let now = &now;
-        access.transact_idempotent(
-            crate::store::config_client::IdempotentTransactionRetry::Standard,
-            "lifecycle.begin_owned_execution",
-            move |txn| {
-                let generation = generation.clone();
-                let request_doc_id = request_doc_id.clone();
-                Box::pin(async move {
-                    let doc = escape_graphql_string(&request_doc_id);
-                    let response = txn.execute(&format!(r#"{{ AgentRequest(
-                        filter: {{ _docID: {{ _eq: "{doc}" }} }}, limit: 2
-                    ) {{ request_id lifecycle_state execution_generation execution_lease_expires_at }} }}"#)).await?;
-                    let rows = response["data"]["AgentRequest"].as_array()
-                        .context("execution begin omitted request rows")?;
-                    anyhow::ensure!(rows.len() == 1, "execution begin request is missing or ambiguous");
-                    let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(rows[0].clone())?;
-                    let state = row.lifecycle_state.context("execution begin missing lifecycle")?;
-                    let observed_generation = row.execution_generation.as_deref()
-                        .context("execution begin missing generation")?;
-                    let expiry = row.execution_lease_expires_at.as_deref()
-                        .context("execution begin missing lease expiry")?;
-                    let observed = super::execution_policy::LeaseObservation {
-                        request: state,
-                        generation: observed_generation,
-                        deadline_ms: chrono::DateTime::parse_from_rfc3339(expiry)?.timestamp_millis(),
-                    };
-                    let now = now().timestamp_millis();
-                    // A lost acknowledgement must not reapply the transition
-                    // or reset its lease; it may acknowledge the exact live
-                    // generation's already committed processing state.
-                    if state == RequestLifecycleState::Processing {
-                        anyhow::ensure!(super::execution_policy::authorize_producer_decision(
-                            observed, &generation, now), "execution begin replay lost ownership");
-                        return Ok(());
-                    }
-                    anyhow::ensure!(super::execution_policy::authorize_begin(observed, &generation, now),
-                        "execution begin requires a live claimed or resuming generation");
-                    let response = txn.execute(&format!(r#"mutation {{ update_AgentRequest(
-                        docID: "{doc}", filter: {{ _docID: {{ _eq: "{doc}" }}, lifecycle_state: {{ _eq: "{claimed}" }},
-                            execution_generation: {{ _eq: "{}" }}, execution_lease_expires_at: {{ _eq: "{}" }} }},
-                        input: {{ lifecycle_state: "{processing}" }}
-                    ) {{ _docID }} }}"#, escape_graphql_string(&generation), escape_graphql_string(expiry), claimed = state.as_str(), processing = RequestLifecycleState::Processing.as_str())).await?;
-                    anyhow::ensure!(response["data"]["update_AgentRequest"].as_array()
-                        .is_some_and(|rows| rows.len() == 1), "execution begin lost its request CAS");
-                    Ok(())
-                })
-            },
-        ).await
+        access
+            .transact_idempotent(
+                crate::store::config_client::IdempotentTransactionRetry::Standard,
+                "lifecycle.begin_owned_execution",
+                move |txn| {
+                    let generation = generation.clone();
+                    let request_doc_id = request_doc_id.clone();
+                    Box::pin(async move {
+                        use gents_protocol::document_query::{
+                            fields::agent_request as fields, Filter, Input, Query, Selection,
+                            Update,
+                        };
+                        let read = Query::select(
+                            Selection::new()
+                                .field(fields::REQUEST_ID)
+                                .field(fields::LIFECYCLE_STATE)
+                                .field(fields::EXECUTION_GENERATION)
+                                .field(fields::EXECUTION_LEASE_EXPIRES_AT),
+                        )
+                        .filter(Filter::eq(fields::DOC_ID, &request_doc_id))
+                        .limit(2)
+                        .render();
+                        let response = txn.run(&read).await?;
+                        let rows = response["data"]["AgentRequest"]
+                            .as_array()
+                            .context("execution begin omitted request rows")?;
+                        anyhow::ensure!(
+                            rows.len() == 1,
+                            "execution begin request is missing or ambiguous"
+                        );
+                        let row: gents_protocol::row::AgentRequestRow =
+                            serde_json::from_value(rows[0].clone())?;
+                        let state = row
+                            .lifecycle_state
+                            .context("execution begin missing lifecycle")?;
+                        let observed_generation = row
+                            .execution_generation
+                            .as_deref()
+                            .context("execution begin missing generation")?;
+                        let expiry = row
+                            .execution_lease_expires_at
+                            .as_deref()
+                            .context("execution begin missing lease expiry")?;
+                        let observed = super::execution_policy::LeaseObservation {
+                            request: state,
+                            generation: observed_generation,
+                            deadline_ms: chrono::DateTime::parse_from_rfc3339(expiry)?
+                                .timestamp_millis(),
+                        };
+                        let now = now().timestamp_millis();
+                        // A lost acknowledgement must not reapply the transition
+                        // or reset its lease; it may acknowledge the exact live
+                        // generation's already committed processing state.
+                        if state == RequestLifecycleState::Processing {
+                            anyhow::ensure!(
+                                super::execution_policy::authorize_producer_decision(
+                                    observed,
+                                    &generation,
+                                    now
+                                ),
+                                "execution begin replay lost ownership"
+                            );
+                            return Ok(());
+                        }
+                        anyhow::ensure!(
+                            super::execution_policy::authorize_begin(observed, &generation, now),
+                            "execution begin requires a live claimed or resuming generation"
+                        );
+                        let update = Update::doc(
+                            &request_doc_id,
+                            Input::new().set(
+                                fields::LIFECYCLE_STATE,
+                                RequestLifecycleState::Processing.as_str(),
+                            ),
+                        )
+                        .filter(Filter::eq(fields::DOC_ID, &request_doc_id))
+                        .filter(Filter::eq(fields::LIFECYCLE_STATE, state.as_str()))
+                        .filter(Filter::eq(fields::EXECUTION_GENERATION, &generation))
+                        .filter(Filter::eq(fields::EXECUTION_LEASE_EXPIRES_AT, expiry))
+                        .render();
+                        let response = txn.run(&update).await?;
+                        anyhow::ensure!(
+                            response["data"]["update_AgentRequest"]
+                                .as_array()
+                                .is_some_and(|rows| rows.len() == 1),
+                            "execution begin lost its request CAS"
+                        );
+                        Ok(())
+                    })
+                },
+            )
+            .await
     }
 
     async fn transition_pending_to_interrupted(&mut self, _interrupt_at: &str) -> Result<()> {
-        let doc_id = escape_graphql_string(&self.request.doc_id);
-        let node_did = escape_graphql_string(&self.request.node_did);
-        let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-        let mutation = format!(
-            r#"mutation {{
-                update_AgentRequest(
-                    docID: "{doc_id}", filter: {{
-                        _docID: {{ _eq: "{doc_id}" }},
-                        node_did: {{ _eq: "{node_did}" }},
-                        lifecycle_state: {{ _eq: "{pending}" }}
-                    }},
-                    input: {{
-                        lifecycle_state: "{interrupted}",
-                        terminalized_at: "{terminalized_at}",
-                        terminal_redrive_attempts: 0
-                    }}
-                ) {{ _docID request_id workspace_id workspace_owner_node_did }}
-            }}"#,
-            pending = RequestLifecycleState::Pending.as_str(),
-            interrupted = RequestLifecycleState::Interrupted.as_str()
-        );
+        let terminalized_at = chrono::Utc::now().to_rfc3339();
+        let mutation = {
+            use gents_protocol::document_query::{
+                fields::agent_request as fields, Filter, Input, Selection, Update,
+            };
+            Update::doc(
+                &self.request.doc_id,
+                Input::new()
+                    .set(
+                        fields::LIFECYCLE_STATE,
+                        RequestLifecycleState::Interrupted.as_str(),
+                    )
+                    .set(fields::TERMINALIZED_AT, terminalized_at.as_str())
+                    .set(fields::TERMINAL_REDRIVE_ATTEMPTS, 0_i32),
+            )
+            .filter(Filter::eq(fields::DOC_ID, &self.request.doc_id))
+            .filter(Filter::eq(fields::NODE_DID, &self.request.node_did))
+            .filter(Filter::eq(
+                fields::LIFECYCLE_STATE,
+                RequestLifecycleState::Pending.as_str(),
+            ))
+            .returning(
+                Selection::doc_id()
+                    .field(fields::REQUEST_ID)
+                    .field(fields::WORKSPACE_ID)
+                    .field(fields::WORKSPACE_OWNER_NODE_DID),
+            )
+            .render()
+        };
         let request = &self.request;
         let resp = self
             .access()?
@@ -544,7 +602,7 @@ impl RequestLifecycle {
                     let mutation = &mutation;
                     let terminalized_at = &terminalized_at;
                     Box::pin(async move {
-                        let response = txn.execute_local_response(mutation).await?;
+                        let response = txn.run_local_response(mutation).await?;
                         if let Some(rows) = response
                             .data
                             .as_ref()
@@ -598,28 +656,36 @@ impl RequestLifecycle {
     }
 
     async fn transition_pending_to_dead_stale(&mut self) -> Result<()> {
-        let doc_id = escape_graphql_string(&self.request.doc_id);
-        let node_did = escape_graphql_string(&self.request.node_did);
-        let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-        let mutation = format!(
-            r#"mutation {{
-                update_AgentRequest(
-                    docID: "{doc_id}", filter: {{
-                        _docID: {{ _eq: "{doc_id}" }},
-                        node_did: {{ _eq: "{node_did}" }},
-                        lifecycle_state: {{ _eq: "{pending}" }}
-                    }},
-                    input: {{
-                        lifecycle_state: "{dead}",
-                        failure_reason: "Stale",
-                        terminalized_at: "{terminalized_at}",
-                        terminal_redrive_attempts: 0
-                    }}
-                ) {{ _docID request_id workspace_id workspace_owner_node_did }}
-            }}"#,
-            pending = RequestLifecycleState::Pending.as_str(),
-            dead = RequestLifecycleState::Dead.as_str()
-        );
+        let terminalized_at = chrono::Utc::now().to_rfc3339();
+        let mutation = {
+            use gents_protocol::document_query::{
+                fields::agent_request as fields, Filter, Input, Selection, Update,
+            };
+            Update::doc(
+                &self.request.doc_id,
+                Input::new()
+                    .set(
+                        fields::LIFECYCLE_STATE,
+                        RequestLifecycleState::Dead.as_str(),
+                    )
+                    .set(fields::FAILURE_REASON, "Stale")
+                    .set(fields::TERMINALIZED_AT, terminalized_at.as_str())
+                    .set(fields::TERMINAL_REDRIVE_ATTEMPTS, 0_i32),
+            )
+            .filter(Filter::eq(fields::DOC_ID, &self.request.doc_id))
+            .filter(Filter::eq(fields::NODE_DID, &self.request.node_did))
+            .filter(Filter::eq(
+                fields::LIFECYCLE_STATE,
+                RequestLifecycleState::Pending.as_str(),
+            ))
+            .returning(
+                Selection::doc_id()
+                    .field(fields::REQUEST_ID)
+                    .field(fields::WORKSPACE_ID)
+                    .field(fields::WORKSPACE_OWNER_NODE_DID),
+            )
+            .render()
+        };
         let request = &self.request;
         let resp = self
             .access()?
@@ -630,7 +696,7 @@ impl RequestLifecycle {
                     let mutation = &mutation;
                     let terminalized_at = &terminalized_at;
                     Box::pin(async move {
-                        let response = txn.execute_local_response(mutation).await?;
+                        let response = txn.run_local_response(mutation).await?;
                         if let Some(rows) = response
                             .data
                             .as_ref()

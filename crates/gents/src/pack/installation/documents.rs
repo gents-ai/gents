@@ -16,7 +16,7 @@ use super::super::{
     HomePackInstall, InstalledVia, PackInferenceBindingPreview, PackInferenceBindings,
     PackInstallOptions,
 };
-use super::{DriftPolicy, InstallReport, InstalledPackPlugin, PackIdentity};
+use super::{DriftPolicy, InstallReport, InstalledPackPlugin, PackChangeError, PackIdentity};
 
 pub(crate) fn sdl_paths(manifest: &super::super::PackManifest) -> std::collections::BTreeSet<&str> {
     let mut paths: std::collections::BTreeSet<&str> = manifest
@@ -419,27 +419,30 @@ pub async fn prepare_document_pack_install(
     root_archive: Option<&PackArchive>,
     environment: &(dyn Fn(&str) -> Option<String> + Sync),
     overrides: &DependencyVariableOverrides,
-) -> Result<PreparedDocumentPackInstall> {
+) -> Result<PreparedDocumentPackInstall, PackChangeError> {
     // The caller renders `config`; this records the values it used, with an
     // installed root keeping its recorded values for omitted variables.
-    let root = match root_archive {
-        Some(archive) => {
-            let root = root_install_variables(access, owner, manifest).await?;
-            let path = manifest.config.as_deref().context("pack has no config")?;
-            let authored: serde_json::Value = serde_json::from_slice(archive.asset(path)?)?;
-            let captured = std::sync::Mutex::new(BTreeMap::new());
-            super::super::interpolate::inspect_install_variables(&authored, &|name| {
-                if name == "GENTS_PACK_NODE_DID" {
-                    return Some(owner.to_owned());
-                }
-                capture_variable(&captured, name, || root.resolve(name, environment))
-            })
-            .map_err(|names| anyhow::anyhow!("unset variables: {}", names.join(", ")))?;
-            let variables = captured.into_inner().unwrap_or_else(|e| e.into_inner());
-            root.with_variables(variables)
-        }
-        None => RootInstallVariables::default(),
-    };
+    let root = async {
+        Ok::<_, anyhow::Error>(match root_archive {
+            Some(archive) => {
+                let root = root_install_variables(access, owner, manifest).await?;
+                let path = manifest.config.as_deref().context("pack has no config")?;
+                let authored: serde_json::Value = serde_json::from_slice(archive.asset(path)?)?;
+                let captured = std::sync::Mutex::new(BTreeMap::new());
+                super::super::interpolate::inspect_install_variables(&authored, &|name| {
+                    if name == "GENTS_PACK_NODE_DID" {
+                        return Some(owner.to_owned());
+                    }
+                    capture_variable(&captured, name, || root.resolve(name, environment))
+                })
+                .map_err(|names| anyhow::anyhow!("unset variables: {}", names.join(", ")))?;
+                let variables = captured.into_inner().unwrap_or_else(|e| e.into_inner());
+                root.with_variables(variables)
+            }
+            None => RootInstallVariables::default(),
+        })
+    }
+    .await?;
     prepare_document_pack_install_inner(
         None,
         BTreeMap::new(),
@@ -477,7 +480,7 @@ pub async fn prepare_document_pack_archive(
     plugin_home: Option<&Path>,
     environment: &(dyn Fn(&str) -> Option<String> + Sync),
     overrides: &DependencyVariableOverrides,
-) -> Result<PreparedDocumentPackInstall> {
+) -> Result<PreparedDocumentPackInstall, PackChangeError> {
     prepare_document_pack_archive_with_provisioner(
         access,
         owner,
@@ -526,14 +529,15 @@ pub async fn prepare_document_pack_archive_with_runtime(
     environment: &(dyn Fn(&str) -> Option<String> + Sync),
     runtime: &dyn crate::store::identity::NodeIdentity,
     overrides: &DependencyVariableOverrides,
-) -> Result<PreparedDocumentPackInstall> {
+) -> Result<PreparedDocumentPackInstall, PackChangeError> {
     let node = access
         .local_node()
         .context("local pack preparation requires an embedded Node")?;
-    anyhow::ensure!(
-        runtime.did() == owner && node.node_identity_did() == Some(owner),
-        "held runtime identity does not match the selected Node"
-    );
+    if runtime.did() != owner || node.node_identity_did() != Some(owner) {
+        return Err(
+            anyhow::anyhow!("held runtime identity does not match the selected Node").into(),
+        );
+    }
     let provisioner = super::super::agent_bindings::AgentProvisioner {
         node,
         runtime,
@@ -573,7 +577,7 @@ pub(crate) async fn prepare_document_pack_archive_with_provisioner(
     environment: &(dyn Fn(&str) -> Option<String> + Sync),
     provisioner: Option<&super::super::agent_bindings::AgentProvisioner<'_>>,
     overrides: &DependencyVariableOverrides,
-) -> Result<PreparedDocumentPackInstall> {
+) -> Result<PreparedDocumentPackInstall, PackChangeError> {
     prepare_document_pack_archive_inputs(
         access,
         owner,
@@ -640,6 +644,7 @@ pub async fn prepare_hosted_document_pack_archive(
         overrides,
     )
     .await
+    .map_err(PackChangeError::into_anyhow)
 }
 
 #[expect(
@@ -659,7 +664,7 @@ async fn prepare_document_pack_archive_inputs(
     provisioner: Option<&super::super::agent_bindings::AgentProvisioner<'_>>,
     hosted: Option<&HostedPackPreparation>,
     overrides: &DependencyVariableOverrides,
-) -> Result<PreparedDocumentPackInstall> {
+) -> Result<PreparedDocumentPackInstall, PackChangeError> {
     let declared = super::super::agent_bindings::declared_dependencies(archive.manifest());
     validate_dependency_overrides(dependencies, overrides)?;
     let mut preloaded = BTreeMap::new();
@@ -667,10 +672,12 @@ async fn prepare_document_pack_archive_inputs(
     for dependency in dependencies {
         let manifest = dependency.manifest();
         let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
-        anyhow::ensure!(
-            declared.contains(&coordinate),
-            "prepared dependency {coordinate:?} is not declared by the root pack"
-        );
+        if !declared.contains(&coordinate) {
+            return Err(anyhow::anyhow!(
+                "prepared dependency {coordinate:?} is not declared by the root pack"
+            )
+            .into());
+        }
         require_documents_dependency(manifest)?;
         let loaded = load_dependency(
             access,
@@ -687,10 +694,9 @@ async fn prepare_document_pack_archive_inputs(
         )
         .await?;
         available.insert(coordinate.clone(), loaded.bound.agent_bindings.clone());
-        anyhow::ensure!(
-            preloaded.insert(coordinate, loaded).is_none(),
-            "duplicate prepared dependency"
-        );
+        if preloaded.insert(coordinate, loaded).is_some() {
+            return Err(anyhow::anyhow!("duplicate prepared dependency").into());
+        }
     }
     let root = root_install_variables(access, owner, archive.manifest()).await?;
     let captured = std::sync::Mutex::new(BTreeMap::new());
@@ -1011,20 +1017,25 @@ async fn prepare_document_pack_install_inner(
     hosted: Option<&HostedPackPreparation>,
     root: RootInstallVariables,
     overrides: &DependencyVariableOverrides,
-) -> Result<PreparedDocumentPackInstall> {
+) -> Result<PreparedDocumentPackInstall, PackChangeError> {
     if let Some(archive) = root_archive {
-        anyhow::ensure!(
-            serde_json::to_value(archive.manifest())? == serde_json::to_value(manifest)?,
-            "prepared pack manifest does not match the archive"
-        );
+        if serde_json::to_value(archive.manifest()).map_err(anyhow::Error::from)?
+            != serde_json::to_value(manifest).map_err(anyhow::Error::from)?
+        {
+            return Err(
+                anyhow::anyhow!("prepared pack manifest does not match the archive").into(),
+            );
+        }
     }
-    anyhow::ensure!(
-        document_ux_install_allowed(
-            !manifest.metadata.ux.is_empty(),
-            plugin_home.is_some() || hosted.is_some(),
-        ),
-        "document packs with UX need the node's local home, where the desktop reads their pages"
-    );
+    if !document_ux_install_allowed(
+        !manifest.metadata.ux.is_empty(),
+        plugin_home.is_some() || hosted.is_some(),
+    ) {
+        return Err(anyhow::anyhow!(
+            "document packs with UX need the node's local home, where the desktop reads their pages"
+        )
+        .into());
+    }
     for dependency in dependencies {
         if let Some(hosted) = hosted {
             if !dependency.manifest().metadata.ux.is_empty() {
@@ -1033,8 +1044,14 @@ async fn prepare_document_pack_install_inner(
                     dependency.manifest().metadata.namespace,
                     dependency.manifest().name
                 );
-                anyhow::ensure!(hosted.operator_ux_digests.get(&coordinate).map(String::as_str) == Some(dependency.digest()),
-                    "dependency {coordinate} with UX must be operator installed at the reviewed digest");
+                if hosted
+                    .operator_ux_digests
+                    .get(&coordinate)
+                    .map(String::as_str)
+                    != Some(dependency.digest())
+                {
+                    return Err(anyhow::anyhow!("dependency {coordinate} with UX must be operator installed at the reviewed digest").into());
+                }
             }
         } else {
             require_installed_dependency_ux(
@@ -1047,17 +1064,21 @@ async fn prepare_document_pack_install_inner(
     }
     validate_dependency_overrides(dependencies, overrides)?;
     for slot in requested.keys() {
-        anyhow::ensure!(
-            std::iter::once(manifest)
-                .chain(dependencies.iter().map(|p| p.manifest()))
-                .any(|m| m
-                    .metadata
+        if !std::iter::once(manifest)
+            .chain(dependencies.iter().map(|p| p.manifest()))
+            .any(|m| {
+                m.metadata
                     .inference_slots
                     .iter()
-                    .any(|declared| &declared.name == slot)),
-            "pack {} and its dependencies have no inference slot {slot:?}",
-            manifest.name
-        );
+                    .any(|declared| &declared.name == slot)
+            })
+        {
+            return Err(anyhow::anyhow!(
+                "pack {} and its dependencies have no inference slot {slot:?}",
+                manifest.name
+            )
+            .into());
+        }
     }
     let selected = |manifest: &super::super::PackManifest| {
         requested
@@ -1121,8 +1142,9 @@ async fn prepare_document_pack_install_inner(
                 owner,
             )?;
             for (slot, profile) in &requested_dependency {
-                anyhow::ensure!(bindings.get(slot) == Some(profile),
-                    "installed dependency {coordinate} already uses a different profile for {slot:?}; update it explicitly before installing its dependent");
+                if bindings.get(slot) != Some(profile) {
+                    return Err(anyhow::anyhow!("installed dependency {coordinate} already uses a different profile for {slot:?}; update it explicitly before installing its dependent").into());
+                }
             }
             let mut preview = super::super::inspect_pack_inference_bindings_with_node_binding(
                 access,
@@ -1172,9 +1194,10 @@ async fn prepare_document_pack_install_inner(
                     path.to_owned(),
                     crate::store::config_client::preview_schema_install(
                         access,
-                        std::str::from_utf8(sdl)?,
+                        std::str::from_utf8(sdl).map_err(anyhow::Error::from)?,
                     )
-                    .await?,
+                    .await
+                    .map_err(anyhow::Error::from)?,
                 ));
                 assets.insert(path.to_owned(), sdl.to_vec());
             }
@@ -1256,10 +1279,12 @@ async fn prepare_document_pack_install_inner(
                     crate::plugin::store::content_digest_hex(archive.asset(&plugin.artifact)?)
                 );
                 if let Some(previous) = shipped_digests.insert(coordinate.clone(), digest.clone()) {
-                    anyhow::ensure!(
-                        previous == digest,
-                        "pack graph ships conflicting artifacts for plugin {coordinate}"
-                    );
+                    if previous != digest {
+                        return Err(anyhow::anyhow!(
+                            "pack graph ships conflicting artifacts for plugin {coordinate}"
+                        )
+                        .into());
+                    }
                 }
             }
         }
@@ -1500,7 +1525,8 @@ pub async fn install_prepared_document_pack(
         grant_authority,
         true,
     )
-    .await?;
+    .await
+    .map_err(|error| error.into_anyhow())?;
     let root_coordinate = format!(
         "{}/{}",
         archive.manifest().metadata.namespace,
@@ -1628,7 +1654,7 @@ pub async fn install_prepared_document_graph(
     home: Option<&Path>,
     consent: bool,
     explicit: bool,
-) -> Result<(InstallReport, Vec<crate::plugin::store::InstalledPlugin>)> {
+) -> Result<(InstallReport, Vec<crate::plugin::store::InstalledPlugin>), PackChangeError> {
     let stages = document_graph_stages(archive, prepared, explicit)?;
     let (reports, plugins) = install_document_graph(
         access,
@@ -1837,7 +1863,8 @@ pub async fn apply_hosted_document_graph(
             policy,
             graph.node_binding.as_ref(),
         )
-        .await;
+        .await
+        .map_err(PackChangeError::into_anyhow);
     }
     let (root, dependencies) = graph
         .identities
@@ -1864,7 +1891,8 @@ pub async fn apply_hosted_document_graph(
         policy,
         graph.node_binding.as_ref(),
     )
-    .await?;
+    .await
+    .map_err(PackChangeError::into_anyhow)?;
     super::validate_plugin_replacements_in_txn(txn, owner, std::slice::from_ref(root)).await?;
     super::write_installed_plugin_identity(
         txn,
@@ -1931,11 +1959,10 @@ pub(super) async fn apply_document_graph_in_txn(
     records: &[StageRecord],
     policy: DriftPolicy,
     node_binding: Option<&crate::store::config_client::ConfigurationNodeBinding>,
-) -> Result<Vec<InstallReport>> {
-    anyhow::ensure!(
-        records.len() == identities.len(),
-        "pack stage records do not match the document graph"
-    );
+) -> Result<Vec<InstallReport>, PackChangeError> {
+    if records.len() != identities.len() {
+        return Err(anyhow::anyhow!("pack stage records do not match the document graph").into());
+    }
     let mut reports = Vec::new();
     for ((identity, documents), record) in identities.iter().zip(documents).zip(records) {
         if let Some(snapshot) = &record.snapshot {
@@ -1946,11 +1973,13 @@ pub(super) async fn apply_document_graph_in_txn(
                 snapshot.record.digest.as_deref(),
             )
             .await?;
-            anyhow::ensure!(
-                current.as_ref() == Some(snapshot),
-                "installed dependency {} changed during preparation; retry the install",
-                identity.coordinate
-            );
+            if current.as_ref() != Some(snapshot) {
+                return Err(anyhow::anyhow!(
+                    "installed dependency {} changed during preparation; retry the install",
+                    identity.coordinate
+                )
+                .into());
+            }
             if !record.reconfigure {
                 reports.push(InstallReport::default());
                 continue;
@@ -1982,10 +2011,13 @@ pub(super) async fn install_document_graph(
     home: Option<&Path>,
     consent: bool,
     node_binding: Option<crate::store::config_client::ConfigurationNodeBinding>,
-) -> Result<(
-    Vec<InstallReport>,
-    Vec<crate::plugin::store::InstalledPlugin>,
-)> {
+) -> Result<
+    (
+        Vec<InstallReport>,
+        Vec<crate::plugin::store::InstalledPlugin>,
+    ),
+    PackChangeError,
+> {
     let access = access.clone();
     let owner = owner.to_owned();
     let home = home.map(Path::to_owned);
@@ -2130,7 +2162,8 @@ pub(super) async fn install_document_graph(
                             .collect();
                         ensure_plugin_references_resolve(&packs, home.as_deref(), &digests)
                     })
-                    .await??;
+                    .await
+                    .map_err(anyhow::Error::from)??;
                     apply_document_graph_in_txn(
                         txn,
                         owner,
@@ -2151,12 +2184,12 @@ pub(super) async fn install_document_graph(
         if let Some(stage) = plugin_stage {
             if let Err(cleanup) = stage.finish(!rejected).await {
                 return Err(match result {
-                    Err(failure) => failure
-                        .error
+                    Err(failure) => anyhow::Error::from(failure.error)
                         .context(format!("plugin store cleanup failed: {cleanup:#}")),
                     Ok(_) => cleanup
                         .context("plugin store cleanup failed after committed pack transaction"),
-                });
+                }
+                .into());
             }
         }
         #[cfg(test)]
@@ -2164,20 +2197,23 @@ pub(super) async fn install_document_graph(
             pause.completed.notify_one();
         }
         result
-            .map_err(|error| error.error)
             .map(|reports| (reports, plugins))
-            .with_context(|| {
-                if rejected {
-                    "pack document transaction was rejected; local plugin records were restored"
-                } else {
-                    "pack document outcome was not confirmed; local plugins remain published"
+            .map_err(|failure| match failure.error {
+                PackChangeError::Other(error) => {
+                    PackChangeError::Other(error.context(if rejected {
+                        "pack document transaction was rejected; local plugin records were restored"
+                    } else {
+                        "pack document outcome was not confirmed; local plugins remain published"
+                    }))
                 }
+                refusal => refusal,
             })
     })
     .await
     .context("owned pack installation task failed")?
 }
 
+#[cfg(test)]
 #[expect(
     clippy::too_many_arguments,
     reason = "the document and plugin owners share an installation outcome"

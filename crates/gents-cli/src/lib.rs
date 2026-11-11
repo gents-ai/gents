@@ -21,7 +21,6 @@ pub mod enrollment {
 }
 mod caused_sessions;
 mod cli;
-mod client_settings;
 mod commands;
 mod config_bundle;
 mod config_import;
@@ -68,16 +67,7 @@ const DEFAULT_XAI_GROK_OAUTH_MODEL_NAME: &str = "grok-4.7";
 const DEFAULT_HTTP_PORT: u16 = 9191;
 #[cfg(all(debug_assertions, feature = "native-e2e"))]
 const DEFAULT_HTTP_PORT: u16 = 21919;
-#[cfg(not(all(debug_assertions, feature = "native-e2e")))]
-const DEFAULT_CODEX_SHIM_PORT: u16 = 9292;
-#[cfg(all(debug_assertions, feature = "native-e2e"))]
-const DEFAULT_CODEX_SHIM_PORT: u16 = 21929;
-#[cfg(not(all(debug_assertions, feature = "native-e2e")))]
-const DEFAULT_CODEX_REMOTE: &str = "ws://127.0.0.1:9292/";
-#[cfg(all(debug_assertions, feature = "native-e2e"))]
-const DEFAULT_CODEX_REMOTE: &str = "ws://127.0.0.1:21929/";
 const DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS: u64 = 86_400;
-const DEFAULT_CODEX_SHIM_TIMEOUT_SECS: u64 = DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS;
 const TOKIO_WORKER_STACK_SIZE: usize = 16 * 1024 * 1024;
 const DEFAULT_P2P_MAX_CONCURRENT_DAG_FETCHES: usize = p2p::sync::DEFAULT_MAX_CONCURRENT_DAG_FETCHES;
 const DEFAULT_P2P_MAX_CONCURRENT_PUSH_TASKS: usize = p2p::sync::DEFAULT_MAX_CONCURRENT_PUSH_TASKS;
@@ -142,7 +132,7 @@ Examples:
 Next:
   llama-server -hf google/gemma-4-12B-it-qat-q4_0-gguf
   gents runtime server
-  gents codex";
+  gents";
 const PROVISION_AFTER_HELP: &str = "\
 Provision binds a portable manifest root to this host's initialized identity,
 applies it locally, and verifies an exact post-apply diff.
@@ -172,34 +162,9 @@ const SERVER_AFTER_HELP: &str = "\
 Common flow:
   gents
 
-The server runs the Codex TUI endpoint by default (loopback only); disable it
-with --no-codex-shim. `gents codex` in another terminal connects to it.
-
-For authenticated remote use, terminate TLS in a reverse proxy to the loopback
-listener and advertise that endpoint:
-  gents runtime server --codex-shim-auth-token-env GENTS_REMOTE_TOKEN --codex-shim-public-url wss://<host>:443/
-  gents codex --remote wss://<host>:443/ --remote-auth-token-env GENTS_REMOTE_TOKEN
-
 Identity note:
   Standalone server startup supports file keys, macOS keychain software-key homes initialized with identity_backend=macos-keychain, and macOS Secure Enclave homes initialized with identity_backend=macos-secure-enclave.
   Homes with a real node DID and no key_path must include a supported identity_backend and label in init.json.";
-const CODEX_AFTER_HELP: &str = "\
-Launches the `codex` terminal UI as a separate process connected to the local
-node's Codex shim. Codex-side approvals and sandboxing are bypassed: the tool
-preset chosen at `gents init` (read-only by default) is the permission boundary.
-
-Examples:
-  gents codex
-  gents codex \"what is in this directory?\"
-  gents codex --remote ws://127.0.0.1:9292/
-  gents codex --agent DID
-  gents --agent DID
-
-`--agent` opens that agent instead of the node's default, in as many terminals
-as you like, with no restart. `gents config agent list` shows the agents.
-
-Requires a running `gents runtime server` in another terminal and `codex` on PATH.
-Set GENTS_CODEX_BIN to use a different Codex executable.";
 const P2P_AFTER_HELP: &str = "\
 Examples:
   gents runtime p2p status
@@ -423,15 +388,18 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     let cli = Cli::parse();
     let command = match cli.command {
         None => {
-            return commands::start::run(commands::start::StartArgs {
-                home: cli.home,
-                store_key_custody: cli.store_key_custody,
-                agent: cli.agent,
-                print: cli.print,
-                prompt: cli.prompt,
-                continue_session: cli.continue_session,
-                yolo: cli.yolo,
-            })
+            return commands::start::run(
+                commands::start::StartArgs {
+                    home: cli.home,
+                    store_key_custody: cli.store_key_custody,
+                    agent: cli.agent,
+                    print: cli.print,
+                    prompt: cli.prompt,
+                    continue_session: cli.continue_session,
+                    yolo: cli.yolo,
+                },
+                runtime,
+            )
             .await
         }
         Some(Command::NativeFsRunner(args)) => {
@@ -441,9 +409,7 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
             return packs::plugin_build(args.dir, args.test).await;
         }
         Some(Command::DocsBundle(args)) => return commands::docs_bundle::docs_bundle(args),
-        Some(Command::Codex(args)) => {
-            return commands::codex::codex(args).await;
-        }
+        Some(Command::Shell(args)) => return commands::start::shell(args, runtime).await,
         Some(command) => command,
     };
     gents::enable_self_runner();
@@ -546,7 +512,7 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
                 commands::optimization::dispatch(command, runtime).await
             }
         },
-        Command::Codex(_)
+        Command::Shell(_)
         | Command::NativeFsRunner(_)
         | Command::PluginBuild(_)
         | Command::DocsBundle(_) => {

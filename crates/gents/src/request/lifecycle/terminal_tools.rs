@@ -90,24 +90,39 @@ pub(super) async fn account_tools_in_txn(
         .session_id
         .as_deref()
         .context("request missing session")?;
-    let scope = gents_protocol::session::session_scope_filter(
-        agent,
-        session,
-        request.requester_did.as_deref(),
-    );
     let escaped_request = escape_graphql_string(request_id);
-    let response = txn
-        .execute_local_response(&format!(
-            r#"{{
-        AgentToolCall(filter: {{ {scope}, request_doc_id: {{ _eq: "{escaped_request}" }} }}) {{
-            _docID tool_call_key request_doc_id node_did requester_did session_id
-            message_sequence tool_call_id tool_name lifecycle_state await_mode
-            started_at deadline_at spawned_by_tool_call_doc_id
-            plugin_parent_tool_call_doc_id plugin_effect_ordinal terminal_output
-        }}
-    }}"#
+    let response = {
+        use gents_protocol::document_query::{
+            fields::agent_tool_call as fields, session_scope, Filter, Query, Selection,
+        };
+        let rendered = Query::select(
+            Selection::doc_id()
+                .field(fields::TOOL_CALL_KEY)
+                .field(fields::REQUEST_DOC_ID)
+                .field(fields::NODE_DID)
+                .field(fields::REQUESTER_DID)
+                .field(fields::SESSION_ID)
+                .field(fields::MESSAGE_SEQUENCE)
+                .field(fields::TOOL_CALL_ID)
+                .field(fields::TOOL_NAME)
+                .field(fields::LIFECYCLE_STATE)
+                .field(fields::AWAIT_MODE)
+                .field(fields::STARTED_AT)
+                .field(fields::DEADLINE_AT)
+                .field(fields::SPAWNED_BY_TOOL_CALL_DOC_ID)
+                .field(fields::PLUGIN_PARENT_TOOL_CALL_DOC_ID)
+                .field(fields::PLUGIN_EFFECT_ORDINAL)
+                .field(fields::TERMINAL_OUTPUT),
+        )
+        .filter(session_scope(
+            agent,
+            session,
+            request.requester_did.as_deref(),
         ))
-        .await?;
+        .filter(Filter::eq(fields::REQUEST_DOC_ID, request_id))
+        .render();
+        txn.run_local_response(&rendered).await?
+    };
     let tools: Vec<ToolDocument> = crate::store::graphql::rows(&response, "AgentToolCall")?;
     for header in headers.iter().filter(|h| matches!(&h.message.publication,
         MessagePublication::RequestExecution { execution_generation } if execution_generation == generation)

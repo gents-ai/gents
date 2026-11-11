@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -15,7 +14,7 @@ use crate::tools::background::job::admit::Refusal;
 use crate::tools::background::job::driver::tests::{pinned_job_row, settle_row, start_running};
 use crate::tools::background::job::driver::{load_lifecycle, settle_plugin_job, Settlement};
 use crate::tools::background::job::input::tests::{
-    agent_did, insert_as, live_settings, new_job, node_did, request_as, Job,
+    agent_did, live_settings, new_job, node_did, request_as, Job,
 };
 use crate::tools::background::job::keys::{job_session_id, job_spawn_key};
 use crate::tools::background::job::records::{read_pin, read_progress, write_pin_in_txn};
@@ -413,7 +412,6 @@ const EVERY_STATE: [JobState; 7] = [
 fn every_job() -> JobFilter {
     JobFilter {
         session_id: None,
-        requester: None,
         state: StateFilter::States(EVERY_STATE.to_vec()),
         plugin: None,
     }
@@ -566,43 +564,6 @@ async fn list_jobs_skips_an_undecodable_row_with_a_warning() {
     job.node.shutdown().await.expect("shut down test node");
 }
 
-/// A running job row of `requester`, inserted directly because
-/// `requester_did` is immutable; the job's Agent owns its rows.
-async fn requester_job_row(job: &Job, requester: &str, call_id: &str) -> String {
-    insert_as(
-        &job.access,
-        "AgentToolCall",
-        json!({
-            "request_id": "request-1",
-            "request_doc_id": "request-doc",
-            "node_did": node_did(),
-            "requester_did": requester,
-            "session_id": "session-1",
-            "tool_call_id": call_id,
-            "tool_name": "workflow",
-            "lifecycle_state": "running",
-            "started_at": "2026-01-01T00:00:00Z",
-            "job_pin": job.pin(call_id, None),
-        }),
-    )
-    .await
-}
-
-#[tokio::test]
-async fn list_jobs_keeps_only_the_requesters_rows() {
-    let job = new().await;
-    let a = requester_job_row(&job, "a", "call-1").await;
-    let b = requester_job_row(&job, "b", "call-2").await;
-    let only = |requester| JobFilter {
-        requester,
-        ..every_job()
-    };
-
-    assert_eq!(listed(&job, &only(Some("a".into()))).await, vec![a.clone()]);
-    assert_eq!(sorted(listed(&job, &only(None)).await), sorted(vec![a, b]));
-    job.node.shutdown().await.expect("shut down test node");
-}
-
 #[tokio::test]
 async fn list_jobs_without_a_session_lists_job_rows_of_every_session() {
     let mut job = new().await;
@@ -665,33 +626,6 @@ async fn list_jobs_states_keeps_only_the_listed_states() {
     assert_eq!(
         sorted(listed(&job, &only(EVERY_STATE.to_vec())).await),
         sorted(vec![running, paused, awaiting, completed])
-    );
-    job.node.shutdown().await.expect("shut down test node");
-}
-
-#[tokio::test]
-async fn list_jobs_not_terminal_or_undelivered_keeps_running_and_undelivered_rows() {
-    let mut job = new().await;
-    let running = pinned_job_row(&mut job, "call-1").await;
-    let delivered = pinned_job_row(&mut job, "call-2").await;
-    settle_row(&job, &delivered, Settlement::Result(json!("done"))).await;
-    let undelivered = pinned_job_row(&mut job, "call-3").await;
-    settle_row(
-        &job,
-        &undelivered,
-        Settlement::Control(JobControlKind::Pause),
-    )
-    .await;
-    let filter = JobFilter {
-        state: StateFilter::NotTerminalOrUndelivered {
-            delivered: BTreeSet::from([delivered]),
-        },
-        ..every_job()
-    };
-
-    assert_eq!(
-        sorted(listed(&job, &filter).await),
-        sorted(vec![running, undelivered])
     );
     job.node.shutdown().await.expect("shut down test node");
 }

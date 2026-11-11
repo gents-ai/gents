@@ -1,4 +1,6 @@
 use crate::types::*;
+use futures::TryFutureExt;
+use gents::pack::PackChangeError;
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::Value;
 use tauri::State;
@@ -158,6 +160,7 @@ pub async fn desktop_pack_install(
                 request.preview,
                 request.expect_digest,
             )
+            .map_err(PackChangeError::into_anyhow)
         })
         .await
     }
@@ -172,7 +175,11 @@ pub async fn desktop_pack_update(
 ) -> Result<PackUpdateView, BridgeError> {
     {
         let home = home(&state)?;
-        run(move || packs::update(home, package, registry, edited.unwrap_or_default())).await
+        run(move || {
+            packs::update(home, package, registry, edited.unwrap_or_default())
+                .map_err(PackChangeError::into_anyhow)
+        })
+        .await
     }
 }
 
@@ -184,7 +191,11 @@ pub async fn desktop_pack_remove(
 ) -> Result<PackRemoveView, BridgeError> {
     {
         let home = home(&state)?;
-        run(move || packs::remove(home, package, edited.unwrap_or_default())).await
+        run(move || {
+            packs::remove(home, package, edited.unwrap_or_default())
+                .map_err(PackChangeError::into_anyhow)
+        })
+        .await
     }
 }
 

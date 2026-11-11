@@ -3,10 +3,9 @@ use super::*;
 #[tokio::test]
 async fn captured_context_details_require_exact_owner_and_admission_identity() {
     let node = seeded_node().await;
-    let mut context = load_session_inference_observation(
+    let mut context = load_session_investigation(
         &crate::store::config_client::ConfigAccess::local(node.clone()),
         PIN_FIXED_DID,
-        Some(PIN_FIXED_DID),
         "session-a",
     )
     .await
@@ -183,10 +182,9 @@ async fn captured_context_details_require_exact_owner_and_admission_identity() {
 #[tokio::test]
 async fn ui_accounting_separates_compaction_usage_from_current_context() {
     let node = seeded_node().await;
-    let before = load_session_inference_observation(
+    let before = load_session_investigation(
         &crate::store::config_client::ConfigAccess::local(node.clone()),
         PIN_FIXED_DID,
-        Some(PIN_FIXED_DID),
         "session-a",
     )
     .await
@@ -210,10 +208,9 @@ async fn ui_accounting_separates_compaction_usage_from_current_context() {
                 prompt_tokens: 10, completion_tokens: 5, cached_input_tokens: 0, usage_completeness: "complete", context_accounting_json: "{encoded}"
             }}) {{_docID}} }}"#, escape_graphql_string(doc))).await;
         crate::store::graphql::ensure_no_errors(&response, "context generation fixture").unwrap();
-        let observed = load_session_inference_observation(
+        let observed = load_session_investigation(
             &crate::store::config_client::ConfigAccess::local(node.clone()),
             PIN_FIXED_DID,
-            Some(PIN_FIXED_DID),
             "session-a",
         )
         .await
@@ -229,158 +226,4 @@ async fn ui_accounting_separates_compaction_usage_from_current_context() {
         );
         assert!(observed.token_usage.charged_tokens > before.token_usage.charged_tokens);
     }
-}
-
-#[tokio::test]
-async fn ui_accounting_uses_exact_requester_and_physical_request_ownership() {
-    let node = seeded_node().await;
-    for (agent, session, request) in [
-        (" ", "session-a", "request-a-new"),
-        (
-            "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
-            "",
-            "request-a-new",
-        ),
-        (
-            "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
-            "session-a",
-            "\t",
-        ),
-    ] {
-        assert!(load_request_context_observation(
-            &crate::store::config_client::ConfigAccess::local(node.clone()),
-            agent,
-            None,
-            session,
-            request
-        )
-        .await
-        .is_err());
-    }
-    let baseline = load_session_inference_observation(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
-        PIN_FIXED_DID,
-        Some(PIN_FIXED_DID),
-        "session-a",
-    )
-    .await
-    .unwrap();
-    assert_eq!(baseline.token_usage.input_tokens, Some(100));
-    assert_eq!(
-        baseline
-            .latest_context
-            .as_ref()
-            .unwrap()
-            .accounting
-            .estimated_input_tokens,
-        650
-    );
-    assert_eq!(baseline.latest_completion_tokens, Some(20));
-    assert_eq!(baseline.inference_turns, Some(1));
-    let live = load_request_context_observation(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
-        "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
-        Some(PIN_FIXED_DID),
-        "session-a",
-        "request-a-new",
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    assert_eq!(live.context, baseline.latest_context.clone().unwrap());
-    assert_eq!(live.completion_tokens, Some(20));
-    assert!(load_request_context_observation(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
-        "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
-        Some("not-an-owner"),
-        "session-a",
-        "request-a-new"
-    )
-    .await
-    .unwrap()
-    .is_none());
-
-    let identities = tempfile::tempdir().unwrap();
-    let foreign_identity =
-        KeyIdentity::load_or_create(identities.path().join("foreign.key"), None).unwrap();
-    let foreign_did = foreign_identity.did().to_owned();
-    let mut foreign_request = gents_protocol::request_admission::AgentRequestCreate::base(
-        gents_protocol::request_admission::RequestPurpose::Normal,
-        "foreign-requester",
-        PIN_FIXED_DID,
-        &foreign_did,
-        "agent-a",
-        "session-a",
-        "foreign requester fixture",
-        "interactive",
-        "2026-06-04T11:59:00Z",
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&foreign_did),
-    );
-    crate::sign_agent_request_create(&foreign_identity, &mut foreign_request)
-        .await
-        .unwrap();
-    let response = crate::store::config_client::ConfigAccess::write_local_response(
-        &node,
-        "test.session_history.foreign_request",
-        &foreign_request.graphql_mutation().unwrap(),
-    )
-    .await
-    .unwrap();
-    crate::store::graphql::ensure_no_errors(&response, "foreign requester fixture").unwrap();
-    let response = node
-        .execute(r#"{ AgentRequest(filter: {request_id: {_eq: "foreign-requester"}}) {_docID} }"#)
-        .await;
-    let doc = response.data.as_ref().unwrap()["AgentRequest"][0]["_docID"]
-        .as_str()
-        .unwrap();
-    let response = node.execute(&format!(r#"mutation {{ create_InferenceCall(input: {{
-            call_id: "foreign-usage", call_seq: 1, call_kind: "inference", node_did: "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7", request_id: "request-a-new",
-            request_doc_id: "{}", backend_id: "backend-a", call_state: "completed", prompt_tokens: 9000, completion_tokens: 1000, cached_input_tokens: 0, usage_completeness: "complete",
-            queued_at: "2026-06-04T12:00:00Z"
-        }}) {{_docID}} }}"#, escape_graphql_string(doc))).await;
-    crate::store::graphql::ensure_no_errors(&response, "foreign usage fixture").unwrap();
-    assert_eq!(
-        load_session_inference_observation(
-            &crate::store::config_client::ConfigAccess::local(node.clone()),
-            PIN_FIXED_DID,
-            Some(PIN_FIXED_DID),
-            "session-a"
-        )
-        .await
-        .unwrap(),
-        baseline
-    );
-    assert_eq!(
-        load_request_context_observation(
-            &crate::store::config_client::ConfigAccess::local(node.clone()),
-            "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
-            Some(PIN_FIXED_DID),
-            "session-a",
-            "request-a-new"
-        )
-        .await
-        .unwrap()
-        .unwrap(),
-        live
-    );
-    let foreign = load_session_inference_observation(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
-        "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
-        Some(&foreign_did),
-        "session-a",
-    )
-    .await
-    .unwrap();
-    assert_eq!(foreign.token_usage.input_tokens, Some(9000));
-    assert!(foreign.latest_context.is_none());
-    let absent = load_session_inference_observation(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
-        "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
-        Some("not-an-owner"),
-        "session-a",
-    )
-    .await
-    .unwrap();
-    assert_eq!(absent.token_usage.model_calls, 0);
-    assert!(absent.latest_context.is_none());
 }

@@ -7,7 +7,6 @@ use crate::request::streaming::AcceptedToolCall;
 #[cfg(test)]
 use crate::store::config_client::ConfigAccess;
 use crate::store::config_client::ConfigApplyTxn;
-use crate::store::graphql::escape_graphql_string;
 use gents_protocol::output::rows::{decode_transcript_message_row, AGENT_MESSAGE_FIELDS};
 
 use super::ToolCallLifecycle;
@@ -21,9 +20,10 @@ impl ToolCallLifecycle {
         requester_did: Option<&str>,
         require_complete: bool,
     ) -> Result<AcceptedToolCall> {
+        use gents_protocol::document_query::{
+            fields::agent_tool_call as fields, session_scope, Filter, Query, Selection,
+        };
         use rapidhash::{HashSetExt, RapidHashSet};
-        let scope =
-            gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
         let mut seen = RapidHashSet::new();
         let mut chain = Vec::new();
         let mut cursor = tool_doc_id.to_owned();
@@ -32,15 +32,22 @@ impl ToolCallLifecycle {
                 seen.insert(cursor.clone()),
                 "cyclic tool invocation ancestry"
             );
-            let response = txn
-                .execute(&format!(
-                    r#"{{ AgentToolCall(filter: {{ {scope}, _docID: {{ _eq: "{}" }} }}, limit: 2) {{
-                _docID request_doc_id tool_call_id tool_name message_sequence await_mode
-                spawned_by_tool_call_doc_id plugin_parent_tool_call_doc_id plugin_effect_ordinal
-            }} }}"#,
-                    escape_graphql_string(&cursor)
-                ))
-                .await?;
+            let lookup = Query::select(
+                Selection::doc_id()
+                    .field(fields::REQUEST_DOC_ID)
+                    .field(fields::TOOL_CALL_ID)
+                    .field(fields::TOOL_NAME)
+                    .field(fields::MESSAGE_SEQUENCE)
+                    .field(fields::AWAIT_MODE)
+                    .field(fields::SPAWNED_BY_TOOL_CALL_DOC_ID)
+                    .field(fields::PLUGIN_PARENT_TOOL_CALL_DOC_ID)
+                    .field(fields::PLUGIN_EFFECT_ORDINAL),
+            )
+            .filter(session_scope(node_did, session_id, requester_did))
+            .filter(Filter::eq(fields::DOC_ID, &cursor))
+            .limit(2)
+            .render();
+            let response = txn.run(&lookup).await?;
             let rows = response["data"]["AgentToolCall"]
                 .as_array()
                 .context("invocation lookup omitted rows")?;
@@ -194,17 +201,29 @@ impl ToolCallLifecycle {
         requester_did: Option<&str>,
         require_complete: bool,
     ) -> Result<AcceptedToolCall> {
-        let scope =
-            gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
-        let tool_id = escape_graphql_string(tool_doc_id);
-        let response = txn
-            .execute(&format!(
-                r#"{{ AgentToolCall(filter: {{ {scope}, _docID: {{ _eq: "{tool_id}" }} }}, limit: 2) {{
-                    _docID request_doc_id tool_call_id tool_name message_sequence lifecycle_state
-                    await_mode spawned_by_tool_call_doc_id plugin_parent_tool_call_doc_id plugin_effect_ordinal
-                }} }}"#
-            ))
-            .await?;
+        use gents_protocol::document_query::{
+            fields::{agent_message, agent_request, agent_tool_call},
+            session_scope, Filter, Query, Selection,
+        };
+        let tool_query = Query::select(
+            Selection::doc_id()
+                .field(agent_tool_call::REQUEST_DOC_ID)
+                .field(agent_tool_call::TOOL_CALL_ID)
+                .field(agent_tool_call::TOOL_NAME)
+                .field(agent_tool_call::MESSAGE_SEQUENCE)
+                .field(agent_tool_call::LIFECYCLE_STATE)
+                .field(agent_tool_call::AWAIT_MODE)
+                .field(agent_tool_call::SPAWNED_BY_TOOL_CALL_DOC_ID)
+                .field(agent_tool_call::PLUGIN_PARENT_TOOL_CALL_DOC_ID)
+                .field(agent_tool_call::PLUGIN_EFFECT_ORDINAL),
+        )
+        .filter(
+            session_scope(node_did, session_id, requester_did)
+                .and(Filter::eq(agent_tool_call::DOC_ID, tool_doc_id)),
+        )
+        .limit(2)
+        .render();
+        let response = txn.run(&tool_query).await?;
         let rows = response["data"]["AgentToolCall"]
             .as_array()
             .context("direct admission lookup omitted tool rows")?;
@@ -237,14 +256,15 @@ impl ToolCallLifecycle {
             tool["await_mode"].as_str().unwrap_or("foreground"),
         )
         .context("accepted tool has an invalid await mode")?;
-        let request = escape_graphql_string(request_doc_id);
-        let response = txn
-            .execute(&format!(
-                r#"{{ AgentMessage(filter: {{
-{scope}, request_doc_id: {{ _eq: "{request}" }}, sequence: {{ _eq: {sequence} }}
-                }}, limit: 2) {{ {AGENT_MESSAGE_FIELDS} }} }}"#
-            ))
-            .await?;
+        let message_query = Query::select(Selection::owned(AGENT_MESSAGE_FIELDS))
+            .filter(
+                session_scope(node_did, session_id, requester_did)
+                    .and(Filter::eq(agent_message::REQUEST_DOC_ID, request_doc_id))
+                    .and(Filter::eq(agent_message::SEQUENCE, sequence)),
+            )
+            .limit(2)
+            .render();
+        let response = txn.run(&message_query).await?;
         let headers = response["data"]["AgentMessage"]
             .as_array()
             .context("direct admission lookup omitted header rows")?;
@@ -301,12 +321,11 @@ impl ToolCallLifecycle {
             "accepted header does not uniquely bind this physical tool"
         );
         let (call_id, arguments) = matches[0];
-        let request_doc = escape_graphql_string(request_doc_id);
-        let owner = txn
-            .execute_local_response(&format!(
-                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request_doc}" }} }}, limit: 1) {{ agent_did }} }}"#
-            ))
-            .await?;
+        let owner_query = Query::select(Selection::new().field(agent_request::AGENT_DID))
+            .filter(Filter::eq(agent_request::DOC_ID, request_doc_id))
+            .limit(1)
+            .render();
+        let owner = txn.run_local_response(&owner_query).await?;
         let agent = owner
             .data
             .as_ref()

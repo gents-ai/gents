@@ -1,6 +1,9 @@
+use std::path::Path;
+
 use anyhow::{anyhow, Context, Result};
+pub(crate) use gents::request::task_run::TaskRunOutput;
 use gents::request::task_run::{
-    enqueue_task_run as enqueue_task_run_owner, read_runnable_task, TaskRunOptions, TaskRunOutput,
+    enqueue_task_run as enqueue_task_run_owner, read_runnable_task, TaskRunOptions,
 };
 #[cfg(test)]
 use gents::request::task_run::{
@@ -16,7 +19,6 @@ use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
 
 use crate::cli::ConfigTaskRunArgs;
-#[cfg(test)]
 use crate::config_writes::ConfigAccess;
 use crate::request_helpers::wait_for_terminal_response;
 use crate::{print_json, resolve_config_access, resolve_graphql_endpoint};
@@ -59,22 +61,40 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     }
 
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
+    enqueue_task_run_on(
+        &access,
+        args.home.as_deref(),
+        &task_id,
+        args_value,
+        args.session_id.as_deref(),
+        args.continue_session.as_deref(),
+    )
+    .await
+}
 
-    let node_did = crate::resolve_node_did(args.home.as_deref(), None)?;
+pub(crate) async fn enqueue_task_run_on(
+    access: &ConfigAccess,
+    home: Option<&Path>,
+    task_id: &str,
+    args: Value,
+    session_id: Option<&str>,
+    continue_session: Option<&str>,
+) -> Result<TaskRunOutput> {
+    let node_did = crate::resolve_node_did(home, None)?;
     let actor_did = access
         .actor_did()
         .context("Task invocation requires an authenticated client identity")?;
     let signer = gents::store::identity::RegisteredIdentity::from_registered_did(&actor_did, None)?;
-    let task = read_runnable_task(&access, &node_did, &task_id).await?;
+    let task = read_runnable_task(access, &node_did, task_id).await?;
     enqueue_task_run_owner(
-        &access,
+        access,
         &node_did,
         &signer,
         task,
         &TaskRunOptions {
-            args: args_value,
-            session_id: args.session_id.clone(),
-            continue_session: args.continue_session.clone(),
+            args,
+            session_id: session_id.map(str::to_owned),
+            continue_session: continue_session.map(str::to_owned),
         },
     )
     .await
@@ -243,6 +263,83 @@ mod tests {
             .await
             .unwrap_err();
         assert!(format!("{error:#}").contains("signature"), "{error:#}");
+        Ok(())
+    }
+
+    /// The shell runs a task through its own access: with no runtime recorded in the home,
+    /// `resolve_config_access` would open the home's store instead.
+    #[tokio::test]
+    async fn run_now_uses_the_access_it_is_given() -> Result<()> {
+        let home = tempfile::tempdir()?;
+        let did = crate::caused_sessions::fixtures::FIXTURE_DID.to_string();
+        crate::home_state::write_init_config(
+            home.path(),
+            &crate::shared::StoredInitConfig {
+                home: home.path().to_string_lossy().into_owned(),
+                node_name: "fixture".into(),
+                node_did: did.clone(),
+                key_path: None,
+                identity_backend: None,
+                keychain_label: None,
+                secure_enclave_label: None,
+                tool_package: None,
+                tool_ceiling: crate::cli::args::ToolCeilingArg::MetaOnly,
+                tool_root: None,
+                store_encryption: None,
+            },
+        )?;
+        let served = crate::shared::test_support::served_config(json!({
+            "node": { "node_did": did, "default_agent_did": "engineer" },
+            "inference_backends": [{
+                "node_did": did,
+                "backend_id": "backend",
+                "name": "Backend",
+                "provider_kind": "OpenAiCompatible",
+                "endpoint": "http://127.0.0.1:1/v1",
+                "auth": { "kind": "unauthenticated" },
+            }],
+            "inference_profiles": [{
+                "node_did": did,
+                "profile_id": "profile",
+                "backend_id": "backend",
+                "model_name": "model",
+            }],
+            "agents": [{ "node_did": did, "agent_did": "engineer", "inference_profile_id": "profile" }],
+            "tasks": [{
+                "node_did": did,
+                "task_id": "digest",
+                "agent_did": "engineer",
+                "prompt_template": "digest the day",
+            }],
+        }))
+        .await;
+
+        let output = enqueue_task_run_on(
+            &ConfigAccess::Graphql(served.user.clone()),
+            Some(home.path()),
+            "digest",
+            json!({}),
+            None,
+            None,
+        )
+        .await?;
+
+        let written = ConfigAccess::Graphql(served.user.clone())
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                escape_graphql_string(&output.request_id)
+            ))
+            .await?;
+        assert_eq!(
+            written["data"]["AgentRequest"],
+            json!([{ "_docID": output.request_doc_id }])
+        );
+        assert_eq!(output.status, "pending");
+        assert!(
+            !crate::home_state::default_data_dir(home.path()).exists(),
+            "the home's store is never opened"
+        );
+        served.node.shutdown().await.expect("node shutdown");
         Ok(())
     }
 
