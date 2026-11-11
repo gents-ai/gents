@@ -637,9 +637,12 @@ struct Source {
     chats: RapidHashMap<String, Chat>,
     /// This node's agents as setup lists them, which names subagents.
     agents: Vec<AgentView>,
-    /// The agents the shell was told, which a turn may go to. One listed stays listed: its
-    /// runtime answers a turn it can no longer run with why.
+    /// Every agent the shell was ever told, which a turn may go to: its runtime answers a
+    /// turn it can no longer run with why.
     shown_agents: Vec<String>,
+    /// The agents the shell was last told, in order: its picker lists exactly these, so it
+    /// is told again whenever those that can run change, not only when one is new.
+    told_agents: Vec<String>,
     /// Why no agent can run, as the shell was last told, while none is listed.
     unready: Option<String>,
     /// What `gents` was opened with, told once after the first agents.
@@ -721,6 +724,7 @@ impl Source {
             chats: RapidHashMap::new(),
             agents: Vec::new(),
             shown_agents: Vec::new(),
+            told_agents: Vec::new(),
             unready: None,
             begin: None,
             readiness_live: false,
@@ -782,8 +786,8 @@ impl Source {
     }
 
     /// With none that can run, the shell is told why, and again when the reason changes. With
-    /// some, it is told them when one is new to it; the first are followed by what `gents` was
-    /// opened with and `Ready`.
+    /// some, it is told them whenever they are not the ones it was last told; the first are
+    /// followed by what `gents` was opened with and `Ready`.
     fn take_agents(&mut self, read: Runnable) {
         let Runnable {
             views,
@@ -799,14 +803,17 @@ impl Source {
             }
             return;
         }
-        let known = |agent: &gents_shell::source::Agent| self.shown_agents.contains(&agent.id);
-        let new: Vec<_> = agents.iter().filter(|agent| !known(agent)).collect();
-        if new.is_empty() {
+        let ids: Vec<String> = agents.iter().map(|agent| agent.id.clone()).collect();
+        if ids == self.told_agents {
             return;
         }
         let first = self.shown_agents.is_empty();
-        let new = new.into_iter().map(|agent| agent.id.clone());
-        self.shown_agents.extend(new.collect::<Vec<_>>());
+        for id in &ids {
+            if !self.shown_agents.contains(id) {
+                self.shown_agents.push(id.clone());
+            }
+        }
+        self.told_agents = ids;
         let woke = self.unready.take().map(|_| agents[0].name.clone());
         self.tell(Update::Agents(agents));
         if first {
@@ -2241,6 +2248,42 @@ mod tests {
             _ => None,
         });
         told.collect()
+    }
+
+    /// The picker lists what it was last told, so an agent that stops being runnable and
+    /// recovers is told again, though it is not new.
+    #[tokio::test]
+    async fn an_agent_that_recovers_is_listed_again() {
+        let (mut source, told, _watched) = idle_source();
+        let runnable = |names: &[&str]| Runnable {
+            views: Vec::new(),
+            agents: names
+                .iter()
+                .map(|name| gents_shell::source::Agent {
+                    id: name.to_string(),
+                    name: name.to_string(),
+                    text: name.to_string(),
+                    tone: Tone::Plain,
+                })
+                .collect(),
+            unready: None,
+        };
+
+        source.take_agents(runnable(&["a"]));
+        source.take_agents(runnable(&["b"]));
+        source.take_agents(runnable(&["a", "b"]));
+        source.take_agents(runnable(&["a", "b"]));
+
+        let listed: Vec<Vec<String>> = told
+            .try_iter()
+            .filter_map(|input| match input {
+                Input::Runtime(Update::Agents(agents)) => {
+                    Some(agents.into_iter().map(|agent| agent.id).collect())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(listed, [vec!["a"], vec!["b"], vec!["a", "b"]]);
     }
 
     #[tokio::test]
