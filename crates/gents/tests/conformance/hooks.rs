@@ -632,7 +632,7 @@ async fn generated_lifecycle_hook_must_commit_cases_drive_dropping_staging() {
         core.push(case.transition.clone());
         let host = StoreDouble::new(&case.world, core, &case.read_failed);
         let plugins = string_plugins(&case.plugins);
-        let staged = stage_dropping(&host, &plugins, &())
+        let staged = stage_dropping(&host, &plugins, &(), &[])
             .await
             .unwrap_or_else(|error| panic!("{}: {error:?}", case.name));
         let dropped: Vec<bool> = staged.iter().map(Staged::is_owed).collect();
