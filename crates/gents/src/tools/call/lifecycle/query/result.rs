@@ -431,7 +431,7 @@ async fn load_tool_call_read_source(
         } else if call.await_mode.as_deref() == Some("background") && !lifecycle_state.is_terminal()
         {
             let receipt_source =
-                super::super::plugin_effect::receipt_source(session_id, tool_call_doc_id);
+                crate::session::plugin_effect_rows::receipt_source(session_id, tool_call_doc_id);
             let query = gents_protocol::output::rows::source_output_segments_query(
                 &request_doc_id,
                 &receipt_source,
@@ -440,7 +440,7 @@ async fn load_tool_call_read_source(
             let rows = response["data"]["AgentOutputSegment"]
                 .as_array()
                 .context("plugin receipt read omitted segments")?;
-            let receipt = super::super::plugin_effect::receipt_from_rows(
+            let receipt = crate::session::plugin_effect_rows::receipt_from_rows(
                 rows,
                 node_did,
                 session_id,

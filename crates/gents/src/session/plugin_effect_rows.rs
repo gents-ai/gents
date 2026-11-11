@@ -111,3 +111,62 @@ pub(crate) fn arguments_from_rows(
             .context("plugin effect arguments must be a JSON object")?;
     Ok((reference, reconstructed.text))
 }
+
+pub fn receipt_source(session: &str, tool: &str) -> OutputSource {
+    OutputSource::Authored {
+        key: format!("{session}:background-receipt:{tool}"),
+    }
+}
+
+pub fn receipt_from_rows(
+    rows: &[serde_json::Value],
+    node: &str,
+    session: &str,
+    requester: Option<&str>,
+    request: &str,
+    tool: &str,
+) -> Result<Option<String>> {
+    let records = decode_scoped_request_output_segments(rows, node, Some(session), requester)?;
+    let source = receipt_source(session, tool);
+    let matching = records
+        .iter()
+        .filter(|row| row.segment.source == source)
+        .collect::<Vec<_>>();
+    anyhow::ensure!(matching.len() <= 1, "ambiguous plugin receipt");
+    let Some(row) = matching.first() else {
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        row.segment.request_doc_id == request
+            && row.segment.writer
+                == OutputWriter::ToolExecution {
+                    tool_call_doc_id: tool.to_owned()
+                }
+            && matches!(
+                row.segment.close,
+                Some(SourceClose::Closed {
+                    outcome: OutputOutcome::Complete,
+                    ..
+                })
+            ),
+        "plugin receipt has invalid ownership or closure"
+    );
+    let observed = [ObservedSegment {
+        doc_id: &row.doc_id,
+        segment: &row.segment,
+    }];
+    let reconstructed = reconstruct_stream(
+        &observed,
+        &[],
+        &[],
+        &PayloadRef {
+            close_doc_id: row.doc_id.clone(),
+            stream: 0,
+        },
+    )?;
+    anyhow::ensure!(
+        matches!(reconstructed.declaration.payload, StreamPayload::ToolOutput),
+        "plugin receipt is not tool output"
+    );
+    Ok(Some(reconstructed.text))
+}
