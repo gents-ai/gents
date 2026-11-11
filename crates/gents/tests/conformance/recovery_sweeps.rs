@@ -382,7 +382,7 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
             0
         );
         let registry = gents::BackgroundExecutionRegistry::default();
-        let live = gents::runtime::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
+        let live = gents::tools::call::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
             &db.node,
             db.node_identity.did(),
             std::slice::from_ref(&agent),
@@ -415,7 +415,7 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
             )
             .await;
         let repaired =
-            gents::runtime::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
+            gents::tools::call::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
                 &db.node,
                 db.node_identity.did(),
                 std::slice::from_ref(&agent),
@@ -441,7 +441,7 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
         );
         assert!(!gents::call_state_holds_backend_slot(&call.call_state));
         let second =
-            gents::runtime::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
+            gents::tools::call::periodic_recovery::run_periodic_recovery_sweeps_with_identities(
                 &db.node,
                 db.node_identity.did(),
                 std::slice::from_ref(&agent),

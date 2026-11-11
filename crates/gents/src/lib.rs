@@ -148,7 +148,7 @@ pub use runtime::p2p::observability::{
     P2pPushBacklogSnapshot, P2pPushRetryMarkerSnapshot, P2pRequestDispatchSnapshot,
     P2pSyncStatusAdapter, P2pSyncStatusSnapshot,
 };
-pub use runtime::periodic_recovery::{
+pub use tools::call::periodic_recovery::{
     periodic_recovery_sweep_metadata, run_periodic_recovery_sweeps_with_identities,
     PeriodicRecoverySweepMetadata, PeriodicRecoverySweepOutcome, PeriodicRecoverySweepRun,
 };
