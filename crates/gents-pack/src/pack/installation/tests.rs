@@ -315,7 +315,7 @@ async fn install_owned(
         &pack,
         config,
         policy,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
 }
@@ -387,7 +387,7 @@ async fn edit_tools_owned(access: &ConfigAccess, owner: &str, id: &str, name: &s
                 gents_documents::apply_desired_state_plan(
                     txn,
                     edit,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
@@ -495,7 +495,7 @@ async fn install_then_remove_leaves_no_pack_documents_and_keeps_adopted_ones() {
         OWNER,
         "acme/demo",
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -527,7 +527,7 @@ async fn install_then_remove_leaves_no_pack_documents_and_keeps_adopted_ones() {
         OWNER,
         "acme/demo",
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy
+        &gents_inference::resolved::ProviderProfilePolicy
     )
     .await
     .is_err());
@@ -556,7 +556,7 @@ async fn a_non_explicit_documents_install_becomes_explicit_when_installed_explic
         &dependency,
         &config,
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -568,7 +568,7 @@ async fn a_non_explicit_documents_install_becomes_explicit_when_installed_explic
         &identity("1"),
         &config,
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -580,7 +580,7 @@ async fn a_non_explicit_documents_install_becomes_explicit_when_installed_explic
         &dependency,
         &config,
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -647,7 +647,7 @@ async fn an_edited_document_is_a_typed_refusal_on_remove() {
         OWNER,
         "acme/demo",
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap_err();
@@ -702,7 +702,7 @@ async fn plugin_store_notification_lost_commit_receipt_is_unconfirmed() {
                 home.path(),
                 &pack.coordinate,
                 Some(&pack),
-                &crate::inference::resolved::ProviderProfilePolicy,
+                &gents_inference::resolved::ProviderProfilePolicy,
             ),
         )
         .await;
@@ -760,7 +760,7 @@ async fn a_plugin_store_record_is_not_a_pack_install() {
         home.path(),
         "acme/demo",
         Some(&identity("1")),
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -780,7 +780,7 @@ async fn a_plugin_store_record_is_not_a_pack_install() {
         OWNER,
         "acme/demo",
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap_err();
@@ -799,7 +799,7 @@ async fn a_plugin_store_record_is_not_a_pack_install() {
         home.path(),
         "acme/demo",
         None,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -834,7 +834,7 @@ async fn a_plugin_store_record_is_not_a_pack_install() {
         None,
         home.path(),
         "acme/demo",
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -864,7 +864,7 @@ async fn a_documentless_pack_install_is_not_a_plugin_store_record() {
         home.path(),
         "acme/demo",
         None,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -874,7 +874,7 @@ async fn a_documentless_pack_install_is_not_a_plugin_store_record() {
         OWNER,
         "acme/demo",
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -930,7 +930,7 @@ async fn remove_tolerates_unmanaged_collections() {
         OWNER,
         "acme/demo",
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -1242,7 +1242,7 @@ async fn dependency_fixture() -> (Arc<defra_node::Node>, ConfigAccess) {
     seed_pack_node(&node_access(&node), OWNER).await.unwrap();
     for profile in ["claude", "glm", "grok"] {
         let binding = gents_store::identity::provision_agent_identity(&runtime).unwrap();
-        crate::test_support::inference::install_test_agent_binding(&node, OWNER, profile, &binding)
+        gents_inference::test_support::install_test_agent_binding(&node, OWNER, profile, &binding)
             .await;
     }
     let access = node_access(&node);
@@ -1287,124 +1287,12 @@ async fn install_dependee(
         None,
         false,
         explicit,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
 }
 
-#[tokio::test]
-async fn locally_installed_pack_agent_holds_the_projected_baseline() {
-    use gents_store::identity::NodeIdentity as _;
-    let (db, user, user_access) =
-        crate::test_support::root::signed_test_node_without_agent("local-pack-baseline").await;
-    let runtime = db.node_identity.clone();
-    let (_guard, dir) = crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
-    let (bytes, _) = crate::pack::archive::pack_dir(&dir).unwrap();
-    let archive = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
-    let local = ConfigAccess::local_as(db.node.clone(), identity::Did::new(user.did()).unwrap());
-    let backend = json!({"node_did":runtime.did(),"backend_id":"backend","name":"Test","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}});
-    let profile = json!({"node_did":runtime.did(),"profile_id":"profile","backend_id":"backend","model_name":"test-model"});
-    let plan = gents_documents::DesiredStateApplyPlan::new(
-        [
-            (
-                gents_store::collection::Collection::InferenceBackend,
-                backend,
-            ),
-            (
-                gents_store::collection::Collection::InferenceProfile,
-                profile,
-            ),
-        ]
-        .into_iter()
-        .map(
-            |(collection, value)| gents_documents::DesiredStateApplyDocument {
-                collection,
-                add: value.clone(),
-                update: value,
-            },
-        )
-        .collect(),
-    )
-    .unwrap();
-    user_access
-        .transact_write("test.local_pack.profile", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                gents_documents::apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
-                )
-                .await
-            })
-        })
-        .await
-        .unwrap();
-    let requested = BTreeMap::from([("worker".to_owned(), "profile".to_owned())]);
-    let prepared = super::super::prepare_document_pack_archive_with_runtime(
-        &local,
-        runtime.did(),
-        &archive,
-        &requested,
-        &[],
-        None,
-        &|_| None,
-        runtime.as_ref(),
-        &Default::default(),
-    )
-    .await
-    .unwrap();
-    let agent = prepared
-        .agent_bindings
-        .values()
-        .next()
-        .expect("the pack provisions one Agent")
-        .agent_did
-        .clone();
-    let agent = identity::Did::new(&agent).unwrap();
-    let held = |node: Arc<defra_node::Node>, agent: identity::Did| async move {
-        let mut held = Vec::new();
-        for permission in gents_store::identity::GrantSet::AgentBaseline.permissions() {
-            if node
-                .nac_manager()
-                .check_permission(&agent, *permission)
-                .await
-                .unwrap()
-            {
-                held.push(permission.as_str().to_owned());
-            }
-        }
-        held
-    };
-    assert!(held(db.node.clone(), agent.clone()).await.is_empty());
-    super::super::install_prepared_document_graph(
-        &user_access,
-        runtime.did(),
-        &archive,
-        &prepared,
-        DriftPolicy::Refuse,
-        None,
-        false,
-        true,
-        &crate::inference::resolved::ProviderProfilePolicy,
-    )
-    .await
-    .unwrap();
-    let modeled = gents_lean_vocab::lean_contract_snapshot()
-        .identity_agent_baseline_cases
-        .iter()
-        .find(|case| case.actor == "enrolled-user")
-        .expect("modeled enrolled-user lifecycle")
-        .steps
-        .iter()
-        .find(|step| step.action == "publish")
-        .expect("modeled publication")
-        .installed
-        .clone();
-    assert_eq!(held(db.node.clone(), agent).await, modeled);
-    db.node.shutdown().await.unwrap();
-}
 
 fn demo_identity(dependencies: Vec<String>) -> PackIdentity {
     PackIdentity {
@@ -1431,7 +1319,7 @@ async fn a_dependency_is_released_with_its_last_non_explicit_dependent() {
         &demo_identity(vec!["fixture/dependee_fixture".into()]),
         &config_owned(owner, &[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -1441,7 +1329,7 @@ async fn a_dependency_is_released_with_its_last_non_explicit_dependent() {
         owner,
         "fixture/dependee_fixture",
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap_err();
@@ -1452,7 +1340,7 @@ async fn a_dependency_is_released_with_its_last_non_explicit_dependent() {
         owner,
         "acme/demo",
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -1483,7 +1371,7 @@ async fn an_explicit_dependency_survives_its_dependent() {
         &demo_identity(vec!["fixture/dependee_fixture".into()]),
         &config_owned(owner, &[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -1493,7 +1381,7 @@ async fn an_explicit_dependency_survives_its_dependent() {
         owner,
         "acme/demo",
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -1520,7 +1408,7 @@ async fn an_explicit_dependency_survives_its_dependent() {
         owner,
         "fixture/dependee_fixture",
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -1538,7 +1426,7 @@ async fn an_upgrade_that_drops_a_dependency_releases_its_claim() {
         &demo_identity(vec!["fixture/dependee_fixture".into()]),
         &config_owned(owner, &[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -1559,7 +1447,7 @@ async fn an_upgrade_that_drops_a_dependency_releases_its_claim() {
         &demo_identity(vec![]),
         &config_owned(owner, &[("alpha", "Alpha 2")]),
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -1600,7 +1488,7 @@ async fn an_upgrade_retires_the_unselected_plugin_of_a_dependency_it_drops() {
         &demo_identity(vec!["fixture/dependee_fixture".into()]),
         &config_owned(owner, &[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -1610,7 +1498,7 @@ async fn an_upgrade_retires_the_unselected_plugin_of_a_dependency_it_drops() {
         &demo_identity(vec![]),
         &config_owned(owner, &[("alpha", "Changed")]),
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -1671,7 +1559,7 @@ async fn an_upgrade_that_drops_a_documents_dependency_releases_it() {
         },
         &config_owned(owner, &[("alpha", "Alpha")]),
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -1727,7 +1615,7 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
                 gents_documents::apply_desired_state_plan(
                     txn,
                     seed,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
@@ -1801,7 +1689,7 @@ async fn a_delayed_plugin_notification_projects_the_current_home_pin() {
         home.path(),
         "acme/demo",
         Some(&identity("1")),
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -1829,7 +1717,7 @@ async fn a_delayed_plugin_notification_projects_the_current_home_pin() {
         home.path(),
         "acme/demo",
         None,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -2068,7 +1956,7 @@ async fn self_config_install(archive: &crate::pack::archive::PackArchive, home: 
         false,
         crate::pack::InstalledVia::SelfConfig,
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -2123,7 +2011,7 @@ async fn operator_installs_document_pack_ux_with_its_data_plugin() {
         true,
         InstalledVia::Operator,
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -2582,7 +2470,7 @@ async fn install_prepared_graph(
         plugin_home,
         false,
         true,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await?;
     Ok(report)
@@ -2618,7 +2506,7 @@ async fn write_dependee_tools(access: &ConfigAccess, tools: &Value) {
                 gents_documents::apply_desired_state_plan(
                     txn,
                     edit,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
@@ -3226,7 +3114,7 @@ async fn remote_install_refuses_unverifiable_plugin_before_writes_and_installs_p
         false,
         crate::pack::InstalledVia::Operator,
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -3348,7 +3236,7 @@ async fn generated_plugin_reference_cases_validate_prepared_pack_resources() {
             &pack_identity,
             &config,
             DriftPolicy::Refuse,
-            &crate::inference::resolved::ProviderProfilePolicy,
+            &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await
         .unwrap();
@@ -3379,7 +3267,7 @@ async fn removing_a_plugin_pack_refuses_surviving_agents_and_rolls_back_document
         &identity("1"),
         &config_owned(owner, &[("owned", "Owned")]),
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -3414,7 +3302,7 @@ async fn removing_a_plugin_pack_refuses_surviving_agents_and_rolls_back_document
                 gents_documents::apply_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
                 .map(|_| ())
@@ -3428,7 +3316,7 @@ async fn removing_a_plugin_pack_refuses_surviving_agents_and_rolls_back_document
         owner,
         "acme/demo",
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap_err();
@@ -3459,7 +3347,7 @@ async fn removing_a_plugin_pack_refuses_surviving_agents_and_rolls_back_document
         owner,
         "acme/demo",
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -3494,7 +3382,7 @@ async fn removing_agents_with_their_plugin_pack_retires_its_plugin() {
         &identity("1"),
         &config,
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -3506,7 +3394,7 @@ async fn removing_agents_with_their_plugin_pack_retires_its_plugin() {
         owner,
         "acme/demo",
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -3649,7 +3537,7 @@ async fn pinned_plugin_references_match_executable_model_before_install_or_updat
                     &identity,
                     &previous,
                     DriftPolicy::Refuse,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
                 .unwrap();
@@ -3719,7 +3607,7 @@ async fn failed_transaction_begin_restores_the_previous_plugin_record() {
         &bindings,
         Vec::new(),
         true,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -3751,7 +3639,7 @@ async fn failed_transaction_begin_restores_the_previous_plugin_record() {
         &bindings,
         Vec::new(),
         true,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap_err();
@@ -3803,7 +3691,7 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
         &bindings,
         Vec::new(),
         true,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -3850,7 +3738,7 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
         &bindings,
         Vec::new(),
         true,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap_err();
@@ -3883,7 +3771,7 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
         &bindings,
         Vec::new(),
         true,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await;
     assert_eq!(accepted.is_ok(), model("installed_match"), "{accepted:?}");
@@ -3936,7 +3824,7 @@ async fn cancelling_pack_install_caller_does_not_cancel_owned_commit() {
             &crate::pack::PackInferenceBindings::new(),
             Vec::new(),
             true,
-            &crate::inference::resolved::ProviderProfilePolicy,
+            &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await
     });
@@ -4037,7 +3925,7 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
         Some(home.path()),
         false,
         None,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -4059,7 +3947,7 @@ async fn dependency_and_root_pin_update_commit_as_one_graph() {
         Some(home.path()),
         false,
         None,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -4153,7 +4041,7 @@ async fn installed_plugin_pin_is_rechecked_at_graph_commit() {
         &BTreeMap::new(),
         Vec::new(),
         true,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await;
     assert_eq!(result.is_ok(), expected, "{result:?}");
@@ -4223,7 +4111,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
             &BTreeMap::new(),
             Vec::new(),
             true,
-            &crate::inference::resolved::ProviderProfilePolicy,
+            &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await
     });
@@ -4258,7 +4146,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
                 &notify_home,
                 &identity.coordinate,
                 Some(&identity),
-                &crate::inference::resolved::ProviderProfilePolicy,
+                &gents_inference::resolved::ProviderProfilePolicy,
             )
             .await
         },
@@ -4292,7 +4180,7 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
                 &notify_home,
                 &identity.coordinate,
                 Some(&identity),
-                &crate::inference::resolved::ProviderProfilePolicy,
+                &gents_inference::resolved::ProviderProfilePolicy,
             )
             .await
         },
@@ -4367,7 +4255,7 @@ async fn standalone_plugin_update_restores_store_and_home_on_pin_conflict() {
                 &notify_home,
                 &identity.coordinate,
                 Some(&identity),
-                &crate::inference::resolved::ProviderProfilePolicy,
+                &gents_inference::resolved::ProviderProfilePolicy,
             )
             .await
         },
@@ -4496,7 +4384,7 @@ async fn definitive_document_drift_rejection_restores_previously_pinned_plugin()
         &bindings,
         Vec::new(),
         true,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -4516,7 +4404,7 @@ async fn definitive_document_drift_rejection_restores_previously_pinned_plugin()
         &bindings,
         Vec::new(),
         true,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap_err();
@@ -4726,7 +4614,7 @@ async fn client_signs_pack_installation_record_and_dependency_updates() -> Resul
                     "acme/consumer",
                     &["acme/demo".to_owned()],
                     DriftPolicy::Keep,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
@@ -4757,7 +4645,7 @@ async fn hosted_plugin_root_preserves_existing_pack_documents() -> Result<()> {
         &existing,
         &config(&[("retained", "Retained")]),
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await?;
     let prepared = prepare_document_pack_archive(
@@ -4782,7 +4670,7 @@ async fn hosted_plugin_root_preserves_existing_pack_documents() -> Result<()> {
                     OWNER,
                     graph,
                     DriftPolicy::Refuse,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
@@ -4806,189 +4694,3 @@ async fn hosted_plugin_root_preserves_existing_pack_documents() -> Result<()> {
     Ok(())
 }
 
-/// Lean `Identity.PackPlacementReaders`: installing the pack applies exactly
-/// the readers its RepositoryPlacement declares, an undeclared slot Agent stays
-/// denied, a reinstall does not restore a revoked reader, and removal revokes
-/// the declared readers and removes the placement.
-#[tokio::test]
-async fn pack_install_applies_exactly_the_declared_placement_readers() {
-    use gents_store::identity::{GrantSet, NodeIdentity as _};
-    let (db, user, user_access) =
-        crate::test_support::root::signed_test_node_without_agent("pack-placement-readers").await;
-    let runtime = db.node_identity.clone();
-    let root = tempfile::tempdir().unwrap();
-    let host_path = root.path().to_string_lossy().into_owned();
-    let (_guard, dir) = crate::test_support::fixture_pack_copy("placement_fixture", &json!({}));
-    let (bytes, _) = crate::pack::archive::pack_dir(&dir).unwrap();
-    let archive = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
-    let local = ConfigAccess::local_as(db.node.clone(), identity::Did::new(user.did()).unwrap());
-    let backend = json!({"node_did":runtime.did(),"backend_id":"backend","name":"Test","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}});
-    let profile = json!({"node_did":runtime.did(),"profile_id":"profile","backend_id":"backend","model_name":"test-model"});
-    let plan = gents_documents::DesiredStateApplyPlan::new(
-        [
-            (
-                gents_store::collection::Collection::InferenceBackend,
-                backend,
-            ),
-            (
-                gents_store::collection::Collection::InferenceProfile,
-                profile,
-            ),
-        ]
-        .into_iter()
-        .map(
-            |(collection, value)| gents_documents::DesiredStateApplyDocument {
-                collection,
-                add: value.clone(),
-                update: value,
-            },
-        )
-        .collect(),
-    )
-    .unwrap();
-    user_access
-        .transact_write("test.placement_readers.setup", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                gents_documents::apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
-                )
-                .await
-            })
-        })
-        .await
-        .unwrap();
-    let requested = BTreeMap::from([("worker".to_owned(), "profile".to_owned())]);
-    let environment =
-        move |name: &str| (name == "PLACEMENT_FIXTURE_ROOT").then(|| host_path.clone());
-    let install = || async {
-        let prepared = super::super::prepare_document_pack_archive_with_runtime(
-            &local,
-            runtime.did(),
-            &archive,
-            &requested,
-            &[],
-            None,
-            &environment,
-            runtime.as_ref(),
-            &Default::default(),
-        )
-        .await
-        .unwrap();
-        super::super::install_prepared_document_graph(
-            &user_access,
-            runtime.did(),
-            &archive,
-            &prepared,
-            DriftPolicy::Refuse,
-            None,
-            false,
-            true,
-            &crate::inference::resolved::ProviderProfilePolicy,
-        )
-        .await
-        .unwrap();
-        prepared.agent_bindings
-    };
-    let bindings = install().await;
-    assert_eq!(bindings.len(), 3, "{bindings:?}");
-    let admin = ConfigAccess::local_as(db.node.clone(), identity::Did::new(runtime.did()).unwrap());
-    let other = gents_store::identity::provision_agent_identity(runtime.as_ref()).unwrap();
-    GrantSet::AgentBaseline
-        .grant(&admin, &identity::Did::new(&other.agent_did).unwrap())
-        .await
-        .unwrap();
-    let agent_access = |binding: &gents_protocol::agent_identity::AgentIdentityBinding| {
-        let key = gents_store::identity::resolve_agent_identity(runtime.as_ref(), binding).unwrap();
-        ConfigAccess::local_managed_agent(
-            db.node.clone(),
-            identity::Did::new(&binding.agent_did).unwrap(),
-            key.as_ref(),
-        )
-        .unwrap()
-    };
-    let slot = |name: &str| &bindings[&format!("fixture-{name}")];
-    let actors = BTreeMap::from([
-        ("user", user_access.clone()),
-        ("writer", agent_access(slot("writer"))),
-        ("reviewer", agent_access(slot("reviewer"))),
-        ("integrator", agent_access(slot("integrator"))),
-        ("other", agent_access(&other)),
-    ]);
-    let readable = |actor: &'static str, access: ConfigAccess| async move {
-        let rows = access
-            .execute("{ RepositoryPlacement { repository_id } }")
-            .await
-            .unwrap();
-        assert!(rows.get("errors").is_none(), "{actor}: {rows}");
-        // A removed Agent's actor sees no collection at all: a native denial.
-        rows["data"]["RepositoryPlacement"]
-            .as_array()
-            .is_some_and(|rows| {
-                rows.iter()
-                    .any(|row| row["repository_id"] == "placement-fixture-repository")
-            })
-    };
-    let cases = &gents_lean_vocab::lean_contract_snapshot().pack_placement_reader_cases;
-    assert_eq!(cases.len(), 3);
-    for case in cases {
-        match case["state"].as_str().unwrap() {
-            "installed" => {}
-            "reinstalled_after_revoke" => {
-                let (doc, _) = user_access
-                    .transact_readonly("test.placement_readers.read", |txn| {
-                        let owner = runtime.did();
-                        Box::pin(async move {
-                            gents_documents::read_desired_state_record_in_txn(
-                                txn,
-                                gents_store::collection::Collection::RepositoryPlacement,
-                                owner,
-                                "placement-fixture-repository",
-                            )
-                            .await
-                        })
-                    })
-                    .await
-                    .unwrap()
-                    .unwrap();
-                user_access
-                    .delete_actor_relationship(
-                        "RepositoryPlacement",
-                        &doc,
-                        "reader",
-                        &identity::Did::new(&slot("reviewer").agent_did).unwrap(),
-                    )
-                    .await
-                    .unwrap();
-                assert_eq!(install().await, bindings);
-            }
-            "removed" => {
-                super::super::remove_pack(
-                    &user_access,
-                    runtime.did(),
-                    "fixture/placement_fixture",
-                    DriftPolicy::Refuse,
-                    &crate::inference::resolved::ProviderProfilePolicy,
-                )
-                .await
-                .unwrap();
-            }
-            state => panic!("unmodeled placement reader state {state}"),
-        }
-        for expected in case["readers"].as_array().unwrap() {
-            let actor = *actors
-                .keys()
-                .find(|known| **known == expected["actor"].as_str().unwrap())
-                .unwrap();
-            assert_eq!(
-                readable(actor, actors[actor].clone()).await,
-                expected["read"].as_bool().unwrap(),
-                "{} {actor}",
-                case["state"]
-            );
-        }
-    }
-    db.node.shutdown().await.unwrap();
-}

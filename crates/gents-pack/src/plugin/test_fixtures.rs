@@ -213,3 +213,60 @@ pub const IMPORTING_WAT: &str = r#"(module
       (else
         (drop (call $fd_write (i32.const 1) (i32.const 1032) (i32.const 1) (i32.const 1048)))))))
 "#;
+
+pub fn source_only_afb(name: &str, language: &str, entry: &str, body: &[u8]) -> Vec<u8> {
+    use afterburner_afb::manifest::{Format, Manifest, Package, Runtime};
+    use afterburner_afb::pack::Builder;
+
+    let manifest = Manifest {
+        format: Format {
+            version: afterburner_afb::reader_format_version(),
+            min_reader: None,
+        },
+        package: Package {
+            name: name.into(),
+            namespace: "test".into(),
+            version: "0.1.0".into(),
+            language: language.into(),
+            entry: entry.into(),
+            description: None,
+            homepage: None,
+            license: None,
+            keywords: vec![],
+        },
+        runtime: Runtime {
+            min: afterburner_core::VERSION.to_owned(),
+            target: None,
+        },
+        dependencies: Default::default(),
+        npm: Default::default(),
+        pip: Default::default(),
+        gem: Default::default(),
+        signature: None,
+        metadata: Default::default(),
+        extra: Default::default(),
+    };
+    let (bytes, _digest) = Builder::new(manifest, Manifold::sealed())
+        .source(entry, body.to_vec())
+        .build()
+        .expect("build a source-only fixture .afb");
+    bytes
+}
+
+pub fn plugin_named(name: &str, language: &str) -> PackPlugin {
+    PackPlugin {
+        name: name.to_owned(),
+        description: format!("a {language} plugin"),
+        artifact: PLUGIN_ARTIFACT.to_owned(),
+        source: None,
+        language: language.to_owned(),
+        input_schema: serde_json::json!({"type": "object"}),
+        manifold: None,
+        instructions: None,
+        bind_dir: None,
+        limits: None,
+        model_slot: None,
+        service: None,
+        ..Default::default()
+    }
+}

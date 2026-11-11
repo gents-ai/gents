@@ -151,7 +151,7 @@ async fn install(
         &identity,
         &bound,
         super::super::DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
 }
@@ -207,7 +207,7 @@ pub(in crate::pack) async fn fixture() -> (
                 gents_documents::apply_desired_state_plan(
                     txn,
                     seed,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
@@ -258,7 +258,7 @@ async fn installed_agents_reuse_bindings_and_reject_stale_preparation() {
         root.did(),
         "fixture/one",
         super::super::DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -369,7 +369,7 @@ async fn dependency_slot_is_provisioned_once_and_owned_by_its_installation() {
         None,
         false,
         true,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();

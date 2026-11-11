@@ -11,9 +11,10 @@ default = ["defra-node/http", "defra-node/p2p", "defra-node/wasmtime-runtime"]
 typescript = ["dep:ts-rs", "gents-loop/typescript", "gents-protocol/typescript", "gents-store/typescript", "gents-documents/typescript"]
 live-e2e = ["gents-store/live-e2e", "gents-documents/live-e2e"]
 test-home-guard = ["gents-store/test-home-guard", "gents-documents/test-home-guard"]
-test-fixtures = ["test-home-guard", "axum/ws", "gents-store/test-fixtures", "gents-documents/test-fixtures"]
+test-fixtures = ["test-home-guard", "axum/ws", "gents-store/test-fixtures", "gents-documents/test-fixtures", "dep:wat"]
 
 [dependencies]
+wat = { version = "1.254", optional = true }
 gents-store.workspace = true
 gents-documents.workspace = true
 acp.workspace = true
@@ -59,6 +60,7 @@ wasmtime = { version = "49", default-features = false, features = ["runtime"] }
 [dev-dependencies]
 gents-store = { workspace = true, features = ["test-fixtures"] }
 gents-documents = { workspace = true, features = ["test-fixtures"] }
+gents-inference = { workspace = true, features = ["test-fixtures"] }
 axum = { version = "0.8", features = ["ws"] }
 gents-lean-contract.workspace = true
 gents-lean-vocab.workspace = true

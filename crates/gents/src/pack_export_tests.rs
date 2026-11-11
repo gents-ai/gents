@@ -2,9 +2,9 @@ use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
 
-use super::{export_pack, ExportSelection};
-use crate::pack::archive::{pack_dir, PackArchive};
-use crate::pack::{
+use gents_pack::pack::authoring::export::{export_pack, ExportSelection};
+use gents_pack::pack::archive::{pack_dir, PackArchive};
+use gents_pack::pack::{
     install_prepared_document_pack, prepare_document_pack_archive_with_runtime, remove_pack,
     DriftPolicy, InstallReport, InstalledVia,
 };
@@ -33,7 +33,7 @@ async fn apply(access: &ConfigAccess, documents: Vec<(Collection, Value)>) {
                 gents_documents::apply_desired_state_plan(
                     txn,
                     plan,
-                    &crate::inference::resolved::ProviderProfilePolicy,
+                    &gents_inference::resolved::ProviderProfilePolicy,
                 )
                 .await
             })
@@ -85,7 +85,7 @@ async fn install_in(
         false,
         InstalledVia::Operator,
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
 }
@@ -380,7 +380,7 @@ async fn a_live_app_exports_installs_on_a_second_node_and_is_adopted_where_it_ca
     // With the variable the export names, the slot is the agent it was
     // exported from, and the live originals become the pack's documents.
     let bound = BTreeMap::from([(
-        crate::pack::agent_binding_variable(slot),
+        gents_pack::pack::agent_binding_variable(slot),
         report.agents[slot].clone(),
     )]);
     assert_eq!(report.agents[slot], worker.agent_did);
@@ -407,7 +407,7 @@ async fn a_live_app_exports_installs_on_a_second_node_and_is_adopted_where_it_ca
         &owner,
         "fixture/ticket_desk",
         DriftPolicy::Refuse,
-        &crate::inference::resolved::ProviderProfilePolicy,
+        &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await
     .unwrap();
@@ -733,7 +733,7 @@ async fn a_plugin_built_on_the_node_exports_as_the_packs_plugin_and_runs_where_i
         Value::Null,
         "the pack's plugin directory is the one copy of the source: {config}"
     );
-    let manifest = crate::pack::authoring::read_manifest(&report.dir).unwrap();
+    let manifest = gents_pack::pack::authoring::read_manifest(&report.dir).unwrap();
     let plugin = &manifest.metadata.plugins[0];
     assert_eq!(
         (plugin.name.as_str(), plugin.language.as_str()),
@@ -742,7 +742,7 @@ async fn a_plugin_built_on_the_node_exports_as_the_packs_plugin_and_runs_where_i
     assert_eq!(plugin.description, "Doubles n.");
     assert_eq!(plugin.input_schema["properties"]["n"]["type"], "number");
     assert_eq!(
-        crate::pack::authoring::plugins_with_source(&manifest),
+        gents_pack::pack::authoring::plugins_with_source(&manifest),
         ["double"]
     );
     assert_eq!(
@@ -758,12 +758,12 @@ async fn a_plugin_built_on_the_node_exports_as_the_packs_plugin_and_runs_where_i
     // `pack build` compiles the source; a prebuilt artifact stands in for it.
     std::fs::write(
         report.dir.join(&plugin.artifact),
-        crate::plugin::test_fixtures::build_plugin_afb(
-            &crate::plugin::test_fixtures::constant_output_wat(br#"{"n":4}"#),
+        gents_pack::plugin::test_fixtures::build_plugin_afb(
+            &gents_pack::plugin::test_fixtures::constant_output_wat(br#"{"n":4}"#),
         ),
     )
     .unwrap();
-    let check = crate::pack::authoring::check_dir(&report.dir).await;
+    let check = gents_pack::pack::authoring::check_dir(&report.dir).await;
     assert!(
         check.problems.is_empty() && check.unbuilt.is_empty(),
         "{check:#?}"
@@ -807,7 +807,7 @@ async fn a_plugin_built_on_the_node_exports_as_the_packs_plugin_and_runs_where_i
         live["Tools"][0]["integrations"]["plugins"][0]["plugin"], "fixture/double",
         "{live}"
     );
-    let executor = crate::plugin::executor::PluginExecutor::new(Some(home.path().to_owned()));
+    let executor = gents_toolcalls::plugin::executor::PluginExecutor::new(Some(home.path().to_owned()));
     let installed = executor.resolve("fixture/double", None).unwrap();
     let call = executor.call(&installed, json!({"n": 2})).await.unwrap();
     assert_eq!(call.coordinate, "fixture/double");

@@ -7,8 +7,6 @@ mod root;
 mod schema;
 mod select;
 mod snapshot;
-#[cfg(test)]
-mod tests;
 
 pub use pack::{export_pack, ExportReport, PulledByReference};
 pub use root::{document_handle, write_manifest_root};

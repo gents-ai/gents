@@ -1,4 +1,5 @@
-use super::*;
+use crate::plugin::test_fixtures::{build_plugin_pack, plugin_named, source_only_afb, ECHO_WAT};
+use crate::plugin::{BoundDir, PluginBudget, PluginOutcome, PluginRunner, PluginVerdict};
 
 #[test]
 fn bound_dir_requires_a_directory() {

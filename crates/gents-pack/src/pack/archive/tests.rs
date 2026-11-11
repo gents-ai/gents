@@ -78,7 +78,7 @@ fn a_packed_pack_reads_back_as_the_same_pack() {
 
 #[test]
 fn every_fixture_pack_keeps_its_digest_through_a_pack_file() {
-    for name in crate::support::fixtures::fixture_pack_names() {
+    for name in crate::test_support::fixture_pack_names() {
         let (_guard, root) = fixture_pack_dir(&name);
         let manifest = fixture_manifest(&name);
         let mut assets = std::collections::BTreeMap::new();

@@ -196,7 +196,7 @@ pub fn is_protected(path: &Path) -> bool {
 /// WASI preopens reject links outside their root. Inspect physical descendants
 /// without following links; an in-root link's target is visited at its own name.
 /// Namespace changes after the final inspection remain a host filesystem premise.
-pub(crate) fn ensure_mount_safe(root: &Path) -> anyhow::Result<()> {
+pub fn ensure_mount_safe(root: &Path) -> anyhow::Result<()> {
     let paths = PROTECTED
         .lock()
         .map_err(|_| io::Error::other("operator path guard is unavailable"))?

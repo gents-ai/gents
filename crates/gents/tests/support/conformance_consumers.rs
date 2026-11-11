@@ -72,7 +72,7 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "pack::installation::tests::install_source_selection_matches_lean",
             package: "gents",
-            source_path: "crates/gents/src/pack/installation/tests.rs",
+            source_path: "crates/gents/src/pack_installation_root_tests.rs",
             module_path: "pack::installation::tests",
             function: "install_source_selection_matches_lean",
         },
@@ -91,10 +91,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "upgrade_variable_precedence_matches_the_executable_model",
         },
         ConformanceConsumer::RustTest {
-            id: "pack::installation::tests::pack_install_applies_exactly_the_declared_placement_readers",
+            id: "pack_installation_root_tests::pack_install_applies_exactly_the_declared_placement_readers",
             package: "gents",
-            source_path: "crates/gents/src/pack/installation/tests.rs",
-            module_path: "pack::installation::tests",
+            source_path: "crates/gents/src/pack_installation_root_tests.rs",
+            module_path: "pack_installation_root_tests",
             function: "pack_install_applies_exactly_the_declared_placement_readers",
         },
         ConformanceConsumer::RustTest {
@@ -112,10 +112,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "selected_callback_agents_follow_native_visibility",
         },
         ConformanceConsumer::RustTest {
-            id: "store::config_client::desired_state::agent_target_access::tests::configured_agent_targets_grant_exactly_session_writer",
+            id: "documents_selection_tests::agent_target_access::configured_agent_targets_grant_exactly_session_writer",
             package: "gents",
-            source_path: "crates/gents/src/documents/desired_state/agent_target_access.rs",
-            module_path: "store::config_client::desired_state::agent_target_access::tests",
+            source_path: "crates/gents/src/documents_selection_tests.rs",
+            module_path: "documents_selection_tests::agent_target_access",
             function: "configured_agent_targets_grant_exactly_session_writer",
         },
         ConformanceConsumer::RustTest {
@@ -2487,7 +2487,7 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "pack::installation::tests::generated_plugin_reference_cases_validate_prepared_pack_resources",
             package: "gents",
-            source_path: "crates/gents/src/pack/installation/tests.rs",
+            source_path: "crates/gents/src/pack_installation_root_tests.rs",
             module_path: "pack::installation::tests",
             function: "generated_plugin_reference_cases_validate_prepared_pack_resources",
         },

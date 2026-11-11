@@ -11,3 +11,9 @@ pub mod surface;
 pub mod test_support;
 pub mod ux_data;
 pub mod ux_preview;
+
+#[cfg(test)]
+mod documents_skill_tests;
+
+#[cfg(test)]
+mod documents_selection_tests;

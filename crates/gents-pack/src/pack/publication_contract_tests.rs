@@ -325,7 +325,7 @@ async fn non_pin_notification_rejection_restores_previous_plugin_and_home_record
                 &identity.coordinate,
                 Some(&identity),
                 &changes,
-                &crate::inference::resolved::ProviderProfilePolicy,
+                &gents_inference::resolved::ProviderProfilePolicy,
             )
             .await
         },
