@@ -3966,7 +3966,7 @@ export function createDesktopUiHarness(
       return outcome;
     },
     async listJobs({ nodeDid, states, plugin, sessionId }) {
-      if (nodeDid !== NODE_DID) return [];
+      if (nodeDid !== NODE_DID || scenario !== "workflows") return [];
       return harnessWorkflowRuns().filter(
         (run) =>
           (!states?.length || states.includes(run.state)) &&
@@ -3975,7 +3975,8 @@ export function createDesktopUiHarness(
       );
     },
     async getJobView(request) {
-      const run = harnessWorkflowRuns().find((candidate) =>
+      const runs = scenario === "workflows" ? harnessWorkflowRuns() : [];
+      const run = runs.find((candidate) =>
         request.rowDocId
           ? candidate.row_doc_id === request.rowDocId
           : candidate.address === request.address,

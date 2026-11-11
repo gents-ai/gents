@@ -1,21 +1,65 @@
 import { useEffect, useState } from "react";
 import { Button } from "@gents/ui/components/button";
 import type { DynamicWorkflows } from "@source-inc/gents-desktop-client";
+import type { JobView } from "@source-inc/gents-desktop-client/generated/JobView";
 import { useApp } from "@/app/AppContext";
 import { errorText } from "../../../lib/errorText";
 import { EmptyList } from "./ListDetail";
 import { Group, Row } from "./rows";
 import { PromoteWorkflowDialog } from "../PromoteWorkflowDialog";
-import type { NodeView } from "../../../hooks/fleetStore";
+import { WorkflowRunSheet } from "../WorkflowRunSheet";
+import { nodeKeyOf, type NodeView } from "../../../hooks/fleetStore";
 import { useBootstrap } from "@/hooks/useClient";
+import { NO_SESSIONS, useFleet } from "@/hooks/useFleet";
 import { isLocalNode } from "@/lib/firstRun";
+import { ACTIVE_STATES, RunningRuns, observedOf, useJobs } from "./WorkflowRuns";
 
-/* dynamic scripts this node completed, one row per script, each promotable from
-   its latest run */
+/* the node's running runs, read for any node; then, on the local node, its
+   installed workflows and the dynamic scripts it completed, one row per
+   script, each promotable from its latest run */
 export function WorkflowsPanel({ deployment }: { deployment: NodeView }) {
-  const { actions } = useApp();
   const bootstrap = useBootstrap();
   const local = isLocalNode(deployment, bootstrap?.initNodeDid);
+  const nodeDid = deployment.nodeDid;
+  /* the node's session summaries change with its requests and tool calls;
+     the node card re-reads its operations snapshot on the same signal */
+  const sessions = useFleet((s) => s.sessionsOf[nodeKeyOf(deployment)] ?? NO_SESSIONS);
+  const running = useJobs({ nodeDid, states: ACTIVE_STATES }, sessions);
+  const [opened, setOpened] = useState<JobView | null>(null);
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const open = (run: JobView) => {
+    setOpened(run);
+    setSheetOpen(true);
+  };
+  const shownRun = opened
+    ? running.runs?.find((run) => run.row_doc_id === opened.row_doc_id)
+    : undefined;
+
+  return (
+    <div>
+      <RunningRuns
+        runs={running.runs}
+        error={running.error}
+        sessions={sessions}
+        onOpen={open}
+      />
+      {local && <LocalWorkflows />}
+      {opened && (
+        <WorkflowRunSheet
+          open={sheetOpen}
+          nodeDid={nodeDid}
+          rowDocId={opened.row_doc_id}
+          observed={observedOf(shownRun)}
+          onClose={() => setSheetOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* read from this desktop's own home, so only for the local node */
+function LocalWorkflows() {
+  const { actions } = useApp();
   const [workflows, setWorkflows] = useState<DynamicWorkflows | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selector, setSelector] = useState<string | null>(null);
@@ -24,13 +68,6 @@ export function WorkflowsPanel({ deployment }: { deployment: NodeView }) {
 
   useEffect(() => {
     let current = true;
-    if (!local) {
-      setWorkflows(null);
-      setError(null);
-      return () => {
-        current = false;
-      };
-    }
     actions.listDynamicWorkflows().then(
       (value) => current && setWorkflows(value),
       (e: unknown) => current && setError(errorText(e)),
@@ -38,14 +75,13 @@ export function WorkflowsPanel({ deployment }: { deployment: NodeView }) {
     return () => {
       current = false;
     };
-  }, [actions, local, loads]);
+  }, [actions, loads]);
 
-  if (!local) return null;
   if (error) return <p className="text-sm text-destructive">{error}</p>;
   if (!workflows) return null;
   const { installed, workflows: dynamic } = workflows;
   return (
-    <div>
+    <>
       {installed.length > 0 && (
         <Group title="Installed">
           {installed.map((w) => (
@@ -102,6 +138,6 @@ export function WorkflowsPanel({ deployment }: { deployment: NodeView }) {
           }}
         />
       )}
-    </div>
+    </>
   );
 }

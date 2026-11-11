@@ -99,7 +99,10 @@ export function WorkflowRunSheet({
   const answer = () => {
     if (!view) return;
     answering.current = true;
-    answerJob(view.handle);
+    answerJob(view.handle, {
+      sessionId: view.session_id,
+      nodeDid: view.scope.node_did,
+    });
     close();
   };
   const children = view

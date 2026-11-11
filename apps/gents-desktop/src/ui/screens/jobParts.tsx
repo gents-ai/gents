@@ -4,7 +4,9 @@
 import type { JobProgress } from "@source-inc/gents-desktop-client/generated/JobProgress";
 import type { JobState } from "@source-inc/gents-desktop-client/generated/JobState";
 import { cn } from "@gents/ui/lib/utils";
-import { writeDraft } from "../../hooks/draftStore";
+import { focusDraft, writeDraft } from "../../hooks/draftStore";
+import { sessionDraftKey } from "../../hooks/shellView";
+import { navigate } from "@/lib/router";
 import { useApp } from "../app/AppContext";
 
 export const words = (value: string) => value.replace(/_/g, " ");
@@ -79,11 +81,32 @@ export function JobProgressBody({
   );
 }
 
-/** Answer starts a composer draft naming the job; the person writes the rest. */
+/** Answer starts a composer draft naming the job; the person writes the rest.
+    Given the run's session, a run answered from outside it opens that
+    session with the draft. */
 export function useAnswerJob() {
-  const { drafts, view } = useApp();
-  return (handle: string | null | undefined) => {
-    writeDraft(drafts, view.getState().draftKey, `Answer for ${handle}: `);
+  const { drafts, stores, view } = useApp();
+  return (
+    handle: string | null | undefined,
+    session?: { sessionId: string; nodeDid: string },
+  ) => {
+    const text = `Answer for ${handle}: `;
+    const selected = stores.selection.getState();
+    if (
+      session &&
+      (selected.sessionId !== session.sessionId || selected.nodeDid !== session.nodeDid)
+    ) {
+      const key = sessionDraftKey(session.nodeDid, session.sessionId);
+      writeDraft(drafts, key, text);
+      focusDraft(drafts, key);
+      navigate({
+        name: "session",
+        sessionId: session.sessionId,
+        nodeDid: session.nodeDid,
+      });
+      return;
+    }
+    writeDraft(drafts, view.getState().draftKey, text);
     document
       .querySelector<HTMLTextAreaElement>('[data-testid="composer"] textarea')
       ?.focus();
