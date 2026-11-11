@@ -335,6 +335,10 @@ pub(crate) async fn settle_session_message_row(
 }
 
 #[cfg(test)]
+#[path = "session_message_tests.rs"]
+mod tests;
+
+#[cfg(test)]
 mod folded_outcome_conformance {
     use crate::call::lifecycle::CausedRequestTerminal as Terminal;
 

@@ -343,10 +343,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "interrupt_delivery_latches_only_the_prepublication_head",
         },
         ConformanceConsumer::RustTest {
-            id: "toolcalls_tests::background::session_message_assignment::folded_session_message_waits_for_exact_head_and_replays_once",
-            package: "gents",
-            source_path: "crates/gents/src/toolcalls_tests/background/session_message_assignment.rs",
-            module_path: "toolcalls_tests::background::session_message_assignment",
+            id: "background::completion::session_message::tests::folded_session_message_waits_for_exact_head_and_replays_once",
+            package: "gents-toolcalls",
+            source_path: "crates/gents-toolcalls/src/background/completion/session_message_tests.rs",
+            module_path: "background::completion::session_message::tests",
             function: "folded_session_message_waits_for_exact_head_and_replays_once",
         },
         ConformanceConsumer::RustTest {
@@ -1568,10 +1568,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_session_messages_capture_target_goal_before_signing",
         },
         ConformanceConsumer::RustTest {
-            id: "toolcalls_tests::background::goal_input_tests::generated_deliveries_capture_destination_goal_in_the_admission_transaction",
-            package: "gents",
-            source_path: "crates/gents/src/toolcalls_tests/background/goal_input_tests.rs",
-            module_path: "toolcalls_tests::background::goal_input_tests",
+            id: "goal::session_message::delivery_goal_input_tests::generated_deliveries_capture_destination_goal_in_the_admission_transaction",
+            package: "gents-automation",
+            source_path: "crates/gents-automation/src/goal/session_message/delivery_goal_input_tests.rs",
+            module_path: "goal::session_message::delivery_goal_input_tests",
             function: "generated_deliveries_capture_destination_goal_in_the_admission_transaction",
         },
         ConformanceConsumer::RustTest {
@@ -1617,10 +1617,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_goal_wake_ancestry_keeps_assignment_without_widening_invocations",
         },
         ConformanceConsumer::RustTest {
-            id: "toolcalls_tests::hook::goal_context::generated_goal_tool_context_uses_the_signed_callers_assignment",
-            package: "gents",
-            source_path: "crates/gents/src/toolcalls_tests/hook/goal_context.rs",
-            module_path: "toolcalls_tests::hook::goal_context",
+            id: "goal::goal_tools::tests::goal_context::generated_goal_tool_context_uses_the_signed_callers_assignment",
+            package: "gents-automation",
+            source_path: "crates/gents-automation/src/goal/goal_tools/tests/goal_context.rs",
+            module_path: "goal::goal_tools::tests::goal_context",
             function: "generated_goal_tool_context_uses_the_signed_callers_assignment",
         },
         ConformanceConsumer::RustTest {
@@ -2702,10 +2702,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_native_recovery_cases_use_canonical_admission_owner",
         },
         ConformanceConsumer::RustTest {
-            id: "toolcalls_tests::lifecycle::recovery_closeout::generated_session_message_recovery_cases_use_accepted_call",
-            package: "gents",
-            source_path: "crates/gents/src/toolcalls_tests/lifecycle/recovery_closeout.rs",
-            module_path: "toolcalls_tests::lifecycle::recovery_closeout",
+            id: "goal::session_message::recovery_closeout_tests::generated_session_message_recovery_cases_use_accepted_call",
+            package: "gents-automation",
+            source_path: "crates/gents-automation/src/goal/session_message/recovery_closeout_tests.rs",
+            module_path: "goal::session_message::recovery_closeout_tests",
             function: "generated_session_message_recovery_cases_use_accepted_call",
         },
         ConformanceConsumer::RustTest {

@@ -431,3 +431,6 @@ async fn update_goal(call: &GoalToolCall<'_>) -> anyhow::Result<GoalToolReply> {
     )?;
     Ok(GoalToolReply::Complete(result))
 }
+
+#[cfg(test)]
+mod tests;

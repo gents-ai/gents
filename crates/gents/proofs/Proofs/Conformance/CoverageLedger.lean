@@ -863,7 +863,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "agent_folded_binding_cases"
       "AgentFoldedBindingCases"
-      "toolcalls_tests::background::session_message_assignment::folded_session_message_waits_for_exact_head_and_replays_once"
+      "background::completion::session_message::tests::folded_session_message_waits_for_exact_head_and_replays_once"
       "Binds requester and physical-head outcome checks; cross-node replication races remain to be exercised.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
@@ -2038,7 +2038,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "goal_delivery_input_cases"
       "GoalDeliveryInputCases"
-      "toolcalls_tests::background::goal_input_tests::generated_deliveries_capture_destination_goal_in_the_admission_transaction")
+      "goal::session_message::delivery_goal_input_tests::generated_deliveries_capture_destination_goal_in_the_admission_transaction")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_input_binding_cases"
@@ -2073,7 +2073,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "goal_tool_context_cases"
       "GoalToolContextCases"
-      "toolcalls_tests::hook::goal_context::generated_goal_tool_context_uses_the_signed_callers_assignment")
+      "goal::goal_tools::tests::goal_context::generated_goal_tool_context_uses_the_signed_callers_assignment")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_request_scope_cases"
@@ -2272,7 +2272,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "recovery_sweep_cases"
       "RecoverySweepCases"
-      "toolcalls_tests::lifecycle::recovery_closeout::generated_session_message_recovery_cases_use_accepted_call")
+      "goal::session_message::recovery_closeout_tests::generated_session_message_recovery_cases_use_accepted_call")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "recovery_sweep_cases"

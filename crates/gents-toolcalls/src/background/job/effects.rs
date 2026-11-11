@@ -399,6 +399,43 @@ async fn stage_request(
     Ok(create)
 }
 
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "fields of the staged AgentRequest"
+)]
+pub async fn stage_request_fixture(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    goals: &dyn gents_session::session::message::SessionMessageGoals,
+    cause: &SessionMessageCause,
+    node_did: &str,
+    agent_did: &str,
+    session_id: String,
+    content: &str,
+    title: Option<&str>,
+    retry_key: String,
+    hop: u32,
+    cwd: Option<String>,
+    existing_destination: bool,
+) -> Result<AgentRequestCreate> {
+    stage_request(
+        txn,
+        goals,
+        cause,
+        node_did,
+        agent_did,
+        session_id,
+        content,
+        title,
+        retry_key,
+        hop,
+        cwd,
+        existing_destination,
+    )
+    .await
+}
+
 type StoredRequest = gents_protocol::row::AgentRequestRow;
 
 async fn one_request(
