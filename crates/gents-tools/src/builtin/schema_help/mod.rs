@@ -389,7 +389,7 @@ impl SchemaTool {
                     );
                 }
                 if words[0] == "collection" {
-                    gents_store::config_client::preview_schema_install(access, text("sdl")?).await.context("collection create installs new schemas or verifies matching schemas; use collection update to evolve an existing schema")?;
+                    gents_store::config_client::preview_client_schema_install(access, text("sdl")?, false).await.context("collection create installs new schemas or verifies matching schemas; use collection update to evolve an existing schema")?;
                 }
                 Value::Object(existing)
             }
@@ -473,12 +473,17 @@ impl SchemaTool {
         }
         let result = match words.as_slice() {
             ["collection", "create"] => {
-                let plan = gents_store::config_client::preview_schema_install(access, text("sdl")?)
-                    .await?;
-                let installed = gents_store::config_client::apply_schema_install(
+                let plan = gents_store::config_client::preview_client_schema_install(
+                    access,
+                    text("sdl")?,
+                    false,
+                )
+                .await?;
+                let installed = gents_store::config_client::apply_client_schema_install(
                     access,
                     text("sdl")?,
                     &plan.artifact_digest,
+                    false,
                 )
                 .await?;
                 let collections: Vec<String> =
@@ -727,6 +732,13 @@ impl SchemaTool {
                     gents_store::config_client::schema_install_mismatch(error.as_ref())
                 {
                     json!({"tool":"schema","args":{"argv":["collection","get"],"target_id":mismatch.collection}})
+                } else if let Some(gents_protocol::operations::agent::NextCall::VerbHelp {
+                    resource,
+                    verb,
+                }) = gents_store::config_client::schema_install_refusal(error.as_ref())
+                    .and_then(|refusal| refusal.recovery())
+                {
+                    json!({"tool":"schema","args":{"argv":["help",resource,verb]}})
                 } else if error.is::<SchemaSdlFailure>() {
                     sdl_help_call(args, &format!("{error:#}"))
                 } else {

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 type Result<T, E = SchemaInstallError> = std::result::Result<T, E>;
+use gents_protocol::operations::schema::{LiveCollection, SchemaInstallDecision};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -48,6 +49,11 @@ pub enum SchemaInstallError {
         existing: Vec<String>,
         missing: Vec<String>,
     },
+    #[error("collection {collection:?} exists without declared fields {pending:?}; add them with a collection update, or apply this schema together with the patches that add them")]
+    FieldsPending {
+        collection: String,
+        pending: Vec<String>,
+    },
     #[error("schema artifact changed; preview again")]
     ArtifactChanged,
     #[error("published schema is not discoverable")]
@@ -61,6 +67,94 @@ impl SchemaInstallError {
             _ => None,
         }
     }
+
+    /// Lean `SchemaInstall.Decision`: which refusal this failure is, when it
+    /// is one.
+    pub fn refusal(&self) -> Option<SchemaInstallDecision> {
+        match self {
+            Self::Mismatch(_) => Some(SchemaInstallDecision::Mismatch),
+            Self::FieldsPending { .. } => Some(SchemaInstallDecision::FieldsPending),
+            _ => None,
+        }
+    }
+}
+
+/// Lean `SchemaInstall.decide`.
+pub fn schema_install_decision(live: LiveCollection, patches: bool) -> SchemaInstallDecision {
+    match live {
+        LiveCollection::Missing => SchemaInstallDecision::Publish,
+        LiveCollection::Exact | LiveCollection::Extra => SchemaInstallDecision::Satisfied,
+        LiveCollection::Pending if patches => SchemaInstallDecision::AwaitsFields,
+        LiveCollection::Pending => SchemaInstallDecision::FieldsPending,
+        LiveCollection::Conflicting => SchemaInstallDecision::Mismatch,
+    }
+}
+
+/// Lean `SchemaInstall.requestAdmitted`.
+pub fn schema_request_admitted(any_missing: bool, any_live: bool) -> bool {
+    !(any_missing && any_live)
+}
+
+/// How a declared collection is compared with a live one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Comparison {
+    /// A signed artifact verified against the node: any field difference is a
+    /// mismatch.
+    Exact,
+    /// A client verb, decided by [`schema_install_decision`].
+    Client { patches: bool },
+}
+
+impl Comparison {
+    fn admit(
+        self,
+        collection: &str,
+        delta: std::result::Result<&SchemaFieldDelta, SchemaContractError>,
+    ) -> Result<()> {
+        let mismatch = |source| SchemaInstallMismatch {
+            collection: collection.to_owned(),
+            source,
+        };
+        match self {
+            Self::Exact => {
+                let delta = delta.map_err(|source| mismatch(Some(source)))?;
+                if !delta.pending.is_empty() || !delta.extra.is_empty() {
+                    return Err(mismatch(None).into());
+                }
+                Ok(())
+            }
+            Self::Client { patches } => {
+                let live = match &delta {
+                    Err(_) => LiveCollection::Conflicting,
+                    Ok(delta) if !delta.pending.is_empty() => LiveCollection::Pending,
+                    Ok(delta) if !delta.extra.is_empty() => LiveCollection::Extra,
+                    Ok(_) => LiveCollection::Exact,
+                };
+                match schema_install_decision(live, patches) {
+                    SchemaInstallDecision::Mismatch => Err(mismatch(delta.err()).into()),
+                    SchemaInstallDecision::FieldsPending => {
+                        Err(SchemaInstallError::FieldsPending {
+                            collection: collection.to_owned(),
+                            pending: delta
+                                .map(|delta| delta.pending.iter().cloned().collect())
+                                .unwrap_or_default(),
+                        })
+                    }
+                    SchemaInstallDecision::Publish
+                    | SchemaInstallDecision::Satisfied
+                    | SchemaInstallDecision::AwaitsFields => Ok(()),
+                }
+            }
+        }
+    }
+}
+
+fn install_error_in<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a SchemaInstallError> {
+    gents_protocol::error_chain::find_map_source(error, |cause| {
+        cause.downcast_ref::<SchemaInstallError>()
+    })
 }
 
 /// The install mismatch anywhere in an application error's chain, including
@@ -69,10 +163,18 @@ pub fn schema_install_mismatch<'a>(
     error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a SchemaInstallMismatch> {
     gents_protocol::error_chain::find_map_source(error, |cause| {
-        cause
-            .downcast_ref::<SchemaInstallMismatch>()
-            .or_else(|| cause.downcast_ref::<SchemaInstallError>()?.mismatch())
+        cause.downcast_ref::<SchemaInstallMismatch>()
     })
+    .or_else(|| install_error_in(error)?.mismatch())
+}
+
+/// Which install refusal an application error carries anywhere in its chain.
+pub fn schema_install_refusal(
+    error: &(dyn std::error::Error + 'static),
+) -> Option<SchemaInstallDecision> {
+    schema_install_mismatch(error)
+        .map(|_| SchemaInstallDecision::Mismatch)
+        .or_else(|| install_error_in(error)?.refusal())
 }
 
 /// Schema publication is node-wide and does not grant document read/write ACP.
@@ -102,20 +204,23 @@ impl SchemaInstallPlan {
 }
 
 pub async fn preview_schema_install(access: &ConfigAccess, sdl: &str) -> Result<SchemaInstallPlan> {
-    preview_schema(access, sdl, false).await
+    preview_schema(access, sdl, Comparison::Exact).await
 }
 
-pub async fn preview_additive_schema_install(
+/// The schema install of a client verb. `patches` says the same request
+/// carries the patches that add declared fields a live collection lacks.
+pub async fn preview_client_schema_install(
     access: &ConfigAccess,
     sdl: &str,
+    patches: bool,
 ) -> Result<SchemaInstallPlan> {
-    preview_schema(access, sdl, true).await
+    preview_schema(access, sdl, Comparison::Client { patches }).await
 }
 
 async fn preview_schema(
     access: &ConfigAccess,
     sdl: &str,
-    additive: bool,
+    comparison: Comparison,
 ) -> Result<SchemaInstallPlan> {
     let expected = query::parse_sdl(sdl)?;
     if expected.is_empty() {
@@ -138,25 +243,18 @@ async fn preview_schema(
         match access.collection_version(&collection.name).await? {
             Some(live) => {
                 existing.push(collection.name.clone());
-                let delta =
-                    collection_schema_field_delta(&serde_json::to_value(&collection)?, &live)
-                        .map_err(|source| SchemaInstallMismatch {
-                            collection: collection.name.clone(),
-                            source: Some(source),
-                        })?;
-                if !additive && (!delta.pending.is_empty() || !delta.extra.is_empty()) {
-                    return Err(SchemaInstallMismatch {
-                        collection: collection.name,
-                        source: None,
+                match collection_schema_field_delta(&serde_json::to_value(&collection)?, &live) {
+                    Ok(delta) => {
+                        comparison.admit(&collection.name, Ok(&delta))?;
+                        field_deltas.insert(collection.name.clone(), delta);
                     }
-                    .into());
+                    Err(source) => comparison.admit(&collection.name, Err(source))?,
                 }
-                field_deltas.insert(collection.name.clone(), delta);
             }
             None => missing.push(collection.name),
         }
     }
-    if !missing.is_empty() && !existing.is_empty() {
+    if !schema_request_admitted(!missing.is_empty(), !existing.is_empty()) {
         return Err(SchemaInstallError::MixedCollections { existing, missing });
     }
     Ok(SchemaInstallPlan {
@@ -175,31 +273,32 @@ pub async fn apply_schema_install(
     sdl: &str,
     expected_digest: &str,
 ) -> Result<SchemaInstallPlan> {
-    apply_schema(access, sdl, expected_digest, false).await
+    apply_schema(access, sdl, expected_digest, Comparison::Exact).await
 }
 
-pub async fn apply_additive_schema_install(
+pub async fn apply_client_schema_install(
     access: &ConfigAccess,
     sdl: &str,
     expected_digest: &str,
+    patches: bool,
 ) -> Result<SchemaInstallPlan> {
-    apply_schema(access, sdl, expected_digest, true).await
+    apply_schema(access, sdl, expected_digest, Comparison::Client { patches }).await
 }
 
 async fn apply_schema(
     access: &ConfigAccess,
     sdl: &str,
     expected_digest: &str,
-    additive: bool,
+    comparison: Comparison,
 ) -> Result<SchemaInstallPlan> {
-    let plan = preview_schema(access, sdl, additive).await?;
+    let plan = preview_schema(access, sdl, comparison).await?;
     if plan.artifact_digest != expected_digest {
         return Err(SchemaInstallError::ArtifactChanged);
     }
     if plan.requires_publication {
         access.add_collection(sdl).await?;
     }
-    let observed = preview_schema(access, sdl, additive).await?;
+    let observed = preview_schema(access, sdl, comparison).await?;
     if observed.requires_publication {
         return Err(SchemaInstallError::NotDiscoverable);
     }
@@ -212,6 +311,15 @@ async fn apply_schema(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn install_decisions_match_lean() {
+        use gents_lean_vocab::families;
+        families::schema_install_decide::replay(|i| schema_install_decision(i.live, i.patches));
+        families::schema_install_request_admitted::replay(|i| {
+            schema_request_admitted(i.any_missing, i.any_live)
+        });
+    }
 
     #[test]
     fn install_mismatch_classifies_through_its_owner() {
@@ -244,7 +352,7 @@ mod tests {
         apply_schema_install(&access, base, &plan.artifact_digest)
             .await
             .unwrap();
-        let pending = preview_additive_schema_install(&access, extended)
+        let pending = preview_client_schema_install(&access, extended, true)
             .await
             .unwrap();
         assert_eq!(
@@ -257,10 +365,10 @@ mod tests {
         );
         assert!(pending.require_satisfied().is_err());
         assert!(preview_schema_install(&access, extended).await.is_err());
-        apply_additive_schema_install(&access, extended, &pending.artifact_digest)
+        apply_client_schema_install(&access, extended, &pending.artifact_digest, true)
             .await
             .unwrap();
-        assert!(preview_additive_schema_install(&access, extended)
+        assert!(preview_client_schema_install(&access, extended, true)
             .await
             .unwrap()
             .require_satisfied()
@@ -272,12 +380,12 @@ mod tests {
             )
             .await
             .unwrap();
-        preview_additive_schema_install(&access, extended)
+        preview_client_schema_install(&access, extended, true)
             .await
             .unwrap()
             .require_satisfied()
             .unwrap();
-        let repeated = preview_additive_schema_install(&access, base)
+        let repeated = preview_client_schema_install(&access, base, true)
             .await
             .unwrap();
         assert!(repeated.field_deltas["EvalPatch"]
@@ -290,7 +398,7 @@ mod tests {
             "type EvalPatch { message: String owned_files: String }",
         ] {
             assert!(
-                preview_additive_schema_install(&access, conflicting)
+                preview_client_schema_install(&access, conflicting, true)
                     .await
                     .is_err(),
                 "{conflicting}"

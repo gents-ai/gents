@@ -81,12 +81,15 @@ pub async fn apply_schema_inputs(
     root: &Path,
     inputs: &[SchemaInput],
 ) -> Result<PackSchemaPhase> {
+    let patches = inputs
+        .iter()
+        .any(|input| input.kind == SchemaInputKind::Patch);
     let mut schema_files = Vec::new();
     for input in inputs
         .iter()
         .filter(|input| input.kind == SchemaInputKind::Sdl)
     {
-        schema_files.push(apply_sdl_file(access, &input.path).await?);
+        schema_files.push(apply_sdl_file(access, &input.path, patches).await?);
     }
 
     let mut patch_files = Vec::new();
@@ -102,7 +105,7 @@ pub async fn apply_schema_inputs(
         .filter(|input| input.kind == SchemaInputKind::Sdl)
     {
         let sdl = fs::read_to_string(&input.path)?;
-        gents_store::config_client::preview_additive_schema_install(access, &sdl)
+        gents_store::config_client::preview_client_schema_install(access, &sdl, patches)
             .await?
             .require_satisfied()
             .with_context(|| format!("schema series did not satisfy {}", input.path.display()))?;
@@ -185,16 +188,21 @@ fn classify_schema_input(path: &Path) -> Option<SchemaInputKind> {
     }
 }
 
-async fn apply_sdl_file(access: &ConfigAccess, path: &Path) -> Result<SchemaApplyFileResult> {
+async fn apply_sdl_file(
+    access: &ConfigAccess,
+    path: &Path,
+    patches: bool,
+) -> Result<SchemaApplyFileResult> {
     let sdl = fs::read_to_string(path)
         .with_context(|| format!("reading schema SDL {}", path.display()))?;
-    let plan = gents_store::config_client::preview_additive_schema_install(access, &sdl)
+    let plan = gents_store::config_client::preview_client_schema_install(access, &sdl, patches)
         .await
         .with_context(|| format!("preview schema SDL {}", path.display()))?;
-    let receipt = gents_store::config_client::apply_additive_schema_install(
+    let receipt = gents_store::config_client::apply_client_schema_install(
         access,
         &sdl,
         &plan.artifact_digest,
+        patches,
     )
     .await
     .with_context(|| format!("publish schema SDL {}", path.display()))?;
@@ -379,15 +387,15 @@ mod pack_schema_tests {
         let access = ConfigAccess::local(node.clone());
         fs::write(&path, "type Widget { message: String }").unwrap();
         assert_eq!(
-            apply_sdl_file(&access, &path).await.unwrap().status,
+            apply_sdl_file(&access, &path, false).await.unwrap().status,
             "applied"
         );
         assert_eq!(
-            apply_sdl_file(&access, &path).await.unwrap().status,
+            apply_sdl_file(&access, &path, false).await.unwrap().status,
             "already_exists"
         );
         fs::write(&path, "type Widget { message: Int }").unwrap();
-        let error = apply_sdl_file(&access, &path).await.unwrap_err();
+        let error = apply_sdl_file(&access, &path, false).await.unwrap_err();
         assert!(
             format!("{error:#}").contains("does not match requested schema"),
             "{error:#}"
@@ -397,7 +405,7 @@ mod pack_schema_tests {
             "type Widget { message: String } type OtherWidget { message: String }",
         )
         .unwrap();
-        assert!(apply_sdl_file(&access, &path).await.is_err());
+        assert!(apply_sdl_file(&access, &path, false).await.is_err());
         assert!(node.get_collection("OtherWidget").unwrap().is_none());
         fs::write(&path, "type Widget { message: String pending: String }").unwrap();
         let inputs = discover_schema_inputs(dir.path(), &[]).unwrap();
@@ -405,7 +413,10 @@ mod pack_schema_tests {
             .await
             .unwrap_err();
         assert!(
-            format!("{error:#}").contains("missing declared fields"),
+            error.chain().any(|cause| matches!(
+                cause.downcast_ref::<gents_store::config_client::SchemaInstallError>(),
+                Some(gents_store::config_client::SchemaInstallError::FieldsPending { .. })
+            )),
             "{error:#}"
         );
         assert!(!access
