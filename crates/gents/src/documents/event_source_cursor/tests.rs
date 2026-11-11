@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 #[test]
 fn callback_checkpoint_claim_markers_match_lean() {
-    let cases = &crate::lean_vocab_test::lean_identity_household_cases()
+    let cases = &gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap()

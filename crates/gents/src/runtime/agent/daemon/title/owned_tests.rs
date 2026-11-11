@@ -24,10 +24,6 @@ use tracing_subscriber::{Layer, Registry};
 use super::{AgentDaemon, AuxiliaryTask};
 use crate::inference::backends::provider::BackendProviderKind;
 use crate::inference::resolved::{ResolvedAgent, SamplingConfig};
-use crate::lean_vocab_test::{
-    LeanCanonicalExecutionCase, LeanCanonicalExecutionOperation, LeanCanonicalSource,
-    LeanPayloadKind, LeanTerminalSelection,
-};
 use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
 use crate::request::watcher::DefraWatcher;
 use crate::runtime::agent::completion_retry::CompletionRetryProfileFields;
@@ -44,6 +40,10 @@ use crate::tools::call::hook::{
 };
 use crate::tools::surface::AgentToolSurfaceConfig;
 use crate::turn::prompt::LayeredPromptBuilder;
+use gents_lean_vocab::{
+    LeanCanonicalExecutionCase, LeanCanonicalExecutionOperation, LeanCanonicalSource,
+    LeanPayloadKind, LeanTerminalSelection,
+};
 use gents_protocol::output::rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
 use gents_protocol::row::AgentRequest;
 
@@ -1603,7 +1603,7 @@ impl TitleFixture {
 }
 
 fn modeled_title_fields(name: &str) -> (Vec<(StreamPayload, String, u32, u32)>, OutputOutcome) {
-    let case = crate::lean_vocab_test::lean_contract_snapshot().canonical_execution_gate_cases.iter().find(|case| matches!(case, LeanCanonicalExecutionCase::NativeExecution { name: found, .. } | LeanCanonicalExecutionCase::ModelExecution { name: found, .. } if found == name)).expect("Lean title script");
+    let case = gents_lean_vocab::lean_contract_snapshot().canonical_execution_gate_cases.iter().find(|case| matches!(case, LeanCanonicalExecutionCase::NativeExecution { name: found, .. } | LeanCanonicalExecutionCase::ModelExecution { name: found, .. } if found == name)).expect("Lean title script");
     let (LeanCanonicalExecutionCase::NativeExecution {
         operations,
         expected_observations,
@@ -1634,7 +1634,7 @@ fn modeled_title_fields(name: &str) -> (Vec<(StreamPayload, String, u32, u32)>, 
     assert!(matches!(
         &record.coordinate.source,
         LeanCanonicalSource::Auxiliary {
-            auxiliary_kind: crate::lean_vocab_test::LeanAuxiliaryKind::Title,
+            auxiliary_kind: gents_lean_vocab::LeanAuxiliaryKind::Title,
             ..
         }
     ));
@@ -1669,12 +1669,12 @@ fn modeled_title_fields(name: &str) -> (Vec<(StreamPayload, String, u32, u32)>, 
         .iter()
         .find_map(|record| record.close.as_ref())
         .expect("modeled title closure");
-    let crate::lean_vocab_test::LeanCanonicalClosure::Closed { outcome, .. } = closure else {
+    let gents_lean_vocab::LeanCanonicalClosure::Closed { outcome, .. } = closure else {
         panic!("modeled title retracted")
     };
     let outcome = match outcome {
-        crate::lean_vocab_test::LeanOutcome::Complete => OutputOutcome::Complete,
-        crate::lean_vocab_test::LeanOutcome::Partial => OutputOutcome::Partial,
+        gents_lean_vocab::LeanOutcome::Complete => OutputOutcome::Complete,
+        gents_lean_vocab::LeanOutcome::Partial => OutputOutcome::Partial,
     };
     (fields, outcome)
 }
@@ -1998,7 +1998,7 @@ async fn title_timeout_drains_each_received_reasoning_attempt_as_partial() {
 #[tokio::test]
 async fn crashed_title_recovers_committed_reasoning_without_publication() {
     let (fields, outcome) = modeled_title_fields("title_expired_unlatched_recovery_no_message");
-    let model = crate::lean_vocab_test::lean_contract_snapshot()
+    let model = gents_lean_vocab::lean_contract_snapshot()
         .canonical_execution_gate_cases
         .iter()
         .find(|case| matches!(case, LeanCanonicalExecutionCase::NativeExecution { name, .. } | LeanCanonicalExecutionCase::ModelExecution { name, .. } if name == "title_expired_unlatched_recovery_no_message"))

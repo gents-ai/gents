@@ -103,7 +103,7 @@ pub(super) async fn grant_modeled_direct_sets(
     use crate::store::identity::GrantSet;
     let wanted = recipient.to_owned();
     let case = tokio::task::spawn_blocking(move || {
-        crate::lean_vocab_test::lean_contract_snapshot()
+        gents_lean_vocab::lean_contract_snapshot()
             .identity_grant_recipient_cases
             .iter()
             .find(|case| case.recipient == wanted)
@@ -139,7 +139,7 @@ pub(super) async fn grant_engineer_tool_source_permissions(
 ) {
     use crate::store::config_client::NodePermission;
     let permissions = tokio::task::spawn_blocking(|| {
-        let model = crate::lean_vocab_test::lean_identity_household_cases()
+        let model = gents_lean_vocab::lean_identity_household_cases()
             .iter()
             .find(|case| case.name == "configuration-explicit-grants")
             .expect("configuration contract");
@@ -672,7 +672,7 @@ async fn config_tool_access_follows_the_modeled_managed_route() {
     )
     .unwrap();
     let cases = tokio::task::spawn_blocking(|| {
-        crate::lean_vocab_test::lean_contract_snapshot()
+        gents_lean_vocab::lean_contract_snapshot()
             .identity_agent_block_signing_cases
             .clone()
     })
@@ -3894,8 +3894,8 @@ fn take_agent_tool(
 
 #[tokio::test]
 async fn user_owned_node_default_rejects_agent_update_and_accepts_user() {
-    use crate::lean_vocab_test::{LeanIdentityAction, LeanIdentitySubject};
-    let model = crate::lean_vocab_test::lean_identity_household_cases()
+    use gents_lean_vocab::{LeanIdentityAction, LeanIdentitySubject};
+    let model = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "user-node-agents-mixed-session-ownership-policy-followup")
         .unwrap();
@@ -4963,7 +4963,7 @@ async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
     )];
     assert!(core.preview(backend_request(raw.clone())).await.is_err());
     assert!(core.apply(backend_request(raw)).await.is_err());
-    let model = crate::lean_vocab_test::lean_self_config_cases()
+    let model = gents_lean_vocab::lean_self_config_cases()
         .iter()
         .find(|case| case.name == "backend_credential_to_raw_key_rejected")
         .unwrap();
@@ -5202,7 +5202,7 @@ async fn backend_choice_uses_runtime_visible_default_in_agent_transaction() {
     )
     .await
     .unwrap();
-    let model = crate::lean_vocab_test::lean_identity_household_cases()
+    let model = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
@@ -6621,7 +6621,7 @@ async fn modeled_resource_reads_use_resource_category_and_native_access() {
         .await
         .unwrap();
     let cases =
-        &crate::lean_vocab_test::lean_contract_snapshot().self_config_resource_read_exposure_cases;
+        &gents_lean_vocab::lean_contract_snapshot().self_config_resource_read_exposure_cases;
     assert!(!cases.is_empty());
     for case in cases {
         let categories = case["categories"]
@@ -6704,7 +6704,7 @@ async fn automation_read_preserves_native_selected_agent_visibility() {
         })
         .await
         .unwrap();
-    let expected = crate::lean_vocab_test::lean_identity_household_cases()
+    let expected = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap()
@@ -7910,7 +7910,7 @@ async fn public_prompt_edits_require_an_existing_unshared_context_without_partia
 
 #[tokio::test]
 async fn modeled_job_policy_updates_follow_native_tools_authorization() {
-    let cases = &crate::lean_vocab_test::lean_self_config_selection_cases().job_guard_cases;
+    let cases = &gents_lean_vocab::lean_self_config_selection_cases().job_guard_cases;
     let native_cases: Vec<_> = cases
         .iter()
         .filter(|case| case.name.starts_with("native_agent_update_"))
@@ -8154,7 +8154,7 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
     // The own-only grant leaves the sibling with the Agent baseline and no NAC
     // relation operation, so the held-bounded rule refuses each new tool
     // source; an edit that projects no new source needs no relation authority.
-    let household = &crate::lean_vocab_test::lean_identity_household_cases()
+    let household = &gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .expect("configuration model");

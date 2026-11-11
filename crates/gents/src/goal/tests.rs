@@ -446,7 +446,7 @@ async fn goal_and_claim_publication_links_match_lean() {
             .is_empty()
     }
 
-    for case in &crate::lean_vocab_test::lean_contract_snapshot().goal_link_cases {
+    for case in &gents_lean_vocab::lean_contract_snapshot().goal_link_cases {
         let (db, user, user_access, binding) =
             crate::test_support::signed_test_node("goal-links").await;
         let node = db.node.clone();

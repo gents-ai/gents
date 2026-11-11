@@ -11,7 +11,7 @@ fn set_named(name: &str) -> GrantSet {
 }
 
 fn recipient_sets(name: &str) -> Vec<GrantSet> {
-    let case = crate::lean_vocab_test::lean_contract_snapshot()
+    let case = gents_lean_vocab::lean_contract_snapshot()
         .identity_grant_recipient_cases
         .iter()
         .find(|case| case.recipient == name)
@@ -54,7 +54,7 @@ fn did(directory: &tempfile::TempDir, name: &str) -> identity::Did {
 
 #[test]
 fn sets_match_lean_owner() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().identity_grant_set_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().identity_grant_set_cases;
     assert_eq!(cases.len(), GrantSet::ALL.len());
     for case in cases {
         let set = set_named(&case.set);
@@ -68,7 +68,7 @@ fn sets_match_lean_owner() {
 async fn native_delegation_follows_modeled_holders() {
     let (directory, runtime, node) = nac_node().await;
     let admin = ConfigAccess::local_as(node.clone(), identity::Did::new(runtime.did()).unwrap());
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().identity_delegation_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().identity_delegation_cases;
     assert!(!cases.is_empty());
     for (index, case) in cases.iter().enumerate() {
         let (holder, holder_identity) = agent_delegate(&runtime);
@@ -221,7 +221,7 @@ async fn agent_step(
 
 #[tokio::test]
 async fn agent_baseline_projection_follows_modeled_lifecycle() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().identity_agent_baseline_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().identity_agent_baseline_cases;
     assert!(!cases.is_empty());
     for case in cases {
         let (db, owner, owner_access) =

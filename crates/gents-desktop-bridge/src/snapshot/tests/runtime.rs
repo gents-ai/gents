@@ -1,8 +1,8 @@
 use super::*;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-use super::lean_vocab_test::{lean_trigger_dispatch_case_count, lean_trigger_dispatch_cases};
 use crate::types::{SessionSummary, TriggerView};
+use gents_lean_vocab::{lean_trigger_dispatch_case_count, lean_trigger_dispatch_cases};
 
 fn canonical_session(requester: Option<&str>) -> AgentSession {
     serde_json::from_value(serde_json::json!({

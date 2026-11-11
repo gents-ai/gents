@@ -7,9 +7,6 @@ use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
-#[path = "../../../gents/src/lean_vocab_test/support.rs"]
-mod lean_vocab_test;
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
     let lean_case = lean_manual_dispatch_case()?;
@@ -347,10 +344,10 @@ async fn config_task_run_rejects_disabled_task() -> Result<()> {
     Ok(())
 }
 
-fn lean_manual_dispatch_case() -> Result<&'static lean_vocab_test::LeanTriggerDispatchCase> {
-    let cases = lean_vocab_test::lean_trigger_dispatch_cases();
+fn lean_manual_dispatch_case() -> Result<&'static gents_lean_vocab::LeanTriggerDispatchCase> {
+    let cases = gents_lean_vocab::lean_trigger_dispatch_cases();
     assert_eq!(
-        lean_vocab_test::lean_trigger_dispatch_case_count(),
+        gents_lean_vocab::lean_trigger_dispatch_case_count(),
         cases.len(),
         "Lean trigger dispatch case-count sentinel drifted"
     );

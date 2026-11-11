@@ -163,7 +163,7 @@ mod tests {
             ).await })
         }).await?;
         let profile = crate::store::graphql::created_doc_id(&created, "InferenceProfile")?;
-        let case = crate::lean_vocab_test::lean_identity_household_cases()
+        let case = gents_lean_vocab::lean_identity_household_cases()
             .iter()
             .find(|case| case.name == "configuration-explicit-grants")
             .unwrap();
@@ -347,7 +347,7 @@ mod tests {
                 })
             })
             .await?;
-        let case = crate::lean_vocab_test::lean_identity_household_cases()
+        let case = gents_lean_vocab::lean_identity_household_cases()
             .iter()
             .find(|case| case.name == "configuration-explicit-grants")
             .unwrap();

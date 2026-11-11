@@ -209,7 +209,7 @@ struct CapacitySnapshot {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lean_vocab_test::{
+    use gents_lean_vocab::{
         lean_canonical_worker_capacity_cases, LeanWorkerCapacityOperation, LeanWorkerCapacityState,
     };
 

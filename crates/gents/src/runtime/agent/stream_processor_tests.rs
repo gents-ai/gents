@@ -97,7 +97,7 @@ fn claude_signed_final_seals_preview_without_duplicating_bytes() {
 #[test]
 fn generated_reasoning_delta_cases_coalesce_native_parts() {
     use crate::inference::llm::message::ReasoningContent;
-    use crate::lean_vocab_test::{lean_reasoning_delta_cases, LeanReasoningDeltaPart as Part};
+    use gents_lean_vocab::{lean_reasoning_delta_cases, LeanReasoningDeltaPart as Part};
 
     for case in lean_reasoning_delta_cases() {
         let mut accumulator = AssistantTurnAccumulator::default();

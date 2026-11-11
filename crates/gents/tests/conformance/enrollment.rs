@@ -9,7 +9,7 @@ use gents_protocol::request_admission::{
     RuntimeInternalSourceKind,
 };
 
-use crate::lean_vocab_test::{
+use gents_lean_vocab::{
     lean_agent_request_admission_cases, lean_causal_hop_contract, lean_enrollment_cases,
     lean_enrollment_digest_cases, lean_enrollment_durable_projection_cases,
     lean_enrollment_encoding_cases, LeanEnrollmentTraceStep,

@@ -308,10 +308,6 @@ async fn fetch_request_view(
 }
 
 #[cfg(test)]
-#[path = "../../../../../gents/src/lean_vocab_test/support.rs"]
-mod lean_vocab_test;
-
-#[cfg(test)]
 mod tests;
 
 pub(super) mod prepare;

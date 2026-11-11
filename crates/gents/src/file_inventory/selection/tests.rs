@@ -205,7 +205,7 @@ async fn generated_terminal_selections_preserve_superseded_requests() -> Result<
     crate::ensure_runtime_schemas(&node).await?;
     let did = node.node_identity_did().unwrap().to_owned();
     let access = ConfigAccess::local(node.clone());
-    let cases = crate::lean_vocab_test::lean_request_terminal_selection_cases();
+    let cases = gents_lean_vocab::lean_request_terminal_selection_cases();
     assert_eq!(cases.len(), 27);
     for (index, case) in cases.iter().enumerate() {
         let state = case["state"].as_str().unwrap();

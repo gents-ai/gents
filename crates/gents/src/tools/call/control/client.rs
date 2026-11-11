@@ -1140,7 +1140,7 @@ mod signed_conformance {
             requester_did: Some("requester".into()),
             tool_call_id: "call".into(),
         };
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().client_signed_control_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().client_signed_control_cases;
         assert!(!cases.is_empty());
         for case in cases {
             let signer = if case["author"] == "client" {

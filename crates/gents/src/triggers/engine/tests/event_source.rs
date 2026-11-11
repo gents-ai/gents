@@ -1300,7 +1300,7 @@ async fn correlation_populated_after_create_remains_eligible_for_delivery() {
 
 #[tokio::test]
 async fn generated_sibling_delivery_case_preserves_pending_correlation() {
-    use crate::lean_vocab_test::{lean_event_delivery_transition_cases, LeanEventDeliveryAction};
+    use gents_lean_vocab::{lean_event_delivery_transition_cases, LeanEventDeliveryAction};
 
     let cases = lean_event_delivery_transition_cases();
     let case = cases

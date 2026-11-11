@@ -123,7 +123,7 @@ mod tests {
                 })
             })
             .await?;
-        let model = crate::lean_vocab_test::lean_identity_household_cases()
+        let model = gents_lean_vocab::lean_identity_household_cases()
             .iter()
             .find(|case| case.name == "configuration-explicit-grants")
             .unwrap();

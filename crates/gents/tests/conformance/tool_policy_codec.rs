@@ -5,9 +5,7 @@ use gents::tools::surface::ToolPolicySurface;
 use gents::tools::surface::{EndpointScope, ToolPolicyBash};
 use gents::{BashMode, FileToolMode};
 
-use crate::lean_vocab_test::{
-    LeanToolPolicySurfaceView as View, LeanToolPolicyWriteGrant as WriteGrant,
-};
+use gents_lean_vocab::{LeanToolPolicySurfaceView as View, LeanToolPolicyWriteGrant as WriteGrant};
 
 fn file_from_rank(rank: u8) -> FileToolMode {
     match rank {

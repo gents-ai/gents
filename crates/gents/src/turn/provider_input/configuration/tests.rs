@@ -1,8 +1,8 @@
 use super::*;
-use crate::lean_vocab_test::{lean_identity_household_cases, LeanIdentityAction};
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::{created_doc_id, escape_graphql_string};
 use crate::store::identity::NodeIdentity;
+use gents_lean_vocab::{lean_identity_household_cases, LeanIdentityAction};
 use serde_json::Value;
 
 #[tokio::test]

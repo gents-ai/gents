@@ -23,7 +23,7 @@ mod tests {
 
     #[test]
     fn pack_delete_confirmation_matches_modeled_physical_identity() {
-        let modeled = crate::lean_vocab_test::lean_identity_household_cases()
+        let modeled = gents_lean_vocab::lean_identity_household_cases()
             .iter()
             .find(|case| case.name == "configuration-explicit-grants")
             .expect("configuration policy model");

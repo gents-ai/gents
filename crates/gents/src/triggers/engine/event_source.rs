@@ -2178,7 +2178,7 @@ mod native_route_tests {
     /// route from that observed document alone.
     #[test]
     fn native_documents_carry_the_modeled_route() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().native_route_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().native_route_cases;
         assert_eq!(cases.len(), 6);
         for case in cases {
             let name = case["name"].as_str().unwrap();

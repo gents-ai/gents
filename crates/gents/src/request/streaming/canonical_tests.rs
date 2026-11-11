@@ -2091,7 +2091,7 @@ async fn modeled_inputs_survive_publication_replay_and_forks() {
     .await;
     let access = fixture_access(&node, &lifecycle);
     let mut expected = Vec::new();
-    for (index, case) in crate::lean_vocab_test::lean_contract_snapshot()
+    for (index, case) in gents_lean_vocab::lean_contract_snapshot()
         .request_input_cases
         .iter()
         .enumerate()

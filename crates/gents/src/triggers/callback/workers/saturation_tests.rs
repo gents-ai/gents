@@ -120,7 +120,7 @@ async fn wait_for_arrival_checkpoint(
 }
 
 fn transition(name: &str) -> &'static Value {
-    crate::lean_vocab_test::lean_contract_snapshot()
+    gents_lean_vocab::lean_contract_snapshot()
         .callback_transition_cases
         .iter()
         .find(|case| case["name"] == name)

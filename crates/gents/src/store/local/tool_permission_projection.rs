@@ -755,7 +755,7 @@ mod tests {
     async fn enrolled_user_authors_held_tools_and_only_the_household_owner_adds_schema(
     ) -> anyhow::Result<()> {
         use crate::store::identity::GrantSet;
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().identity_delegation_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().identity_delegation_cases;
         let modeled = |name: &str| {
             cases
                 .iter()
@@ -889,7 +889,7 @@ mod tests {
             agent.clone(),
             agent_signer.as_ref(),
         )?;
-        let model = crate::lean_vocab_test::lean_identity_household_cases()
+        let model = gents_lean_vocab::lean_identity_household_cases()
             .iter()
             .find(|case| case.name == "configuration-explicit-grants")
             .expect("configuration contract");
@@ -1005,7 +1005,7 @@ mod tests {
                 .check_permission(&agent_did, NodePermission::CollectionPatch)
                 .await?
         );
-        let model = crate::lean_vocab_test::lean_identity_household_cases()
+        let model = gents_lean_vocab::lean_identity_household_cases()
             .iter()
             .find(|case| case.name == "configuration-explicit-grants")
             .expect("configuration model");
@@ -1137,8 +1137,8 @@ mod tests {
                 Box::pin(async move { txn.execute_desired_state_mutation(mutation, &json!({"input":input}), collection, true).await })
             }).await?;
         }
-        use crate::lean_vocab_test::LeanClaimedDid;
-        let identity_cases = &crate::lean_vocab_test::lean_identity_household_cases()
+        use gents_lean_vocab::LeanClaimedDid;
+        let identity_cases = &gents_lean_vocab::lean_identity_household_cases()
             .iter()
             .find(|case| case.name == "configuration-explicit-grants")
             .unwrap()
@@ -1341,7 +1341,7 @@ mod tests {
         }
         let actor =
             crate::ConfigAccess::local_managed_agent(node.clone(), agent.clone(), signer.as_ref())?;
-        let model = crate::lean_vocab_test::lean_identity_household_cases()
+        let model = gents_lean_vocab::lean_identity_household_cases()
             .iter()
             .find(|case| case.name == "configuration-explicit-grants")
             .expect("configuration model");
@@ -1592,7 +1592,7 @@ mod tests {
                 .await?
         );
 
-        let model = crate::lean_vocab_test::lean_identity_household_cases()
+        let model = gents_lean_vocab::lean_identity_household_cases()
             .iter()
             .find(|case| case.name == "configuration-explicit-grants")
             .expect("configuration model");
@@ -1877,7 +1877,7 @@ mod tests {
         let non_admin =
             crate::ConfigAccess::local_managed_agent(node.clone(), agent.clone(), signer.as_ref())?;
         assert!(!node.nac_manager().is_admin(&agent).await?);
-        let modeled = &crate::lean_vocab_test::lean_identity_household_cases()
+        let modeled = &gents_lean_vocab::lean_identity_household_cases()
             .iter()
             .find(|case| case.name == "configuration-explicit-grants")
             .expect("configuration model")

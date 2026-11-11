@@ -650,7 +650,7 @@ async fn named_run_source_boundaries_follow_the_model_and_preserve_accepted_argu
     .into_iter()
     .enumerate()
     {
-        let case = crate::lean_vocab_test::lean_plugin_job_admission_cases()
+        let case = gents_lean_vocab::lean_plugin_job_admission_cases()
             .iter()
             .find(|case| case.name == name)
             .unwrap();
@@ -1204,7 +1204,7 @@ async fn a_script_spawn_is_refused_under_the_check_policy() {
     .await;
     let call = json!({"script": PASS_PIN, "agent_budget": 2, "args": pin_args(PASS_PIN, 2, "h")});
     let answer = step.call_as("call-1", &call.to_string()).await;
-    let case = crate::lean_vocab_test::lean_plugin_job_admission_cases()
+    let case = gents_lean_vocab::lean_plugin_job_admission_cases()
         .iter()
         .find(|case| case.name == "dynamic_check_spawn_refused")
         .unwrap();
@@ -1263,7 +1263,7 @@ async fn an_unconfigured_job_target_names_the_caller_scope_and_next_help() {
         panic!("job call must return its admission result: {action:?}");
     };
     let answer: Value = serde_json::from_str(&reason).unwrap();
-    let case = crate::lean_vocab_test::lean_plugin_job_admission_cases()
+    let case = gents_lean_vocab::lean_plugin_job_admission_cases()
         .iter()
         .find(|case| case.name == "caller_target_unconfigured_refused")
         .unwrap();

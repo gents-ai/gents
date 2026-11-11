@@ -1,7 +1,4 @@
 use super::*;
-use crate::lean_vocab_test::{
-    LeanInterruptQueueCase, LeanInterruptQueueEntry, LeanInterruptQueueInput,
-};
 use crate::request::lifecycle::queue::{
     persist_background_completion_with_message_waking_with_access, QueuePolicy, QueueSource,
     RequestInput, RequestQueue,
@@ -9,6 +6,7 @@ use crate::request::lifecycle::queue::{
 use crate::request::lifecycle::ExecutionOrigin;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::identity::NodeIdentity;
+use gents_lean_vocab::{LeanInterruptQueueCase, LeanInterruptQueueEntry, LeanInterruptQueueInput};
 use gents_protocol::row::AgentRequest;
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use serde_json::{json, Value};
@@ -315,7 +313,7 @@ fn assert_generated_queue_row_metadata(
 #[tokio::test]
 async fn generated_interrupt_queue_events_bind_to_native_rows() {
     let mut overlap_cases = RapidHashSet::new();
-    for case in crate::lean_vocab_test::lean_interrupt_queue_cases() {
+    for case in gents_lean_vocab::lean_interrupt_queue_cases() {
         let has_overlap_event = case.inputs.iter().any(|event| {
             matches!(
                 event,
@@ -505,7 +503,7 @@ async fn generated_interrupt_queue_events_bind_to_native_rows() {
 
 #[tokio::test]
 async fn generated_http_overlap_cases_preserve_cutoff() {
-    let cases = crate::lean_vocab_test::lean_interrupt_queue_cases()
+    let cases = gents_lean_vocab::lean_interrupt_queue_cases()
         .iter()
         .filter(|case| {
             matches!(
@@ -760,7 +758,7 @@ async fn generated_http_overlap_cases_preserve_cutoff() {
 
 #[tokio::test]
 async fn interrupted_queue_drain_rolls_back_with_latch() {
-    let case = crate::lean_vocab_test::lean_interrupt_queue_cases()
+    let case = gents_lean_vocab::lean_interrupt_queue_cases()
         .iter()
         .find(|case| case.name == "completion_before_interrupt")
         .expect("generated pre-interrupt completion case");
@@ -819,7 +817,7 @@ async fn interrupted_queue_drain_rolls_back_with_latch() {
 
 #[tokio::test]
 async fn desktop_user_signed_interrupt_latches_and_drains_the_modeled_wake() {
-    let case = crate::lean_vocab_test::lean_interrupt_queue_cases()
+    let case = gents_lean_vocab::lean_interrupt_queue_cases()
         .iter()
         .find(|case| case.name == "completion_before_interrupt")
         .expect("modeled completion before interrupt");

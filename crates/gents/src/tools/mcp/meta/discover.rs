@@ -186,8 +186,8 @@ mod tests {
     use chrono::Utc;
     use rmcp::model::{ListToolsResult, Tool as McpTool};
 
-    use crate::lean_vocab_test::lean_tool_preflight_cases;
     use crate::tools::mcp::health::{HealthStatus, ServiceHealth};
+    use gents_lean_vocab::lean_tool_preflight_cases;
 
     use super::super::tests::seed_registry_service;
 

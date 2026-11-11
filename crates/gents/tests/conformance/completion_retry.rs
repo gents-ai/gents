@@ -44,7 +44,7 @@ impl PreStream for CompletionRetryState {
     }
 }
 
-use crate::lean_vocab_test::{
+use gents_lean_vocab::{
     assert_lean_contract_vocabulary_matches, lean_completion_retry_cases, LeanCompletionRetryCase,
     LeanContractVocabulary,
 };

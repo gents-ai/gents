@@ -1169,7 +1169,7 @@ fn default_agent_publication_matches_lean() {
     use crate::Collection;
     use crate::NodeIdentity;
     use serde_json::json;
-    let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+    let snapshot = gents_lean_vocab::lean_contract_snapshot();
     let cases = snapshot.configuration_scope_cases["default_agent"]
         .as_array()
         .unwrap();
@@ -1236,7 +1236,7 @@ async fn oauth_account_scope_matches_lean() {
         resolve_oauth_credential, resolve_oauth_pool, upsert_oauth_credential_on, AccountPick,
     };
     use crate::inference::backends::provider::{BackendProviderKind, BackendProviderOauthExt};
-    let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+    let snapshot = gents_lean_vocab::lean_contract_snapshot();
     let lean = &snapshot.configuration_scope_cases["oauth_account"];
     let kind_of = |value: &serde_json::Value| -> BackendProviderKind {
         serde_json::from_value(value.clone()).unwrap()
@@ -1523,7 +1523,7 @@ async fn reference_loader_isolates_foreign_malformed_backends_and_rejects_owned_
 
 #[test]
 fn cached_datastore_tool_matches_modeled_selection_and_visibility() {
-    let model = crate::lean_vocab_test::lean_identity_household_cases()
+    let model = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();

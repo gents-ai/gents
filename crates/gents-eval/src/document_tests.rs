@@ -17,7 +17,7 @@ async fn model_driven_held_client_eval_and_optimization_records_are_private() ->
     use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     use gents::store::config_client::GraphqlEndpoint;
     use gents::store::identity::NodeIdentity;
-    let modeled = &crate::lean_vocab_test::lean_contract_snapshot().identity_eval_record_cases;
+    let modeled = &gents_lean_vocab::lean_contract_snapshot().identity_eval_record_cases;
     let directory = tempfile::tempdir()?;
     let user = gents::KeyIdentity::load_or_create(directory.path().join("user"), None)?;
     let runtime = gents::KeyIdentity::load_or_create(directory.path().join("runtime"), None)?;

@@ -1,8 +1,5 @@
 mod support;
 
-#[path = "../src/lean_vocab_test/support.rs"]
-mod lean_vocab_test;
-
 #[path = "e2e_background/plugin_job_admission.rs"]
 mod plugin_job_admission;
 #[path = "e2e_background/plugin_job_kill.rs"]

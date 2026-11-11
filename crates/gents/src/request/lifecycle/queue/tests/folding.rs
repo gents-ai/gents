@@ -1,6 +1,6 @@
 use super::*;
-use crate::lean_vocab_test::{LeanFoldQueueCase, LeanFoldQueueEntry, LeanFoldQueueInput};
 use crate::request::lifecycle::RequestTerminalOutcome;
+use gents_lean_vocab::{LeanFoldQueueCase, LeanFoldQueueEntry, LeanFoldQueueInput};
 use rapidhash::{HashMapExt, RapidHashMap};
 use serde_json::json;
 
@@ -283,7 +283,7 @@ async fn claim_request(
 
 #[tokio::test]
 async fn generated_fold_queue_cases_bind_to_native_claims() {
-    let cases = crate::lean_vocab_test::lean_fold_queue_cases();
+    let cases = gents_lean_vocab::lean_fold_queue_cases();
     assert!(!cases.is_empty());
     for case in cases {
         drive(case).await;
@@ -449,7 +449,7 @@ async fn drive(case: &LeanFoldQueueCase) {
 
 #[tokio::test]
 async fn generated_handover_fold_claims_bind_to_native_claims() {
-    let cases = crate::lean_vocab_test::lean_handover_fold_cases();
+    let cases = gents_lean_vocab::lean_handover_fold_cases();
     assert!(!cases.is_empty());
     for case in cases {
         let db = test_db(&case.name).await;
@@ -523,10 +523,10 @@ async fn durable_facts(db: &TestDb, session_id: &str) -> serde_json::Value {
 
 #[tokio::test]
 async fn generated_fold_publication_scripts_bind_to_native_owners() {
-    use crate::lean_vocab_test::LeanFoldPublicationStep as Step;
+    use gents_lean_vocab::LeanFoldPublicationStep as Step;
 
-    let cases = crate::lean_vocab_test::lean_fold_publication_cases();
-    let steering_cases = crate::lean_vocab_test::lean_steering_publication_cases();
+    let cases = gents_lean_vocab::lean_fold_publication_cases();
+    let steering_cases = gents_lean_vocab::lean_steering_publication_cases();
     assert!(!cases.is_empty());
     assert!(!steering_cases.is_empty());
     let loop_boundary_cases = steering_cases
@@ -970,7 +970,7 @@ async fn claim_selected_publication_keeps_later_incompatible_pending_row() {
 
 #[tokio::test]
 async fn direct_user_steer_passes_ordinary_queue_without_consuming_it() {
-    let case = crate::lean_vocab_test::lean_contract_snapshot()
+    let case = gents_lean_vocab::lean_contract_snapshot()
         .agent_steering_boundary_cases
         .iter()
         .find(|case| {
@@ -1079,8 +1079,8 @@ async fn direct_user_steer_passes_ordinary_queue_without_consuming_it() {
 
 #[tokio::test]
 async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
-    use crate::lean_vocab_test::LeanQueueManagementOperation;
-    let case = crate::lean_vocab_test::lean_queue_management_cases()
+    use gents_lean_vocab::LeanQueueManagementOperation;
+    let case = gents_lean_vocab::lean_queue_management_cases()
         .iter()
         .find(|case| case.name == "expired_steering_is_barrier")
         .unwrap();

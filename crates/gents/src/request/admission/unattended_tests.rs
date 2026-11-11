@@ -18,7 +18,7 @@ async fn observe(access: &ConfigAccess, owner: &str, selected: &str) -> bool {
 
 #[tokio::test]
 async fn enabled_and_native_invoke_are_independent_at_unattended_admission() -> anyhow::Result<()> {
-    let cases = &crate::lean_vocab_test::lean_identity_household_cases()
+    let cases = &gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap()
@@ -156,7 +156,7 @@ async fn enabled_and_native_invoke_are_independent_at_unattended_admission() -> 
 
 #[tokio::test]
 async fn missing_native_node_authority_is_not_treated_as_invoke() -> anyhow::Result<()> {
-    let case = crate::lean_vocab_test::lean_identity_household_cases()
+    let case = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap()

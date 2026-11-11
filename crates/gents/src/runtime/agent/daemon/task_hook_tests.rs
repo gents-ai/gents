@@ -1321,7 +1321,7 @@ async fn revocation_between_hooks_is_checked_before_the_next_renewal_poll() {
     .await
     .unwrap();
     result.unwrap();
-    let modeled = crate::lean_vocab_test::lean_task_hook_run_cases()
+    let modeled = gents_lean_vocab::lean_task_hook_run_cases()
         .iter()
         .find(|case| case.name == "revoked_between_before_hooks_refuses_the_next_launch")
         .unwrap();

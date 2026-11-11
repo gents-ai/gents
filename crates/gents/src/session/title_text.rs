@@ -113,7 +113,7 @@ mod tests {
     use super::*;
     #[test]
     fn generated_title_text_cases_bind_native_presentation() {
-        let contract = &crate::lean_vocab_test::lean_contract_snapshot().title_text_cases;
+        let contract = &gents_lean_vocab::lean_contract_snapshot().title_text_cases;
         assert_eq!(GENERATION_PREAMBLE, contract["preamble"].as_str().unwrap());
         for case in contract["cases"].as_array().unwrap() {
             let raw = case["raw"].as_str().unwrap();

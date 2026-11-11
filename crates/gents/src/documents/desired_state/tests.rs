@@ -35,7 +35,7 @@ const DEFAULT_REPLACEMENT_OWNER_DIDS: [&str; 6] = [
 
 #[test]
 fn modeled_removal_requires_the_exact_returned_document() {
-    let cases = &crate::lean_vocab_test::lean_identity_household_cases()
+    let cases = &gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .expect("configuration contract")
@@ -62,8 +62,8 @@ fn modeled_removal_requires_the_exact_returned_document() {
 
 #[tokio::test]
 async fn modeled_callback_configuration_publication_and_revocation() -> Result<()> {
-    use crate::lean_vocab_test::{lean_identity_household_cases, LeanIdentitySubject};
     use crate::NodeIdentity as _;
+    use gents_lean_vocab::{lean_identity_household_cases, LeanIdentitySubject};
     let case = lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
@@ -760,7 +760,7 @@ fn cyclic_configuration(owner: &str, agent_did: &str) -> Vec<DesiredStateApplyDo
 
 #[tokio::test]
 async fn generated_default_replacements_preserve_runtime_startup_selection() -> Result<()> {
-    let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+    let snapshot = gents_lean_vocab::lean_contract_snapshot();
     let cases = snapshot.configuration_scope_cases["default_replacement"]
         .as_array()
         .expect("Lean default replacement cases");
@@ -1201,7 +1201,7 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
 
 #[tokio::test]
 async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
-    use crate::lean_vocab_test::lean_publish_if_cases;
+    use gents_lean_vocab::lean_publish_if_cases;
 
     fn doc_for(owner: &str, id: &str, content: &str) -> Value {
         renamed(owner, id, content)
@@ -1507,7 +1507,7 @@ async fn output_obligation_count_field_must_hold_a_count_on_the_target_collectio
         ("required_observed_at", "DateTime!"),
         ("marker", "ID"),
     ] {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().count_carrier_cases["fields"];
+        let cases = &gents_lean_vocab::lean_contract_snapshot().count_carrier_cases["fields"];
         let case = cases
             .as_array()
             .unwrap()
@@ -1881,7 +1881,7 @@ async fn event_source_count_field_must_hold_a_count_on_the_source_collection() -
         ("required_observed_at", "DateTime!"),
         ("marker", "ID"),
     ] {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().count_carrier_cases["fields"];
+        let cases = &gents_lean_vocab::lean_contract_snapshot().count_carrier_cases["fields"];
         let case = cases
             .as_array()
             .unwrap()
@@ -2453,7 +2453,7 @@ async fn publication_applies_native_route_template_fields_the_schema_does_not_de
 
 #[tokio::test]
 async fn modeled_node_binding_uses_runtime_visibility_without_changing_agent_actor() -> Result<()> {
-    use crate::lean_vocab_test::{
+    use gents_lean_vocab::{
         lean_identity_household_cases, LeanIdentityAction, LeanIdentitySubject,
     };
     let case = lean_identity_household_cases()
@@ -2576,9 +2576,9 @@ async fn modeled_node_binding_uses_runtime_visibility_without_changing_agent_act
 
 #[tokio::test]
 async fn projection_binding_publication_follows_modeled_native_ownership() -> Result<()> {
-    use crate::lean_vocab_test::lean_identity_household_cases;
     use crate::store::config_client::{GraphqlEndpoint, NodePermission};
     use crate::NodeIdentity;
+    use gents_lean_vocab::lean_identity_household_cases;
 
     let model = lean_identity_household_cases()
         .iter()

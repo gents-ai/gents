@@ -30,7 +30,7 @@ async fn verified_receipt_cannot_authorize_a_different_opening_request() {
         verified_agent_creation_receipt(&session, "physical-session", Some("first-opening"))
             .is_some()
     );
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().delegated_publication_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().delegated_publication_cases;
     let mismatch = cases
         .iter()
         .find(|case| case["name"] == "mismatched-recovery-binding")
@@ -44,7 +44,7 @@ async fn verified_receipt_cannot_authorize_a_different_opening_request() {
 
 #[test]
 fn job_creation_binding_matches_executable_model() {
-    for case in &crate::lean_vocab_test::lean_causal_hop_contract().job_creation_cases {
+    for case in &gents_lean_vocab::lean_causal_hop_contract().job_creation_cases {
         assert_eq!(
             super::job_creation_matches(case.parent, case.job, case.key, case.spawn),
             case.expected
@@ -54,7 +54,7 @@ fn job_creation_binding_matches_executable_model() {
 
 #[test]
 fn deferred_creation_matches_executable_model() {
-    for case in &crate::lean_vocab_test::lean_causal_hop_contract().deferred_creation_cases {
+    for case in &gents_lean_vocab::lean_causal_hop_contract().deferred_creation_cases {
         assert_eq!(
             super::deferred_creation_allowed(case.kind, case.receipt, case.opening, case.cause),
             case.expected
@@ -72,7 +72,7 @@ async fn receipt_verification_matches_executable_creation_model() {
     assert_ne!(node.did(), agent.did());
     assert_ne!(node.did(), user.did());
     assert_ne!(agent.did(), user.did());
-    for case in &crate::lean_vocab_test::lean_causal_hop_contract().creation_cases {
+    for case in &gents_lean_vocab::lean_causal_hop_contract().creation_cases {
         let mut receipt = SessionCreationReceipt {
             node_did: node.did().into(),
             session_id: if case.scope_matches {
@@ -168,7 +168,7 @@ async fn receipt_signer_matches_creation_model() {
         crate::KeyIdentity::load_or_create(directory.path().join("worker.key"), None).unwrap();
     let other =
         crate::KeyIdentity::load_or_create(directory.path().join("other.key"), None).unwrap();
-    for case in &crate::lean_vocab_test::lean_causal_hop_contract().creation_signer_cases {
+    for case in &gents_lean_vocab::lean_causal_hop_contract().creation_signer_cases {
         let cause = if case.agent_new {
             SessionCreationCause::AgentNew
         } else {

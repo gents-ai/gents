@@ -700,9 +700,7 @@ mod tests {
 
     #[test]
     fn workspace_root_fallback_requires_complete_visibility() {
-        for case in
-            &crate::lean_vocab_test::lean_contract_snapshot().workspace_root_completeness_cases
-        {
+        for case in &gents_lean_vocab::lean_contract_snapshot().workspace_root_completeness_cases {
             let complete = case["complete"].as_bool().unwrap();
             let visible_configured = case["visible_configured"].as_bool().unwrap();
             let documents = if visible_configured {

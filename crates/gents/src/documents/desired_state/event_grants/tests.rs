@@ -82,7 +82,7 @@ fn modeled_source(generation: &Value, owner: &str) -> Value {
 #[tokio::test]
 async fn event_configuration_publication_rebinding_and_revocation_use_native_grants() -> Result<()>
 {
-    let contract = crate::lean_vocab_test::lean_identity_household_cases()
+    let contract = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();

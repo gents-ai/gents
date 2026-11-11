@@ -6,16 +6,16 @@ use gents::runtime::agent::p2p_reconcile::{
     PairingActual, PairingApplied, PairingDesired, MAX_CONCURRENT_PEER_PREPARATIONS,
 };
 
-use crate::lean_vocab_test::{
-    lean_pairing_reconcile_cases, lean_pairing_reconcile_shutdown_boundary_cases,
-    lean_pairing_reconcile_sweep_retry_boundary_cases,
-    lean_pairing_reconcile_sweep_scheduling_cases, LeanPairingReconcileSnapshot,
-};
 use crate::support::pairing_conformance::invariants::{
     check_liveness, check_safety, ObservedSnapshot,
 };
 use crate::support::pairing_conformance::runner::Harness;
 use crate::support::pairing_conformance::scenario::Scenario;
+use gents_lean_vocab::{
+    lean_pairing_reconcile_cases, lean_pairing_reconcile_shutdown_boundary_cases,
+    lean_pairing_reconcile_sweep_retry_boundary_cases,
+    lean_pairing_reconcile_sweep_scheduling_cases, LeanPairingReconcileSnapshot,
+};
 
 fn fixture_path(fixture: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -159,24 +159,26 @@ fn data_plane_layer_adds_replication_beside_control_pairing() {
     assert!(merged.template_ids.contains("machine"));
 }
 
-impl LeanPairingReconcileSnapshot {
-    fn desired(&self) -> PairingDesired {
-        PairingDesired {
-            replicator_addresses: self.desired_replicators.iter().cloned().collect(),
-            ..Default::default()
-        }
+fn pairing_desired(snapshot: &LeanPairingReconcileSnapshot) -> PairingDesired {
+    PairingDesired {
+        replicator_addresses: snapshot.desired_replicators.iter().cloned().collect(),
+        ..Default::default()
     }
+}
 
-    fn actual(&self) -> PairingActual {
-        PairingActual {
-            replicator_addresses: self.actual_replicators.iter().cloned().collect(),
-            ..Default::default()
-        }
+fn pairing_actual(snapshot: &LeanPairingReconcileSnapshot) -> PairingActual {
+    PairingActual {
+        replicator_addresses: snapshot.actual_replicators.iter().cloned().collect(),
+        ..Default::default()
     }
+}
 
-    fn owned_ops(&self) -> Vec<DiffOp> {
-        compute_owned_pairing_diff(&self.desired(), &self.actual(), &PairingApplied::default())
-    }
+fn owned_ops(snapshot: &LeanPairingReconcileSnapshot) -> Vec<DiffOp> {
+    compute_owned_pairing_diff(
+        &pairing_desired(snapshot),
+        &pairing_actual(snapshot),
+        &PairingApplied::default(),
+    )
 }
 
 #[test]
@@ -208,7 +210,7 @@ fn generated_pairing_reconcile_cases_drive_production_projector() {
         for state in [&case.before, &case.after] {
             if state.connected {
                 assert_eq!(
-                    state.owned_ops().is_empty(),
+                    owned_ops(state).is_empty(),
                     state.converged,
                     "{}: resource completion",
                     case.name
@@ -216,8 +218,8 @@ fn generated_pairing_reconcile_cases_drive_production_projector() {
             }
         }
 
-        let before_ops = case.before.owned_ops();
-        let after_ops = case.after.owned_ops();
+        let before_ops = owned_ops(&case.before);
+        let after_ops = owned_ops(&case.after);
         match case.action.as_str() {
             "dial" | "dialFailed" => {
                 assert!(
@@ -295,7 +297,7 @@ fn generated_pairing_reconcile_cases_drive_production_projector() {
     assert!(
         cases
             .iter()
-            .any(|case| case.after.converged && case.after.owned_ops().is_empty()),
+            .any(|case| case.after.converged && owned_ops(&case.after).is_empty()),
         "samples must include a state converged on every desired resource"
     );
 }

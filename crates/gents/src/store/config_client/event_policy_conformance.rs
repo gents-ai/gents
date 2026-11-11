@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 #[tokio::test]
 async fn modeled_event_configuration_grants_use_native_permissions() -> anyhow::Result<()> {
-    let contract = crate::lean_vocab_test::lean_identity_household_cases()
+    let contract = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .expect("configuration contract");
@@ -25,7 +25,7 @@ async fn modeled_event_configuration_grants_use_native_permissions() -> anyhow::
         .relations
         .iter()
         .find_map(|relation| match &relation.subject {
-            crate::lean_vocab_test::LeanIdentitySubject::Actor { actor }
+            gents_lean_vocab::LeanIdentitySubject::Actor { actor }
                 if relation.resource == "nodes" && relation.relation == "runtime_reader" =>
             {
                 Some(actor)
@@ -249,7 +249,7 @@ async fn modeled_event_configuration_grants_use_native_permissions() -> anyhow::
 
 #[tokio::test]
 async fn modeled_task_receipt_shares_native_session_permissions() -> anyhow::Result<()> {
-    let contract = crate::lean_vocab_test::lean_identity_household_cases()
+    let contract = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();

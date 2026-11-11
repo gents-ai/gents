@@ -4,7 +4,7 @@ use super::lean_contract_snapshot;
 
 #[test]
 fn generated_root_admission_case_inventory_is_complete() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().root_admission_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().root_admission_cases;
     assert!(!cases.is_empty());
     let mut names = BTreeSet::new();
     for case in cases {

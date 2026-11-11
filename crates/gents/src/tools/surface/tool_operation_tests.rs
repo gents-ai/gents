@@ -14,7 +14,7 @@ fn projection(surface: &ToolPolicySurface, pack: bool) -> Value {
 
 #[test]
 fn covered_tool_operations_follow_executable_identity_model() {
-    let case = crate::lean_vocab_test::lean_identity_household_cases()
+    let case = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .expect("configuration contract");

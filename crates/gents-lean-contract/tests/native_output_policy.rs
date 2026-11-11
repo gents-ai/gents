@@ -4,24 +4,18 @@
     reason = "This target exercises lease admission and renewal from the shared execution-policy owner."
 )]
 mod execution_policy;
-#[path = "../../gents/src/lean_vocab_test/request_execution_lease.rs"]
-#[expect(
-    dead_code,
-    reason = "The shared decoder also serves trace and provider cases in other conformance targets."
-)]
-mod runtime_contract;
 #[path = "../../gents/src/request/lifecycle/terminal_binding.rs"]
 mod terminal_binding;
 
 #[test]
 fn generated_active_lease_cases_drive_native_admission_and_renewal() {
-    use runtime_contract::{
+    use gents_lean_vocab::{
         LeanRequestExecutionAction as Action, LeanRequestExecutionBoundary as Boundary,
         LeanRequestExecutionLeaseStatus as Status,
     };
     let snapshot: serde_json::Value =
         gents_lean_contract::load_contract_snapshot().expect("generate Lean contract");
-    let cases: Vec<runtime_contract::LeanRequestExecutionLeaseCase> = serde_json::from_value(
+    let cases: Vec<gents_lean_vocab::LeanRequestExecutionLeaseCase> = serde_json::from_value(
         snapshot
             .get("request_execution_lease_cases")
             .expect("lease group")

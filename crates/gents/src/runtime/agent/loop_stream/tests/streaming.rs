@@ -244,7 +244,7 @@ async fn threaded_assistant_turn_carries_provider_message_id() {
 
 #[tokio::test]
 async fn retry_entry_does_not_publish_recorded_prompt_again() {
-    for case in &crate::lean_vocab_test::lean_contract_snapshot().retry_entry_cases {
+    for case in &gents_lean_vocab::lean_contract_snapshot().retry_entry_cases {
         let model = ScriptedModel::new(vec![
             RawStreamingChoice::Message("continued".into()),
             RawStreamingChoice::FinalResponse(()),

@@ -475,7 +475,7 @@ mod input_reissuance_tests {
 
     #[test]
     fn generated_edit_inputs_replace_authored_fields() {
-        for case in &crate::lean_vocab_test::lean_contract_snapshot().request_input_cases {
+        for case in &gents_lean_vocab::lean_contract_snapshot().request_input_cases {
             let source: RequestInput = serde_json::from_value(case["input"].clone()).unwrap();
             let input: RequestInput =
                 serde_json::from_value(case["edit_authored_input"].clone()).unwrap();
@@ -529,7 +529,7 @@ mod input_reissuance_tests {
         let signer =
             crate::store::identity::KeyIdentity::load_or_create(temp.path().join("node.key"), None)
                 .unwrap();
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().request_input_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().request_input_cases;
         let mut exercised = 0;
         for case in cases
             .iter()

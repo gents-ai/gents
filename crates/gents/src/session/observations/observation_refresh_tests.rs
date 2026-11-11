@@ -360,7 +360,7 @@ async fn same_second_claim_after_completion_becomes_the_observed_head() {
 /// query and head selection over DefraDB.
 #[tokio::test]
 async fn generated_selection_cases_drive_the_native_request_head() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot()
+    let cases = &gents_lean_vocab::lean_contract_snapshot()
         .session_document_cases
         .selection;
     assert!(cases.len() >= 13);

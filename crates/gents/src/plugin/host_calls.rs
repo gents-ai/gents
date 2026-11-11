@@ -475,8 +475,8 @@ mod tests {
 
     #[test]
     fn invocation_lifetimes_conform_to_lean() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases
-            ["tool_calls"]["host_call_lifetime"];
+        let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_resource_cases["tool_calls"]
+            ["host_call_lifetime"];
         for case in cases.as_array().unwrap() {
             let actual = wall_clock_for_invocation(
                 Duration::from_secs(case["declared"].as_u64().unwrap()),
@@ -493,8 +493,8 @@ mod tests {
 
     #[test]
     fn compute_allowances_conform_to_lean() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases
-            ["tool_calls"]["compute_allowance"];
+        let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_resource_cases["tool_calls"]
+            ["compute_allowance"];
         for case in cases.as_array().unwrap() {
             let actual = compute_allowance(
                 Duration::from_secs(case["declared"].as_u64().unwrap()),
@@ -511,8 +511,8 @@ mod tests {
 
     #[test]
     fn sleep_bounds_conform_to_lean() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases
-            ["tool_calls"]["sleep"];
+        let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_resource_cases["tool_calls"]
+            ["sleep"];
         for case in cases.as_array().unwrap() {
             assert_eq!(
                 sleep_admissible(

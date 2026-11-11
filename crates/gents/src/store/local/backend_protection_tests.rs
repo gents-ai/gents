@@ -26,7 +26,7 @@ async fn only_the_fresh_store_and_its_key_can_reopen_protected_backend() -> anyh
     })
     .await??;
     let did = runtime.did().to_owned();
-    let cases = crate::lean_vocab_test::lean_identity_household_cases()
+    let cases = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
@@ -150,7 +150,7 @@ async fn existing_unbound_store_without_provenance_is_left_untouched() -> anyhow
     );
     node.shutdown().await?;
     drop(node);
-    let cases = crate::lean_vocab_test::lean_identity_household_cases()
+    let cases = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
@@ -188,7 +188,7 @@ async fn existing_unbound_store_without_provenance_is_left_untouched() -> anyhow
 
 #[tokio::test]
 async fn a_node_reopened_with_nac_disabled_is_refused_at_startup() -> anyhow::Result<()> {
-    let modeled = crate::lean_vocab_test::lean_contract_snapshot()
+    let modeled = gents_lean_vocab::lean_contract_snapshot()
         .identity_runtime_nac_cases
         .iter()
         .map(|case| {

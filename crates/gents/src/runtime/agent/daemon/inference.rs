@@ -1011,7 +1011,7 @@ pub(super) mod tests {
 
     #[test]
     fn retry_entry_matches_lean_frontier() {
-        for case in &crate::lean_vocab_test::lean_contract_snapshot().retry_entry_cases {
+        for case in &gents_lean_vocab::lean_contract_snapshot().retry_entry_cases {
             let message = |value: &serde_json::Value| {
                 use crate::inference::llm::message::{
                     AssistantContent, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
@@ -1427,7 +1427,7 @@ pub(super) mod tests {
             .process_request(successor.clone(), shutdown_rx)
             .await
             .unwrap();
-        let contract = crate::lean_vocab_test::lean_contract_snapshot()
+        let contract = gents_lean_vocab::lean_contract_snapshot()
             .wake_input_cases
             .iter()
             .find(|case| case.name == "successor_wake_moves_only_new_notification")

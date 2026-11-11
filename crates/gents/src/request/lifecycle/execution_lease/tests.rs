@@ -472,7 +472,7 @@ async fn expired_execution_owner_drop_preserves_the_authoritative_deadline() {
 
 #[tokio::test]
 async fn native_relinquishment_follows_generated_drop_cases() {
-    use crate::lean_vocab_test::{
+    use gents_lean_vocab::{
         LeanRequestExecutionAction, LeanRequestExecutionBoundary, LeanRequestExecutionLeaseStatus,
     };
 
@@ -480,7 +480,7 @@ async fn native_relinquishment_follows_generated_drop_cases() {
 
     let access = agent_access(&node, &identity, &agent);
     let mut exercised = 0;
-    for case in crate::lean_vocab_test::lean_request_execution_lease_cases() {
+    for case in gents_lean_vocab::lean_request_execution_lease_cases() {
         let LeanRequestExecutionAction::Drop {
             boundary: LeanRequestExecutionBoundary::MutationWriteGate,
             generation,
@@ -1594,6 +1594,7 @@ async fn cancel_racing_provider_eof_commits_one_agreeing_terminal_pair() {
     }
 }
 
+mod generated_policy;
 mod request_row_writers;
 mod workspace_recovery;
 
@@ -1666,7 +1667,7 @@ async fn observed_case_request(
     node: &Arc<EmbeddedNode>,
     identity: &Arc<dyn crate::store::identity::NodeIdentity>,
     agent: &gents_protocol::agent_identity::AgentIdentityBinding,
-    case: &crate::lean_vocab_test::LeanRequestExecutionObservedCase,
+    case: &gents_lean_vocab::LeanRequestExecutionObservedCase,
     epoch: DateTime<Utc>,
 ) -> RequestLifecycle {
     let lifecycle = owner(node, identity, agent).await;
@@ -1682,7 +1683,7 @@ async fn observed_case_request(
 
 #[tokio::test]
 async fn generated_renewal_invalidates_real_publication_point_read_transaction() {
-    use crate::lean_vocab_test::LeanRequestExecutionAction;
+    use gents_lean_vocab::LeanRequestExecutionAction;
     use gents_protocol::output::rows::{
         output_segment_create_variables, transcript_message_create_variables,
         CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
@@ -1691,7 +1692,7 @@ async fn generated_renewal_invalidates_real_publication_point_read_transaction()
         MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
         OutputWriter, SegmentRun, SourceClose, StreamDeclaration, StreamPayload, TranscriptMessage,
     };
-    let case = crate::lean_vocab_test::lean_request_execution_lease_observed_cases()
+    let case = gents_lean_vocab::lean_request_execution_lease_observed_cases()
         .iter()
         .find(|case| case.name == "renewal_invalidates_admitted_publication")
         .unwrap();
@@ -1829,8 +1830,8 @@ async fn generated_renewal_invalidates_real_publication_point_read_transaction()
 
 #[tokio::test]
 async fn generated_recovery_invalidates_real_admitted_renewal_transaction() {
-    use crate::lean_vocab_test::LeanRequestExecutionAction;
-    let case = crate::lean_vocab_test::lean_request_execution_lease_observed_cases()
+    use gents_lean_vocab::LeanRequestExecutionAction;
+    let case = gents_lean_vocab::lean_request_execution_lease_observed_cases()
         .iter()
         .find(|case| case.name == "recovery_invalidates_admitted_renewal")
         .unwrap();
@@ -1904,7 +1905,7 @@ async fn generated_recovery_invalidates_real_admitted_renewal_transaction() {
 
 #[tokio::test]
 async fn renewal_expiring_during_mutation_rolls_back_before_commit_admission() {
-    let cases = crate::lean_vocab_test::lean_request_execution_lease_observed_cases();
+    let cases = gents_lean_vocab::lean_request_execution_lease_observed_cases();
     let admitted = cases
         .iter()
         .find(|case| {
@@ -1947,7 +1948,7 @@ async fn renewal_expiring_during_mutation_rolls_back_before_commit_admission() {
 
 #[tokio::test]
 async fn natural_finish_retries_changed_pending_snapshot_and_selects_exact_saved_header() {
-    let case = crate::lean_vocab_test::lean_steering_publication_cases()
+    let case = gents_lean_vocab::lean_steering_publication_cases()
         .iter()
         .find(|case| case.name == "natural_completion_intakes_late_input_before_terminal")
         .expect("executable natural completion case");
@@ -1958,7 +1959,7 @@ async fn natural_finish_retries_changed_pending_snapshot_and_selects_exact_saved
         .filter_map(|(step, expected)| {
             matches!(
                 step,
-                crate::lean_vocab_test::LeanFoldPublicationStep::FinishOrIntake { .. }
+                gents_lean_vocab::LeanFoldPublicationStep::FinishOrIntake { .. }
             )
             .then_some(expected)
         })

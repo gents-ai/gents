@@ -1611,8 +1611,8 @@ async fn recovery_hold_and_deferred_step_keep_runtime_retirement_busy() {
 
 #[tokio::test]
 async fn generated_plugin_job_wake_cases_keep_the_selected_agent() {
-    use crate::lean_vocab_test::{lean_plugin_job_wake_cases, LeanPluginJobWakeOutcome};
     use futures::FutureExt;
+    use gents_lean_vocab::{lean_plugin_job_wake_cases, LeanPluginJobWakeOutcome};
 
     let cases = lean_plugin_job_wake_cases();
     assert!(cases

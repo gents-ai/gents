@@ -255,7 +255,7 @@ async fn failed_capture_publication_rolls_back_bound_blocks_and_record() {
 
 #[test]
 fn generated_capture_block_scope_cases_use_physical_session_identity() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().capture_block_scope_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().capture_block_scope_cases;
     assert!(!cases.is_empty());
     for case in cases {
         let field = |name: &str| case[name].as_str().expect("block scope case field");

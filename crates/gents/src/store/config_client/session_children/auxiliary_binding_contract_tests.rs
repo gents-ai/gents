@@ -34,8 +34,7 @@ async fn create_document(access: &crate::ConfigAccess, collection: &str, input: 
 
 #[tokio::test]
 async fn modeled_request_child_bindings_use_real_node_and_agent_signatures() {
-    let cases =
-        &crate::lean_vocab_test::lean_contract_snapshot().auxiliary_session_child_binding_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().auxiliary_session_child_binding_cases;
     let selected = [
         "paired_title_segment",
         "paired_title_capture",

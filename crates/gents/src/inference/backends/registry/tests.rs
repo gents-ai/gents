@@ -1,8 +1,8 @@
 use super::*;
 use crate::inference::admission::BackendAdmissionConfig;
 use crate::inference::backends::provider::BackendProviderKind;
-use crate::lean_vocab_test::lean_backend_health_admission_cases;
 use crate::OpenAiWireApi;
+use gents_lean_vocab::lean_backend_health_admission_cases;
 
 fn base_backend() -> InferenceBackend {
     serde_json::from_value(serde_json::json!({
@@ -968,7 +968,7 @@ async fn generated_catalog_refreshes_preserve_payload_commits_and_latest_freshne
     let (db, _user, access) =
         crate::test_support::signed_test_node_without_agent("registry-generated-catalog").await;
     let node = db.node.clone();
-    for (index, case) in crate::lean_vocab_test::lean_catalog_refresh_cases()
+    for (index, case) in gents_lean_vocab::lean_catalog_refresh_cases()
         .iter()
         .enumerate()
     {
@@ -1048,7 +1048,7 @@ async fn catalog_freshness_survives_reopen_and_adopts_retained_payloads() -> Res
     let mut backend = base_backend();
     backend.node_did = db.node_identity.did().to_owned();
     crate::documents::write_inference_backend_document(&access, &backend).await?;
-    let case = crate::lean_vocab_test::lean_catalog_refresh_cases()
+    let case = gents_lean_vocab::lean_catalog_refresh_cases()
         .iter()
         .find(|case| case["witness"] == "catalog.delayed-change-after-identical")
         .unwrap();

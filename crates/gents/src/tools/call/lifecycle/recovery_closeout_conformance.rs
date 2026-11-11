@@ -27,7 +27,7 @@ pub(super) fn recovery_identities(
 
 #[tokio::test]
 async fn generated_native_missing_parent_restart_cases_defer() {
-    let cases = crate::lean_vocab_test::lean_restart_disposition_cases()
+    let cases = gents_lean_vocab::lean_restart_disposition_cases()
         .iter()
         .filter(|case| case.parent_observation == "missing")
         .collect::<Vec<_>>();
@@ -82,10 +82,7 @@ async fn generated_native_missing_parent_restart_cases_defer() {
     }
 }
 
-fn assert_notification_reason(
-    notification: &str,
-    case: &crate::lean_vocab_test::LeanRecoverySweepCase,
-) {
+fn assert_notification_reason(notification: &str, case: &gents_lean_vocab::LeanRecoverySweepCase) {
     match case.notification_reason.as_deref() {
         Some(reason) => assert!(
             notification.contains(&format!("<reason>{reason}</reason>")),
@@ -140,7 +137,7 @@ fn handoff_reason_for_case(name: &str) -> Option<&'static str> {
 
 #[tokio::test]
 async fn generated_session_message_recovery_cases_use_accepted_call() {
-    let cases = crate::lean_vocab_test::lean_recovery_sweep_cases()
+    let cases = gents_lean_vocab::lean_recovery_sweep_cases()
         .iter()
         .filter(|case| case.sweep_id == "tool_call_lifecycle_recover_session_message_rows")
         .collect::<Vec<_>>();
@@ -276,7 +273,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                         Some(message.caused_request_doc_id.as_str())
                     );
                     let modeled = tokio::task::spawn_blocking(|| {
-                        crate::lean_vocab_test::lean_contract_snapshot()
+                        gents_lean_vocab::lean_contract_snapshot()
                             .goal_link_cases
                             .iter()
                             .find(|case| {
@@ -483,7 +480,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
 #[cfg(unix)]
 #[tokio::test]
 async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
-    let cases = crate::lean_vocab_test::lean_recovery_sweep_cases();
+    let cases = gents_lean_vocab::lean_recovery_sweep_cases();
     for name in [
         "orphaned_background_tool_without_execution_to_cancelled",
         "orphaned_background_tool_expired_terminal_parent_to_timed_out",
@@ -640,7 +637,7 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
 
 #[tokio::test]
 async fn generated_missing_parent_deferred_cases_keep_accepted_row_running() {
-    let cases = crate::lean_vocab_test::lean_recovery_sweep_cases();
+    let cases = gents_lean_vocab::lean_recovery_sweep_cases();
     for name in ["orphaned_background_tool_expired_missing_parent_deferred"] {
         let case = cases.iter().find(|case| case.name == name).unwrap();
         assert_eq!(case.terminal_state, "running", "{name}");
@@ -715,7 +712,7 @@ async fn generated_missing_parent_deferred_cases_keep_accepted_row_running() {
 }
 #[tokio::test]
 async fn generated_background_completion_recovery_uses_accepted_native_call() {
-    let cases = crate::lean_vocab_test::lean_recovery_sweep_cases();
+    let cases = gents_lean_vocab::lean_recovery_sweep_cases();
     let case = cases
         .iter()
         .find(|case| {

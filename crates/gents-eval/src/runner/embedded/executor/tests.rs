@@ -44,7 +44,7 @@ pub(super) fn assert_failure_class(
     class: crate::EvidenceClass,
 ) {
     assert_eq!(observed, Some(kind));
-    let modeled = crate::lean_vocab_test::lean_eval_outcome_cases()
+    let modeled = gents_lean_vocab::lean_eval_outcome_cases()
         .iter()
         .find(|case| case.kind == kind.as_str() && case.provider_reason.is_none())
         .expect("the Lean model classifies every outcome without a provider reason");

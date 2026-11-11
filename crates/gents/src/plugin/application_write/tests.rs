@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 #[test]
 fn admission_matches_executable_lean_owner() {
-    let cases = crate::lean_vocab_test::lean_application_write_cases();
+    let cases = gents_lean_vocab::lean_application_write_cases();
     assert!(!cases.is_empty());
     for case in cases {
         let observation: Observation = serde_json::from_value(case.clone()).unwrap();
@@ -566,8 +566,8 @@ mod plugin {
     #[tokio::test]
     async fn plugin_write_to_a_protected_collection_is_refused() {
         let node = node().await;
-        let publication = &crate::lean_vocab_test::lean_contract_snapshot()
-            .client_publication_protected_collection;
+        let publication =
+            &gents_lean_vocab::lean_contract_snapshot().client_publication_protected_collection;
         for collection in [
             gents_protocol::schemas::EVAL_RUN_NAME,
             "AgentRequest",

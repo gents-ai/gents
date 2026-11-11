@@ -166,7 +166,7 @@ mod legacy_backend_tests {
                 policy.id == gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID
                     && policy.resource_name == "secret_configuration"
             });
-        let modeled = crate::lean_vocab_test::lean_identity_household_cases()
+        let modeled = gents_lean_vocab::lean_identity_household_cases()
             .iter()
             .find(|case| case.name == "configuration-explicit-grants")
             .unwrap();

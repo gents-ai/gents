@@ -17,7 +17,7 @@ use gents_loop::claude_messages_body::{
 use rig::completion::CompletionError;
 use rig::streaming::RawStreamingChoice;
 
-use crate::lean_vocab_test::{
+use gents_lean_vocab::{
     lean_prompt_assembly_claude_body_cases, lean_prompt_assembly_claude_map_cases,
     lean_prompt_assembly_claude_replay_cases, lean_prompt_assembly_claude_stream_cases,
     lean_prompt_assembly_claude_thinking_stream_cases, lean_prompt_assembly_sanitize_cases,
@@ -827,12 +827,12 @@ fn generated_claude_initial_thinking_text_seals_in_native_accumulator() {
     }
 }
 
-fn profile_of_order(mode: crate::lean_vocab_test::LeanAssistantOrderMode) -> ProviderInputProfile {
+fn profile_of_order(mode: gents_lean_vocab::LeanAssistantOrderMode) -> ProviderInputProfile {
     match mode {
-        crate::lean_vocab_test::LeanAssistantOrderMode::Grouped => {
+        gents_lean_vocab::LeanAssistantOrderMode::Grouped => {
             ProviderInputProfile::OpenAiChatCompletions
         }
-        crate::lean_vocab_test::LeanAssistantOrderMode::NativePreserved => {
+        gents_lean_vocab::LeanAssistantOrderMode::NativePreserved => {
             ProviderInputProfile::ClaudeMessages
         }
     }
@@ -841,7 +841,7 @@ fn profile_of_order(mode: crate::lean_vocab_test::LeanAssistantOrderMode) -> Pro
 #[test]
 fn generated_assistant_order_cases_bind_selected_provider_order() {
     use gents::inference::compaction::history::normalize_assistant_content_order;
-    let cases = crate::lean_vocab_test::lean_prompt_assembly_assistant_order_cases();
+    let cases = gents_lean_vocab::lean_prompt_assembly_assistant_order_cases();
     assert!(!cases.is_empty());
     for case in cases {
         let profile = profile_of_order(case.order_mode);
@@ -871,7 +871,7 @@ fn generated_assistant_order_cases_bind_selected_provider_order() {
 
 #[test]
 fn generated_mode_sanitize_cases_bind_composed_provider_view() {
-    let cases = crate::lean_vocab_test::lean_prompt_assembly_mode_sanitize_cases();
+    let cases = gents_lean_vocab::lean_prompt_assembly_mode_sanitize_cases();
     assert!(!cases.is_empty());
     for case in cases {
         let profile = profile_of_order(case.order_mode);
@@ -939,9 +939,9 @@ fn physical_replay_tag(row: usize) -> gents_loop::claude_messages_body::ReplayTa
 }
 
 fn native_replay_tag(
-    tag: &crate::lean_vocab_test::LeanCanonicalCoordinate,
+    tag: &gents_lean_vocab::LeanCanonicalCoordinate,
 ) -> gents_loop::claude_messages_body::ReplayTag {
-    use crate::lean_vocab_test::LeanCanonicalSource;
+    use gents_lean_vocab::LeanCanonicalSource;
     use gents_protocol::output::OutputSource;
     let source = match &tag.source {
         LeanCanonicalSource::Provider {
@@ -966,16 +966,16 @@ fn native_replay_tag(
         } => OutputSource::ProviderTurn {
             scope: gents_protocol::rendered_request::CaptureScope {
                 kind: match auxiliary_kind {
-                    crate::lean_vocab_test::LeanAuxiliaryKind::Compaction => {
+                    gents_lean_vocab::LeanAuxiliaryKind::Compaction => {
                         gents_protocol::rendered_request::CaptureScopeKind::Compaction
                     }
-                    crate::lean_vocab_test::LeanAuxiliaryKind::CompactionFallback => {
+                    gents_lean_vocab::LeanAuxiliaryKind::CompactionFallback => {
                         gents_protocol::rendered_request::CaptureScopeKind::CompactionFallback
                     }
-                    crate::lean_vocab_test::LeanAuxiliaryKind::Title => {
+                    gents_lean_vocab::LeanAuxiliaryKind::Title => {
                         gents_protocol::rendered_request::CaptureScopeKind::Title
                     }
-                    crate::lean_vocab_test::LeanAuxiliaryKind::AccessReview => {
+                    gents_lean_vocab::LeanAuxiliaryKind::AccessReview => {
                         gents_protocol::rendered_request::CaptureScopeKind::AccessReview
                     }
                 },
@@ -995,9 +995,9 @@ fn native_replay_tag(
 }
 
 fn native_replay_origin(
-    origin: &crate::lean_vocab_test::LeanClaudeReplayOrigin,
+    origin: &gents_lean_vocab::LeanClaudeReplayOrigin,
 ) -> gents_loop::claude_messages_body::ReplayOrigin {
-    use crate::lean_vocab_test::LeanClaudeReplayOrigin as Lean;
+    use gents_lean_vocab::LeanClaudeReplayOrigin as Lean;
     use gents_loop::claude_messages_body::ReplayOrigin as Native;
     match origin {
         Lean::ClaudeSubscription => Native::ClaudeSubscription,
@@ -1010,9 +1010,9 @@ fn native_replay_origin(
 }
 
 fn native_replay_wire(
-    wire: crate::lean_vocab_test::LeanReasoningReplayWire,
+    wire: gents_lean_vocab::LeanReasoningReplayWire,
 ) -> gents_loop::claude_messages_body::ReplayWire {
-    use crate::lean_vocab_test::LeanReasoningReplayWire as Lean;
+    use gents_lean_vocab::LeanReasoningReplayWire as Lean;
     use gents_loop::claude_messages_body::ReplayWire as Native;
     match wire {
         Lean::ClaudeMessages => Native::ClaudeMessages,
@@ -1021,7 +1021,7 @@ fn native_replay_wire(
 }
 
 fn native_replay_resolution(
-    entry: &crate::lean_vocab_test::LeanClaudeCheckpointResolution,
+    entry: &gents_lean_vocab::LeanClaudeCheckpointResolution,
 ) -> gents_loop::claude_messages_body::ResolvedReplayEvidence {
     use gents_loop::claude_messages_body::{ReplayIssuer, ResolvedReplayEvidence};
     ResolvedReplayEvidence {
@@ -1048,9 +1048,9 @@ fn native_replay_resolution(
 }
 
 fn native_flat_items(
-    items: &[crate::lean_vocab_test::LeanReplayFlatItem],
+    items: &[gents_lean_vocab::LeanReplayFlatItem],
 ) -> Vec<gents_loop::provider_input::replay_frontier::FlatItem> {
-    use crate::lean_vocab_test::LeanReplayFlatKind;
+    use gents_lean_vocab::LeanReplayFlatKind;
     use gents_loop::provider_input::replay_frontier::FlatItem;
     items
         .iter()
@@ -1062,7 +1062,7 @@ fn native_flat_items(
 }
 
 fn native_tagged_replay_row(
-    row: &crate::lean_vocab_test::LeanClaudeTaggedReplayRow,
+    row: &gents_lean_vocab::LeanClaudeTaggedReplayRow,
 ) -> gents_loop::claude_messages_body::TaggedAssistantRow {
     gents_loop::claude_messages_body::TaggedAssistantRow {
         source: row.source.as_ref().map(native_replay_tag),
@@ -1074,7 +1074,7 @@ fn native_tagged_replay_row(
 }
 
 fn native_tagged_message(
-    row: &crate::lean_vocab_test::LeanClaudeTaggedReplayRow,
+    row: &gents_lean_vocab::LeanClaudeTaggedReplayRow,
 ) -> gents_loop::loop_stream::TaggedMessage {
     gents_loop::loop_stream::TaggedMessage {
         message: Message::Assistant {
@@ -1090,7 +1090,7 @@ fn native_tagged_message(
 
 fn native_modeled_provider_view(
     messages: &[Message],
-    rows: &[crate::lean_vocab_test::LeanClaudeTaggedReplayRow],
+    rows: &[gents_lean_vocab::LeanClaudeTaggedReplayRow],
 ) -> Vec<gents_loop::loop_stream::TaggedMessage> {
     let mut modeled = rows.iter();
     let mut announced: std::collections::VecDeque<ToolCall> = std::collections::VecDeque::new();
@@ -1146,7 +1146,7 @@ fn native_modeled_provider_view(
 
 #[test]
 fn generated_replay_shape_cases_bind_source_index_projection() {
-    use crate::lean_vocab_test::lean_prompt_assembly_replay_shape_cases;
+    use gents_lean_vocab::lean_prompt_assembly_replay_shape_cases;
     use gents_loop::loop_stream::select_tagged_assistant_blocks;
 
     let cases = lean_prompt_assembly_replay_shape_cases();
@@ -1178,7 +1178,7 @@ fn generated_replay_shape_cases_bind_source_index_projection() {
 
 #[test]
 fn generated_replay_prefix_cases_bind_acceptance_checks() {
-    use crate::lean_vocab_test::lean_prompt_assembly_replay_prefix_cases;
+    use gents_lean_vocab::lean_prompt_assembly_replay_prefix_cases;
     use gents_loop::provider_input::replay_frontier::{anchored, drop_leading_reasoning, ords};
 
     let cases = lean_prompt_assembly_replay_prefix_cases();
@@ -1217,7 +1217,7 @@ fn generated_replay_prefix_cases_bind_acceptance_checks() {
 
 #[test]
 fn generated_reasoning_suffix_cases_bind_native_selection() {
-    use crate::lean_vocab_test::lean_prompt_assembly_reasoning_suffix_cases;
+    use gents_lean_vocab::lean_prompt_assembly_reasoning_suffix_cases;
     use gents_loop::claude_messages_body::{replay_stage, select_replay, ReplayIssuer};
 
     let cases = lean_prompt_assembly_reasoning_suffix_cases();
@@ -1339,7 +1339,7 @@ fn replay_checkpoint_outcome(
 
 #[test]
 fn generated_protected_replay_compaction_cases_bind_native_split_and_checkpoint() {
-    use crate::lean_vocab_test::lean_protected_replay_compaction_cases;
+    use gents_lean_vocab::lean_protected_replay_compaction_cases;
     use gents_loop::claude_messages_body::prepare_replay_checkpoint;
     use gents_loop::compaction::history::protected_pair_safe_split_index;
 
@@ -1421,7 +1421,7 @@ fn generated_protected_replay_compaction_cases_bind_native_split_and_checkpoint(
 
 #[test]
 fn generated_claude_checkpoint_cases_bind_selected_assistant_projection() {
-    use crate::lean_vocab_test::lean_prompt_assembly_claude_checkpoint_cases;
+    use gents_lean_vocab::lean_prompt_assembly_claude_checkpoint_cases;
     use gents_loop::claude_messages_body::{
         prepare_replay_checkpoint, restore_contiguous_replay, TaggedAssistantRow,
     };
@@ -1596,7 +1596,7 @@ fn generated_claude_replay_cases_drive_native_messages_body() {
     }
 }
 
-fn lean_facts(facts: &crate::lean_vocab_test::LeanPromptAssemblyClaudeFieldFacts) -> ModelFacts {
+fn lean_facts(facts: &gents_lean_vocab::LeanPromptAssemblyClaudeFieldFacts) -> ModelFacts {
     ModelFacts {
         adaptive: facts.adaptive,
         always_thinks: facts.always_thinks,
@@ -1817,7 +1817,6 @@ fn production_sources() -> Vec<(String, String)> {
                 || file_name.ends_with("_tests.rs")
                 || file_name.ends_with("_test.rs")
                 || relative.contains("test_support")
-                || relative.contains("lean_vocab_test")
             {
                 continue;
             }

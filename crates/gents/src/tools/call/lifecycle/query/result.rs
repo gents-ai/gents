@@ -1132,7 +1132,7 @@ mod tests {
     #[tokio::test]
     async fn generated_plugin_child_terminal_presentation_matches_execution_owner() {
         use gents_protocol::output::{PayloadPresentation, PresentationPart};
-        let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+        let snapshot = gents_lean_vocab::lean_contract_snapshot();
         let cases = snapshot.plugin_resource_cases["tool_effect_terminals"]
             .as_array()
             .expect("generated plugin terminal cases");

@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use gents::eval::{classify, subject_causable, EvidenceClass, OutcomeKind, ProviderReason};
 
-use crate::lean_vocab_test::{lean_eval_outcome_cases, lean_vocabulary_values};
+use gents_lean_vocab::{lean_eval_outcome_cases, lean_vocabulary_values};
 
 pub(super) fn rust_eval_outcome_vocabulary_and_projection_match_lean() {
     assert_eq!(

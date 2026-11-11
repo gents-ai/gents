@@ -183,7 +183,7 @@ mod tests {
             notice,
         )
         .await;
-        let model = &crate::lean_vocab_test::lean_contract_snapshot().mailbox_runtime_notice_case;
+        let model = &gents_lean_vocab::lean_contract_snapshot().mailbox_runtime_notice_case;
         assert_eq!(
             matches!(result, Err(RuntimeNoticeError::MissingClaimProvenance)),
             model["deferred"].as_bool().unwrap()

@@ -1530,7 +1530,7 @@ mod session_provenance_tests {
 
     #[test]
     fn task_provenance_matches_generated_opening_cases() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot()
+        let cases = &gents_lean_vocab::lean_contract_snapshot()
             .session_document_cases
             .projection;
         let cases: Vec<_> = cases

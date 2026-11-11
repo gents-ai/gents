@@ -51,7 +51,7 @@ async fn native_mailbox_recipient_and_creator_follow_modeled_policy() -> anyhow:
             .await?,
     );
     let context = defra_core::RequestContext::default().with_identity(Some(user.did().to_owned()));
-    let modeled = &crate::lean_vocab_test::lean_contract_snapshot().mailbox_native_policy;
+    let modeled = &gents_lean_vocab::lean_contract_snapshot().mailbox_native_policy;
     assert_eq!(
         modeled["policy_yaml"].as_str(),
         Some(gents_protocol::schemas::MAILBOX_POLICY)
@@ -430,7 +430,7 @@ async fn mailbox_sweep_uses_held_targets() -> anyhow::Result<()> {
         "{{ MailboxItem(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
         escape_graphql_string(&ids[0])
     );
-    for case in &crate::lean_vocab_test::lean_contract_snapshot().mailbox_sweep_actor_cases {
+    for case in &gents_lean_vocab::lean_contract_snapshot().mailbox_sweep_actor_cases {
         let access = match case["actor"].as_str().unwrap() {
             "agent" => ConfigAccess::local_managed_agent(
                 node.clone(),

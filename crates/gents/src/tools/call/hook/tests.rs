@@ -524,10 +524,10 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
     let _ = std::fs::remove_dir_all(data_path);
 }
 use crate::ensure_runtime_schemas;
-use crate::lean_vocab_test::{
+use crate::test_support::first_content;
+use gents_lean_vocab::{
     lean_persistence_failure_policy_cases, lean_storage_observation_runtime_cases,
 };
-use crate::test_support::first_content;
 
 fn user_text_message(text: &str) -> Message {
     Message::User {
@@ -665,8 +665,7 @@ fn failure_policy_from_contract(policy: &str) -> FailurePolicy {
 
 #[tokio::test]
 async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies() {
-    let cases =
-        &crate::lean_vocab_test::lean_contract_snapshot().canonical_dispatch_observation_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().canonical_dispatch_observation_cases;
     for case in cases
         .iter()
         .filter(|case| case.inputs.iter().all(|input| input.policy_allows))
@@ -871,11 +870,11 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
     let identity_dir = tempfile::tempdir().unwrap();
     let identity =
         KeyIdentity::load_or_create(identity_dir.path().join("owner.key"), None).unwrap();
-    let goal_case = crate::lean_vocab_test::lean_goal_create_cases()
+    let goal_case = gents_lean_vocab::lean_goal_create_cases()
         .iter()
         .find(|case| case.expected == "fresh" && case.token_budget.is_none())
         .unwrap();
-    let replay = crate::lean_vocab_test::lean_canonical_dispatch_observation_cases()
+    let replay = gents_lean_vocab::lean_canonical_dispatch_observation_cases()
         .iter()
         .find(|case| case.name == "won_dispatch_then_replay")
         .unwrap();
@@ -2965,7 +2964,7 @@ async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
     use crate::session::tool_call_state::ToolCallState;
     use crate::tools::call::lifecycle::InterruptDisposition;
     use gents_protocol::tool_call::AwaitMode;
-    let cases = crate::lean_vocab_test::lean_interrupt_disposition_cases();
+    let cases = gents_lean_vocab::lean_interrupt_disposition_cases();
     assert!(!cases.is_empty());
     let dir = tempfile::tempdir().unwrap();
     let node = Arc::new(
@@ -4793,7 +4792,7 @@ async fn plugin_child_naming_a_job_tool_reaches_its_owner() {
 
 #[tokio::test]
 async fn generated_background_process_identity_cases_cancel_only_the_physical_invocation() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().background_process_identity_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().background_process_identity_cases;
     assert!(!cases.is_empty());
     for case in cases {
         let registry = BackgroundExecutionRegistry::default();

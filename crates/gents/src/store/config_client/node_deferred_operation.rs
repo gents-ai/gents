@@ -207,11 +207,11 @@ mod tests {
     use anyhow::{Context, Result};
 
     use super::*;
-    use crate::lean_vocab_test::{
-        lean_contract_snapshot, lean_identity_household_cases, LeanIdentityAction,
-    };
     use crate::store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
     use crate::NodeIdentity;
+    use gents_lean_vocab::{
+        lean_contract_snapshot, lean_identity_household_cases, LeanIdentityAction,
+    };
 
     #[tokio::test]
     async fn deferred_enrollment_documents_remain_private_then_follow_the_node() -> Result<()> {

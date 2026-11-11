@@ -1,6 +1,6 @@
 use super::*;
-use crate::lean_vocab_test::{lean_pack_identity_cases, LeanPackIdentityBinding};
 use crate::store::identity::{KeyIdentity, NodeIdentity};
+use gents_lean_vocab::{lean_pack_identity_cases, LeanPackIdentityBinding};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -257,7 +257,7 @@ async fn installed_agents_reuse_bindings_and_reject_stale_preparation() {
 
 #[test]
 fn dependency_reference_matches_lean() {
-    for case in crate::lean_vocab_test::lean_pack_identity_reference_cases() {
+    for case in gents_lean_vocab::lean_pack_identity_reference_cases() {
         let actual = (|| -> Result<AgentIdentityBinding> {
             let mut available = BTreeMap::new();
             for dependency in &case.available {

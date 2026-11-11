@@ -13,8 +13,7 @@ use serde_json::json;
 
 #[test]
 fn configuration_admission_and_deferral_match_lean() {
-    let cases =
-        &crate::lean_vocab_test::lean_contract_snapshot().runtime_configuration_admission_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().runtime_configuration_admission_cases;
     assert_eq!(cases.len(), 4);
     for case in cases {
         let name = case["name"].as_str().unwrap();

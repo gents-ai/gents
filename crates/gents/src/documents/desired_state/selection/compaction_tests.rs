@@ -49,7 +49,7 @@ async fn document_id(
 
 #[tokio::test]
 async fn signed_compaction_selection_and_revocation_follow_native_usersets() -> Result<()> {
-    let cases = &crate::lean_vocab_test::lean_identity_household_cases()
+    let cases = &gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .context("configuration model")?

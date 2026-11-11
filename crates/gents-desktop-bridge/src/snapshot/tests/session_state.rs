@@ -2,7 +2,7 @@ use super::*;
 use crate::types::ReconstructionState;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-use super::lean_vocab_test::{
+use gents_lean_vocab::{
     lean_client_session_queue_order_cases, lean_desktop_client_shell_cases,
     lean_live_overlay_cases, lean_request_lifecycle_operator_ui_cases, lean_transcript_cases,
 };
@@ -82,7 +82,7 @@ fn lean_requester(id: usize) -> Option<String> {
 
 fn lean_session_rows(
     session_id: &str,
-    rows: &[super::lean_vocab_test::LeanSessionTurnRow],
+    rows: &[gents_lean_vocab::LeanSessionTurnRow],
 ) -> Vec<AgentRequestRow> {
     use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
     rows.iter()
@@ -190,7 +190,7 @@ fn contract_session(
     }
 }
 
-fn client_shell_contract_store(case: &super::lean_vocab_test::LeanClientShellCase) -> ClientStore {
+fn client_shell_contract_store(case: &gents_lean_vocab::LeanClientShellCase) -> ClientStore {
     let session_id = contract_session_id(
         case.desktop_selected_session_id
             .expect("desktop contract case should select a session"),
@@ -240,7 +240,7 @@ fn request_ids_for_docs(rows: &[AgentRequestRow], docs: &[usize]) -> Vec<String>
 
 #[test]
 fn display_owner_binds_generated_session_turn_cases() {
-    for case in super::lean_vocab_test::lean_client_session_turn_cases() {
+    for case in gents_lean_vocab::lean_client_session_turn_cases() {
         let rows = lean_session_rows("session-1", &case.rows);
         let selected = rows
             .iter()
@@ -260,7 +260,7 @@ fn display_owner_binds_generated_session_turn_cases() {
 
 #[test]
 fn session_snapshot_binds_generated_session_turn_cases() {
-    let cases = super::lean_vocab_test::lean_client_session_turn_cases();
+    let cases = gents_lean_vocab::lean_client_session_turn_cases();
     assert_eq!(cases.len(), 43);
     let public_cases = cases
         .iter()
@@ -462,7 +462,7 @@ fn session_snapshot_binds_generated_session_turn_cases() {
 #[test]
 fn session_queue_order_matches_native_arrival_model_after_claim() {
     for case in lean_client_session_queue_order_cases() {
-        let modeled: Vec<super::lean_vocab_test::LeanSessionTurnRow> =
+        let modeled: Vec<gents_lean_vocab::LeanSessionTurnRow> =
             serde_json::from_value(case["rows"].clone()).unwrap();
         let rows = lean_session_rows("session-1", &modeled);
         let store = ClientStore::from_rows(ClientStoreRows {
@@ -1060,7 +1060,7 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
 
 #[test]
 fn session_snapshot_retains_modeled_terminal_provider_evidence() {
-    for case in super::lean_vocab_test::lean_request_transition_cases()
+    for case in gents_lean_vocab::lean_request_transition_cases()
         .iter()
         .filter(|case| case.to == "interrupted" && case.classification == "legal")
     {

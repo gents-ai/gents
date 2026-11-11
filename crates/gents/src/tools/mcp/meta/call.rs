@@ -382,9 +382,9 @@ mod tests {
     use chrono::Utc;
     use serde_json::json;
 
-    use crate::lean_vocab_test::{lean_tool_preflight_cases, LeanToolPreflightCase};
     use crate::tools::mcp::health::{HealthStatus, ServiceHealth, ServiceHealthMap};
     use crate::tools::mcp::pool::McpPool;
+    use gents_lean_vocab::{lean_tool_preflight_cases, LeanToolPreflightCase};
 
     fn search_schema() -> Map<String, Value> {
         json!({

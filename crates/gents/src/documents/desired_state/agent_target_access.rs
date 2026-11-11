@@ -364,7 +364,7 @@ mod tests {
             db.node.clone(),
             identity::Did::new(node_did.clone()).unwrap(),
         );
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().agent_target_access_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().agent_target_access_cases;
         assert_eq!(cases.len(), 8);
         for (index, case) in cases.iter().enumerate() {
             let state = case["state"].as_str().unwrap();

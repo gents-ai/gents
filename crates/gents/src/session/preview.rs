@@ -115,7 +115,7 @@ mod tests {
 
     #[test]
     fn terminal_reply_projection_follows_the_model() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().session_reply_preview_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().session_reply_preview_cases;
         assert_eq!(cases.len(), 96);
         for case in cases {
             let observation = SessionObservation {

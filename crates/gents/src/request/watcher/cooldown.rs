@@ -64,7 +64,7 @@ where
 #[cfg(test)]
 #[test]
 fn generation_marks_match_the_generated_model() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().backend_generation_mark_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().backend_generation_mark_cases;
     assert!(!cases.is_empty());
     for case in cases {
         assert_eq!(

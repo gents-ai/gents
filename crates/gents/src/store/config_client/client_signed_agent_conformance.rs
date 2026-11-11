@@ -262,7 +262,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
         id: metadata["credential_id"].as_str().unwrap().to_owned(),
         version: metadata["credential_version"].as_str().unwrap().to_owned(),
     };
-    let modeled = crate::lean_vocab_test::lean_identity_household_cases()
+    let modeled = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
@@ -295,7 +295,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
         rotated["data"]["BackendCredential"][0]["secret"]["key"],
         "rotated-private-key"
     );
-    let modeled = crate::lean_vocab_test::lean_identity_household_cases()
+    let modeled = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
@@ -344,7 +344,7 @@ async fn user_signed_backend_separates_metadata_and_private_credential() -> anyh
         .is_err());
     let agent_did = identity::Did::new(agent.did())?;
     let editor_did = identity::Did::new(editor.did())?;
-    let modeled = crate::lean_vocab_test::lean_identity_household_cases()
+    let modeled = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
@@ -683,7 +683,7 @@ async fn publication_observer_refuses_local_transactions_before_callback() {
 #[test]
 fn modeled_publication_journal_traces_drive_the_native_owner() {
     use super::client_agent_publication::{ClientAgentJournal, PublicationStage};
-    use crate::lean_vocab_test::{
+    use gents_lean_vocab::{
         LeanIdentityClientAgentJournalAction as Action,
         LeanIdentityClientAgentJournalStage as Stage,
     };
@@ -697,7 +697,7 @@ fn modeled_publication_journal_traces_drive_the_native_owner() {
     }
     fn check(
         actual: &ClientAgentJournal,
-        expected: &crate::lean_vocab_test::LeanIdentityClientAgentJournalState,
+        expected: &gents_lean_vocab::LeanIdentityClientAgentJournalState,
         name: &str,
     ) {
         assert_eq!(actual.client, expected.client, "{name}");
@@ -726,9 +726,7 @@ fn modeled_publication_journal_traces_drive_the_native_owner() {
             "{name}"
         );
     }
-    for case in
-        &crate::lean_vocab_test::lean_contract_snapshot().identity_client_agent_journal_cases
-    {
+    for case in &gents_lean_vocab::lean_contract_snapshot().identity_client_agent_journal_cases {
         let initial = &case.initial;
         let mut journal = ClientAgentJournal::new(
             initial.client.clone(),
@@ -761,8 +759,7 @@ fn modeled_publication_journal_traces_drive_the_native_owner() {
 
 #[test]
 fn modeled_agent_create_intent_drives_the_transaction_route() {
-    let cases =
-        &crate::lean_vocab_test::lean_contract_snapshot().identity_client_agent_creation_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().identity_client_agent_creation_cases;
     let mut covered = 0;
     for case in cases {
         if !case.signer_available
@@ -796,8 +793,7 @@ fn modeled_agent_create_intent_drives_the_transaction_route() {
 #[test]
 fn modeled_authored_document_creation_requires_trusted_schema_and_held_user() {
     use super::authored_document::{document_create_allowed, DocumentSchemaSource};
-    for case in
-        &crate::lean_vocab_test::lean_contract_snapshot().identity_client_document_creation_cases
+    for case in &gents_lean_vocab::lean_contract_snapshot().identity_client_document_creation_cases
     {
         let flag = |name: &str| case[name].as_bool().expect("modeled boolean");
         let source = match case["source"].as_str().expect("modeled schema source") {
@@ -824,7 +820,7 @@ fn modeled_authored_document_creation_requires_trusted_schema_and_held_user() {
 
 #[test]
 fn modeled_configuration_create_collections_use_trusted_schemas() {
-    let case = crate::lean_vocab_test::lean_identity_household_cases()
+    let case = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .expect("configuration contract");
@@ -858,7 +854,7 @@ fn modeled_configuration_create_collections_use_trusted_schemas() {
 
 #[test]
 fn modeled_client_intent_refuses_ordinary_mutations() {
-    let case = crate::lean_vocab_test::lean_identity_household_cases()
+    let case = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
@@ -875,7 +871,7 @@ fn modeled_client_intent_refuses_ordinary_mutations() {
 
 #[test]
 fn modeled_configuration_delete_collections_use_trusted_schemas() {
-    let case = crate::lean_vocab_test::lean_identity_household_cases()
+    let case = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
@@ -905,7 +901,7 @@ fn modeled_configuration_delete_collections_use_trusted_schemas() {
 
 #[test]
 fn modeled_signed_write_replay_requires_confirmed_abort_and_authority() {
-    let case = crate::lean_vocab_test::lean_identity_household_cases()
+    let case = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
@@ -923,7 +919,7 @@ fn modeled_signed_write_replay_requires_confirmed_abort_and_authority() {
 
 #[test]
 fn modeled_agent_immutable_replacements_preserve_genesis() {
-    let case = crate::lean_vocab_test::lean_identity_household_cases()
+    let case = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
@@ -965,7 +961,7 @@ fn modeled_held_signer_binds_the_actor_and_bearer() -> anyhow::Result<()> {
             actor_b.did()
         }
     };
-    let case = crate::lean_vocab_test::lean_identity_household_cases()
+    let case = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
@@ -1001,7 +997,7 @@ fn modeled_held_signer_binds_the_actor_and_bearer() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn modeled_missing_client_signer_fails_before_connecting() {
-    let case = crate::lean_vocab_test::lean_contract_snapshot()
+    let case = gents_lean_vocab::lean_contract_snapshot()
         .identity_client_agent_creation_cases
         .iter()
         .find(|case| case.name == "no-signer")

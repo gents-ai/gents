@@ -14,7 +14,7 @@ use super::{ConfigAccess, ConfigApplyTxn, GraphqlEndpoint, TxnBackend};
 #[tokio::test]
 async fn modeled_native_entity_sets_preserve_selection_sources() -> anyhow::Result<()> {
     use crate::store::identity::NodeIdentity;
-    let case = crate::lean_vocab_test::lean_identity_household_cases()
+    let case = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .expect("configuration model");
@@ -864,7 +864,7 @@ async fn embedded_relationship_grants_and_revocations_follow_transaction_finalit
 async fn modeled_node_owners_and_administrators_manage_only_their_selected_relations(
 ) -> anyhow::Result<()> {
     use crate::store::identity::NodeIdentity;
-    let model = crate::lean_vocab_test::lean_identity_household_cases()
+    let model = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .expect("configuration policy model");

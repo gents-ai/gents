@@ -642,7 +642,7 @@ mod tests {
         node.shutdown().await.expect("shut down test node");
     }
 
-    use crate::lean_vocab_test::{
+    use gents_lean_vocab::{
         assert_lean_contract_vocabulary_matches, assert_state_machine_contract_is_complete,
         lean_state_machine_contract, LeanContractVocabulary,
     };

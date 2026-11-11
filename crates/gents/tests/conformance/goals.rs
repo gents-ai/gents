@@ -9,7 +9,7 @@ use gents::goal::{
 };
 use gents_protocol::goal_status::GoalStatus;
 
-use crate::lean_vocab_test::{
+use gents_lean_vocab::{
     assert_state_machine_contract_is_complete, lean_goal_continuation_materialization_cases,
     lean_goal_create_cases, lean_goal_decision_cases, lean_goal_readiness_gate_cases,
     lean_goal_submission_cases, lean_goal_transition_cases, lean_task_goal_publication_cases,

@@ -241,7 +241,7 @@ mod client_goal_binding_tests {
 
     #[test]
     fn generated_client_goal_claim_requires_the_physical_assignment() {
-        let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+        let snapshot = gents_lean_vocab::lean_contract_snapshot();
         let cases = snapshot.request_input_cases[0]["client_goal_claim_binding_cases"]
             .as_array()
             .unwrap();

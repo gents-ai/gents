@@ -98,7 +98,7 @@ async fn restart_obligations(
 #[cfg(unix)]
 #[tokio::test]
 async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
-    let cases = crate::lean_vocab_test::lean_restart_disposition_cases();
+    let cases = gents_lean_vocab::lean_restart_disposition_cases();
     for name in [
         "restart_native_background_live_parent_interrupted",
         "restart_native_background_deadline_expired_times_out",
@@ -285,7 +285,7 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
 
 #[tokio::test]
 async fn generated_session_message_restart_dispositions_use_canonical_admission_owner() {
-    let cases = crate::lean_vocab_test::lean_restart_disposition_cases()
+    let cases = gents_lean_vocab::lean_restart_disposition_cases()
         .iter()
         .filter(|case| case.session_message && case.parent_observation != "missing")
         .collect::<Vec<_>>();
@@ -394,7 +394,7 @@ async fn generated_session_message_restart_dispositions_use_canonical_admission_
 
 #[tokio::test]
 async fn generated_native_recovery_cases_use_canonical_admission_owner() {
-    let cases = crate::lean_vocab_test::lean_recovery_sweep_cases();
+    let cases = gents_lean_vocab::lean_recovery_sweep_cases();
     for name in [
         "tool_backgrounded_running_unowned_process_to_failed",
         "tool_running_deadline_exceeded_to_timed_out",

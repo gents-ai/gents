@@ -38,7 +38,7 @@ impl ToolDyn for SchemaArgumentProbe {
 
 #[tokio::test]
 async fn generated_schema_argument_repair_cases_drive_owned_loop() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().schema_argument_repair_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().schema_argument_repair_cases;
     assert!(!cases.is_empty());
     let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
     let calls = Arc::new(AtomicUsize::new(0));

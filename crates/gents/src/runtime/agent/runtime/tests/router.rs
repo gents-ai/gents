@@ -1,8 +1,8 @@
 use super::support::*;
 use super::*;
-use crate::lean_vocab_test::lean_runtime_reconcile_case;
 use crate::runtime::agent::runtime::router::{RouterInputs, RouterWaitState, RuntimeAdmissionGate};
 use crate::runtime::node_readiness_publisher::{FatalNodeReadinessWrite, NodeReadinessWriter};
+use gents_lean_vocab::lean_runtime_reconcile_case;
 use rapidhash::{HashMapExt, RapidHashMap};
 
 struct CountingWatcher {

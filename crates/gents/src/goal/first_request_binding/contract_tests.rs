@@ -43,8 +43,7 @@ async fn fixture_goal(access: &ConfigAccess, node_did: &str, session_id: &str) -
 
 #[test]
 fn generated_continuation_assignments_preserve_physical_bindings() {
-    let cases =
-        &crate::lean_vocab_test::lean_contract_snapshot().goal_continuation_assignment_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_continuation_assignment_cases;
     assert_eq!(cases.len(), 17);
     for case in cases {
         let parent: Option<GoalAssignmentInput> =
@@ -83,7 +82,7 @@ fn generated_continuation_assignments_preserve_physical_bindings() {
 
 #[tokio::test]
 async fn generated_first_request_bindings_commit_exact_physical_roots() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().goal_first_request_binding_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_first_request_binding_cases;
     assert_eq!(cases.len(), 14);
     for case in cases {
         let temp = tempfile::tempdir().unwrap();

@@ -4,7 +4,7 @@
 /// revocation survives a restart.
 #[tokio::test]
 async fn data_plane_overlay_acp_follows_the_configuration_model() -> anyhow::Result<()> {
-    use crate::lean_vocab_test::lean_identity_household_cases;
+    use gents_lean_vocab::lean_identity_household_cases;
     use crate::store::config_client::{ConfigAccess, GraphqlEndpoint, NodePermission};
     use crate::NodeIdentity as _;
     use crate::store::graphql::escape_graphql_string;

@@ -653,7 +653,7 @@ mod tests {
             })
             .await?;
         let cases = tokio::task::spawn_blocking(|| {
-            crate::lean_vocab_test::lean_contract_snapshot()
+            gents_lean_vocab::lean_contract_snapshot()
                 .hosted_pack_schema_cases
                 .clone()
         })
@@ -765,7 +765,7 @@ mod tests {
         let other_evidence =
             prepare_pack_evidence(&other_access, &other_key, &scope, &create).await?;
         let cases = tokio::task::spawn_blocking(|| {
-            crate::lean_vocab_test::lean_contract_snapshot()
+            gents_lean_vocab::lean_contract_snapshot()
                 .hosted_pack_evidence_cases
                 .clone()
         })

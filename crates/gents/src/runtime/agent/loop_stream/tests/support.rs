@@ -702,7 +702,7 @@ pub(super) async fn owned_test_hook_with_identity(
 }
 
 pub(super) async fn owned_test_hook_with_folded_case(
-    case: &crate::lean_vocab_test::LeanFoldTurnInputCase,
+    case: &gents_lean_vocab::LeanFoldTurnInputCase,
 ) -> (
     Arc<defra_node::Node>,
     DefraSessionHook,
@@ -766,7 +766,7 @@ async fn write_owned_request(
 async fn owned_test_hook_with_identity_policy(
     identity: Option<Arc<dyn crate::NodeIdentity>>,
     policy: FailurePolicy,
-    folded_case: Option<&crate::lean_vocab_test::LeanFoldTurnInputCase>,
+    folded_case: Option<&gents_lean_vocab::LeanFoldTurnInputCase>,
     signature: RequestSignature,
 ) -> (
     Arc<defra_node::Node>,

@@ -723,7 +723,7 @@ async fn mailbox_sweep_pages_by_node_and_progresses_while_rows_close() {
     use std::collections::BTreeMap;
 
     let node = test_node().await;
-    let contract = crate::lean_vocab_test::lean_contract_snapshot();
+    let contract = gents_lean_vocab::lean_contract_snapshot();
     let case = contract
         .mailbox_sweep_cases
         .first()

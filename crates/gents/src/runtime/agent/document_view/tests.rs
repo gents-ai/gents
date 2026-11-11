@@ -2527,7 +2527,7 @@ async fn unavailable_agent_scan_identity_follows_lean_candidates() {
         crate::inference::backends::health::BackendHealthMap::new(),
     );
     let original = load_document_runtime_view(&node, root.did()).await.unwrap();
-    for case in &crate::lean_vocab_test::lean_contract_snapshot().watcher_actor_cases {
+    for case in &gents_lean_vocab::lean_contract_snapshot().watcher_actor_cases {
         let name = case["name"].as_str().unwrap();
         if !matches!(name, "disabled-resolved" | "disabled-unresolved") {
             continue;

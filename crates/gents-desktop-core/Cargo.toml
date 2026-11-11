@@ -54,4 +54,5 @@ gents = { path = "../gents", features = ["test-home-guard"] }
 defra-core.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 gents-lean-contract.workspace = true
+gents-lean-vocab.workspace = true
 wiremock = "0.6"

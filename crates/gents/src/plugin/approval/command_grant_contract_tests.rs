@@ -78,7 +78,7 @@ fn store(home: &Path, entries: &[workspace::Settings]) {
 
 #[test]
 fn generated_command_answers_preserve_scope_and_one_time_delivery() {
-    let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+    let snapshot = gents_lean_vocab::lean_contract_snapshot();
     assert_eq!(snapshot.workspace_command_grant_answers.len(), 962);
     assert_eq!(snapshot.workspace_command_grant_lookups.len(), 24);
     for (index, value) in snapshot.workspace_command_grant_answers.iter().enumerate() {
@@ -180,7 +180,7 @@ fn generated_command_answers_preserve_scope_and_one_time_delivery() {
 
 #[test]
 fn generated_command_revocation_preserves_the_selected_mode() {
-    let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+    let snapshot = gents_lean_vocab::lean_contract_snapshot();
     assert_eq!(snapshot.workspace_command_grant_revocations.len(), 54);
     for value in &snapshot.workspace_command_grant_revocations {
         let case: RevokeCase = serde_json::from_value(value.clone()).unwrap();

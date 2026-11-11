@@ -13,7 +13,7 @@ pub(super) fn stored_value(item: &MailboxItem) -> Value {
 
 #[test]
 fn notification_outcomes_follow_lean_cases() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().mailbox_notification_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().mailbox_notification_cases;
     assert_eq!(cases.len(), 8);
     for case in cases {
         let mode = if case["mode"] == "event" {
@@ -88,7 +88,7 @@ async fn generated_notification_cases_drive_durable_writes() {
     let node = tests::test_node().await;
     let access = tests::agent_access(&node);
     let context = tests::context("did:test:owner");
-    for (index, case) in crate::lean_vocab_test::lean_contract_snapshot()
+    for (index, case) in gents_lean_vocab::lean_contract_snapshot()
         .mailbox_notification_cases
         .iter()
         .enumerate()

@@ -34,6 +34,7 @@ proptest = "1"
 gents = { path = "../gents", features = ["test-fixtures"] }
 acp.workspace = true
 gents-lean-contract.workspace = true
+gents-lean-vocab.workspace = true
 db.workspace = true
 defra-core.workspace = true
 jsonschema = { version = "0.46.5", default-features = false }

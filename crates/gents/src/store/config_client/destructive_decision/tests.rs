@@ -2,7 +2,7 @@ use super::{DestructiveAuthority, InventoryRead};
 
 #[test]
 fn destructive_decision_follows_the_model_for_every_available_read() {
-    let cases = &crate::lean_vocab_test::lean_identity_household_cases()
+    let cases = &gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .expect("configuration model")

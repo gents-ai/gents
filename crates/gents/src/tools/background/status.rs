@@ -772,7 +772,7 @@ mod tests {
 
     #[test]
     fn generated_tool_output_paging_cases_match_slice_function() {
-        let cases = crate::lean_vocab_test::lean_tool_output_paging_cases();
+        let cases = gents_lean_vocab::lean_tool_output_paging_cases();
         assert!(
             !cases.is_empty(),
             "Lean emitted no tool-output paging cases"

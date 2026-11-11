@@ -253,7 +253,7 @@ mod tests {
     #[tokio::test]
     async fn hosted_home_publication_conforms_to_lean() {
         let cases = tokio::task::spawn_blocking(|| {
-            crate::lean_vocab_test::lean_contract_snapshot()
+            gents_lean_vocab::lean_contract_snapshot()
                 .hosted_pack_home_cases
                 .clone()
         })

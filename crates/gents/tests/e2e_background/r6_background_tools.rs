@@ -1448,10 +1448,10 @@ async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
 
 #[tokio::test]
 async fn wait_tool_caller_interrupt_returns_without_cancelling_background_row() {
-    let interrupt_case = crate::lean_vocab_test::lean_r6_backgrounding_case(
+    let interrupt_case = gents_lean_vocab::lean_r6_backgrounding_case(
         "caller_interrupt_cancels_wait_call_preserves_background_process",
     );
-    let observer_case = crate::lean_vocab_test::lean_r6_backgrounding_case(
+    let observer_case = gents_lean_vocab::lean_r6_backgrounding_case(
         "caller_interrupt_observer_completes_wait_call_preserves_background_process",
     );
     assert!(interrupt_case.legal && observer_case.legal);

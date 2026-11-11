@@ -33,7 +33,7 @@ async fn teardown(admission: PublishedAdmission) {
 
 #[tokio::test]
 async fn generated_background_lifecycle_cases_use_canonical_admission_owner() {
-    for case in crate::lean_vocab_test::lean_r6_backgrounding_cases()
+    for case in gents_lean_vocab::lean_r6_backgrounding_cases()
         .iter()
         .filter(|case| case.group == "native_lifecycle")
     {

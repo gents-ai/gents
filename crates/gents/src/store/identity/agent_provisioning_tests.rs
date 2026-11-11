@@ -3,7 +3,7 @@ use crate::store::config_client::ConfigAccess;
 
 #[tokio::test]
 async fn authorized_provisioning_grants_no_direct_node_permission() {
-    let modeled = crate::lean_vocab_test::lean_contract_snapshot()
+    let modeled = gents_lean_vocab::lean_contract_snapshot()
         .identity_grant_recipient_cases
         .iter()
         .find(|case| case.recipient == "agent")
@@ -64,7 +64,7 @@ async fn modeled_agent_creator_and_node_owner_control_native_agent() -> anyhow::
         ZanzibarStore,
     };
     let cases = tokio::task::spawn_blocking(|| {
-        crate::lean_vocab_test::lean_contract_snapshot()
+        gents_lean_vocab::lean_contract_snapshot()
             .identity_created_agent_access_cases
             .clone()
     })

@@ -138,7 +138,7 @@ async fn set_state(access: &ConfigAccess, doc_id: &str, state: &str) {
 async fn steer_reachability_matches_lean() {
     use gents_protocol::request_input::{QueueDelivery, QueuePolicy, QueueSource, RequestQueue};
     let (message, _, head) = started("steer-reachability-model").await;
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().agent_steer_reachability_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().agent_steer_reachability_cases;
     for case in cases {
         let rows = case
             .inputs
@@ -207,7 +207,7 @@ async fn steer_reachability_matches_lean() {
 
 #[tokio::test]
 async fn interrupt_delivery_latches_only_the_prepublication_head() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().interrupt_delivery_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().interrupt_delivery_cases;
     for case in cases {
         let (message, caller, caused) = started("interrupt-delivery-atomic").await;
         let node = message.admission.node.clone();
@@ -535,12 +535,12 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
         root_request_doc_id: None,
     });
     contexts.push(("goal", goal));
-    let modeled = crate::lean_vocab_test::lean_contract_snapshot()
+    let modeled = gents_lean_vocab::lean_contract_snapshot()
         .agent_steer_disposition_cases
         .iter()
         .find(|case| case.active && !case.compatible)
         .unwrap();
-    for case in &crate::lean_vocab_test::lean_contract_snapshot().agent_steer_target_cases {
+    for case in &gents_lean_vocab::lean_contract_snapshot().agent_steer_target_cases {
         let mut head = caused.clone();
         if case["planned_head"] != case["active_head"] {
             head.request_id = "a-later-turn".to_owned();
@@ -1132,7 +1132,7 @@ fn session_target_fixture(
 
 #[test]
 fn session_target_authority_matches_lean_owner() {
-    let cases = &crate::lean_vocab_test::lean_causal_hop_contract().session_target_cases;
+    let cases = &gents_lean_vocab::lean_causal_hop_contract().session_target_cases;
     assert_eq!(cases.len(), 16);
     for case in cases {
         let (session, tools) = session_target_fixture(
@@ -1151,7 +1151,7 @@ fn session_target_authority_matches_lean_owner() {
 
 #[test]
 fn session_list_entries_match_lean_owner() {
-    let cases = &crate::lean_vocab_test::lean_causal_hop_contract().session_list_cases;
+    let cases = &gents_lean_vocab::lean_causal_hop_contract().session_list_cases;
     assert_eq!(cases.len(), 64);
     for case in cases {
         let (session, tools) = session_target_fixture(
@@ -1828,7 +1828,7 @@ async fn agent_new_goal_publishes_for_target_with_the_caller_as_native_owner() {
     use crate::tools::call::lifecycle::admission_fixture::published_admission_with_owner;
 
     let modeled = tokio::task::spawn_blocking(|| {
-        crate::lean_vocab_test::lean_goal_submission_cases()
+        gents_lean_vocab::lean_goal_submission_cases()
             .iter()
             .find(|case| case.name == "commit_both_atomically")
             .unwrap()
@@ -1960,7 +1960,7 @@ async fn agent_new_goal_publishes_for_target_with_the_caller_as_native_owner() {
     )
     .unwrap();
     let publication = tokio::task::spawn_blocking(|| {
-        crate::lean_vocab_test::lean_contract_snapshot()
+        gents_lean_vocab::lean_contract_snapshot()
             .delegated_publication_cases
             .iter()
             .find(|case| case["name"] == "published")
@@ -2019,7 +2019,7 @@ async fn agent_new_goal_publishes_for_target_with_the_caller_as_native_owner() {
         );
     }
     let goal_links = tokio::task::spawn_blocking(|| {
-        crate::lean_vocab_test::lean_contract_snapshot()
+        gents_lean_vocab::lean_contract_snapshot()
             .goal_link_cases
             .clone()
     })

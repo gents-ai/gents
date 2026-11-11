@@ -7,7 +7,7 @@ use gents_protocol::row::AgentRequest;
 #[tokio::test]
 async fn watcher_routes_native_private_requests_as_their_selected_agents() {
     use crate::request::watcher::{DefraWatcher, Watcher};
-    let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+    let snapshot = gents_lean_vocab::lean_contract_snapshot();
     let model = snapshot
         .watcher_scoped_scan_cases
         .iter()
@@ -200,7 +200,7 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
             request_id
         );
     }
-    let household = crate::lean_vocab_test::lean_identity_household_cases()
+    let household = gents_lean_vocab::lean_identity_household_cases()
         .first()
         .expect("modeled household");
     let model_user = &household
@@ -226,7 +226,7 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
                 return None;
             }
             match &relation.subject {
-                crate::lean_vocab_test::LeanIdentitySubject::Actor { actor } => Some(actor),
+                gents_lean_vocab::LeanIdentitySubject::Actor { actor } => Some(actor),
                 _ => None,
             }
         })
@@ -236,7 +236,7 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
             .actions
             .iter()
             .find_map(|action| match action {
-                crate::lean_vocab_test::LeanIdentityAction::Check {
+                gents_lean_vocab::LeanIdentityAction::Check {
                     actor: checked,
                     resource,
                     id,
@@ -369,7 +369,7 @@ async fn watcher_routes_native_private_requests_as_their_selected_agents() {
 
 #[tokio::test]
 async fn signed_client_claim_uses_transaction_bound_intent_and_native_permissions() {
-    let modeled = crate::lean_vocab_test::lean_contract_snapshot();
+    let modeled = gents_lean_vocab::lean_contract_snapshot();
     for (name, mutate, scheduled, steer) in [
         ("committed_claim", false, false, false),
         ("committed_claim", false, true, false),
@@ -510,7 +510,7 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
         let claimed = matches!(result.as_ref(), Ok(ClaimOutcome::Claimed));
         assert_eq!(
             result.is_err(),
-            case.decision == crate::lean_vocab_test::LeanCrossActorDecision::Denied,
+            case.decision == gents_lean_vocab::LeanCrossActorDecision::Denied,
             "{name}: {}",
             result
                 .as_ref()
@@ -520,7 +520,7 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
         );
         assert_eq!(
             claimed,
-            case.decision == crate::lean_vocab_test::LeanCrossActorDecision::Claimed,
+            case.decision == gents_lean_vocab::LeanCrossActorDecision::Claimed,
             "{name}"
         );
         if claimed {
@@ -535,7 +535,7 @@ async fn signed_client_claim_uses_transaction_bound_intent_and_native_permission
             Some(case.lifecycle.as_str()),
             "{name}"
         );
-        if case.decision == crate::lean_vocab_test::LeanCrossActorDecision::Denied {
+        if case.decision == gents_lean_vocab::LeanCrossActorDecision::Denied {
             assert_eq!(
                 state["data"]["AgentRequest"][0]["failure_reason"].as_str(),
                 case.failure_reason.as_deref()
@@ -613,8 +613,8 @@ async fn client_tool_control_claim_rechecks_native_authority_and_retains_committ
     use crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
     use gents_protocol::tool_call::AwaitMode;
 
-    let model = &crate::lean_vocab_test::lean_contract_snapshot().client_process_claim_cases;
-    let grant_model = &crate::lean_vocab_test::lean_contract_snapshot().client_control_grant_cases;
+    let model = &gents_lean_vocab::lean_contract_snapshot().client_process_claim_cases;
+    let grant_model = &gents_lean_vocab::lean_contract_snapshot().client_control_grant_cases;
     let may_publish = |authority: bool, fenced: bool| {
         grant_model
             .iter()
@@ -1355,7 +1355,7 @@ async fn generated_tool_control_receipts_require_selected_agent_and_exact_intent
         }),
         signature: Vec::new(),
     };
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().client_process_receipt_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().client_process_receipt_cases;
     assert!(!cases.is_empty());
     for case in cases {
         let mut receipt = expected.clone();
@@ -1424,7 +1424,7 @@ async fn generated_tool_control_receipts_require_selected_agent_and_exact_intent
 
 #[tokio::test]
 async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
-    let modeled = crate::lean_vocab_test::lean_contract_snapshot();
+    let modeled = gents_lean_vocab::lean_contract_snapshot();
     let allowed = modeled
         .cross_actor_authorization_cases
         .iter()
@@ -1437,11 +1437,11 @@ async fn active_client_steer_rechecks_its_own_author_at_atomic_consumption() {
         .unwrap();
     assert_eq!(
         allowed.decision,
-        crate::lean_vocab_test::LeanCrossActorDecision::Claimed
+        gents_lean_vocab::LeanCrossActorDecision::Claimed
     );
     assert_eq!(
         denied.decision,
-        crate::lean_vocab_test::LeanCrossActorDecision::Denied
+        gents_lean_vocab::LeanCrossActorDecision::Denied
     );
     let home = tempfile::tempdir().unwrap();
     let runtime: Arc<dyn NodeIdentity> =

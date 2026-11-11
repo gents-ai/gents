@@ -209,7 +209,7 @@ async fn trigger_checkpoint_uses_selected_agent_visibility_and_advances_serial_a
             .unwrap()
             .is_none()
     );
-    let fixture = crate::lean_vocab_test::lean_identity_household_cases()
+    let fixture = gents_lean_vocab::lean_identity_household_cases()
         .first()
         .unwrap();
     let modeled_agent = &fixture
@@ -869,7 +869,7 @@ async fn session_fixtures_publish_only_declared_cross_agent_readers() {
 
 #[tokio::test]
 async fn expired_request_fixtures_are_signed_published_and_expired_without_inference() {
-    let transition = crate::lean_vocab_test::lean_request_transition_cases()
+    let transition = gents_lean_vocab::lean_request_transition_cases()
         .iter()
         .find(|case| case.from == "pending" && case.to == "dead")
         .expect("Lean models pending expiry");

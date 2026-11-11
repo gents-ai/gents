@@ -345,7 +345,7 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
     use crate::request::streaming::DefraStreamWriter;
     use std::time::Duration;
 
-    let modeled = crate::lean_vocab_test::lean_contract_snapshot()
+    let modeled = gents_lean_vocab::lean_contract_snapshot()
         .mailbox_handoff_cases
         .iter()
         .find(|case| case.variant == "fresh-linked")
@@ -506,7 +506,7 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
 
 #[test]
 fn generated_reply_cases_drive_claim_validation() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().mailbox_reply_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().mailbox_reply_cases;
     assert!(!cases.is_empty());
     assert!(cases
         .iter()

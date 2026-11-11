@@ -323,8 +323,8 @@ mod tests {
         use rapidhash::{HashMapExt, RapidHashMap};
         let directory = tempfile::tempdir().unwrap();
         let mut roots = RapidHashMap::new();
-        for case in crate::lean_vocab_test::lean_identity_derivation_cases() {
-            let mut derive = |input: &crate::lean_vocab_test::LeanIdentityDerivationInput| {
+        for case in gents_lean_vocab::lean_identity_derivation_cases() {
+            let mut derive = |input: &gents_lean_vocab::LeanIdentityDerivationInput| {
                 let next = roots.len();
                 let root = roots.entry(input.node_key.clone()).or_insert_with(|| {
                     KeyIdentity::load_or_create(

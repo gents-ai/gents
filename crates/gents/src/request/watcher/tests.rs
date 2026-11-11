@@ -354,7 +354,7 @@ impl ScopedWatcherFixture {
 
 #[tokio::test]
 async fn generated_release_cases_preserve_native_session_order() {
-    use crate::lean_vocab_test::{lean_event_delivery_transition_cases, LeanEventDeliveryAction};
+    use gents_lean_vocab::{lean_event_delivery_transition_cases, LeanEventDeliveryAction};
     let mut cases = 0;
     for case in lean_event_delivery_transition_cases() {
         let LeanEventDeliveryAction::Release { doc } = &case.action else {
@@ -652,7 +652,7 @@ async fn malformed_row_without_selected_agent_stays_pending_without_blocking_val
 
 #[tokio::test]
 async fn unresolved_agent_request_stays_pending_until_identity_is_available() {
-    let model = crate::lean_vocab_test::lean_contract_snapshot()
+    let model = gents_lean_vocab::lean_contract_snapshot()
         .watcher_scoped_scan_cases
         .iter()
         .find(|case| case["name"] == "unresolved-agent-is-not-scanned")

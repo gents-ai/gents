@@ -3,7 +3,7 @@ use serde_json::json;
 
 #[test]
 fn modeled_affected_validation_preserves_visible_dependencies() {
-    let case = crate::lean_vocab_test::lean_identity_household_cases()
+    let case = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .expect("configuration contract");

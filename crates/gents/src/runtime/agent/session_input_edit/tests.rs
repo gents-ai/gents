@@ -1,10 +1,10 @@
 use super::super::session_commands::{unanswered_commands, CommandKind, Sweep};
 use super::*;
-use crate::lean_vocab_test::{
+use crate::store::identity::KeyIdentity;
+use gents_lean_vocab::{
     LeanQueueManagementState, LeanSessionInputEditAuthority, LeanSessionInputEditCommand,
     LeanSessionInputEditStep, LeanSessionInputEditor, QueueImage,
 };
-use crate::store::identity::KeyIdentity;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -431,7 +431,7 @@ impl ModeledQueue {
     }
 
     async fn image(&self) -> QueueImage {
-        crate::lean_vocab_test::native_queue_image(
+        crate::request::lifecycle::test_support::native_queue_image(
             &self.fixture.node,
             self.fixture.identity.did(),
             SESSION,
@@ -696,7 +696,7 @@ async fn unanswered_sweep_discovers_malformed_command_for_transactional_validati
 
 #[tokio::test]
 async fn generated_commands_bind_to_atomic_queue_owner() {
-    let cases = crate::lean_vocab_test::lean_session_input_edit_cases()
+    let cases = gents_lean_vocab::lean_session_input_edit_cases()
         .iter()
         .filter(|case| {
             case.authority.command_identity_unique

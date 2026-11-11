@@ -78,7 +78,7 @@ mod tests {
 
     #[test]
     fn generated_task_policies_bind_the_configured_task_fields() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().access_review_task_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().access_review_task_cases;
         assert!(!cases.is_empty());
         for case in cases {
             let case: Case = serde_json::from_value(case.clone()).unwrap();

@@ -214,7 +214,7 @@ async fn schema_preview_and_publication_expose_ignored_native_directives() {
 
 #[tokio::test]
 async fn schema_publication_matches_executable_lean_contract() {
-    for case in &crate::lean_vocab_test::lean_contract_snapshot().schema_publication_cases {
+    for case in &gents_lean_vocab::lean_contract_snapshot().schema_publication_cases {
         if !case["native_allowed"].as_bool().unwrap() {
             continue;
         }
@@ -283,7 +283,7 @@ async fn schema_publication_uses_agent_native_authority() {
     use crate::store::config_client::NodePermission;
     use crate::store::identity::{KeyIdentity, NodeIdentity};
 
-    for case in &crate::lean_vocab_test::lean_contract_snapshot().schema_publication_cases {
+    for case in &gents_lean_vocab::lean_contract_snapshot().schema_publication_cases {
         if case["grant"] != true || case["artifact"] != true || case["compatible"] != true {
             continue;
         }
@@ -429,7 +429,7 @@ async fn schema_view_and_materialization_use_managed_agent_authority() {
         .await
         .is_err());
 
-    let cases = crate::lean_vocab_test::lean_identity_household_cases();
+    let cases = gents_lean_vocab::lean_identity_household_cases();
     let group = cases
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")

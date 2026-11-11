@@ -265,7 +265,7 @@ mod tests {
 
     #[test]
     fn current_wake_input_matches_lean_owner() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().wake_input_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().wake_input_cases;
         assert!(cases.len() >= 6);
         for case in cases {
             assert_eq!(
@@ -274,7 +274,7 @@ mod tests {
                 "{}",
                 case.name
             );
-            let native = |row: &crate::lean_vocab_test::LeanWakeInputRow| {
+            let native = |row: &gents_lean_vocab::LeanWakeInputRow| {
                 if let Some(key) = &row.notification_key {
                     assert!(case.claimed.contains(key) || !case.current_keys.contains(key));
                 }

@@ -577,8 +577,7 @@ fn surface_recovery(tool_name: &str, surface_id: Option<&str>) -> String {
 mod tests {
     #[test]
     fn workspace_datastore_create_tools_follow_the_model() {
-        let cases =
-            &crate::lean_vocab_test::lean_contract_snapshot().workspace_datastore_write_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_datastore_write_cases;
         assert!(!cases.is_empty());
         for case in cases {
             let collection = case["collection"].as_str().unwrap();
@@ -597,8 +596,8 @@ mod tests {
 
     #[test]
     fn eval_and_optimization_collections_are_never_exposed() {
-        let publication = &crate::lean_vocab_test::lean_contract_snapshot()
-            .client_publication_protected_collection;
+        let publication =
+            &gents_lean_vocab::lean_contract_snapshot().client_publication_protected_collection;
         assert!(super::PROTECTED_DATASTORE_COLLECTIONS.contains(&publication.as_str()));
         for name in super::PROTECTED_DATASTORE_COLLECTIONS {
             let error = super::reject_protected_collection_name(name).unwrap_err();

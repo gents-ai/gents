@@ -60,7 +60,7 @@ async fn queue_snapshot(
 
 #[tokio::test]
 async fn generated_background_completion_queue_case_uses_accepted_session_messages() {
-    let case = crate::lean_vocab_test::lean_queue_deadline_case(
+    let case = gents_lean_vocab::lean_queue_deadline_case(
         "background_completion_notification_creates_no_agent_request",
     );
     assert_eq!(case.group, "completion_delivery");

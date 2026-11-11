@@ -479,7 +479,7 @@ async fn a_profile_resolves_to_its_chat_completions_endpoint() {
 
 #[tokio::test]
 async fn modeled_plugin_profile_uses_immediate_actor_and_rechecks_each_request() -> Result<()> {
-    let case = crate::lean_vocab_test::lean_identity_household_cases()
+    let case = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .expect("configuration model");

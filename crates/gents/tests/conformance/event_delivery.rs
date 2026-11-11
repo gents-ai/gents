@@ -205,7 +205,7 @@ enum ProductionRuntime {
 impl ProductionEventDeliveryDriver {
     async fn new(
         source: EventDeliverySourceContract,
-        world: &lean_vocab_test::LeanEventDeliveryWorld,
+        world: &gents_lean_vocab::LeanEventDeliveryWorld,
     ) -> Self {
         let db = support::test_db(&format!("event-delivery-{}", source.name)).await;
         let watcher_fixture = Some(support::managed_agent_fixture(&db).await);
@@ -283,7 +283,7 @@ impl ProductionEventDeliveryDriver {
 
     async fn seed_world(
         &mut self,
-        world: &lean_vocab_test::LeanEventDeliveryWorld,
+        world: &gents_lean_vocab::LeanEventDeliveryWorld,
     ) -> Result<(), String> {
         for (index, doc) in world.persistent_set.iter().enumerate() {
             self.persist_runtime_doc(doc, index).await?;

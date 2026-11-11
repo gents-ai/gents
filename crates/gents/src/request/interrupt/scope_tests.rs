@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 
 #[tokio::test]
 async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues() {
-    let cases = crate::lean_vocab_test::lean_queue_deadline_cases();
+    let cases = gents_lean_vocab::lean_queue_deadline_cases();
     let case = cases
         .iter()
         .find(|case| case.name == "cancel_drains_automated_wakeups_preserves_user_pending")

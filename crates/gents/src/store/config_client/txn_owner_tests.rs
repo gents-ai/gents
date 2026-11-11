@@ -35,7 +35,7 @@ fn transaction_id(txn: &ConfigApplyTxn<'_>) -> String {
 #[tokio::test]
 async fn tracked_transaction_finality_distinguishes_rejection_from_lost_receipt() {
     let cases = tokio::task::spawn_blocking(|| {
-        crate::lean_vocab_test::lean_contract_snapshot()
+        gents_lean_vocab::lean_contract_snapshot()
             .pack_finality_cases
             .clone()
     })

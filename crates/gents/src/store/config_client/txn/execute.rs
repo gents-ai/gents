@@ -1329,8 +1329,7 @@ mod owner_registration_model_tests {
 
     #[test]
     fn http_registration_observations_match_executed_model() {
-        let cases =
-            &crate::lean_vocab_test::lean_contract_snapshot().identity_owner_registration_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().identity_owner_registration_cases;
         assert!(!cases.is_empty());
         for case in cases {
             let row = HttpOwnerObservation {

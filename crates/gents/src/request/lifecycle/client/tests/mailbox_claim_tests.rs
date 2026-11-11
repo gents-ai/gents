@@ -135,8 +135,7 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
     );
     lifecycle.bind_managed_agent(agent.as_ref())?;
     lifecycle.set_client_claim_admission(admission);
-    let modeled_claim =
-        &crate::lean_vocab_test::lean_contract_snapshot().mailbox_claimed_recipient_cases;
+    let modeled_claim = &gents_lean_vocab::lean_contract_snapshot().mailbox_claimed_recipient_cases;
     let before = modeled_claim
         .iter()
         .find(|case| case["present"] == true && case["committed"] == false)
@@ -196,7 +195,7 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
     )?
     .unwrap();
     assert_block_signer(&node, &version.cid, agent.did()).await;
-    let policy = &crate::lean_vocab_test::lean_contract_snapshot().mailbox_native_policy;
+    let policy = &gents_lean_vocab::lean_contract_snapshot().mailbox_native_policy;
     for (role, access) in [("user", &user_access), ("other", &outsider_access)] {
         let expected = policy["checks"]
             .as_array()
@@ -259,8 +258,7 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
         summary: "Completed".into(),
         failed: false,
     };
-    let modeled_notice =
-        &crate::lean_vocab_test::lean_contract_snapshot().mailbox_runtime_notice_case;
+    let modeled_notice = &gents_lean_vocab::lean_contract_snapshot().mailbox_runtime_notice_case;
     // After the claimed request is terminal, as after a runtime restart, the
     // notice reaches the verified signer rather than the session owner.
     let notice = crate::session::mailbox::publish_runtime_notice(

@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn modeled_binding_cases_match_private_resolver() {
-        let modeled = crate::lean_vocab_test::lean_identity_household_cases()
+        let modeled = gents_lean_vocab::lean_identity_household_cases()
             .iter()
             .find(|case| case.name == "configuration-explicit-grants")
             .expect("configuration contract");

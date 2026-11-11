@@ -1,5 +1,5 @@
 use super::*;
-use crate::lean_vocab_test::LeanQueuedSteeringAction as Action;
+use gents_lean_vocab::LeanQueuedSteeringAction as Action;
 
 /// Reads through the Agent's own access: the queued rows are Agent-owned, so
 /// the node identity does not see them.
@@ -86,7 +86,7 @@ async fn steering_admission_keeps_signed_content_queued_without_transcript_publi
 
 #[tokio::test]
 async fn generated_pending_steering_terminals_retain_signed_admission_without_output() {
-    let cases = crate::lean_vocab_test::lean_queued_steering_trace_cases();
+    let cases = gents_lean_vocab::lean_queued_steering_trace_cases();
     let mut covered = 0;
     for case in cases {
         let terminal = match case.actions.as_slice() {
@@ -214,7 +214,7 @@ async fn generated_pending_steering_terminals_retain_signed_admission_without_ou
 
 #[tokio::test]
 async fn generated_owned_prepublication_terminals_retain_signed_admission_without_output() {
-    let cases = crate::lean_vocab_test::lean_queued_steering_trace_cases();
+    let cases = gents_lean_vocab::lean_queued_steering_trace_cases();
     let mut covered = 0;
     for case in cases {
         let outcome = match case.actions.as_slice() {

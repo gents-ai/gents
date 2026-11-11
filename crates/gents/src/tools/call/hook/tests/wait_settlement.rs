@@ -5,7 +5,7 @@ use std::time::Duration;
 
 #[tokio::test]
 async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_owner() {
-    let expected = crate::lean_vocab_test::lean_r6_backgrounding_case(
+    let expected = gents_lean_vocab::lean_r6_backgrounding_case(
         "caller_interrupt_cancels_wait_call_preserves_background_process",
     );
     assert!(expected.legal);

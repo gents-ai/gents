@@ -658,8 +658,8 @@ mod tests {
 
     #[test]
     fn spawned_dispatchers_conform_to_lean() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases
-            ["tool_calls"]["spawned_dispatcher"];
+        let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_resource_cases["tool_calls"]
+            ["spawned_dispatcher"];
         for case in cases.as_array().unwrap() {
             assert_eq!(
                 spawned_may_compose(case["spawner"] == "plugin_child"),
@@ -672,7 +672,7 @@ mod tests {
     #[tokio::test]
     async fn generated_plugin_effect_admission_matches_execution_owner() {
         let cases =
-            &crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases["tool_effects"];
+            &gents_lean_vocab::lean_contract_snapshot().plugin_resource_cases["tool_effects"];
         for case in cases.as_array().expect("generated plugin effect scenarios") {
             let name = case["name"].as_str().unwrap();
             let (fixture, owner) = published_admission_with_owner(PublishedAdmissionOptions {
@@ -768,7 +768,7 @@ mod tests {
     }
     #[tokio::test]
     async fn asynchronous_receipts_conform_to_the_execution_owner() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases
+        let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_resource_cases
             ["tool_effect_receipts"];
         for (index, case) in cases.as_array().unwrap().iter().enumerate() {
             let (fixture, owner) = published_admission_with_owner(PublishedAdmissionOptions {

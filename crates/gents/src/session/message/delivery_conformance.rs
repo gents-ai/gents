@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn agent_delivery_matches_lean() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().agent_delivery_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().agent_delivery_cases;
     assert_eq!(cases.len(), 12);
     for case in cases {
         let mut input = serde_json::json!({

@@ -156,7 +156,7 @@ fn tool_result_msg(call_id: &str, result_text: &str) -> Message {
 
 #[test]
 fn generated_rolling_cases_drive_the_production_commit_precondition() {
-    for case in crate::lean_vocab_test::lean_rolling_compaction_cases() {
+    for case in gents_lean_vocab::lean_rolling_compaction_cases() {
         let actual_valid = rolling_plan_is_valid(
             case.target_messages,
             &case.chunk_messages,
@@ -172,7 +172,7 @@ fn generated_rolling_cases_drive_the_production_commit_precondition() {
 
 #[test]
 fn generated_reduction_engine_cases_drive_shared_decision_outcome() {
-    for case in crate::lean_vocab_test::lean_reduction_engine_cases() {
+    for case in gents_lean_vocab::lean_reduction_engine_cases() {
         let threshold = threshold_decision(case.input_tokens, case.effective_input_budget);
         let threshold_name = match threshold {
             ThresholdDecision::NotNeeded => "not_needed",

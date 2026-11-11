@@ -135,7 +135,7 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
         .unwrap()
         .to_owned();
     let quickstart_cases =
-        &crate::lean_vocab_test::lean_contract_snapshot().workspace_quickstart_selection_cases;
+        &gents_lean_vocab::lean_contract_snapshot().workspace_quickstart_selection_cases;
     for case in quickstart_cases {
         let actor = match case["actor"].as_str().unwrap() {
             "user" => &operator,
@@ -149,7 +149,7 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
             .is_empty();
         assert_eq!(visible, case["before"].as_bool().unwrap(), "{case}");
     }
-    let modeled = crate::lean_vocab_test::lean_workspace_cases()
+    let modeled = gents_lean_vocab::lean_workspace_cases()
         .iter()
         .find(|case| case.name == "provision_frozen_base")
         .unwrap();
@@ -245,7 +245,7 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
     let repository_doc = repository["data"]["RepositoryPlacement"][0]["_docID"]
         .as_str()
         .unwrap();
-    for case in &crate::lean_vocab_test::lean_contract_snapshot().workspace_quickstart_cases {
+    for case in &gents_lean_vocab::lean_contract_snapshot().workspace_quickstart_cases {
         let actor = match case["actor"].as_str().unwrap() {
             "user" => &operator,
             "agent" => &access,
@@ -351,7 +351,7 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
             .is_empty(),
         "quickstart replay restored the revoked repository reader"
     );
-    for case in &crate::lean_vocab_test::lean_contract_snapshot().workspace_quickstart_cases {
+    for case in &gents_lean_vocab::lean_contract_snapshot().workspace_quickstart_cases {
         let actor = match case["actor"].as_str().unwrap() {
             "user" => &operator,
             "agent" => &access,
@@ -398,7 +398,7 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
         > 1;
     assert_eq!(
         created_after_abort,
-        crate::lean_vocab_test::lean_contract_snapshot().workspace_quickstart_cases[0]
+        gents_lean_vocab::lean_contract_snapshot().workspace_quickstart_cases[0]
             ["aborted_document_visible"]
             .as_bool()
             .unwrap()

@@ -481,7 +481,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         .add_actor_relationship("Node", &node_doc, "runtime_reader", &runtime_actor)
         .await?;
     let cases = tokio::task::spawn_blocking(|| {
-        crate::lean_vocab_test::lean_contract_snapshot()
+        gents_lean_vocab::lean_contract_snapshot()
             .identity_agent_creator_cases
             .clone()
     })
@@ -759,7 +759,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
         creator_access.execute("{ Node { _docID } }").await?["data"]["Node"],
         json!([])
     );
-    let modeled = crate::lean_vocab_test::lean_identity_household_cases()
+    let modeled = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .context("configuration policy model is missing")?;
@@ -1692,7 +1692,7 @@ async fn agent_creates_and_configures_child_with_native_ownership() -> Result<()
     // A notice that the files are gone, which is not a retirement, keeps the
     // installation evidence, refreshed by the Agent (`retainPluginStoreRecord`).
     let retain = tokio::task::spawn_blocking(|| {
-        crate::lean_vocab_test::lean_plugin_reference_cases()
+        gents_lean_vocab::lean_plugin_reference_cases()
             .iter()
             .find(|case| {
                 case["root_ships"]

@@ -21,7 +21,7 @@ async fn verified_signer_as_user(
 #[tokio::test]
 async fn user_title_update_is_signed_on_authenticated_http() -> anyhow::Result<()> {
     use crate::store::identity::NodeIdentity;
-    let case = crate::lean_vocab_test::lean_contract_snapshot()
+    let case = gents_lean_vocab::lean_contract_snapshot()
         .session_document_cases
         .projection
         .iter()
@@ -418,7 +418,7 @@ async fn title_transitions_preserve_session_and_request_observation() {
 
 #[tokio::test]
 async fn generated_user_title_cases_drive_the_shared_session_owner() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot()
+    let cases = &gents_lean_vocab::lean_contract_snapshot()
         .session_document_cases
         .projection;
     let cases = cases

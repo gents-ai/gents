@@ -903,7 +903,7 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
 
 #[test]
 fn modeled_client_goal_actor_binding_requires_the_transaction_signer() {
-    let model = crate::lean_vocab_test::lean_identity_household_cases()
+    let model = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .expect("identity conformance case");
@@ -924,7 +924,7 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
     use crate::request::lifecycle::{
         build_signed_client_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
     };
-    let modeled = crate::lean_vocab_test::lean_identity_household_cases()
+    let modeled = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap()
@@ -1054,7 +1054,7 @@ async fn client_goal_control_cannot_publish_user_graph_as_the_agent() {
             "both fresh and replacement writes must remain absent"
         );
 
-        let cases = &crate::lean_vocab_test::lean_identity_household_cases()
+        let cases = &gents_lean_vocab::lean_identity_household_cases()
             .iter()
             .find(|case| case.name == "configuration-explicit-grants")
             .unwrap()

@@ -333,7 +333,7 @@ mod tests {
 
     #[test]
     fn boundary_selection_matches_lean() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().agent_steering_boundary_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().agent_steering_boundary_cases;
         for case in cases {
             let rows = case
                 .inputs

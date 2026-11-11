@@ -354,7 +354,8 @@ jobs:
             -p gents-claude-login \
             -p gents-fs-runner \
             -p gents-shell \
-            -p gents-lean-contract
+            -p gents-lean-contract \
+            -p gents-lean-vocab
 
       - name: Collect migration lens diagnostics on support failure
         if: failure() && matrix.suite == 'support'

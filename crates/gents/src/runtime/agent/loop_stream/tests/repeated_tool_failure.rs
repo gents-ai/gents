@@ -78,7 +78,7 @@ fn repeat_call(index: usize, event: &serde_json::Value) -> RawStreamingChoice<()
 
 #[tokio::test]
 async fn generated_repeated_tool_failure_cases_drive_owned_loop() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().repeated_tool_failure_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().repeated_tool_failure_cases;
     for case in cases {
         let name = case["name"].as_str().unwrap();
         let events = case["events"].as_array().unwrap();

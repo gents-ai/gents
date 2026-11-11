@@ -551,7 +551,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "provider_eof_cases"
       "ProviderEofCases"
-      "lean_vocab_test::request_execution_lease_policy::generated_provider_eof_cases_fence_production_policy")
+      "request::lifecycle::execution_lease::tests::generated_policy::generated_provider_eof_cases_fence_production_policy")
       "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "request_execution_lease_observed_cases"
@@ -880,24 +880,24 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "task_hook_admission_cases"
       "TaskHookAdmissionCases"
-      "lean_vocab_test::task_hooks_policy::generated_task_hook_admission_cases_fence_production_validation")
+      "tools::call::task_hooks::generated_policy_tests::generated_task_hook_admission_cases_fence_production_validation")
       "task-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "task_hook_run_cases"
       "TaskHookRunCases"
-      "lean_vocab_test::task_hooks_policy::generated_task_hook_cases_fence_the_modeled_phase_vocabulary"
+      "tools::call::task_hooks::generated_policy_tests::generated_task_hook_cases_fence_the_modeled_phase_vocabulary"
       "The consumer binds the emitted phase vocabulary to the production TaskHookPhase encoding and replays admission over every trace; the executor consumer below drives the traces.")
       "task-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "task_hook_run_cases"
       "TaskHookRunCases"
-      "lean_vocab_test::task_hook_executor::generated_task_hook_run_cases_drive_real_host_commands"
+      "runtime::startup_recovery::task_hook_executor_tests::generated_task_hook_run_cases_drive_real_host_commands"
       "Every generated trace runs through the production orchestration and managed host execution with real commands: each scripted result is produced by a real process (an exit status, a nonexistent executable, a command outliving its model-resolved timeout, or a held command cancelled through the interrupt or shutdown source its phase uses). The processes' own invocation log, with the owned work's entry, is compared against the emitted invocationTrace, excluding only occurrences that could not launch; attempts, outcomes and the terminal request state are compared too. The daemon placement of the before gate at claim and the after phases ahead of terminalization is fenced by daemon tests, not these traces.")
       "task-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "task_hook_recovery_cases"
       "TaskHookRecoveryCases"
-      "lean_vocab_test::task_hook_recovery::generated_task_hook_recovery_cases_drive_startup_recovery_and_host_records")
+      "runtime::startup_recovery::task_hook_recovery_tests::generated_task_hook_recovery_cases_drive_startup_recovery_and_host_records")
       "task-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "request_progress_cases"
@@ -2232,7 +2232,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "recovery_sweep_cases"
       "RecoverySweepCases"
-      "lean_vocab_test::task_hook_recovery::generated_task_hook_sweep_cases_drive_the_record_sweep")
+      "runtime::startup_recovery::task_hook_recovery_tests::generated_task_hook_sweep_cases_drive_the_record_sweep")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "r6_background_cases"
@@ -2319,7 +2319,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "canonical_execution_gate_cases"
       "CanonicalExecutionGateCases"
-      "canonical_execution_native_adapter::every_generated_native_execution_script_runs_to_completion"
+      "runtime::agent::tests::canonical_execution_native_adapter::every_generated_native_execution_script_runs_to_completion"
       "Generated native scripts bind transactional lease, publication, recovery and tool owners. Title scripts bind signed parent-only admission, own claim/begin, renewal, Complete/Partial/retracted audit closure, retry coordinates, terminal-parent isolation and purpose denial. Rows marked nativeGap retain explicit replication or unmaterialized-input premises; trace summaries and finite cases do not establish the application's universal invariants in Rust.")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
   , tagged (consumerCoverage
@@ -2360,7 +2360,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "canonical_payload_presentation_cases"
       "CanonicalPayloadPresentationCases"
-      "lean_vocab_test::support::canonical_presentation::native_adapter::generated_payload_presentation_cases_use_native_reconstruction"
+      "canonical_presentation::native_adapter::generated_payload_presentation_cases_use_native_reconstruction"
       "The four generated cases bind presented payload-field bytes and missing-dependency failure to native canonical reconstruction; stored-byte quantities remain Lean expectations. Provider serialization, estimator output, and compaction threshold remain unbound here; the real serialized-request/threshold experiment is native.external-projected-request-threshold.")
       "canonical-output" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
@@ -2849,7 +2849,7 @@ def caseCoverage : List CoverageEntry :=
       "session::preview::tests::terminal_reply_projection_follows_the_model")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp "session_document_cases" "SessionDocumentCases"
-      "lean_vocab_test::support::session_documents::tests::generated_pending_timeline_cases_preserve_request_identities_and_order"
+      "session_documents::tests::generated_pending_timeline_cases_preserve_request_identities_and_order"
       "Generated pending timeline cases bind physical identity, admission order, same or following request anchors, hidden or missing anchor fallback, tool-first replication, orphan groups and overlay ownership to the shared protocol ordering owner. Durable request lookup and authored-message suppression remain bridge-owner obligations.")
       "client-shell" [Surface.runtimeInternal]
   , tagged (consumerCoverage "session_document_cases" "SessionDocumentCases"

@@ -61,7 +61,7 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
         agent_did: caused.agent_did.clone(),
         session_id: caused.session_id.clone(),
     };
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot()
+    let cases = &gents_lean_vocab::lean_contract_snapshot()
         .causal_hop_contract
         .write_cases;
     assert!(cases.iter().any(|case| case.delivery == "queue"));

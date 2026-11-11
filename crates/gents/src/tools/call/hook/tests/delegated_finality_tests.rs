@@ -275,7 +275,7 @@ async fn observed(fixture: &Fixture) -> (String, Vec<serde_json::Value>) {
 }
 
 fn model(name: &str) -> serde_json::Value {
-    crate::lean_vocab_test::lean_contract_snapshot()
+    gents_lean_vocab::lean_contract_snapshot()
         .delegated_finality_cases
         .iter()
         .find(|case| case["name"] == name)
@@ -481,7 +481,7 @@ async fn cancelled_after_child_commit_recovers_relationships_in_the_actor_watche
 
 #[tokio::test]
 async fn existing_child_message_uses_calling_agent_native_claim() {
-    let modeled = crate::lean_vocab_test::lean_contract_snapshot();
+    let modeled = gents_lean_vocab::lean_contract_snapshot();
     let allowed = modeled
         .cross_actor_authorization_cases
         .iter()
@@ -494,11 +494,11 @@ async fn existing_child_message_uses_calling_agent_native_claim() {
         .unwrap();
     assert_eq!(
         allowed.decision,
-        crate::lean_vocab_test::LeanCrossActorDecision::Claimed
+        gents_lean_vocab::LeanCrossActorDecision::Claimed
     );
     assert_eq!(
         denied.decision,
-        crate::lean_vocab_test::LeanCrossActorDecision::Denied
+        gents_lean_vocab::LeanCrossActorDecision::Denied
     );
     for (active, deny) in [(false, false), (false, true), (true, true)] {
         let mut fixture = fixture(if active {

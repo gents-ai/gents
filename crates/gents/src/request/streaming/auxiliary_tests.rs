@@ -16,14 +16,14 @@ use gents_protocol::output::{
 use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 
 use super::{auxiliary, canonical, native_encoding, DefraStreamWriter};
-use crate::lean_vocab_test::{
+use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
+use crate::store::config_client::ConfigAccess;
+use gents_lean_vocab::{
     lean_auxiliary_output_cases, LeanAuxiliaryKind, LeanAuxiliaryOutputCase, LeanCanonicalClosure,
     LeanCanonicalSource, LeanCanonicalWriter, LeanMessageBlock, LeanMessagePublication,
     LeanMessageRole, LeanOutcome, LeanPayloadKind, LeanPresentation, LeanReasoningAuditResult,
     LeanReasoningPart,
 };
-use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
-use crate::store::config_client::ConfigAccess;
 use gents_protocol::output::rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
 
 struct TitleFixture {
@@ -1210,7 +1210,7 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
         }
         assert!(matches!(
             case.expected.public_view,
-            crate::lean_vocab_test::LeanCanonicalOutputView::Absent
+            gents_lean_vocab::LeanCanonicalOutputView::Absent
         ));
         let view = project_live(&LiveObservation {
             request_doc_id: &request.doc_id,

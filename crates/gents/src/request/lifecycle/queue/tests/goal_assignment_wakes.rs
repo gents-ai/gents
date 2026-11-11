@@ -89,7 +89,7 @@ fn queue(parent: &AgentRequest, key: u64) -> RequestQueue {
 
 #[tokio::test]
 async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().goal_wake_coalescing_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_wake_coalescing_cases;
     assert_eq!(cases.len(), 10);
     for case in cases {
         let name = case["name"].as_str().unwrap();

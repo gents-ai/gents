@@ -295,7 +295,7 @@ async fn refuses_client_publication_reads_and_discovery() {
     let node = seeded_node().await;
     let tool = DefraQueryTool::new(node, CollectionScope::all());
     let collection =
-        &crate::lean_vocab_test::lean_contract_snapshot().client_publication_protected_collection;
+        &gents_lean_vocab::lean_contract_snapshot().client_publication_protected_collection;
     for fields in [vec!["payload".to_owned()], vec!["*".to_owned()]] {
         let error = Tool::call(
             &tool,

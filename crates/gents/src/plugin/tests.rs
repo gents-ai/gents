@@ -827,7 +827,7 @@ fn plugin_requests_select_native_nan_arithmetic() {
 
 #[test]
 fn generated_plugin_resource_cases_bind_budget_and_consent() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_resource_cases;
     for case in cases["consent"].as_array().unwrap() {
         let requested = case["requested"].as_u64().unwrap() as u32;
         let previous = case["previous"].as_u64().unwrap() as u32;
@@ -956,8 +956,7 @@ async fn generated_plugin_call_access_cases_drive_bind_admission() {
         let directory = tempfile::tempdir().unwrap();
         let marker = directory.path().join("verified");
         let cases = tokio::task::spawn_blocking(|| {
-            crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases["call_access"]
-                .clone()
+            gents_lean_vocab::lean_contract_snapshot().plugin_resource_cases["call_access"].clone()
         })
         .await
         .unwrap();

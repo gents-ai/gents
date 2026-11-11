@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 #[test]
 fn modeled_event_execution_generations_match_runtime_projection() {
-    let contract = crate::lean_vocab_test::lean_identity_household_cases()
+    let contract = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
@@ -78,7 +78,7 @@ fn modeled_event_execution_generations_match_runtime_projection() {
 
 #[test]
 fn modeled_event_source_generations_match_resolved_projection() {
-    let contract = crate::lean_vocab_test::lean_identity_household_cases()
+    let contract = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
@@ -173,7 +173,7 @@ fn modeled_event_source_generations_match_resolved_projection() {
 
 #[tokio::test]
 async fn modeled_group_clock_is_owned_by_selected_agent_and_linked_once() -> anyhow::Result<()> {
-    let contract = crate::lean_vocab_test::lean_identity_household_cases()
+    let contract = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .unwrap();
@@ -193,7 +193,7 @@ async fn modeled_group_clock_is_owned_by_selected_agent_and_linked_once() -> any
         .relations
         .iter()
         .find_map(|relation| match &relation.subject {
-            crate::lean_vocab_test::LeanIdentitySubject::Actor { actor }
+            gents_lean_vocab::LeanIdentitySubject::Actor { actor }
                 if relation.resource == "nodes" && relation.relation == "runtime_reader" =>
             {
                 Some(actor)

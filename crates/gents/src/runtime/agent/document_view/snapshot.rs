@@ -575,7 +575,7 @@ mod advertised_context_override_tests {
 
     #[test]
     fn context_override_admission_matches_lean() {
-        let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+        let snapshot = gents_lean_vocab::lean_contract_snapshot();
         let cases = snapshot.configuration_scope_cases["context_bounds"]
             .as_array()
             .unwrap();

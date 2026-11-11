@@ -300,7 +300,7 @@ async fn publish_readiness(
 
 #[tokio::test]
 async fn required_question_holds_the_claim_until_its_native_item_is_acted() {
-    let case = crate::lean_vocab_test::lean_contract_snapshot()
+    let case = gents_lean_vocab::lean_contract_snapshot()
         .goal_claimed_readiness_cases
         .iter()
         .find(|case| case["name"] == "claimed_ready_materializes_retry")
@@ -379,7 +379,7 @@ async fn required_question_holds_the_claim_until_its_native_item_is_acted() {
 
 #[tokio::test]
 async fn generated_claimed_readiness_cases_drive_goal_source() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().goal_claimed_readiness_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_claimed_readiness_cases;
     assert!(!cases.is_empty());
     for case in cases {
         let name = case["name"].as_str().unwrap();
@@ -552,7 +552,7 @@ async fn generated_claimed_readiness_cases_drive_goal_source() {
 
 #[tokio::test]
 async fn readiness_stop_rejects_a_replaced_claim_epoch() {
-    let case = crate::lean_vocab_test::lean_contract_snapshot()
+    let case = gents_lean_vocab::lean_contract_snapshot()
         .goal_claimed_readiness_cases
         .iter()
         .find(|case| case["name"] == "claimed_settled_invalid_pauses")
@@ -703,7 +703,7 @@ async fn unclaimed_goal_follows_live_reconcile_status_and_modeled_readiness() {
     let (_tx, rx) = watch::channel(snapshot);
     let controller = GoalSource::new(rx, db.node.clone(), CancellationToken::new())
         .with_runtime_status(status.clone());
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().goal_readiness_gate_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_readiness_gate_cases;
     for (name, process, reason, phase) in [
         (
             "missing_readiness_defers_continuation",

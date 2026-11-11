@@ -217,7 +217,7 @@ fn document_captures_reject_secret_fields_and_oauth_documents() {
 fn generated_document_capture_cases_match_lean() {
     use std::collections::BTreeSet;
 
-    let cases = crate::lean_vocab_test::lean_eval_document_capture_cases();
+    let cases = gents_lean_vocab::lean_eval_document_capture_cases();
     assert!(!cases.is_empty());
     for case in cases {
         let mut filter_fields = Vec::new();

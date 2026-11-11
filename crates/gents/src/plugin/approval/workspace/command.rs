@@ -92,7 +92,7 @@ mod tests {
 
     #[tokio::test]
     async fn generated_workspace_command_roots_preserve_the_tool_ceiling() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().workspace_command_root_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_command_root_cases;
         assert_eq!(cases.len(), 32);
         for value in cases {
             let case: Case = serde_json::from_value(value.clone()).unwrap();

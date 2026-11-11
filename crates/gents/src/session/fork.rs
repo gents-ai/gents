@@ -1119,7 +1119,7 @@ mod tests {
 
     #[test]
     fn generated_fork_reference_authority_matches_native_decision() {
-        let cases = crate::lean_vocab_test::lean_contract_snapshot()
+        let cases = gents_lean_vocab::lean_contract_snapshot()
             .session_document_cases
             .projection
             .iter()
@@ -1183,7 +1183,7 @@ mod tests {
 
     #[test]
     fn generated_edit_anchors_select_exact_canonical_user_messages() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot()
+        let cases = &gents_lean_vocab::lean_contract_snapshot()
             .session_document_cases
             .edit_anchors;
         assert!(!cases.is_empty());
@@ -1220,7 +1220,7 @@ mod tests {
                 message_key: value["message_key"].as_str().unwrap().to_owned(),
             }
         }
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot()
+        let cases = &gents_lean_vocab::lean_contract_snapshot()
             .session_document_cases
             .edit_fork_bindings;
         assert!(!cases.is_empty());

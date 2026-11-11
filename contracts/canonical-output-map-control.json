@@ -187,7 +187,7 @@
     "generated_groups": ["interrupt_queue_cases"],
     "fixture_status": "concrete_inputs",
     "native_owner_paths": ["crates/gents/src/request/interrupt.rs", "crates/gents/src/request/lifecycle/queue/draining.rs"],
-    "consumer_paths": ["crates/gents/src/lean_vocab_test/support.rs", "crates/gents/src/request/interrupt/queue_tests.rs"],
+    "consumer_paths": ["crates/gents-lean-vocab/src/lib.rs", "crates/gents/src/request/interrupt/queue_tests.rs"],
     "native_status": "pending",
     "required_cases": [
       "completion_before_interrupt",
@@ -330,7 +330,7 @@
       "crates/gents/src/runtime/agent/daemon/inference.rs"
     ],
     "consumer_paths": [
-      "crates/gents/src/lean_vocab_test/support.rs",
+      "crates/gents-lean-vocab/src/lib.rs",
       "crates/gents/src/request/lifecycle/queue/tests/folding.rs",
       "crates/gents/src/runtime/agent/loop_stream/tests/request_assembly.rs"
     ],

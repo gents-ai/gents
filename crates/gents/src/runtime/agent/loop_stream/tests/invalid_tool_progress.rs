@@ -47,7 +47,7 @@ fn invalid_progress_call(index: usize, outcome: &str) -> RawStreamingChoice<()> 
 
 #[tokio::test]
 async fn generated_invalid_tool_progress_cases_drive_owned_loop() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().invalid_tool_progress_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().invalid_tool_progress_cases;
     assert_eq!(cases.len(), 11);
     for case in cases {
         let (node, hook, writer, mut lifecycle) = owned_test_hook().await;

@@ -188,8 +188,7 @@ mod tests {
     fn generated_intent_cases_match_current_generation_projection() {
         use chrono::{SecondsFormat, TimeZone};
         use serde_json::Value;
-        let cases =
-            &crate::lean_vocab_test::lean_contract_snapshot().enrollment_renewal_intent_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().enrollment_renewal_intent_cases;
         let timestamp = |seconds: i64| {
             Utc.timestamp_opt(1_800_000_000 + seconds, 0)
                 .single()
@@ -256,7 +255,7 @@ mod tests {
     fn generated_approval_cases_match_renewal_projection() {
         use chrono::{SecondsFormat, TimeZone};
         use serde_json::Value;
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().enrollment_auto_renewal_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().enrollment_auto_renewal_cases;
         let timestamp = |seconds: i64| {
             Utc.timestamp_opt(1_800_000_000 + seconds, 0)
                 .single()

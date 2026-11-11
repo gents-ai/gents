@@ -425,7 +425,7 @@ async fn load_parent_catalog(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lean_vocab_test::{LeanTitleUsageCase, LeanTitleUsageResult};
+    use gents_lean_vocab::{LeanTitleUsageCase, LeanTitleUsageResult};
 
     #[test]
     fn request_index_rows_preserve_exact_node_usage_and_ignore_malformed_twins() {
@@ -570,7 +570,7 @@ mod tests {
     }
 
     fn assert_goal_usage_cases() {
-        use crate::lean_vocab_test::LeanUsageBudgetResult;
+        use gents_lean_vocab::LeanUsageBudgetResult;
 
         for name in [
             "empty_budget_has_no_spend",
@@ -583,7 +583,7 @@ mod tests {
             "access_review_late_usage_restores_budget_observation",
             "failed_access_review_usage_still_reduces_budget",
         ] {
-            let case = crate::lean_vocab_test::lean_title_usage_cases()
+            let case = gents_lean_vocab::lean_title_usage_cases()
                 .iter()
                 .find(|case| case.name == name)
                 .unwrap();
@@ -625,7 +625,7 @@ mod tests {
             "exact_duplicate_call_counts_once",
             "conflicting_call_id_fails_closed",
         ];
-        let cases = crate::lean_vocab_test::lean_title_usage_cases();
+        let cases = gents_lean_vocab::lean_title_usage_cases();
         for name in names {
             let case = cases
                 .iter()
@@ -638,7 +638,7 @@ mod tests {
 
     #[test]
     fn generated_budget_recovery_cases_bind_signed_catalog_usage() {
-        use crate::lean_vocab_test::LeanUsageBudgetResult;
+        use gents_lean_vocab::LeanUsageBudgetResult;
 
         assert_goal_usage_cases();
 
@@ -656,7 +656,7 @@ mod tests {
             "exact_duplicate_call_counts_once",
             "conflicting_call_id_fails_closed",
         ];
-        let cases = crate::lean_vocab_test::lean_title_usage_cases();
+        let cases = gents_lean_vocab::lean_title_usage_cases();
         for name in names {
             let case = cases.iter().find(|case| case.name == name).unwrap();
             for after in [false, true] {

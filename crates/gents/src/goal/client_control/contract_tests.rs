@@ -289,7 +289,7 @@ async fn goal_command_signature_binds_modeled_physical_targets() {
         None,
     )
     .unwrap();
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().cross_actor_authorization_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().cross_actor_authorization_cases;
     let baseline = cases
         .iter()
         .find(|case| case.name == "committed_claim")
@@ -334,7 +334,7 @@ async fn goal_command_signature_binds_modeled_physical_targets() {
             .unwrap_or(false);
         assert_eq!(
             verified,
-            case.decision == crate::lean_vocab_test::LeanCrossActorDecision::Claimed,
+            case.decision == gents_lean_vocab::LeanCrossActorDecision::Claimed,
             "{name}"
         );
     }

@@ -647,7 +647,7 @@ mod tests {
 
     #[test]
     fn gates_costs_and_decisions_match_lean() {
-        let lean = crate::lean_vocab_test::lean_optimization_cases();
+        let lean = gents_lean_vocab::lean_optimization_cases();
         let policy = PolicyV2 {
             min_pairs: lean.params.min_pairs,
             max_not_evidence_bp: lean.params.max_not_evidence_bp,

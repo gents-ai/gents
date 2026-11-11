@@ -287,8 +287,8 @@ mod tests {
             .map_err(anyhow::Error::msg)?;
         assert_eq!(signer, user.did());
         assert_ne!(user.did(), db.node_identity.did());
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot()
-            .identity_client_document_creation_cases;
+        let cases =
+            &gents_lean_vocab::lean_contract_snapshot().identity_client_document_creation_cases;
         for (case_name, source, schema) in [
             ("remote", DocumentSchemaSource::RemoteObservation, SDL),
             ("schema-mismatch", DocumentSchemaSource::UserAuthored, WRONG),

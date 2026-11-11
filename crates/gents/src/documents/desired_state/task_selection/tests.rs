@@ -6,10 +6,10 @@ use serde_json::json;
 use super::{apply_task_selections, selected_agent};
 use crate::documents::desired_state::selection::tests::canonical;
 use crate::documents::desired_state::selection::{apply_selection_changes, Change};
-use crate::lean_vocab_test::lean_identity_household_cases;
 use crate::store::config_client::ConfigAccess;
 use crate::store::identity::NodeIdentity;
 use crate::Collection;
+use gents_lean_vocab::lean_identity_household_cases;
 
 #[test]
 fn task_selection_edge_is_the_task_target_agent() -> Result<()> {

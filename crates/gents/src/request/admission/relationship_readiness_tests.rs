@@ -35,7 +35,7 @@ async fn same_agent_client_waits_for_both_relationship_sets() {
 }
 
 async fn exercise_readiness(same_agent: bool) {
-    let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+    let snapshot = gents_lean_vocab::lean_contract_snapshot();
     let partial = snapshot
         .delegated_publication_cases
         .iter()

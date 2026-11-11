@@ -46,8 +46,7 @@ async fn visible(access: &ConfigAccess, doc: &str) -> bool {
 
 #[tokio::test]
 async fn modeled_auxiliary_child_repair_requires_signed_exact_parent_and_native_owner() {
-    let cases =
-        &crate::lean_vocab_test::lean_contract_snapshot().auxiliary_session_child_binding_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().auxiliary_session_child_binding_cases;
     let selected = [
         "paired_title_segment",
         "missing_parent",

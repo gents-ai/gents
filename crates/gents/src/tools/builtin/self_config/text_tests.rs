@@ -1665,7 +1665,7 @@ async fn saved_config_audit_reports_broken_references_without_mutation_and_refus
     assert!(refused_edit.contains("is unavailable"), "{refused_edit}");
     assert_eq!(before, access.execute(&query).await.unwrap());
     fixture.grant_user_native_admin().await;
-    let modeled = &crate::lean_vocab_test::lean_identity_household_cases()
+    let modeled = &gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .expect("configuration model")

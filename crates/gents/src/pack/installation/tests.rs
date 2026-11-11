@@ -7,7 +7,7 @@ const OWNER: &str = "did:key:zPackInstallOwner";
 
 #[test]
 fn pack_cleanup_observation_matches_model() {
-    let modeled = crate::lean_vocab_test::lean_identity_household_cases()
+    let modeled = gents_lean_vocab::lean_identity_household_cases()
         .iter()
         .find(|case| case.name == "configuration-explicit-grants")
         .expect("configuration policy model");
@@ -749,7 +749,7 @@ async fn plugin_store_notification_lost_commit_receipt_is_unconfirmed() {
 #[tokio::test]
 async fn pin_rejection_after_unknown_commit_preserves_unconfirmed_outcome() {
     let cases = tokio::task::spawn_blocking(|| {
-        crate::lean_vocab_test::lean_contract_snapshot()
+        gents_lean_vocab::lean_contract_snapshot()
             .pack_finality_cases
             .clone()
     })
@@ -816,7 +816,7 @@ async fn a_plugin_store_record_is_not_a_pack_install() {
         .execute("{ PackInstallation { _docID installed_at } }")
         .await
         .unwrap();
-    let model = crate::lean_vocab_test::lean_plugin_reference_cases()
+    let model = gents_lean_vocab::lean_plugin_reference_cases()
         .iter()
         .find(|case| !case["root_ships"].as_array().unwrap().is_empty())
         .unwrap();
@@ -1412,7 +1412,7 @@ async fn locally_installed_pack_agent_holds_the_projected_baseline() {
     )
     .await
     .unwrap();
-    let modeled = crate::lean_vocab_test::lean_contract_snapshot()
+    let modeled = gents_lean_vocab::lean_contract_snapshot()
         .identity_agent_baseline_cases
         .iter()
         .find(|case| case.actor == "enrolled-user")
@@ -1891,7 +1891,7 @@ async fn a_delayed_plugin_notification_projects_the_current_home_pin() {
         .await
         .unwrap();
     let retained = tokio::task::spawn_blocking(|| {
-        crate::lean_vocab_test::lean_plugin_reference_cases()
+        gents_lean_vocab::lean_plugin_reference_cases()
             .iter()
             .find(|case| !case["root_ships"].as_array().unwrap().is_empty())
             .unwrap()["retain_notification_record"]
@@ -3477,11 +3477,10 @@ async fn generated_plugin_reference_cases_validate_prepared_pack_resources() {
         }))
         .unwrap()
     }
-    let cases = tokio::task::spawn_blocking(|| {
-        crate::lean_vocab_test::lean_plugin_reference_cases().to_vec()
-    })
-    .await
-    .unwrap();
+    let cases =
+        tokio::task::spawn_blocking(|| gents_lean_vocab::lean_plugin_reference_cases().to_vec())
+            .await
+            .unwrap();
     assert_eq!(cases.len(), 14);
     for case in &cases {
         let home = tempfile::tempdir().unwrap();
@@ -3748,7 +3747,7 @@ async fn plugin_removal_does_not_treat_dangling_scope_as_no_references() {
 #[tokio::test]
 async fn pinned_plugin_references_match_executable_model_before_install_or_update() {
     let cases = tokio::task::spawn_blocking(|| {
-        crate::lean_vocab_test::lean_contract_snapshot()
+        gents_lean_vocab::lean_contract_snapshot()
             .plugin_pin_cases
             .clone()
     })
@@ -3896,7 +3895,7 @@ async fn failed_transaction_begin_restores_the_previous_plugin_record() {
     .unwrap();
     let before = crate::plugin::store::read_record(home.path(), "acme", "web_search").unwrap();
     let cases = tokio::task::spawn_blocking(|| {
-        crate::lean_vocab_test::lean_contract_snapshot()
+        gents_lean_vocab::lean_contract_snapshot()
             .pack_finality_cases
             .clone()
     })
@@ -3995,7 +3994,7 @@ async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_u
         .await
         .unwrap();
     let cases = tokio::task::spawn_blocking(|| {
-        crate::lean_vocab_test::lean_contract_snapshot()
+        gents_lean_vocab::lean_contract_snapshot()
             .plugin_pin_cases
             .clone()
     })
@@ -4292,7 +4291,7 @@ async fn installed_plugin_pin_is_rechecked_at_graph_commit() {
     })).unwrap();
     let manifest = plugin_pack_manifest("stale_pin", "documents", &[]);
     let cases = tokio::task::spawn_blocking(|| {
-        crate::lean_vocab_test::lean_contract_snapshot()
+        gents_lean_vocab::lean_contract_snapshot()
             .plugin_pin_cases
             .clone()
     })
@@ -4761,7 +4760,7 @@ async fn committed_ack_timeout_retains_staged_plugin_records() {
     tokio::time::resume();
     let error = write.await.unwrap_err();
     let cases = tokio::task::spawn_blocking(|| {
-        crate::lean_vocab_test::lean_contract_snapshot()
+        gents_lean_vocab::lean_contract_snapshot()
             .pack_finality_cases
             .clone()
     })
@@ -4931,7 +4930,7 @@ async fn hosted_plugin_root_preserves_existing_pack_documents() -> Result<()> {
             })
         })
         .await;
-    let model = crate::lean_vocab_test::lean_contract_snapshot()
+    let model = gents_lean_vocab::lean_contract_snapshot()
         .hosted_plugin_cases
         .iter()
         .find(|case| case["reviewed"] == true && case["plan"] == true && case["native"] == true)
@@ -5061,7 +5060,7 @@ async fn pack_install_applies_exactly_the_declared_placement_readers() {
                     .any(|row| row["repository_id"] == "placement-fixture-repository")
             })
     };
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().pack_placement_reader_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().pack_placement_reader_cases;
     assert_eq!(cases.len(), 3);
     for case in cases {
         match case["state"].as_str().unwrap() {

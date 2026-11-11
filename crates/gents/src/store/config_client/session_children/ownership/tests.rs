@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 #[tokio::test]
 async fn publication_matches_atomic_session_child_model() {
-    for case in &crate::lean_vocab_test::lean_contract_snapshot().session_child_cases {
+    for case in &gents_lean_vocab::lean_contract_snapshot().session_child_cases {
         let name = case["name"].as_str().unwrap();
         let home = tempfile::tempdir().unwrap();
         let runtime = KeyIdentity::load_or_create(home.path().join("node"), None).unwrap();

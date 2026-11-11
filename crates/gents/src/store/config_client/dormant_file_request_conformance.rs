@@ -75,7 +75,7 @@ async fn native_node_scoped_file_requests_match_modeled_access() -> anyhow::Resu
         })
         .await?;
     let node_doc = crate::store::graphql::created_doc_id(&node_response, "Node")?;
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().node_file_request_access_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().node_file_request_access_cases;
     assert!(!cases.is_empty());
     let schemas = [(
         "FileInventoryRequest",

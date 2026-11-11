@@ -3,8 +3,8 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::timeline::{has_durable_user_owner, DurableUserOwnerInput};
 
-use crate::lean_vocab_test::{lean_pending_user_turn_cases, LeanPendingUserTurnCase};
-use crate::lean_vocab_test::{lean_queued_steering_guard_cases, lean_queued_steering_trace_cases};
+use gents_lean_vocab::{lean_pending_user_turn_cases, LeanPendingUserTurnCase};
+use gents_lean_vocab::{lean_queued_steering_guard_cases, lean_queued_steering_trace_cases};
 
 #[test]
 fn pending_user_turn_cases_match_lean_table() {

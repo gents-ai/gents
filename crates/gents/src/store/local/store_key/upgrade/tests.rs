@@ -125,7 +125,7 @@ fn assert_engine_files_hide_entries(data: &Path, entries: &[(Vec<u8>, Vec<u8>)])
 
 #[test]
 fn every_recovery_observation_matches_lean() {
-    for case in &crate::lean_vocab_test::lean_contract_snapshot().store_encryption_upgrade_cases {
+    for case in &gents_lean_vocab::lean_contract_snapshot().store_encryption_upgrade_cases {
         let phase: Phase = serde_json::from_value(case["phase"].clone()).unwrap();
         let action = next(
             phase,

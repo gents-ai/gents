@@ -8,7 +8,7 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
     if !crate::tools::native::workspace_write_sandbox_enforced() {
         return;
     }
-    let expected = crate::lean_vocab_test::lean_process_stop_cases()
+    let expected = gents_lean_vocab::lean_process_stop_cases()
         .iter()
         .find(|case| case.live_evidence == "never_spawned" && case.worker_released)
         .unwrap();
@@ -160,7 +160,7 @@ async fn background_commands_keep_workspace_consent_after_dispatch() {
         } else {
             "unavailable"
         };
-        let case = crate::lean_vocab_test::lean_contract_snapshot()
+        let case = gents_lean_vocab::lean_contract_snapshot()
             .workspace_permission_cases
             .iter()
             .find(|case| {
@@ -186,7 +186,7 @@ async fn background_commands_keep_workspace_consent_after_dispatch() {
             &case["expectedRoute"]
         };
         let supported = crate::tools::native::workspace_write_sandbox_enforced();
-        let guard_case = crate::lean_vocab_test::lean_contract_snapshot()
+        let guard_case = gents_lean_vocab::lean_contract_snapshot()
             .operator_path_cases
             .iter()
             .find(|case| {
@@ -328,7 +328,7 @@ async fn background_commands_keep_workspace_consent_after_dispatch() {
 
 #[tokio::test]
 async fn spawn_process_rejects_target_policy_before_spawned_admission() {
-    let cases = crate::lean_vocab_test::lean_canonical_spawned_target_rejection_cases();
+    let cases = gents_lean_vocab::lean_canonical_spawned_target_rejection_cases();
     assert!(!cases.is_empty());
     for case in cases {
         for target in DeniedTarget::ALL {
@@ -481,7 +481,7 @@ async fn admission_harness(
 }
 
 async fn spawned_target_rejection_case(
-    case: &crate::lean_vocab_test::LeanSpawnedTargetRejectionCase,
+    case: &gents_lean_vocab::LeanSpawnedTargetRejectionCase,
     target: &DeniedTarget,
 ) {
     let expected = &case.expected;

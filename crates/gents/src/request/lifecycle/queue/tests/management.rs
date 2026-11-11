@@ -1,6 +1,6 @@
 use super::*;
-use crate::lean_vocab_test::LeanQueueManagementOperation;
 use crate::store::config_client::ConfigAccess;
+use gents_lean_vocab::LeanQueueManagementOperation;
 use rapidhash::{HashMapExt, RapidHashMap};
 
 /// Seeds an Agent-owned row through the Agent's own signed access.
@@ -17,8 +17,8 @@ async fn queue_image(
     db: &TestDb,
     session_id: &str,
     active: Option<&super::folding::ActiveTurn>,
-) -> crate::lean_vocab_test::QueueImage {
-    crate::lean_vocab_test::native_queue_image_with_access(
+) -> gents_lean_vocab::QueueImage {
+    crate::request::lifecycle::test_support::native_queue_image_with_access(
         &db.agent_access,
         db.node_did(),
         session_id,
@@ -29,7 +29,7 @@ async fn queue_image(
 
 #[tokio::test]
 async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
-    let cases = crate::lean_vocab_test::lean_queue_management_cases();
+    let cases = gents_lean_vocab::lean_queue_management_cases();
     assert!(!cases.is_empty());
     let mut exercised = Vec::new();
     for (case, variant) in cases.iter().flat_map(|case| [(case, 0), (case, 1)]) {
@@ -67,8 +67,7 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
         }
         let db = test_db(&format!("{}-{variant}", case.name)).await;
         let session_id = format!("management-{}", case.name);
-        let ttl = |entry: &crate::lean_vocab_test::LeanFoldQueueEntry| match (entry.fresh, variant)
-        {
+        let ttl = |entry: &gents_lean_vocab::LeanFoldQueueEntry| match (entry.fresh, variant) {
             (true, 0) => None,
             (true, _) => Some("2099-01-01T00:00:00Z"),
             (false, 0) => Some("2000-01-01T00:00:00Z"),

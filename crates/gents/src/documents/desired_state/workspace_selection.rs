@@ -238,8 +238,7 @@ mod tests {
                 &identity::Did::new(creator.did())?,
             )
             .await?;
-        let cases =
-            &crate::lean_vocab_test::lean_contract_snapshot().workspace_callback_selection_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_callback_selection_cases;
         assert!(!cases.is_empty());
         for case in cases {
             let key: &dyn NodeIdentity = match case["actor"].as_str().unwrap() {

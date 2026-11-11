@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::lean_vocab_test::lean_tool_retry_case;
+use gents_lean_vocab::lean_tool_retry_case;
 
 #[tokio::test]
 async fn list_tools_transport_failure_retries_generated_safe_read_case() {

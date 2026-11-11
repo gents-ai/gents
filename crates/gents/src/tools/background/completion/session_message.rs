@@ -354,7 +354,7 @@ mod folded_outcome_conformance {
 
     #[test]
     fn folded_outcome_matches_lean() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().agent_message_outcome_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().agent_message_outcome_cases;
         assert_eq!(cases.len(), 5);
         for case in cases {
             let actual = crate::tools::background::status::select_folded_outcome(
@@ -607,8 +607,7 @@ mod turn_assignment_tests {
             .write("test.foreign_fold", &foreign_fold)
             .await
             .unwrap();
-        let binding_cases =
-            &crate::lean_vocab_test::lean_contract_snapshot().agent_folded_binding_cases;
+        let binding_cases = &gents_lean_vocab::lean_contract_snapshot().agent_folded_binding_cases;
         let foreign_model = binding_cases
             .iter()
             .find(|case| {

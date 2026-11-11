@@ -905,7 +905,7 @@ async fn session_rewrite_rows(access: &crate::ConfigAccess) -> Vec<Vec<String>> 
 async fn editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_source() {
     use crate::store::identity::NodeIdentity;
     const SOURCE: &str = "edit-source";
-    let case = crate::lean_vocab_test::lean_contract_snapshot()
+    let case = gents_lean_vocab::lean_contract_snapshot()
         .session_document_cases
         .edit_anchors
         .iter()
@@ -1053,7 +1053,7 @@ async fn a_reader_granted_only_the_fork_reads_its_whole_retained_transcript() {
     use crate::store::config_client::NodePermission;
     use crate::store::identity::NodeIdentity;
     const SOURCE: &str = "shared-fork-source";
-    let case = crate::lean_vocab_test::lean_contract_snapshot()
+    let case = gents_lean_vocab::lean_contract_snapshot()
         .session_document_cases
         .fork
         .iter()
@@ -2651,7 +2651,7 @@ async fn retry_frontier_matches_lean_admission() {
     })
     .await
     .unwrap();
-    for (index, case) in crate::lean_vocab_test::lean_contract_snapshot()
+    for (index, case) in gents_lean_vocab::lean_contract_snapshot()
         .retry_frontier_cases
         .iter()
         .enumerate()
@@ -2805,7 +2805,7 @@ async fn retry_frontier_matches_lean_admission() {
 
 #[tokio::test]
 async fn unsigned_starter_cannot_populate_the_index() {
-    let starter_cases = &crate::lean_vocab_test::lean_contract_snapshot()
+    let starter_cases = &gents_lean_vocab::lean_contract_snapshot()
         .session_document_cases
         .starter_verification;
     assert_eq!(
@@ -2815,7 +2815,7 @@ async fn unsigned_starter_cannot_populate_the_index() {
             .unwrap()["accepted"],
         false
     );
-    let case = crate::lean_vocab_test::lean_contract_snapshot()
+    let case = gents_lean_vocab::lean_contract_snapshot()
         .session_document_cases
         .projection
         .iter()

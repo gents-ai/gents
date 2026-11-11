@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn exact_seed_rendering_matches_lean() {
-        for row in &crate::lean_vocab_test::lean_optimization_cases().seed_rendering {
+        for row in &gents_lean_vocab::lean_optimization_cases().seed_rendering {
             let dir = tempfile::tempdir().unwrap();
             crate::optimization::subject::tests::write_task_fixture_pack(dir.path(), false);
             use gents::NodeIdentity;

@@ -1607,7 +1607,7 @@ pub(crate) async fn verify_resumed_claim_version(
 #[cfg(test)]
 #[test]
 fn resumed_claim_admission_matches_the_generated_model() {
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().backend_resume_admission_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().backend_resume_admission_cases;
     assert!(!cases.is_empty());
     for case in cases {
         let facts = ResumeClaimFacts {
@@ -1672,7 +1672,7 @@ mod tests {
 
     #[test]
     fn generated_client_claim_queue_candidates_match_the_model() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().request_input_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().request_input_cases;
         for case in cases {
             let input: gents_protocol::request_input::RequestInput =
                 serde_json::from_value(case["input"].clone()).unwrap();

@@ -304,7 +304,7 @@ mod tests {
 
     #[test]
     fn generated_tool_timeout_cases_bind_native_resolution() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().tool_timeout_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().tool_timeout_cases;
 
         let foreground = cases["foreground"].as_array().unwrap();
         assert_eq!(foreground.len(), 11);

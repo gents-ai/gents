@@ -55,7 +55,7 @@ async fn stop_rechecks_a_process_record_created_after_cancellation_began() {
 #[cfg(unix)]
 #[tokio::test]
 async fn cancelled_worker_keeps_running_row_when_process_exit_is_unverified() {
-    let expected = crate::lean_vocab_test::lean_process_stop_cases()
+    let expected = gents_lean_vocab::lean_process_stop_cases()
         .iter()
         .find(|case| case.before == "running" && case.after == "running")
         .unwrap();
@@ -116,7 +116,7 @@ async fn cancelled_worker_keeps_running_row_when_process_exit_is_unverified() {
 
 #[tokio::test]
 async fn later_stop_preserves_first_timeout_or_failure_and_projects_completion() {
-    let model = crate::lean_vocab_test::lean_process_stop_cases()
+    let model = gents_lean_vocab::lean_process_stop_cases()
         .iter()
         .find(|case| case.live_evidence == "exited" && case.worker_released)
         .unwrap();
@@ -227,7 +227,7 @@ async fn confirmed_background_stop_survives_terminal_write_failure() {
         .with_max_level(tracing::Level::WARN)
         .finish();
     let _subscriber_guard = tracing::subscriber::set_default(subscriber);
-    let model = crate::lean_vocab_test::lean_process_stop_cases()
+    let model = gents_lean_vocab::lean_process_stop_cases()
         .iter()
         .find(|case| case.live_evidence == "never_spawned" && case.worker_released)
         .unwrap();
@@ -376,7 +376,7 @@ async fn live_process_identity_survives_host_record_write_failure() {
 
 #[tokio::test]
 async fn native_failure_decision_precedes_cancel_during_cleanup() {
-    let model = crate::lean_vocab_test::lean_process_stop_cases()
+    let model = gents_lean_vocab::lean_process_stop_cases()
         .iter()
         .find(|case| case.live_evidence == "exited" && case.worker_released)
         .unwrap();
@@ -549,7 +549,7 @@ async fn timeout_decision_is_owned_before_cleanup_and_later_cancel() {
             Box::pin(std::future::pending())
         }
     }
-    let model = crate::lean_vocab_test::lean_process_stop_cases()
+    let model = gents_lean_vocab::lean_process_stop_cases()
         .iter()
         .find(|case| case.live_evidence == "exited" && case.worker_released)
         .unwrap();

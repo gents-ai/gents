@@ -15,8 +15,6 @@ pub mod eval;
 pub mod file_inventory;
 pub mod goal;
 pub mod inference;
-#[cfg(test)]
-pub(crate) mod lean_vocab_test;
 pub mod observe;
 pub mod openai_wire;
 pub mod operations;
@@ -26,9 +24,6 @@ pub use gents_loop::provider_input::ProviderInputProfile;
 pub mod provider_budget {
     pub use crate::turn::provider_input::budget::{effective_input_budget, threshold_budget};
 }
-#[cfg(test)]
-#[path = "lean_vocab_test/canonical_execution/native_adapter.rs"]
-mod canonical_execution_native_adapter;
 pub(crate) mod provider_usage;
 pub mod runtime;
 pub mod store;

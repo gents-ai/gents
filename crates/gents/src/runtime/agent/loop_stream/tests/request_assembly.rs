@@ -1,7 +1,7 @@
 fn generated_steering_prepared_prompt(
-    case: &crate::lean_vocab_test::LeanQueuedSteeringTraceCase,
+    case: &gents_lean_vocab::LeanQueuedSteeringTraceCase,
 ) -> Message {
-    use crate::lean_vocab_test::{
+    use gents_lean_vocab::{
         LeanCanonicalClosure, LeanCanonicalSource, LeanCanonicalWriter, LeanMessageBlock,
         LeanMessagePublication, LeanMessageRole, LeanOutcome, LeanPayloadKind, LeanPresentation,
     };
@@ -59,9 +59,9 @@ fn generated_steering_prepared_prompt(
 
 #[tokio::test]
 async fn generated_authored_input_is_durable_before_provider_stream_entry() {
-    use crate::lean_vocab_test::LeanQueuedSteeringAction as Action;
+    use gents_lean_vocab::LeanQueuedSteeringAction as Action;
 
-    let cases = crate::lean_vocab_test::lean_queued_steering_trace_cases();
+    let cases = gents_lean_vocab::lean_queued_steering_trace_cases();
     let case = cases
         .iter()
         .find(|case| {
@@ -826,7 +826,7 @@ fn classify_slot(message: &Message, is_last: bool, conversation_index: &mut usiz
 
 #[tokio::test]
 async fn generated_layer_cases_pin_the_assembled_request_order() {
-    use crate::lean_vocab_test::lean_prompt_assembly_layer_cases;
+    use gents_lean_vocab::lean_prompt_assembly_layer_cases;
     use crate::turn::prompt::{LayeredPromptBuilder, PromptBuilder};
 
     let cases = lean_prompt_assembly_layer_cases();
@@ -1053,7 +1053,7 @@ fn repair_preserves_a_tool_pair_split_across_history_and_prompt() {
 
 #[test]
 fn generated_repair_cases_drive_tool_argument_repair() {
-    use crate::lean_vocab_test::lean_prompt_assembly_repair_cases;
+    use gents_lean_vocab::lean_prompt_assembly_repair_cases;
 
     let cases = lean_prompt_assembly_repair_cases();
     assert!(
@@ -1095,10 +1095,10 @@ fn generated_repair_cases_drive_tool_argument_repair() {
 }
 
 fn generated_authored_key(
-    key: &crate::lean_vocab_test::LeanFoldAuthoredKey,
+    key: &gents_lean_vocab::LeanFoldAuthoredKey,
     docs: &rapidhash::RapidHashMap<u64, String>,
 ) -> String {
-    use crate::lean_vocab_test::LeanFoldAuthoredKey as Key;
+    use gents_lean_vocab::LeanFoldAuthoredKey as Key;
     match key {
         Key::Context => "context".to_owned(),
         Key::Prompt => "prompt".to_owned(),
@@ -1109,7 +1109,7 @@ fn generated_authored_key(
 }
 
 async fn drive_generated_turn_input(
-    case: &crate::lean_vocab_test::LeanFoldTurnInputCase,
+    case: &gents_lean_vocab::LeanFoldTurnInputCase,
     first_turn_compaction: bool,
 ) {
     let (node, hook, writer, mut lifecycle, docs) = owned_test_hook_with_folded_case(case).await;
@@ -1329,7 +1329,7 @@ async fn drive_generated_turn_input(
 
 #[tokio::test]
 async fn folded_prompts_publish_and_send_in_queue_order() {
-    let cases = crate::lean_vocab_test::lean_fold_turn_input_cases();
+    let cases = gents_lean_vocab::lean_fold_turn_input_cases();
     assert!(!cases.is_empty());
     for case in cases {
         drive_generated_turn_input(case, false).await;
@@ -1338,7 +1338,7 @@ async fn folded_prompts_publish_and_send_in_queue_order() {
 
 #[tokio::test]
 async fn first_turn_compaction_keeps_folded_authored_input() {
-    for case in crate::lean_vocab_test::lean_fold_turn_input_cases() {
+    for case in gents_lean_vocab::lean_fold_turn_input_cases() {
         drive_generated_turn_input(case, true).await;
     }
 }

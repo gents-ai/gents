@@ -36,6 +36,7 @@ case "${suite}" in
   support)
     packages=(
       gents-lean-contract
+      gents-lean-vocab
       gents-migration
       gents-lens-fixture-add-label
       gents-callback-fixture-create-workspace

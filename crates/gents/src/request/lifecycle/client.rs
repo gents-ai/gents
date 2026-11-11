@@ -1584,7 +1584,7 @@ mod tests {
             .execute("{ AgentRequest { request_id relationships_pending } }")
             .await
             .unwrap();
-        let model = &crate::lean_vocab_test::lean_contract_snapshot().delegated_publication_cases;
+        let model = &gents_lean_vocab::lean_contract_snapshot().delegated_publication_cases;
         let wrong_receipt = model
             .iter()
             .find(|case| case["name"] == "wrong-receipt")
@@ -1619,8 +1619,7 @@ mod tests {
     async fn client_signature_binds_modeled_physical_targets() {
         let home = tempfile::tempdir().unwrap();
         let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
-        let cases =
-            &crate::lean_vocab_test::lean_contract_snapshot().cross_actor_authorization_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().cross_actor_authorization_cases;
         let baseline = cases
             .iter()
             .find(|case| case.name == "committed_claim")
@@ -1660,7 +1659,7 @@ mod tests {
             );
             assert_eq!(
                 verified,
-                case.decision == crate::lean_vocab_test::LeanCrossActorDecision::Claimed,
+                case.decision == gents_lean_vocab::LeanCrossActorDecision::Claimed,
                 "{name}"
             );
         }
@@ -1676,7 +1675,7 @@ mod tests {
 
     #[test]
     fn local_self_publication_matches_model() {
-        for case in &crate::lean_vocab_test::lean_contract_snapshot().local_self_publication_cases {
+        for case in &gents_lean_vocab::lean_contract_snapshot().local_self_publication_cases {
             let field = |name: &str| case[name].as_str().unwrap();
             assert_eq!(
                 local_self_publication_allowed(
@@ -1922,7 +1921,7 @@ mod tests {
 
     #[tokio::test]
     async fn agent_goal_submission_stages_the_session_before_its_goal_and_rolls_back_together() {
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().goal_backed_runtime_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().goal_backed_runtime_cases;
         let modeled = |name: &str| cases.iter().find(|case| case["name"] == name).unwrap();
         let (db, user, client, binding) =
             crate::test_support::signed_test_node("runtime-goal-opening").await;
@@ -2168,7 +2167,7 @@ mod tests {
 
     #[tokio::test]
     async fn goal_reservation_retains_user_owned_session_after_unconfirmed_commit() {
-        let modeled = crate::lean_vocab_test::lean_contract_snapshot()
+        let modeled = gents_lean_vocab::lean_contract_snapshot()
             .goal_client_start_cases
             .iter()
             .find(|case| case["name"] == "reserved_session")
@@ -2346,9 +2345,8 @@ mod tests {
             Some("request.client.submit"), submit_client_request(&access, &first),
         ).await;
         assert!(fired && result.unwrap_err().is_unconfirmed());
-        let model =
-            &crate::lean_vocab_test::lean_contract_snapshot().client_request_publication_cases;
-        let committed = crate::lean_vocab_test::lean_contract_snapshot()
+        let model = &gents_lean_vocab::lean_contract_snapshot().client_request_publication_cases;
+        let committed = gents_lean_vocab::lean_contract_snapshot()
             .identity_atomic_client_request_cases
             .iter()
             .find(|case| case["name"] == "created")
@@ -2597,8 +2595,7 @@ mod tests {
         )
         .await
         .is_err());
-        let model =
-            &crate::lean_vocab_test::lean_contract_snapshot().client_request_publication_cases;
+        let model = &gents_lean_vocab::lean_contract_snapshot().client_request_publication_cases;
         let granted = model
             .iter()
             .find(|case| case["name"] == "grant_succeeded")
@@ -2856,8 +2853,8 @@ mod tests {
             "2026-11-04T00:00:00Z",
             AgentRequestAdmissionRecord::client(user.did()),
         );
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot()
-            .identity_client_session_reservation_cases;
+        let cases =
+            &gents_lean_vocab::lean_contract_snapshot().identity_client_session_reservation_cases;
         let modeled = |name: &str| cases.iter().find(|case| case["name"] == name).unwrap();
         let aborted: anyhow::Result<()> = access
             .transact_write("test.client.abort_session_reservation", |txn| {
@@ -2939,7 +2936,7 @@ mod tests {
             .await
             .unwrap();
         let request_cases =
-            &crate::lean_vocab_test::lean_contract_snapshot().identity_atomic_client_request_cases;
+            &gents_lean_vocab::lean_contract_snapshot().identity_atomic_client_request_cases;
         let request_model = |name: &str| {
             request_cases
                 .iter()

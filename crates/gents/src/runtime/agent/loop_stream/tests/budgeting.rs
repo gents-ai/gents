@@ -1,6 +1,6 @@
 #[test]
 fn generated_turn_budget_cases_drive_every_completion_dispatch() {
-    let cases = crate::lean_vocab_test::lean_prompt_assembly_turn_budget_cases();
+    let cases = gents_lean_vocab::lean_prompt_assembly_turn_budget_cases();
     assert!(
         !cases.is_empty(),
         "Lean emitted no owned-loop turn budget cases"
@@ -115,7 +115,7 @@ fn generated_turn_budget_cases_drive_every_completion_dispatch() {
 
 #[test]
 fn generated_retention_cases_drive_production_compaction_target() {
-    let cases = crate::lean_vocab_test::lean_prompt_assembly_retention_cases();
+    let cases = gents_lean_vocab::lean_prompt_assembly_retention_cases();
     assert!(
         !cases.is_empty(),
         "Lean emitted no PromptAssembly retention cases"
@@ -231,7 +231,7 @@ fn machine_width_budget_arithmetic_is_exact_and_fail_closed() {
 
 #[test]
 fn generated_aggregate_token_budget_cases_drive_the_owned_loop_ledger() {
-    let cases = crate::lean_vocab_test::lean_aggregate_token_budget_cases();
+    let cases = gents_lean_vocab::lean_aggregate_token_budget_cases();
     assert!(
         !cases.is_empty(),
         "Lean emitted no aggregate token-budget cases"
@@ -511,7 +511,7 @@ async fn provider_view_repair_is_not_reported_as_a_durable_compaction() {
 #[tokio::test]
 async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fits() {
     use crate::store::identity::NodeIdentity as _;
-    let cases = crate::lean_vocab_test::lean_compaction_projection_join_cases();
+    let cases = gents_lean_vocab::lean_compaction_projection_join_cases();
     let committed = |result: &str| {
         cases
             .iter()
@@ -1364,7 +1364,7 @@ async fn mid_stream_failure_after_tool_budget_exhausted_fails() {
 
 #[test]
 fn generated_budget_cases_drive_dynamic_output_compaction_trigger() {
-    let cases = crate::lean_vocab_test::lean_prompt_assembly_budget_cases();
+    let cases = gents_lean_vocab::lean_prompt_assembly_budget_cases();
     assert!(
         !cases.is_empty(),
         "Lean emitted no PromptAssembly budget cases"
@@ -1443,7 +1443,7 @@ fn generated_budget_cases_drive_dynamic_output_compaction_trigger() {
 #[test]
 fn generated_compaction_trigger_cases_drive_the_production_trigger() {
     use crate::turn::provider_input::budget::{ContextAnchor, ContextCalibration};
-    let cases = crate::lean_vocab_test::lean_prompt_assembly_compaction_trigger_cases();
+    let cases = gents_lean_vocab::lean_prompt_assembly_compaction_trigger_cases();
     assert!(
         !cases.is_empty(),
         "Lean emitted no compaction trigger cases"

@@ -1,8 +1,8 @@
-use crate::lean_vocab_test::{lean_identity_permission_cases, LeanIdentityPermissionCase};
 use acp::{
     AcpStore, DocumentACP, DocumentPermission, Identity, LocalDocumentACP, MemoryAcpStore,
     RelationTuple, READER_RELATION,
 };
+use gents_lean_vocab::{lean_identity_permission_cases, LeanIdentityPermissionCase};
 use identity::Did;
 use std::sync::Arc;
 
@@ -125,9 +125,9 @@ async fn resolved_identity_permission_cases_drive_defra_acp() -> anyhow::Result<
 }
 
 fn household_subject(
-    subject: &crate::lean_vocab_test::LeanIdentitySubject,
+    subject: &gents_lean_vocab::LeanIdentitySubject,
 ) -> anyhow::Result<acp::Subject> {
-    use crate::lean_vocab_test::LeanIdentitySubject;
+    use gents_lean_vocab::LeanIdentitySubject;
     Ok(match subject {
         LeanIdentitySubject::Actor { actor } => acp::Subject::Entity(Did::new(actor)?),
         LeanIdentitySubject::Object { resource, id } => acp::Subject::entity_set(resource, id, ""),
@@ -142,8 +142,8 @@ fn household_subject(
 async fn household_relationship(
     acp: &acp::ZanzibarDocumentACP<acp::MemoryZanzibarStore>,
     policy_id: &str,
-    case: &crate::lean_vocab_test::LeanIdentityHouseholdCase,
-    relation: &crate::lean_vocab_test::LeanIdentityRelation,
+    case: &gents_lean_vocab::LeanIdentityHouseholdCase,
+    relation: &gents_lean_vocab::LeanIdentityRelation,
     grant: bool,
 ) -> anyhow::Result<()> {
     use anyhow::Context;
@@ -189,7 +189,7 @@ async fn household_relationship_as(
     acp: &acp::ZanzibarDocumentACP<acp::MemoryZanzibarStore>,
     policy_id: &str,
     actor: &str,
-    relation: &crate::lean_vocab_test::LeanIdentityRelation,
+    relation: &gents_lean_vocab::LeanIdentityRelation,
     grant: bool,
     expected: bool,
 ) -> anyhow::Result<()> {
@@ -233,12 +233,12 @@ async fn household_relationship_as(
 
 #[tokio::test]
 async fn household_policy_actions_drive_native_acp() -> anyhow::Result<()> {
-    use crate::lean_vocab_test::{lean_identity_household_cases, LeanIdentityAction};
     use acp::{
         policy_yaml::{build_policy, parse_policy_yaml},
         MemoryZanzibarStore, ZanzibarDocumentACP, ZanzibarStore,
     };
-    for contract in crate::lean_vocab_test::lean_identity_contracts() {
+    use gents_lean_vocab::{lean_identity_household_cases, LeanIdentityAction};
+    for contract in gents_lean_vocab::lean_identity_contracts() {
         assert_eq!(
             contract.schema_actor, contract.runtime_actor,
             "schema installation and updates use the modeled runtime actor"
@@ -399,14 +399,14 @@ async fn household_policy_actions_drive_native_acp() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn modeled_configuration_grants_use_authenticated_native_relations() -> anyhow::Result<()> {
-    use crate::lean_vocab_test::{
-        lean_identity_household_cases, LeanIdentityAction, LeanIdentitySubject,
-    };
     use gents::documents::apply_desired_state_plan;
     use gents::documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     use gents::store::config_client::NodePermission;
     use gents::store::graphql::{created_doc_id, escape_graphql_string};
     use gents::NodeIdentity;
+    use gents_lean_vocab::{
+        lean_identity_household_cases, LeanIdentityAction, LeanIdentitySubject,
+    };
 
     let case = lean_identity_household_cases()
         .iter()
@@ -727,12 +727,12 @@ async fn modeled_configuration_grants_use_authenticated_native_relations() -> an
 
 #[tokio::test]
 async fn modeled_self_config_grants_use_authenticated_native_relations() -> anyhow::Result<()> {
-    use crate::lean_vocab_test::{
-        lean_identity_household_cases, LeanIdentityAction, LeanIdentitySubject,
-    };
     use anyhow::Context;
     use gents::store::config_client::AgentSelfConfigPermission;
     use gents::NodeIdentity;
+    use gents_lean_vocab::{
+        lean_identity_household_cases, LeanIdentityAction, LeanIdentitySubject,
+    };
 
     let case = lean_identity_household_cases()
         .first()

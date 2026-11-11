@@ -181,7 +181,7 @@ mod tests {
 
     use super::*;
 
-    use crate::lean_vocab_test::{lean_identity_permission_cases, LeanIdentityPermissionCase};
+    use gents_lean_vocab::{lean_identity_permission_cases, LeanIdentityPermissionCase};
 
     const IDENTITY_PERMISSION_POLICY_ID: &str = "identity-permission-cases";
     const IDENTITY_PERMISSION_RESOURCE_NAME: &str = "row";

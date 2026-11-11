@@ -145,7 +145,7 @@ fn remote_context(
 #[tokio::test]
 async fn service_enablement_at_use_matches_model() {
     let cases = tokio::task::spawn_blocking(|| {
-        crate::lean_vocab_test::lean_identity_household_cases()
+        gents_lean_vocab::lean_identity_household_cases()
             .iter()
             .find(|case| case.name == "configuration-explicit-grants")
             .expect("MCP use model")

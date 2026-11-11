@@ -155,7 +155,7 @@ mod tests {
             )
             .await?;
         let network = crate::store::graphql::created_doc_id(&network, "Network")?;
-        let cases = &crate::lean_vocab_test::lean_contract_snapshot().identity_replica_grant_cases;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().identity_replica_grant_cases;
         let modeled_pending = |name: &str| {
             cases
                 .iter()

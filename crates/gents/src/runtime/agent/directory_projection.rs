@@ -464,7 +464,7 @@ mod tests {
     #[tokio::test]
     async fn directory_retracts_own_publications_and_preserves_foreign_sources() -> Result<()> {
         let cases =
-            &crate::lean_vocab_test::lean_contract_snapshot().identity_directory_publication_cases;
+            &gents_lean_vocab::lean_contract_snapshot().identity_directory_publication_cases;
         let mut checked = 0;
         for case in cases.iter().filter(|case| case["name"] != "failed-delete") {
             checked += 1;
@@ -565,7 +565,7 @@ mod tests {
                 Ok(())
             }
         }
-        let case = crate::lean_vocab_test::lean_contract_snapshot()
+        let case = gents_lean_vocab::lean_contract_snapshot()
             .identity_directory_publication_cases
             .iter()
             .find(|case| case["name"] == "failed-delete")

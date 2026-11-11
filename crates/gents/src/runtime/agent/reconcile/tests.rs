@@ -11,12 +11,12 @@ use crate::ensure_runtime_schemas;
 use crate::inference::admission::BackendAdmissionConfig;
 use crate::inference::backends::provider::BackendProviderKind;
 use crate::inference::resolved::{MaxTurnsProvenance, ResolvedAgent, DEFAULT_MAX_TURNS};
-use crate::lean_vocab_test::lean_runtime_reconcile_case;
 use crate::runtime::agent::PendingAgent;
 use crate::runtime::status::RuntimeStatusHandle;
 use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::{KeyIdentity, NodeIdentity as _, RuntimeNode};
 use crate::tools::surface::{AgentToolSurfaceConfig, ToolCeiling, ToolSurface};
+use gents_lean_vocab::lean_runtime_reconcile_case;
 use gents_protocol::row::AgentRequest;
 
 async fn test_node() -> Arc<defra_node::Node> {
