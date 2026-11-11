@@ -21,7 +21,7 @@ use gents_store::agent_identity_watch::{
     AgentIdentityWatch, AgentIdentityWatchClosed, WatchedAndActiveAgents,
 };
 use gents_store::identity::RuntimeNode;
-use gents_tools::surface::ToolSurface;
+use gents_tools::surface::{AgentToolSurfaceConfig, AgentWithTools, ToolSurface};
 
 pub type DispatcherMap = RapidHashMap<String, mpsc::Sender<AgentRequest>>;
 
@@ -114,6 +114,7 @@ pub struct ResolvedRuntimeSnapshot {
     pub(crate) local_did: String,
     pub(crate) default_agent_did: String,
     pub(crate) agents: RapidHashMap<String, Arc<ResolvedAgent>>,
+    pub(crate) tool_configs: RapidHashMap<String, Arc<AgentToolSurfaceConfig>>,
     pub(crate) tool_surfaces: RapidHashMap<String, Arc<ToolSurface>>,
     pub(crate) backend_admission_configs: RapidHashMap<String, BackendAdmissionConfig>,
     pub(crate) unavailable_agents: RapidHashMap<String, UnavailableAgent>,
@@ -156,6 +157,14 @@ impl ResolvedRuntimeSnapshot {
                 "runnable agent/tool-surface keysets differ (missing={missing:?}, extra={extra:?})"
             );
         }
+        if self.tool_configs.len() != self.agents.len()
+            || !self
+                .agents
+                .keys()
+                .all(|agent_did| self.tool_configs.contains_key(agent_did))
+        {
+            anyhow::bail!("runnable agent/tool-configuration keysets differ");
+        }
         if !self.agents.contains_key(&self.default_agent_did)
             && !self
                 .unavailable_agents
@@ -172,7 +181,7 @@ impl ResolvedRuntimeSnapshot {
     #[allow(dead_code)]
     pub(crate) fn from_parts(
         default_agent_did: String,
-        agents: Vec<Arc<ResolvedAgent>>,
+        agents: Vec<AgentWithTools>,
         tool_surfaces: RapidHashMap<String, Arc<ToolSurface>>,
         unavailable_agents: RapidHashMap<String, UnavailableAgent>,
     ) -> Self {
@@ -187,19 +196,23 @@ impl ResolvedRuntimeSnapshot {
 
     pub(crate) fn from_parts_with_admission_configs(
         default_agent_did: String,
-        agents: Vec<Arc<ResolvedAgent>>,
+        agents: Vec<AgentWithTools>,
         tool_surfaces: RapidHashMap<String, Arc<ToolSurface>>,
         backend_admission_configs: RapidHashMap<String, BackendAdmissionConfig>,
         unavailable_agents: RapidHashMap<String, UnavailableAgent>,
     ) -> Self {
+        let mut resolved_agents = RapidHashMap::with_capacity(agents.len());
+        let mut tool_configs = RapidHashMap::with_capacity(agents.len());
+        for AgentWithTools { agent, tools } in agents {
+            tool_configs.insert(agent.agent_did.clone(), tools);
+            resolved_agents.insert(agent.agent_did.clone(), agent);
+        }
         Self {
             node: None,
             local_did: String::new(),
             default_agent_did,
-            agents: agents
-                .into_iter()
-                .map(|agent| (agent.agent_did.clone(), agent))
-                .collect(),
+            agents: resolved_agents,
+            tool_configs,
             tool_surfaces,
             backend_admission_configs,
             unavailable_agents,
@@ -238,6 +251,7 @@ impl ResolvedRuntimeSnapshot {
             .agents
             .remove(agent_did)
             .map(|agent| agent.agent_identity.clone());
+        self.tool_configs.remove(agent_did);
         self.tool_surfaces.remove(agent_did);
         let reason = match identity {
             Some(identity) => reason.with_watcher_identity(identity),
@@ -309,6 +323,7 @@ impl ResolvedRuntimeSnapshot {
             local_did: self.local_did,
             default_agent_did: self.default_agent_did,
             agents: self.agents,
+            tool_configs: self.tool_configs,
             tool_surfaces: self.tool_surfaces,
             backend_admission_configs: self.backend_admission_configs,
             unavailable_agents: self.unavailable_agents,
@@ -328,6 +343,7 @@ impl ResolvedRuntimeSnapshot {
             &self.default_agent_did,
             &self.local_did,
             &self.agents,
+            &self.tool_configs,
             &self.tool_surfaces,
             &self.backend_admission_configs,
             &self.unavailable_agents,
@@ -347,6 +363,7 @@ pub struct ActiveRuntimeSnapshot {
     pub local_did: String,
     pub default_agent_did: String,
     pub agents: RapidHashMap<String, Arc<ResolvedAgent>>,
+    pub tool_configs: RapidHashMap<String, Arc<AgentToolSurfaceConfig>>,
     pub tool_surfaces: RapidHashMap<String, Arc<ToolSurface>>,
     pub backend_admission_configs: RapidHashMap<String, BackendAdmissionConfig>,
     pub unavailable_agents: RapidHashMap<String, UnavailableAgent>,
@@ -436,6 +453,10 @@ impl ActiveRuntimeSnapshot {
         &self.active_event_triggers
     }
 
+    pub(crate) fn tool_config(&self, agent_did: &str) -> Option<&Arc<AgentToolSurfaceConfig>> {
+        self.tool_configs.get(agent_did)
+    }
+
     pub(crate) fn tool_surface(&self, agent_did: &str) -> Option<&Arc<ToolSurface>> {
         self.tool_surfaces.get(agent_did)
     }
@@ -491,6 +512,7 @@ impl ActiveRuntimeSnapshot {
             &self.default_agent_did,
             &self.local_did,
             &self.agents,
+            &self.tool_configs,
             &self.tool_surfaces,
             &self.backend_admission_configs,
             &self.unavailable_agents,
@@ -508,6 +530,7 @@ fn configuration_fingerprint(
     default_agent_did: &str,
     local_did: &str,
     agents: &RapidHashMap<String, Arc<ResolvedAgent>>,
+    tool_configs: &RapidHashMap<String, Arc<AgentToolSurfaceConfig>>,
     tool_surfaces: &RapidHashMap<String, Arc<ToolSurface>>,
     backend_admission_configs: &RapidHashMap<String, BackendAdmissionConfig>,
     unavailable_agents: &RapidHashMap<String, UnavailableAgent>,
@@ -536,6 +559,13 @@ fn configuration_fingerprint(
         fingerprint.push('=');
         fingerprint.push_str(&format!("{agent:?}"));
         fingerprint.push('\n');
+        if let Some(tool_config) = tool_configs.get(&agent_did) {
+            fingerprint.push_str("tool_config:");
+            fingerprint.push_str(&agent_did);
+            fingerprint.push('=');
+            fingerprint.push_str(&format!("{tool_config:?}"));
+            fingerprint.push('\n');
+        }
     }
 
     let mut tool_ids = tool_surfaces.keys().cloned().collect::<Vec<_>>();
