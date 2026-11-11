@@ -152,6 +152,20 @@ async fn admission_facts(
     Ok(AdmissionFacts::Observed(facts))
 }
 
+/// Whether whoever `access` signs for holds the agent catalog
+/// (`nodes manage_agents`) on `node_did`, as native ACP answers.
+pub async fn holds_agent_catalog(access: &ConfigAccess, node_did: &str) -> Result<bool> {
+    Ok(
+        match admission_facts(access, node_did, &[])
+            .await
+            .map_err(anyhow::Error::from)?
+        {
+            AdmissionFacts::Observed(facts) => facts.catalog,
+            AdmissionFacts::Unrestricted => true,
+        },
+    )
+}
+
 /// Lean `SelfConfig.Actor` from the facts, and the catalog's default.
 async fn admission_actor(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,

@@ -19,16 +19,14 @@ pub use documents::{apply_tool_grant_selection, validate_tool_network_selection}
 use documents::{candidate_doc, replacement_plan, safe_diff, shared_receipt};
 pub(crate) use documents::{
     decode_merged, guard_shared_authority_in_txn, read_owned_doc, shared_referrers, shared_refusal,
-    validate_merged_selection,
+    summarized, validate_merged_selection,
 };
 pub(crate) use grants::guard_reselection_keeps_grants_in_txn;
 pub use grants::{guard_tools_keep_grants, reselection_keeps_grants, OperatorGrants};
 pub use guards::{
     guard_agent_keeps_reach, guard_backend_auth, guard_backend_choice, guard_tools_keep_control,
 };
-pub use guards::{
-    guard_backend_choice_in_txn, guard_compaction_choice_in_txn, profile_backend_id,
-};
+pub use guards::{guard_backend_choice_in_txn, guard_compaction_choice_in_txn, profile_backend_id};
 pub use request::ApplyRequest;
 
 #[derive(Debug, thiserror::Error)]
@@ -57,6 +55,9 @@ impl std::fmt::Display for MissingAgent {
         }
     }
 }
+
+pub(crate) const PREVIEW_EFFECT: &str =
+    "preview: nothing was written; send the same create/update call without preview to apply";
 
 pub const EFFECT_TIMING_NOTE: &str = "Applies from the next request, once the runtime reconciler \
      picks it up (a few seconds); the current turn keeps its existing configuration.";
@@ -91,6 +92,43 @@ pub struct PatchOutcome {
     /// write reaches, and the sha256 of the document that was published.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shared: Option<Value>,
+}
+
+impl PatchOutcome {
+    /// A shared handler's receipt as the config tool answers it.
+    pub(crate) fn from_receipt(
+        target: SelfConfigTarget,
+        agent_did: &str,
+        receipt: gents_protocol::operations::document::DocumentReceipt,
+    ) -> Self {
+        Self {
+            committed: receipt.committed,
+            collection: receipt.collection,
+            target_id: receipt.id,
+            agent_did: agent_did.to_owned(),
+            connection: None,
+            created: receipt.created,
+            changed: summarized(
+                target,
+                receipt
+                    .changed
+                    .into_iter()
+                    .map(|change| FieldDelta {
+                        field: change.field,
+                        from: change.from,
+                        to: change.to,
+                    })
+                    .collect(),
+            ),
+            effect: if receipt.committed {
+                EFFECT_TIMING_NOTE
+            } else {
+                PREVIEW_EFFECT
+            },
+            doc_id: receipt.doc_id,
+            shared: None,
+        }
+    }
 }
 
 pub fn target_destination(document: &Map<String, Value>, owner: &str) -> Value {
@@ -303,10 +341,7 @@ impl SelfConfigCore {
         self
     }
 
-    pub fn with_process_ceiling(
-        mut self,
-        process_ceiling: SelfConfigProcessCeiling,
-    ) -> Self {
+    pub fn with_process_ceiling(mut self, process_ceiling: SelfConfigProcessCeiling) -> Self {
         self.process_ceiling = process_ceiling;
         self
     }
@@ -645,7 +680,7 @@ impl SelfConfigCore {
             created: creating,
             committed: false,
             shared,
-            effect: "preview: nothing was written; send the same create/update call without preview to apply",
+            effect: PREVIEW_EFFECT,
         })
     }
 }

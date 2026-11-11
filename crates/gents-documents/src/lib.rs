@@ -27,6 +27,7 @@ pub(crate) mod desired_state;
 pub mod event_consumer;
 pub mod event_source_cursor;
 mod node_document_publication;
+pub mod operations;
 mod pack_config;
 pub mod pack_spec;
 mod page;

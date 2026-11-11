@@ -298,7 +298,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
             what: "reusable instructions selected by a Context (tools grant). Create from fields or import a SKILL.md.",
             commands: &[
                 "skill get SKILL_ID",
-                "skill [preview] import SKILL_ID PATH  PATH is a skill directory or its SKILL.md inside the invoking agent's file root",
+                "skill [preview] import SKILL_ID PATH  PATH is a skill directory or its SKILL.md inside the invoking agent's file root; options.overwrite = true replaces a stored skill",
             ],
             notes: "On import, frontmatter supplies name and description, the body the instructions, optional agents/openai.yaml interface metadata and tool dependencies. Files are limited to 1 MiB. Import creates an unused ID and never overwrites. Skills grant no tools; supporting files are neither copied nor run.",
             next: "create or import the Skill, then context update with set.skill_ids = the current IDs plus this one. Verify with load_skill in a fresh request.",
