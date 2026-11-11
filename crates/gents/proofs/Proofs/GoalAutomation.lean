@@ -1,4 +1,5 @@
 import Proofs.Goals
+import Proofs.TextNormalization
 
 namespace GoalAutomation
 
@@ -10,23 +11,6 @@ def maxTokenBudget : Int := 9223372036854775807
 def validBudget : Option Int → Bool
   | none => true
   | some value => decide (0 < value ∧ value ≤ maxTokenBudget)
-
-/-- Native objective normalization uses Rust's Unicode White_Space property,
-as specified by `char::is_whitespace`, rather than Lean's ASCII whitespace.
-https://doc.rust-lang.org/std/primitive.char.html#method.is_whitespace -/
-def objectiveWhitespaceRanges : List (Nat × Nat) :=
-  [(0x9, 0xD), (0x20, 0x20), (0x85, 0x85), (0xA0, 0xA0), (0x1680, 0x1680),
-   (0x2000, 0x200A), (0x2028, 0x2029), (0x202F, 0x202F), (0x205F, 0x205F), (0x3000, 0x3000)]
-
-def objectiveWhitespace (c : Char) : Bool :=
-  objectiveWhitespaceRanges.any fun (first, last) => first ≤ c.toNat && c.toNat ≤ last
-
-def objectiveWhitespaceCodepoints : List Nat :=
-  objectiveWhitespaceRanges.flatMap fun (first, last) =>
-    (List.range (last - first + 1)).map (first + ·)
-
-def canonicalObjective (objective : String) : String :=
-  (objective.dropWhile objectiveWhitespace).dropRightWhile objectiveWhitespace
 
 structure Fingerprint where
   owner : Did
@@ -58,14 +42,14 @@ inductive CreateDisposition where
 def createFingerprint (request : CreateRequest) : Fingerprint :=
   { owner := request.caller
   , session := request.currentSession
-  , objective := canonicalObjective request.objective
+  , objective := TextNormalization.canonicalObjective request.objective
   , tokenBudget := request.tokenBudget }
 
 def decideCreate (request : CreateRequest) (existing : Option Fingerprint) : CreateDisposition :=
   if !request.goalTools || !request.goalCreate then .denied
   else if request.requestedOwner != request.caller ||
       request.requestedSession != request.currentSession then .denied
-  else if !request.objectiveNonempty || (canonicalObjective request.objective).isEmpty ||
+  else if !request.objectiveNonempty || (TextNormalization.canonicalObjective request.objective).isEmpty ||
       !validBudget request.tokenBudget then .invalid
   else match existing with
   | none => .fresh
@@ -96,7 +80,7 @@ theorem duplicate_create_is_idempotent (request : CreateRequest)
     (howner : request.requestedOwner = request.caller)
     (hsession : request.requestedSession = request.currentSession)
     (hobjective : request.objectiveNonempty = true)
-    (htrimmed : (canonicalObjective request.objective).isEmpty = false)
+    (htrimmed : (TextNormalization.canonicalObjective request.objective).isEmpty = false)
     (hbudget : validBudget request.tokenBudget = true) :
     decideCreate request (some (createFingerprint request)) = .idempotent := by
   rcases hcaps with ⟨hgoal, hcreate⟩
@@ -119,7 +103,7 @@ def validTaskGoalDeclaration (declaration : TaskGoalDeclaration) : Bool :=
   match declaration.goalObjective with
   | none => declaration.goalTokenBudget.isNone
   | some objective =>
-      !(canonicalObjective objective).isEmpty && validBudget declaration.goalTokenBudget
+      !(TextNormalization.canonicalObjective objective).isEmpty && validBudget declaration.goalTokenBudget
 
 /-- The runtime-facing encoding is length-prefixed so the same node/Task/fire
 tuple deterministically recovers the same session and request retry identities

@@ -135,7 +135,7 @@ def taskCasesJson : Json :=
     taskCaseJson { base with goal := true } true,
     taskCaseJson base false (some "Earlier policy."),
     taskCaseJson base false (some (base.prompt ++ " "))] ++
-    GoalAutomation.objectiveWhitespaceCodepoints.map (fun value =>
+    TextNormalization.objectiveWhitespaceCodepoints.map (fun value =>
       taskCaseJson { base with prompt := String.singleton (Char.ofNat value) }))
 
 end Conformance.AccessReview

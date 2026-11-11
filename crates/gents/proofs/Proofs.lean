@@ -13,6 +13,7 @@ import Proofs.RequestExecutionLease
 import Proofs.InferenceCall
 import Proofs.AccountRotation
 import Proofs.AuxiliaryAdmission
+import Proofs.TextNormalization
 import Proofs.TitleText
 import Proofs.CrossMachineComposed
 import Proofs.Fleet
