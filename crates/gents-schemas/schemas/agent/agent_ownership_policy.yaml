@@ -38,6 +38,15 @@ resources:
         expr: parent->read
       - name: update
       - name: delete
+  - name: owed_deliveries
+    relations:
+      - name: parent
+        types: [nodes]
+    permissions:
+      - name: read
+        expr: parent->update
+      - name: update
+      - name: delete
   - name: pairing_observations
     relations:
       - name: parent

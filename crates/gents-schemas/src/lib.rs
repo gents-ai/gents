@@ -32,7 +32,7 @@ pub const AGENT_SESSION: &str = include_str!("../schemas/agent/agent_session.gra
 pub const AGENT_OWNERSHIP_POLICY: &str =
     include_str!("../schemas/agent/agent_ownership_policy.yaml");
 pub const AGENT_OWNERSHIP_POLICY_ID: &str =
-    "ac7d6625bfe087880ab77635e5da9c48fe1ee5f9152748018a63c0d9a75ceb70";
+    "5214e9adbbb9b355e4f18a31587c3592d67bf40567688584187bd3ea74bafd91";
 pub const SESSION_POLICY_RESOURCE: &str = "sessions";
 pub const GOAL_NAME: &str = "Goal";
 pub const GOAL: &str = include_str!("../schemas/agent/goal.graphql");
