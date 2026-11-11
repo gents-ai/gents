@@ -112,8 +112,6 @@ mod session_control;
 mod startup_readiness;
 #[path = "conformance/streaming_compaction.rs"]
 mod streaming_compaction;
-#[path = "conformance/tool_call.rs"]
-mod tool_call;
 
 #[test]
 fn lean_executable_contracts_cover_initial_domains() {

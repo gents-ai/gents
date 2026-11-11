@@ -1,3 +1,9 @@
+import Proofs.Conformance.Functions.Automation
+import Proofs.Conformance.Functions.Clients
+import Proofs.Conformance.Functions.Runtime
+import Proofs.Conformance.Functions.Session
+import Proofs.Conformance.Functions.ToolCalls
+import Proofs.Conformance.Functions.Tools
 import Proofs.Conformance.Functions.Shared
 import Proofs.Conformance.Functions.Store
 import Proofs.Conformance.StorageWriteGate

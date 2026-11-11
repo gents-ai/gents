@@ -1,4 +1,5 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ToolCallState {
     Pending,
     Running,
@@ -50,7 +51,8 @@ impl ToolCallState {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum CancelCause {
     Interrupted,
     Deadline,
@@ -80,4 +82,19 @@ impl CancelCause {
         CancelCause::Deadline,
         CancelCause::UserCancelled,
     ];
+}
+
+#[cfg(test)]
+mod conformance {
+    use super::{CancelCause, ToolCallState};
+
+    #[test]
+    fn tool_call_states_are_the_lean_tool_call_states() {
+        gents_lean_vocab::families::tool_execution_tool_call_state_vocabulary::replay(&ToolCallState::ALL);
+    }
+
+    #[test]
+    fn cancel_causes_are_the_lean_cancel_causes() {
+        gents_lean_vocab::families::tool_execution_cancel_cause_vocabulary::replay(CancelCause::ALL);
+    }
 }

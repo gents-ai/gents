@@ -16,10 +16,18 @@ inductive Schema where
   | enum (name : String) (values : List (String × String))
   | struct (name : String) (fields : List (String × Schema))
 
+/-- camelCase to snake_case; a run of capitals is one word (`MCPHealth` is
+`mcp_health`). -/
 def wireName (leanName : String) : String :=
-  (leanName.foldl
-    (fun wire c => if c.isUpper then wire ++ "_" ++ c.toLower.toString else wire.push c) "")
-    |>.dropWhile (· == '_')
+  let chars := leanName.toList
+  let rec go (previous : Option Char) : List Char → List Char
+    | [] => []
+    | c :: rest =>
+      let startsWord := c.isUpper && (match previous with
+        | none => false
+        | some p => p.isLower || p.isDigit || (p.isUpper && (rest.head?.map Char.isLower).getD false))
+      (if startsWord then ['_', c.toLower] else [c.toLower]) ++ go (some c) rest
+  String.mk (go none chars)
 
 def wireKey (declaration : Name) : String :=
   "_".intercalate (declaration.components.map fun part => wireName part.toString)
@@ -143,12 +151,14 @@ elab "conformance_families%" : term => do
     `(($(quote (wireKey declaration)), $(← familyTerm declaration)))
   elabTerm (← `(Json.mkObj [$entries,*])) (some (mkConst ``Json))
 
-/-- The wire names of every enum with a `conformance_vocabulary`, by key. -/
+/-- The wire names of every enum with a `conformance_vocabulary`. The key ends
+in `_vocabulary`: `ManagedExec.StopOutcome` and `ManagedExec.stopOutcome` would
+otherwise share one. -/
 elab "conformance_vocabularies%" : term => do
   let vocabularies := (vocabularyExtension.getState (← getEnv)).qsort (Name.lt ·.1 ·.1)
   let entries ← vocabularies.mapM fun (type, _) => do
     let (name, constructors) ← enumConstructors (mkConst type)
-    `(($(quote (wireKey type)), Schema.wire $(← enumSchemaTerm name constructors)))
+    `(($(quote (wireKey type ++ "_vocabulary")), Schema.wire $(← enumSchemaTerm name constructors)))
   elabTerm (← `(Json.mkObj [$entries,*])) (some (mkConst ``Json))
 
 end Conformance

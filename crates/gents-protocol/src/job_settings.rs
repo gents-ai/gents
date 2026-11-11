@@ -95,3 +95,15 @@ pub fn effective_ceiling(block: Option<&PluginJobSettings>) -> JobCeiling {
         },
     }
 }
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn consented_dynamic_matches_lean() {
+        gents_lean_vocab::families::plugin_job_consented_dynamic::replay(|i| {
+            consented_dynamic(i.consent, i.mode)
+        });
+    }
+}

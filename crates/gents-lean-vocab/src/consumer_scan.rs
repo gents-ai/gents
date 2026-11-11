@@ -35,6 +35,8 @@ const DOMAIN_FAMILIES: &[(&str, &str)] = &[
 /// generated; both are replayed as `families::<key>`.
 const DERIVED_FAMILIES: &str = "families";
 const DERIVED_VOCABULARIES: &str = "family_vocabularies";
+/// The ledger category of a row that tags a derived family by its key.
+const DERIVED_LEDGER_CATEGORY: &str = "family";
 
 /// Ledger categories the snapshot scan cannot see: follow-up hooks, accepted
 /// boundaries on domains with no emitted machine, and the standalone
@@ -225,6 +227,9 @@ pub fn emitted_families(snapshot: &Value) -> BTreeSet<String> {
 
 /// The family a ledger row speaks for.
 pub fn ledger_family(category: &str, domain: &str) -> String {
+    if category == DERIVED_LEDGER_CATEGORY {
+        return format!("{DERIVED_FAMILIES}/{domain}");
+    }
     match DOMAIN_FAMILIES
         .iter()
         .find(|(_, row_category)| *row_category == category)

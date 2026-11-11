@@ -42,3 +42,21 @@ impl GoalStatus {
         self == Self::Active
     }
 }
+
+#[cfg(test)]
+mod conformance {
+    use super::GoalStatus;
+
+    #[test]
+    fn goal_statuses_are_the_lean_goal_statuses() {
+        gents_lean_vocab::families::goals_status_vocabulary::replay(&[
+            GoalStatus::Active,
+            GoalStatus::Paused,
+            GoalStatus::Blocked,
+            GoalStatus::UsageLimited,
+            GoalStatus::BudgetLimited,
+            GoalStatus::Complete,
+            GoalStatus::Stopped,
+        ]);
+    }
+}

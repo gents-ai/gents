@@ -308,12 +308,12 @@ def vocabularyCoverage : List CoverageEntry :=
       "RequestState")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "vocabulary"
-      "ExecutionOrigin")
+      "family"
+      "execution_origin_vocabulary")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "vocabulary"
-      "ProcessState")
+      "family"
+      "process_state_vocabulary")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "vocabulary"
@@ -326,8 +326,8 @@ def vocabularyCoverage : List CoverageEntry :=
       boundaryStorageHookFailurePolicyId)
       "persistence-failure-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "vocabulary"
-      "ReconcilePhase")
+      "family"
+      "reconcile_phase_vocabulary")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "vocabulary"
@@ -357,24 +357,24 @@ def vocabularyCoverage : List CoverageEntry :=
       "No production disposition enum exists; the deleted test-only mirror was not runtime vocabulary coverage. Retry behavior is observed through MCP operations below.")
       "tool-call" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "vocabulary"
-      "ToolCallState")
+      "family"
+      "tool_execution_tool_call_state_vocabulary")
       "tool-call" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "vocabulary"
-      "CancelCause")
+      "family"
+      "tool_execution_cancel_cause_vocabulary")
       "interrupt-and-cancel" [Surface.agentFacing]
   , tagged (consumerCoverage
       "vocabulary"
       "ManagedExecState")
       "managed-exec" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "vocabulary"
-      "ProcessStopOutcome")
+      "family"
+      "managed_exec_stop_outcome_vocabulary")
       "managed-exec" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "vocabulary"
-      "CancelProcessReply")
+      "family"
+      "managed_exec_cancel_reply_vocabulary")
       "managed-exec" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "process_stop_cases"
@@ -382,12 +382,12 @@ def vocabularyCoverage : List CoverageEntry :=
       "Each generated verdict is checked against the native mapping, and the reachable observations (a recorded running group, the same group after the owner's stop, a reused start identity) are produced by real test-owned process groups. A group that survives SIGKILL cannot be constructed on a test host, so stillRunning is checked only through the mapping.")
       "managed-exec" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "vocabulary"
-      "ToolFailureClass")
+      "family"
+      "tool_execution_failure_class_vocabulary")
       "tool-call" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "vocabulary"
-      "AwaitMode")
+      "family"
+      "tool_execution_await_mode_vocabulary")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
       "vocabulary"
@@ -2431,8 +2431,8 @@ def caseCoverage : List CoverageEntry :=
       "MCPHealthCases")
       "mcp-health" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "vocabulary"
-      "CancelCause")
+      "family"
+      "tool_execution_cancel_cause_vocabulary")
       "interrupt-and-cancel" [Surface.operatorUi]
   , tagged (consumerCoverage
       "state_machine"

@@ -667,3 +667,15 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod conformance {
+    use super::available;
+
+    #[test]
+    fn plugin_call_availability_matches_the_lean_model() {
+        gents_lean_vocab::families::tool_policy_plugin_calls_available::replay(|i| {
+            available(i.selected_grant, i.live_dispatcher)
+        });
+    }
+}

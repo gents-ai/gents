@@ -107,7 +107,8 @@ impl RequestExecutionLease {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RequestTerminalOutcome {
     Completed,
     Failed,
@@ -1184,3 +1185,15 @@ mod tests;
 #[derive(Debug, thiserror::Error)]
 #[error("pending input changed before natural completion")]
 struct PendingQueueChanged;
+
+#[cfg(test)]
+mod conformance {
+    use super::RequestTerminalOutcome;
+
+    #[test]
+    fn request_execution_lease_outcome_request_state_matches_lean() {
+        gents_lean_vocab::families::request_execution_lease_outcome_request_state::replay(|i| {
+            RequestTerminalOutcome::request_state(i.outcome)
+        });
+    }
+}

@@ -6,3 +6,15 @@ pub fn command_guard_allows(
 ) -> bool {
     !required || (supported && inspected && single_linked)
 }
+
+#[cfg(test)]
+mod conformance {
+    use super::command_guard_allows;
+
+    #[test]
+    fn command_guard_matches_the_lean_model() {
+        gents_lean_vocab::families::tool_policy_operator_paths_command_guard_allows::replay(|i| {
+            command_guard_allows(i.required, i.supported, i.inspected, i.single_linked)
+        });
+    }
+}

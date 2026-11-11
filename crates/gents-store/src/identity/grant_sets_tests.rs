@@ -63,7 +63,7 @@ pub(crate) fn did(directory: &tempfile::TempDir, name: &str) -> identity::Did {
 #[test]
 fn sets_match_lean_owner() {
     use gents_lean_vocab::families;
-    families::identity_grant_sets_grant_set::replay(&GrantSet::ALL);
+    families::identity_grant_sets_grant_set_vocabulary::replay(&GrantSet::ALL);
     families::identity_grant_sets_grant_set_native_admin::replay(|i| {
         GrantSet::native_admin(i.grant_set)
     });

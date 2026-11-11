@@ -24,7 +24,8 @@ pub mod persistence;
 #[cfg(test)]
 pub(crate) mod tests;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum FailurePolicy {
     FailOpen,
     #[default]
@@ -2473,5 +2474,18 @@ fn decide_persistence_outcome(
             tracing::error!(error = %error, context = %context, "persistence failed (fail-closed) — terminating");
             PolicyDecision::Terminate(format!("persistence failed: {error}"))
         }
+    }
+}
+
+#[cfg(test)]
+mod conformance {
+    use super::FailurePolicy;
+
+    #[test]
+    fn failure_policies_are_the_lean_persistence_failure_policies() {
+        gents_lean_vocab::families::persistence_state_failure_policy_vocabulary::replay(&[
+            FailurePolicy::FailOpen,
+            FailurePolicy::FailClosed,
+        ]);
     }
 }

@@ -8,21 +8,24 @@ use serde::{Deserialize, Serialize};
 mod record_store_tests;
 
 // Process-group ids are reused; termination requires the recorded leader's OS start identity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ProcessObservation {
     Running,
     Exited,
     Unowned,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LiveProcessEvidence {
     NeverSpawned,
     SpawnedUnverified,
     Exited,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum NativeTerminalIntent {
     Completed,
     Cancelled,
@@ -133,7 +136,8 @@ impl ProcessObservation {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ProcessStopOutcome {
     Stopped,
     AlreadyExited,
@@ -177,7 +181,8 @@ impl ProcessStopOutcome {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum CancelProcessReply {
     Cancelled,
     Lost,
@@ -725,5 +730,62 @@ pub mod test_support {
         fn drop(&mut self) {
             self.token.cancel();
         }
+    }
+}
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn process_stop_outcomes_are_the_lean_stop_outcomes() {
+        gents_lean_vocab::families::managed_exec_stop_outcome_vocabulary::replay(&ProcessStopOutcome::ALL);
+    }
+
+    #[test]
+    fn cancel_process_replies_are_the_lean_cancel_replies() {
+        gents_lean_vocab::families::managed_exec_cancel_reply_vocabulary::replay(&CancelProcessReply::ALL);
+    }
+
+    #[test]
+    fn managed_exec_may_terminate_matches_lean() {
+        gents_lean_vocab::families::managed_exec_may_terminate::replay(|i| {
+            ProcessObservation::may_terminate(i.process_observation)
+        });
+    }
+
+    #[test]
+    fn managed_exec_retain_process_record_matches_lean() {
+        gents_lean_vocab::families::managed_exec_retain_process_record::replay(|i| {
+            ProcessObservation::retain_process_record(i.process_observation)
+        });
+    }
+
+    #[test]
+    fn managed_exec_cancel_reply_matches_lean() {
+        gents_lean_vocab::families::managed_exec_cancel_reply::replay(|i| {
+            ProcessStopOutcome::cancel_reply(i.stop_outcome)
+        });
+    }
+
+    #[test]
+    fn managed_exec_stop_outcome_matches_lean() {
+        gents_lean_vocab::families::managed_exec_stop_outcome::replay(|i| {
+            ProcessStopOutcome::from_observations(i.before, i.after)
+        });
+    }
+
+    #[test]
+    fn process_control_decisions_match_lean() {
+        use gents_lean_vocab::families;
+        families::background_process_control_retire_stop_receipt::replay(|i| {
+            retire_stop_receipt(i.terminal_committed)
+        });
+        families::background_process_control_settle_live_cancel::replay(|i| {
+            settle_live_cancel(i.released, i.evidence)
+        });
+        families::background_process_control_may_settle_terminal::replay(|i| {
+            may_settle_native(i.intent, i.evidence)
+        });
     }
 }

@@ -308,6 +308,6 @@ mod conformance {
 
     #[test]
     fn lifecycle_states_are_the_lean_request_states() {
-        gents_lean_vocab::families::request_state::replay(&RequestLifecycleState::ALL);
+        gents_lean_vocab::families::request_state_vocabulary::replay(&RequestLifecycleState::ALL);
     }
 }
