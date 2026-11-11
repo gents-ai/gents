@@ -9,8 +9,8 @@ pub enum ToolCallState {
 }
 
 impl ToolCallState {
-    #[cfg(test)]
-    pub(crate) const ALL: [Self; 6] = [
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub const ALL: [Self; 6] = [
         Self::Pending,
         Self::Running,
         Self::Completed,

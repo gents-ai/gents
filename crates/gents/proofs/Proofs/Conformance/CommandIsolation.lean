@@ -1,4 +1,4 @@
-import Proofs.CommandPolicy.Sandbox
+import Proofs.Session.CommandPolicy.Sandbox
 import Lean
 
 namespace Conformance.CommandIsolation

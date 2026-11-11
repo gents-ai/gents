@@ -1,4 +1,4 @@
-import Proofs.Request
+import Proofs.Session.Request
 import Proofs.Conformance.Contracts.Machines.Request
 import Proofs.Conformance.Contracts.Machines.Process
 import Proofs.Conformance.Boundaries

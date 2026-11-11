@@ -27,7 +27,7 @@ use super::{
     PartialHeaderFactory, ProviderAttemptClose, ProviderCloseRejection, ProviderPartialCandidate,
 };
 
-pub(in crate::request::streaming) async fn close_provider_attempt_with_signer(
+pub async fn close_provider_attempt_with_signer(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: identity::Did,
     signer: Option<gents_store::identity::ManagedAgentSigner>,
@@ -47,7 +47,7 @@ pub(in crate::request::streaming) async fn close_provider_attempt_with_signer(
     .await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn close_provider_attempt_at_with_access(
     access: &ConfigAccess,
     generation: &str,

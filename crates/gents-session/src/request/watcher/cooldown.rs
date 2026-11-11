@@ -8,7 +8,7 @@ pub(crate) const GOSSIP_FALLBACK_POLL: Duration = Duration::from_secs(30);
 pub(super) const PROCESSED_REQUEST_COOLDOWN: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ProcessedMark {
+pub struct ProcessedMark {
     pub(super) at: Instant,
     pub(super) queue_session: Option<String>,
     pub(super) execution_generation: Option<String>,

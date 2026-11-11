@@ -73,7 +73,7 @@ pub async fn resolve_send_target(
     )
 }
 
-pub(super) fn session_target_allowed(
+pub fn session_target_allowed(
     session: &gents_protocol::session::AgentSession,
     caller_node_did: &str,
     caller_agent_did: &str,

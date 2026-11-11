@@ -1,6 +1,6 @@
 //! Tolerant dense-prefix reconstruction for live views, refining
-//! `Proofs/StreamingResponse` (`reconstructPrefix`/`contiguousFlushes`,
-//! `PrefixGrowth`, `Executable`) and `Proofs/CanonicalOutput/Reconstruction`
+//! `Proofs/Session/StreamingResponse` (`reconstructPrefix`/`contiguousFlushes`,
+//! `PrefixGrowth`, `Executable`) and `Proofs/Session/CanonicalOutput/Reconstruction`
 //! (`flushAt`, `consumeRuns`). Owns the live eligibility classifier as the
 //! exact Rust projection of Lean's `StreamingResponse.project`; nothing
 //! outside this module decides whether a source may be shown live.

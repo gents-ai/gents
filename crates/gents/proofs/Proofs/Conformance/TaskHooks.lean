@@ -1,4 +1,4 @@
-import Proofs.TaskHooks
+import Proofs.ToolCalls.TaskHooks
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.TaskHooksContracts

@@ -125,7 +125,6 @@ pub fn test_agent_with_identity(
         max_turns: gents_inference::resolved::DEFAULT_MAX_TURNS,
         max_turns_provenance: gents_inference::resolved::MaxTurnsProvenance::Default,
         system_prompt: String::new(),
-        tools: AgentToolSurfaceConfig::default(),
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
@@ -142,6 +141,21 @@ pub fn test_agent_with_identity(
         completion_retry: gents_loop::completion_retry::CompletionRetryProfileFields::default(),
         sampling: gents_inference::resolved::SamplingConfig::default(),
     }
+}
+
+/// A fixture Agent paired with the default tool surface configuration its tests ran with.
+pub fn with_default_tools(agent: ResolvedAgent) -> gents_tools::surface::AgentWithTools {
+    gents_tools::surface::AgentWithTools::new(agent, AgentToolSurfaceConfig::default())
+}
+
+/// One default tool surface configuration per Agent, as a snapshot holds beside `agents`.
+pub fn default_tool_configs(
+    agents: &rapidhash::RapidHashMap<String, Arc<ResolvedAgent>>,
+) -> rapidhash::RapidHashMap<String, Arc<AgentToolSurfaceConfig>> {
+    agents
+        .keys()
+        .map(|agent_did| (agent_did.clone(), Arc::new(AgentToolSurfaceConfig::default())))
+        .collect()
 }
 
 pub async fn session_command_agent_snapshot(
@@ -182,12 +196,14 @@ pub async fn session_command_agent_snapshot(
     );
     let default_agent_did = agents.keys().next().unwrap().clone();
     let runtime_node = test_node_for(db.node_identity.clone(), &default_agent_did);
+    let tool_configs = default_tool_configs(&agents);
     let snapshot = gents_automation::triggers::runtime_snapshot::ActiveRuntimeSnapshot {
         generation: 1,
         node: Some(runtime_node),
         local_did: db.node_identity.did().into(),
         default_agent_did,
         agents,
+        tool_configs,
         tool_surfaces: Default::default(),
         backend_admission_configs: Default::default(),
         unavailable_agents: Default::default(),

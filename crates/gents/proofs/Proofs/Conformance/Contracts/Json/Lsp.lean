@@ -1,5 +1,5 @@
 import Proofs.Conformance.Contracts.Json.Helpers
-import Proofs.Lsp.Cases
+import Proofs.Tools.Lsp.Cases
 
 namespace Conformance.Contracts
 

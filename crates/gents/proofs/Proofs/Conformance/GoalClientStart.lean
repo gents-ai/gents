@@ -1,7 +1,7 @@
-import Proofs.GoalAutomation.ClientStart
+import Proofs.Automation.GoalAutomation.ClientStart
 import Proofs.Conformance.Contracts.Json.SessionDocuments
 import Proofs.Conformance.GoalClientControl
-import Proofs.GoalAutomation.ClientMutation
+import Proofs.Automation.GoalAutomation.ClientMutation
 
 namespace Conformance.GoalClientStartContracts
 

@@ -1,4 +1,4 @@
-import Proofs.Configuration.Initialization
+import Proofs.Documents.Configuration.Initialization
 import Lean
 
 namespace Conformance.Initialization

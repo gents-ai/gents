@@ -11,9 +11,11 @@ default = ["defra-node/http", "defra-node/p2p", "defra-node/wasmtime-runtime"]
 typescript = ["gents-loop/typescript", "gents-protocol/typescript", "gents-store/typescript", "gents-documents/typescript", "gents-inference/typescript", "gents-p2p/typescript"]
 live-e2e = ["gents-store/live-e2e", "gents-documents/live-e2e", "gents-inference/live-e2e", "gents-p2p/live-e2e"]
 test-home-guard = ["gents-store/test-home-guard", "gents-documents/test-home-guard", "gents-inference/test-home-guard", "gents-p2p/test-home-guard"]
-test-fixtures = ["test-home-guard", "gents-store/test-fixtures", "gents-documents/test-fixtures", "gents-inference/test-fixtures", "gents-p2p/test-fixtures"]
+test-fixtures = ["test-home-guard", "dep:gents-lean-vocab", "gents-store/test-fixtures", "gents-documents/test-fixtures", "gents-inference/test-fixtures", "gents-p2p/test-fixtures"]
 
 [dependencies]
+# Decoder of Lean-generated cases; compiled in only for test-fixtures.
+gents-lean-vocab = { workspace = true, optional = true }
 gents-store.workspace = true
 gents-documents.workspace = true
 gents-inference.workspace = true

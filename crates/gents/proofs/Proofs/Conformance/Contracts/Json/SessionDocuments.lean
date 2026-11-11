@@ -1,7 +1,7 @@
 import Proofs.Conformance.TaskLineage
-import Proofs.ClientShell.Timeline
+import Proofs.Clients.ClientShell.Timeline
 import Proofs.Conformance.QuestionReply
-import Proofs.Session.Archive
+import Proofs.Session.SessionQueue.Archive
 import Proofs.Conformance.ContractCases.SessionDocuments
 import Proofs.Conformance.ContractCases.Types
 import Lean

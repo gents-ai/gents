@@ -23,7 +23,7 @@ pub(super) enum Wake {
     Wait,
 }
 
-/// `Proofs.Background.Observation` owns wake priority and closure latching.
+/// `Proofs.ToolCalls.Background.Observation` owns wake priority and closure latching.
 /// The host must poll ready timers and finish each durable read; notifications
 /// supply invalidations, never lifecycle or authorization facts.
 pub(super) struct Observation {
@@ -32,7 +32,7 @@ pub(super) struct Observation {
 }
 
 impl Observation {
-    pub(super) fn new(rescan_at: Instant, feed_open: bool) -> Self {
+    pub fn new(rescan_at: Instant, feed_open: bool) -> Self {
         Self {
             rescan_at,
             feed_open,

@@ -1,4 +1,4 @@
-import Proofs.CompletionRetry.CountCarrier
+import Proofs.Shared.CompletionRetry.CountCarrier
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.CountCarrier

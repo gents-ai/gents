@@ -1,5 +1,5 @@
 import Lean
-import Proofs.ToolPolicy.WorkspaceCommandGrants
+import Proofs.Tools.ToolPolicy.WorkspaceCommandGrants
 import Proofs.Conformance.PluginApproval
 import Proofs.Conformance.Contracts.Json.ToolPolicy
 

@@ -3279,12 +3279,12 @@ fn assert_standard_backgrounding_tool_surfaces(
     let active_agent_dids = agent
         .agents()
         .iter()
-        .map(|agent_config| agent_config.agent_did.clone())
+        .map(|agent_config| agent_config.agent.agent_did.clone())
         .collect::<RapidHashSet<_>>();
     let parent = agent
         .agents()
         .iter()
-        .find(|agent_config| agent_config.agent_did == parent_agent_did)
+        .find(|agent_config| agent_config.agent.agent_did == parent_agent_did)
         .unwrap_or_else(|| {
             panic!(
                 "loaded orchestrator agent {parent_agent_did}; active agents: {active_agent_dids:?}; unavailable: {:?}",
@@ -3341,7 +3341,7 @@ fn assert_standard_backgrounding_tool_surfaces(
     let child = agent
         .agents()
         .iter()
-        .find(|agent_config| agent_config.agent_did == child_agent_did)
+        .find(|agent_config| agent_config.agent.agent_did == child_agent_did)
         .expect("loaded background worker agent");
     let child_surface = child
         .tools

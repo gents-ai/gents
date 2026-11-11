@@ -45,13 +45,13 @@ async fn ping_snapshot(
     hydrate_event_config_ids(node, &mut trigger).await;
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         agent.agent_did.clone(),
-        vec![Arc::new(agent)],
+        vec![with_default_tools(Arc::new(agent))],
         RapidHashMap::new(),
         RapidHashMap::new(),
         RapidHashMap::new(),
     )
     .with_node(runtime_node)
-    .with_local_did(gents_session::request::lifecycle::test_support::PIN_FIXED_DID.into())
+    .with_local_did(gents_store::test_support::PIN_FIXED_DID.into())
     .with_automation(gents_documents::automation::ResolvedAutomation {
         event_triggers: RapidHashMap::from_iter([("ping-trigger".to_string(), trigger)]),
         ..Default::default()
@@ -67,7 +67,7 @@ async fn ping_node(schema: &str, emit_outcome: bool) -> Arc<defra_node::Node> {
             .unwrap(),
     );
     ensure_runtime_schemas(&node).await.unwrap();
-    let owner = gents_session::request::lifecycle::test_support::PIN_FIXED_DID;
+    let owner = gents_store::test_support::PIN_FIXED_DID;
     crate::triggers::callback::seed_test_agent(&node, owner).await;
     node.add_collection(schema).await.unwrap();
     crate::triggers::callback::seed_test_configuration(
@@ -181,7 +181,7 @@ async fn first_delivery_on(schema: &str, emit_outcome: bool) -> (Delivery, FireI
 
 impl Delivery {
     async fn cursor(&self) -> String {
-        let owner = gents_session::request::lifecycle::test_support::PIN_FIXED_DID.to_owned();
+        let owner = gents_store::test_support::PIN_FIXED_DID.to_owned();
         crate::triggers::callback::test_agent_access(&self.node)
             .transact_write("test.unacknowledged_cursor", |txn| {
                 let owner = &owner;
@@ -247,7 +247,7 @@ impl Delivery {
         for _ in 0..100 {
             let trigger = observed_trigger(
                 self.node.as_ref(),
-                gents_session::request::lifecycle::test_support::PIN_FIXED_DID,
+                gents_store::test_support::PIN_FIXED_DID,
                 "ping-trigger",
             )
             .await;
@@ -317,7 +317,7 @@ async fn refused_fire_fails_once_visibly_and_is_delivered_once_after_reconfigura
     // The repair is a committed Task change; admission revalidates against it.
     crate::triggers::callback::seed_test_configuration(
         &delivery.node,
-        gents_session::request::lifecycle::test_support::PIN_FIXED_DID,
+        gents_store::test_support::PIN_FIXED_DID,
         vec![(
             gents_store::collection::Collection::Task,
             serde_json::json!({"task_id":"ping-task",
@@ -342,7 +342,7 @@ async fn refused_fire_fails_once_visibly_and_is_delivered_once_after_reconfigura
     let result = admit_selected_event(
         &node,
         &intent,
-        gents_session::request::lifecycle::test_support::PIN_FIXED_DID,
+        gents_store::test_support::PIN_FIXED_DID,
     )
     .await;
     (intent.on_result)(result);
@@ -452,7 +452,7 @@ async fn an_acknowledged_fire_records_no_unacknowledged_status() {
     tokio::time::sleep(Duration::from_millis(150)).await;
     let settled = observed_trigger(
         delivery.node.as_ref(),
-        gents_session::request::lifecycle::test_support::PIN_FIXED_DID,
+        gents_store::test_support::PIN_FIXED_DID,
         "ping-trigger",
     )
     .await;
@@ -571,7 +571,7 @@ async fn repaired_document_is_delivered_once(drop_notification: bool) {
     let result = admit_selected_event(
         &node,
         &intent,
-        gents_session::request::lifecycle::test_support::PIN_FIXED_DID,
+        gents_store::test_support::PIN_FIXED_DID,
     )
     .await;
     (intent.on_result)(result);

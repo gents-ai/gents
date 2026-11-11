@@ -878,7 +878,7 @@ async fn test_node() -> Arc<defra_node::Node> {
 #[tokio::test]
 async fn workspace_reads_keep_the_held_agent_actor() {
     let node = test_node().await;
-    let node_did = gents_session::request::lifecycle::test_support::PIN_FIXED_DID;
+    let node_did = gents_store::test_support::PIN_FIXED_DID;
     super::seed_test_agent(&node, node_did).await;
     let agent_did = super::test_agent_did();
     let agent_access = super::test_agent_access(&node);
@@ -926,7 +926,7 @@ async fn workspace_reads_keep_the_held_agent_actor() {
 #[tokio::test]
 async fn first_seen_source_create_materializes_owner_invocation() {
     let node = test_node().await;
-    let owner_node_did = gents_session::request::lifecycle::test_support::PIN_FIXED_DID.to_owned();
+    let owner_node_did = gents_store::test_support::PIN_FIXED_DID.to_owned();
     super::seed_test_agent(&node, &owner_node_did).await;
     node.add_collection(
         r#"
@@ -1500,7 +1500,7 @@ async fn callback_results_are_selectable_by_their_binding() {
     let node = test_node().await;
     super::seed_test_agent(
         &node,
-        gents_session::request::lifecycle::test_support::PIN_FIXED_DID,
+        gents_store::test_support::PIN_FIXED_DID,
     )
     .await;
     for (invocation_id, binding_id) in [
@@ -1515,7 +1515,7 @@ async fn callback_results_are_selectable_by_their_binding() {
                 invocation_id: invocation_id.to_owned(),
                 binding_id: Some(binding_id.to_owned()),
                 agent_did: crate::triggers::callback::test_agent_did(),
-                owner_node_did: gents_session::request::lifecycle::test_support::PIN_FIXED_DID
+                owner_node_did: gents_store::test_support::PIN_FIXED_DID
                     .to_owned(),
                 workspace_id: None,
                 work_unit_id: None,
@@ -1548,7 +1548,7 @@ async fn callback_result_is_agent_owned_and_parent_link_grants_user_read() {
     let node = test_node().await;
     super::seed_test_agent(
         &node,
-        gents_session::request::lifecycle::test_support::PIN_FIXED_DID,
+        gents_store::test_support::PIN_FIXED_DID,
     )
     .await;
     super::grant_test_node_administrator(&node, user.did()).await;
@@ -1566,7 +1566,7 @@ async fn callback_result_is_agent_owned_and_parent_link_grants_user_read() {
         result_id: "owned-result".into(),
         invocation_id: "owned-invocation".into(),
         binding_id: None,
-        owner_node_did: gents_session::request::lifecycle::test_support::PIN_FIXED_DID.into(),
+        owner_node_did: gents_store::test_support::PIN_FIXED_DID.into(),
         agent_did: agent,
         workspace_id: None,
         work_unit_id: None,
@@ -1613,7 +1613,7 @@ async fn callback_result_visibility_and_repair_match_the_executable_cursor_contr
     let outsider =
         KeyIdentity::load_or_create(directory.path().join("outsider.key"), None).unwrap();
     let node = test_node().await;
-    let owner = gents_session::request::lifecycle::test_support::PIN_FIXED_DID;
+    let owner = gents_store::test_support::PIN_FIXED_DID;
     super::seed_test_agent(&node, owner).await;
     super::grant_test_node_read(&node, outsider.did()).await;
     let agent = super::test_agent_did();
@@ -1769,7 +1769,7 @@ struct Backlog {
     history: String,
 }
 
-const BACKLOG_OWNER: &str = gents_session::request::lifecycle::test_support::PIN_FIXED_DID;
+const BACKLOG_OWNER: &str = gents_store::test_support::PIN_FIXED_DID;
 
 impl Backlog {
     async fn config_ids(&self) -> super::documents::CallbackConfigDocIds {
@@ -1799,7 +1799,7 @@ impl Backlog {
         use gents_store::collection::Collection;
         use gents_store::config_client::ConfigAccess;
         let home = tempfile::tempdir().unwrap();
-        let identity = gents_session::request::lifecycle::test_support::pin_fixed_signing_identity(
+        let identity = gents_store::test_support::pin_fixed_signing_identity(
             home.path(),
         );
         let node = test_node().await;
@@ -2487,7 +2487,7 @@ async fn callback_children_publish_atomically_and_duplicate_does_not_regrant() -
         None,
     )?;
     let node = test_node().await;
-    let owner = gents_session::request::lifecycle::test_support::PIN_FIXED_DID;
+    let owner = gents_store::test_support::PIN_FIXED_DID;
     super::seed_test_agent(&node, owner).await;
     super::grant_test_node_administrator(&node, user.did()).await;
     let agent = super::test_agent_access(&node);
@@ -3259,7 +3259,7 @@ async fn callback_parent_requires_the_selected_authenticated_agent() {
     let home = tempfile::tempdir().unwrap();
     let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
     let node = test_node().await;
-    let owner = gents_session::request::lifecycle::test_support::PIN_FIXED_DID;
+    let owner = gents_store::test_support::PIN_FIXED_DID;
     super::seed_test_agent(&node, owner).await;
     super::grant_test_node_administrator(&node, user.did()).await;
     let agent = super::test_agent_did();
@@ -3338,7 +3338,7 @@ async fn callback_parent_recovery_matches_modeled_interrupted_grant_and_revocati
     let home = tempfile::tempdir().unwrap();
     let user = KeyIdentity::load_or_create(home.path().join("user.key"), None).unwrap();
     let node = test_node().await;
-    let owner = gents_session::request::lifecycle::test_support::PIN_FIXED_DID;
+    let owner = gents_store::test_support::PIN_FIXED_DID;
     super::seed_test_agent(&node, owner).await;
     super::grant_test_node_administrator(&node, user.did()).await;
     let agent = super::test_agent_did();

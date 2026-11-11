@@ -1,4 +1,4 @@
-import Proofs.GoalAutomation.FirstRequestBinding
+import Proofs.Automation.GoalAutomation.FirstRequestBinding
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.GoalFirstRequestBinding

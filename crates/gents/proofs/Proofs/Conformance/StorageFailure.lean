@@ -1,4 +1,4 @@
-import Proofs.StorageFailure
+import Proofs.Store.StorageFailure
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.StorageFailureContracts

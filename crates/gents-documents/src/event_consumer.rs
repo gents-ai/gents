@@ -174,7 +174,7 @@ async fn consumer_agent(
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn load_or_seed(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
@@ -449,7 +449,7 @@ pub async fn acknowledge_fire(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn advance(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,

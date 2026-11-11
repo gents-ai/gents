@@ -1,7 +1,7 @@
-import Proofs.Request
-import Proofs.Process
-import Proofs.InferenceCall
-import Proofs.Persistence
+import Proofs.Session.Request
+import Proofs.Automation.Process
+import Proofs.Runtime.InferenceCall
+import Proofs.Store.Persistence
 import Proofs.Conformance.Triggers
 
 inductive GentsProcessState where

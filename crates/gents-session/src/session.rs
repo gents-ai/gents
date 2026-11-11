@@ -17,19 +17,19 @@ pub mod tool_presentation;
 pub use archive::set_session_archived_on;
 mod compaction_entries;
 mod control;
-mod fork;
+pub mod fork;
 mod history;
-#[cfg(test)]
-mod model_test_support;
-mod observations;
-mod output;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod model_test_support;
+pub mod observations;
+pub mod output;
 pub mod output_render;
 mod preview;
 pub mod provider_context_reduction;
 pub(crate) use preview::{request_preview_in_txn, visible_reply_preview};
 #[cfg(test)]
 mod output_replay_tests;
-mod query;
+pub mod query;
 mod request_output;
 mod rows;
 mod sessions;
@@ -38,10 +38,14 @@ pub mod title_text;
 pub use title_text::display_session_title;
 #[cfg(test)]
 mod tests;
+#[cfg(any(test, feature = "test-fixtures"))]
+mod history_fixture;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use history_fixture::import_history_observation_as;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use history_fixture::import_history_observation;
 #[cfg(test)]
-pub(crate) use tests::import_history_observation_as;
-#[cfg(test)]
-pub use tests::{import_history_observation, publish_signed_history};
+pub use tests::publish_signed_history;
 
 pub use crate::tool_call::query::result::{
     load_tool_call_arguments, load_tool_call_presentation, load_tool_call_result,
@@ -64,14 +68,14 @@ pub use fork::{
     fork_edit_on, fork_on, is_user_turn, publish_fork_relationships, ForkBoundary, ForkError,
     ForkOutcome, ForkParams, ForkRelationshipIntent,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use history::load_history_with_access;
 pub use history::{load_history, sequence_message_key};
 pub use history::{load_sequenced_history_for_request, load_sequenced_history_projection_on};
 pub use history::{resumed_request_has_published_input, retry_has_published_input};
 pub use observations::load_latest_requests_in_txn;
 pub use observations::load_recent_titles_for_agent;
-pub(crate) use observations::load_session_current_hop;
+pub use observations::load_session_current_hop;
 pub use observations::load_session_current_hop_in_txn;
 pub(crate) use observations::{
     advance_refused_request_observation_in_txn, advance_session_request_observation_in_txn,
@@ -86,11 +90,11 @@ pub use observations::{
 pub use observations::{load_latest_request_in_txn, SessionRequestFact};
 #[cfg(test)]
 pub(crate) use output::count_capture_row_queries;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use output::count_request_output_scans;
 #[cfg(test)]
 pub(crate) use output::count_source_output_queries;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use output::reader::load_canonical_payload_from_access;
 pub(crate) use output::reader::load_canonical_payload_in_txn;
 pub(crate) use output::reader::load_canonical_payload_with_access;
@@ -104,7 +108,7 @@ pub use output::{
     reader::load_canonical_message_in_txn, reader::load_request_headers_in_txn,
     reader::TxnCanonicalReader,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use query::load_session_agent_did;
 pub use query::require_session;
 pub use query::session_is_stopped;
@@ -126,7 +130,7 @@ pub use sessions::{
     stage_created_session_relationships_in_txn,
 };
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use sessions::max_sequence;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

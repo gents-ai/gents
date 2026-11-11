@@ -55,7 +55,7 @@ impl OutcomeKind {
     }
 }
 
-/// `Proofs/Eval.lean` `ProviderReason`: why a provider call did not produce a
+/// `Proofs/Runtime/Eval.lean` `ProviderReason`: why a provider call did not produce a
 /// usable answer. A `provider` outcome needs one, because a candidate prompt
 /// can cause a context overflow but not an outage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -84,7 +84,7 @@ impl ProviderReason {
     }
 }
 
-/// `Proofs/Eval.lean` `EvidenceClass`: what one outcome is evidence of.
+/// `Proofs/Runtime/Eval.lean` `EvidenceClass`: what one outcome is evidence of.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvidenceClass {

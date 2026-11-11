@@ -112,8 +112,8 @@ impl ToolRuntimeContext {
 
     /// Selects the runtime and held Agent a test builds tools for, as
     /// `for_agent` does from a resolved Agent.
-    #[cfg(test)]
-    pub(crate) fn with_agent_for_test(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn with_agent_for_test(
         mut self,
         runtime: Arc<dyn NodeIdentity>,
         agent: Arc<dyn NodeIdentity>,

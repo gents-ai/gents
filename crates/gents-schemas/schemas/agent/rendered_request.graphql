@@ -1,5 +1,5 @@
 # Durable fact record for one provider call: the exact rendered request,
-# persisted before it is sent. Proofs/RenderedCapture.lean fences the order —
+# persisted before it is sent. Proofs/Shared/RenderedCapture.lean fences the order —
 # a send is legal only after the matching (capture_key, canonical request) is
 # durable. Integrity comes from the DefraDB field commit CID for
 # `request_json`. Capture payloads are manifests of RenderedRequestBlock

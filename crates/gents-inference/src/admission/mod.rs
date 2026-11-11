@@ -25,5 +25,17 @@ pub use recovery::{InferenceCall, InferenceCallRecoveryReport};
 pub use registry::AdmissionRegistry;
 pub use slot_accounting::call_state_holds_backend_slot;
 
+/// The recovery and persistence owners' items that full-request tests above
+/// this crate drive, because a request exists only in higher layers.
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod recovery_fixtures {
+    pub use super::controller::{InferenceCallRecord, PendingCallMetadata};
+    pub use super::persistence::{persist_existing_call_terminal, ProviderCallUsage};
+    pub use super::recovery::{
+        load_stale_inference_calls, lookup_parent_request, recover_inference_call_row,
+        recovery_outcome, InferenceRecoveryOutcome, StaleInferenceCallRow,
+    };
+}
+
 #[cfg(test)]
 mod tests;

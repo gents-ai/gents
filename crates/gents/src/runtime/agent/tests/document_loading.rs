@@ -135,48 +135,48 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
     let behavior = agent
         .agents()
         .iter()
-        .find(|behavior| behavior.agent_did == default_agent_did)
+        .find(|behavior| behavior.agent.agent_did == default_agent_did)
         .expect("default agent is runnable");
-    assert_eq!(behavior.node_did(), did);
+    assert_eq!(behavior.agent.node_did(), did);
     assert_eq!(
-        behavior.backend_id.as_deref(),
+        behavior.agent.backend_id.as_deref(),
         Some(format!("{default_agent_did}:backend").as_str())
     );
-    assert_eq!(behavior.model_name, "test-model");
-    assert_eq!(behavior.context_window, 32768);
-    assert_eq!(behavior.max_output_tokens, 4096);
-    assert_eq!(behavior.max_turns, 8);
-    assert_eq!(behavior.system_prompt, "You are precise.");
+    assert_eq!(behavior.agent.model_name, "test-model");
+    assert_eq!(behavior.agent.context_window, 32768);
+    assert_eq!(behavior.agent.max_output_tokens, 4096);
+    assert_eq!(behavior.agent.max_turns, 8);
+    assert_eq!(behavior.agent.system_prompt, "You are precise.");
     assert!(matches!(
-        behavior.compaction_strategy(),
+        behavior.agent.compaction_strategy(),
         gents_inference::compaction::CompactionStrategy::StripThenSummarize
     ));
-    assert_eq!(behavior.compaction_threshold(), 0.75);
-    assert_eq!(behavior.stream_batch_ms, 500);
+    assert_eq!(behavior.agent.compaction_threshold(), 0.75);
+    assert_eq!(behavior.agent.stream_batch_ms, 500);
     assert_ne!(
-        behavior.stream_liveness_timeout,
+        behavior.agent.stream_liveness_timeout,
         Duration::from_secs(
             gents_documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS
         ),
         "the explicit execution setting must override the shorter default lease",
     );
-    assert_eq!(behavior.stream_liveness_timeout, Duration::from_secs(45));
-    assert_eq!(behavior.deadline_duration, Duration::from_secs(120));
+    assert_eq!(behavior.agent.stream_liveness_timeout, Duration::from_secs(45));
+    assert_eq!(behavior.agent.deadline_duration, Duration::from_secs(120));
 
-    assert_eq!(behavior.sampling.temperature, Some(0.2));
-    assert_eq!(behavior.sampling.top_p, Some(0.95));
-    assert_eq!(behavior.sampling.top_k, Some(40));
-    assert_eq!(behavior.sampling.min_p, Some(0.05));
-    assert_eq!(behavior.sampling.frequency_penalty, Some(0.5));
-    assert_eq!(behavior.sampling.presence_penalty, Some(-0.25));
-    assert_eq!(behavior.sampling.repetition_penalty, Some(1.1));
+    assert_eq!(behavior.agent.sampling.temperature, Some(0.2));
+    assert_eq!(behavior.agent.sampling.top_p, Some(0.95));
+    assert_eq!(behavior.agent.sampling.top_k, Some(40));
+    assert_eq!(behavior.agent.sampling.min_p, Some(0.05));
+    assert_eq!(behavior.agent.sampling.frequency_penalty, Some(0.5));
+    assert_eq!(behavior.agent.sampling.presence_penalty, Some(-0.25));
+    assert_eq!(behavior.agent.sampling.repetition_penalty, Some(1.1));
     assert_eq!(
-        behavior.sampling.reasoning_effort,
+        behavior.agent.sampling.reasoning_effort,
         Some(gents_documents::inference_defaults::ReasoningEffort::Max)
     );
 
     let params = behavior
-        .sampling
+        .agent.sampling
         .additional_params()
         .expect("pinned sampling knobs must produce provider body params");
     assert_eq!(params["top_p"], 0.95);
@@ -328,7 +328,7 @@ async fn from_default_agent_documents_resolves_tool_selection_with_ceiling() {
     let behavior = agent
         .agents()
         .iter()
-        .find(|behavior| behavior.agent_did == default_agent_did)
+        .find(|behavior| behavior.agent.agent_did == default_agent_did)
         .expect("default agent is runnable");
     assert_eq!(behavior.tools.host_tools(), &ToolSet::readonly());
     assert!(!behavior.tools.meta_tools_requested());
@@ -505,7 +505,7 @@ async fn from_default_agent_documents_rejects_unresolved_agent_target() {
     assert!(!agent
         .agents()
         .iter()
-        .any(|behavior| behavior.agent_did == default_agent_did));
+        .any(|behavior| behavior.agent.agent_did == default_agent_did));
     let unavailable = agent
         .unavailable_agents()
         .get(default_agent_did.as_str())
@@ -573,7 +573,7 @@ async fn from_default_agent_documents_loads_runnable_agents_and_tracks_unavailab
     let runnable_names = agent
         .agents()
         .iter()
-        .map(|behavior| behavior.agent_did.as_str())
+        .map(|behavior| behavior.agent.agent_did.as_str())
         .collect::<rapidhash::RapidHashSet<_>>();
     assert_eq!(agent.node_did(), did);
     assert_eq!(agent.agents().len(), 1);

@@ -1,4 +1,4 @@
-import Proofs.Compaction.ReductionEngine
+import Proofs.Session.Compaction.ReductionEngine
 
 namespace Conformance.ContractCases.CompactionProjectionJoin
 open Compaction.ReductionEngine

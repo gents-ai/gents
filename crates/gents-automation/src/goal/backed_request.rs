@@ -368,7 +368,7 @@ pub async fn submit_goal_backed_request_local(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn submit_goal_backed_request_with_identity(
+pub async fn submit_goal_backed_request_with_identity(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
     node_did: &str,

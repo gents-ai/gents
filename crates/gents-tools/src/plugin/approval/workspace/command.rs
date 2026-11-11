@@ -12,7 +12,7 @@ pub(crate) fn guard_home() -> Result<Option<PathBuf>> {
     Ok(context::settings(&home)?.map(|_| home))
 }
 
-pub(crate) fn writable_root(root: &Path, policy: &CommandExecutionPolicy) -> Result<PathBuf> {
+pub fn writable_root(root: &Path, policy: &CommandExecutionPolicy) -> Result<PathBuf> {
     if policy.mode != CommandExecutionMode::WorkspaceWrite {
         return Ok(root.to_owned());
     }
@@ -39,7 +39,7 @@ pub(crate) fn writable_root(root: &Path, policy: &CommandExecutionPolicy) -> Res
 /// their configured ceiling; bounded command isolation is enforced independently
 /// by the shared launch owner. A supplied but unavailable approval home is an
 /// error at request setup, never evidence of an unconfigured workspace.
-pub(crate) async fn authorize_command(
+pub async fn authorize_command(
     argv: &[String],
     cwd: &Path,
     root: &Path,

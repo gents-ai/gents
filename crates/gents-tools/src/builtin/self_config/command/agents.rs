@@ -7,7 +7,7 @@ use gents_protocol::operations::agent::{
 use gents_session::session::output_render::ordered;
 
 impl ConfigCommandTool {
-    pub(super) async fn agent(&self, argv: &[String]) -> Result<String> {
+    pub async fn agent(&self, argv: &[String]) -> Result<String> {
         anyhow::ensure!(
             super::grants::agent_command_exposed(&self.categories),
             "agent configuration is not granted; enabled resources: {}",
@@ -150,7 +150,7 @@ impl ConfigCommandTool {
         }
     }
 
-    pub(super) async fn agent_context(&self, argv: &[String]) -> Result<String> {
+    pub async fn agent_context(&self, argv: &[String]) -> Result<String> {
         anyhow::ensure!(
             self.categories.contains("agent") || self.categories.contains("node"),
             "agent/context configuration is not granted"
@@ -198,7 +198,7 @@ impl ConfigCommandTool {
         }
     }
 
-    pub(super) async fn resolve_target_agent(
+    pub async fn resolve_target_agent(
         &self,
         target_id: &str,
         patch: &mut SelfConfigPatch,
@@ -255,7 +255,7 @@ impl ConfigCommandTool {
         Ok(())
     }
 
-    pub(super) async fn resolve_agent_did(&self, id: &str) -> Result<String> {
+    pub async fn resolve_agent_did(&self, id: &str) -> Result<String> {
         let current = self.core.agent_did();
         if !self.categories.contains("node") {
             ::identity::Did::new(id.to_owned()).context("agent selection requires its DID")?;
@@ -429,7 +429,7 @@ impl ConfigCommandTool {
     /// Core for the Agent whose configuration an operation touches. `category`
     /// is the document category it reads or edits (`ensure_config_scope`); None
     /// is an effective read that needs no category grant on the invoking Agent.
-    pub(super) async fn target_core(
+    pub async fn target_core(
         &self,
         agent_did: Option<&str>,
         category: Option<&str>,
@@ -522,7 +522,7 @@ fn options_free_params(verb: &str) -> ConfigureAgentParams {
     }
 }
 
-pub(super) fn default_agent_params(action: &str, agent_did: &str) -> ConfigureAgentParams {
+pub fn default_agent_params(action: &str, agent_did: &str) -> ConfigureAgentParams {
     ConfigureAgentParams {
         action: action.to_owned(),
         operation: (action == "preview").then(|| "edit".to_owned()),
@@ -532,8 +532,8 @@ pub(super) fn default_agent_params(action: &str, agent_did: &str) -> ConfigureAg
     }
 }
 
-#[cfg(test)]
-pub(in crate::builtin::self_config) fn agent_params(
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn agent_params(
     action: &str,
     operation: Option<String>,
     argv: &[String],

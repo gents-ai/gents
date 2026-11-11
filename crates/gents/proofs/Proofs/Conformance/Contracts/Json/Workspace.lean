@@ -1,6 +1,6 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases.Types
-import Proofs.Workspace.Conformance
+import Proofs.Session.Workspace.Conformance
 
 namespace Conformance.Contracts
 

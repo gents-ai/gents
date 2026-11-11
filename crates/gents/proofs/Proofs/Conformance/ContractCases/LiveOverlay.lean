@@ -1,5 +1,5 @@
-import Proofs.Client.Types
-import Proofs.ClientShell.Projection
+import Proofs.Session.Client.Types
+import Proofs.Clients.ClientShell.Projection
 
 namespace Conformance.ContractCases
 

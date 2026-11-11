@@ -1,4 +1,4 @@
-import Proofs.ClientShell.Installation
+import Proofs.Clients.ClientShell.Installation
 import Lean
 
 namespace Conformance.ClientInstallation

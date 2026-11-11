@@ -15,7 +15,7 @@
 //! one. Std's and tokio's `output` and `status` return that spawn error before
 //! any child exists; waiting reports ECHILD or EINTR, never EBADF.
 //!
-//! The policy is modelled by `Proofs/NativeSpawn.lean`; its generated cases
+//! The policy is modelled by `Proofs/Session/NativeSpawn.lean`; its generated cases
 //! drive [`spawn_with_fork_fallback`] in this module's tests.
 
 use std::io;

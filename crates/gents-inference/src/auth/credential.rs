@@ -221,5 +221,5 @@ mod backfill_tests;
 #[cfg(test)]
 mod cooldown_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_support;

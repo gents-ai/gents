@@ -27,7 +27,7 @@ async fn live_openrouter_oneshot_succeeds() -> Result<()> {
 
     let result = gents::run_openai_oneshot_admitted(
         db.node.clone(),
-        &agent,
+        &crate::support::fixtures::with_default_tools(agent),
         "Reply with exactly the word READY and nothing else.",
         &db.home.backend_admission(),
     )

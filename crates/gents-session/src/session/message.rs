@@ -22,10 +22,10 @@ mod body;
 pub mod commit;
 mod discovery;
 mod goals;
-mod inspection;
+pub mod inspection;
 mod interrupt;
 pub mod plan;
-mod target;
+pub mod target;
 
 pub use body::{load_configured_task, render_body, render_task_body};
 pub use commit::{
@@ -39,7 +39,7 @@ pub use interrupt::{
     agent_interrupt_allowed, interrupt_refusal, interrupt_session, interrupt_session_with_access,
 };
 #[cfg(any(test, feature = "test-fixtures"))]
-pub(crate) use plan::plan;
+pub use plan::plan;
 pub use plan::{plan_with_delivery, Plan};
 pub use target::{
     agent_list, load_caller_session_tools, resolve_send_target, target_agent_exists, target_scope,
@@ -151,7 +151,7 @@ pub(crate) enum Delivery {
 }
 
 impl Delivery {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Request => "request",
             Self::Queued => "queue",

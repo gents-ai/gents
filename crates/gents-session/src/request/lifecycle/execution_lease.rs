@@ -117,8 +117,8 @@ pub enum RequestTerminalOutcome {
 }
 
 impl RequestTerminalOutcome {
-    #[cfg(test)]
-    pub(crate) fn request_lifecycle_state(self) -> RequestLifecycleState {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn request_lifecycle_state(self) -> RequestLifecycleState {
         self.request_state()
     }
 
@@ -434,7 +434,7 @@ pub(crate) async fn revoke_execution_preserving_output_with_access(
     .await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn revoke_execution_preserving_output_at_with_access(
     access: &gents_store::config_client::ConfigAccess,
     row: &AgentRequestRow,
@@ -466,7 +466,7 @@ pub async fn revoke_execution_preserving_output_at_with_access(
     .await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn terminalize_owned_at_with_access(
     access: &gents_store::config_client::ConfigAccess,
     request_doc_id: &str,

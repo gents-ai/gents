@@ -259,7 +259,7 @@ pub async fn load_session_current_hop_in_txn(
     ))
 }
 
-pub(crate) async fn load_session_current_hop(
+pub async fn load_session_current_hop(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: &::identity::Did,
     node_did: &str,

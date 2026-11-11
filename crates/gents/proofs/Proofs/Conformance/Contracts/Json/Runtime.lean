@@ -1,6 +1,6 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases
-import Proofs.RuntimeReconcile.StartupReadiness
+import Proofs.Runtime.RuntimeReconcile.StartupReadiness
 
 namespace Conformance.Contracts
 

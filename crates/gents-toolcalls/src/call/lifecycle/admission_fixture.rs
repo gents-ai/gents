@@ -39,7 +39,7 @@ impl Default for PublishedAdmissionOptions {
 }
 
 /// The `JobPin` every `job_pin: true` fixture row carries.
-pub(crate) fn fixture_job_pin() -> gents_protocol::job::JobPin {
+pub fn fixture_job_pin() -> gents_protocol::job::JobPin {
     gents_protocol::job::JobPin {
         script_id: "fixture-script".to_owned(),
         source_digest: "sha256:fixture-source".to_owned(),
@@ -79,7 +79,7 @@ pub(crate) async fn write_fixture_job_pin(
 }
 
 /// [`write_fixture_job_pin`] as `access`'s actor, for a row an Agent owns.
-pub(crate) async fn write_fixture_job_pin_as(
+pub async fn write_fixture_job_pin_as(
     access: &gents_store::config_client::ConfigAccess,
     tool_doc_id: &str,
 ) -> anyhow::Result<()> {
@@ -180,7 +180,7 @@ pub struct PublishedAdmission {
     pub node: Arc<EmbeddedNode>,
     /// Holds the store lock until dropped, so a test that shuts the node down
     /// and drops this can reopen the retained store at `path`.
-    pub home: crate::support::TestDb,
+    pub home: crate::test_support::TestHome,
     pub path: PathBuf,
     pub tool: ToolCallLifecycle,
     pub node_did: String,
@@ -415,7 +415,7 @@ pub(crate) async fn ensure_managed_fixture_session(
     agent
 }
 
-pub(crate) async fn claimed_signed_request(
+pub async fn claimed_signed_request(
     node: &Arc<EmbeddedNode>,
     request_id: &str,
     session_id: &str,
@@ -492,7 +492,7 @@ pub(crate) async fn claimed_signed_request_create(
 /// already owns. A session created by its Agent is invisible to the unsigned
 /// lookup [`ensure_managed_fixture_session`] performs, so a caller that holds
 /// the owning Agent selects it directly.
-pub(crate) async fn claimed_signed_request_create_as_agent(
+pub async fn claimed_signed_request_create_as_agent(
     node: &Arc<EmbeddedNode>,
     identity: &dyn NodeIdentity,
     agent_identity: &dyn NodeIdentity,
@@ -569,15 +569,10 @@ pub async fn published_admission_with_owner(
     let name = options.name;
     let path =
         std::env::temp_dir().join(format!("admission-fixture-{name}-{}", uuid::Uuid::new_v4()));
-    let p2p: Option<crate::runtime::embedded::P2PConfigForPath> = if options.p2p {
-        Some(Arc::new(|_| test_p2p_config()))
-    } else {
-        None
-    };
-    let home = crate::runtime::embedded::EmbeddedHome::create_retained_with_p2p(&path, p2p).await?;
-    let db = crate::support::test_db_from_home(home);
+    let p2p = options.p2p.then(test_p2p_config);
+    let home = crate::test_support::TestHome::create_at(&path, p2p).await?;
     let (db, user, owner, binding) =
-        crate::test_support::root::signed_test_node_from_db(db, &name).await;
+        crate::test_support::signed_test_node_from_home(home, &name).await;
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
     let node_did = runtime.did().to_owned();
@@ -890,7 +885,7 @@ pub async fn published_background_bridge(
     (node, path, tool)
 }
 
-pub(crate) async fn materialize_session_message(
+pub async fn materialize_session_message(
     node: &Arc<EmbeddedNode>,
     request: &RequestLifecycle,
     tool: &mut ToolCallLifecycle,
@@ -923,6 +918,7 @@ pub(crate) async fn materialize_session_message(
     })?;
     let mut plan = gents_session::session::message::plan(
         node,
+        &gents_session::session::message::NoSessionMessageGoals,
         &cause,
         &target,
         gents_session::session::message::RenderedBody {
@@ -937,7 +933,14 @@ pub(crate) async fn materialize_session_message(
     .map_err(anyhow::Error::msg)?;
     plan.sign_agent_creation(&cause.caller_node_did, &caller.input, &signer)
         .await?;
-    gents_session::session::message::commit(node, &cause, tool, plan, false)
+    gents_session::session::message::commit(
+        node,
+        &gents_session::session::message::NoSessionMessageGoals,
+        &cause,
+        tool,
+        plan,
+        false,
+    )
         .await
         .map_err(Into::into)
 }
@@ -1238,4 +1241,128 @@ mod lifecycle_tests {
         assert!(row["tool_failure_class"].is_null());
         teardown(node, path).await;
     }
+}
+
+pub fn recovery_identities(
+    admission: &PublishedAdmission,
+) -> Vec<Arc<dyn NodeIdentity>> {
+    let signer = admission
+        .tool
+        .access()
+        .expect("fixture tool access")
+        .managed_agent_signer()
+        .expect("fixture managed Agent signer");
+    vec![Arc::new(signer)]
+}
+
+/// Fixture writes to a `@branchable` collection also advance its
+/// collection head, so two back-to-back writes can conflict; retry those,
+/// bounded. Writes go through the owning actor's access: ACP hides and
+/// refuses the Agent-owned rows for any other identity. A client-submitted
+/// parent request is owned by its client, not its Agent.
+async fn execute_fixture_write(
+    access: &gents_store::config_client::ConfigAccess,
+    operation: &'static str,
+    mutation: &str,
+) {
+    let mut backoff = std::time::Duration::from_millis(5);
+    let mut last_error = None;
+    for _ in 0..8 {
+        match access.write(operation, mutation).await {
+            Ok(_) => return,
+            Err(error) => last_error = Some(error),
+        }
+        tokio::time::sleep(backoff).await;
+        backoff = (backoff * 2).min(std::time::Duration::from_millis(200));
+    }
+    panic!("fixture write kept failing: {mutation}: {last_error:?}");
+}
+
+pub async fn update(
+    access: &gents_store::config_client::ConfigAccess,
+    doc_id: &str,
+    fields: &str,
+) {
+    let doc_id = gents_store::graphql::escape_graphql_string(doc_id);
+    execute_fixture_write(access, "fixture.tool_call.update", &format!(
+        r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#
+    ))
+    .await;
+}
+
+pub async fn update_request(
+    access: &gents_store::config_client::ConfigAccess,
+    doc_id: &str,
+    fields: &str,
+) {
+    let doc_id = gents_store::graphql::escape_graphql_string(doc_id);
+    execute_fixture_write(access, "fixture.request.update", &format!(
+        r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#
+    ))
+    .await;
+}
+
+/// The parent is client-owned, so only its client may delete it, and a
+/// client endpoint deletes through its signed native graph.
+pub async fn remove_parent(client: &gents_store::config_client::ConfigAccess, doc_id: &str) {
+    client
+        .transact_signed_conflict_rebuild("fixture.request.remove_parent", |txn| {
+            Box::pin(async move { txn.delete_request_for_native_fixture(doc_id).await })
+        })
+        .await
+        .expect("client deletes its parent request");
+}
+
+pub async fn completion_obligations(
+    access: &gents_store::config_client::ConfigAccess,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+) -> (Vec<String>, Vec<serde_json::Value>) {
+    let session_id = gents_store::graphql::escape_graphql_string(session_id);
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ _docID }} AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }}, execution_origin: {{ _eq: "scheduled" }} }}) {{ input }} }}"#
+        ))
+        .await
+        .expect("read recovery completion obligations");
+    let data = &response["data"];
+    let mut notifications = Vec::new();
+    for row in data["AgentMessage"].as_array().unwrap() {
+        let (_, message) = gents_session::session::load_canonical_message(
+            access,
+            row["_docID"].as_str().unwrap(),
+            node_did,
+            requester_did,
+        )
+        .await
+        .expect("reconstruct canonical recovery notification");
+        if let gents_inference::llm::message::Message::User { content } = message {
+            for item in content {
+                if let gents_inference::llm::message::UserContent::Text(text) = item {
+                    if text.text.contains("<tool-completion") {
+                        notifications.push(text.text);
+                    }
+                }
+            }
+        }
+    }
+    let wakes = data["AgentRequest"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["input"].clone())
+        .collect();
+    (notifications, wakes)
+}
+
+pub async fn settle(admission: &PublishedAdmission) -> usize {
+    crate::background::completion::settle_running_session_message_rows_with_access(
+        &admission.node,
+        &admission.tool.access().unwrap(),
+        &gents_session::session::message::NoSessionMessageGoals,
+        &admission.node_did,
+    )
+    .await
+    .unwrap()
 }

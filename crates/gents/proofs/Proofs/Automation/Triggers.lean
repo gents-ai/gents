@@ -1,0 +1,13 @@
+import Proofs.Automation.Triggers.Types
+import Proofs.Automation.Triggers.Dispatch
+import Proofs.Automation.Triggers.Reachability
+import Proofs.Automation.Triggers.SerialSupport
+import Proofs.Automation.Triggers.Serial
+import Proofs.Automation.Triggers.LatestOnly
+import Proofs.Automation.Triggers.Lineage
+import Proofs.Automation.Triggers.Groups
+import Proofs.Automation.Triggers.Durable
+import Proofs.Automation.Triggers.Refinement
+import Proofs.Automation.Triggers.NativeRoute
+import Proofs.Automation.Triggers.SessionKey
+import Proofs.Automation.Triggers.FireBudget

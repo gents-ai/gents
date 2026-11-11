@@ -11,7 +11,7 @@ pub struct RuntimeDocumentProjector {
 }
 
 impl RuntimeDocumentProjector {
-    pub(super) fn new(
+    pub fn new(
         node: std::sync::Arc<dyn crate::identity::NodeIdentity>,
         policy: std::sync::Arc<dyn super::ToolSourcePolicy>,
     ) -> std::result::Result<Self, identity::Error> {

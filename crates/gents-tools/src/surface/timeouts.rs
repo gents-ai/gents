@@ -186,7 +186,7 @@ impl Default for ToolTimeouts {
 }
 
 impl ToolTimeouts {
-    pub(crate) fn from_document(tools: &gents_documents::Tools) -> Self {
+    pub fn from_document(tools: &gents_documents::Tools) -> Self {
         let host = tools.host.as_ref();
         let bash = host.and_then(|host| host.bash.as_ref());
         let lsp = tools

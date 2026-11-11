@@ -1,4 +1,4 @@
-import Proofs.ClientShell.ObservationOrdering
+import Proofs.Clients.ClientShell.ObservationOrdering
 import Lean
 
 /-! Executes `ObserverResync` and `ClientDataPublication` on the observer

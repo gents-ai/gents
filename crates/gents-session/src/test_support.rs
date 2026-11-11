@@ -95,3 +95,37 @@ pub async fn create_agent_owned_session(
         .await
         .unwrap()
 }
+
+/// Makes the session owners' warnings visible to a scoped subscriber: tracing
+/// caches callsite interest globally, so a scoped subscriber sees an event only
+/// when a global default has enabled its target first.
+pub fn enable_scoped_event_capture() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        tracing::subscriber::set_global_default(CapturedTargetSubscriber)
+            .expect("no other global tracing default in this test binary");
+    });
+}
+
+struct CapturedTargetSubscriber;
+
+impl tracing::Subscriber for CapturedTargetSubscriber {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        metadata.target().starts_with("gents_session::")
+            || metadata.target() == crate::session::REFUSAL_PROJECTION_EVENT_TARGET
+    }
+
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::Id {
+        tracing::Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &tracing::Id, _values: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &tracing::Id, _follows: &tracing::Id) {}
+
+    fn event(&self, _event: &tracing::Event<'_>) {}
+
+    fn enter(&self, _span: &tracing::Id) {}
+
+    fn exit(&self, _span: &tracing::Id) {}
+}

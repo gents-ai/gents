@@ -131,7 +131,7 @@ pub fn derive_turn(attempts: &[AttemptView]) -> Option<ClientTurnState> {
 }
 
 /// The canonical `AgentSession` rows a selected-session read found for its
-/// exact node/session scope (`SessionRowObservation` in `Proofs/Client/Types.lean`).
+/// exact node/session scope (`SessionRowObservation` in `Proofs/Session/Client/Types.lean`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionRowObservation {
     Absent,

@@ -1,0 +1,529 @@
+import Proofs.Session.Compaction.Summarize
+import Proofs.Session.Compaction.Prefix
+
+namespace Compaction
+
+open Transcript (MessageRow StrictlyIncreasingMessages)
+
+def fixtureCallSymbol : Nat := PromptView.providerCallSymbol "1" none
+def fixtureSecondCallSymbol : Nat := PromptView.providerCallSymbol "2" none
+
+def fixtureNativeCallKey (symbol : Nat) : String :=
+  if symbol == fixtureCallSymbol then "1"
+  else if symbol == fixtureSecondCallSymbol then "2" else s!"unmapped-{symbol}"
+
+
+
+
+
+
+
+
+
+def caseFixture : Nat → List Transcript.MessageRow
+  | 1 => [⟨0, 0, 0, .user, .toolResult fixtureCallSymbol ⟨0, 0, 37⟩⟩]
+  | 2 => [⟨0, 0, 0, .assistant, .assistantToolCalls {fixtureCallSymbol}⟩,
+          ⟨1, 0, 1, .user, .toolResult fixtureCallSymbol ⟨0, 0, 37⟩⟩]
+  | 3 => [⟨0, 0, 0, .user, .ordinary⟩,
+          ⟨1, 0, 1, .assistant, .assistantToolCalls {fixtureCallSymbol}⟩,
+          ⟨2, 0, 2, .user, .toolResult fixtureCallSymbol ⟨0, 0, 37⟩⟩]
+  | 4 => [⟨0, 0, 0, .user, .ordinary⟩,
+          ⟨1, 0, 1, .assistant, .assistantToolCalls {fixtureCallSymbol}⟩,
+          ⟨2, 0, 2, .user, .toolResult fixtureCallSymbol ⟨0, 0, 37⟩⟩,
+          ⟨3, 0, 3, .assistant, .ordinary⟩]
+  | _ => []
+
+
+
+
+theorem caseFixture_boundaries_pinned :
+    pairSafeBoundary (caseFixture 3) 2 = 1 ∧
+      pairSafeBoundary (caseFixture 3) 1 = 1 ∧
+      pairSafeBoundary (caseFixture 3) 3 = 3 ∧
+      pairSafeBoundary (caseFixture 2) 1 = 0 := by
+  refine ⟨?_, ?_, ?_, ?_⟩ <;> decide
+
+
+
+
+structure ProtectedReplayCompactionCase where
+  name : String
+  messageCount : Nat
+  rawIndex : Nat
+  required : List PromptAssembly.ClaudeMap.ReplayTag
+  rows : List PromptAssembly.ClaudeMap.TaggedReplayRow
+
+  ceilingError : String
+
+
+  ceiling : Option Nat
+  selectedSplit : Option Nat
+  outcome : String
+  deriving Repr
+
+private def protectedTag : PromptAssembly.ClaudeMap.ReplayTag :=
+  { request := 7, source := .provider 2 1 0 }
+
+
+private def absentTag : PromptAssembly.ClaudeMap.ReplayTag :=
+  { request := 7, source := .provider 2 2 0 }
+
+private def thinkingRow (source : Option PromptAssembly.ClaudeMap.ReplayTag) :
+    PromptAssembly.ClaudeMap.TaggedReplayRow :=
+  { source, blocks :=
+      [.reasoning none [.text [65] (some "sig")],
+       .toolCall 9 "call" none "echo" [123, 125] none none] }
+
+private def replyRow (source : Option PromptAssembly.ClaudeMap.ReplayTag) :
+    PromptAssembly.ClaudeMap.TaggedReplayRow :=
+  { source, blocks := [.text [66]] }
+
+private def protectedReplayCase (name : String) (rawIndex : Nat)
+    (required : List PromptAssembly.ClaudeMap.ReplayTag)
+    (rows : List PromptAssembly.ClaudeMap.TaggedReplayRow) :
+    ProtectedReplayCompactionCase :=
+  let msgs := caseFixture 4
+  match replayReductionCeiling required rows with
+  | .error error =>
+      { name, messageCount := 4, rawIndex, required, rows,
+        ceilingError := PromptAssembly.ClaudeMap.errorName error, ceiling := none,
+        selectedSplit := none, outcome := "ceiling_refused" }
+  | .ok none =>
+      { name, messageCount := 4, rawIndex, required, rows, ceilingError := "",
+        ceiling := none, selectedSplit := none, outcome := "unbounded" }
+  | .ok (some ceiling) =>
+      let selectedSplit := protectedPairSafeBoundary msgs rawIndex ceiling
+      let outcome := match prepareProtectedReplayCheckpoint msgs rawIndex ceiling
+          required rows with
+        | .ok _ => "ok"
+        | .error .cannotFit => "cannot_fit"
+        | .error .misalignedAssistantProjection => "misaligned_assistant_projection"
+        | .error (.replay error) => PromptAssembly.ClaudeMap.errorName error
+      { name, messageCount := 4, rawIndex, required, rows, ceilingError := "",
+        ceiling := some ceiling, selectedSplit, outcome }
+
+def protectedReplayCompactionCases : List ProtectedReplayCompactionCase :=
+  [ protectedReplayCase "open-round-refuses-adjacent-prefix" 3
+      [protectedTag] [thinkingRow (some protectedTag), replyRow none]
+  , protectedReplayCase "open-round-refuses-earlier-tool-round" 3
+      [protectedTag] [thinkingRow none, replyRow (some protectedTag)]
+  , protectedReplayCase "open-round-refuses-without-a-budget-split" 0
+      [protectedTag] [thinkingRow (some protectedTag), replyRow none]
+  , protectedReplayCase "closed-round-keeps-retention-bound" 3
+      [] [thinkingRow (some protectedTag), replyRow none]
+  , protectedReplayCase "duplicate-required-coordinate" 3
+      [protectedTag, protectedTag] [thinkingRow (some protectedTag), replyRow none]
+  , protectedReplayCase "required-coordinate-absent-from-view" 3
+      [absentTag] [thinkingRow (some protectedTag), replyRow none] ]
+
+theorem protectedReplayCompactionCases_owner_computed :
+    protectedReplayCompactionCases.map
+        (fun c => (c.name, c.ceilingError, c.ceiling, c.selectedSplit, c.outcome)) =
+      [ ("open-round-refuses-adjacent-prefix", "", some 0, none, "cannot_fit")
+      , ("open-round-refuses-earlier-tool-round", "", some 0, none, "cannot_fit")
+      , ("open-round-refuses-without-a-budget-split", "", some 0, none, "cannot_fit")
+      , ("closed-round-keeps-retention-bound", "", none, none, "unbounded")
+      , ("duplicate-required-coordinate", "duplicateReplayAssociation", none, none,
+         "ceiling_refused")
+      , ("required-coordinate-absent-from-view", "missingRequiredReplay", none, none,
+         "ceiling_refused") ] := by
+  native_decide
+
+theorem protectedPairSafeBoundary_nonzero_bounds_pinned :
+    protectedPairSafeBoundary (caseFixture 4) 3 1 = some 1 ∧
+      protectedPairSafeBoundary (caseFixture 4) 3 2 = some 1 ∧
+      protectedPairSafeBoundary (caseFixture 4) 3 3 = some 3 ∧
+      protectedPairSafeBoundary (caseFixture 4) 0 1 = none ∧
+      protectedPairSafeBoundary (caseFixture 4) 3 0 = none := by
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩ <;> decide
+
+structure CompactionReducerCase where
+  name                : String
+  group               : String
+  reducer             : String
+  legal               : Bool
+  inputRows           : List MessageRow
+  projectedPrefixReady : Bool
+  preMessageCount     : Nat
+  postMessageCount    : Nat
+  preservesPairs      : Bool
+  preservesOrder      : Bool
+
+  gateOpen            : Option Bool
+  publicationReady    : Bool
+  providerFixpoint    : Bool
+  turnBoundary        : Bool
+  safeToReduce        : Bool
+  reducerIsIdentity   : Bool
+  reducerIsIdempotent : Bool
+
+  splitIndex          : Nat
+
+
+  safeBoundary        : Nat
+
+  retainedCount       : Nat
+
+private def pairsClosed (msgs : List MessageRow) : Bool :=
+  msgs.all fun row => match row.kind with
+    | .toolResult callId _ => msgs.any fun caller =>
+        caller.role == .assistant && match caller.kind with
+          | .assistantToolCalls ids => decide (callId ∈ ids)
+          | _ => false
+    | _ => true
+private theorem pairsClosed_iff (msgs : List MessageRow) :
+    pairsClosed msgs = true ↔ PromptView.PairsClosedInMessages msgs := by
+  simp only [pairsClosed, List.all_eq_true, PromptView.PairsClosedInMessages]
+  constructor
+  · intro h row hr callId key hk
+    have hh := h row hr
+    simp only [hk, List.any_eq_true, Bool.and_eq_true, beq_iff_eq] at hh
+    obtain ⟨caller, hc, role, hk⟩ := hh
+    refine ⟨caller, hc, role, ?_⟩
+    cases he : caller.kind <;> simp_all
+  · intro h row hr
+    cases hk : row.kind with
+    | ordinary => rfl
+    | assistantToolCalls ids => rfl
+    | toolResult callId key =>
+        obtain ⟨caller, hc, role, ids, hi, hm⟩ := h row hr callId key hk
+        exact List.any_eq_true.mpr ⟨caller, hc, by simp [role, hi, hm]⟩
+private instance (msgs : List MessageRow) : Decidable (StrictlyIncreasingMessages msgs) := by
+  induction msgs with
+  | nil => exact isTrue trivial
+  | cons row rest ih =>
+      unfold StrictlyIncreasingMessages
+      exact instDecidableAnd
+
+private inductive Reducer where
+  | identity | strip | summarize | providerView
+
+private def Reducer.name : Reducer → String
+  | .identity => "identity"
+  | .strip => "strip"
+  | .summarize => "summarize"
+  | .providerView => "provider_view"
+
+private def fixtureSegment (id : Nat) (coordinate : CanonicalOutput.Coordinate)
+    (writer : CanonicalOutput.Writer) (declaration : CanonicalOutput.Declaration)
+    (bytes : List UInt8) : CanonicalOutput.Segment :=
+  { id, coordinate, writer
+  , flush := some ⟨0, [⟨0, bytes.length, some declaration⟩], bytes⟩
+  , close := some (.closed .complete 1 [bytes.length]), createdAt := 0 }
+
+private def ordinaryPublication (row : Transcript.MessageRow) :
+    List CanonicalOutput.Segment × CanonicalOutput.MessageEnvelope :=
+  let closeId := 1000 + row.messageId * 100
+  let coordinate : CanonicalOutput.Coordinate := ⟨0, .provider 0 row.sequence 0⟩
+  let record := fixtureSegment closeId coordinate (.request 0)
+    { block := 0, part := 0, kind := .text } [65]
+  let spec : CanonicalOutput.PayloadSpec := ⟨⟨closeId, 0⟩, .full⟩
+  let role := match row.role with
+    | .assistant => CanonicalOutput.MessageRole.assistant
+    | .user => CanonicalOutput.MessageRole.user
+  let message : CanonicalOutput.MessageEnvelope :=
+    { header :=
+        { id := row.messageId, session := row.sessionId, request := some 0, origin := none
+        , refs := [spec.reference], outcome := .complete, role
+        , publication := .requestExecution 0 }
+    , key := s!"ordinary-{row.messageId}", sequence := row.sequence, nativeId := none
+    , blocks := [.text spec], createdAt := 0 }
+  ([record], message)
+
+private def assistantCallPublication (row : Transcript.MessageRow)
+    (callIds : Finset Nat) :
+    List CanonicalOutput.Segment × CanonicalOutput.MessageEnvelope :=
+
+
+
+  let indexed := ([fixtureCallSymbol, fixtureSecondCallSymbol].filter
+    (fun call => call ∈ callIds)).zipIdx
+  let records := indexed.map fun entry =>
+    let symbol := entry.1
+    let block := entry.2
+    let nativeKey := fixtureNativeCallKey symbol
+    fixtureSegment (1000 + row.messageId * 100 + block)
+      ⟨0, .provider 0 row.sequence block⟩ (.request 0)
+      { block, part := 0, kind := .arguments
+      , tool := some ⟨nativeKey, none, "tool"⟩ } [123, 125]
+  let blocks : List (CanonicalOutput.MessageBlock CanonicalOutput.PayloadSpec) :=
+    indexed.map fun entry =>
+      let symbol := entry.1
+      let block := entry.2
+      let nativeKey := fixtureNativeCallKey symbol
+      .toolCall (10000 + symbol) nativeKey none "tool"
+        ⟨⟨1000 + row.messageId * 100 + block, 0⟩, .full⟩ none none
+  let message : CanonicalOutput.MessageEnvelope :=
+    { header :=
+        { id := row.messageId, session := row.sessionId, request := some 0, origin := none
+        , refs := blocks.flatMap CanonicalOutput.blockRefs, outcome := .complete
+        , role := .assistant, publication := .requestExecution 0 }
+    , key := s!"assistant-{row.messageId}", sequence := row.sequence
+    , nativeId := some s!"native-{row.messageId}", blocks, createdAt := 0 }
+  (records, message)
+
+private def toolResultPublication (row : Transcript.MessageRow) (call : Nat) :
+    List CanonicalOutput.Segment × CanonicalOutput.MessageEnvelope :=
+  let closeId := 1000 + row.messageId * 100
+  let physicalCall := 10000 + call
+  let nativeKey := fixtureNativeCallKey call
+  let record := fixtureSegment closeId ⟨0, .tool physicalCall⟩ (.tool physicalCall)
+    { block := 0, part := 0, kind := .toolOutput } [65]
+  let spec : CanonicalOutput.PayloadSpec := ⟨⟨closeId, 0⟩, .full⟩
+  let blocks : List (CanonicalOutput.MessageBlock CanonicalOutput.PayloadSpec) :=
+    [.toolResult physicalCall nativeKey none [.text spec]]
+  let message : CanonicalOutput.MessageEnvelope :=
+    { header :=
+        { id := row.messageId, session := row.sessionId, request := some 0, origin := none
+        , refs := blocks.flatMap CanonicalOutput.blockRefs, outcome := .complete
+        , role := .user, publication := .toolDelivery physicalCall }
+    , key := s!"result-{row.messageId}", sequence := row.sequence, nativeId := none
+    , blocks, createdAt := 0 }
+  ([record], message)
+
+
+
+
+private def publishedObservation
+    (row : Transcript.MessageRow) : StreamingResponse.Observation :=
+  let publication := match row.kind with
+    | .ordinary => ordinaryPublication row
+    | .assistantToolCalls callIds => assistantCallPublication row callIds
+    | .toolResult call _ => toolResultPublication row call
+  let records := publication.1
+  let message := publication.2
+  { request := 0, session := row.sessionId, records, messages := [message]
+  , deniedHeaders := [], deniedSegments := [], dependencyDenials := []
+  , owner := ⟨none, []⟩
+  , target := ⟨⟨0, .provider 0 0 0⟩, .request 0, some row.messageId⟩
+  , requestTerminal := false, terminalSelection := none }
+
+private def emptyPublishedObservation (row : Transcript.MessageRow)
+    (publication : CanonicalOutput.MessagePublication) : StreamingResponse.Observation :=
+  let nativeRole := match row.role with
+    | .assistant => CanonicalOutput.MessageRole.assistant
+    | .user => CanonicalOutput.MessageRole.user
+  let message : CanonicalOutput.MessageEnvelope :=
+    { header :=
+        { id := row.messageId, session := row.sessionId, request := some 0, origin := none
+        , refs := [], outcome := .complete, role := nativeRole, publication }
+    , key := "empty", sequence := row.sequence, nativeId := none, blocks := []
+    , createdAt := 0 }
+  { request := 0, session := row.sessionId, records := [], messages := [message]
+  , deniedHeaders := [], deniedSegments := [], dependencyDenials := []
+  , owner := ⟨none, []⟩
+  , target := ⟨⟨0, .provider 0 0 0⟩, .request 0, some row.messageId⟩
+  , requestTerminal := false, terminalSelection := none }
+
+theorem empty_header_cannot_bless_assistant_calls :
+    let row : Transcript.MessageRow :=
+      ⟨20, 0, 4, .assistant, .assistantToolCalls {fixtureCallSymbol}⟩
+    let view : PromptView :=
+      ⟨0, [row], none, fun id =>
+        if id == row.messageId then some (emptyPublishedObservation row (.requestExecution 0))
+        else none⟩
+    PromptView.rowPublished view row = false := by
+  native_decide
+
+theorem empty_header_cannot_bless_tool_result :
+    let row : Transcript.MessageRow :=
+      ⟨21, 0, 5, .user, .toolResult fixtureCallSymbol ⟨0, 1, 2⟩⟩
+    let view : PromptView :=
+      ⟨0, [row], none, fun id =>
+        if id == row.messageId then some
+          (emptyPublishedObservation row (.toolDelivery (10000 + fixtureCallSymbol)))
+        else none⟩
+    PromptView.rowPublished view row = false := by
+  native_decide
+
+theorem wrong_sequence_cannot_bless_row :
+    let row : Transcript.MessageRow := ⟨22, 0, 6, .assistant, .ordinary⟩
+    let other := { row with sequence := 7 }
+    let view : PromptView :=
+      ⟨0, [row], none, fun id =>
+        if id == row.messageId then some (publishedObservation other) else none⟩
+    PromptView.rowPublished view row = false := by
+  native_decide
+
+theorem multiple_native_results_cannot_fit_one_row :
+    let physical := 10000 + fixtureCallSymbol
+    let row : Transcript.MessageRow :=
+      ⟨23, 0, 7, .user, .toolResult fixtureCallSymbol ⟨0, 1, 2⟩⟩
+    let message : CanonicalOutput.MessageEnvelope :=
+      { header :=
+          { id := 23, session := 0, request := some 0, origin := none, refs := []
+          , outcome := .complete, role := .user, publication := .toolDelivery physical }
+      , key := "multi", sequence := 7, nativeId := none, blocks := [], createdAt := 0 }
+    let native : CanonicalOutput.ReconstructedMessage :=
+      ⟨.user, none, none,
+        [.toolResult physical "1" none [], .toolResult physical "1" none []]⟩
+    PromptView.kindMatches row message native = false := by
+  native_decide
+
+theorem native_call_id_precedes_fallback_id :
+    PromptView.providerCallSymbol "left" (some "native") =
+      PromptView.providerCallSymbol "right" (some "native") := by
+  rfl
+
+theorem distinct_native_keys_have_distinct_symbols :
+    fixtureCallSymbol ≠ fixtureSecondCallSymbol := by
+  native_decide
+
+
+
+private def reducerCase (name group : String) (reducer : Reducer)
+    (count splitIndex : Nat) (publicationReady : Bool := true)
+    (inputOverride : Option (List MessageRow) := none) :
+    CompactionReducerCase :=
+  let source := inputOverride.getD (caseFixture count)
+  let view : PromptView := ⟨0, source, none, fun id =>
+    if publicationReady then
+      source.find? (fun row => row.messageId == id) |>.map
+        publishedObservation
+    else none⟩
+  let reduce := fun (input : PromptView) => match reducer with
+    | .identity => identityReducer input
+    | .strip => { input with messages := strip input.messages }
+    | .summarize => summarize (fun _ => splitIndex) ⟨1⟩ input
+    | .providerView => { input with messages := providerViewTurn input.messages }
+  let reduced := reduce view
+  let reapplied := reduce reduced
+  { name, group, reducer := reducer.name, legal := true
+  , inputRows := source
+  , projectedPrefixReady := decide (PromptView.canCompactProjection view)
+  , preMessageCount := source.length
+  , postMessageCount := reduced.messages.length
+  , preservesPairs := !pairsClosed source || pairsClosed reduced.messages
+  , preservesOrder := decide
+      (Transcript.StrictlyIncreasingMessages source →
+       Transcript.StrictlyIncreasingMessages reduced.messages)
+  , gateOpen := match reducer with
+      | .identity => some (@decide _ (IsValidReducer.decGate (r := identityReducer) view))
+      | .summarize => some (@decide _ (IsValidReducer.decGate
+          (r := summarize (fun _ => splitIndex) ⟨1⟩) view))
+      | .strip | .providerView => none
+  , publicationReady
+  , providerFixpoint := decide (PromptAssembly.sanitizeTurn source = source)
+  , turnBoundary := PromptView.endsAtTurnBoundary source
+  , safeToReduce := decide (PromptView.safeToReduce view)
+  , reducerIsIdentity := decide (reduced.messages = source ∧ reduced.summary = view.summary)
+  , reducerIsIdempotent := decide
+      (reapplied.messages = reduced.messages ∧ reapplied.summary = reduced.summary)
+  , splitIndex
+  , safeBoundary := pairSafeBoundary source splitIndex
+  , retainedCount := reduced.messages.length }
+
+def compactionReducerCases : List CompactionReducerCase :=
+  [ reducerCase "identity_reducer_is_no_op" "witness" .identity 0 0
+  , reducerCase "identity_preserves_pair_atomicity" "witness" .identity 2 0
+  , reducerCase "identity_preserves_message_order" "witness" .identity 3 0
+  , reducerCase "strip_preserves_pair_atomicity" "witness" .strip 2 0
+  , reducerCase "strip_preserves_message_order" "witness" .strip 3 0
+  , reducerCase "strip_is_strictly_idempotent" "witness" .strip 2 0
+  , reducerCase "reduction_blocked_when_header_loading" "publication" .summarize 2 2 false
+  , reducerCase "reduction_allowed_for_stable_published_prefix" "publication" .summarize 4 2
+  , reducerCase "no_orphaned_tool_results_after_strip" "contract" .strip 2 0
+  , reducerCase "reapply_preserves_view_coherent" "contract" .strip 2 0
+  , reducerCase "summarize_retains_straddling_turn" "summarize" .summarize 4 2
+  , reducerCase "summarize_drops_whole_turns" "summarize" .summarize 4 1
+  , reducerCase "summarize_oversized_complete_turn" "summarize" .summarize 4 4
+  , reducerCase "summarize_blocked_when_header_loading" "summarize" .summarize 4 2 false
+  , reducerCase "summarize_cannot_split_a_leading_turn" "summarize" .summarize 2 1
+  , reducerCase "provider_view_is_idempotent" "provider_view" .providerView 3 0
+  , reducerCase "provider_view_drops_orphaned_result" "provider_view" .providerView 1 0
+  , reducerCase "closed_turn_allows_projection_after_unresolved_history" "projection" .providerView 0 0 true
+      (some [⟨0, 0, 0, .assistant, .assistantToolCalls {fixtureCallSymbol}⟩,
+             ⟨1, 0, 1, .user, .ordinary⟩])
+  , reducerCase "open_raw_tail_blocks_projected_prefix" "projection" .providerView 0 0 true
+      (some [⟨0, 0, 0, .user, .ordinary⟩,
+             ⟨1, 0, 1, .assistant, .assistantToolCalls {fixtureCallSymbol}⟩])
+  , reducerCase "unpublished_closed_turn_blocks_projected_prefix" "projection" .providerView 0 0 false
+      (some [⟨0, 0, 0, .assistant, .assistantToolCalls {fixtureCallSymbol}⟩,
+             ⟨1, 0, 1, .user, .ordinary⟩]) ]
+
+theorem compactionReducerCases_count : compactionReducerCases.length = 20 := by decide
+
+theorem stable_published_prefix_gate_opens :
+    (reducerCase "allowed" "publication" .summarize 4 2).safeToReduce = true := by
+  native_decide
+
+theorem strip_fixture_changes_payload :
+    (reducerCase "strip" "witness" .strip 2 0).reducerIsIdentity = false := by decide
+
+theorem strip_and_provider_fixtures_idempotent :
+    (reducerCase "strip" "witness" .strip 2 0).reducerIsIdempotent = true ∧
+    (reducerCase "provider" "provider_view" .providerView 3 0).reducerIsIdempotent = true := by
+  decide
+
+def incompleteCallPrefix : List Transcript.MessageRow :=
+  [ ⟨0, 0, 0, .assistant,
+      .assistantToolCalls {fixtureCallSymbol, fixtureSecondCallSymbol}⟩
+  , ⟨1, 0, 1, .user, .toolResult fixtureCallSymbol ⟨0, 0, 37⟩⟩
+  , ⟨2, 0, 2, .user, .ordinary⟩ ]
+
+theorem incomplete_call_prefix_is_rejected :
+    let view : PromptView :=
+      ⟨0, incompleteCallPrefix, none, fun id =>
+        incompleteCallPrefix.find? (fun row => row.messageId == id) |>.map
+          publishedObservation⟩
+    ¬ PromptView.safeToReduce view := by
+  native_decide
+
+theorem reused_row_symbol_suffix_does_not_shift_closed_prefix :
+    let history :=
+      [⟨0, 0, 0, .assistant, .assistantToolCalls {fixtureCallSymbol}⟩,
+       ⟨1, 0, 1, .user, .toolResult fixtureCallSymbol ⟨0, 0, 0⟩⟩,
+       ⟨2, 0, 2, .user, .ordinary⟩]
+    let suffix :=
+      [⟨3, 0, 3, .assistant, .assistantToolCalls {fixtureCallSymbol}⟩,
+       ⟨4, 0, 4, .user, .toolResult fixtureCallSymbol ⟨0, 0, 1⟩⟩]
+    (PromptAssembly.sanitizeTurn (history ++ suffix)).take history.length = history := by
+  native_decide
+
+
+
+
+
+
+
+
+
+
+def cursorFixture : List Transcript.MessageRow :=
+  [ ⟨0, 0, 0, .user, .toolResult 99 ⟨0, 0, 0⟩⟩
+  , ⟨1, 0, 1, .user, .ordinary⟩
+  , ⟨2, 0, 2, .assistant, .assistantToolCalls {1}⟩
+  , ⟨3, 0, 3, .user, .toolResult 1 ⟨0, 0, 37⟩⟩
+  , ⟨4, 0, 4, .assistant, .ordinary⟩ ]
+
+def cursorCandidates (msgs : List Transcript.MessageRow) : List Nat :=
+  (List.range msgs.length).map fun offset => msgs.length - offset
+
+def findCursor (msgs : List Transcript.MessageRow) (compacted : Nat) : Option Nat :=
+  (cursorCandidates msgs).find? fun cursor => decide (
+    providerViewGlobal msgs =
+        providerViewGlobal (msgs.take cursor) ++ providerViewGlobal (msgs.drop cursor) ∧
+      (providerViewGlobal (msgs.take cursor)).length = compacted)
+
+structure CompactionCursorCase where
+  name           : String
+  compacted      : Nat
+  expectedCursor : Option Nat
+  deriving Repr
+
+def compactionCursorCases : List CompactionCursorCase :=
+  [ { name := "cursor_skips_orphan_and_compacted_turn"
+    , compacted := 1
+    , expectedCursor := findCursor cursorFixture 1 }
+  , { name := "cursor_rejects_split_inside_tool_pair"
+    , compacted := 2
+    , expectedCursor := findCursor cursorFixture 2 }
+  , { name := "cursor_accepts_complete_tool_pair"
+    , compacted := 3
+    , expectedCursor := findCursor cursorFixture 3 } ]
+
+theorem compactionCursorCases_pinned :
+    compactionCursorCases.map (fun c => c.expectedCursor) = [some 2, none, some 4] := by
+  native_decide
+
+end Compaction

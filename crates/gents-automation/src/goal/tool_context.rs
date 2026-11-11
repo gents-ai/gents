@@ -1,7 +1,7 @@
 use super::*;
 use gents_protocol::row::AgentRequestRow;
 
-pub(crate) struct GoalToolContext {
+pub struct GoalToolContext {
     pub request: AgentRequestRow,
     pub assignment: RequestAssignmentObservation,
     current: Option<GoalDocument>,
@@ -30,7 +30,7 @@ pub(super) fn same_goal_assignment(left: &GoalDocument, right: &GoalDocument) ->
         && left.assignment_root_request_doc_id == right.assignment_root_request_doc_id
 }
 
-pub(crate) async fn load_goal_tool_context(
+pub async fn load_goal_tool_context(
     access: &gents_store::config_client::ConfigAccess,
     owner: &str,
     session: &str,

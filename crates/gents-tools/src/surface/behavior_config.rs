@@ -437,7 +437,7 @@ impl AgentToolSurfaceConfig {
         &self.required_mcp_service_ids
     }
 
-    pub(crate) fn agent_tools(&self) -> &AgentToolConfig {
+    pub fn agent_tools(&self) -> &AgentToolConfig {
         &self.agent_tools
     }
 
@@ -523,7 +523,7 @@ impl AgentToolSurfaceConfig {
         )
     }
 
-    pub(crate) fn resolve_with_agent_tools_for_runtime_availability(
+    pub fn resolve_with_agent_tools_for_runtime_availability(
         &self,
         availability: RuntimeToolAvailability,
         agent_tools: AgentToolConfig,

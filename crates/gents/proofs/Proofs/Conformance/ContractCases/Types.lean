@@ -1,9 +1,9 @@
-import Proofs.Basic
-import Proofs.Background.ProcessControl
-import Proofs.Scheduling
-import Proofs.RuntimeReconcile.State
-import Proofs.CanonicalOutput.State
-import Proofs.Recovery.Sweeps.BackgroundRestart
+import Proofs.Shared.Basic
+import Proofs.ToolCalls.Background.ProcessControl
+import Proofs.Inference.Scheduling
+import Proofs.Automation.RuntimeReconcile.State
+import Proofs.Shared.CanonicalOutput.State
+import Proofs.ToolCalls.Recovery.Sweeps.BackgroundRestart
 
 namespace Conformance.ContractCases
 

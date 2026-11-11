@@ -30,7 +30,7 @@ pub struct CallToolTool {
 }
 
 impl CallToolTool {
-    pub(crate) fn new(ctx: MetaToolContext) -> Self {
+    pub fn new(ctx: MetaToolContext) -> Self {
         Self { ctx }
     }
 }

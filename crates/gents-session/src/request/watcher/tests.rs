@@ -131,7 +131,7 @@ struct ScopedWatcherFixture {
     agent: Arc<dyn gents_store::identity::NodeIdentity>,
     access: gents_store::config_client::ConfigAccess,
     client_access: gents_store::config_client::ConfigAccess,
-    _home: crate::support::TestDb,
+    _home: gents_inference::test_support::TestDb,
 }
 
 impl ScopedWatcherFixture {
@@ -139,9 +139,9 @@ impl ScopedWatcherFixture {
         use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         use gents_store::identity::NodeIdentity;
 
-        let db = crate::support::test_db("scoped-watcher").await;
+        let db = gents_inference::test_support::test_db("scoped-watcher").await;
         let (home, user, client_access) =
-            crate::test_support::root::signed_test_node_without_agent_from_db(
+            gents_inference::test_support::signed_test_node_without_agent_from_db(
                 db,
                 "scoped-watcher-user",
             )
@@ -880,54 +880,6 @@ async fn try_fetch_request_terminalizes_incoherent_parent_linkage() {
     assert_eq!(terminal["lifecycle_state"], "failed");
     assert!(terminal["terminalized_at"].is_string());
     assert_eq!(terminal["terminal_redrive_attempts"], 0);
-}
-
-#[tokio::test]
-async fn pending_requests_are_scoped_by_node_did_without_host_identity() {
-    let fixture = ScopedWatcherFixture::new().await;
-    let node_did = fixture.node_did.as_str();
-    let mut input = fixture.request_input("req-owned", "sess-owned");
-    input["created_at"] = serde_json::json!("2026-08-21T00:00:00Z");
-    input["workspace_id"] = serde_json::json!("ws-1");
-    input["workspace_owner_node_did"] = serde_json::json!(node_did);
-    input["workspace_authority"] = serde_json::json!("readWrite");
-    fixture.create_request(input).await;
-
-    let foreign = DefraWatcher::for_agents(
-        fixture.node.clone(),
-        "did:key:foreign",
-        vec![fixture.agent.clone()],
-    )
-    .expect("request watcher");
-    assert!(foreign.pending_requests().await.unwrap().is_empty());
-    let owner = fixture.watcher();
-    let pending = owner.pending_requests().await.unwrap();
-    assert_eq!(
-        pending
-            .iter()
-            .map(|request| request.request_id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["req-owned"]
-    );
-    assert_eq!(
-        pending[0].workspace_owner_node_did.as_deref(),
-        Some(node_did)
-    );
-    let continuation = crate::goal::continuation::prepare_goal_continuation(
-        &pending[0],
-        pending[0].agent_did.clone(),
-        "goal-workspace-owner",
-        "continue",
-        1,
-        false,
-        "2026-08-21T00:00:01Z",
-        pending[0].request_hop,
-    )
-    .expect("workspace-bound parent produces a coherent goal continuation");
-    assert_eq!(
-        continuation.workspace_owner_node_did.as_deref(),
-        Some(node_did)
-    );
 }
 
 #[tokio::test]

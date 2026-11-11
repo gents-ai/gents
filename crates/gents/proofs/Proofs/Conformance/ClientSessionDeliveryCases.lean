@@ -1,4 +1,4 @@
-import Proofs.Client.Types
+import Proofs.Session.Client.Types
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.ClientSessionDelivery

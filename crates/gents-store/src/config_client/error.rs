@@ -595,7 +595,7 @@ impl ConfigClientError {
 
     /// DefraDB answered the operation with a store conflict its GraphQL
     /// errors code as retryable.
-    pub(crate) fn is_retryable_database_conflict(&self) -> bool {
+    pub fn is_retryable_database_conflict(&self) -> bool {
         match self {
             Self::EmbeddedGraphqlErrors { errors } => {
                 !self.is_permission_denied()

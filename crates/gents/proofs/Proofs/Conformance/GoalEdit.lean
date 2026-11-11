@@ -1,4 +1,4 @@
-import Proofs.GoalAutomation.Edit
+import Proofs.Automation.GoalAutomation.Edit
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.GoalEditContracts
@@ -94,6 +94,6 @@ def caseJson (origin : Origin) (c : Case) : String :=
 def casesJson : String := jsonArray (cases.map fun (origin, c) => caseJson origin c)
 
 def whitespaceCodepointsJson : String :=
-  jsonArray (GoalAutomation.objectiveWhitespaceCodepoints.map toString)
+  jsonArray (TextNormalization.objectiveWhitespaceCodepoints.map toString)
 
 end Conformance.GoalEditContracts

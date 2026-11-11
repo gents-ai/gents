@@ -382,9 +382,9 @@ impl FileInventorySnapshot {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub async fn load(
-        node: &Arc<EmbeddedNode>,
+        node: &std::sync::Arc<defra_node::Node>,
         admission: &FileInventoryAdmission,
     ) -> Result<Self> {
         anyhow::ensure!(

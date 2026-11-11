@@ -9,7 +9,7 @@ use crate::request::event_delivery::{EventDeliveryRuntimeContract, EventDelivery
 use gents_protocol::row::AgentRequest;
 use gents_store::subscription_source::UpdateSubscriptionSource;
 
-mod cooldown;
+pub mod cooldown;
 mod query;
 #[cfg(test)]
 mod tests;

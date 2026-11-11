@@ -7,7 +7,7 @@ mod canonical_recovery;
 
 pub(super) use canonical_recovery::request_segments;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use canonical_recovery::{
     recover_expired_generation_with_access_for_test, RecoveryResult, RecoverySelectionChoice,
     RecoverySelectionRejected,

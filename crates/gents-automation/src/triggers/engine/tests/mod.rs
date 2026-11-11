@@ -77,8 +77,8 @@ fn stub_principal() -> Arc<gents_store::identity::RuntimeNode> {
 }
 
 const LEAN_TRIGGER_TYPES_MODEL: &str =
-    include_str!("../../../../../gents/proofs/Proofs/Triggers/Types.lean");
-const LEAN_TRIGGER_TYPES_FILE: &str = "crates/gents/proofs/Proofs/Triggers/Types.lean";
+    include_str!("../../../../../gents/proofs/Proofs/Automation/Triggers/Types.lean");
+const LEAN_TRIGGER_TYPES_FILE: &str = "crates/gents/proofs/Proofs/Automation/Triggers/Types.lean";
 
 #[test]
 fn durable_fire_keys_are_unambiguous_across_component_delimiters() {
@@ -554,7 +554,7 @@ fn snapshot_from_trigger_contract(
     let agent = spy_test_agent();
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         agent.agent_did.clone(),
-        vec![agent.clone()],
+        vec![with_default_tools(agent.clone())],
         RapidHashMap::new(),
         RapidHashMap::new(),
         RapidHashMap::new(),
@@ -567,6 +567,14 @@ fn snapshot_from_trigger_contract(
     .with_node(agent.node.clone())
     .with_local_did(agent.node_did().to_string());
     Arc::new(resolved.activate(1, RapidHashMap::new()))
+}
+
+/// Pairs a fixture agent with the default tool surface configuration, as the snapshot carries them side by side.
+pub(super) fn with_default_tools(agent: Arc<ResolvedAgent>) -> gents_tools::surface::AgentWithTools {
+    gents_tools::surface::AgentWithTools {
+        agent,
+        tools: Arc::new(AgentToolSurfaceConfig::default()),
+    }
 }
 
 pub(super) fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> {
@@ -612,7 +620,6 @@ pub(super) fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> 
         max_turns: gents_inference::resolved::DEFAULT_MAX_TURNS,
         max_turns_provenance: gents_inference::resolved::MaxTurnsProvenance::Default,
         system_prompt: String::new(),
-        tools: AgentToolSurfaceConfig::default(),
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
@@ -636,12 +643,12 @@ pub(super) fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> 
 pub(super) async fn signed_materializer_agent(
     name: &str,
 ) -> (
-    crate::support::TestDb,
+    gents_inference::test_support::TestDb,
     gents_store::identity::KeyIdentity,
     gents_store::config_client::ConfigAccess,
     Arc<ResolvedAgent>,
 ) {
-    let (db, user, access, binding) = crate::test_support::root::signed_test_node(name).await;
+    let (db, user, access, binding) = gents_inference::test_support::signed_test_node(name).await;
     let template = tokio::task::spawn_blocking(|| integration_test_agent("materializer-template"))
         .await
         .expect("build test agent template");
@@ -717,7 +724,7 @@ pub(super) fn snapshot_with_agent_and_schedules(
     let local_did = behavior.node_did().to_string();
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         behavior.agent_did.clone(),
-        vec![behavior],
+        vec![with_default_tools(behavior)],
         RapidHashMap::new(),
         RapidHashMap::new(),
         RapidHashMap::new(),

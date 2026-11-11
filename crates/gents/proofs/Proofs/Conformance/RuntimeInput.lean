@@ -1,4 +1,4 @@
-import Proofs.ClientShell.RuntimeInput
+import Proofs.Clients.ClientShell.RuntimeInput
 import Lean
 
 namespace Conformance.RuntimeInput

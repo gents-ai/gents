@@ -1,4 +1,4 @@
-import Proofs.PromptAssembly.SchemaArgumentRepair
+import Proofs.Session.PromptAssembly.SchemaArgumentRepair
 
 namespace Conformance.SchemaArgumentRepair
 open Lean PromptAssembly.SchemaArgumentRepair

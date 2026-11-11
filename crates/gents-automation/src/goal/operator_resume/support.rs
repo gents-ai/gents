@@ -11,7 +11,7 @@ use gents_store::identity::KeyIdentity;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-pub(crate) const SESSION: &str = "contract-session";
+pub const SESSION: &str = "contract-session";
 pub(crate) const PARENT: &str = "contract-parent";
 pub(crate) const PROFILE: &str = "contract-behavior:inference";
 
@@ -23,7 +23,7 @@ pub(crate) struct ClaudeAccounts {
     pub b_credential: String,
 }
 
-pub(crate) struct Fixture {
+pub struct Fixture {
     pub node: Arc<EmbeddedNode>,
     pub identity: Arc<dyn NodeIdentity>,
     pub user: Arc<KeyIdentity>,
@@ -33,7 +33,7 @@ pub(crate) struct Fixture {
     pub goal: GoalDocument,
     pub parent: gents_protocol::row::AgentRequest,
     user_access: ConfigAccess,
-    _db: crate::support::TestDb,
+    _db: gents_inference::test_support::TestDb,
 }
 impl Fixture {
     pub async fn new(before: &Value) -> Self {
@@ -59,7 +59,7 @@ impl Fixture {
         user_owned_goal: bool,
     ) -> Self {
         let (db, user, user_access, binding) =
-            crate::test_support::root::signed_test_node("goal-operator").await;
+            gents_inference::test_support::signed_test_node("goal-operator").await;
         let node = db.node.clone();
         let identity = db.node_identity.clone();
         let user = Arc::new(user);

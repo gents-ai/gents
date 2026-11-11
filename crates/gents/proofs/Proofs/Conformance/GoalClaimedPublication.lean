@@ -1,4 +1,4 @@
-import Proofs.GoalAutomation.ClaimedPublication
+import Proofs.Automation.GoalAutomation.ClaimedPublication
 import Proofs.Conformance.GoalOperatorResume
 
 namespace Conformance.GoalClaimedPublicationContracts

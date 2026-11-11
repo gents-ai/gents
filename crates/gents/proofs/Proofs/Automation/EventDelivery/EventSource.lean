@@ -1,0 +1,47 @@
+import Proofs.Automation.EventDelivery.Contract
+import Proofs.Automation.EventDelivery.Properties
+
+open EventDelivery
+
+namespace EventDelivery.EventSource
+
+def eventSourceSrc : SourceInstance :=
+  { name := "EventSource"
+  , dedupePolicy := .monotoneOnce
+  , rescanBoundedBy := 1
+  }
+
+theorem eventSourceSrc_rescanBoundedBy_pos :
+    0 < eventSourceSrc.rescanBoundedBy := by
+  decide
+
+theorem E1_event_source_delivery_convergence
+    (w₀ : World) (d : DocId)
+    (h_persisted : d ∈ w₀.persistentSet)
+    (h_unprocessed : d ∉ w₀.processedSet) :
+    ∃ (actions : List Action) (w' : World),
+      TraceOf w₀ actions w' ∧
+      Fair eventSourceSrc actions ∧
+      d ∈ w'.handled :=
+  D1_delivery_convergence
+    eventSourceSrc w₀ d h_persisted h_unprocessed
+    eventSourceSrc_rescanBoundedBy_pos
+
+theorem E2_ready_trigger_independent_of_pending_trigger
+    (w : World) (ready pending : DocId)
+    (h_ready_queued : ready ∈ w.subscriptionQueue)
+    (h_ready_unprocessed : ready ∉ w.processedSet)
+    (h_pending_persisted : pending ∈ w.persistentSet)
+    (h_pending_unprocessed : pending ∉ w.processedSet)
+    (h_distinct : pending ≠ ready) :
+    let w' :=
+      { w with handled := ready :: w.handled
+             , processedSet := ready :: w.processedSet
+             , subscriptionQueue := w.subscriptionQueue.erase ready }
+    Transition w (.handle ready) w' ∧ pending ∈ w'.persistentSet ∧
+      pending ∉ w'.processedSet := by
+  constructor
+  · exact Transition.handle w ready h_ready_queued h_ready_unprocessed
+  · exact ⟨h_pending_persisted, by simp [h_distinct, h_pending_unprocessed]⟩
+
+end EventDelivery.EventSource

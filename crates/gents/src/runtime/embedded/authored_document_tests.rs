@@ -1,4 +1,5 @@
 use gents_store::config_client::authored_document::*;
+use gents_store::config_client::ConfigAccess;
 use gents_store::identity::NodeIdentity;
 use serde_json::json;
 

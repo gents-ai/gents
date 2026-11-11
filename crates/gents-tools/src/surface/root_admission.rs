@@ -56,7 +56,7 @@ pub struct WorkspaceRootPolicy {
 pub struct RootExecutionGuard {
     pub agent_did: String,
     pub selected_root: Option<PathBuf>,
-    pub(crate) ceiling_root: Option<PathBuf>,
+    pub ceiling_root: Option<PathBuf>,
 }
 
 impl RootExecutionGuard {

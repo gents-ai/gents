@@ -1,6 +1,6 @@
-import Proofs.CanonicalOutput.Execution.Examples
-import Proofs.CanonicalOutput.Execution.Gate
-import Proofs.CanonicalOutput.Execution.ToolDeliveryCases
+import Proofs.Runtime.CanonicalOutput.Execution.Examples
+import Proofs.Runtime.CanonicalOutput.Execution.Gate
+import Proofs.Runtime.CanonicalOutput.Execution.ToolDeliveryCases
 import Proofs.Conformance.Contracts.Json.ClientRuntime
 import Lean
 

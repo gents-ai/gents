@@ -1,4 +1,4 @@
-import Proofs.InferenceCall.UsageProjection
+import Proofs.Runtime.InferenceCall.UsageProjection
 import Lean
 
 namespace Conformance.TitleUsage

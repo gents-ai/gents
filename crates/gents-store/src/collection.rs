@@ -195,7 +195,7 @@ mod tests {
 
     #[test]
     fn vocabulary_matches_canonical_lean_document_catalog() {
-        let lean = include_str!("../../gents/proofs/Proofs/ConfigDocuments.lean");
+        let lean = include_str!("../../gents/proofs/Proofs/Documents/ConfigDocuments.lean");
         let expected: Vec<_> = lean
             .lines()
             .filter_map(|line| {

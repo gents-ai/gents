@@ -1,4 +1,4 @@
-import Proofs.ClientShell.InterruptControl
+import Proofs.Clients.ClientShell.InterruptControl
 import Proofs.Conformance.ClientShell.Contracts.Types
 
 namespace Conformance.ClientInterruptControl

@@ -1,5 +1,5 @@
 import Proofs.Conformance.ContractCases.Types
-import Proofs.RenderedCapture
+import Proofs.Shared.RenderedCapture
 
 /-!
 # RenderedCapture contract cases

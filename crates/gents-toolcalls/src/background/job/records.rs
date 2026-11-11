@@ -375,7 +375,7 @@ mod tests {
 
     /// The row owner's access: the job row is owned by its Agent, so the
     /// node identity cannot read it.
-    fn access(admission: &PublishedAdmission) -> ConfigAccess {
+    pub fn access(admission: &PublishedAdmission) -> ConfigAccess {
         admission
             .tool
             .access()

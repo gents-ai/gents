@@ -25,7 +25,7 @@ pub struct ProcessControlScope {
 }
 
 impl ProcessControlScope {
-    pub(crate) fn authorizes(
+    pub fn authorizes(
         &self,
         owner_session_id: &str,
         owner_node_did: &str,
@@ -367,9 +367,9 @@ fn list_projection_matches(filter: ListStatusFilter, projection: &WaitStatusProj
     }
 }
 
-#[cfg(test)]
-pub(crate) use final_output::select_folded_outcome;
-pub(crate) use final_output::{
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use final_output::select_folded_outcome;
+pub use final_output::{
     caused_request_terminals_in_txn, load_caused_request_terminals, load_session_message_terminal,
 };
 

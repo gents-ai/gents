@@ -21,7 +21,7 @@ It adds neither a write gate nor a durable lifecycle nor a second recovery owner
 
 ## Model and scope
 
-`Proofs/StorageWriteGate.lean` models one existing gate acquisition. Its phase
+`Proofs/Store/StorageWriteGate.lean` models one existing gate acquisition. Its phase
 distinguishes pending storage, cancellation cleanup, future drop, permission to
 release, and actual release. Scheduling is a separate fact: an independently
 scheduled finalizer remains pollable while its consumer awaits the gate.

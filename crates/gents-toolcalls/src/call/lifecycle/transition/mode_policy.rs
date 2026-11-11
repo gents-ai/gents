@@ -32,7 +32,7 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
-    pub(crate) async fn background_with_receipt(&mut self, receipt: &str) -> Result<()> {
+    pub async fn background_with_receipt(&mut self, receipt: &str) -> Result<()> {
         self.background_with_receipt_slot(
             receipt,
             crate::call::hook::persistence::BackgroundSlot::Occupied,

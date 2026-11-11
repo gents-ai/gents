@@ -1,4 +1,4 @@
-import Proofs.ClientShell.RequestCacheIdentity
+import Proofs.Clients.ClientShell.RequestCacheIdentity
 
 namespace Conformance.ClientRequestCacheIdentity
 

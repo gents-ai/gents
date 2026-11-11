@@ -153,7 +153,7 @@ pub async fn fork_on(
 
 /// The fork and all of its destination-owned content commit in one
 /// transaction; relationship publication follows from the returned intent.
-pub(super) async fn commit_fork(
+pub async fn commit_fork(
     access: &ConfigAccess,
     params: ForkParams<'_>,
 ) -> Result<ForkPublication, ForkError> {

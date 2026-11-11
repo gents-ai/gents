@@ -4,7 +4,7 @@ use gents_documents::event_consumer::{acknowledge_fire, exclude_arrival};
 use gents_documents::test_support::event_cursor::{
     create_source, cursor, document, fixture, publish, source, trigger, trigger_consumer,
 };
-use gents_session::request::lifecycle::test_support::PIN_FIXED_DID;
+use gents_store::test_support::PIN_FIXED_DID;
 use gents_store::collection::Collection;
 use serde_json::json;
 

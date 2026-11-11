@@ -4,7 +4,7 @@ mod artifact;
 pub use artifact::ArtifactGrant;
 mod binding;
 mod documents;
-mod executor;
+pub mod executor;
 mod instructions;
 pub mod journal;
 pub mod overlay;
@@ -12,7 +12,7 @@ mod path_capability;
 mod publication;
 mod quickstart;
 pub mod root_resolution;
-mod runtime;
+pub mod runtime;
 pub mod sandbox;
 
 pub use action_plan::{
@@ -77,17 +77,19 @@ pub(crate) use overlay::{
     bind_workspace_overlay, IsolatedWorkspaceRecord, WorkspaceBindInput, WorkspacePlacementRecord,
 };
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use binding::{admit_workspace_binding, new_binding, AdmitBinding};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use documents::workspace_integrate_docs_mutation;
-#[cfg(test)]
-pub use tests::{bind_integrate, git, git_worktree_caps, integrate_writer, seal_writer, Fixture};
+#[cfg(any(test, feature = "test-fixtures"))]
+mod fixture;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use fixture::{bind_integrate, git, git_worktree_caps, integrate_writer, seal_writer, Fixture};
 
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use overlay::overlay_tests::artifact_test_fixture;
-#[cfg(test)]
-pub(crate) use overlay::overlay_tests::ArtifactTestFixture;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use overlay::overlay_tests::ArtifactTestFixture;

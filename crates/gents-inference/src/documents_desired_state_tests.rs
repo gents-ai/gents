@@ -64,7 +64,7 @@ async fn preview_window(
                 gents_documents::validate_desired_state_plan(
                     txn,
                     plan,
-                    &gents_documents::test_support::AdmitAllProfiles,
+                    &crate::resolved::ProviderProfilePolicy,
                 )
                 .await
             })

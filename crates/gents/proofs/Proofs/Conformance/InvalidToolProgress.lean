@@ -1,5 +1,5 @@
-import Proofs.CompletionRetry.InvalidToolProgress
-import Proofs.CompletionRetry.RepeatedToolFailure
+import Proofs.Shared.CompletionRetry.InvalidToolProgress
+import Proofs.Shared.CompletionRetry.RepeatedToolFailure
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.InvalidToolProgressContracts

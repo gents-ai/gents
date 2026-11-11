@@ -1,5 +1,5 @@
 import Proofs.Conformance.Contracts.Json.Helpers
-import Proofs.CommandPolicy.Cases
+import Proofs.Session.CommandPolicy.Cases
 
 namespace Conformance.Contracts
 

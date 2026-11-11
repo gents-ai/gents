@@ -6,7 +6,7 @@ use anyhow::{bail, Context, Result};
 use super::documents::{IsolatedWorkspaceDoc, WorkspaceDocuments, WorkspacePlacementDoc};
 
 pub(super) mod cleanup;
-pub(super) mod create;
+pub mod create;
 pub(super) mod freeze;
 pub(super) mod integrate;
 pub(super) mod seal;

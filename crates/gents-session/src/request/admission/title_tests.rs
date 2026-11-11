@@ -124,7 +124,8 @@ async fn update_request_field(node: &Arc<EmbeddedNode>, doc_id: &str, field: &st
 /// equal identities and distinct labels to distinct ones, so the model's agent
 /// relations are kept.
 fn modeled_agent(label: &str) -> Arc<dyn NodeIdentity> {
-    let root = crate::triggers::callback::test_root_identity();
+    let home = tempfile::tempdir().unwrap();
+    let root = crate::request::lifecycle::test_support::pin_fixed_signing_identity(home.path());
     let nonce: String = label
         .bytes()
         .map(|byte| format!("{byte:02x}"))

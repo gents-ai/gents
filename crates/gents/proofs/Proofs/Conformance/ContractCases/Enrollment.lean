@@ -1,5 +1,5 @@
-import Proofs.Enrollment
-import Proofs.Enrollment.RequestAdmission
+import Proofs.Session.Enrollment
+import Proofs.Session.Enrollment.RequestAdmission
 import Proofs.Conformance.ContractCases.Types
 
 namespace Conformance.ContractCases

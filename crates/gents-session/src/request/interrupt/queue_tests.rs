@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Notify;
 
 struct QueueFixture {
-    db: crate::support::TestDb,
+    db: gents_inference::test_support::TestDb,
     user: gents_store::identity::KeyIdentity,
     client: ConfigAccess,
     agent: Arc<dyn NodeIdentity>,
@@ -94,7 +94,7 @@ async fn fixture(case: &LeanInterruptQueueCase) -> QueueFixture {
         "modeled requester scope"
     );
     let (db, user, client, binding) =
-        crate::test_support::root::signed_test_node(&format!("interrupt-queue-{}", case.name))
+        gents_inference::test_support::signed_test_node(&format!("interrupt-queue-{}", case.name))
             .await;
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();
