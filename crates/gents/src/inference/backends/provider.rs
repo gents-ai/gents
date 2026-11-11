@@ -67,7 +67,7 @@ fn provider_display_name(kind: BackendProviderKind) -> &'static str {
 const MODEL_DISCOVERY_PATH: &str = "/models";
 const XAI_GROK_MODEL_DISCOVERY_PATH: &str = "/models-v2";
 const CLAUDE_MODELS_BASE: &str =
-    crate::inference::clients::claude_subscription::ANTHROPIC_API_ENDPOINT;
+    crate::documents::inference_defaults::ANTHROPIC_API_ENDPOINT;
 
 fn claude_models_base(endpoint: &str) -> String {
     if endpoint.starts_with("http://") || endpoint.starts_with("https://") {

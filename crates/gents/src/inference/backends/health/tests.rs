@@ -14,7 +14,7 @@ use crate::inference::auth::credential::test_support::{
     one_shot_token_server, seed_credential, seed_credential_with_refresh_token, test_node,
     TOKEN_URL_ENV,
 };
-use crate::inference::backends::registry::DEFAULT_MAX_QUEUE_DEPTH;
+use crate::documents::inference_defaults::DEFAULT_MAX_QUEUE_DEPTH;
 use crate::lean_vocab_test::lean_backend_health_cases;
 
 fn state_from_lean(name: &str, state: &str) -> BackendHealthState {

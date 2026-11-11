@@ -5,6 +5,7 @@ use anyhow::Result;
 
 use crate::documents::inference_defaults::ReasoningEffort;
 use crate::inference::backends::provider::BackendProviderKind;
+use crate::inference::backends::registry::backend_fields;
 use crate::inference::compaction::CompactionStrategy;
 use crate::openai_wire::OpenAiWireApi;
 use crate::runtime::agent::completion_retry::CompletionRetryProfileFields;
@@ -187,7 +188,7 @@ impl ResolvedInference {
             reasoning_effort: self.profile.reasoning_effort,
             max_tokens: Some(u64::try_from(self.max_output_tokens()?)?),
         };
-        let backend = self.backend.backend_fields();
+        let backend = backend_fields(&self.backend);
         result.validate_for_provider(backend.backend_provider_kind, backend.openai_wire_api)?;
         Ok(result)
     }
@@ -508,7 +509,7 @@ pub fn unsent_reasoning_effort(
     observation: Option<&crate::documents::InferenceBackendObservation>,
 ) -> Option<String> {
     let effort = profile.reasoning_effort?;
-    let fields = backend.backend_fields();
+    let fields = backend_fields(backend);
     let model = backend_catalog(backend, observation)
         .ok()
         .flatten()

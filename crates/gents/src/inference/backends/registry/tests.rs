@@ -24,13 +24,13 @@ fn private_credential_rotation_changes_the_keyed_connection_identity() {
         version: "rotation-one".into(),
     };
     let before =
-        crate::inference::admission::backend_connection_fingerprint(&backend.backend_fields());
+        crate::inference::admission::backend_connection_fingerprint(&backend_fields(&backend));
     backend.auth = BackendAuth::Credential {
         id: "private-reference".into(),
         version: "rotation-two".into(),
     };
     let after =
-        crate::inference::admission::backend_connection_fingerprint(&backend.backend_fields());
+        crate::inference::admission::backend_connection_fingerprint(&backend_fields(&backend));
     assert_ne!(before, after);
     assert!(!before.contains("private-reference") && !before.contains("rotation-one"));
 }
@@ -305,7 +305,7 @@ fn inference_backend_validation_reports_every_violation() {
 
 #[test]
 fn anthropic_api_key_takes_keys_on_the_fixed_endpoint_only() {
-    let endpoint = crate::inference::clients::claude_subscription::ANTHROPIC_API_ENDPOINT;
+    let endpoint = crate::documents::inference_defaults::ANTHROPIC_API_ENDPOINT;
     let mut backend = base_backend();
     backend.provider_kind = BackendProviderKind::AnthropicApiKey;
     backend.endpoint = endpoint.into();

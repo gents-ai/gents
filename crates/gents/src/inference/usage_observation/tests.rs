@@ -5,6 +5,8 @@ use defra_node::Node as EmbeddedNode;
 use gents_loop::account_usage::{UsageReport, UsageSource, UsageWindow};
 use serde_json::{json, Value};
 
+use crate::inference::backends::registry::backend_fields;
+
 use super::*;
 use crate::inference::auth::credential::{
     oauth_credential_id, resolve_oauth_credential, test_support, upsert_oauth_credential,
@@ -1233,7 +1235,7 @@ fn usage_account_for_backend_follows_node_oauth() {
             provider: "XaiGrokOAuth".to_string(),
             backend_id: "backend-usage-a".to_string(),
             connection: crate::inference::admission::backend_connection_fingerprint(
-                &api_key.backend_fields()
+                &backend_fields(&api_key)
             ),
         }
     );

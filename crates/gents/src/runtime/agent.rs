@@ -7,6 +7,7 @@ use anyhow::Context as _;
 use defra_node::Node as EmbeddedNode;
 use tokio::sync::watch;
 
+use crate::inference::backends::registry::backend_fields;
 use crate::documents::inference_defaults::{
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
@@ -619,7 +620,7 @@ pub(crate) fn agent_config_from_documents(
     if let Some(config) = &compaction {
         config.validate()?;
     }
-    let backend = inference.backend.backend_fields();
+    let backend = backend_fields(&inference.backend);
     let resolved_max_turns = inference.max_turns()?;
     anyhow::ensure!(
         agent_config.node_did == principal.node_did,

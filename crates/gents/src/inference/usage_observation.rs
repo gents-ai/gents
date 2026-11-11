@@ -5,6 +5,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::Node as EmbeddedNode;
+use crate::inference::backends::registry::backend_fields;
 pub use gents_loop::account_usage;
 use gents_loop::account_usage::{
     usage_from_headers, UsagePlan, UsageReport, UsageSource, READ_SKIP_WINDOW,
@@ -74,7 +75,7 @@ impl UsageAccount {
                 provider: backend.provider_kind.as_str().to_string(),
                 backend_id: backend.backend_id.clone(),
                 connection: crate::inference::admission::backend_connection_fingerprint(
-                    &backend.backend_fields(),
+                    &backend_fields(backend),
                 ),
             },
         }

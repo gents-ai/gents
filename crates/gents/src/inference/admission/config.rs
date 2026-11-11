@@ -4,7 +4,9 @@ use anyhow::Result;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
-use crate::inference::backends::registry::{BackendFields, InferenceBackend, HEALTHY_PROBE_STATUS};
+use crate::inference::backends::registry::{
+    backend_fields, BackendFields, InferenceBackend, HEALTHY_PROBE_STATUS,
+};
 
 const BACKEND_CONFIG_FINGERPRINT_TAG: &str = "gents-backend-admission-config-v1";
 const BACKEND_CONNECTION_FINGERPRINT_TAG: &str = "gents-backend-connection-v1";
@@ -80,7 +82,7 @@ impl BackendAdmissionConfig {
         let max_concurrent = usize::try_from(backend.effective_max_concurrent())?;
         let max_queue_depth = usize::try_from(backend.effective_max_queue_depth())?;
         // The observation must come from the same owner-scoped document lookup.
-        let fields = backend.backend_fields();
+        let fields = backend_fields(backend);
         let fingerprint_inputs = (
             BACKEND_CONFIG_FINGERPRINT_TAG,
             &backend.node_did,

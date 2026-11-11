@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use defra_node::Node as EmbeddedNode;
 use tokio_util::sync::CancellationToken;
 
-use crate::inference::backends::registry::{InferenceBackend, UNKNOWN_PROBE_STATUS};
+use crate::inference::backends::registry::{backend_fields, InferenceBackend, UNKNOWN_PROBE_STATUS};
 
 use super::oauth::{oauth_credential_for_probe, OAuthProbeContext};
 use super::{
@@ -54,7 +54,7 @@ impl ProbeSchedule {
 
 pub(super) fn probe_configuration_fingerprint(backend: &InferenceBackend) -> String {
     let connection =
-        crate::inference::admission::backend_connection_fingerprint(&backend.backend_fields());
+        crate::inference::admission::backend_connection_fingerprint(&backend_fields(backend));
     format!(
         "{connection}:connect={:?}:discovery={:?}",
         backend.connect_timeout_secs, backend.discovery_timeout_secs

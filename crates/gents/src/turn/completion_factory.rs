@@ -6,6 +6,7 @@ use serde::Deserialize;
 use crate::documents::inference_defaults::ReasoningEffort;
 use crate::inference::admission::{AdmissionRegistry, AdmittedCompletionModel};
 use crate::inference::backends::provider::BackendProviderKind;
+use crate::inference::backends::registry::backend_fields;
 use crate::inference::connection_fingerprint::agent_connection_fingerprint;
 use crate::inference::rendered_request::CaptureScopeKind;
 use crate::inference::resolved::ResolvedAgent;
@@ -704,7 +705,7 @@ pub(crate) async fn build_compaction_engine(
     );
     inference.backend.validate()?;
     let mut summary = agent_config.clone();
-    let backend = inference.backend.backend_fields();
+    let backend = backend_fields(&inference.backend);
     summary.backend_id = backend.backend_id;
     summary.backend_provider_kind = backend.backend_provider_kind;
     summary.openai_wire_api = backend.openai_wire_api;

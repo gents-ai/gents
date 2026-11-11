@@ -10,6 +10,7 @@ pub(crate) type AgentFactory =
     Box<dyn FnOnce(Arc<RuntimeNode>) -> std::result::Result<ResolvedAgent, AgentBuildError> + Send>;
 
 use super::{assemble_node_and_agents, runtime, AgentBuildError, Gents, ProcessLifecycleObserver};
+use crate::inference::backends::registry::backend_fields;
 use crate::documents::inference_defaults::{
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
@@ -612,7 +613,7 @@ impl PendingAgent {
         }
 
         let agent_name = self.name.clone();
-        let backend_fields = backend.backend_fields();
+        let backend_fields = backend_fields(&backend);
         let tool_ceiling = tool_ceiling.clone();
 
         Ok(Box::new(move |principal| {

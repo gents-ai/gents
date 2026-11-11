@@ -13,8 +13,6 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;
 
-pub const DEFAULT_MAX_CONCURRENT: i64 = 1;
-pub const DEFAULT_MAX_QUEUE_DEPTH: i64 = 100;
 pub const HEALTHY_PROBE_STATUS: &str = "healthy";
 pub const UNKNOWN_PROBE_STATUS: &str = "unknown";
 
@@ -30,157 +28,17 @@ pub struct BackendFields {
 
 pub(crate) const BACKEND_CONFIG_FIELDS: &str = "node_did backend_id name provider_kind openai_wire_api endpoint auth_kind credential_id credential_version environment_variable oauth_account_ref oauth_allow_overage claude_platform connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled tags";
 
-impl InferenceBackend {
-    fn metadata_from_value(value: &serde_json::Value) -> Result<Self> {
-        let mut config = value.clone();
-        let object = config
-            .as_object_mut()
-            .context("backend metadata must be an object")?;
-        for field in [
-            "_docID",
-            "_deleted",
-            "updated_at",
-            "catalogs",
-            "catalog_freshness",
-            "probe_status",
-            "last_probe",
-        ] {
-            object.remove(field);
-        }
-        let metadata: crate::documents::InferenceBackendMetadata = serde_json::from_value(config)?;
-        let backend = metadata.into_backend()?;
-        backend.validate()?;
-        Ok(backend)
-    }
-
-    pub fn from_value(value: &serde_json::Value) -> Result<Self> {
-        let mut config = value.clone();
-        let object = config
-            .as_object_mut()
-            .context("InferenceBackend must be an object")?;
-        for field in [
-            "_docID",
-            "_deleted",
-            "updated_at",
-            "catalogs",
-            "catalog_freshness",
-            "probe_status",
-            "last_probe",
-        ] {
-            object.remove(field);
-        }
-        let backend: Self =
-            serde_json::from_value(config).context("decoding InferenceBackend configuration")?;
-        backend.validate()?;
-        Ok(backend)
-    }
-
-    pub fn backend_fields(&self) -> BackendFields {
-        BackendFields {
-            backend_id: Some(self.backend_id.clone()),
-            backend_provider_kind: self.provider_kind,
-            openai_wire_api: OpenAiWireApi::effective_for_provider(
-                self.provider_kind,
-                self.openai_wire_api,
-            ),
-            backend_endpoint: self.endpoint.clone(),
-            backend_auth: self.auth.clone(),
-            claude_platform: self.claude_platform.clone(),
-        }
-    }
-
-    pub fn effective_max_concurrent(&self) -> i64 {
-        self.max_concurrent.unwrap_or(DEFAULT_MAX_CONCURRENT)
-    }
-
-    pub fn effective_max_queue_depth(&self) -> i64 {
-        self.max_queue_depth.unwrap_or(DEFAULT_MAX_QUEUE_DEPTH)
-    }
-
-    pub fn validation_violations(&self) -> Vec<String> {
-        let mut violations = Vec::new();
-        for (name, value) in [
-            ("node_did", self.node_did.as_str()),
-            ("backend_id", self.backend_id.as_str()),
-            ("endpoint", self.endpoint.as_str()),
-        ] {
-            if value.trim().is_empty() {
-                violations.push(format!("{name} must not be empty"));
-            }
-        }
-        if self.effective_max_concurrent() <= 0 {
-            violations.push("max_concurrent must be positive".into());
-        }
-        if self.effective_max_queue_depth() < 0 {
-            violations.push("max_queue_depth must not be negative".into());
-        }
-        for (name, value) in [
-            ("connect_timeout_secs", self.connect_timeout_secs),
-            ("discovery_timeout_secs", self.discovery_timeout_secs),
-        ] {
-            if value.is_some_and(|value| value <= 0) {
-                violations.push(format!("{name} must be positive"));
-            }
-        }
-        match &self.auth {
-            BackendAuth::ApiKey { key } if key.trim().is_empty() => {
-                violations.push("API key must not be blank".into())
-            }
-            BackendAuth::Environment { variable } if variable.trim().is_empty() => {
-                violations.push("API key environment variable must not be blank".into())
-            }
-            _ => {}
-        }
-        let node_oauth = self.auth.uses_node_oauth();
-        if (node_oauth && !self.provider_kind.accepts_node_oauth())
-            || (!node_oauth && self.provider_kind.is_node_scoped_oauth())
-            || !self.auth.suits_provider(self.provider_kind)
-        {
-            violations
-                .push("backend auth selection is incompatible with the provider adapter".into());
-        }
-        if let Err(error) =
-            ClaudePlatform::validate(self.provider_kind, self.claude_platform.as_ref())
-        {
-            violations.push(error.to_string());
-        }
-        if self.provider_kind.is_claude_platform()
-            && !(self.endpoint.starts_with("https://") || self.endpoint.starts_with("http://"))
-        {
-            violations.push("endpoint must be an http or https URL".into());
-        }
-        // The rotation policy reads Claude's unified rate-limit headers; no
-        // other provider adapter reports the limit state it chooses by.
-        if matches!(self.auth, BackendAuth::NodeOAuthPool { .. })
-            && self.provider_kind != BackendProviderKind::ClaudeCliSubscription
-        {
-            violations.push(
-                "account pools rotate Claude subscription accounts; select one account for this provider"
-                    .into(),
-            );
-        }
-        let anthropic_endpoint =
-            crate::inference::clients::claude_subscription::ANTHROPIC_API_ENDPOINT;
-        if self.provider_kind == BackendProviderKind::AnthropicApiKey
-            && self.endpoint.trim_end_matches('/') != anthropic_endpoint
-        {
-            violations.push(format!(
-                "AnthropicApiKey endpoint must be {anthropic_endpoint}; a different endpoint is not supported"
-            ));
-        }
-        violations
-    }
-
-    pub fn validate(&self) -> Result<()> {
-        let violations = self.validation_violations();
-        anyhow::ensure!(violations.is_empty(), "{}", violations.join("; "));
-        Ok(())
-    }
-
-    pub fn catalog_scope(&self) -> Option<&str> {
-        self.auth
-            .uses_node_oauth()
-            .then_some(self.node_did.as_str())
+pub fn backend_fields(backend: &InferenceBackend) -> BackendFields {
+    BackendFields {
+        backend_id: Some(backend.backend_id.clone()),
+        backend_provider_kind: backend.provider_kind,
+        openai_wire_api: OpenAiWireApi::effective_for_provider(
+            backend.provider_kind,
+            backend.openai_wire_api,
+        ),
+        backend_endpoint: backend.endpoint.clone(),
+        backend_auth: backend.auth.clone(),
+        claude_platform: backend.claude_platform.clone(),
     }
 }
 
@@ -576,8 +434,8 @@ async fn write_probe_observation(
                 if let Some((expected, expected_doc)) = expected {
                     anyhow::ensure!(metadata_doc == expected_doc, "backend was replaced during probe");
                     anyhow::ensure!(current.enabled &&
-                        crate::inference::admission::backend_connection_fingerprint(&current.backend_fields()) ==
-                        crate::inference::admission::backend_connection_fingerprint(&expected.backend_fields()),
+                        crate::inference::admission::backend_connection_fingerprint(&backend_fields(&current)) ==
+                        crate::inference::admission::backend_connection_fingerprint(&backend_fields(expected)),
                         "backend connection changed during probe");
                 }
                 let filter = scope_filter(node_did, backend_id)?;
@@ -636,9 +494,9 @@ pub(crate) async fn capture_backend_document(
                 anyhow::ensure!(
                     current.enabled
                         && crate::inference::admission::backend_connection_fingerprint(
-                            &current.backend_fields()
+                            &backend_fields(&current)
                         ) == crate::inference::admission::backend_connection_fingerprint(
-                            &backend.backend_fields()
+                            &backend_fields(backend)
                         ),
                     "backend connection changed"
                 );

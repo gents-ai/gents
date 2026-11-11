@@ -7,6 +7,8 @@ use gents_loop::account_usage::{UsageReport, UsageSource, UsageWindow};
 use gents_protocol::agent_identity::AgentIdentityBinding;
 use serde_json::{json, Value};
 
+use crate::inference::backends::registry::backend_fields;
+
 use super::*;
 use crate::documents::write_inference_backend_document;
 use crate::documents::AdvertisedModel;
@@ -419,7 +421,7 @@ async fn next_turns_use_the_target_credentials() {
         let agent_did = fixture.agents[name].agent_did.as_str();
         let profile = &references.agent_profiles(agent_did)[0];
         let (_, backend) = references.profile_with_backend(profile).unwrap().unwrap();
-        let fields = backend.backend_fields();
+        let fields = backend_fields(&backend);
         assert_eq!(
             fields.backend_id.as_deref(),
             Some(fixture.backends["b"].as_str()),
