@@ -5277,6 +5277,7 @@ dependencies = [
  "caseless",
  "cc",
  "chrono",
+ "crypto",
  "cursor",
  "db",
  "defra-core",

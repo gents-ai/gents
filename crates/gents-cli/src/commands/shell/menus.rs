@@ -919,7 +919,7 @@ mod tests {
 
     #[tokio::test]
     async fn setting_the_default_and_turning_a_task_off_notice_what_changed() {
-        const OWNER: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
+        const OWNER: &str = gents_session::test_support::lineage_fixtures::FIXTURE_DID;
         let did = |name| crate::shared::test_support::fixture_agent_named(name).agent_did;
         let served = crate::shared::test_support::served_config(json!({
             "node": { "node_did": OWNER },

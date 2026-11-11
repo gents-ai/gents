@@ -599,7 +599,7 @@ mod tests {
     }
 
     /// The node `served_config` publishes a config's `owner` as.
-    const OWNER: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
+    const OWNER: &str = gents_session::test_support::lineage_fixtures::FIXTURE_DID;
 
     /// The owner's `collection` documents, whole, as the store reads them back.
     async fn stored(access: &ConfigAccess, collection: Collection) -> Vec<Value> {

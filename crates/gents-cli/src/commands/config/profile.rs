@@ -434,7 +434,7 @@ mod tests {
             .expect("warning");
         assert!(warning.contains("profile grok"), "{warning}");
     }
-    const DID: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
+    const DID: &str = gents_session::test_support::lineage_fixtures::FIXTURE_DID;
     const CLAUDE: &str = "claude-subscription";
 
     fn agent(name: &str) -> gents_protocol::agent_identity::AgentIdentityBinding {
@@ -504,7 +504,7 @@ mod tests {
         crate::shared::test_support::publish_test_node(&node).await;
         let access = ConfigAccess::local_as(
             node,
-            ::identity::Did::new(crate::caused_sessions::fixtures::FIXTURE_DID).unwrap(),
+            ::identity::Did::new(gents_session::test_support::lineage_fixtures::FIXTURE_DID).unwrap(),
         );
         for value in [
             backend(

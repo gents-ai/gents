@@ -39,7 +39,7 @@ const WAIT: Duration = Duration::from_secs(10);
 const SHORT_WAIT: Duration = Duration::from_secs(1);
 
 /// The fixture runtime the nodes here run as.
-pub(super) const OWNER: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
+pub(super) const OWNER: &str = gents_session::test_support::lineage_fixtures::FIXTURE_DID;
 
 /// The DID a fixture's Agent named `name` takes.
 pub(super) fn did(name: &str) -> String {
@@ -519,7 +519,7 @@ impl ChatNode {
             session_id: request.session_id.clone().unwrap(),
             requester_did: Some(OWNER.to_string()),
         };
-        let mut session = crate::caused_sessions::fixtures::fixture_session(OWNER, child);
+        let mut session = gents_session::test_support::lineage_fixtures::fixture_session(OWNER, child);
         session.agent_did = did(agent);
         session.created_at = self.next_at();
         let mut provenance = SessionProvenance {
@@ -551,7 +551,7 @@ impl ChatNode {
             }),
             signature: Vec::new(),
         };
-        let signer = crate::caused_sessions::fixtures::fixture_signer();
+        let signer = gents_session::test_support::lineage_fixtures::fixture_signer();
         receipt.signature = signer.sign(&receipt.signing_payload()).await.unwrap();
         provenance.creation_receipt = Some(receipt);
         let input = json!({ "provenance": provenance });
@@ -3435,7 +3435,7 @@ async fn filed(
         parent_item_id: None,
         deadline_at: None,
     };
-    let root = crate::caused_sessions::fixtures::fixture_signer();
+    let root = gents_session::test_support::lineage_fixtures::fixture_signer();
     let binding = crate::shared::test_support::fixture_agent_named("engineer");
     let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
     let actor = ::identity::Did::new(agent.did()).unwrap();

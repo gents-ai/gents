@@ -161,6 +161,7 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Syste
 [dev-dependencies]
 gents = { path = "../gents", features = ["test-home-guard"] }
 gents-service = { workspace = true, features = ["test-home-guard"] }
+gents-session = { workspace = true, features = ["test-fixtures"] }
 ctor = "0.2"
 acp.workspace = true
 crypto.workspace = true

@@ -27,7 +27,7 @@ pub(crate) async fn served_config(mut config: Value) -> Served {
     use gents_documents::apply_desired_state_plan;
     use gents_documents::DesiredStateApplyPlan;
     use gents_store::identity::NodeIdentity as _;
-    const OWNER: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
+    const OWNER: &str = gents_session::test_support::lineage_fixtures::FIXTURE_DID;
 
     if config["node"].is_null() {
         config["node"] = serde_json::json!({ "node_did": "owner" });
@@ -127,11 +127,11 @@ fn rename_placeholders(
 }
 
 /// A node whose runtime is the deterministic fixture signer
-/// (`caused_sessions::fixtures::FIXTURE_DID`), whose key this process holds.
+/// (`gents_session::test_support::lineage_fixtures::FIXTURE_DID`), whose key this process holds.
 pub(crate) fn fixture_node_builder() -> defra_node::NodeBuilder {
     use gents_store::identity::NodeIdentity as _;
 
-    let signer = crate::caused_sessions::fixtures::fixture_signer();
+    let signer = gents_session::test_support::lineage_fixtures::fixture_signer();
     defra_node::Node::builder().with_node_identity_did(signer.did())
 }
 
@@ -147,7 +147,7 @@ pub(crate) fn fixture_agent_named(
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
     let identity = gents_store::identity::derive_agent_identity(
-        &crate::caused_sessions::fixtures::fixture_signer(),
+        &gents_session::test_support::lineage_fixtures::fixture_signer(),
         &creation_nonce,
     )
     .unwrap();

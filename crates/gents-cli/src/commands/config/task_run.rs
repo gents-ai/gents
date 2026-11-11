@@ -276,7 +276,7 @@ mod tests {
     #[tokio::test]
     async fn run_now_uses_the_access_it_is_given() -> Result<()> {
         let home = tempfile::tempdir()?;
-        let did = crate::caused_sessions::fixtures::FIXTURE_DID.to_string();
+        let did = gents_session::test_support::lineage_fixtures::FIXTURE_DID.to_string();
         gents_service::home_state::write_init_config(
             home.path(),
             &gents_service::state::StoredInitConfig {

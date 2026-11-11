@@ -1,3 +1,5 @@
+pub mod lineage_fixtures;
+
 pub async fn publish_provider_message(
     writer: &crate::request::streaming::DefraStreamWriter,
     request: &crate::request::lifecycle::RequestLifecycle,

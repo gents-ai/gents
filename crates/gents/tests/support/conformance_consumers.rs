@@ -1274,10 +1274,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "an_unexercised_task_target_is_refused_before_any_job_or_trial_is_created",
         },
         ConformanceConsumer::RustTest {
-            id: "caused_sessions::tests::generated_plugin_job_lineage_cases_drive_caused_session_readers",
-            package: "gents-cli",
-            source_path: "crates/gents-cli/src/caused_sessions.rs",
-            module_path: "caused_sessions::tests",
+            id: "session::caused::tests::generated_plugin_job_lineage_cases_drive_caused_session_readers",
+            package: "gents-session",
+            source_path: "crates/gents-session/src/session/caused.rs",
+            module_path: "session::caused::tests",
             function: "generated_plugin_job_lineage_cases_drive_caused_session_readers",
         },
         ConformanceConsumer::RustTest {

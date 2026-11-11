@@ -1942,7 +1942,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "plugin_job_lineage_cases"
       "PluginJobLineageCases"
-      "caused_sessions::tests::generated_plugin_job_lineage_cases_drive_caused_session_readers")
+      "session::caused::tests::generated_plugin_job_lineage_cases_drive_caused_session_readers")
       "plugin-jobs" [Surface.operatorCli]
   , tagged (consumerCoverage
       "plugin_job_lineage_cases"

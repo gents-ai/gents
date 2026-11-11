@@ -281,7 +281,7 @@ mod tests {
     use super::*;
     use gents_inference::auth::credential::{set_account_enabled, store_sign_in};
 
-    const DID: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
+    const DID: &str = gents_session::test_support::lineage_fixtures::FIXTURE_DID;
     const CLAUDE: &str = "claude-subscription";
 
     fn claude_sign_in(who: &str) -> gents_inference::auth::credential::OAuthCredential {
@@ -314,7 +314,7 @@ mod tests {
         crate::shared::test_support::publish_test_node(&node).await;
         let access = ConfigAccess::local_as(
             node,
-            ::identity::Did::new(crate::caused_sessions::fixtures::FIXTURE_DID).unwrap(),
+            ::identity::Did::new(gents_session::test_support::lineage_fixtures::FIXTURE_DID).unwrap(),
         );
         for (id, kind, endpoint, auth) in [
             (

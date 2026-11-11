@@ -32,6 +32,7 @@ bs58 = "0.5"
 caseless = "0.2.2"
 unicode-normalization = "0.1.25"
 chrono.workspace = true
+crypto.workspace = true
 cursor.workspace = true
 defra-core.workspace = true
 gents-loop = { workspace = true, features = ["native"] }

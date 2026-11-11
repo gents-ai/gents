@@ -208,7 +208,7 @@ mod tests {
     use gents_documents::BackendAuth;
     use std::sync::Arc;
 
-    const OWNER: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
+    const OWNER: &str = gents_session::test_support::lineage_fixtures::FIXTURE_DID;
 
     async fn seed_backend(access: &ConfigAccess, backend: &InferenceBackend, status: Option<&str>) {
         crate::shared::test_support::publish_test_node_as(

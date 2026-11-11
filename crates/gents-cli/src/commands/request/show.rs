@@ -84,7 +84,7 @@ async fn load_request_show_snapshot(
     let tool_rows = value_array(&tool_response, "/data/AgentToolCall");
 
     let access = ConfigAccess::Graphql(graphql.clone());
-    let child_requests = crate::caused_sessions::started_by_request(&access, &canonical_request)
+    let child_requests = gents_session::session::caused::started_by_request(&access, &canonical_request)
         .await
         .with_context(|| format!("loading sessions started by {request_id}"))?
         .into_iter()

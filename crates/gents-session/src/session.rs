@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use gents_store::graphql::escape_graphql_string;
 
 mod archive;
+pub mod caused;
 pub mod mailbox;
 pub mod message;
 pub mod origin;
