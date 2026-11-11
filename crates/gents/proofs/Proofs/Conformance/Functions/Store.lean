@@ -7,6 +7,6 @@ deriving instance Lean.ToJson for GrantSet
 
 attribute [conformance_vocabulary] GrantSet.name
 
-attribute [conformance_function] GrantSet.nativeAdmin
+attribute [conformance_function] GrantSet.nativeAdmin GrantSet.permissions
 
 end Identity.GrantSets

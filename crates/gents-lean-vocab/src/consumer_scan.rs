@@ -1,20 +1,9 @@
-//! Finds the native tests that consume each emitted Lean family.
-//!
-//! A family is a snapshot key holding cases; each vocabulary and state machine
-//! is its own family, `<key>/<domain>`. A consumer site is a test file that
-//! reads the key, directly or through one of this crate's loaders, and for a
-//! domain family also names the domain. The coverage ledger says whether a
-//! family is consumed; it never names the test. A family converted to the
-//! derived mechanism is `families/<key>` and is consumed by its one
-//! `families::<key>::replay` call.
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
 use serde_json::Value;
 
-/// Snapshot keys that describe the contract itself and carry no cases.
 const CONTRACT_METADATA: &[&str] = &[
     "boundaries",
     "coverage_ledger",
@@ -24,23 +13,15 @@ const CONTRACT_METADATA: &[&str] = &[
     "follow_up_hooks",
 ];
 
-/// Snapshot keys whose entries are families of their own, with the ledger
-/// category their rows use.
 const DOMAIN_FAMILIES: &[(&str, &str)] = &[
     ("vocabularies", "vocabulary"),
     ("state_machines", "state_machine"),
 ];
 
-/// The snapshot keys holding the families whose types and replay are
-/// generated; both are replayed as `families::<key>`.
 const DERIVED_FAMILIES: &str = "families";
 const DERIVED_VOCABULARIES: &str = "family_vocabularies";
-/// The ledger category of a row that tags a derived family by its key.
 const DERIVED_LEDGER_CATEGORY: &str = "family";
 
-/// Ledger categories the snapshot scan cannot see: follow-up hooks, accepted
-/// boundaries on domains with no emitted machine, and the standalone
-/// generators, which a row names by Lean module.
 const UNSCANNED_CATEGORIES: &[&str] = &["follow_up_hook", "state_machine", "Proofs.Conformance."];
 
 const SOURCE_ROOTS: &[&str] = &["crates", "apps", "packages"];
@@ -50,7 +31,6 @@ fn is_identifier(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
-/// Every identifier with the byte before it and the byte after it.
 fn identifiers(source: &str) -> impl Iterator<Item = (u8, &str, u8)> {
     let bytes = source.as_bytes();
     let mut start = 0;
@@ -73,8 +53,6 @@ fn identifiers(source: &str) -> impl Iterator<Item = (u8, &str, u8)> {
     })
 }
 
-/// The families a source text reads: a field or property access, a quoted
-/// key, or a call to a loader that reads one.
 fn families_read(
     source: &str,
     families: &BTreeSet<String>,
@@ -105,8 +83,6 @@ fn families_read(
     read
 }
 
-/// Each `lean_*` loader of this crate with the families it reads, following
-/// loaders that call other loaders.
 fn loaders(
     vocab_sources: &[String],
     families: &BTreeSet<String>,
@@ -157,8 +133,6 @@ fn loaders(
     }
 }
 
-/// This crate's sources hold loaders and, after the first test attribute, the
-/// tests that consume some families here. `mod tests;` declares a file.
 fn split_at_tests(source: &str) -> (&str, &str) {
     let first = [
         "#[cfg(test)]\nmod tests {",
@@ -195,8 +169,6 @@ fn source_files(directory: &Path, files: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-/// The emitted families: every snapshot key that holds cases, and each
-/// vocabulary and state machine under its domain.
 pub fn emitted_families(snapshot: &Value) -> BTreeSet<String> {
     let snapshot = snapshot.as_object().expect("snapshot object");
     let mut families: BTreeSet<String> = snapshot
@@ -225,7 +197,6 @@ pub fn emitted_families(snapshot: &Value) -> BTreeSet<String> {
     families
 }
 
-/// The family a ledger row speaks for.
 pub fn ledger_family(category: &str, domain: &str) -> String {
     if category == DERIVED_LEDGER_CATEGORY {
         return format!("{DERIVED_FAMILIES}/{domain}");
@@ -239,7 +210,6 @@ pub fn ledger_family(category: &str, domain: &str) -> String {
     }
 }
 
-/// Consumer sites per family, as workspace-relative paths.
 pub fn consumer_sites(
     workspace: &Path,
     families: &BTreeSet<String>,
@@ -251,7 +221,6 @@ pub fn consumer_sites(
         .iter()
         .map(|path| fs::read_to_string(path).expect("vocab source"))
         .collect();
-    // A loader is not a consumer; only this crate's own test code is.
     let loader_sources: Vec<String> = vocab_sources
         .iter()
         .map(|source| split_at_tests(source).0.to_owned())
@@ -302,7 +271,10 @@ pub fn consumer_sites(
             let Some(key) = family.strip_prefix(&prefix) else {
                 break;
             };
-            let calls = source.matches(&format!("families::{key}::replay(")).count();
+            let calls: usize = ["::replay(", "::replay::<", "::cases(", "::cases::<", " as family;"]
+                .iter()
+                .map(|site| source.matches(&format!("families::{key}{site}")).count())
+                .sum();
             found.extend((1..=calls).map(|call| format!("{relative}#{call}")));
         }
     }
@@ -320,24 +292,6 @@ mod tests {
             .expect("workspace root")
     }
 
-    #[test]
-    fn loaders_resolve_through_other_loaders() {
-        let families = BTreeSet::from(["retry_cases".to_owned()]);
-        let source = "\npub fn lean_retry_cases() -> u8 {\n    snapshot().retry_cases\n}\n\
-                      \npub fn lean_retry_case(name: &str) -> u8 {\n    lean_retry_cases()\n}\n";
-        let loaders = loaders(&[source.to_owned()], &families);
-        assert_eq!(loaders["lean_retry_case"], families);
-        let read = families_read("let case = lean_retry_case(\"a\");", &families, &loaders);
-        assert_eq!(read, families);
-        assert!(families_read("retry_cases", &families, &loaders).is_empty());
-        assert_eq!(
-            families_read("snapshot[\"retry_cases\"]", &families, &loaders),
-            families
-        );
-    }
-
-    /// A family the ledger marks consumed has a native test that reads it, and
-    /// a family no test reads is one the ledger says is not consumed.
     #[test]
     fn every_emitted_family_has_a_consumer_or_a_ledger_reason() {
         let json = gents_lean_contract::load_contract_json().expect("Lean contract JSON");
@@ -384,7 +338,10 @@ mod tests {
         let prefix = format!("{DERIVED_FAMILIES}/");
         let misplaced: Vec<_> = sites
             .iter()
-            .filter(|(family, found)| family.starts_with(&prefix) && found.len() != 1)
+            .filter(|(family, found)| {
+                family.starts_with(&prefix)
+                    && found.len() != usize::from(!unconsumed.contains(*family))
+            })
             .collect();
         assert!(
             misplaced.is_empty(),

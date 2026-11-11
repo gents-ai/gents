@@ -1,9 +1,9 @@
 import Proofs.Documents.ApplyReconcile.Publication
-import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Family
 import Mathlib.Data.Finset.Card
 namespace ApplyReconcile.ContractCases
 
-open Conformance.Contracts
+open Conformance Lean
 
 private def manifestOf : List (DocRef × DesiredFields) → Manifest
   | [] => ⟨fun _ => none, ∅, by simp⟩
@@ -66,53 +66,82 @@ example : (manifestOf independentOwners).referencesClosed = true := by decide
 example : (manifestOf sameLabels).referencesClosed = true := by decide
 example : (manifestOf sameLabels).support.card = 4 := by decide
 
-private def docRefJson (d : DocRef) : String :=
-  "{\"collection\":" ++ jsonString (ConfigDocuments.Collection.collectionName d.collection)
-    ++ ",\"id\":" ++ jsonString d.id
-    ++ ",\"node_did\":" ++ jsonString d.nodeDid ++ "}"
+deriving instance ToJson for ConfigDocuments.Collection, DocRef, DesiredFields
 
-private def desiredJson (keys : List DocRef) (desired : DocRef → Option DesiredFields) : String :=
-  jsonArray (keys.filterMap fun d => (desired d).map fun f =>
-    "{\"ref\":" ++ docRefJson d
-      ++ ",\"content\":" ++ jsonString f.content ++ ",\"refs\":"
-      ++ jsonArray ((keys.filter (fun r => r ∈ f.refs)).map docRefJson) ++ "}")
+structure Desired where
+  doc : DocRef
+  content : String
+  refs : List DocRef
+  deriving ToJson
 
-private def liveJson (keys : List DocRef) (live : DocRef → Option LiveFields) : String :=
-  jsonArray (keys.filterMap fun d => (live d).map fun value =>
-    "{\"ref\":" ++ docRefJson d ++ ",\"value\":" ++ jsonString value ++ "}")
+structure Content where
+  doc : DocRef
+  content : Option String
+  deriving ToJson
 
-private def scenarioJson (name : String) (entries : List (DocRef × DesiredFields)) : String :=
-  let prior := manifestOf [row .skill "retained-before-publication"]
-  let candidate := manifestOf entries
-  let keys : List DocRef := ([(⟨.skill, "retained-before-publication", "did:owner"⟩ : DocRef), ⟨.agentContext, "absent", "did:owner"⟩]
+structure Expected where
+  doc : DocRef
+  fields : Option DesiredFields
+  deriving ToJson
+
+structure Observation where
+  doc : DocRef
+  value : Option String
+  deriving ToJson
+
+private def desiredRows (rows : List (DocRef × DesiredFields)) : List Desired :=
+  rows.map fun (d, f) => { doc := d, content := f.content, refs := f.refs }
+
+private def manifestOfRows (rows : List Desired) : Manifest :=
+  manifestOf (rows.map fun r => (r.doc, { content := r.content, refs := r.refs }))
+
+private def contents (keys : List DocRef) (desired : DocRef → Option DesiredFields) :
+    List Content :=
+  keys.map fun d => { doc := d, content := (desired d).map (·.content) }
+
+structure PublishInput where
+  name : String
+  preDesired : List Desired
+  preLive : List Observation
+  candidate : List Desired
+  observe : List DocRef
+  deriving ToJson
+
+structure PublishOutput where
+  accepted : Bool
+  afterDesired : List Content
+  afterLive : List Observation
+  retryDesired : List Content
+  deriving ToJson
+
+private def publishInput (name : String) (entries : List (DocRef × DesiredFields)) :
+    PublishInput :=
+  let retained : DocRef := ⟨.skill, "retained-before-publication", "did:owner"⟩
+  let keys : List DocRef := ([retained, ⟨.agentContext, "absent", "did:owner"⟩]
     ++ entries.map Prod.fst ++ entries.flatMap (fun entry => entry.2.refs)).eraseDups
-  let old : LiveState := { desired := prior.docs, live := fun _ => some "runtime-observation" }
-  let after := publish old candidate
-  let retry := publish after candidate
-  "{\"name\":" ++ jsonString name
-    ++ ",\"accepted\":" ++ toString candidate.referencesClosed
-    ++ ",\"candidate\":" ++ desiredJson keys candidate.docs
-    ++ ",\"pre_desired\":" ++ desiredJson keys old.desired
-    ++ ",\"pre_live\":" ++ liveJson keys old.live
-    ++ ",\"expected_after_live\":" ++ liveJson keys after.live
-    ++ ",\"expected_after_desired\":" ++ desiredJson keys after.desired
-    ++ ",\"expected_retry_desired\":" ++ desiredJson keys retry.desired
-    ++ ",\"observations_preserved\":"
-      ++ toString (keys.all fun d => after.live d == old.live d) ++ "}"
+  { name := name
+    preDesired := desiredRows [row .skill "retained-before-publication"]
+    preLive := keys.map fun d => { doc := d, value := some "runtime-observation" }
+    candidate := desiredRows entries
+    observe := keys }
 
-def applyReconcileCasesJson : String :=
-  jsonArray (scenarios.map fun (name, entries) => scenarioJson name entries)
+@[conformance_family]
+def publishCases : Family PublishInput PublishOutput where
+  inputs := scenarios.map fun (name, entries) => publishInput name entries
+  model := fun i =>
+    let candidate := manifestOfRows i.candidate
+    let old : LiveState :=
+      { desired := (manifestOfRows i.preDesired).docs
+        live := fun d => (i.preLive.find? fun o => o.doc = d).bind (·.value) }
+    let after := publish old candidate
+    let retry := publish after candidate
+    { accepted := candidate.referencesClosed
+      afterDesired := contents i.observe after.desired
+      afterLive := i.observe.map fun d => { doc := d, value := after.live d }
+      retryDesired := contents i.observe retry.desired }
 
-private def boolJson (b : Bool) : String := if b then "true" else "false"
-
-private def expectedJson (rows : List (DocRef × Option DesiredFields)) : String :=
-  jsonArray (rows.map fun (d, f) =>
-    "{\"ref\":" ++ docRefJson d ++ ",\"content\":"
-      ++ (match f with | some x => jsonString x.content | none => "null") ++ "}")
-
-private def expectedFn (rows : List (DocRef × Option DesiredFields)) :
-    DocRef → Option DesiredFields :=
-  fun d => (rows.find? fun r => r.1 = d).bind Prod.snd
+private def expectedFn (rows : List Expected) : DocRef → Option DesiredFields :=
+  fun d => (rows.find? fun r => r.doc = d).bind (·.fields)
 
 private def ctx : DocRef := ⟨.agentContext, "context", "did:owner"⟩
 private def tools : DocRef := ⟨.tools, "tools", "did:owner"⟩
@@ -137,21 +166,39 @@ private def publishIfScenarios : List (String × List (DocRef × Option DesiredF
    ("expected_present_but_absent", [(absent, some { content := "x", refs := [] })]),
    ("empty_scope_is_publish", [])]
 
-private def publishIfScenarioJson (name : String)
-    (rows : List (DocRef × Option DesiredFields)) : String :=
-  let old : LiveState := { desired := (manifestOf priorRows).docs, live := fun _ => none }
-  let candidate := manifestOf candidateRows
-  let scope := rows.map Prod.fst
-  let after := publishIf old scope (expectedFn rows) candidate
-  let keys : List DocRef := [ctx, tools, absent]
-  "{\"name\":" ++ jsonString name
-    ++ ",\"expected\":" ++ expectedJson rows
-    ++ ",\"pre_desired\":" ++ desiredJson keys old.desired
-    ++ ",\"candidate\":" ++ desiredJson keys candidate.docs
-    ++ ",\"applied\":" ++ boolJson (expectationsHold old scope (expectedFn rows))
-    ++ ",\"expected_after_desired\":" ++ desiredJson keys after.desired ++ "}"
+structure PublishIfInput where
+  name : String
+  expected : List Expected
+  preDesired : List Desired
+  candidate : List Desired
+  observe : List DocRef
+  deriving ToJson
 
-def publishIfCasesJson : String :=
-  jsonArray (publishIfScenarios.map fun (name, rows) => publishIfScenarioJson name rows)
+structure PublishIfOutput where
+  applied : Bool
+  after : List Content
+  replayApplied : Bool
+  afterReplay : List Content
+  deriving ToJson
+
+@[conformance_family]
+def publishIfCases : Family PublishIfInput PublishIfOutput where
+  inputs := publishIfScenarios.map fun (name, rows) =>
+    { name := name
+      expected := rows.map fun (d, f) => { doc := d, fields := f }
+      preDesired := desiredRows priorRows
+      candidate := desiredRows candidateRows
+      observe := [ctx, tools, absent] }
+  model := fun i =>
+    let old : LiveState :=
+      { desired := (manifestOfRows i.preDesired).docs, live := fun _ => none }
+    let candidate := manifestOfRows i.candidate
+    let scope := i.expected.map (·.doc)
+    let after := publishIf old scope (expectedFn i.expected) candidate
+    let replay := publishIf after scope (expectedFn i.expected) candidate
+    { applied := expectationsHold old scope (expectedFn i.expected)
+      after := contents i.observe after.desired
+      replayApplied := expectationsHold after scope (expectedFn i.expected)
+      afterReplay := contents i.observe replay.desired }
 
 end ApplyReconcile.ContractCases

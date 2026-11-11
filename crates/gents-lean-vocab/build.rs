@@ -6,12 +6,17 @@ use std::path::PathBuf;
 
 use serde_json::Value;
 
-/// One family's Rust types. A Lean enum becomes a type parameter, so the
-/// production enum is the decoder and its serde names are the checked vocabulary.
 #[derive(Default)]
 struct Module {
     structs: BTreeMap<String, (String, Vec<String>)>,
+    bounds: BTreeMap<String, String>,
 }
+
+const KEYWORDS: &[&str] = &[
+    "as", "async", "await", "break", "const", "continue", "dyn", "else", "enum", "fn", "for", "if",
+    "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return", "static",
+    "struct", "trait", "type", "unsafe", "use", "where", "while",
+];
 
 impl Module {
     fn rust_type(&mut self, schema: &Value, enums: &mut Vec<String>) -> String {
@@ -38,10 +43,32 @@ impl Module {
         let name = schema["struct"].as_str().expect("family struct name");
         let mut used = Vec::new();
         let mut body = String::new();
+        let mut optional = false;
         for field in schema["fields"].as_array().expect("family struct fields") {
             let field_type = self.rust_type(&field[1], &mut used);
             let field_name = field[0].as_str().expect("family field name");
-            writeln!(body, "        pub {field_name}: {field_type},").unwrap();
+            if field[1].get("option").is_some() {
+                optional = true;
+                writeln!(
+                    body,
+                    "        #[serde(deserialize_with = \"crate::required_nullable\")]"
+                )
+                .unwrap();
+            }
+            let raw = if KEYWORDS.contains(&field_name) {
+                "r#"
+            } else {
+                ""
+            };
+            writeln!(body, "        pub {raw}{field_name}: {field_type},").unwrap();
+        }
+        used.sort();
+        if optional && !used.is_empty() {
+            let bounds: Vec<String> = used
+                .iter()
+                .map(|parameter| format!("{parameter}: serde::Deserialize<'de>"))
+                .collect();
+            self.bounds.insert(name.to_owned(), bounds.join(", "));
         }
         let rendered = generic(name, &used);
         for parameter in &used {
@@ -75,17 +102,14 @@ fn main() {
             .expect("family schema JSON");
 
     let mut out = String::new();
-    for (key, vocabulary) in &schema["vocabularies"] {
+    for key in schema["vocabularies"].keys() {
         assert!(
             !schema["functions"].contains_key(key),
             "family key {key} names a function and a vocabulary"
         );
-        let name = vocabulary["enum"].as_str().expect("vocabulary enum name");
         writeln!(
             out,
             "pub mod {key} {{\n    \
-             /// Checks that `all`, every value of the production enum, is Lean `{name}`\n    \
-             /// under the same wire names.\n    \
              pub fn replay<T>(all: &[T])\n    where\n        \
              T: serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,\n    {{\n        \
              crate::family::replay_vocabulary({key:?}, all)\n    }}\n}}"
@@ -97,22 +121,31 @@ fn main() {
         let mut enums = Vec::new();
         let input = module.rust_type(&family["input"], &mut enums);
         let output = module.rust_type(&family["output"], &mut enums);
+        enums.sort();
         writeln!(out, "pub mod {key} {{").unwrap();
         for (name, (body, parameters)) in &module.structs {
             writeln!(
                 out,
                 "    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]\n    \
-                 #[serde(deny_unknown_fields)]\n    pub struct {} {{\n{body}    }}",
+                 #[serde(deny_unknown_fields{})]\n    pub struct {} {{\n{body}    }}",
+                module
+                    .bounds
+                    .get(name)
+                    .map_or(String::new(), |bounds| format!(
+                        ", bound(deserialize = \"{bounds}\")"
+                    )),
                 generic(name, parameters)
             )
             .unwrap();
         }
         writeln!(
             out,
-            "    /// Replays every Lean case of `{key}` through the production owner.\n    \
-             pub fn replay<{parameters}>(run: impl Fn(&{input}) -> {output})\n    where\n        \
+            "    pub fn replay<{parameters}>(run: impl Fn(&{input}) -> {output})\n    where\n        \
              {input}: serde::de::DeserializeOwned,\n        {output}: serde::Serialize,\n    {{\n        \
-             crate::family::replay({key:?}, run)\n    }}\n}}",
+             crate::family::replay({key:?}, run)\n    }}\n    \
+             pub fn cases<{parameters}>() -> Vec<crate::family::Case<{input}, {output}>>\n    where\n        \
+             {input}: serde::de::DeserializeOwned,\n    {{\n        \
+             crate::family::cases({key:?})\n    }}\n}}",
             parameters = enums.join(", "),
         )
         .unwrap();

@@ -44,13 +44,4 @@ theorem runtime_access_requires_its_explicit_grant :
     Household.allowed 5 revokedRuntimeFixture "runtime" "configuration" "request" "read" = false ∧
     Household.allowed 5 revokedRuntimeFixture "runtime" "configuration" "request" "update" = false := by native_decide
 
-def requestAccessCasesJson : String :=
-  (Lean.toJson (["user", "runtime", "agent", "other"].flatMap fun actor =>
-    ["read", "update", "delete"].map fun permission => Lean.Json.mkObj
-      [("actor", Lean.toJson actor), ("permission", Lean.toJson permission),
-       ("expected", Lean.toJson (requestPermission actor permission)),
-       ("revoked_expected", Lean.toJson (Household.allowed 5 revokedRuntimeFixture actor "configuration" "request" permission)),
-       ("aborted_document", Lean.toJson (publish false).document)])).compress
-
-
 end Identity.NodeFileRequests

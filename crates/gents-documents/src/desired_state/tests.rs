@@ -1175,172 +1175,115 @@ async fn absent_expectations_are_checked_in_both_directions() -> Result<()> {
 
 #[tokio::test]
 async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
-    use gents_lean_vocab::lean_publish_if_cases;
+    use gents_lean_vocab::families::apply_reconcile_contract_cases_publish_if_cases as family;
 
-    fn doc_for(owner: &str, id: &str, content: &str) -> Value {
-        renamed(owner, id, content)
+    type DocRef = family::DocRef<String>;
+
+    fn doc_for(doc: &DocRef, content: &str) -> Value {
+        renamed(modeled_owner(&doc.node_did), &doc.id, content)
     }
 
-    fn authored_digest(owner: &str, id: &str, content: &str) -> Result<String> {
-        let (_, projected) = config_projection(
-            Collection::InferenceBackend,
-            Some(&doc_for(owner, id, content)),
-        )?;
-        desired_state_document_digest(&projected.context("projection")?)
+    fn plan_of(rows: &[family::Desired<String>]) -> Result<DesiredStateApplyPlan> {
+        DesiredStateApplyPlan::new(
+            rows.iter()
+                .map(|row| document(doc_for(&row.doc, &row.content)))
+                .collect(),
+        )
     }
 
-    let mut exercised = Vec::new();
-    for case in lean_publish_if_cases() {
-        let (access, _) = cas_node().await?;
-        let prior = case
-            .pre_desired
-            .iter()
-            .map(|row| {
-                document(doc_for(
-                    modeled_owner(&row.target.node_did),
-                    &row.target.id,
-                    &row.content,
-                ))
+    async fn publish(access: &ConfigAccess, plan: &DesiredStateApplyPlan) -> bool {
+        let outcome = access
+            .transact_write("test.cas.lean", |txn| {
+                Box::pin(async move {
+                    apply_desired_state_plan(txn, plan, &crate::test_support::AdmitAllProfiles)
+                        .await
+                })
             })
-            .collect::<Vec<_>>();
-        apply(&access, prior).await?;
+            .await;
+        if let Err(error) = &outcome {
+            assert!(stale_expectation(error).is_some(), "{error:#}");
+        }
+        outcome.is_ok()
+    }
 
-        let expected = case
+    async fn observe(
+        access: &ConfigAccess,
+        docs: &[DocRef],
+    ) -> Result<Vec<family::Content<String>>> {
+        let mut observed = Vec::new();
+        for doc in docs {
+            let (owner, id) = (modeled_owner(&doc.node_did), doc.id.clone());
+            let content = access
+                .transact_write("test.cas.read", |txn| {
+                    let id = id.clone();
+                    Box::pin(async move {
+                        anyhow::Ok(read_desired_state_document_in_txn(
+                            txn,
+                            Collection::InferenceBackend,
+                            owner,
+                            &id,
+                        )
+                        .await?
+                        .map(|live| live["name"].as_str().expect("backend name").to_owned()))
+                    })
+                })
+                .await?;
+            observed.push(family::Content {
+                doc: doc.clone(),
+                content,
+            });
+        }
+        Ok(observed)
+    }
+
+    for case in family::cases::<String>() {
+        let input = &case.input;
+        let (access, _) = cas_node().await?;
+        apply(
+            &access,
+            input
+                .pre_desired
+                .iter()
+                .map(|row| document(doc_for(&row.doc, &row.content)))
+                .collect(),
+        )
+        .await?;
+
+        let expected = input
             .expected
             .iter()
             .map(|row| {
                 let digest = row
-                    .content
-                    .as_deref()
-                    .map(|content| {
-                        authored_digest(
-                            modeled_owner(&row.target.node_did),
-                            &row.target.id,
-                            content,
-                        )
+                    .fields
+                    .as_ref()
+                    .map(|fields| {
+                        let (_, projected) = config_projection(
+                            Collection::InferenceBackend,
+                            Some(&doc_for(&row.doc, &fields.content)),
+                        )?;
+                        desired_state_document_digest(&projected.context("projection")?)
                     })
                     .transpose()?;
                 Ok(expectation(
-                    modeled_owner(&row.target.node_did),
-                    &row.target.id,
+                    modeled_owner(&row.doc.node_did),
+                    &row.doc.id,
                     digest,
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
-        let plan = DesiredStateApplyPlan::new(
-            case.candidate
-                .iter()
-                .map(|row| {
-                    document(doc_for(
-                        modeled_owner(&row.target.node_did),
-                        &row.target.id,
-                        &row.content,
-                    ))
-                })
-                .collect(),
-        )?
-        .with_expected(expected)?;
+        let plan = plan_of(&input.candidate)?.with_expected(expected)?;
 
-        let outcome = access
-            .transact_write("test.cas.lean", |txn| {
-                let plan = &plan;
-                Box::pin(async move {
-                    apply_desired_state_plan(
-                        txn,
-                        plan,
-                        &crate::test_support::AdmitAllProfiles,
-                    )
-                    .await
-                })
-            })
-            .await;
-        assert_eq!(outcome.is_ok(), case.applied, "case {}", case.name);
-        if let Err(error) = &outcome {
-            assert!(
-                stale_expectation(error).is_some(),
-                "case {}: {error:#}",
-                case.name
-            );
-        }
-
-        let mut after_first = Vec::new();
-        for row in &case.expected_after_desired {
-            let live =
-                live_digest(&access, modeled_owner(&row.target.node_did), &row.target.id).await?;
-            let want = authored_digest(
-                modeled_owner(&row.target.node_did),
-                &row.target.id,
-                &row.content,
-            )?;
-            assert_eq!(
-                live,
-                Some(want),
-                "case {} document {}",
-                case.name,
-                row.target.id
-            );
-            after_first.push(live);
-        }
-
-        if case.applied {
-            let replay_holds = case.expected.iter().all(|expectation| {
-                case.expected_after_desired
-                    .iter()
-                    .find(|row| row.target == expectation.target)
-                    .map(|row| row.content.as_str())
-                    == expectation.content.as_deref()
-            });
-            let replay = access
-                .transact_write("test.cas.lean.replay", |txn| {
-                    let plan = &plan;
-                    Box::pin(async move {
-                        apply_desired_state_plan(
-                            txn,
-                            plan,
-                            &crate::test_support::AdmitAllProfiles,
-                        )
-                        .await
-                    })
-                })
-                .await;
-            assert_eq!(
-                replay.is_ok(),
-                replay_holds,
-                "case {} replay: {replay:?}",
-                case.name
-            );
-            if let Err(error) = &replay {
-                assert!(
-                    stale_expectation(error).is_some(),
-                    "case {} replay: {error:#}",
-                    case.name
-                );
-            }
-            for (row, first) in case.expected_after_desired.iter().zip(&after_first) {
-                assert_eq!(
-                    live_digest(&access, modeled_owner(&row.target.node_did), &row.target.id)
-                        .await?,
-                    *first,
-                    "case {} document {} changed on replay",
-                    case.name,
-                    row.target.id
-                );
-            }
-        }
-        exercised.push(case.name.as_str());
+        let applied = publish(&access, &plan).await;
+        let after = observe(&access, &input.observe).await?;
+        let replay_applied = publish(&access, &plan).await;
+        let after_replay = observe(&access, &input.observe).await?;
+        case.check(family::PublishIfOutput {
+            applied,
+            after,
+            replay_applied,
+            after_replay,
+        });
     }
-    assert_eq!(
-        exercised,
-        [
-            "all_expectations_match",
-            "target_drifted",
-            "closure_document_drifted",
-            "expected_absent_but_present",
-            "expected_absent_and_absent",
-            "expected_present_but_absent",
-            "empty_scope_is_publish",
-        ]
-    );
     Ok(())
 }
 

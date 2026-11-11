@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
+use super::test_support::*;
 use super::*;
 use crate::identity::NodeIdentity;
-use super::test_support::*;
 
 pub(crate) fn recipient_sets(name: &str) -> Vec<GrantSet> {
     let case = gents_lean_vocab::lean_contract_snapshot()
@@ -24,11 +24,12 @@ fn sets_match_lean_owner() {
     families::identity_grant_sets_grant_set_native_admin::replay(|i| {
         GrantSet::native_admin(i.grant_set)
     });
-    for case in &gents_lean_vocab::lean_contract_snapshot().identity_grant_set_cases {
-        let set = set_named(&case.set);
-        let permissions: Vec<_> = set.permissions().iter().map(|p| p.as_str()).collect();
-        assert_eq!(permissions, case.permissions, "{}", case.set);
-    }
+    families::identity_grant_sets_grant_set_permissions::replay(|i| {
+        GrantSet::permissions(i.grant_set)
+            .iter()
+            .map(|permission| permission.as_str().to_owned())
+            .collect()
+    });
 }
 
 #[tokio::test]

@@ -79,8 +79,7 @@ async fn native_node_scoped_file_requests_match_modeled_access() -> anyhow::Resu
         })
         .await?;
     let node_doc = crate::graphql::created_doc_id(&node_response, "Node")?;
-    let cases = &gents_lean_vocab::lean_contract_snapshot().node_file_request_access_cases;
-    assert!(!cases.is_empty());
+    let cases = gents_lean_vocab::families::node_file_requests_access::cases();
     let schemas = [(
         "FileInventoryRequest",
         gents_protocol::schemas::FILE_INVENTORY_REQUEST,
@@ -161,40 +160,35 @@ async fn native_node_scoped_file_requests_match_modeled_access() -> anyhow::Resu
                 crate::graphql::escape_graphql_string(&abort_key)
             ))
             .await?;
-        assert_eq!(
-            !envelope_rows(&aborted_rows, name)?.is_empty(),
-            cases[0]["aborted_document"].as_bool().unwrap()
-        );
-        for case in cases {
-            let key = match case["actor"].as_str().unwrap() {
-                "user" => &user,
-                "runtime" => &runtime,
-                "agent" => &agent,
-                "other" => &other,
-                actor => panic!("unknown modeled actor {actor}"),
-            };
-            let permission = match case["permission"].as_str().unwrap() {
-                "read" => defra_node::DocumentPermission::Read,
-                "update" => defra_node::DocumentPermission::Update,
-                "delete" => defra_node::DocumentPermission::Delete,
-                permission => panic!("unknown modeled permission {permission}"),
-            };
+        let aborted_document = !envelope_rows(&aborted_rows, name)?.is_empty();
+        let key_of = |actor: &str| match actor {
+            "user" => &user,
+            "runtime" => &runtime,
+            "agent" => &agent,
+            "other" => &other,
+            actor => panic!("unknown modeled actor {actor}"),
+        };
+        let permission_of = |permission: &str| match permission {
+            "read" => defra_node::DocumentPermission::Read,
+            "update" => defra_node::DocumentPermission::Update,
+            "delete" => defra_node::DocumentPermission::Delete,
+            permission => panic!("unknown modeled permission {permission}"),
+        };
+        let mut granted = Vec::new();
+        for case in &cases {
+            let key = key_of(&case.input.actor);
             let allowed = node
                 .document_acp()
                 .check_doc_access(
                     &defra_node::AcpIdentity::Authenticated(key.did().parse()?),
-                    permission,
+                    permission_of(&case.input.permission),
                     gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
                     "configuration",
                     &doc,
                 )
                 .await?;
-            assert_eq!(
-                allowed,
-                case["expected"].as_bool().unwrap(),
-                "{name}: {case}"
-            );
-            if case["permission"] == "read" {
+            granted.push(allowed);
+            if case.input.permission == "read" {
                 let response = client(&url, key)?
                     .execute(&format!(
                         "{{ {name}(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ _docID status }} }}",
@@ -205,10 +199,18 @@ async fn native_node_scoped_file_requests_match_modeled_access() -> anyhow::Resu
                 assert_eq!(
                     !rows.is_empty(),
                     allowed,
-                    "native HTTP visibility for {name}: {case}"
+                    "native HTTP visibility for {name}: {} read",
+                    case.input.actor
                 );
             }
         }
+        let granted_to = |granted: &[bool], actor: &str, permission: &str| {
+            let case = cases
+                .iter()
+                .position(|case| case.input.actor == actor && case.input.permission == permission)
+                .expect("modeled access case");
+            granted[case]
+        };
         let runtime_access = client(&url, &runtime)?;
         let update = format!("mutation($input: {name}MutationInputArg!) {{ update_{name}(docID: \"{}\", input: $input) {{ _docID }} }}", crate::graphql::escape_graphql_string(&doc));
         let outsider = client(&url, &other)?;
@@ -233,14 +235,7 @@ async fn native_node_scoped_file_requests_match_modeled_access() -> anyhow::Resu
             }
             Err(_) => false,
         };
-        let outsider_update = cases
-            .iter()
-            .find(|case| case["actor"] == "other" && case["permission"] == "update")
-            .unwrap();
-        assert_eq!(
-            outsider_changed,
-            outsider_update["expected"].as_bool().unwrap()
-        );
+        assert_eq!(outsider_changed, granted_to(&granted, "other", "update"));
         let owner_observation = user_access
             .execute(&format!(
                 "{{ {name}(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ status }} }}",
@@ -263,14 +258,7 @@ async fn native_node_scoped_file_requests_match_modeled_access() -> anyhow::Resu
             .await?;
         let updated =
             crate::graphql::mutation_documents(&update_result, &format!("update_{name}"))?.unwrap();
-        let runtime_update = cases
-            .iter()
-            .find(|case| case["actor"] == "runtime" && case["permission"] == "update")
-            .unwrap();
-        assert_eq!(
-            updated.len() == 1,
-            runtime_update["expected"].as_bool().unwrap()
-        );
+        assert_eq!(updated.len() == 1, granted_to(&granted, "runtime", "update"));
         user_access
             .transact_write("test.file_request.revoke", |txn| {
                 let doc = &doc;
@@ -293,28 +281,34 @@ async fn native_node_scoped_file_requests_match_modeled_access() -> anyhow::Resu
                 crate::graphql::escape_graphql_string(&doc)
             ))
             .await?;
-        let runtime_read = cases
-            .iter()
-            .find(|case| case["actor"] == "runtime" && case["permission"] == "read")
-            .unwrap();
+        let mut granted_after_revocation = Vec::new();
+        for case in &cases {
+            let key = key_of(&case.input.actor);
+            granted_after_revocation.push(
+                node.document_acp()
+                    .check_doc_access(
+                        &defra_node::AcpIdentity::Authenticated(key.did().parse()?),
+                        permission_of(&case.input.permission),
+                        gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
+                        "configuration",
+                        &doc,
+                    )
+                    .await?,
+            );
+        }
         assert_eq!(
             !envelope_rows(&denied, name)?.is_empty(),
-            runtime_read["revoked_expected"].as_bool().unwrap()
+            granted_to(&granted_after_revocation, "runtime", "read")
         );
-        let still_allowed = node
-            .document_acp()
-            .check_doc_access(
-                &defra_node::AcpIdentity::Authenticated(runtime.did().parse()?),
-                defra_node::DocumentPermission::Update,
-                gents_protocol::schemas::AGENT_OWNERSHIP_POLICY_ID,
-                "configuration",
-                &doc,
-            )
-            .await?;
-        assert_eq!(
-            still_allowed,
-            runtime_update["revoked_expected"].as_bool().unwrap()
-        );
+        for (index, case) in cases.iter().enumerate() {
+            case.check(
+                gents_lean_vocab::families::node_file_requests_access::AccessOutput {
+                    allowed: granted[index],
+                    revoked_allowed: granted_after_revocation[index],
+                    aborted_document,
+                },
+            );
+        }
     }
     node.shutdown().await?;
     Ok(())
