@@ -30,7 +30,7 @@ pub use mutations::{
     upsert_schedule_on, upsert_skill_on, upsert_tool_service_registry_on, upsert_trigger_on,
     ManualTaskInvocation,
 };
-pub use mutations::{interrupt_request_on, RequestInterrupt};
+pub use mutations::interrupt_request_on;
 pub use mutations::{ConfigEditorDocument, ConfigEditorRevision};
 pub use mutations::{PeerMutationResult, SubmitRequestOptions, SubmittedRequest};
 pub use observe::{
@@ -60,8 +60,8 @@ pub use query::{
 pub use schema::subscribed_collection_names;
 pub use store::{
     folded_requests, queued_behind_turn, request_answer_owner, session_display_request,
-    session_order_key, session_summary_entries, session_turn_request, source_matches_node,
-    ClientStore, ClientStoreRows, SessionOrderKey, SessionSummaryEntry, TaskRecentRuns,
+    session_summary_entries, session_turn_request, source_matches_node, ClientStore,
+    ClientStoreRows, SessionSummaryEntry, TaskRecentRuns,
     TranscriptView,
 };
 pub use sync_projection::{

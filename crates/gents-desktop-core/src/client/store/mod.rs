@@ -9,9 +9,7 @@ mod turns;
 
 pub(crate) use indexing::sort_request_rows;
 
-pub use session_summaries::{
-    session_order_key, session_summary_entries, SessionOrderKey, SessionSummaryEntry,
-};
+pub use session_summaries::{session_summary_entries, SessionSummaryEntry};
 pub use turns::{
     folded_requests, queued_behind_turn, request_answer_owner, session_display_request,
     session_turn_request,
