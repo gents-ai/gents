@@ -371,7 +371,14 @@ mod tests {
                 Some(core.node_identity().did()),
             )
         };
-        let send = || core.prepare_user_message_input(&node_did, "chat", RequestInput::default());
+        let send = || {
+            core.prepare_user_message_input_with_delivery(
+                &node_did,
+                "chat",
+                RequestInput::default(),
+                QueueDelivery::Steer,
+            )
+        };
         let refused = |result: Result<RequestInput>,
                        expected: gents_automation::goal::GoalInputRefused| {
             let error = result.expect_err("an unknown Goal state refuses the send");

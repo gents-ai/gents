@@ -100,7 +100,12 @@ async fn message_preparation_uses_the_hosted_head_when_the_replica_lags() -> Res
     .await?;
     assert!(core.store().snapshot().requests.is_empty());
     let input = core
-        .prepare_user_message_input(node_did, "hosted-session", Default::default())
+        .prepare_user_message_input_with_delivery(
+            node_did,
+            "hosted-session",
+            Default::default(),
+            gents_protocol::request_input::QueueDelivery::Steer,
+        )
         .await?;
     let queue = input.queue.context("prepared user queue")?;
     assert_eq!(
