@@ -8208,6 +8208,100 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
     assert_eq!(preview.is_ok(), no_source_change, "{preview:?}");
 }
 
+/// `pack wire` writes the Tools and Context the agent selects, so it reaches
+/// every agent that selects them: with the pack grant alone it is refused for
+/// a Tools a sibling shares, as a Tools edit is, and the catalog grant wires
+/// it.
+#[tokio::test]
+async fn pack_wire_into_a_shared_tools_needs_the_catalog_grant() {
+    let (workspace, artifact, archive) =
+        crate::pack::plugin_lifecycle::tests::fixture("1.0.0", false);
+    let home = tempfile::tempdir().unwrap();
+    let plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+        home.path().to_owned(),
+    )));
+    let fixture = SelfConfigFixture::new("shared-pack-wire").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_pack_install().await;
+    // The sharing guard counts the referrers the caller can read.
+    fixture.grant_node_reader().await;
+    fixture.publish_workspace_root(workspace.path()).await;
+    let tools_for = |categories: &[&str]| {
+        let mut cfg = config(categories);
+        cfg.agent_did = fixture.agent_did().to_owned();
+        cfg.enable_pack_install = true;
+        cfg.process_ceiling.file_mode = crate::tools::surface::FileToolMode::ReadOnly;
+        cfg.process_ceiling.root = Some(workspace.path().to_owned());
+        fixture.tools_with_plugins(&cfg, plugins.clone())
+    };
+    let tools = tools_for(&["tools", "agent"]);
+    // Reading the local pack file takes the agent's own file tools.
+    tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .unwrap()
+        .call(json!({"argv":["tools","update"],"set":{"host":{"root":workspace.path(),"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}}).to_string())
+        .await
+        .unwrap();
+    config_call(
+        &tools,
+        &[
+            "pack",
+            "install",
+            artifact.to_str().unwrap(),
+            "--digest",
+            archive.digest(),
+        ],
+    )
+    .await
+    .unwrap();
+
+    let sibling = fixture.install_sibling("sibling-agent").await;
+    let rows = fixture
+        .user_access
+        .execute(&format!(
+            r#"{{ AgentContext(filter: {{context_id: {{_eq: "{}:context"}}}}) {{ _docID }} }}"#,
+            crate::store::graphql::escape_graphql_string(&sibling)
+        ))
+        .await
+        .unwrap();
+    let doc = rows["data"]["AgentContext"][0]["_docID"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the sibling has a Context: {rows}"))
+        .to_owned();
+    let shared = format!("{}:tools", fixture.agent_did());
+    fixture
+        .user_access
+        .transact_write("test.pack_wire.share_tools", |txn| {
+            let (doc, shared) = (&doc, &shared);
+            Box::pin(async move {
+                txn.execute_client_signed_update(
+                    &format!(
+                        r#"mutation($input: AgentContextMutationInputArg!) {{ update_AgentContext(docID: "{}", input: $input) {{ _docID }} }}"#,
+                        crate::store::graphql::escape_graphql_string(doc)
+                    ),
+                    &json!({"input": {"tools_id": shared}}),
+                    gents_protocol::schemas::AGENT_CONTEXT,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+
+    let wire = ["pack", "wire", "fixture/native_echo_pack"];
+    let refused = config_call(&tools, &wire).await.unwrap_err().to_string();
+    assert!(refused.contains("agent catalog grant"), "{refused}");
+    let unchanged = config_call(&tools, &["tools", "get"]).await.unwrap();
+    assert!(!unchanged.contains("native_echo"), "{unchanged}");
+
+    let catalog = tools_for(&["tools", "agent", "node"]);
+    let wired: Value = serde_json::from_str(&config_call(&catalog, &wire).await.unwrap()).unwrap();
+    assert_eq!(wired["committed"], true, "{wired}");
+    let selected = config_call(&catalog, &["tools", "get"]).await.unwrap();
+    assert!(selected.contains("fixture/native_echo"), "{selected}");
+}
+
 #[tokio::test]
 async fn native_pack_local_install_inspection_selection_and_digest_fence() {
     let (workspace, artifact, archive) =
