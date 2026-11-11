@@ -36,6 +36,9 @@ export type ChatDraft = {
    * `CHAT_SEND_DEADLINE_MS`). It is saved with the payload, so every window
    * derives the same status: pending until it passes, failed after. */
   pendingUntil?: number;
+  /** When the person sent it (epoch ms): its place among the session's
+   * kept sends. */
+  composedAt?: number;
   /** Why the last send failed, shown with Retry: the cause and, when the
    * bridge classified it, its typed error (storage full names a recovery). */
   failure?: { message: string; error: BridgeErrorPayload | null };
@@ -105,6 +108,8 @@ function decode(value: unknown): ChatDraft {
     Number.isFinite(value.pendingUntil)
   )
     draft.pendingUntil = value.pendingUntil;
+  if (typeof value.composedAt === "number" && Number.isFinite(value.composedAt))
+    draft.composedAt = value.composedAt;
   if (object(value.failure) && typeof value.failure.message === "string")
     draft.failure = {
       message: value.failure.message,

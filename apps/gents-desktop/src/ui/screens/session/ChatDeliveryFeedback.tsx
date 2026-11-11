@@ -2,7 +2,7 @@ import type {
   ChatSendRequest,
   MailboxItemView,
 } from "@source-inc/gents-desktop-client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 import { Button } from "@gents/ui/components/button";
 import { errorWords } from "../../../lib/reasonText";
@@ -26,10 +26,18 @@ import {
 } from "../../../hooks/chatDrafts";
 import {
   deliveryAffordances,
+  drawnInTranscript,
   sendStatus,
+  transcriptSends,
   type SendStatus,
+  type TranscriptSend,
 } from "../../../hooks/chatDeliveryView";
 import { useSendDeadlineClock } from "../../../hooks/sendDeadlineClock";
+import {
+  heldFor,
+  sessionHoldsRequest,
+  useSessionValue,
+} from "../../../hooks/sessionStore";
 
 function description(draft: ChatDraft) {
   if (draft.mailbox) return draft.mailbox.summary;
@@ -64,6 +72,11 @@ export function ChatDeliveryFeedback({
   const readError = stores.chat.use.chatDraftError();
   const sending = stores.chat.use.sending();
   const now = useSendDeadlineClock(stores.chat);
+  /* the open session's transcript draws its own sends */
+  const transcript = useSessionValue(
+    stores.session,
+    (state) => !mailboxItem && heldFor(state.session, sessionId, nodeDid) !== null,
+  );
   useEffect(() => {
     const reload = () => stores.chat.setState(loadChatDrafts());
     window.addEventListener("storage", reload);
@@ -85,18 +98,96 @@ export function ChatDeliveryFeedback({
         nodeDid,
         sessionId,
         mailboxItem?.itemId ?? null,
-      ).map((draft) => {
-        const status = sendStatus(draft, now);
-        return (
-          <SavedMessage
-            key={draft.requestId}
-            draft={draft}
-            status={status}
-            disabled={sending || status === "pending"}
-          />
-        );
-      })}
+      )
+        .filter(
+          (draft) => !(transcript && drawnInTranscript(draft, nodeDid, sessionId)),
+        )
+        .map((draft) => {
+          const status = sendStatus(draft, now);
+          return (
+            <SavedMessage
+              key={draft.requestId}
+              draft={draft}
+              status={status}
+              disabled={sending || status === "pending"}
+            />
+          );
+        })}
     </>
+  );
+}
+
+/** The sends of this client that the session's transcript draws as their own
+ * rows (Lean `keptRow`), oldest first: none once the session is observed
+ * holding the request, whose own row then stands for it. The list keeps its
+ * identity while what it draws is unchanged. */
+export function useTranscriptSends(
+  nodeDid: string | null,
+  sessionId: string | null,
+): readonly TranscriptSend[] {
+  const { stores } = useApp();
+  const clientDid = useStore(
+    stores.client,
+    (state) => state.snapshot?.client?.clientDid ?? null,
+  );
+  const drafts = stores.chat.use.chatDrafts();
+  const storing = stores.chat.use.storingSend();
+  const now = useSendDeadlineClock(stores.chat);
+  const observed = useSessionValue(stores.session, (state) =>
+    heldFor(state.session, sessionId, nodeDid)
+      ? drafts
+          .filter(
+            (draft) =>
+              drawnInTranscript(draft, nodeDid, sessionId) &&
+              sessionHoldsRequest(state, draft.requestId),
+          )
+          .map((draft) => draft.requestId)
+          .join("\n")
+      : "",
+  );
+  const sends = transcriptSends(
+    drafts,
+    clientDid,
+    nodeDid,
+    sessionId,
+    now,
+    (requestId) => observed.split("\n").includes(requestId),
+    storing,
+  );
+  const kept = useRef<readonly TranscriptSend[]>(NO_SENDS);
+  if (!sameSends(kept.current, sends)) kept.current = sends.length ? sends : NO_SENDS;
+  return kept.current;
+}
+
+const NO_SENDS: readonly TranscriptSend[] = [];
+
+const sameSends = (a: readonly TranscriptSend[], b: readonly TranscriptSend[]) =>
+  a.length === b.length &&
+  a.every(
+    (send, index) =>
+      send.row === b[index]!.row &&
+      JSON.stringify(send.draft) === JSON.stringify(b[index]!.draft),
+  );
+
+/** A failed send drawn in its transcript: the bubble shows what was sent, so
+ * this holds why it wasn't sent, with Retry and Discard. */
+export function TranscriptSendFailure({ draft }: { draft: ChatDraft }) {
+  const sending = useApp().stores.chat.use.sending();
+  const readable = useMemo(() => {
+    try {
+      chatDraftRequest(draft);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [draft]);
+  return (
+    <SavedMessage
+      draft={draft}
+      status="failed"
+      disabled={sending}
+      details={!readable}
+    />
   );
 }
 
@@ -120,10 +211,13 @@ function SavedMessage({
   draft,
   status,
   disabled,
+  details = true,
 }: {
   draft: ChatDraft;
   status: SendStatus;
   disabled: boolean;
+  /** show what was sent, when nothing else in view does */
+  details?: boolean;
 }) {
   const { actions, stores, drafts } = useApp();
   const mounted = useRef(true);
@@ -202,9 +296,9 @@ function SavedMessage({
               ? "The answer wasn't sent"
               : "The message wasn't sent"
       }
-      details={description(draft)}
-      detailsText
-      detailsLabel={`Saved ${noun}`}
+      details={details ? description(draft) : undefined}
+      detailsText={details}
+      detailsLabel={details ? `Saved ${noun}` : undefined}
       actions={
         <>
           {shown.retry && (

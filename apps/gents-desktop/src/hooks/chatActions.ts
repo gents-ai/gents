@@ -34,6 +34,7 @@ import { heldFor, readSession } from "./sessionStore";
 import type { ShellProjection, ShellStores } from "./shellProjection";
 import { ChatViewUpdateError, createChatDelivery } from "./chatDelivery";
 import { chatDraftRequest, type ChatDraft } from "./chatDrafts";
+import { drawnInTranscript } from "./chatDeliveryView";
 import type { SendAttachmentStore } from "./sendAttachments";
 import { createGoalDelivery } from "./goalDelivery";
 import { goalDraftCommand, type GoalDraft } from "./goalDrafts";
@@ -205,15 +206,7 @@ export function createChatActions({
       selection.adoptSession(store, result.sessionId);
     }
     const sent = splitSkillLines(request?.content ?? "");
-    if (
-      request &&
-      !stores.chat
-        .getState()
-        .sentTurns.some(
-          (turn) =>
-            turn.requestId === result.requestId && turn.sessionId === result.sessionId,
-        )
-    )
+    if (request)
       chat.showPendingTurn(
         stores.chat,
         {
@@ -227,7 +220,8 @@ export function createChatActions({
           lifecycleState: "pending",
           foldedIntoRequestId: null,
           origin: null,
-          createdAt: new Date().toISOString(),
+          /* when it was sent, so it keeps its place among the kept sends */
+          createdAt: new Date(draft.composedAt ?? Date.now()).toISOString(),
         },
         draft.queued,
       );
@@ -310,6 +304,12 @@ export function createChatActions({
         undefined,
         (draft) => {
           savedRequestId = draft.requestId;
+          if (drawnInTranscript(draft, draft.nodeDid, draft.sessionId))
+            chat.noteSentTurn(stores.chat, {
+              sessionId: draft.sessionId,
+              requestId: draft.requestId,
+              queued: false,
+            });
           saved?.();
         },
       );

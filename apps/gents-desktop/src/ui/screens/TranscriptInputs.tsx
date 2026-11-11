@@ -637,15 +637,18 @@ export function UserInputWithState({
   state,
   actions,
   meta,
+  pinActions = false,
 }: {
   content: ReactNode;
   state: string | null;
   actions?: Parameters<typeof UserMessage>[0]["actions"];
   meta?: ReactNode;
+  /** keep the row under the message shown, not only on hover */
+  pinActions?: boolean;
 }) {
   if (!state)
     return (
-      <UserMessage actions={actions} meta={meta}>
+      <UserMessage actions={actions} meta={meta} pinActions={pinActions}>
         {content}
       </UserMessage>
     );

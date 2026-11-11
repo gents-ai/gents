@@ -76,3 +76,59 @@ export function keptRow(
   if (mailbox || observed) return null;
   return status === "pending" ? "sending" : status === "failed" ? "failed" : null;
 }
+
+/** A kept send that its session's transcript draws instead of the composer's
+ * feedback: a chat message sent from that session's own composer. A queued
+ * one waits in the pending tray, a new session's first message has no
+ * transcript yet, and an answer is shown with its question. */
+export function drawnInTranscript(
+  draft: ChatDraft,
+  nodeDid: string | null,
+  sessionId: string | null,
+): boolean {
+  return (
+    !draft.mailbox &&
+    !draft.queued &&
+    draft.nodeDid === nodeDid &&
+    draft.selectedSessionId !== null &&
+    draft.selectedSessionId === draft.sessionId &&
+    draft.sessionId === sessionId
+  );
+}
+
+export type TranscriptSend = { draft: ChatDraft; row: KeptRow };
+
+/** The kept sends of `clientDid` that the session's transcript draws as
+ * their own rows, oldest first. `storing` is the send this window saved but
+ * whose attachment bytes it is still storing: a failed store refuses it and
+ * the composer keeps its text, so it is drawn only once they are stored. */
+export function transcriptSends(
+  drafts: readonly ChatDraft[],
+  clientDid: string | null,
+  nodeDid: string | null,
+  sessionId: string | null,
+  now: number,
+  observed: (requestId: string) => boolean,
+  storing: string | null,
+): TranscriptSend[] {
+  const sends: TranscriptSend[] = [];
+  for (const draft of drafts) {
+    if (
+      draft.clientDid !== clientDid ||
+      draft.requestId === storing ||
+      !drawnInTranscript(draft, nodeDid, sessionId)
+    )
+      continue;
+    const row = keptRow(
+      sendStatus(draft, now),
+      draft.mailbox !== undefined,
+      observed(draft.requestId),
+    );
+    if (row) sends.push({ draft, row });
+  }
+  return sends.sort(
+    (a, b) =>
+      (a.draft.composedAt ?? 0) - (b.draft.composedAt ?? 0) ||
+      (a.draft.requestId < b.draft.requestId ? -1 : 1),
+  );
+}

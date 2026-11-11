@@ -35,6 +35,9 @@ export type ChatState = {
   chatDraftError: string | null;
   /** when a saved send deadline last passed (`keepSendDeadlineClock`) */
   sendDeadlineTick: number;
+  /** the send this window saved whose attachment bytes it is still storing;
+      a failed store refuses it, so it is not drawn as sent until then */
+  storingSend: string | null;
 };
 
 export type SentTurn = { sessionId: string; requestId: string; queued: boolean };
@@ -56,9 +59,19 @@ export function createChatStore(initial: Partial<ChatState> = {}) {
       goalCommandsInFlight: new Set(),
       ...loadChatDrafts(),
       sendDeadlineTick: 0,
+      storingSend: null,
       ...initial,
     })),
   );
+}
+
+/* each message once, at the place it was first sent */
+function withSentTurn(sent: readonly SentTurn[], turn: SentTurn): readonly SentTurn[] {
+  return sent.some(
+    (held) => held.requestId === turn.requestId && held.sessionId === turn.sessionId,
+  )
+    ? sent
+    : [...sent.slice(-(SENT_TURNS_KEPT - 1)), turn];
 }
 
 const READY: ChatWorkflowState = { kind: "ready" };
@@ -101,11 +114,20 @@ export const chat = {
   showPendingTurn(store: ChatStore, turn: OptimisticPendingTurn, queued = false) {
     store.setState((state) => ({
       optimisticPendingTurn: turn,
-      sentTurns: [
-        ...state.sentTurns.slice(-(SENT_TURNS_KEPT - 1)),
-        { sessionId: turn.sessionId, requestId: turn.requestId, queued },
-      ],
+      sentTurns: withSentTurn(state.sentTurns, {
+        sessionId: turn.sessionId,
+        requestId: turn.requestId,
+        queued,
+      }),
     }));
+  },
+  /** a message sent from here before its reply, so the view goes to its
+      turn as it is drawn */
+  noteSentTurn(store: ChatStore, turn: SentTurn) {
+    store.setState((state) => {
+      const sentTurns = withSentTurn(state.sentTurns, turn);
+      return sentTurns === state.sentTurns ? state : { sentTurns };
+    });
   },
   endPendingTurn(store: ChatStore, requestId: string) {
     if (store.getState().optimisticPendingTurn?.requestId === requestId)

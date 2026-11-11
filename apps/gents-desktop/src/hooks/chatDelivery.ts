@@ -220,19 +220,36 @@ export function createChatDelivery(
           throw new Error(
             "Retry or discard the saved answer before answering this question again.",
           );
-        return attempt(draft);
+        const pending = attempt({ ...draft, composedAt: now() });
+        if (input.attachments?.length)
+          stores.chat.setState({ storingSend: pending.requestId });
+        return pending;
       };
-      return proceed(
-        saveNewChatDraft(
-          attachments,
-          stores.chat,
-          input,
-          selectedSessionId,
-          queued,
-          mailbox,
-          admitted,
-        ),
-        (draft) => send(draft, applied, saved),
+      const stored = () => {
+        if (stores.chat.getState().storingSend === input.requestId)
+          stores.chat.setState({ storingSend: null });
+      };
+      const saving = saveNewChatDraft(
+        attachments,
+        stores.chat,
+        input,
+        selectedSessionId,
+        queued,
+        mailbox,
+        admitted,
+      );
+      if (!(saving instanceof Promise)) return send(saving, applied, saved);
+      return saving.then(
+        (draft) => {
+          // In the task that hands the input over, so the window draws the
+          // send as the composer lets it go.
+          stored();
+          return send(draft, applied, saved);
+        },
+        (error) => {
+          stored();
+          throw error;
+        },
       );
     },
     /** Resend a failed message: the same payload under the same identity. */
