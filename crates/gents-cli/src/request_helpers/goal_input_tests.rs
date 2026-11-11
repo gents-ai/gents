@@ -57,7 +57,7 @@ impl Source {
             gents_session::request::lifecycle::RequestSpec {
                 input,
                 retry_key: Some("manual-fire".into()),
-                ..gents::RequestSpec::new(
+                ..gents_session::request::lifecycle::RequestSpec::new(
                     gents_protocol::request_admission::RequestPurpose::Normal,
                     gents_session::request::lifecycle::RequestIdentity {
                         request_id: "manual-task".into(),
