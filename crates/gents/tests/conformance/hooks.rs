@@ -4,16 +4,19 @@ use gents_lean_vocab::{
     lean_lifecycle_hook_admit_cases, lean_lifecycle_hook_combine_cases,
     lean_lifecycle_hook_delivery_cases, lean_lifecycle_hook_effect_cases,
     lean_lifecycle_hook_gate_cases, lean_lifecycle_hook_grant_cases,
-    lean_lifecycle_hook_must_commit_cases, lean_lifecycle_hook_queue_scope_cases,
-    lean_lifecycle_hook_stage_cases, LeanLifecycleHookAccess, LeanLifecycleHookAdmitResult,
-    LeanLifecycleHookBinding, LeanLifecycleHookChoice, LeanLifecycleHookDecision,
-    LeanLifecycleHookDeliveryRecord, LeanLifecycleHookDeliveryStep, LeanLifecycleHookEffect,
-    LeanLifecycleHookGateResult, LeanLifecycleHookManifest, LeanLifecycleHookPartition,
-    LeanLifecycleHookPreparedVerdict, LeanLifecycleHookQueueScopeResult, LeanLifecycleHookRef,
-    LeanLifecycleHookRefusal, LeanLifecycleHookRow, LeanLifecycleHookScopeAnswer,
-    LeanLifecycleHookScopeKey, LeanLifecycleHookScript, LeanLifecycleHookStageResult,
-    LeanLifecycleHookStale, LeanLifecycleHookState, LeanLifecycleHookSubject,
-    LeanLifecycleHookSubjectKind, LeanLifecycleHookVerdict, LeanLifecycleHookWorld,
+    lean_lifecycle_hook_must_commit_cases, lean_lifecycle_hook_owed_delivery_cases,
+    lean_lifecycle_hook_queue_scope_cases, lean_lifecycle_hook_stage_cases,
+    LeanLifecycleHookAccess, LeanLifecycleHookAdmitResult, LeanLifecycleHookBinding,
+    LeanLifecycleHookChoice, LeanLifecycleHookDecision, LeanLifecycleHookDeliveryRecord,
+    LeanLifecycleHookDeliveryStep, LeanLifecycleHookEffect, LeanLifecycleHookGateResult,
+    LeanLifecycleHookManifest, LeanLifecycleHookOwedAttempt, LeanLifecycleHookOwedKey,
+    LeanLifecycleHookOwedRecord, LeanLifecycleHookOwedSettlement, LeanLifecycleHookOwedStep,
+    LeanLifecycleHookPartition, LeanLifecycleHookPreparedVerdict,
+    LeanLifecycleHookQueueScopeResult, LeanLifecycleHookRef, LeanLifecycleHookRefusal,
+    LeanLifecycleHookRow, LeanLifecycleHookScopeAnswer, LeanLifecycleHookScopeKey,
+    LeanLifecycleHookScript, LeanLifecycleHookStageResult, LeanLifecycleHookStale,
+    LeanLifecycleHookState, LeanLifecycleHookSubject, LeanLifecycleHookSubjectKind,
+    LeanLifecycleHookVerdict, LeanLifecycleHookWorld,
 };
 use gents_session::request::hooks::claim::{combine, ClaimVerdict};
 use gents_session::request::hooks::delivery::DeliveryRecord;
@@ -22,6 +25,7 @@ use gents_session::request::hooks::effect::{
     Row, Subject, SubjectKind, Write,
 };
 use gents_session::request::hooks::hook::{Hook, Outcome, Query};
+use gents_session::request::hooks::owed;
 use gents_session::request::hooks::prepared::{admit, prepare, Binding, Stale, Verdict};
 use gents_session::request::hooks::queue_scope::{
     partition, Partition, ScopeAnswer, ScopeAnswers, ScopeFailure, ScopeRefused,
@@ -838,6 +842,85 @@ fn generated_lifecycle_hook_delivery_cases_drive_the_delivery_record() {
                 record.pending(),
                 entry.pending,
                 "{} step {index}: pending",
+                case.name
+            );
+        }
+    }
+}
+
+fn owed_key_of(lean: &LeanLifecycleHookOwedKey) -> owed::Key {
+    owed::Key {
+        point: lean.point.clone(),
+        plugin: lean.plugin.clone(),
+        subject: lean.subject.clone(),
+    }
+}
+
+fn owed_record_of(lean: &LeanLifecycleHookOwedRecord) -> owed::Record {
+    owed::Record {
+        key: owed_key_of(&lean.key),
+        actor: lean.actor.clone(),
+        attempts: lean.attempts,
+        last_error: lean.last_error.clone(),
+        settled: lean.settled.map(|settled| match settled {
+            LeanLifecycleHookOwedSettlement::Delivered => owed::Settlement::Delivered,
+            LeanLifecycleHookOwedSettlement::Dropped => owed::Settlement::Dropped,
+        }),
+    }
+}
+
+/// Lean `Hooks.OwedDelivery.publish`, `redrive` and `performs` drive the
+/// production record the periodic sweep settles (`owed::redrive_pending`).
+#[test]
+fn generated_lifecycle_hook_owed_delivery_cases_drive_the_redrive_record() {
+    let cases = lean_lifecycle_hook_owed_delivery_cases();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let mut records: Vec<owed::Record> = Vec::new();
+        for (index, entry) in case.trace.iter().enumerate() {
+            let performed = match &entry.step {
+                LeanLifecycleHookOwedStep::Publish {
+                    actor,
+                    keys,
+                    commit,
+                } => {
+                    owed::publish(&mut records, actor, keys.iter().map(owed_key_of), *commit);
+                    false
+                }
+                LeanLifecycleHookOwedStep::Redrive {
+                    key,
+                    authorized,
+                    current,
+                    attempt,
+                } => {
+                    let key = owed_key_of(key);
+                    let observed = owed::Observation {
+                        authorized: *authorized,
+                        current: *current,
+                    };
+                    let attempt = match attempt {
+                        LeanLifecycleHookOwedAttempt::Applied => owed::Attempt::Applied,
+                        LeanLifecycleHookOwedAttempt::Failed { error } => {
+                            owed::Attempt::Failed(error.clone())
+                        }
+                    };
+                    let mut performed = false;
+                    for record in records.iter_mut().filter(|record| record.key == key) {
+                        performed |= record.performs(observed, &attempt);
+                        *record = record.redrive(observed, &attempt);
+                    }
+                    performed
+                }
+            };
+            assert_eq!(
+                records,
+                entry.records.iter().map(owed_record_of).collect::<Vec<_>>(),
+                "{} step {index}: records",
+                case.name
+            );
+            assert_eq!(
+                performed, entry.performed,
+                "{} step {index}: performed",
                 case.name
             );
         }

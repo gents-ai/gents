@@ -706,6 +706,7 @@ async fn http_relationships_and_ownership_use_the_transaction_actor() {
         contends_with_request_siblings: AtomicBool::new(false),
         client_signed_write_dispatched: AtomicBool::new(false),
         relationship_grants: Mutex::new(Vec::new()),
+        owed_deliveries: Mutex::new(Vec::new()),
         publication_observer: None,
         pack_approval: None,
     };

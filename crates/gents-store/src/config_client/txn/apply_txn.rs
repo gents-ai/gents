@@ -41,6 +41,7 @@ pub struct ConfigApplyTxn<'a> {
     pub(super) contends_with_request_siblings: AtomicBool,
     pub(super) client_signed_write_dispatched: AtomicBool,
     pub(super) relationship_grants: Mutex<Vec<ConfigRelationshipGrant>>,
+    pub(super) owed_deliveries: Mutex<Vec<gents_protocol::owed_delivery::OwedDeliveryRow>>,
     pub(super) publication_observer: Option<Arc<dyn AgentPublicationObserver>>,
     pub(super) pack_approval: Option<Arc<super::super::pack_effect::PackInterpreterApproval>>,
 }
@@ -203,6 +204,7 @@ impl<'a> ConfigApplyTxn<'a> {
             contends_with_request_siblings: AtomicBool::new(false),
             client_signed_write_dispatched: AtomicBool::new(false),
             relationship_grants: Mutex::new(Vec::new()),
+            owed_deliveries: Mutex::new(Vec::new()),
             publication_observer: None,
             pack_approval: None,
             operation: Some(operation.as_str()),
@@ -323,6 +325,7 @@ impl<'a> ConfigApplyTxn<'a> {
                 contends_with_request_siblings: AtomicBool::new(false),
                 client_signed_write_dispatched: AtomicBool::new(false),
                 relationship_grants: Mutex::new(Vec::new()),
+                owed_deliveries: Mutex::new(Vec::new()),
                 publication_observer: None,
                 pack_approval: None,
                 operation: None,
@@ -346,6 +349,7 @@ impl<'a> ConfigApplyTxn<'a> {
             contends_with_request_siblings: AtomicBool::new(false),
             client_signed_write_dispatched: AtomicBool::new(false),
             relationship_grants: Mutex::new(Vec::new()),
+            owed_deliveries: Mutex::new(Vec::new()),
             publication_observer: None,
             pack_approval: None,
             operation: None,
@@ -366,6 +370,38 @@ impl<'a> ConfigApplyTxn<'a> {
             .unwrap_or_else(|e| e.into_inner())
             .push(grant);
         Ok(())
+    }
+
+    /// Records a delivery this transaction owes; the runtime publishes it after
+    /// this transaction commits (Lean `Hooks.OwedDelivery.publish`).
+    ///
+    /// The record is node-owned while this transaction runs as its own actor.
+    /// Every statement of an embedded transaction carries that one identity,
+    /// and a runtime transaction cannot be opened inside it (a re-entrant
+    /// embedded write is refused), so the record cannot share the owing commit:
+    /// a process that stops between that commit and the publication loses it.
+    pub fn owe_delivery(&self, row: gents_protocol::owed_delivery::OwedDeliveryRow) {
+        self.owed_deliveries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(row);
+    }
+
+    pub(super) async fn publish_owed_deliveries(&self) {
+        let rows = std::mem::take(
+            &mut *self
+                .owed_deliveries
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+        );
+        if rows.is_empty() {
+            return;
+        }
+        let node = match &self.backend {
+            TxnBackend::Embedded { node, .. } => Some(node),
+            TxnBackend::Http { .. } => None,
+        };
+        super::super::owed_delivery::publish_owed(node, rows).await;
     }
 
     pub(super) async fn complete_relationship_grants(&self) -> Result<()> {
