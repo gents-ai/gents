@@ -16,7 +16,7 @@ pub async fn select_agent_model_on(
     agent_did: &str,
     backend_id: &str,
     model_name: &str,
-    reasoning_effort: Option<gents::inference::resolved::ReasoningEffort>,
+    reasoning_effort: Option<gents::documents::inference_defaults::ReasoningEffort>,
     service_tier: Option<gents::inference::resolved::ServiceTier>,
 ) -> Result<InferenceProfile> {
     anyhow::ensure!(!model_name.trim().is_empty(), "Choose a model.");
@@ -227,7 +227,7 @@ mod tests {
                 first_did,
                 "backend",
                 "original",
-                Some(gents::inference::resolved::ReasoningEffort::High),
+                Some(gents::documents::inference_defaults::ReasoningEffort::High),
                 None,
             )
             .await?,
@@ -239,7 +239,7 @@ mod tests {
             first_did,
             "backend",
             "original",
-            Some(gents::inference::resolved::ReasoningEffort::High),
+            Some(gents::documents::inference_defaults::ReasoningEffort::High),
             Some(gents::inference::resolved::ServiceTier::Fast),
         )
         .await?;
@@ -255,7 +255,7 @@ mod tests {
                 first_did,
                 "backend",
                 "original",
-                Some(gents::inference::resolved::ReasoningEffort::High),
+                Some(gents::documents::inference_defaults::ReasoningEffort::High),
                 Some(gents::inference::resolved::ServiceTier::Fast),
             )
             .await?,
@@ -267,7 +267,7 @@ mod tests {
             first_did,
             "backend",
             "original",
-            Some(gents::inference::resolved::ReasoningEffort::High),
+            Some(gents::documents::inference_defaults::ReasoningEffort::High),
             Some(gents::inference::resolved::ServiceTier::Default),
         )
         .await?;
@@ -299,7 +299,7 @@ mod tests {
                 first_did,
                 "backend",
                 "original",
-                Some(gents::inference::resolved::ReasoningEffort::High),
+                Some(gents::documents::inference_defaults::ReasoningEffort::High),
                 Some(gents::inference::resolved::ServiceTier::Default),
             )
             .await?,
@@ -312,7 +312,7 @@ mod tests {
                 second_did,
                 "backend",
                 "original",
-                Some(gents::inference::resolved::ReasoningEffort::High),
+                Some(gents::documents::inference_defaults::ReasoningEffort::High),
                 None,
             )
             .await?,
@@ -361,7 +361,7 @@ mod tests {
                     assert_eq!(retained.max_output_tokens, Some(100));
                     assert_eq!(
                         retained.reasoning_effort,
-                        Some(gents::inference::resolved::ReasoningEffort::High)
+                        Some(gents::documents::inference_defaults::ReasoningEffort::High)
                     );
                     Ok::<_, anyhow::Error>(())
                 })

@@ -901,8 +901,8 @@ async fn operator_discovery_publishes_scoped_credential_free_catalog() -> Result
         catalog.models[0].reasoning_efforts.as_deref(),
         Some(
             [
-                crate::inference::resolved::ReasoningEffort::Low,
-                crate::inference::resolved::ReasoningEffort::High
+                crate::documents::inference_defaults::ReasoningEffort::Low,
+                crate::documents::inference_defaults::ReasoningEffort::High
             ]
             .as_slice()
         )

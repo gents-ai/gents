@@ -132,10 +132,10 @@ pub fn test_agent_with_identity(
         max_total_tokens: None,
         stream_batch_ms: gents::inference::resolved::DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(
-            gents::inference::resolved::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+            gents::documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         ),
         deadline_duration: Duration::from_secs(
-            gents::inference::resolved::DEFAULT_DEADLINE_DURATION_SECS,
+            gents::documents::inference_defaults::DEFAULT_DEADLINE_DURATION_SECS,
         ),
         provider_idle_timeout: Duration::from_secs(
             gents::inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,

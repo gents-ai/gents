@@ -9,6 +9,9 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 pub(super) fn execution_settings(document: Option<&Value>) -> Result<Value> {
+    use crate::documents::inference_defaults::{
+        DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+    };
     use crate::inference::resolved::*;
     let mut document = document.cloned().unwrap_or_else(|| {
         json!({

@@ -27,7 +27,7 @@ fn openrouter_and_vllm_catalogs_preserve_advertised_limits() {
 
 #[test]
 fn xai_api_catalog_records_effort_lists_and_context_length() {
-    use crate::inference::resolved::ReasoningEffort::{High, Low, Medium, None as Off, XHigh};
+    use crate::documents::inference_defaults::ReasoningEffort::{High, Low, Medium, None as Off, XHigh};
     let record = |value| serde_json::from_value::<OpenAiModelRecord>(value).unwrap();
     let grok_4_3 = || {
         record(serde_json::json!({
@@ -87,8 +87,8 @@ fn codex_catalog_preserves_context_and_supported_efforts() {
     assert_eq!(
         advertised.reasoning_efforts,
         Some(vec![
-            crate::inference::resolved::ReasoningEffort::Low,
-            crate::inference::resolved::ReasoningEffort::Ultra
+            crate::documents::inference_defaults::ReasoningEffort::Low,
+            crate::documents::inference_defaults::ReasoningEffort::Ultra
         ])
     );
     assert_eq!(advertised.max_output_tokens, None);
@@ -360,12 +360,12 @@ async fn discover_models_sends_chatgpt_codex_version_header_and_query_param() {
         models[0].reasoning_efforts.as_deref(),
         Some(
             &[
-                crate::inference::resolved::ReasoningEffort::Low,
-                crate::inference::resolved::ReasoningEffort::Medium,
-                crate::inference::resolved::ReasoningEffort::High,
-                crate::inference::resolved::ReasoningEffort::XHigh,
-                crate::inference::resolved::ReasoningEffort::Max,
-                crate::inference::resolved::ReasoningEffort::Ultra,
+                crate::documents::inference_defaults::ReasoningEffort::Low,
+                crate::documents::inference_defaults::ReasoningEffort::Medium,
+                crate::documents::inference_defaults::ReasoningEffort::High,
+                crate::documents::inference_defaults::ReasoningEffort::XHigh,
+                crate::documents::inference_defaults::ReasoningEffort::Max,
+                crate::documents::inference_defaults::ReasoningEffort::Ultra,
             ][..]
         )
     );
@@ -469,9 +469,9 @@ async fn discover_models_reads_claude_models_with_oauth_headers() {
         models[0].reasoning_efforts.as_deref(),
         Some(
             [
-                crate::inference::resolved::ReasoningEffort::Low,
-                crate::inference::resolved::ReasoningEffort::High,
-                crate::inference::resolved::ReasoningEffort::XHigh,
+                crate::documents::inference_defaults::ReasoningEffort::Low,
+                crate::documents::inference_defaults::ReasoningEffort::High,
+                crate::documents::inference_defaults::ReasoningEffort::XHigh,
             ]
             .as_slice()
         )
@@ -567,9 +567,9 @@ async fn discover_models_reads_anthropic_key_models_without_oauth_beta() {
         models[0].reasoning_efforts.as_deref(),
         Some(
             [
-                crate::inference::resolved::ReasoningEffort::Low,
-                crate::inference::resolved::ReasoningEffort::High,
-                crate::inference::resolved::ReasoningEffort::XHigh,
+                crate::documents::inference_defaults::ReasoningEffort::Low,
+                crate::documents::inference_defaults::ReasoningEffort::High,
+                crate::documents::inference_defaults::ReasoningEffort::XHigh,
             ]
             .as_slice()
         )

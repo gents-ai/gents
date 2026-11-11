@@ -30,7 +30,7 @@ pub struct InferenceProfile {
     /// Explicit backend-advertised effort selection; unset uses the provider default.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub reasoning_effort: Option<crate::inference::resolved::ReasoningEffort>,
+    pub reasoning_effort: Option<crate::documents::inference_defaults::ReasoningEffort>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub service_tier: Option<crate::inference::resolved::ServiceTier>,

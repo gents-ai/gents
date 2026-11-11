@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 
+use crate::documents::inference_defaults::ReasoningEffort;
 use crate::inference::backends::provider::BackendProviderKind;
 use crate::inference::compaction::CompactionStrategy;
 use crate::openai_wire::OpenAiWireApi;
@@ -19,9 +20,7 @@ pub use gents_loop::compaction::{
     DEFAULT_COMPACTION_SUMMARY_FILE_LIST_MAX, DEFAULT_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
     MAX_COMPACTION_SUMMARY_FILE_LIST_MAX, MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
 };
-pub const DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS: u64 = 120;
 pub const DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS: u64 = 300;
-pub const DEFAULT_DEADLINE_DURATION_SECS: u64 = 86_400;
 pub const DEFAULT_MODEL_NAME: &str = "default";
 
 /// A static builder has no persisted configuration documents. Managed agents
@@ -257,64 +256,6 @@ fn resolve_max_turns(configured: Option<i64>) -> Result<ResolvedMaxTurns> {
     };
     let value = positive_inference_limit(configured, DEFAULT_MAX_TURNS, "max_turns")?;
     Ok(ResolvedMaxTurns { value, provenance })
-}
-
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "lowercase")]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-pub enum ReasoningEffort {
-    None,
-    Minimal,
-    Low,
-    Medium,
-    High,
-    XHigh,
-    Max,
-    Ultra,
-}
-
-impl ReasoningEffort {
-    pub const ALL: [Self; 8] = [
-        Self::None,
-        Self::Minimal,
-        Self::Low,
-        Self::Medium,
-        Self::High,
-        Self::XHigh,
-        Self::Max,
-        Self::Ultra,
-    ];
-
-    pub fn parse(value: &str) -> anyhow::Result<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "none" => Ok(Self::None),
-            "minimal" => Ok(Self::Minimal),
-            "low" => Ok(Self::Low),
-            "medium" => Ok(Self::Medium),
-            "high" => Ok(Self::High),
-            "xhigh" => Ok(Self::XHigh),
-            "max" => Ok(Self::Max),
-            "ultra" => Ok(Self::Ultra),
-            _ => anyhow::bail!(
-                "reasoning_effort must be one of: none, minimal, low, medium, high, xhigh, max, ultra"
-            ),
-        }
-    }
-
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::None => "none",
-            Self::Minimal => "minimal",
-            Self::Low => "low",
-            Self::Medium => "medium",
-            Self::High => "high",
-            Self::XHigh => "xhigh",
-            Self::Max => "max",
-            Self::Ultra => "ultra",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -671,6 +612,9 @@ impl crate::documents::inference_backend::AdvertisedProfilePolicy for BackendPro
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::documents::inference_defaults::{
+        DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+    };
     use crate::store::identity::KeyIdentity;
 
     fn stub_node() -> Arc<RuntimeNode> {

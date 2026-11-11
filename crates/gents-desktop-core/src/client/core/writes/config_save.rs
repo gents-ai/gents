@@ -288,7 +288,7 @@ impl ClientCore {
         agent_did: &str,
         backend_id: &str,
         model_name: &str,
-        reasoning_effort: Option<gents::inference::resolved::ReasoningEffort>,
+        reasoning_effort: Option<gents::documents::inference_defaults::ReasoningEffort>,
         service_tier: Option<gents::inference::resolved::ServiceTier>,
     ) -> Result<gents::InferenceProfile> {
         let access = self.operator_access(node_did)?;

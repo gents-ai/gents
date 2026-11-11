@@ -816,7 +816,7 @@ impl RequestLifecycle {
             folded_selection: Vec::new(),
             natural_finish_allowed: false,
             execution_lease_duration_secs:
-                crate::inference::resolved::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+                crate::documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         }
     }
 

@@ -6,6 +6,7 @@ mod datastore_tool_surface;
 mod eval_definition;
 pub mod event_trigger;
 pub mod inference_backend;
+pub mod inference_defaults;
 mod inference_execution;
 mod inference_profile;
 mod inference_sampling;

@@ -275,7 +275,7 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
         settled_in < Duration::from_secs(10),
         "owner terminalization took {settled_in:?}, which no longer excludes the \
          recovery path waiting out the {}s default execution lease",
-        crate::inference::resolved::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+        crate::documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
     );
 
     let row = request_terminal_row(&agent_access, &request_doc_id)

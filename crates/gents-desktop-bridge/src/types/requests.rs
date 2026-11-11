@@ -660,7 +660,7 @@ pub struct AgentModelSelectionRequest {
     pub agent_did: String,
     pub backend_id: String,
     pub model_name: String,
-    pub reasoning_effort: Option<gents::inference::resolved::ReasoningEffort>,
+    pub reasoning_effort: Option<gents::documents::inference_defaults::ReasoningEffort>,
     pub service_tier: Option<gents::inference::resolved::ServiceTier>,
 }
 

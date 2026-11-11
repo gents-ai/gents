@@ -2142,10 +2142,10 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         max_total_tokens: None,
         stream_batch_ms: crate::inference::resolved::DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(
-            crate::inference::resolved::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+            crate::documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         ),
         deadline_duration: Duration::from_secs(
-            crate::inference::resolved::DEFAULT_DEADLINE_DURATION_SECS,
+            crate::documents::inference_defaults::DEFAULT_DEADLINE_DURATION_SECS,
         ),
         provider_idle_timeout: Duration::from_secs(
             crate::inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,

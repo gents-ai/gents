@@ -2915,7 +2915,7 @@ async fn fenced_title_output_fails_closed_without_retry() {
 
 #[tokio::test]
 async fn title_output_cap_applies_only_when_reasoning_is_disabled_on_the_wire() {
-    use crate::inference::resolved::ReasoningEffort;
+    use crate::documents::inference_defaults::ReasoningEffort;
     use crate::OpenAiWireApi;
     let fixture = TitleFixture::new().await;
     let configured = Some(1024);

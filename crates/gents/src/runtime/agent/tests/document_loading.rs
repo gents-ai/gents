@@ -90,7 +90,7 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
     )
     .await;
     profile.sampling_id = Some(sampling_id);
-    profile.reasoning_effort = Some(crate::inference::resolved::ReasoningEffort::Max);
+    profile.reasoning_effort = Some(crate::documents::inference_defaults::ReasoningEffort::Max);
     profile.context_window = Some(32768);
     profile.max_output_tokens = Some(4096);
     write_document(&owner, crate::Collection::InferenceProfile, &profile)
@@ -170,7 +170,7 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
     assert_eq!(behavior.stream_batch_ms, 500);
     assert_ne!(
         behavior.stream_liveness_timeout,
-        Duration::from_secs(crate::inference::resolved::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS),
+        Duration::from_secs(crate::documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS),
         "the explicit execution setting must override the shorter default lease",
     );
     assert_eq!(behavior.stream_liveness_timeout, Duration::from_secs(45));
@@ -185,7 +185,7 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
     assert_eq!(behavior.sampling.repetition_penalty, Some(1.1));
     assert_eq!(
         behavior.sampling.reasoning_effort,
-        Some(crate::inference::resolved::ReasoningEffort::Max)
+        Some(crate::documents::inference_defaults::ReasoningEffort::Max)
     );
 
     let params = behavior

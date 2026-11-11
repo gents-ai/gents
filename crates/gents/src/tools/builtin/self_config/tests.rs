@@ -911,7 +911,7 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
         .into_iter()
         .map(|value| value.as_str())
         .chain(
-            crate::inference::resolved::ReasoningEffort::ALL
+            crate::documents::inference_defaults::ReasoningEffort::ALL
                 .into_iter()
                 .map(|value| value.as_str()),
         )
@@ -6276,7 +6276,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
     );
     assert_eq!(
         defaults["effective"]["deadline_duration_secs"],
-        crate::inference::resolved::DEFAULT_DEADLINE_DURATION_SECS
+        crate::documents::inference_defaults::DEFAULT_DEADLINE_DURATION_SECS
     );
     assert!(defaults["effective"]["max_total_tokens"].is_null());
     assert!(defaults["document"]["max_turns"].is_null());

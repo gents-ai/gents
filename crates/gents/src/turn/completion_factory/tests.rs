@@ -141,19 +141,19 @@ fn responses_and_openrouter_use_profile_reasoning_effort() {
     let codex = reasoning_profile_params(
         BackendProviderKind::ChatGptCodex,
         crate::OpenAiWireApi::Responses,
-        Some(crate::inference::resolved::ReasoningEffort::Ultra),
+        Some(crate::documents::inference_defaults::ReasoningEffort::Ultra),
     )
     .expect("profile reasoning effort must be present");
     let responses = reasoning_profile_params(
         BackendProviderKind::OpenAiCompatible,
         crate::OpenAiWireApi::Responses,
-        Some(crate::inference::resolved::ReasoningEffort::XHigh),
+        Some(crate::documents::inference_defaults::ReasoningEffort::XHigh),
     )
     .expect("profile reasoning effort must be present");
     let openrouter = reasoning_profile_params(
         BackendProviderKind::OpenRouter,
         crate::OpenAiWireApi::ChatCompletions,
-        Some(crate::inference::resolved::ReasoningEffort::Medium),
+        Some(crate::documents::inference_defaults::ReasoningEffort::Medium),
     )
     .expect("profile reasoning effort must be present");
 
@@ -168,7 +168,7 @@ fn profile_none_disables_local_thinking() {
     let value = reasoning_profile_params(
         BackendProviderKind::OpenAiCompatible,
         crate::OpenAiWireApi::ChatCompletions,
-        Some(crate::inference::resolved::ReasoningEffort::None),
+        Some(crate::documents::inference_defaults::ReasoningEffort::None),
     )
     .expect("explicit none must be present");
 
@@ -188,7 +188,7 @@ fn profile_reasoning_serializes_top_level_into_openai_body() {
             reasoning_profile_params(
                 BackendProviderKind::OpenAiCompatible,
                 crate::OpenAiWireApi::ChatCompletions,
-                Some(crate::inference::resolved::ReasoningEffort::Max),
+                Some(crate::documents::inference_defaults::ReasoningEffort::Max),
             ),
             provider_additional_params(
                 BackendProviderKind::OpenAiCompatible,
@@ -305,7 +305,7 @@ fn generated_responses_storage_cases_drive_loop_config() {
 
 #[test]
 fn generated_responses_effort_cases_drive_loop_config() {
-    use crate::inference::resolved::ReasoningEffort;
+    use crate::documents::inference_defaults::ReasoningEffort;
     use crate::lean_vocab_test::lean_prompt_assembly_responses_effort_cases;
 
     let parse = |value: &String| ReasoningEffort::parse(value).expect("Lean effort");
@@ -565,10 +565,10 @@ fn agent_with_binding(
         max_total_tokens: None,
         stream_batch_ms: crate::inference::resolved::DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(
-            crate::inference::resolved::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+            crate::documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         ),
         deadline_duration: Duration::from_secs(
-            crate::inference::resolved::DEFAULT_DEADLINE_DURATION_SECS,
+            crate::documents::inference_defaults::DEFAULT_DEADLINE_DURATION_SECS,
         ),
         provider_idle_timeout: Duration::from_secs(
             crate::inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,

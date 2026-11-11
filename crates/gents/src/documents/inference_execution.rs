@@ -127,10 +127,10 @@ impl InferenceExecution {
         }
         let liveness = self
             .stream_liveness_timeout_secs
-            .unwrap_or(crate::inference::resolved::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64);
+            .unwrap_or(crate::documents::inference_defaults::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64);
         let deadline = self
             .deadline_duration_secs
-            .unwrap_or(crate::inference::resolved::DEFAULT_DEADLINE_DURATION_SECS as i64);
+            .unwrap_or(crate::documents::inference_defaults::DEFAULT_DEADLINE_DURATION_SECS as i64);
         if liveness >= deadline {
             violations.push(format!("InferenceExecution {execution_id} stream_liveness_timeout_secs ({liveness}) must be less than deadline_duration_secs ({deadline})"));
         }

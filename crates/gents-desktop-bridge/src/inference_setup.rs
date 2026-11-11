@@ -59,7 +59,7 @@ pub struct InferenceRecommendationRequest {
     pub context_window: Option<i64>,
     pub max_context_window: Option<i64>,
     pub max_output_tokens: Option<i64>,
-    pub reasoning_efforts: Option<Vec<gents::inference::resolved::ReasoningEffort>>,
+    pub reasoning_efforts: Option<Vec<gents::documents::inference_defaults::ReasoningEffort>>,
 }
 
 #[derive(Debug, Clone, Deserialize, ts_rs::TS)]
@@ -73,7 +73,7 @@ pub struct InferenceBackendRecommendationRequest {
     pub context_window: Option<i64>,
     pub max_context_window: Option<i64>,
     pub max_output_tokens: Option<i64>,
-    pub reasoning_efforts: Option<Vec<gents::inference::resolved::ReasoningEffort>>,
+    pub reasoning_efforts: Option<Vec<gents::documents::inference_defaults::ReasoningEffort>>,
 }
 
 pub fn inference_model_recommendation(

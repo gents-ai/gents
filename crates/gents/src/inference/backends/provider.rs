@@ -129,7 +129,7 @@ impl OpenAiModelRecord {
                     .into_iter()
                     .filter(|effort| caps["effort"][*effort]["supported"].as_bool() == Some(true))
                     .filter_map(|effort| {
-                        crate::inference::resolved::ReasoningEffort::parse(effort).ok()
+                        crate::documents::inference_defaults::ReasoningEffort::parse(effort).ok()
                     })
                     .collect()
             })
@@ -142,7 +142,7 @@ impl OpenAiModelRecord {
                     .flatten()
                     .filter_map(serde_json::Value::as_str)
                     .filter_map(|effort| {
-                        crate::inference::resolved::ReasoningEffort::parse(effort).ok()
+                        crate::documents::inference_defaults::ReasoningEffort::parse(effort).ok()
                     })
                     .collect(),
             )
@@ -243,7 +243,7 @@ impl ChatGptCodexModelRecord {
             levels
                 .iter()
                 .filter_map(|level| {
-                    crate::inference::resolved::ReasoningEffort::parse(&level.effort).ok()
+                    crate::documents::inference_defaults::ReasoningEffort::parse(&level.effort).ok()
                 })
                 .collect()
         });

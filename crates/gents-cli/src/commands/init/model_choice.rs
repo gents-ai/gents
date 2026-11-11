@@ -6,7 +6,7 @@ use gents::inference::backends::setup::{
     connection_spec, model_option, InferenceModelOption, InferenceProviderId,
     RecommendedNumberControl, RecommendedReasoningControl,
 };
-use gents::inference::resolved::ReasoningEffort;
+use gents::documents::inference_defaults::ReasoningEffort;
 
 use crate::config_writes::ConfigAccess;
 use crate::interactive_backend::{prompt_line, prompt_line_default, PickedConnection};
