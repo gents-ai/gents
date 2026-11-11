@@ -77,7 +77,7 @@ impl Product {
 }
 
 async fn access() -> (
-    crate::support::TestDb,
+    crate::test_support::TestDb,
     gents_store::identity::KeyIdentity,
     ConfigAccess,
 ) {
@@ -85,7 +85,7 @@ async fn access() -> (
     use gents_store::identity::NodeIdentity;
 
     let (db, user, access) =
-        crate::test_support::root::signed_test_node_without_agent("credential-interactive-sign-in")
+        crate::test_support::signed_test_node_without_agent("credential-interactive-sign-in")
             .await;
     let runtime = ConfigAccess::local_as(
         db.node.clone(),
@@ -366,7 +366,7 @@ async fn signed_account_delete_requires_user_document_delete_permission() {
     use gents_store::identity::NodeIdentity;
 
     let (db, user, access) =
-        crate::test_support::root::signed_test_node_without_agent("credential-delete-permission")
+        crate::test_support::signed_test_node_without_agent("credential-delete-permission")
             .await;
     let node_did = db.node_identity.did();
     store(

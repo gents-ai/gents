@@ -57,8 +57,8 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
     // No default agent: its fixture backend is also enabled on this node and
     // would make the runtime listing non-singular.
     let (db, user, user_access) =
-        crate::test_support::root::signed_test_node_without_agent("health-runtime-owner").await;
-    let other = crate::support::test_db("health-foreign-owner").await;
+        crate::test_support::signed_test_node_without_agent("health-runtime-owner").await;
+    let other = crate::test_support::test_db("health-foreign-owner").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let other_did = other.node_identity.did();
@@ -173,7 +173,7 @@ async fn scheduled_probe_requires_the_held_node_and_its_native_reader_grant() {
 #[tokio::test]
 async fn oauth_kinds_probe_the_credential_document_fresh_is_healthy_and_promotes() {
     let (db, _user, user_access, _binding) =
-        crate::test_support::root::signed_test_node("health-oauth").await;
+        crate::test_support::signed_test_node("health-oauth").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let runtime_access = crate::auth::credential::runtime_credential_access(&node, did).unwrap();
@@ -238,7 +238,7 @@ async fn toggled_models_server(
 #[tokio::test]
 async fn scheduled_oauth_probe_failure_records_a_bounded_reason_and_recovers() {
     let (db, _user, user_access, _binding) =
-        crate::test_support::root::signed_test_node("health-oauth").await;
+        crate::test_support::signed_test_node("health-oauth").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let runtime_access = crate::auth::credential::runtime_credential_access(&node, did).unwrap();
@@ -328,7 +328,7 @@ fn probe_errors_are_bounded_on_a_char_boundary() {
 #[tokio::test]
 async fn oauth_account_reference_is_probed_with_its_own_account() {
     let (db, _user, user_access, _binding) =
-        crate::test_support::root::signed_test_node("health-oauth-account").await;
+        crate::test_support::signed_test_node("health-oauth-account").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let runtime_access = crate::auth::credential::runtime_credential_access(&node, did).unwrap();
@@ -398,7 +398,7 @@ async fn oauth_account_reference_is_probed_with_its_own_account() {
 #[tokio::test]
 async fn oauth_account_reference_without_its_row_is_not_probed() {
     let (db, _user, user_access, _binding) =
-        crate::test_support::root::signed_test_node("health-oauth").await;
+        crate::test_support::signed_test_node("health-oauth").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let runtime_access = crate::auth::credential::runtime_credential_access(&node, did).unwrap();
@@ -457,7 +457,7 @@ async fn oauth_account_reference_without_its_row_is_not_probed() {
 #[tokio::test]
 async fn oauth_kinds_fresh_grok_credential_stays_healthy_and_promotes() {
     let (db, _user, user_access, _binding) =
-        crate::test_support::root::signed_test_node("health-oauth").await;
+        crate::test_support::signed_test_node("health-oauth").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let runtime_access = crate::auth::credential::runtime_credential_access(&node, did).unwrap();
@@ -509,7 +509,7 @@ async fn oauth_kinds_fresh_grok_credential_stays_healthy_and_promotes() {
 #[tokio::test]
 async fn oauth_kinds_stale_credential_without_refresh_token_still_demotes_after_k() {
     let (db, _user, user_access, _binding) =
-        crate::test_support::root::signed_test_node("health-oauth").await;
+        crate::test_support::signed_test_node("health-oauth").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let runtime_access = crate::auth::credential::runtime_credential_access(&node, did).unwrap();
@@ -569,7 +569,7 @@ impl Drop for TokenUrlOverrideGuard {
 #[tokio::test]
 async fn oauth_kinds_refresh_an_expired_credential_on_probe_and_recover() {
     let (db, _user, user_access, _binding) =
-        crate::test_support::root::signed_test_node("health-oauth").await;
+        crate::test_support::signed_test_node("health-oauth").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let runtime_access = crate::auth::credential::runtime_credential_access(&node, did).unwrap();
@@ -661,7 +661,7 @@ async fn oauth_kinds_refresh_an_expired_credential_on_probe_and_recover() {
 #[tokio::test]
 async fn a_hung_token_endpoint_does_not_stall_the_next_backend_probe() {
     let (db, _user, user_access, _binding) =
-        crate::test_support::root::signed_test_node("health-oauth").await;
+        crate::test_support::signed_test_node("health-oauth").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let runtime_access = crate::auth::credential::runtime_credential_access(&node, did).unwrap();
@@ -740,7 +740,7 @@ async fn a_hung_token_endpoint_does_not_stall_the_next_backend_probe() {
 #[tokio::test]
 async fn oauth_kinds_missing_credential_fails_with_login_hint() {
     let (db, _user, user_access, _binding) =
-        crate::test_support::root::signed_test_node("health-missing").await;
+        crate::test_support::signed_test_node("health-missing").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let (options, client, health_map) = (
@@ -803,7 +803,7 @@ async fn subscription_probe_preserves_typed_refresh_rejections() {
             (500, r#"{"error":"unavailable"}"#, "probeFail"),
         ] {
             let (db, _user, user_access, _binding) =
-                crate::test_support::root::signed_test_node("health-rejection").await;
+                crate::test_support::signed_test_node("health-rejection").await;
             let node = db.node.clone();
             let did = db.node_identity.did().to_owned();
             let runtime_access =
@@ -941,7 +941,7 @@ async fn oauth_kinds_are_skipped_without_a_probe_context() {
 #[tokio::test]
 async fn a_gateway_node_oauth_backend_probes_its_stored_gateway_account() {
     let (db, _user, user_access, _binding) =
-        crate::test_support::root::signed_test_node("health-oauth").await;
+        crate::test_support::signed_test_node("health-oauth").await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let runtime_access = crate::auth::credential::runtime_credential_access(&node, did).unwrap();

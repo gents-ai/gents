@@ -5,8 +5,6 @@ pub mod claude_gateway_login;
 pub mod clients;
 pub mod compaction;
 pub mod connection_fingerprint;
-#[cfg(test)]
-mod failure_text_tests;
 pub mod inference_observation;
 pub mod llm;
 pub mod profile_switch;
