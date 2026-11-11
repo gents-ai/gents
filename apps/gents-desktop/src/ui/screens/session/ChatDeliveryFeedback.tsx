@@ -74,16 +74,43 @@ export function ChatDeliveryFeedback({
   const now = useSendDeadlineClock(stores.chat);
   const draws = stores.chat.use.transcriptDraws();
   const storing = stores.chat.use.storingSend();
-  /* a send is shown once: here unless the open transcript draws its row,
-     and nowhere but the composer while its attachments are stored */
-  const shownElsewhere = (draft: ChatDraft) =>
-    !mailboxItem &&
-    drawnInTranscript(draft, nodeDid, sessionId) &&
-    (draft.requestId === storing ||
-      (draws !== null &&
-        draws.nodeDid === nodeDid &&
-        draws.sessionId === sessionId &&
-        draws.requestIds.includes(draft.requestId)));
+  const kept = chatDraftsFor(
+    entries,
+    clientDid,
+    nodeDid,
+    sessionId,
+    mailboxItem?.itemId ?? null,
+  );
+  const held = useSessionValue(stores.session, (state) =>
+    !mailboxItem && heldFor(state.session, sessionId, nodeDid)
+      ? kept
+          .filter((draft) => sessionHoldsRequest(state, draft.requestId))
+          .map((draft) => draft.requestId)
+          .join("\n")
+      : "",
+  );
+  /* a chat send is shown in one place: here only while nothing else shows
+     it. The open transcript draws its row, or the composer still holds it
+     while its attachments are stored; a pending one is also shown by the
+     session holding it (its row, the pending tray, a fold) or, queued
+     behind a running turn, by the tray. A failed one stays here, with
+     Retry and Discard, unless its transcript draws it. */
+  const shownElsewhere = (draft: ChatDraft, status: SendStatus) => {
+    if (mailboxItem || draft.mailbox) return false;
+    if (
+      drawnInTranscript(draft, nodeDid, sessionId) &&
+      (draft.requestId === storing ||
+        (draws !== null &&
+          draws.nodeDid === nodeDid &&
+          draws.sessionId === sessionId &&
+          draws.requestIds.includes(draft.requestId)))
+    )
+      return true;
+    return (
+      status === "pending" &&
+      (draft.queued || held.split("\n").includes(draft.requestId))
+    );
+  };
   useEffect(() => {
     const reload = () => stores.chat.setState(loadChatDrafts());
     window.addEventListener("storage", reload);
@@ -99,25 +126,18 @@ export function ChatDeliveryFeedback({
       {/* every kept message is in view from the moment it is sent: pending
           while its send is in flight, failed with Retry and Discard, or a
           confirmed answer waiting for its question to close */}
-      {chatDraftsFor(
-        entries,
-        clientDid,
-        nodeDid,
-        sessionId,
-        mailboxItem?.itemId ?? null,
-      )
-        .filter((draft) => !shownElsewhere(draft))
-        .map((draft) => {
-          const status = sendStatus(draft, now);
-          return (
-            <SavedMessage
-              key={draft.requestId}
-              draft={draft}
-              status={status}
-              disabled={sending || status === "pending"}
-            />
-          );
-        })}
+      {kept.map((draft) => {
+        const status = sendStatus(draft, now);
+        if (shownElsewhere(draft, status)) return null;
+        return (
+          <SavedMessage
+            key={draft.requestId}
+            draft={draft}
+            status={status}
+            disabled={sending || status === "pending"}
+          />
+        );
+      })}
     </>
   );
 }

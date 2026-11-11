@@ -21,6 +21,7 @@ vi.mock("../src/ui/screens/Markdown", () => ({
 }));
 
 import { TranscriptPanel } from "../src/ui/screens/Transcript";
+import { SelectedPendingTray } from "../src/ui/screens/PendingTray";
 import { ChatDeliveryFeedback } from "../src/ui/screens/session/ChatDeliveryFeedback";
 import { NO_PARENT } from "../src/ui/screens/parentWork";
 import { NO_WORKERS } from "../src/ui/screens/workers";
@@ -60,6 +61,9 @@ function selectedTranscript() {
           workerActions={{ interrupt: () => {} }}
           session={useSelectedSession()}
         />
+        <div data-testid="pending-tray">
+          <SelectedPendingTray />
+        </div>
         <div data-testid="composer-feedback">
           <ChatDeliveryFeedback />
         </div>
@@ -247,11 +251,8 @@ describe("a send drawn only in the session it was sent to", () => {
     expect(within(transcript()).queryByText("Sent from here")).toBeNull();
   });
 
-  it("leaves a queued send, a new session's first message and an answer where they were", () => {
+  it("leaves a new session's first message and an answer by the composer", () => {
     const { app } = fixture();
-    keep(app, request({ requestId: "queued", content: "Queued one" }), {
-      queued: true,
-    });
     keep(app, request({ requestId: "first", content: "First message" }), {
       selectedSessionId: null,
     });
@@ -260,9 +261,65 @@ describe("a send drawn only in the session it was sent to", () => {
       request({ requestId: "answer", content: "", causedBySourceDocId: "item" }),
       { mailbox: { nodeDid: NODE, itemId: "item", summary: "An answer" } },
     );
-    for (const id of ["queued", "first", "answer"]) expect(rowsOf(id)).toHaveLength(0);
-    expect(feedback()).toHaveTextContent("Queued one");
+    for (const id of ["first", "answer"]) expect(rowsOf(id)).toHaveLength(0);
+    expect(feedback()).toHaveTextContent("Sending the message…");
     expect(feedback()).toHaveTextContent("First message");
+    expect(feedback()).toHaveTextContent("An answer");
+  });
+});
+
+describe("a send queued behind a running turn", () => {
+  const queuedIn = (ids: string[]) =>
+    sessionSnapshot({
+      sessionId: SESSION,
+      nodeDid: NODE,
+      turnState: "running",
+      queuedTurns: ids.map((requestId) => ({
+        requestId,
+        content: "Queued one",
+        selectedSkillIds: [],
+        lifecycleState: "pending",
+        foldedIntoRequestId: null,
+        origin: null,
+        createdAt: null,
+      })),
+    });
+
+  it("shows no card while pending, whether or not the tray lists it yet", () => {
+    const { app } = fixture({ session: queuedIn([]) });
+    keep(app, request({ requestId: "queued", content: "Queued one" }), {
+      queued: true,
+    });
+    expect(
+      within(feedback()).queryByRole("status", { name: "Saved message" }),
+    ).toBeNull();
+    act(() => writeSession(app.stores.session, queuedIn(["queued"])));
+    expect(screen.getByTestId("pending-tray")).toHaveTextContent("Queued one");
+    expect(
+      within(feedback()).queryByRole("status", { name: "Saved message" }),
+    ).toBeNull();
+    expect(rowsOf("queued")).toHaveLength(0);
+  });
+
+  it("hides the card of a pending send the session holds, though it was not queued here", () => {
+    const { app } = fixture({ session: queuedIn(["sent-request"]) });
+    keep(app, request());
+    expect(
+      within(feedback()).queryByRole("status", { name: "Saved message" }),
+    ).toBeNull();
+    expect(screen.queryByText("Sending the message…")).toBeNull();
+  });
+
+  it("shows the card with Retry and Discard once when it fails", () => {
+    const { app } = fixture({ session: queuedIn([]) });
+    keep(app, request({ requestId: "queued", content: "Queued one" }), {
+      queued: true,
+      failed: true,
+    });
+    expect(screen.getAllByRole("button", { name: "Retry message" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Discard message" })).toHaveLength(1);
+    within(feedback()).getByText("The message wasn't sent");
+    within(feedback()).getByRole("button", { name: "Retry message" });
   });
 });
 
