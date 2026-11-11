@@ -39,7 +39,7 @@ pub(super) fn prepare_recorded_cache(
         record.coordinate == coordinate,
         "pack receipt coordinate mismatch"
     );
-    let (namespace, name) = super::split_namespace(coordinate);
+    let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(coordinate);
     let expected = cache_root(Path::new(""), namespace, name, &record.digest)?;
     let recorded = Path::new(&record.assets);
     let unscoped = Path::new(gents_store::local::home::PACKS_DIR_NAME)

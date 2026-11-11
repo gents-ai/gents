@@ -35,7 +35,7 @@ pub(crate) async fn outdated_packs_on(
     let client = RegistryClient::new(resolve_registry_url(registry));
     let mut report = Vec::new();
     for pack in installed {
-        let (namespace, name) = super::split_namespace(&pack.coordinate);
+        let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(&pack.coordinate);
         let (latest, outdated, error) = match client.package(namespace, name).await {
             Err(error) => (None, None, Some(format!("{error:#}"))),
             Ok(package) => match package["latest"].as_str() {
@@ -80,7 +80,7 @@ fn select_packs<'a>(packs: &'a [Value], package: Option<&str>) -> Result<Vec<&'a
         .iter()
         .filter(|pack| {
             package.is_none_or(|package| {
-                let (namespace, name) = super::split_namespace(package);
+                let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(package);
                 pack["pack"] == format!("{namespace}/{name}").as_str()
             })
         })

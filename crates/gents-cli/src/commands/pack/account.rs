@@ -78,7 +78,7 @@ pub(crate) async fn whoami(args: PackAccountArgs) -> Result<()> {
 }
 
 pub(crate) async fn info(args: PackInfoArgs) -> Result<()> {
-    let (namespace, name) = super::split_namespace(&args.package);
+    let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(&args.package);
     let client = RegistryClient::new(resolve_registry_url(args.registry.as_deref()));
     crate::print_json(&client.package(namespace, name).await?)
 }
@@ -90,7 +90,7 @@ pub(crate) async fn yank(args: PackYankArgs) -> Result<()> {
             args.package
         )
     })?;
-    let (namespace, name) = super::split_namespace(coordinate);
+    let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(coordinate);
     let registry = resolve_registry_url(args.registry.as_deref());
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let token_flag = resolve_token_flag(args.token, args.token_stdin)?;
@@ -102,7 +102,7 @@ pub(crate) async fn yank(args: PackYankArgs) -> Result<()> {
 }
 
 pub(crate) async fn owner(args: PackOwnerArgs) -> Result<()> {
-    let (namespace, name) = super::split_namespace(&args.package);
+    let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(&args.package);
     let registry = resolve_registry_url(args.registry.as_deref());
     let client = RegistryClient::new(registry.clone());
     let Some(username) = args.transfer else {

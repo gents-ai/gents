@@ -11,7 +11,7 @@ use crate::cli::args::PluginRunArgs;
 use super::store::{self, InstalledPlugin};
 
 pub(crate) async fn run(args: PluginRunArgs) -> Result<()> {
-    let (namespace, name) = crate::commands::pack::split_namespace(&args.name);
+    let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(&args.name);
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let record = store::read_record(&home, namespace, name).with_context(|| {
         format!(

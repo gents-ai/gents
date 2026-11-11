@@ -203,7 +203,7 @@ async fn install_unscoped_assets(home: &Path, package: String) -> HomePackInstal
     let installed = install(home, package).await.unwrap();
     let root = Path::new(installed["installed_assets"].as_str().unwrap());
     let mut record: HomePackInstall = serde_json::from_value(installed["record"].clone()).unwrap();
-    let (_, name) = super::super::split_namespace(&record.coordinate);
+    let (_, name) = gents_pack::pack::registry::split_pack_coordinate(&record.coordinate);
     record.assets = format!(
         "packs/{name}/{}",
         gents_pack::pack::archive::digest_hex(&record.digest).unwrap()

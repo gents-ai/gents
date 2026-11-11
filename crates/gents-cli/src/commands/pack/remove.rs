@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use crate::cli::PackRemoveArgs;
 
 pub(crate) async fn remove(args: PackRemoveArgs) -> Result<(), PackChangeError> {
-    let (namespace, name) = super::split_namespace(&args.package);
+    let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(&args.package);
     let coordinate = format!("{namespace}/{name}");
     let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
 
@@ -245,7 +245,7 @@ pub(crate) async fn remove_home_install_with_guard(
     guard.for_home(home)?;
     let record = gents_pack::pack::read_home_install(home, coordinate)?
         .with_context(|| format!("{coordinate} is not installed"))?;
-    let (namespace, _) = super::split_namespace(coordinate);
+    let (namespace, _) = gents_pack::pack::registry::split_pack_coordinate(coordinate);
     let plugins = record
         .plugins
         .iter()

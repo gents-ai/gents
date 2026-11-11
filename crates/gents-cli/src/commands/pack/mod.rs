@@ -157,8 +157,7 @@ pub(crate) mod test_support {
             .unwrap_or_else(|error| panic!("opening {}: {error:#}", dir.display()));
         super::PackSource {
             archive: archive.into(),
-            from: super::source::Source::Local,
-            file_name: None,
+            from: gents_pack::pack::PackSource::Local { file_name: None },
         }
     }
 
@@ -178,10 +177,6 @@ pub(crate) mod test_support {
         std::fs::write(path, serde_json::to_vec(&manifest).unwrap()).unwrap();
         dir
     }
-}
-
-pub(crate) fn split_namespace(name: &str) -> (&str, &str) {
-    gents_pack::pack::registry::split_pack_coordinate(name)
 }
 
 async fn list(args: PackListArgs) -> Result<()> {

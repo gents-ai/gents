@@ -49,7 +49,7 @@ pub(crate) async fn fetch(args: PackFetchArgs) -> Result<()> {
     if args.store {
         return fetch_into_store(args).await;
     }
-    let (namespace, name) = crate::commands::pack::split_namespace(&args.package);
+    let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(&args.package);
     let base_url = resolve_registry_url(args.registry.as_deref());
     let client = RegistryClient::new(base_url.clone());
 

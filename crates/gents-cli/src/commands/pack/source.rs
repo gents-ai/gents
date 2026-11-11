@@ -6,20 +6,7 @@ use gents_pack::pack::PackManifest;
 
 pub(crate) struct PackSource {
     pub(super) archive: std::sync::Arc<PackArchive>,
-    pub(super) from: Source,
-    pub(super) file_name: Option<String>,
-}
-
-pub(super) enum Source {
-    Local,
-    Installed,
-    Store,
-    Registry {
-        namespace: String,
-        name: String,
-        version: String,
-        artifact_digest: String,
-    },
+    pub(super) from: gents_pack::pack::PackSource,
 }
 
 impl PackSource {
@@ -29,37 +16,23 @@ impl PackSource {
         source: gents_pack::pack::PackSource,
     ) -> Result<Self> {
         source.validate()?;
-        let (from, file_name) = match source {
-            gents_pack::pack::PackSource::Local { file_name } => (Source::Local, file_name),
-            gents_pack::pack::PackSource::Installed => (Source::Installed, None),
-            gents_pack::pack::PackSource::Store => (Source::Store, None),
-            gents_pack::pack::PackSource::Registry {
-                namespace,
-                name,
-                version,
-                artifact_digest,
-            } => {
-                anyhow::ensure!(
-                    namespace == archive.manifest().metadata.namespace
-                        && name == archive.manifest().name
-                        && version == archive.manifest().version,
-                    "registry source does not match the archive"
-                );
-                (
-                    Source::Registry {
-                        namespace,
-                        name,
-                        version,
-                        artifact_digest,
-                    },
-                    None,
-                )
-            }
-        };
+        if let gents_pack::pack::PackSource::Registry {
+            namespace,
+            name,
+            version,
+            ..
+        } = &source
+        {
+            anyhow::ensure!(
+                *namespace == archive.manifest().metadata.namespace
+                    && *name == archive.manifest().name
+                    && *version == archive.manifest().version,
+                "registry source does not match the archive"
+            );
+        }
         Ok(Self {
             archive: archive.into(),
-            from,
-            file_name,
+            from: source,
         })
     }
 
@@ -84,12 +57,7 @@ impl PackSource {
     }
 
     pub(crate) fn label(&self) -> &'static str {
-        match &self.from {
-            Source::Local => "local",
-            Source::Installed => "installed",
-            Source::Store => "store",
-            Source::Registry { .. } => "registry",
-        }
+        self.from.kind()
     }
 
     /// Records the provenance of `root` and `dependencies` under their pack coordinates.
@@ -108,29 +76,12 @@ impl PackSource {
     }
 
     pub(crate) fn provenance(&self) -> gents_pack::pack::PackSource {
-        match &self.from {
-            Source::Local => gents_pack::pack::PackSource::Local {
-                file_name: self.file_name.clone(),
-            },
-            Source::Installed => gents_pack::pack::PackSource::Installed,
-            Source::Store => gents_pack::pack::PackSource::Store,
-            Source::Registry {
-                namespace,
-                name,
-                version,
-                artifact_digest,
-            } => gents_pack::pack::PackSource::Registry {
-                namespace: namespace.clone(),
-                name: name.clone(),
-                version: version.clone(),
-                artifact_digest: artifact_digest.clone(),
-            },
-        }
+        self.from.clone()
     }
 
     pub(crate) fn describe(&self) -> String {
         match &self.from {
-            Source::Registry {
+            gents_pack::pack::PackSource::Registry {
                 namespace,
                 name,
                 version,
@@ -151,18 +102,10 @@ pub(crate) async fn resolve_pack_source(
 ) -> Result<PackSource> {
     if let Some(local) = local::classify(spec) {
         let archive = local::open(&local, home)?;
-        let (from, file_name) = match &local {
-            gents_pack::pack::local::LocalName::Path(path) => (
-                Source::Local,
-                path.file_name()
-                    .map(|name| name.to_string_lossy().into_owned()),
-            ),
-            gents_pack::pack::local::LocalName::Digest(_) => (Source::Store, None),
-        };
+        let from = gents_pack::pack::PackSource::of_local_name(&local);
         return Ok(PackSource {
             archive: archive.into(),
             from,
-            file_name,
         });
     }
     let installed: Vec<gents_pack::pack::InstalledPack> =
@@ -181,14 +124,14 @@ pub(crate) async fn resolve_pack_source(
     };
     let resolved = resolve_named(spec, &options).await?;
     let from = match resolved.from {
-        ResolvedFrom::Installed => Source::Installed,
-        ResolvedFrom::Store => Source::Store,
+        ResolvedFrom::Installed => gents_pack::pack::PackSource::Installed,
+        ResolvedFrom::Store => gents_pack::pack::PackSource::Store,
         ResolvedFrom::Registry {
             artifact_digest,
             version,
         } => {
             let parsed = gents_documents::pack_spec::parse_pack_spec(spec)?;
-            Source::Registry {
+            gents_pack::pack::PackSource::Registry {
                 namespace: parsed.namespace.to_owned(),
                 name: parsed.name.to_owned(),
                 version,
@@ -199,7 +142,6 @@ pub(crate) async fn resolve_pack_source(
     Ok(PackSource {
         archive: resolved.archive.into(),
         from,
-        file_name: None,
     })
 }
 

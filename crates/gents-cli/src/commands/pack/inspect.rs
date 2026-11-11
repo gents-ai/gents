@@ -15,7 +15,7 @@ pub(super) async fn show(args: PackShowArgs) -> Result<()> {
         .dependencies
         .iter()
         .map(|dependency| {
-            let (namespace, name) = super::split_namespace(dependency);
+            let (namespace, name) = gents_pack::pack::registry::split_pack_coordinate(dependency);
             Ok(json!({
                 "pack": dependency,
                 "origin_tag": gents_pack::pack::pack_origin_tag(&format!("{namespace}/{name}"))?,

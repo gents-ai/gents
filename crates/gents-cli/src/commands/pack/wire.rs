@@ -20,7 +20,7 @@ use gents_store::config_client::{
 };
 use serde_json::{json, Value};
 
-use super::split_namespace;
+use gents_pack::pack::registry::split_pack_coordinate;
 use crate::cli::PackWireArgs;
 
 #[derive(Clone)]
@@ -106,7 +106,7 @@ async fn wire_in_owned(
     let plugin_name = request.plugin.clone();
     let (_store_guard, plugin) = tokio::task::spawn_blocking(move || {
         let guard = gents_pack::plugin::store::try_lock_store(&home_for_read)?;
-        let (namespace, name) = split_namespace(&plugin_name);
+        let (namespace, name) = split_pack_coordinate(&plugin_name);
         let plugin = read_record(&home_for_read, namespace, name).with_context(|| {
             format!("{plugin_name} is not installed. Next: gents config pack install <pack>")
         })?;
