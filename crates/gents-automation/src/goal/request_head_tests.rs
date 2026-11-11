@@ -291,7 +291,7 @@ struct Case {
     expected_receipt_checks: Option<usize>,
 }
 
-fn signed_row(create: &AgentRequestCreate, doc: u64) -> AgentRequestRow {
+pub(crate) fn signed_row(create: &AgentRequestCreate, doc: u64) -> AgentRequestRow {
     AgentRequestRow {
         purpose: Some(create.purpose),
         doc_id: Some(format!("physical-{doc}")),

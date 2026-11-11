@@ -8,6 +8,10 @@ impl TransactionFailure for anyhow::Error {
         let error: &(dyn std::error::Error + 'static) = self.as_ref();
         super::retry::access_error_in(error)
     }
+
+    fn rerun_requested(&self) -> Option<&super::RerunNote> {
+        super::retry::rerun_request_in(self.as_ref())
+    }
 }
 
 #[cfg(test)]

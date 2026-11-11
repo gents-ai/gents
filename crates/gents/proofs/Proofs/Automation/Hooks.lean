@@ -9,10 +9,13 @@ import Proofs.Session.Hooks.Prepared
 import Proofs.Session.Hooks.Delivery
 import Proofs.Session.Hooks.OwedDelivery
 import Proofs.Session.Hooks.MustCommit
+import Proofs.Session.Hooks.History
 import Proofs.Session.Hooks.Safety
 import Proofs.Session.Hooks.Resume
 import Proofs.Automation.Hooks.Mailbox
 import Proofs.Automation.Hooks.GoalFence
+import Proofs.Automation.Hooks.GoalResume
 import Proofs.Automation.Hooks.GoalTask
 import Proofs.Automation.Hooks.QueueScope
+import Proofs.Automation.Hooks.GoalHalt
 import Proofs.Session.Hooks.Catalog

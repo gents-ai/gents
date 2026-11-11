@@ -112,6 +112,21 @@ impl gents_store::config_client::TransactionFailure for CommitError {
             Self::ObservedTerminal { .. } => None,
         }
     }
+
+    fn rerun_requested(&self) -> Option<&gents_store::config_client::RerunNote> {
+        match self {
+            Self::Access(error) => {
+                gents_store::config_client::TransactionFailure::rerun_requested(error)
+            }
+            Self::Other(error) => {
+                gents_store::config_client::TransactionFailure::rerun_requested(error)
+            }
+            Self::Unconfirmed(error) => {
+                gents_store::config_client::TransactionFailure::rerun_requested(error.as_ref())
+            }
+            Self::Steer(_) | Self::ObservedTerminal { .. } => None,
+        }
+    }
 }
 
 pub async fn commit<C>(

@@ -30,6 +30,14 @@ pub trait TransactionFailure {
         self.config_client_error()
             .is_some_and(ConfigClientError::is_permission_denied)
     }
+
+    /// The note of the callback's request to run the transaction again
+    /// ([`ConfigClientError::RerunRequested`]). An owner enum that carries
+    /// an erased error answers from that error's whole `source()` chain.
+    fn rerun_requested(&self) -> Option<&super::RerunNote> {
+        self.config_client_error()
+            .and_then(ConfigClientError::rerun_note)
+    }
 }
 
 impl TransactionFailure for ConfigClientError {
@@ -54,11 +62,19 @@ where
     fn config_client_error(&self) -> Option<&ConfigClientError> {
         (**self).config_client_error()
     }
+
+    fn rerun_requested(&self) -> Option<&super::RerunNote> {
+        (**self).rerun_requested()
+    }
 }
 
 impl TransactionFailure for Box<dyn std::error::Error + Send + Sync> {
     fn config_client_error(&self) -> Option<&ConfigClientError> {
         access_error_in(self.as_ref())
+    }
+
+    fn rerun_requested(&self) -> Option<&super::RerunNote> {
+        rerun_request_in(self.as_ref())
     }
 }
 
@@ -74,6 +90,17 @@ pub(super) fn access_error_in<'a>(
                 .downcast_ref::<GraphqlResponseError>()?
                 .config_client_error()
         })
+    })
+}
+
+/// The first request to run again in an erased error's chain.
+pub(super) fn rerun_request_in<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a super::RerunNote> {
+    gents_protocol::error_chain::find_map_source(error, |cause| {
+        cause
+            .downcast_ref::<super::RerunRequest>()
+            .map(super::RerunRequest::note)
     })
 }
 

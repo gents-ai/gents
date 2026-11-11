@@ -6,7 +6,7 @@ use serde_json::Value;
 use super::effect::{
     Access, DocRef, Effect, Grant, InvalidEffects, Manifest, Row, Subject, SubjectKind, Write,
 };
-use super::hook::{Direction, Query};
+use super::hook::{history_permitted, Direction, Query};
 use super::registry::{OperationContext, Registry};
 use super::stage::{ApplyFailure, HookError, Host};
 use gents_store::config_client::ConfigApplyTxn;
@@ -345,7 +345,12 @@ impl Host for TxnHost<'_, '_> {
         self.txn.actor_did().map(str::to_owned)
     }
 
-    async fn select(&self, query: &Query) -> Result<Vec<Row>, HookError> {
+    async fn select(
+        &self,
+        manifest: &Manifest,
+        named: &[DocRef],
+        query: &Query,
+    ) -> Result<Vec<Row>, HookError> {
         if let Some(args) = &query.core {
             let read = self
                 .registry
@@ -365,6 +370,12 @@ impl Host for TxnHost<'_, '_> {
                 .collect());
         }
         if let Some(links) = &query.revisions {
+            if !history_permitted(manifest, named, query) {
+                return Err(HookError::UnboundedHistory {
+                    plugin: manifest.name,
+                    collection: query.collection.clone(),
+                });
+            }
             identifier(&query.collection)?;
             selection(&query.fields)?;
             for (field, _) in &query.filter {

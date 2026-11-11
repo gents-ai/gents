@@ -632,6 +632,8 @@ pub struct LeanContractSnapshot {
     pub lifecycle_hook_effect_cases: Vec<LeanLifecycleHookEffectCase>,
     pub lifecycle_hook_stage_cases: Vec<LeanLifecycleHookStageCase>,
     pub lifecycle_hook_must_commit_cases: Vec<LeanLifecycleHookMustCommitCase>,
+    pub lifecycle_hook_rerun_cases: Vec<LeanLifecycleHookRerunCase>,
+    pub lifecycle_hook_goal_resume_cases: Vec<LeanLifecycleHookGoalResumeCase>,
     pub lifecycle_hook_combine_cases: Vec<LeanLifecycleHookCombineCase>,
     pub lifecycle_hook_gate_cases: Vec<LeanLifecycleHookGateCase>,
     pub lifecycle_hook_queue_scope_cases: Vec<LeanLifecycleHookQueueScopeCase>,
@@ -639,6 +641,9 @@ pub struct LeanContractSnapshot {
     pub lifecycle_hook_owed_delivery_cases: LeanLifecycleHookOwedDeliveryCases,
     pub lifecycle_hook_admit_cases: Vec<LeanLifecycleHookAdmitCase>,
     pub lifecycle_hook_grant_cases: Vec<LeanLifecycleHookGrantCase>,
+    pub lifecycle_hook_supersede_cases: Vec<LeanLifecycleHookSupersedeCase>,
+    pub lifecycle_hook_goal_halt_cases: Vec<LeanLifecycleHookGoalHaltCase>,
+    pub lifecycle_hook_history_cases: Vec<LeanLifecycleHookHistoryCase>,
     pub follow_up_hooks: Vec<String>,
     pub coverage_ledger: Vec<LeanCoverageEntry>,
     pub feature_surface_requirements: Vec<LeanFeatureSurfaceRequirement>,
@@ -2795,6 +2800,7 @@ mod durable_reduction;
 mod eval;
 mod event_delivery;
 pub mod family;
+mod hook_decisions;
 mod hooks;
 mod optimization;
 mod prompt_assembly;
@@ -2830,6 +2836,7 @@ pub use composed_invariants::*;
 pub use durable_reduction::*;
 pub use eval::*;
 pub use event_delivery::*;
+pub use hook_decisions::*;
 pub use hooks::*;
 pub use optimization::*;
 pub use prompt_assembly::*;
@@ -3010,6 +3017,14 @@ pub fn lean_lifecycle_hook_must_commit_cases() -> &'static [LeanLifecycleHookMus
     &lean_contract_snapshot().lifecycle_hook_must_commit_cases
 }
 
+pub fn lean_lifecycle_hook_rerun_cases() -> &'static [LeanLifecycleHookRerunCase] {
+    &lean_contract_snapshot().lifecycle_hook_rerun_cases
+}
+
+pub fn lean_lifecycle_hook_goal_resume_cases() -> &'static [LeanLifecycleHookGoalResumeCase] {
+    &lean_contract_snapshot().lifecycle_hook_goal_resume_cases
+}
+
 pub fn lean_lifecycle_hook_combine_cases() -> &'static [LeanLifecycleHookCombineCase] {
     &lean_contract_snapshot().lifecycle_hook_combine_cases
 }
@@ -3036,6 +3051,18 @@ pub fn lean_lifecycle_hook_admit_cases() -> &'static [LeanLifecycleHookAdmitCase
 
 pub fn lean_lifecycle_hook_grant_cases() -> &'static [LeanLifecycleHookGrantCase] {
     &lean_contract_snapshot().lifecycle_hook_grant_cases
+}
+
+pub fn lean_lifecycle_hook_supersede_cases() -> &'static [LeanLifecycleHookSupersedeCase] {
+    &lean_contract_snapshot().lifecycle_hook_supersede_cases
+}
+
+pub fn lean_lifecycle_hook_goal_halt_cases() -> &'static [LeanLifecycleHookGoalHaltCase] {
+    &lean_contract_snapshot().lifecycle_hook_goal_halt_cases
+}
+
+pub fn lean_lifecycle_hook_history_cases() -> &'static [LeanLifecycleHookHistoryCase] {
+    &lean_contract_snapshot().lifecycle_hook_history_cases
 }
 
 pub fn lean_request_execution_lease_cases() -> &'static [LeanRequestExecutionLeaseCase] {

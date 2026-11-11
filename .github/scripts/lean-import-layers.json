@@ -164,6 +164,14 @@
       "rust_owner": "gents-automation",
       "reason": "Goal instance of the hook contract"
     },
+    "Proofs.Automation.Hooks.GoalHalt": {
+      "rust_owner": "gents-automation",
+      "reason": "Goal instance of the hook contract"
+    },
+    "Proofs.Automation.Hooks.GoalResume": {
+      "rust_owner": "gents-automation",
+      "reason": "Goal instance of the hook contract"
+    },
     "Proofs.Automation.Hooks.GoalTask": {
       "rust_owner": "gents-automation",
       "reason": "Goal instance of the hook contract"

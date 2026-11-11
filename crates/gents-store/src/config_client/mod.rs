@@ -124,7 +124,7 @@ pub use txn::{
 };
 
 pub use destructive_decision::{DestructiveAuthority, DestructiveRefusal, InventoryRead};
-pub use error::{ConfigClientError, RerunNote, TransactionConflict};
+pub use error::{ConfigClientError, RerunNote, RerunRequest, TransactionConflict};
 pub use relationships::ConfigRelationshipGrant;
 pub use retry::TransactionFailure;
 pub use self_config_permission::{AgentSelfConfigPermission, AgentSelfConfigPermissionError};

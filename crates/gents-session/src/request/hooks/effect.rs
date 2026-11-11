@@ -212,6 +212,9 @@ pub struct Manifest {
     pub name: &'static str,
     pub owns: Vec<OwnedCollection>,
     pub bound: usize,
+    /// The collections whose revision history the plugin declares it reads
+    /// (Lean `Hooks.historyPermitted`).
+    pub history: Vec<&'static str>,
 }
 
 impl Manifest {
