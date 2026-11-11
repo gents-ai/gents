@@ -640,7 +640,7 @@ mod tests {
 
     #[tokio::test]
     async fn saving_adds_a_backend_beside_the_existing_one() {
-        let served = crate::shared::test_support::served_config(owner_with_anthropic()).await;
+        let served = gents_host::test_support::served_config(owner_with_anthropic()).await;
         let access = ConfigAccess::Graphql(served.user.clone());
         let backends = stored(&access, Collection::InferenceBackend).await;
         let profiles = stored(&access, Collection::InferenceProfile).await;

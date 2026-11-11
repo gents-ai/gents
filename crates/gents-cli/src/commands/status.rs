@@ -1,10 +1,11 @@
+use gents_host::readiness::load_live_node_readiness;
 use gents_store::config_client::GraphqlEndpoint;
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use gents_protocol::row::{
-    decode_node_readiness_snapshot, project_node_readiness_summary, NodeReadinessRow,
+    decode_node_readiness_snapshot, project_node_readiness_summary,
     ProjectedNodeReadinessSummary,
 };
 use serde_json::{json, Value};
@@ -105,7 +106,7 @@ pub(crate) async fn load_runtime_status_output(
         .unwrap_or(Value::Null);
     let home_dir = resolve_home_dir(home);
     let runtime_state = read_runtime_state(&home_dir)?;
-    let p2p_status = crate::commands::p2p::load_live_http_p2p_status(home, graphql).await;
+    let p2p_status = gents_host::p2p_status::load_live_http_p2p_status(home, graphql).await;
     let background_completion =
         match gents_toolcalls::background::diagnostics::load_background_completion_diagnostics(
             &ConfigAccess::Graphql(graphql.clone()),
@@ -188,7 +189,7 @@ pub(crate) async fn load_runtime_status_output(
             .unwrap_or(Value::Null);
         map.insert("agent_executors".to_string(), agent_executors);
         let p2p_value = map.get("p2p").cloned().unwrap_or(Value::Null);
-        crate::commands::p2p::flatten_p2p_fields(map, &p2p_value);
+        gents_host::p2p_status::flatten_p2p_fields(map, &p2p_value);
     }
     Ok(output)
 }
@@ -210,7 +211,7 @@ async fn liveness_value(
     if let Some(liveness) = runtime_status.and_then(|status| status.get("liveness")) {
         return liveness.clone();
     }
-    match crate::http::prometheus::load_metrics_query_data(graphql, node_did).await {
+    match gents_host::http::prometheus::load_metrics_query_data(graphql, node_did).await {
         Ok(data) => serde_json::to_value(&data.liveness).unwrap_or(Value::Null),
         Err(_) => Value::Null,
     }
@@ -233,7 +234,7 @@ fn runtime_backend_probes(status: &Value, node_did: &str) -> BTreeMap<String, Va
         return BTreeMap::new();
     }
     status
-        .get(crate::http::router::BACKEND_PROBES_STATUS_FIELD)
+        .get(gents_host::http::router::BACKEND_PROBES_STATUS_FIELD)
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
@@ -248,7 +249,7 @@ pub(crate) async fn fetch_runtime_status(
     graphql: &GraphqlEndpoint,
     timeout: std::time::Duration,
 ) -> Result<Value> {
-    let status_url = runtime_status_url(graphql)?;
+    let status_url = gents_host::readiness::runtime_status_url(graphql)?;
     let client = reqwest::Client::builder()
         .timeout(timeout)
         .build()
@@ -264,121 +265,9 @@ pub(crate) async fn fetch_runtime_status(
         .with_context(|| format!("decoding runtime status from {status_url}"))
 }
 
-/// A local operator control must not follow a status endpoint to another host
-/// or accept an unbounded response before deciding whether to retire a runtime.
-pub(crate) async fn fetch_local_operator_status(
-    graphql: &GraphqlEndpoint,
-    timeout: std::time::Duration,
-) -> Result<Value> {
-    const MAX_STATUS_BYTES: usize = 2 * 1024 * 1024;
-    let status_url = runtime_status_url(graphql)?;
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(timeout)
-        .build()
-        .context("building local runtime status client")?;
-    let mut response = graphql
-        .authorize(client.get(&status_url))?
-        .send()
-        .await
-        .context("reading local runtime status")?;
-    anyhow::ensure!(
-        response.status().is_success(),
-        "local runtime status was refused"
-    );
-    let mut body = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .context("reading local runtime status")?
-    {
-        anyhow::ensure!(
-            body.len().saturating_add(chunk.len()) <= MAX_STATUS_BYTES,
-            "local runtime status is too large"
-        );
-        body.extend_from_slice(&chunk);
-    }
-    serde_json::from_slice(&body).context("decoding local runtime status")
-}
-
-fn runtime_status_url(graphql: &GraphqlEndpoint) -> Result<String> {
-    let mut url = reqwest::Url::parse(graphql.url()).context("parsing GraphQL endpoint URL")?;
-    url.set_path("/status");
-    url.set_query(None);
-    url.set_fragment(None);
-    Ok(url.to_string())
-}
-
-pub(crate) async fn load_live_node_readiness(
-    graphql: &GraphqlEndpoint,
-    node_did: &str,
-) -> Result<Option<NodeReadinessRow>> {
-    load_node_readiness(&ConfigAccess::Graphql(graphql.clone()), node_did).await
-}
-
-pub(crate) async fn load_node_readiness(
-    access: &ConfigAccess,
-    node_did: &str,
-) -> Result<Option<NodeReadinessRow>> {
-    use gents_protocol::document_query::{
-        fields::node_readiness as fields, Filter, Query, Selection,
-    };
-    let rendered = Query::select(
-        Selection::new()
-            .field(fields::NODE_DID)
-            .field(fields::SNAPSHOT_JSON)
-            .field(fields::UPDATED_AT),
-    )
-    .filter(Filter::eq(fields::NODE_DID, node_did))
-    .limit(1)
-    .render();
-    gents_protocol::graphql::graphql_rows_from_response(
-        &access.read(&rendered).await?,
-        "NodeReadiness",
-    )
-    .into_iter()
-    .next()
-    .map(|row| serde_json::from_value(row).context("decoding node readiness row"))
-    .transpose()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn local_operator_status_refuses_redirects_and_oversized_responses() {
-        use axum::{routing::get, Router};
-        let app = Router::new()
-            .route(
-                "/status",
-                get(|| async { axum::response::Redirect::temporary("/other") }),
-            )
-            .route("/other", get(|| async { "{}" }));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let endpoint = GraphqlEndpoint::anonymous(format!("http://{address}/api/v0/graphql"));
-        assert!(
-            fetch_local_operator_status(&endpoint, std::time::Duration::from_secs(2))
-                .await
-                .is_err()
-        );
-        server.abort();
-
-        let app = Router::new().route("/status", get(|| async { "x".repeat(2 * 1024 * 1024 + 1) }));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let endpoint = GraphqlEndpoint::anonymous(format!("http://{address}/api/v0/graphql"));
-        assert!(
-            fetch_local_operator_status(&endpoint, std::time::Duration::from_secs(2))
-                .await
-                .is_err()
-        );
-        server.abort();
-    }
 
     #[test]
     fn runtime_backend_probes_belong_to_the_status_node() {

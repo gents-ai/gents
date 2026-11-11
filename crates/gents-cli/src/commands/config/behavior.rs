@@ -564,7 +564,7 @@ mod tests {
         use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
         // Agent DIDs are derived per runtime, so the shared logical ID is a
         // profile label the local Node and a replicated peer both use.
-        let client = crate::shared::test_support::ClientHome::new().await;
+        let client = gents_host::test_support::ClientHome::new().await;
         let peer_dir = tempfile::tempdir()?;
         let peer = gents_store::identity::KeyIdentity::load_or_create(
             peer_dir.path().join("peer.key"),
@@ -661,7 +661,7 @@ mod tests {
 
     #[tokio::test]
     async fn agent_create_and_clone_materialize_canonical_chain() -> Result<()> {
-        let client = crate::shared::test_support::ClientHome::new().await;
+        let client = gents_host::test_support::ClientHome::new().await;
         let node = client.node().clone();
         let owner = client.node_did();
         use gents_documents::apply_desired_state_plan;
@@ -956,7 +956,7 @@ Next: gents config agent --help
     async fn raw_set_rejects_dangling_profile_reference() -> Result<()> {
         use gents_documents::apply_desired_state_plan;
         use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-        let client = crate::shared::test_support::ClientHome::new().await;
+        let client = gents_host::test_support::ClientHome::new().await;
         let binding =
             gents_store::identity::provision_agent_identity(client.home.identity.as_ref())?;
         let agent = json!({

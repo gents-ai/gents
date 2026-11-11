@@ -13,7 +13,7 @@ use gents_store::graphql::escape_graphql_string;
 
 use crate::graphql_access::post_graphql;
 
-use super::cli_process::path_arg;
+use gents_host::cli_process::path_arg;
 
 pub(super) fn spawn_server_with_args_and_env(
     bin: &Path,

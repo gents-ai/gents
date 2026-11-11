@@ -7,7 +7,8 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 
-use super::cli_process::{path_arg, run_cli_json};
+use gents_host::cli_process::path_arg;
+use gents_host::cli_process::run_cli_json;
 use super::server::{wait_http, wait_runtime_ready};
 use crate::cli::args::{PackInitArgs, PackRunArgs, PackSeedArgs};
 use crate::graphql_access::post_graphql;

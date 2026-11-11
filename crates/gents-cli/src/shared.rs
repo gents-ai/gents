@@ -42,24 +42,6 @@ pub(crate) struct InitSummary {
     pub(crate) created_default_agent: bool,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub(crate) struct P2pReplicatorRow {
-    #[serde(rename = "ID", default)]
-    pub(crate) id: Option<String>,
-    #[serde(rename = "Addresses", default)]
-    pub(crate) addresses: Vec<String>,
-    #[serde(rename = "CollectionIDs", default)]
-    pub(crate) collection_ids: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct P2pReplicatorOutputRow {
-    pub(crate) id: Option<String>,
-    pub(crate) addresses: Vec<String>,
-    pub(crate) collection_ids: Vec<String>,
-    pub(crate) collection_names: Vec<String>,
-}
-
 #[derive(Debug, Serialize)]
 pub(crate) struct P2pReplicatorRequest {
     #[serde(rename = "Collections")]
@@ -220,8 +202,6 @@ pub(crate) async fn load_backend_observation(
     gents_inference::backends::registry::decode_backend_observation(rows[0].clone())
 }
 
-#[cfg(test)]
-pub(crate) mod test_support;
 
 pub(crate) fn wire<T>(value: &T) -> String
 where
@@ -231,5 +211,60 @@ where
         Ok(serde_json::Value::String(text)) => text,
         Ok(other) => other.to_string(),
         Err(_) => "?".to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod catalog_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn catalog_freshness_reaches_cli_observation_reader() -> anyhow::Result<()> {
+        let node = std::sync::Arc::new(gents_host::test_support::fixture_node_builder().build().await?);
+        gents_store::schema::ensure_runtime_schemas(&node).await?;
+        let owner = gents_host::test_support::publish_test_node(&node).await;
+        let backend: gents_documents::InferenceBackend = serde_json::from_value(serde_json::json!({
+            "node_did":owner, "backend_id":"catalog-backend", "name":"Catalog",
+            "provider_kind":"OpenAiCompatible", "endpoint":"http://127.0.0.1:1/v1",
+            "auth":{"kind":"unauthenticated"}
+        }))?;
+        let access = gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            ::identity::Did::new(owner)?,
+        );
+        gents_documents::write_inference_backend_document(
+            &access,
+            &backend,
+            &gents_inference::resolved::ProviderProfilePolicy,
+        )
+        .await?;
+        for observed_at in ["2026-10-28T01:00:00Z", "2026-10-28T02:00:00Z"] {
+            let catalog: gents_documents::BackendModelCatalog =
+                serde_json::from_value(serde_json::json!({
+                    "node_did":null, "observed_at":observed_at,
+                    "models":[{"model_name":"retained-model"}]
+                }))?;
+            access
+                .transact_write("test.catalog.refresh", |txn| {
+                    let backend = &backend;
+                    let catalog = catalog.clone();
+                    Box::pin(async move {
+                        gents_inference::backends::registry::record_model_catalog_in_txn(
+                            txn, backend, catalog,
+                        )
+                        .await
+                    })
+                })
+                .await?;
+        }
+        let observation =
+            load_backend_observation(&access, &backend.node_did, &backend.backend_id).await?;
+        assert_eq!(observation.catalogs[0].observed_at, "2026-10-28T02:00:00Z");
+        assert_eq!(
+            observation.catalogs[0].models[0].model_name,
+            "retained-model"
+        );
+        node.shutdown().await.expect("node shutdown");
+        Ok(())
     }
 }

@@ -2,21 +2,17 @@ mod access;
 mod connect;
 pub(crate) mod enrollment_admin;
 mod network;
-mod output;
 mod pairings;
 mod replicators;
 mod templates;
 
+use gents_host::p2p_status::p2p_http_client;
 use anyhow::Result;
 use serde_json::{json, Value};
 
 use crate::cli::args::{
     P2pAdminCommand, P2pCommand, P2pEnrollmentCommand, P2pNetworkCommand, P2pPairingsCommand,
     P2pReplicatorsCommand, P2pTemplatesCommand,
-};
-
-pub(crate) use output::{
-    fetch_live_http_p2p_status, flatten_p2p_fields, load_live_http_p2p_status, persisted_p2p_status,
 };
 
 pub(crate) async fn dispatch(command: P2pCommand) -> Result<()> {
@@ -78,28 +74,13 @@ pub(crate) async fn dispatch(command: P2pCommand) -> Result<()> {
     }
 }
 
-/// P2P administration and probes must eventually report an unavailable runtime
-/// endpoint instead of leaving an interactive command waiting indefinitely.
-pub(crate) fn p2p_http_client() -> Result<reqwest::Client> {
-    use std::sync::OnceLock;
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    Ok(CLIENT
-        .get_or_init(|| {
-            reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(5))
-                .build()
-                .expect("building process-wide P2P HTTP client")
-        })
-        .clone())
-}
-
 pub(super) async fn p2p_probe_get(
     graphql: &gents_store::config_client::GraphqlEndpoint,
     url: &str,
 ) -> Value {
     let request = p2p_http_client().and_then(|client| Ok(graphql.authorize(client.get(url))?));
     let response = match request {
-        Ok(request) => crate::http_get_json::<Value>(request).await,
+        Ok(request) => gents_host::http_client::http_get_json::<Value>(request).await,
         Err(error) => Err(error),
     };
     match response {

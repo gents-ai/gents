@@ -33,10 +33,9 @@ use serde_json::{json, Value};
 use crate::cli::*;
 use crate::config_writes::ConfigAccess;
 use crate::shared::*;
-use crate::{
-    dangerously_overwrite_home, format_tool_ceiling, format_tool_package,
-    normalize_optional_string, print_json, BackendResolutionMode,
-};
+use crate::{dangerously_overwrite_home, format_tool_package, print_json, BackendResolutionMode};
+use gents_host::tool_ceiling::format_tool_ceiling;
+use gents_host::http_client::normalize_optional_string;
 use gents_service::home_state::clear_init_pending;
 use gents_service::home_state::clear_runtime_state;
 use gents_service::home_state::default_data_dir;
@@ -219,7 +218,7 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
             tool_package,
             tool_root: args.tool_root.as_deref(),
             reset: args.reset,
-            store_key_custody: crate::cli::args::store_key_custody(args.store_key_custody),
+            store_key_custody: gents_host::args::store_key_custody(args.store_key_custody),
             store_lock: &store_lock,
             owner: owner.did(),
         })
@@ -312,7 +311,7 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
     let store_key = initialize_home_store(
         &home_dir,
         &data_dir,
-        crate::cli::args::store_key_custody(args.store_key_custody),
+        gents_host::args::store_key_custody(args.store_key_custody),
         &mut stored,
     )
     .await?;
@@ -326,7 +325,7 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
     }
     let mut node_builder =
         gents_store::local::store_key::persistent_builder(&data_dir, &store_key)?;
-    let ceiling = crate::resolve_helpers::host_tool_ceiling(
+    let ceiling = gents_host::tool_ceiling::host_tool_ceiling(
         stored.tool_ceiling,
         stored.tool_root.as_deref().map(Path::new),
     )?;
@@ -2122,7 +2121,7 @@ mod tests {
         let fresh_binding = provision_fresh_home(&node, identity.as_ref(), user.did())
             .await
             .unwrap();
-        let access = crate::shared::test_support::user_access(&graphql, &user);
+        let access = gents_host::test_support::user_access(&graphql, &user);
 
         let binding = fresh_binding;
         let agent_did = binding.agent_did;
@@ -2205,7 +2204,7 @@ mod tests {
         let fresh_binding = provision_fresh_home(&node, identity.as_ref(), user.did())
             .await
             .unwrap();
-        let access = crate::shared::test_support::user_access(&graphql, &user);
+        let access = gents_host::test_support::user_access(&graphql, &user);
 
         let args = init_args();
         let tool_package = resolve_initial_tool_package(&args).unwrap();
@@ -2298,7 +2297,7 @@ mod tests {
         let fresh_binding = provision_fresh_home(&node, identity.as_ref(), user.did())
             .await
             .unwrap();
-        let access = crate::shared::test_support::user_access(&graphql, &user);
+        let access = gents_host::test_support::user_access(&graphql, &user);
 
         let mut args = init_args();
         args.engineer = engineer;
@@ -2394,7 +2393,7 @@ mod tests {
         let identity = KeyIdentity::load_or_create(temp.path().join("node.key"), None).unwrap();
         let owner = identity.did().to_owned();
         let owner = owner.as_str();
-        let (node, graphql) = crate::shared::test_support::served_node(
+        let (node, graphql) = gents_host::test_support::served_node(
             gents::defra_node::Node::builder().with_node_identity_did(owner),
         )
         .await;
@@ -2406,7 +2405,7 @@ mod tests {
         let binding = provision_fresh_home(&node, &identity, user.did())
             .await
             .unwrap();
-        let access = crate::shared::test_support::user_access(&graphql, &user);
+        let access = gents_host::test_support::user_access(&graphql, &user);
         let default = binding.agent_did.as_str();
         let backend = json!({"node_did":owner,"backend_id":"backend","name":"Local",
             "provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1",
@@ -2845,7 +2844,7 @@ mod tests {
         let agent = identity::Did::new(initial["default_agent_did"].as_str().unwrap()).unwrap();
         let data = default_data_dir(&home);
         let _claim = lock_init_store(&home, &data, false).unwrap();
-        let ceiling = crate::resolve_helpers::host_tool_ceiling(
+        let ceiling = gents_host::tool_ceiling::host_tool_ceiling(
             stored.tool_ceiling,
             stored.tool_root.as_deref().map(Path::new),
         )
@@ -2940,7 +2939,7 @@ mod tests {
             identity_backend: IdentityBackendArg::File,
             keychain_label: None,
             secure_enclave_label: None,
-            store_key_custody: Some(crate::cli::args::StoreKeyCustodyArg::File),
+            store_key_custody: Some(gents_host::args::StoreKeyCustodyArg::File),
             inference_endpoint: None,
             backend_id: None,
             backend_name: None,

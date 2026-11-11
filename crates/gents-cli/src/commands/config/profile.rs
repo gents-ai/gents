@@ -422,7 +422,7 @@ mod tests {
     use super::*;
     #[tokio::test]
     async fn profile_show_warns_when_an_xai_effort_will_not_be_sent() {
-        let (access, owner) = crate::shared::test_support::seed_unsent_xai_effort().await;
+        let (access, owner) = gents_host::test_support::seed_unsent_xai_effort().await;
         let owner = owner.as_str();
         let mut row =
             super::super::crud::load_one(&access, super::super::crud::PROFILE_SPEC, owner, "grok")
@@ -438,7 +438,7 @@ mod tests {
     const CLAUDE: &str = "claude-subscription";
 
     fn agent(name: &str) -> gents_protocol::agent_identity::AgentIdentityBinding {
-        crate::shared::test_support::fixture_agent_named(name)
+        gents_host::test_support::fixture_agent_named(name)
     }
 
     /// The named fixture Agents' DIDs in DID order.
@@ -493,7 +493,7 @@ mod tests {
     async fn seeded() -> (ConfigAccess, String, String) {
         use gents_inference::auth::credential::{set_account_enabled, store_sign_in};
         let node = std::sync::Arc::new(
-            crate::shared::test_support::fixture_node_builder()
+            gents_host::test_support::fixture_node_builder()
                 .build()
                 .await
                 .unwrap(),
@@ -501,7 +501,7 @@ mod tests {
         gents_store::schema::ensure_runtime_schemas(&node)
             .await
             .unwrap();
-        crate::shared::test_support::publish_test_node(&node).await;
+        gents_host::test_support::publish_test_node(&node).await;
         let access = ConfigAccess::local_as(
             node,
             ::identity::Did::new(gents_session::test_support::lineage_fixtures::FIXTURE_DID)

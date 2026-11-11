@@ -10,10 +10,8 @@ use crate::cli::args::{BackgroundCommand, BackgroundListArgs};
 use crate::cli::output_format::OutputFormat;
 use crate::config_writes::ConfigAccess;
 use crate::request_helpers::parse_duration_suffix;
-use crate::{
-    graphql_rows_or_empty_if_collection_missing, normalize_optional_string, print_json,
-    resolve_config_access,
-};
+use crate::{graphql_rows_or_empty_if_collection_missing, print_json, resolve_config_access};
+use gents_host::http_client::normalize_optional_string;
 
 pub(crate) async fn dispatch(command: BackgroundCommand) -> Result<()> {
     match command {

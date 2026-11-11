@@ -1,3 +1,6 @@
+use gents_host::args::PrepareRuntimeArgs;
+use gents_host::args::ServeArgs;
+use gents_host::args::StoreKeyCustodyArg;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
@@ -47,19 +50,6 @@ pub(crate) use service::*;
 pub(crate) use setup::*;
 pub(crate) use trace::*;
 pub(crate) use work::*;
-
-fn parse_env_var_name(value: &str) -> Result<String, String> {
-    let mut chars = value.chars();
-    let Some(first) = chars.next() else {
-        return Err("environment variable name cannot be empty".to_string());
-    };
-    if !(first == '_' || first.is_ascii_alphabetic())
-        || !chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
-    {
-        return Err(format!("invalid environment variable name {value:?}"));
-    }
-    Ok(value.to_string())
-}
 
 fn parse_message(value: &str) -> Result<String, String> {
     crate::require_non_empty("message", value)

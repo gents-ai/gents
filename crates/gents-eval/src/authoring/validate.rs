@@ -268,7 +268,7 @@ mod tests {
     use serde_json::{json, Value};
 
     use super::super::draft::parse_reply;
-    use super::super::fixtures::{dossier, good, OWNER, SLOT};
+    use super::super::fixtures::{case, dossier, good, OWNER, SLOT};
     use super::*;
 
     const FLOOR_ONE: Floors = Floors { validation_min: 1 };

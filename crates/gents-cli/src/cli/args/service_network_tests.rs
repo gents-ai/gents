@@ -4,7 +4,8 @@ use clap::Parser as _;
 use gents_service::args::{P2pDiscoveryArg, P2pRelayModeArg, ServiceAction, ServiceNetworkArgs};
 use gents_service::network_settings::{NetworkSettings, DEFAULT_HTTP_ADDR};
 
-use crate::cli::{Cli, Command, RuntimeCommand, ServeArgs};
+use crate::cli::{Cli, Command, RuntimeCommand};
+use gents_host::args::ServeArgs;
 
 fn install_network(argv: &[&str]) -> ServiceNetworkArgs {
     let mut full = vec!["gents", "runtime", "service", "install"];

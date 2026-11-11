@@ -5,7 +5,7 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 
-use super::super::cli_process::{path_arg, run_cli_json};
+use gents_host::cli_process::{path_arg, run_cli_json};
 use super::manifest::ResultDocumentExpectation;
 use super::stages::StageResult;
 use crate::graphql_access::post_graphql;

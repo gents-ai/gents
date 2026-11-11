@@ -2311,8 +2311,8 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         },
         ConformanceConsumer::RustTest {
             id: "http::prometheus::tests::backend_probe_status_metric_reflects_measured_health",
-            package: "gents-cli",
-            source_path: "crates/gents-cli/src/http/prometheus.rs",
+            package: "gents-host",
+            source_path: "crates/gents-host/src/http/prometheus.rs",
             module_path: "http::prometheus::tests",
             function: "backend_probe_status_metric_reflects_measured_health",
         },
@@ -2465,8 +2465,8 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         },
         ConformanceConsumer::RustTest {
             id: "http::identity_decide::tests::identity_decide_endpoint_matches_resolved_lean_permission_cases",
-            package: "gents-cli",
-            source_path: "crates/gents-cli/src/http/identity_decide.rs",
+            package: "gents-host",
+            source_path: "crates/gents-host/src/http/identity_decide.rs",
             module_path: "http::identity_decide::tests",
             function: "identity_decide_endpoint_matches_resolved_lean_permission_cases",
         },

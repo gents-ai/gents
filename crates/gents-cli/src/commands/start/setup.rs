@@ -5,7 +5,8 @@ use clap::Parser as _;
 use gents_store::local::home::remember_home;
 use gents_tools::surface::refuse_too_broad_root;
 
-use crate::cli::args::{InitArgs, StoreKeyCustodyArg};
+use crate::cli::args::{InitArgs};
+use gents_host::args::StoreKeyCustodyArg;
 use crate::cli::{Cli, Command};
 use crate::commands::eval::terminal_size;
 use crate::commands::init::init_home;

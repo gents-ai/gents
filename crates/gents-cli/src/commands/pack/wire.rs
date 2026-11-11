@@ -9,6 +9,7 @@ use gents_store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 
 use crate::cli::PackWireArgs;
+#[cfg(test)]
 use gents_pack::pack::registry::split_pack_coordinate;
 
 pub(crate) async fn wire(args: PackWireArgs) -> Result<()> {

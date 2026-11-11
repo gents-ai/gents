@@ -12,7 +12,8 @@ use crate::commands::init::{
 };
 use crate::desired_state;
 use crate::shared::*;
-use crate::{print_json, resolve_config_access, DEFAULT_NODE_NAME};
+use crate::{print_json, resolve_config_access};
+use gents_host::defaults::DEFAULT_NODE_NAME;
 use gents_service::home_state::default_key_path;
 use gents_service::home_state::read_init_config;
 use gents_service::home_state::resolve_home_dir;
@@ -30,7 +31,7 @@ pub(crate) async fn provision(args: ProvisionArgs) -> Result<()> {
         args.bootstrap_macos_secure_enclave,
         args.keychain_label.as_deref(),
         args.secure_enclave_label.as_deref(),
-        crate::cli::args::store_key_custody(args.store_key_custody),
+        gents_host::args::store_key_custody(args.store_key_custody),
     )
     .await?;
 

@@ -121,7 +121,7 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
             }
             ConfigAccess::Graphql(endpoint) => {
                 let mut url = reqwest::Url::parse(endpoint.url())?;
-                url.set_path(crate::http::inference_activity::BACKEND_DISCOVERY_PATH);
+                url.set_path(gents_host::http::inference_activity::BACKEND_DISCOVERY_PATH);
                 url.set_query(None);
                 url.set_fragment(None);
                 let client = reqwest::Client::builder()
@@ -303,7 +303,7 @@ mod tests {
 
     async fn seeded() -> ConfigAccess {
         let node = std::sync::Arc::new(
-            crate::shared::test_support::fixture_node_builder()
+            gents_host::test_support::fixture_node_builder()
                 .build()
                 .await
                 .unwrap(),
@@ -311,7 +311,7 @@ mod tests {
         gents_store::schema::ensure_runtime_schemas(&node)
             .await
             .unwrap();
-        crate::shared::test_support::publish_test_node(&node).await;
+        gents_host::test_support::publish_test_node(&node).await;
         let access = ConfigAccess::local_as(
             node,
             ::identity::Did::new(gents_session::test_support::lineage_fixtures::FIXTURE_DID)

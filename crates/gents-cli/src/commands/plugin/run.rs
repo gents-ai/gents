@@ -232,7 +232,7 @@ mod tests {
     #[tokio::test]
     async fn ux_plugin_writes_are_scoped_and_atomic() {
         // The operator is the home's enrolled User, writing as itself.
-        let client = crate::shared::test_support::ClientHome::new().await;
+        let client = gents_host::test_support::ClientHome::new().await;
         client
             .node()
             .add_collection("type UxNote { body: String }")

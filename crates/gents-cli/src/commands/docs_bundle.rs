@@ -34,7 +34,7 @@ impl BundleRelease {
     /// Explicit values win over the build stamp so a bundle can be produced
     /// for a tag from a binary built after it.
     pub(crate) fn resolve(tag: Option<String>, commit: Option<String>) -> Result<Self> {
-        let build = crate::http::version::version_response().build;
+        let build = crate::version::build_version().build;
         let version = env!("CARGO_PKG_VERSION").to_owned();
         if commit.is_none() && build.git_dirty == Some(true) {
             anyhow::bail!(

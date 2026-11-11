@@ -26,7 +26,7 @@ pub(super) fn diagnose_tool_ceiling(init_config: Option<&StoredInitConfig>) -> V
             };
             json!({
                 "ok": ok,
-                "tool_ceiling": crate::format_tool_ceiling(config.tool_ceiling),
+                "tool_ceiling": gents_host::tool_ceiling::format_tool_ceiling(config.tool_ceiling),
                 "tool_root": config.tool_root,
                 "error": error,
             })

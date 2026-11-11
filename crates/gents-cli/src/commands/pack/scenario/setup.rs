@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
-use super::super::cli_process::path_arg;
+use gents_host::cli_process::path_arg;
 use super::super::server::spawn_server_with_args_and_env;
 use super::manifest::{PackSeed, ScenarioManifest};
 use super::validate::tool_package_needs_root;
@@ -51,7 +51,7 @@ pub(super) async fn install_dependencies(
             args.push("--inference-slot".to_owned());
             args.push(format!("{}={}", slot.name, ctx.inference_profile_id));
         }
-        super::super::cli_process::run_cli_json_with_env(
+        gents_host::cli_process::run_cli_json_with_env(
             ctx.bin,
             &args,
             environments.get(package).cloned().unwrap_or_default(),

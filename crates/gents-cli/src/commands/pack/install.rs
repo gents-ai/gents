@@ -88,7 +88,7 @@ async fn install_documents_pack_inner(
             }
         }
         if needs_runtime_store && args.preview {
-            return crate::http::pack_install::install_remote(
+            return gents_host::http::pack_install::install_remote(
                 endpoint,
                 owner,
                 pack,
@@ -100,7 +100,7 @@ async fn install_documents_pack_inner(
             .map_err(Into::into);
         }
         if needs_runtime_store {
-            return crate::http::pack_install_client::install_remote(
+            return gents_host::http::pack_install_client::install_remote(
                 endpoint,
                 owner,
                 pack,
@@ -334,7 +334,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<(), PackChangeError
                         .await
                         .into_iter()
                         .collect::<Result<Vec<_>>>()?;
-                let result = crate::http::pack_install_client::install_remote(
+                let result = gents_host::http::pack_install_client::install_remote(
                     endpoint,
                     owner,
                     &pack,

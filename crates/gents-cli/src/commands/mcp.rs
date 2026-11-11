@@ -13,10 +13,8 @@ use serde::Serialize;
 use crate::cli::args::{McpCommand, McpProbeArgs, McpRegisterArgs};
 use crate::cli::output_format::OutputFormat;
 use crate::config_writes::ConfigAccess;
-use crate::{
-    graphql_rows_or_empty_if_collection_missing, normalize_optional_string, parse_duration_suffix,
-    print_json, resolve_config_access,
-};
+use crate::{graphql_rows_or_empty_if_collection_missing, parse_duration_suffix, print_json, resolve_config_access};
+use gents_host::http_client::normalize_optional_string;
 
 pub(crate) async fn dispatch(command: McpCommand) -> Result<()> {
     match command {

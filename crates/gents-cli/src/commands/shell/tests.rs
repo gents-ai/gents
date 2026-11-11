@@ -43,7 +43,7 @@ pub(super) const OWNER: &str = gents_session::test_support::lineage_fixtures::FI
 
 /// The DID a fixture's Agent named `name` takes.
 pub(super) fn did(name: &str) -> String {
-    crate::shared::test_support::fixture_agent_named(name).agent_did
+    gents_host::test_support::fixture_agent_named(name).agent_did
 }
 
 pub(super) async fn within<F>(future: F) -> F::Output
@@ -89,7 +89,7 @@ fn test_user() -> &'static gents_store::identity::KeyIdentity {
 
 /// The test User's signed endpoint on `graphql`, as `work_for`'s endpoint signs.
 fn user_endpoint(graphql: &str) -> GraphqlEndpoint {
-    crate::shared::test_support::user_endpoint(graphql, test_user())
+    gents_host::test_support::user_endpoint(graphql, test_user())
 }
 
 /// The test User's access for writing fixtures: the same signer, without the signed-create
@@ -107,7 +107,7 @@ fn chat_config(agents: &[&str]) -> Value {
     let agents: Vec<_> = agents
         .iter()
         .map(|name| {
-            let binding = crate::shared::test_support::fixture_agent_named(name);
+            let binding = gents_host::test_support::fixture_agent_named(name);
             json!({
                 "node_did": OWNER, "agent_did": binding.agent_did,
                 "creation_nonce": binding.creation_nonce, "display_name": name,
@@ -202,7 +202,7 @@ impl ChatNode {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let graphql = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
         let http = gents::defra_node::HttpConfig::with_listener(listener).unwrap();
-        let builder = crate::shared::test_support::fixture_node_builder();
+        let builder = gents_host::test_support::fixture_node_builder();
         let node = Arc::new(builder.with_http(http).build().await.unwrap());
         gents_store::schema::ensure_runtime_schemas(&node)
             .await
@@ -729,7 +729,7 @@ async fn serve(State(shared): State<Arc<Shared>>, request: axum::extract::Reques
         let upgrade = upgrade.await.unwrap();
         let upstream = shared.upstream.replacen("http://", "ws://", 1);
         return upgrade.on_upgrade(move |socket| {
-            crate::shared::test_support::pipe_websocket(socket, upstream, parts)
+            gents_host::test_support::pipe_websocket(socket, upstream, parts)
         });
     }
     let body = axum::body::to_bytes(body, usize::MAX).await.unwrap();
@@ -2264,7 +2264,7 @@ pub(super) fn home_serving(
 async fn work_for_signs_as_this_clis_user() {
     let graphql = "http://127.0.0.1:39999/api/v0/graphql";
     let (home, _) = home_serving(graphql, None);
-    let user = crate::shared::test_support::cli_user().await;
+    let user = gents_host::test_support::cli_user().await;
 
     let work = work::work_for(home.path()).expect("this CLI's User signs");
 
@@ -3437,7 +3437,7 @@ async fn filed(
         deadline_at: None,
     };
     let root = gents_session::test_support::lineage_fixtures::fixture_signer();
-    let binding = crate::shared::test_support::fixture_agent_named("engineer");
+    let binding = gents_host::test_support::fixture_agent_named("engineer");
     let agent = gents_store::identity::resolve_agent_identity(&root, &binding).unwrap();
     let actor = ::identity::Did::new(agent.did()).unwrap();
     let access = gents_store::config_client::ConfigAccess::local_managed_agent(
@@ -3765,7 +3765,7 @@ async fn served_settings() -> (Arc<defra_node::Node>, Work, tempfile::TempDir) {
 
 /// A node served with `config`, and the shell's work on it as the User who owns it.
 async fn served(config: Value) -> (Arc<defra_node::Node>, Work, tempfile::TempDir) {
-    let served = crate::shared::test_support::served_config(config).await;
+    let served = gents_host::test_support::served_config(config).await;
     let home = tempfile::tempdir().unwrap();
     let work = Work {
         endpoint: served.user.clone(),
@@ -5074,7 +5074,7 @@ async fn packs_wait_for_the_runtime() {
     let keys = tempfile::tempdir().unwrap();
     let key = keys.path().join("principal.key");
     let (home, did) = home_serving("http://127.0.0.1:1/api/v0/graphql", Some(&key));
-    crate::shared::test_support::cli_user().await;
+    gents_host::test_support::cli_user().await;
     let work = work::work_for(home.path());
     assert!(
         work.is_ok(),

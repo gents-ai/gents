@@ -14,7 +14,7 @@ use crate::cli::args::{
 use crate::cli::output_format::OutputFormat;
 use crate::{graphql_rows, print_json, resolve_config_access};
 
-use super::output::fetch_connected_peer_ids;
+use gents_host::p2p_status::fetch_connected_peer_ids;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct PeerPairingDesiredRow {

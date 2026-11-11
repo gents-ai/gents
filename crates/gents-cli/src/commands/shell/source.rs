@@ -2176,7 +2176,7 @@ mod tests {
         let keys = tempfile::tempdir().unwrap();
         let key = keys.path().join("principal.key");
         let (home, _) = home_serving("http://127.0.0.1:1/api/v0/graphql", Some(&key));
-        crate::shared::test_support::cli_user().await;
+        gents_host::test_support::cli_user().await;
         let work = work::work_for(home.path());
         assert!(work.is_ok(), "this CLI's User signs: {:?}", work.err());
         let (updates, told) = std::sync::mpsc::channel();

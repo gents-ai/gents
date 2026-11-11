@@ -50,6 +50,7 @@ gents-chatgpt-login.workspace = true
 gents-claude-login.workspace = true
 gents-desktop-core.workspace = true
 gents-service.workspace = true
+gents-host.workspace = true
 gents = { path = "../gents" }
 gents-store = { workspace = true }
 gents-documents = { workspace = true }
@@ -161,6 +162,7 @@ gents-eval = { workspace = true, features = ["test-fixtures"] }
 jsonschema = { version = "0.46.5", default-features = false }
 gents = { path = "../gents", features = ["test-home-guard"] }
 gents-service = { workspace = true, features = ["test-home-guard"] }
+gents-host = { workspace = true, features = ["test-fixtures"] }
 gents-session = { workspace = true, features = ["test-fixtures"] }
 gents-pack = { workspace = true, features = ["test-fixtures"] }
 ctor = "0.2"
