@@ -129,6 +129,17 @@ fn approve_command(home: &Path, pack: &str) -> String {
     )
 }
 
+/// Installs the approved archive of a dependency over the installed one: the
+/// explicit update the installer asks for before it installs a dependent on
+/// a dependency at another artifact. Pinned, since an unpinned name resolves
+/// to what is installed.
+fn update_dependency_command(home: &Path, dependency: &str, version: &str) -> String {
+    format!(
+        "gents config pack install {dependency}@{version} --home {}",
+        home.display()
+    )
+}
+
 fn scope(home: &Path) -> ScopeArgs {
     ScopeArgs {
         home: Some(home.to_owned()),
@@ -179,9 +190,23 @@ pub(crate) async fn install(
     // Every pack is resolved at once, so an unreachable registry holds a
     // first run for one resolve bound, not one per pack; they are then
     // asked about and installed one by one, in order.
-    let resolved =
-        futures_util::future::join_all(packs.iter().map(|pack| resolve(home, pack, registry)))
-            .await;
+    let on_node = async {
+        let (access, owner) = command::resolve_scope_owner(&scope(home)).await?;
+        let on_node = packs_on_node(home, &access, &owner).await;
+        release(access).await;
+        on_node
+    }
+    .await
+    .unwrap_or_else(|error| {
+        tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(error.as_ref()), "the packs on the node could not be read; dependencies resolve by name");
+        OnNode::new()
+    });
+    let resolved = futures_util::future::join_all(
+        packs
+            .iter()
+            .map(|pack| resolve(home, pack, registry, &on_node)),
+    )
+    .await;
     let mut installed = Vec::new();
     let mut not_installed = Vec::new();
     for (pack, resolved) in packs.iter().zip(resolved) {
@@ -370,18 +395,20 @@ pub(crate) async fn status(
                 None => None,
             });
         }
-        Ok::<_, anyhow::Error>(Some(installed))
+        let on_node = packs_on_node(home, &access, &owner).await?;
+        Ok::<_, anyhow::Error>(Some((installed, on_node)))
     }
     .await;
     release(access).await;
-    let Some(installed) = read? else {
+    let Some((installed, on_node)) = read? else {
         return Ok(Vec::new());
     };
+    let on_node = &on_node;
     let resolved = futures_util::future::join_all(packs.iter().zip(&installed).map(
         |(pack, installed)| async move {
             match installed {
                 Some(_) => None,
-                None => Some(resolve(home, pack, registry).await),
+                None => Some(resolve(home, pack, registry, on_node).await),
             }
         },
     ))
@@ -454,13 +481,15 @@ pub(crate) async fn approve(
             home.display()
         )),
     };
+    let on_node = packs_on_node(home, &access, &owner).await;
     release(access).await;
     let engineer = engineer?
         .context("this home's default agent is not the Engineer, so it has no starter packs")?;
+    let on_node = on_node?;
     let resolved = futures_util::future::join_all(
         approved
             .iter()
-            .map(|(pack, _)| resolve(home, pack, registry)),
+            .map(|(pack, _)| resolve(home, pack, registry, &on_node)),
     )
     .await;
     let mut installed = Vec::new();
@@ -550,7 +579,29 @@ impl Resolved {
     }
 }
 
-async fn resolve(home: &Path, pack: &str, registry: Option<&str>) -> Result<Resolved> {
+/// The digest each pack on `home`'s node is installed at, by coordinate.
+type OnNode = std::collections::BTreeMap<String, String>;
+
+async fn packs_on_node(home: &Path, access: &gents::ConfigAccess, owner: &str) -> Result<OnNode> {
+    Ok(
+        gents::pack::installed_packs(Some(home), Some((access, owner)))
+            .await?
+            .into_iter()
+            .map(|pack| (pack.coordinate, pack.digest))
+            .collect(),
+    )
+}
+
+/// Resolves `pack` and its dependencies as its install will: a dependency
+/// the node already has (`on_node`) is that installed archive, which an
+/// install keeps, and only one it lacks is resolved by name. What an
+/// approval shows and pins is then what the node ends up with.
+async fn resolve(
+    home: &Path,
+    pack: &str,
+    registry: Option<&str>,
+    on_node: &OnNode,
+) -> Result<Resolved> {
     let source = tokio::time::timeout(
         RESOLVE_BOUND,
         command::resolve_pack_source(pack, registry, home),
@@ -565,15 +616,23 @@ async fn resolve(home: &Path, pack: &str, registry: Option<&str>) -> Result<Reso
     let dependencies =
         futures_util::future::join_all(source.manifest().metadata.dependencies.iter().map(
             |coordinate| async move {
+                let (namespace, name) = command::split_namespace(coordinate);
+                let installed = on_node.get(&format!("{namespace}/{name}"));
+                let spec = installed.map_or(coordinate.as_str(), String::as_str);
                 tokio::time::timeout(
                     RESOLVE_BOUND,
-                    command::resolve_pack_source(coordinate, registry, home),
+                    command::resolve_pack_source(spec, registry, home),
                 )
                 .await
                 .map_err(|_| {
                     anyhow::anyhow!("its dependency {coordinate} did not resolve in time")
                 })?
-                .with_context(|| format!("resolving its dependency {coordinate}"))
+                .with_context(|| match installed {
+                    Some(digest) => format!(
+                        "reading its dependency {coordinate} as this node has it installed ({digest})"
+                    ),
+                    None => format!("resolving its dependency {coordinate}"),
+                })
             },
         ))
         .await
@@ -701,8 +760,9 @@ async fn install_one(
     };
     let attached = async {
         installed?;
-        // The Engineer's install resolves the dependencies again; what it
-        // installed must be the archives the approval covered.
+        // The approval resolved each dependency as the install does, the
+        // installed archive first, so this holds unless the node changed in
+        // between: what is installed must be the archives the approval covered.
         for dependency in &dependencies {
             let dependency_coordinate = format!(
                 "{}/{}",
@@ -715,9 +775,10 @@ async fn install_one(
                 installed
                     .as_ref()
                     .is_none_or(|installed| installed.digest == dependency.digest()),
-                "{pack} is installed, but its dependency {dependency_coordinate} is at {}, not the approved {}. Remove {pack} or approve it again",
+                "{pack} is installed, but its dependency {dependency_coordinate} is at {}, not the approved {}. Approving again leaves an installed dependency as it is: update it with: {}, then approve {pack} again",
                 installed.map(|installed| installed.digest).unwrap_or_default(),
-                dependency.digest()
+                dependency.digest(),
+                update_dependency_command(home, &dependency_coordinate, &dependency.manifest().version)
             );
         }
         // The Engineer installed the pack, so its rootless Tools took the
@@ -2164,6 +2225,83 @@ mod tests {
         assert_eq!(roots.len(), 1, "{approved}");
         assert_eq!(roots[0]["root"], initialized["tool_root"], "{approved}");
         assert!(roots[0]["reader_on"].is_string(), "{approved}");
+    }
+
+    /// An approval resolves a dependency as its install does: the archive the
+    /// node already has wins over a newer one in the store, so approving a
+    /// pack again is not refused for a dependency the install would keep.
+    /// The update the remaining refusal names brings the dependency to a
+    /// newer archive, which the next approval then shows and keeps.
+    #[tokio::test]
+    async fn an_approval_resolves_a_dependency_the_node_has_as_installed() {
+        use clap::Parser as _;
+        let (home, _) = engineer_home().await;
+        let packs = tempfile::tempdir().unwrap();
+        let skills_pack = |name: &str, version: &str, dependencies: Value| {
+            let dir = packs.path().join(format!("{name}-{version}"));
+            write_pack(
+                &dir,
+                json!({
+                    "manifest_version": 1, "name": name, "namespace": "fixture",
+                    "version": version, "description": "A skill",
+                    "authors": ["tests"], "tags": [], "kind": "documents",
+                    "assets": ["README.md", "pack_config.json"], "dependencies": dependencies,
+                    "config": "pack_config.json",
+                }),
+                &[(
+                    "pack_config.json",
+                    serde_json::to_vec(&json!({
+                        "node": {"node_did": "${GENTS_PACK_NODE_DID}"},
+                        "skills": [{"skill_id": format!("fixture-{name}"),
+                            "node_did": "${GENTS_PACK_NODE_DID}", "name": name,
+                            "description": format!("A skill at {version}."),
+                            "instructions": "Use it."}],
+                    }))
+                    .unwrap(),
+                )],
+            );
+            gents::pack::local::open(&gents::pack::local::LocalName::Path(&dir), home.path())
+                .unwrap()
+                .digest()
+                .to_owned()
+        };
+        let installed_dependency = skills_pack("moved", "1.0.0", json!([]));
+        skills_pack("mover", "1.0.0", json!(["fixture/moved"]));
+        let names = ["fixture/mover"];
+        let unreachable = Some("http://127.0.0.1:9");
+        let approving = vec![("fixture/mover".to_owned(), None)];
+        let approved = approve(home.path(), &names, &approving, unreachable)
+            .await
+            .unwrap();
+        assert_eq!(approved["failed"], json!([]), "{approved}");
+
+        // The store now prefers a dependency archive the node does not have.
+        let newer = skills_pack("moved", "1.1.0", json!([]));
+        assert_ne!(newer, installed_dependency);
+        let again = approve(home.path(), &names, &approving, unreachable)
+            .await
+            .unwrap();
+        assert_eq!(again["failed"], json!([]), "{again}");
+
+        let update = update_dependency_command(home.path(), "fixture/moved", "1.1.0");
+        let cli = crate::cli::Cli::try_parse_from(update.split(' ')).unwrap();
+        let Some(crate::cli::Command::Config {
+            command:
+                crate::cli::ConfigCommand::Pack {
+                    command: crate::cli::PackCommand::Install(args),
+                },
+        }) = cli.command
+        else {
+            panic!("expected pack install")
+        };
+        crate::request_helpers::capture_report(command::install(args))
+            .await
+            .map_err(gents::pack::PackChangeError::into_anyhow)
+            .unwrap();
+        let updated = approve(home.path(), &names, &approving, unreachable)
+            .await
+            .unwrap();
+        assert_eq!(updated["failed"], json!([]), "{updated}");
     }
 
     /// Only a terminal is asked, and only when the caller may prompt; the
