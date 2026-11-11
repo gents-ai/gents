@@ -188,16 +188,24 @@ const requestOf = (item: RenderedTimelineItem): string | null => {
     the same for the app's own copy, the saved row and a folded input. */
 export const turnKey = (requestId: string) => `turn:${requestId}`;
 
-export type SentTurn = { sessionId: string; requestId: string; queued: boolean };
+/** A message sent from here; `taken` once the view has gone to its turn. */
+export type SentTurn = {
+  sessionId: string;
+  requestId: string;
+  queued: boolean;
+  taken?: boolean;
+};
 export type FoldedInput = { requestId: string; foldedIntoRequestId: string };
 
 /**
  * The turn the view goes to after a send from here, by key, or null while
- * there is none: the newest send whose turn has begun. A message sent
- * with nothing running begins as it is drawn; one queued behind a running
- * turn has begun when the session makes it the latest request, or lists
- * it folded into one. Messages folded into the same request begin
- * together, so the view goes to the first of them.
+ * there is none: the newest send whose turn has begun, until the view has
+ * gone to it. A message sent with nothing running begins as it is drawn;
+ * one queued behind a running turn has begun when the session makes it the
+ * latest request, or lists it folded into one. Messages folded into the
+ * same request begin together, so the view goes to the first of them.
+ * The view goes there once per send: a transcript drawn again later opens
+ * where the reader left it.
  */
 export function sentTurnKey(
   sent: readonly SentTurn[],
@@ -218,7 +226,7 @@ export function sentTurnKey(
   const into = foldedInto(newest);
   const first =
     into === null ? newest : begun.find((turn) => foldedInto(turn) === into)!;
-  return turnKey(first.requestId);
+  return first.taken ? null : turnKey(first.requestId);
 }
 
 export const drawKey = (keys: DrawKeys, item: RenderedTimelineItem): string => {

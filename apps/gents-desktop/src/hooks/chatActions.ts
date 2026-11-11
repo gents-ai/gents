@@ -716,6 +716,8 @@ export function createChatActions({
 
   return {
     sendMessage,
+    /** the transcript went to a sent message's turn, by its key */
+    tookSentTurn: (key: string) => chat.tookSentTurn(stores.chat, key),
     editPendingQueue,
     steerPendingMessage,
     retryMessage,

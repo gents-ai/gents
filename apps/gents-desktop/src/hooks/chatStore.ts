@@ -6,6 +6,7 @@ import {
   type OptimisticPendingTurn,
 } from "@source-inc/gents-desktop-chat";
 
+import { turnKey, type SentTurn } from "../ui/screens/stream-reveal";
 import { loadChatFolders, type ChatFolders } from "./chatFolders";
 import { createSelectors, type WithSelectors } from "./createSelectors";
 import { loadGoalDrafts, type GoalDraft } from "./goalDrafts";
@@ -20,9 +21,10 @@ export type ChatState = {
     message: string;
   } | null;
   optimisticPendingTurn: OptimisticPendingTurn | null;
-  /** the messages sent from here, newest last, and whether each queued
-      behind a running turn: kept after the transcript holds them, for
-      what follows a send (the view going to the turn once it begins) */
+  /** the messages sent from here, newest last, whether each queued behind
+      a running turn and whether the view has gone to its turn: kept for
+      the app's run, after the transcript holds them, so the view goes to
+      each sent turn once, not once per transcript drawn */
   sentTurns: readonly SentTurn[];
   folders: ChatFolders;
   goalDrafts: GoalDraft[];
@@ -32,7 +34,7 @@ export type ChatState = {
   chatDraftError: string | null;
 };
 
-export type SentTurn = { sessionId: string; requestId: string; queued: boolean };
+export type { SentTurn };
 /* enough for a run of sends queued behind one turn */
 const SENT_TURNS_KEPT = 16;
 
@@ -100,6 +102,18 @@ export const chat = {
         { sessionId: turn.sessionId, requestId: turn.requestId, queued },
       ],
     }));
+  },
+  /** the view went to a sent message's turn, by its key */
+  tookSentTurn(store: ChatStore, key: string) {
+    store.setState((state) =>
+      state.sentTurns.some((turn) => !turn.taken && turnKey(turn.requestId) === key)
+        ? {
+            sentTurns: state.sentTurns.map((turn) =>
+              turnKey(turn.requestId) === key ? { ...turn, taken: true } : turn,
+            ),
+          }
+        : state,
+    );
   },
   endPendingTurn(store: ChatStore, requestId: string) {
     if (store.getState().optimisticPendingTurn?.requestId === requestId)

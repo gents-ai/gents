@@ -484,4 +484,22 @@ describe("the turn the view goes to after a send", () => {
     /* a send that started its own turn after them wins */
     expect(sentTurnKey([a, b, sent], "s1", "r1", folds)).toBe("turn:r1");
   });
+
+  /* a transcript drawn again for the session opens where it was left */
+  it("is nothing once the view has gone to it, until the next send", () => {
+    const taken = { ...sent, taken: true };
+    expect(sentTurnKey([taken], "s1", "r1", [])).toBeNull();
+    const next = { sessionId: "s1", requestId: "r2", queued: false };
+    expect(sentTurnKey([taken, next], "s1", "r2", [])).toBe("turn:r2");
+    /* nor an older send while the newest waits behind a running turn */
+    expect(sentTurnKey([taken, { ...next, queued: true }], "s1", "r1", [])).toBeNull();
+    /* sends folded into one turn are gone to once, at the first of them */
+    const a = { sessionId: "s1", requestId: "a", queued: true, taken: true };
+    const b = { sessionId: "s1", requestId: "b", queued: true };
+    const folds = [
+      { requestId: "a", foldedIntoRequestId: "x" },
+      { requestId: "b", foldedIntoRequestId: "x" },
+    ];
+    expect(sentTurnKey([a, b], "s1", "x", folds)).toBeNull();
+  });
 });
