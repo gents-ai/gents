@@ -1,0 +1,451 @@
+use gents_toolcalls::call::lifecycle::admission_fixture::{
+    published_session_message, PublishedAdmissionOptions,
+};
+use super::plan::PlannedWrite;
+use gents_session::session::message::*;
+use gents_protocol::tool_call::AwaitMode;
+
+/// The accepted tool row does not carry its calling request's id; the id is
+/// read from the calling request document, as the owning lifecycle does.
+pub(super) async fn cause(
+    message: &gents_toolcalls::call::lifecycle::admission_fixture::PublishedSessionMessage,
+    caller_hop: u32,
+) -> SessionMessageCause {
+    let tool = &message.admission.tool;
+    SessionMessageCause {
+        caller_node_did: message.admission.node_did.clone(),
+        caller_agent_did: tool.actor().to_string(),
+        caller_session_id: tool.session_id().to_owned(),
+        caller_requester_did: tool.requester_did().map(str::to_owned),
+        caller_request_id: tool.calling_request_id().await.unwrap(),
+        caller_request_doc_id: tool.request_doc_id().unwrap().to_owned(),
+        caller_hop,
+        tool_call_id: tool.tool_call_id().to_owned(),
+        tool_call_doc_id: tool.doc_id().unwrap().to_owned(),
+        correlation: None,
+    }
+}
+
+pub(super) fn signer(
+    message: &gents_toolcalls::call::lifecycle::admission_fixture::PublishedSessionMessage,
+) -> gents_store::identity::ManagedAgentSigner {
+    message
+        .admission
+        .tool
+        .access()
+        .unwrap()
+        .managed_agent_signer()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn generated_session_message_writes_carry_the_calling_edge() {
+    let message = published_session_message(PublishedAdmissionOptions {
+        name: "session-message-writes".to_owned(),
+        real_identity: true,
+        await_mode: AwaitMode::Background,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let node = message.admission.node.clone();
+    let caused = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
+        &message.admission.tool.access().unwrap(),
+        &message.caused_request_doc_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let target = SessionMessageTarget {
+        node_did: caused.node_did.clone(),
+        agent_did: caused.agent_did.clone(),
+        session_id: caused.session_id.clone(),
+    };
+    let cases = &gents_lean_vocab::lean_contract_snapshot()
+        .causal_hop_contract
+        .write_cases;
+    assert!(cases.iter().any(|case| case.delivery == "queue"));
+    assert!(cases.iter().any(|case| case.delivery == "steer"));
+    for case in cases {
+        let name = case.name.as_str();
+        assert_eq!(case.own_hop, caused.request_hop, "{name}");
+        let state = if case.delivery == "request" {
+            "pending"
+        } else {
+            "processing"
+        };
+        message
+            .admission
+            .tool
+            .access()
+            .unwrap()
+            .write(
+                "test.set_hop_state",
+                &format!(
+                    r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "{state}" }}) {{ _docID }} }}"#,
+                    escape_graphql_string(&message.caused_request_doc_id)
+                ),
+            )
+            .await
+            .unwrap();
+        let cause = cause(&message, case.caller_hop).await;
+        let body = RenderedBody {
+            content: "again".to_owned(),
+            goal: None,
+        };
+        let planned = plan_with_delivery(
+            &node,
+            &NoSessionMessageGoals,
+            &cause,
+            &target,
+            body,
+            None,
+            if case.delivery == "steer" {
+                AgentMessageDelivery::Steer
+            } else {
+                AgentMessageDelivery::Queue
+            },
+            &signer(&message),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(planned.delivery().as_str(), case.delivery, "{name}");
+        assert_eq!(planned.hop(), case.expected_hop, "{name}");
+        let PlannedWrite::Request { create, .. } = &planned.write else {
+            panic!("{name}: a message without a Goal is a request");
+        };
+        assert_eq!(create.request_hop, case.expected_hop, "{name}");
+        assert_eq!(
+            create.caused_by_parent_request_doc_id.as_deref(),
+            Some(cause.caller_request_doc_id.as_str()),
+            "{name}"
+        );
+        assert_eq!(
+            create.caused_by_parent_tool_call_doc_id.as_deref()
+                == Some(cause.tool_call_doc_id.as_str()),
+            case.names_caller_tool_call,
+            "{name}"
+        );
+        let queued_after = create
+            .input
+            .queue
+            .as_ref()
+            .and_then(|queue| queue.queued_after_request_id.as_deref());
+        assert_eq!(
+            queued_after == Some(caused.request_id.as_str()),
+            case.queued_after_active,
+            "{name}"
+        );
+    }
+    node.shutdown().await.expect("shut down test node");
+    std::fs::remove_dir_all(&message.admission.path).unwrap();
+}
+
+#[tokio::test]
+async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row() {
+    let message = published_session_message(PublishedAdmissionOptions {
+        name: "session-message-staging".to_owned(),
+        real_identity: true,
+        await_mode: AwaitMode::Background,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let node = message.admission.node.clone();
+    let tool = &message.admission.tool;
+    let tool_doc_id = tool.doc_id().unwrap().to_owned();
+    let caused = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
+        &message.admission.tool.access().unwrap(),
+        &message.caused_request_doc_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let target = SessionMessageTarget {
+        node_did: caused.node_did.clone(),
+        agent_did: caused.agent_did.clone(),
+        session_id: caused.session_id.clone(),
+    };
+    let cause = cause(&message, 0).await;
+    let body = RenderedBody {
+        content: "staged".to_owned(),
+        goal: None,
+    };
+    let planned = plan(
+        &node,
+        &NoSessionMessageGoals,
+        &cause,
+        &target,
+        body,
+        None,
+        false,
+        &signer(&message),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let load_tool = || {
+        gents_toolcalls::call::lifecycle::ToolCallLifecycle::load_by_doc_id_as(
+            node.clone(),
+            tool.actor().clone(),
+            &tool_doc_id,
+            tool.node_did(),
+            tool.session_id(),
+            tool.requester_did(),
+        )
+    };
+    let before = load_tool().await.unwrap().unwrap();
+    let receipt_before = load_receipt::<gents_toolcalls::call::lifecycle::ToolCallLifecycle>(
+        &gents_store::config_client::ConfigAccess::local_as(node.clone(), tool.actor().clone()),
+        &tool_doc_id,
+        tool.node_did(),
+        tool.session_id(),
+        tool.requester_did(),
+    )
+    .await
+    .unwrap();
+    let (cause, planned) = (&cause, &planned);
+    let enqueued = message
+        .admission
+        .tool
+        .access()
+        .unwrap()
+        .transact_write("session_message.test_stage", move |txn| {
+            Box::pin(async move {
+                stage_planned_write_in_txn(txn, &NoSessionMessageGoals, cause, planned).await
+            })
+        })
+        .await
+        .unwrap();
+    let staged = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
+        &message.admission.tool.access().unwrap(),
+        &enqueued.doc_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(staged.request_id, enqueued.request_id);
+    assert_eq!(staged.session_id, target.session_id);
+    let after = load_tool().await.unwrap().unwrap();
+    assert_eq!(after.state(), before.state());
+    assert_eq!(after.is_running(), before.is_running());
+    let receipt_after = load_receipt::<gents_toolcalls::call::lifecycle::ToolCallLifecycle>(
+        &gents_store::config_client::ConfigAccess::local_as(node.clone(), tool.actor().clone()),
+        &tool_doc_id,
+        tool.node_did(),
+        tool.session_id(),
+        tool.requester_did(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(&receipt_after).unwrap(),
+        serde_json::to_value(&receipt_before).unwrap()
+    );
+    node.shutdown().await.expect("shut down test node");
+    std::fs::remove_dir_all(&message.admission.path).unwrap();
+}
+
+#[tokio::test]
+async fn stage_planned_write_in_txn_refuses_a_session_that_moved_past_the_planned_hop() {
+    let message = published_session_message(PublishedAdmissionOptions {
+        name: "session-message-stale-hop".to_owned(),
+        real_identity: true,
+        await_mode: AwaitMode::Background,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let node = message.admission.node.clone();
+    let caused = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
+        &message.admission.tool.access().unwrap(),
+        &message.caused_request_doc_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let target = SessionMessageTarget {
+        node_did: caused.node_did.clone(),
+        agent_did: caused.agent_did.clone(),
+        session_id: caused.session_id.clone(),
+    };
+    let stale_cause = cause(&message, 0).await;
+    let body = RenderedBody {
+        content: "stale".to_owned(),
+        goal: None,
+    };
+    let planned = plan(
+        &node,
+        &NoSessionMessageGoals,
+        &stale_cause,
+        &target,
+        body,
+        None,
+        false,
+        &signer(&message),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let ahead_cause = cause(&message, 10).await;
+    let ahead = plan(
+        &node,
+        &NoSessionMessageGoals,
+        &ahead_cause,
+        &target,
+        RenderedBody {
+            content: "ahead".to_owned(),
+            goal: None,
+        },
+        None,
+        false,
+        &signer(&message),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(ahead.hop() > planned.hop());
+    let (ahead_cause, ahead) = (&ahead_cause, &ahead);
+    message
+        .admission
+        .tool
+        .access()
+        .unwrap()
+        .transact_write("session_message.test_ahead_stage", move |txn| {
+            Box::pin(async move {
+                stage_planned_write_in_txn(txn, &NoSessionMessageGoals, ahead_cause, ahead).await
+            })
+        })
+        .await
+        .unwrap();
+    let (stale_cause, planned) = (&stale_cause, &planned);
+    let error = message
+        .admission
+        .tool
+        .access()
+        .unwrap()
+        .transact_write("session_message.test_stale_stage", move |txn| {
+            Box::pin(async move {
+                stage_planned_write_in_txn(txn, &NoSessionMessageGoals, stale_cause, planned).await
+            })
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("moved to hop"),
+        "unexpected error: {error:#}"
+    );
+    let PlannedWrite::Request { create, .. } = &planned.write else {
+        panic!("a message without a Goal is a request");
+    };
+    let response = node
+        .execute(&format!(
+            r#"query {{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            escape_graphql_string(&create.request_id)
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let data = response.data.unwrap();
+    assert!(data["AgentRequest"].as_array().unwrap().is_empty());
+    node.shutdown().await.expect("shut down test node");
+    std::fs::remove_dir_all(&message.admission.path).unwrap();
+}
+
+#[tokio::test]
+async fn agent_creation_signs_local_directory_and_omits_remote_directory() {
+    let message = published_session_message(PublishedAdmissionOptions {
+        name: "agent-new-directory".to_owned(),
+        real_identity: true,
+        await_mode: AwaitMode::Background,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let cause = cause(&message, 0).await;
+    let parent = gents_protocol::request_input::RequestInput {
+        cwd: Some("/workspace/project".into()),
+        ..Default::default()
+    };
+    for (same_node, with_goal) in [(true, false), (true, true), (false, false)] {
+        let target = SessionMessageTarget {
+            node_did: if same_node {
+                cause.caller_node_did.clone()
+            } else {
+                "did:key:remote".into()
+            },
+            agent_did: "worker".into(),
+            session_id: uuid::Uuid::new_v4().to_string(),
+        };
+        let create = gents_session::request::lifecycle::build_session_message_request(
+            &cause,
+            &target,
+            "do the work",
+            None,
+            &uuid::Uuid::new_v4().to_string(),
+            None,
+            1,
+            None,
+            None,
+            &signer(&message),
+        )
+        .await
+        .unwrap();
+        let write = if with_goal {
+            PlannedWrite::Goal {
+                create,
+                objective: "do the work".into(),
+                token_budget: None,
+            }
+        } else {
+            PlannedWrite::Request {
+                create,
+                delivery: Delivery::Request,
+            }
+        };
+        let mut plan = gents_session::session::message::plan::Plan {
+            session_id: target.session_id,
+            hop: 1,
+            steer_head: None,
+            interrupt_before_publish: false,
+            write,
+        };
+        plan.sign_agent_creation(&cause.caller_node_did, &parent, &signer(&message))
+            .await
+            .unwrap();
+        let create = match &plan.write {
+            PlannedWrite::Request { create, .. } | PlannedWrite::Goal { create, .. } => create,
+        };
+        assert_eq!(
+            create.input.cwd.as_deref(),
+            same_node.then_some("/workspace/project")
+        );
+        assert_eq!(
+            create.input.session_creation,
+            Some(gents_protocol::request_input::SessionCreationIntent::AgentNew)
+        );
+        assert!(gents_store::identity::verify_did_signature(
+            &create.admission.signer_did,
+            &create.signing_payload(),
+            &create.admission.signature
+        )
+        .unwrap());
+        let mut altered = create.clone();
+        altered.input.cwd = Some("/workspace/other".into());
+        assert!(!matches!(
+            gents_store::identity::verify_did_signature(
+                &altered.admission.signer_did,
+                &altered.signing_payload(),
+                &altered.admission.signature
+            ),
+            Ok(true)
+        ));
+    }
+    message
+        .admission
+        .node
+        .shutdown()
+        .await
+        .expect("shut down test node");
+    std::fs::remove_dir_all(&message.admission.path).unwrap();
+}
