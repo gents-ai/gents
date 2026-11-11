@@ -1,4 +1,5 @@
 import Proofs.Store.Identity.GrantSets
+import Proofs.Store.SchemaInstall
 import Proofs.Conformance.Family
 
 namespace Identity.GrantSets
@@ -10,3 +11,11 @@ attribute [conformance_vocabulary] GrantSet.name
 attribute [conformance_function] GrantSet.nativeAdmin
 
 end Identity.GrantSets
+
+namespace SchemaInstall
+
+deriving instance Lean.ToJson for Live, Decision
+
+attribute [conformance_function] decide requestAdmitted
+
+end SchemaInstall

@@ -1,5 +1,6 @@
 import Proofs.Conformance.Functions.Automation
 import Proofs.Conformance.Functions.Clients
+import Proofs.Conformance.Functions.Documents
 import Proofs.Conformance.Functions.Runtime
 import Proofs.Conformance.Functions.Session
 import Proofs.Conformance.Functions.ToolCalls

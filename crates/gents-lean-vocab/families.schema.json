@@ -287,6 +287,63 @@
       },
       "output": "bool"
     },
+    "document_operations_delete_outcome": {
+      "input": {
+        "fields": [
+          [
+            "actor",
+            {
+              "enum": "Actor",
+              "values": [
+                "person",
+                "agent"
+              ]
+            }
+          ],
+          [
+            "step",
+            {
+              "enum": "Step",
+              "values": [
+                "preview",
+                "commit"
+              ]
+            }
+          ],
+          [
+            "digest",
+            {
+              "enum": "Digest",
+              "values": [
+                "absent",
+                "current",
+                "stale"
+              ]
+            }
+          ],
+          [
+            "present",
+            "bool"
+          ],
+          [
+            "retained_valid",
+            "bool"
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": {
+        "enum": "DeleteOutcome",
+        "values": [
+          "previewed",
+          "deleted",
+          "target_missing",
+          "digest_required",
+          "digest_stale",
+          "still_referenced"
+        ]
+      }
+    },
     "durable_lineage_deferred_creation_allowed": {
       "input": {
         "fields": [
@@ -942,6 +999,56 @@
           "await_newer_generation"
         ]
       }
+    },
+    "schema_install_decide": {
+      "input": {
+        "fields": [
+          [
+            "live",
+            {
+              "enum": "Live",
+              "values": [
+                "missing",
+                "exact",
+                "extra",
+                "pending",
+                "conflicting"
+              ]
+            }
+          ],
+          [
+            "patches",
+            "bool"
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": {
+        "enum": "Decision",
+        "values": [
+          "publish",
+          "satisfied",
+          "awaits_fields",
+          "fields_pending",
+          "mismatch"
+        ]
+      }
+    },
+    "schema_install_request_admitted": {
+      "input": {
+        "fields": [
+          [
+            "any_missing",
+            "bool"
+          ],
+          [
+            "any_live",
+            "bool"
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": "bool"
     },
     "store_encryption_upgrade_after_recheck": {
       "input": {
