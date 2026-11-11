@@ -286,15 +286,15 @@ async fn provider_selection_after_unconfigured_init_uses_the_discovered_limits()
     let resolved = runtime
         .agents()
         .iter()
-        .find(|agent| agent.agent_did == summary.default_agent_did)
+        .find(|agent| agent.agent.agent_did == summary.default_agent_did)
         .expect("explicit selection makes the configured agent available");
-    assert_eq!(resolved.model_name, advertised.model_name);
+    assert_eq!(resolved.agent.model_name, advertised.model_name);
     assert_eq!(
-        resolved.context_window as i64,
+        resolved.agent.context_window as i64,
         advertised.context_window.unwrap()
     );
     assert_eq!(
-        resolved.max_output_tokens as i64,
+        resolved.agent.max_output_tokens as i64,
         advertised.max_output_tokens.unwrap()
     );
     drop(runtime);

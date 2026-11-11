@@ -371,7 +371,7 @@ pub(crate) async fn prepare_agent_request_with_input(
                     gents_session::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
                 ),
             }),
-            ..gents::RequestSpec::new(
+            ..gents_session::request::lifecycle::RequestSpec::new(
                 gents_protocol::request_admission::RequestPurpose::Normal,
                 gents_session::request::lifecycle::RequestIdentity {
                     request_id: request_id.clone(),
@@ -1558,7 +1558,7 @@ mod tests {
     fn successor_output_target_rejects_missing_physical_identity_and_self_cycles() {
         let mut row: AgentRequestRow = serde_json::from_value(json!({
             "_docID":"input", "request_id":"input", "lifecycle_state":"superseded",
-            "failure_reason":gents::request::lifecycle::FOLDED_REASON, "superseded_by_request":"active"
+            "failure_reason":gents_session::request::lifecycle::FOLDED_REASON, "superseded_by_request":"active"
         }))
         .unwrap();
         assert!(successor_output_target(&row).is_err());
