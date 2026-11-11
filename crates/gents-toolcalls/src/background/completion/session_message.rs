@@ -152,7 +152,7 @@ pub(crate) enum AssignmentObservation {
 /// assignment is named in the handoff so the continuation owner cannot read a
 /// finished turn as a finished goal.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TurnAssignmentHandoff {
+pub struct TurnAssignmentHandoff {
     turn_completed: bool,
     assignment: AssignmentObservation,
     terminal_reason: Option<&'static str>,

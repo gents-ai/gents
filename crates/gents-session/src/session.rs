@@ -85,7 +85,7 @@ pub use observations::{
 pub use observations::{load_latest_request_in_txn, SessionRequestFact};
 #[cfg(test)]
 pub(crate) use output::count_capture_row_queries;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use output::count_request_output_scans;
 #[cfg(test)]
 pub(crate) use output::count_source_output_queries;

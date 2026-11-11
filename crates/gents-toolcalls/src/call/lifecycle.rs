@@ -182,7 +182,7 @@ pub struct SpawnedBackgroundToolAdmission {
 }
 
 impl ToolCallLifecycle {
-    pub(crate) fn access(&self) -> anyhow::Result<gents_store::config_client::ConfigAccess> {
+    pub fn access(&self) -> anyhow::Result<gents_store::config_client::ConfigAccess> {
         Ok(
             gents_store::config_client::ConfigAccess::local_with_optional_agent_signer(
                 self.node.clone(),
@@ -479,7 +479,7 @@ impl ToolCallLifecycle {
         self.state
     }
 
-    pub(crate) fn request_doc_id(&self) -> Option<&str> {
+    pub fn request_doc_id(&self) -> Option<&str> {
         self.request_doc_id.as_deref()
     }
 
@@ -511,15 +511,15 @@ impl ToolCallLifecycle {
         Ok(request.request_id)
     }
 
-    pub(crate) fn session_id(&self) -> &str {
+    pub fn session_id(&self) -> &str {
         &self.session_id
     }
 
-    pub(crate) fn node_did(&self) -> &str {
+    pub fn node_did(&self) -> &str {
         &self.node_did
     }
 
-    pub(crate) fn requester_did(&self) -> Option<&str> {
+    pub fn requester_did(&self) -> Option<&str> {
         self.requester_did.as_deref()
     }
 

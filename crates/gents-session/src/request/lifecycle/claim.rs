@@ -12,7 +12,7 @@ pub(crate) struct DurableClaimReceipt {
     folded_selection: Vec<super::queue::FoldedInput>,
 }
 
-pub(crate) enum DurableClaimOutcome {
+pub enum DurableClaimOutcome {
     Claimed(Box<DurableClaimReceipt>),
     NotClaimed(ClaimOutcome),
 }
