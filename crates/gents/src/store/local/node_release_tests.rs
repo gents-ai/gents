@@ -122,7 +122,7 @@ where
 async fn measure_fixtures() -> Vec<StageReport> {
     vec![
         measure("embedded_home", || async {
-            let home = crate::eval::runner::embedded::EmbeddedHome::create_temp("node-release")
+            let home = crate::runtime::embedded::EmbeddedHome::create_temp("node-release")
                 .await
                 .unwrap();
             Arc::downgrade(&home.node)

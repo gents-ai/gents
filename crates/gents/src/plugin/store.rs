@@ -212,21 +212,22 @@ pub fn grant_on_install(
     namespace: &str,
     plugin: &crate::pack::PackPlugin,
     consent: bool,
-) -> Result<Option<crate::plugin::Manifold>> {
+) -> Result<Option<crate::plugin::Manifold>, super::authority::GrantError> {
     let previous = match read_record(home, namespace, &plugin.name) {
         Ok(record) => Some(record),
         Err(error) if is_not_found(&error) => None,
-        Err(error) => return Err(error).context("reading the existing plugin grant"),
+        Err(error) => return Err(error.context("reading the existing plugin grant").into()),
     };
     let previous_limits = previous
         .as_ref()
         .filter(|record| record.granted.is_some())
         .and_then(|record| record.declaration.limits.as_ref());
-    anyhow::ensure!(
-        super::authority::limits_consented(plugin.limits.as_ref(), previous_limits, consent),
-        "plugin {} asks for increased resource limits; install it with --grant-authority to allow that",
-        plugin.name
-    );
+    if !super::authority::limits_consented(plugin.limits.as_ref(), previous_limits, consent) {
+        return Err(super::authority::GrantError::Ungranted {
+            plugin: plugin.name.clone(),
+            asks: "increased resource limits".into(),
+        });
+    }
     let previous_ceiling = previous.as_ref().map(InstalledPlugin::ceiling);
     let granted = super::authority::grant_for(plugin, previous_ceiling.as_ref(), consent)?;
     Ok((granted != super::Manifold::sealed() || plugin.limits.is_some()).then_some(granted))
@@ -582,6 +583,25 @@ mod tests {
             data_collection_fields: Default::default(),
             data_collection_schemas: Default::default(),
         }
+    }
+
+    #[test]
+    fn raised_limits_are_a_typed_refusal() {
+        let home = tempfile::tempdir().unwrap();
+        let mut plugin = sample_record("acme", "echo", None).declaration;
+        plugin.limits = Some(crate::pack::PluginLimits {
+            memory_mib: Some(1536),
+            ..Default::default()
+        });
+        let error = grant_on_install(home.path(), "acme", &plugin, false).unwrap_err();
+        let super::super::authority::GrantError::Ungranted { asks, .. } = &error else {
+            panic!("{error:#}")
+        };
+        assert_eq!(asks, "increased resource limits");
+        assert_eq!(
+            error.to_string(),
+            "plugin echo asks for increased resource limits; install it with --grant-authority to allow that"
+        );
     }
 
     #[test]

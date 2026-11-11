@@ -19,15 +19,14 @@ pub(super) async fn resolve_timeline_messages_for_session(
             let session_id = session_id.clone();
             let requester_did = requester_did.clone();
             Box::pin(async move {
-                let scope = gents_protocol::session::session_scope_filter(
-                    &node_did,
-                    &session_id,
-                    requester_did.as_deref(),
-                );
-                let query = format!(
-                    r#"{{ AgentMessage(filter: {{ {scope} }}, order: {{ sequence: ASC }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#
-                );
-                let response = txn.execute(&query).await?;
+                use gents_protocol::document_query::{
+                    fields::agent_message as fields, session_scope, Direction, Query, Selection,
+                };
+                let query = Query::select(Selection::owned(AGENT_MESSAGE_FIELDS))
+                    .filter(session_scope(&node_did, &session_id, requester_did.as_deref()))
+                    .order_by(fields::SEQUENCE, Direction::Asc)
+                    .render();
+                let response = txn.run(&query).await?;
                 anyhow::ensure!(
                     response.get("errors").is_none_or(|errors| {
                         errors.is_null() || errors.as_array().is_some_and(Vec::is_empty)

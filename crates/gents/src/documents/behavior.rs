@@ -2,8 +2,6 @@ use anyhow::Result;
 use defra_node::Node as EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
-use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
-
 use super::references::ConfigReferences;
 use super::serde_helpers::{
     default_enabled, deserialize_default_on_null, deserialize_enabled, first_row_with_doc_id,
@@ -83,29 +81,25 @@ pub(crate) async fn load_agent_record(
     node: &EmbeddedNode,
     agent_did: &str,
 ) -> Result<Option<(String, Agent)>> {
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let query = format!(
-        r#"{{
-            Agent(
-                filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }},
-                limit: 1
-            ) {{
-                _docID
-                agent_did
-                creation_nonce
-                node_did
-                display_name
-                description
-                context_id
-                inference_profile_id
-                enabled
-                tags
-                created_at
-            }}
-        }}"#
-    );
+    use gents_protocol::document_query::{fields::agent as fields, Filter, Query, Selection};
+    let rendered = Query::select(
+        Selection::doc_id()
+            .field(fields::AGENT_DID)
+            .field(fields::CREATION_NONCE)
+            .field(fields::NODE_DID)
+            .field(fields::DISPLAY_NAME)
+            .field(fields::DESCRIPTION)
+            .field(fields::CONTEXT_ID)
+            .field(fields::INFERENCE_PROFILE_ID)
+            .field(fields::ENABLED)
+            .field(fields::TAGS)
+            .field(fields::CREATED_AT),
+    )
+    .filter(Filter::eq(fields::AGENT_DID, agent_did))
+    .limit(1)
+    .render();
 
-    let resp = graphql_with_transaction_retry(node, &query, "query Agent").await?;
+    let resp = crate::store::graphql::read_rendered(node, &rendered, "query Agent").await?;
 
     Ok(first_row_with_doc_id(resp.data.as_ref(), "Agent"))
 }
@@ -122,29 +116,27 @@ pub(crate) async fn list_agent_records(
     node: &EmbeddedNode,
     node_did: &str,
 ) -> Result<Vec<(String, Agent)>> {
-    let escaped_node_did = escape_graphql_string(node_did);
-    let query = format!(
-        r#"{{
-            Agent(
-                filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }},
-                order: {{ created_at: ASC }}
-            ) {{
-                _docID
-                agent_did
-                creation_nonce
-                node_did
-                display_name
-                description
-                context_id
-                inference_profile_id
-                enabled
-                tags
-                created_at
-            }}
-        }}"#
-    );
+    use gents_protocol::document_query::{
+        fields::agent as fields, Direction, Filter, Query, Selection,
+    };
+    let rendered = Query::select(
+        Selection::doc_id()
+            .field(fields::AGENT_DID)
+            .field(fields::CREATION_NONCE)
+            .field(fields::NODE_DID)
+            .field(fields::DISPLAY_NAME)
+            .field(fields::DESCRIPTION)
+            .field(fields::CONTEXT_ID)
+            .field(fields::INFERENCE_PROFILE_ID)
+            .field(fields::ENABLED)
+            .field(fields::TAGS)
+            .field(fields::CREATED_AT),
+    )
+    .filter(Filter::eq(fields::NODE_DID, node_did))
+    .order_by(fields::CREATED_AT, Direction::Asc)
+    .render();
 
-    let resp = graphql_with_transaction_retry(node, &query, "list Agent").await?;
+    let resp = crate::store::graphql::read_rendered(node, &rendered, "list Agent").await?;
 
     Ok(rows_with_doc_id(resp.data.as_ref(), "Agent"))
 }

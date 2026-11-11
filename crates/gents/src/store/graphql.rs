@@ -156,6 +156,23 @@ pub async fn graphql_with_transaction_retry(
     Ok(response)
 }
 
+/// [`graphql_with_transaction_retry`] for a rendered read.
+pub async fn read_rendered(
+    node: &EmbeddedNode,
+    rendered: &gents_protocol::document_query::Rendered,
+    operation: &str,
+) -> Result<QueryResponse, ConfigClientError> {
+    let response = crate::store::config_client::ConfigAccess::read_local_response_with_variables(
+        node,
+        &rendered.document,
+        Some(&rendered.variables),
+        operation,
+    )
+    .await?;
+    ensure_no_errors(&response, operation)?;
+    Ok(response)
+}
+
 pub(crate) fn mutation_affected_documents(response: &QueryResponse) -> usize {
     response
         .data

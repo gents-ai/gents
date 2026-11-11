@@ -66,10 +66,27 @@ pub(crate) async fn finish_goal_relationships(
                 .await?.context("Goal publication session is unavailable")?;
             let parent = escape_graphql_string(&session.doc_id);
             let creator = escape_graphql_string(actor);
-            let response = txn.execute(&format!(r#"{{
-                Goal(filter: {{session_doc_id: {{_eq: "{parent}"}}, creator_did: {{_eq: "{creator}"}}, parent_linked: {{_eq: false}}}}) {{_docID agent_did}}
-                GoalCreationClaim(filter: {{session_doc_id: {{_eq: "{parent}"}}, creator_did: {{_eq: "{creator}"}}, parent_linked: {{_eq: false}}}}) {{_docID agent_did}}
-            }}"#)).await?;
+            let response = {
+                use gents_protocol::document_query::{
+                    fields::{goal, goal_creation_claim},
+                    Filter, Query, QuerySet, Selection,
+                };
+                let rendered = QuerySet::new()
+                    .plain(
+                        &Query::select(Selection::doc_id().field(goal::AGENT_DID))
+                            .filter(Filter::eq(goal::SESSION_DOC_ID, &session.doc_id))
+                            .filter(Filter::eq(goal::CREATOR_DID, actor))
+                            .filter(Filter::eq(goal::PARENT_LINKED, false)),
+                    )
+                    .plain(
+                        &Query::select(Selection::doc_id().field(goal_creation_claim::AGENT_DID))
+                            .filter(Filter::eq(goal_creation_claim::SESSION_DOC_ID, &session.doc_id))
+                            .filter(Filter::eq(goal_creation_claim::CREATOR_DID, actor))
+                            .filter(Filter::eq(goal_creation_claim::PARENT_LINKED, false)),
+                    )
+                    .render();
+                txn.run(&rendered).await?
+            };
             for (collection, schema) in [
                 ("Goal", gents_protocol::schemas::GOAL),
                 ("GoalCreationClaim", gents_protocol::schemas::GOAL_CREATION_CLAIM),
@@ -262,8 +279,6 @@ pub(super) async fn stage_goal_and_claim(
     let creation_key = identity
         .map(|identity| identity.creation_key.clone())
         .unwrap_or_else(|| deterministic_goal_creation_key(node_did, session_id));
-    let escaped_did = escape_graphql_string(node_did);
-    let escaped_session = escape_graphql_string(session_id);
     let session = crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
         txn, node_did, session_id,
     )
@@ -272,23 +287,36 @@ pub(super) async fn stage_goal_and_claim(
     let creator = txn
         .actor_did()
         .context("goal creation requires an authenticated actor")?;
-    let response = txn
-        .execute(&format!(
-            r#"{{
-                Goal(filter: {{
-                    node_did: {{ _eq: "{escaped_did}" }},
-                    session_id: {{ _eq: "{escaped_session}" }},
-                    session_doc_id: {{ _eq: "{}" }}
-                }}) {{ {GOAL_FIELDS} }}
-                GoalCreationClaim(filter: {{ session_doc_id: {{ _eq: "{}" }}, creation_key: {{ _eq: "{}" }} }}) {{
-                    goal_id node_did session_id objective token_budget
-                }}
-            }}"#,
-            escape_graphql_string(&session.doc_id),
-            escape_graphql_string(&session.doc_id),
-            escape_graphql_string(&creation_key),
-        ))
-        .await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::{goal, goal_creation_claim},
+            Filter, Query, QuerySet, Selection,
+        };
+        let rendered = QuerySet::new()
+            .plain(
+                &Query::select(Selection::owned(GOAL_FIELDS))
+                    .filter(Filter::eq(goal::NODE_DID, node_did))
+                    .filter(Filter::eq(goal::SESSION_ID, session_id))
+                    .filter(Filter::eq(goal::SESSION_DOC_ID, &session.doc_id)),
+            )
+            .plain(
+                &Query::select(
+                    Selection::new()
+                        .field(goal_creation_claim::GOAL_ID)
+                        .field(goal_creation_claim::NODE_DID)
+                        .field(goal_creation_claim::SESSION_ID)
+                        .field(goal_creation_claim::OBJECTIVE)
+                        .field(goal_creation_claim::TOKEN_BUDGET),
+                )
+                .filter(Filter::eq(
+                    goal_creation_claim::SESSION_DOC_ID,
+                    &session.doc_id,
+                ))
+                .filter(Filter::eq(goal_creation_claim::CREATION_KEY, &creation_key)),
+            )
+            .render();
+        txn.run(&rendered).await?
+    };
     let mut goals: Vec<GoalDocument> = serde_json::from_value(
         response
             .pointer("/data/Goal")
@@ -548,8 +576,10 @@ async fn create_goal_for_session_inner(
                     Some(context)
                 } else { None };
                 let identity = if let Some(tool_context::GoalToolContext { assignment: RequestAssignmentObservation::Assigned(goal), .. }) = &context {
-                    let response = txn.execute(&format!(r#"{{ Goal(filter: {{ _docID: {{_eq: "{}"}} }}) {{creation_key}} }}"#,
-                        escape_graphql_string(&goal.doc_id))).await?;
+                    let response = {
+                        use gents_protocol::document_query::{fields::goal as fields, Filter, Query, Selection};
+                        txn.run(&Query::select(Selection::new().field(fields::CREATION_KEY)).filter(Filter::eq(fields::DOC_ID, &goal.doc_id)).render()).await?
+                    };
                     let creation_key = response.pointer("/data/Goal/0/creation_key").and_then(serde_json::Value::as_str)
                         .filter(|value| !value.is_empty()).context("assigned Goal has no creation identity")?;
                     Some(GoalCreationIdentity { goal_id: goal.goal_id.clone(), creation_key: creation_key.to_string() })

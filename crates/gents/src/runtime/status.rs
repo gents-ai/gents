@@ -365,33 +365,55 @@ async fn upsert_runtime_status(
             ) {{ _docID }}
         }}"#,
     );
+    let runtime_did = row.node_did.as_str();
     let access = crate::store::config_client::ConfigAccess::local_as(node.clone(), actor.clone());
-    access.transact_write("upsert_runtime_status", |txn| {
-        let mutation = &mutation;
-        let node_did = &node_did;
-        let actor = &actor;
-        Box::pin(async move {
-            let response = txn.execute(&format!(
-                r#"{{ NodeRuntime(filter: {{node_did: {{_eq: "{node_did}"}}}}, limit: 2) {{_docID}} }}"#
-            )).await?;
-            let rows = gents_protocol::graphql::graphql_rows_from_response(&response, "NodeRuntime");
-            anyhow::ensure!(rows.len() <= 1, "NodeRuntime is ambiguous");
-            if let Some(row) = rows.first() {
-                let doc = row["_docID"].as_str().context("NodeRuntime has no document ID")?.to_owned();
-                let owners = txn.document_owners("NodeRuntime", &[doc]).await?;
-                anyhow::ensure!(owners.len() == 1 && owners[0].visible && owners[0].owner.as_ref() == Some(actor),
-                    "NodeRuntime has no matching native runtime owner");
-            }
-            let response = txn.execute(mutation).await?;
-            let doc = gents_protocol::graphql::extract_mutation_doc_id(&response, "NodeRuntime")?;
-            if rows.is_empty() {
-                crate::store::config_client::publish_node_child_in_txn(
-                    txn, "NodeRuntime", &doc, actor.as_str(),
-                ).await?;
-            }
-            Ok::<_, anyhow::Error>(())
+    access
+        .transact_write("upsert_runtime_status", |txn| {
+            let mutation = &mutation;
+            let actor = &actor;
+            Box::pin(async move {
+                let rendered = {
+                    use gents_protocol::document_query::{
+                        fields::node_runtime as fields, Filter, Query, Selection,
+                    };
+                    Query::select(Selection::doc_id())
+                        .filter(Filter::eq(fields::NODE_DID, runtime_did))
+                        .limit(2)
+                        .render()
+                };
+                let response = txn.run(&rendered).await?;
+                let rows =
+                    gents_protocol::graphql::graphql_rows_from_response(&response, "NodeRuntime");
+                anyhow::ensure!(rows.len() <= 1, "NodeRuntime is ambiguous");
+                if let Some(row) = rows.first() {
+                    let doc = row["_docID"]
+                        .as_str()
+                        .context("NodeRuntime has no document ID")?
+                        .to_owned();
+                    let owners = txn.document_owners("NodeRuntime", &[doc]).await?;
+                    anyhow::ensure!(
+                        owners.len() == 1
+                            && owners[0].visible
+                            && owners[0].owner.as_ref() == Some(actor),
+                        "NodeRuntime has no matching native runtime owner"
+                    );
+                }
+                let response = txn.execute(mutation).await?;
+                let doc =
+                    gents_protocol::graphql::extract_mutation_doc_id(&response, "NodeRuntime")?;
+                if rows.is_empty() {
+                    crate::store::config_client::publish_node_child_in_txn(
+                        txn,
+                        "NodeRuntime",
+                        &doc,
+                        actor.as_str(),
+                    )
+                    .await?;
+                }
+                Ok::<_, anyhow::Error>(())
+            })
         })
-    }).await
+        .await
 }
 
 struct ExecutorStatusFields {

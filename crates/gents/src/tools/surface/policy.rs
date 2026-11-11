@@ -215,7 +215,7 @@ pub struct ToolPolicySurface {
     pub plugin_tools: EndpointScope<String, ()>,
 }
 
-pub(crate) fn configured_self_config_category_set(categories: &[String]) -> BTreeSet<String> {
+pub fn configured_self_config_category_set(categories: &[String]) -> BTreeSet<String> {
     self_config_category_scope(categories)
         .keys()
         .into_iter()

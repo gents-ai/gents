@@ -232,7 +232,7 @@ fn canonical_tool_payload(
         }
     }
     if tool.spawned_by_tool_call_doc_id.is_some() || tool.plugin_parent_tool_call_doc_id.is_some() {
-        return match super::terminal_tool_output::terminal_tool_output(
+        return match gents_desktop_core::client::canonical_output::terminal_tool_output(
             tool,
             output_segments,
             denied_segments,
@@ -683,7 +683,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
     let mut live_cursor = None;
     if include_live_tail {
         if let Some(request_id) = latest_request_id.as_deref() {
-            if let Some(live) = super::live_delta::canonical_live_text(
+            if let Some(live) = gents_desktop_core::client::canonical_output::canonical_live_text(
                 store,
                 context_store,
                 session_id,

@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use gents::documents::apply_desired_state_plan;
-use gents::eval::runner::embedded::EmbeddedHome;
+use gents::runtime::embedded::EmbeddedHome;
 use gents::store::collection::Collection;
 use gents::store::config_client::{
     ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, GraphqlEndpoint,
@@ -239,8 +239,8 @@ impl ServedRuntimeHome {
 
     /// Runs the runtime over this home until the returned handle is shut
     /// down, as `gents serve` does, once it reports ready.
-    pub async fn boot(&self) -> gents::eval::runner::embedded::RunningRuntime {
-        gents::eval::runner::embedded::boot_runtime(
+    pub async fn boot(&self) -> gents::runtime::embedded::RunningRuntime {
+        gents::runtime::embedded::boot_runtime(
             &self.home,
             self.runtime().clone(),
             gents::DocumentRuntimeOptions::default(),

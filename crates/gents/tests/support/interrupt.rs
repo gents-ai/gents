@@ -90,7 +90,7 @@ pub async fn wait_for_runtime_ready_or_exit(
     handle: &mut tokio::task::JoinHandle<anyhow::Result<()>>,
 ) {
     tokio::select! {
-        ready = gents::eval::runner::embedded::wait_for_runtime_ready(node, node_did) => {
+        ready = gents::runtime::embedded::wait_for_runtime_ready(node, node_did) => {
             ready.expect("runtime ready");
         }
         exited = &mut *handle => match exited {
@@ -123,7 +123,7 @@ pub async fn spawn_runtime(db: &super::TestDb, runtime: gents::Gents) -> BootedA
 }
 
 pub async fn wait_for_runtime_ready(node: &EmbeddedNode, node_did: &str) {
-    gents::eval::runner::embedded::wait_for_runtime_ready(node, node_did)
+    gents::runtime::embedded::wait_for_runtime_ready(node, node_did)
         .await
         .expect("runtime ready");
 }

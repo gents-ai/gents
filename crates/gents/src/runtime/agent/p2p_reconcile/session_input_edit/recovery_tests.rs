@@ -1,5 +1,5 @@
 use super::*;
-use crate::eval::runner::embedded::home::EmbeddedHome;
+use crate::runtime::embedded::EmbeddedHome;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };

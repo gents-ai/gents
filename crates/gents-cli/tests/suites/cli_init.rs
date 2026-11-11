@@ -672,10 +672,8 @@ async fn init_defaults_to_local_llama_server_and_surfaces_identity() -> Result<(
         "init should print the default llama-server next step: {init}"
     );
     assert!(
-        next_steps
-            .iter()
-            .any(|step| step.as_str() == Some("gents codex")),
-        "init should point at the codex subcommand: {init}"
+        next_steps.iter().any(|step| step.as_str() == Some("gents")),
+        "init should point at bare `gents`, which opens the built-in shell: {init}"
     );
 
     Ok(())

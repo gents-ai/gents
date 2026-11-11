@@ -44,20 +44,24 @@ pub async fn stop_session_with_access(
                     .await?
                     .context("cannot stop a missing or differently scoped session")?;
                 let stopped_at = chrono::Utc::now().to_rfc3339();
-                let doc_id = crate::store::graphql::escape_graphql_string(&owner.doc_id);
-                let scope = gents_protocol::session::session_scope_filter(
-                    &node_did,
-                    &session_id,
-                    requester_did.as_deref(),
-                );
-                let stopped_at = crate::store::graphql::escape_graphql_string(&stopped_at);
-                let response = txn
-                    .execute(&format!(
-                        r#"mutation {{ update_AgentSession(filter: {{
-                            _docID: {{ _eq: "{doc_id}" }}, {scope}
-                        }}, input: {{ stopped_at: "{stopped_at}" }}) {{ _docID }} }}"#
-                    ))
-                    .await?;
+                let response = {
+                    use gents_protocol::document_query::{
+                        fields::agent_session as fields, session_scope, Filter, Input, Update,
+                    };
+                    txn.run(
+                        &Update::matching(
+                            Filter::eq(fields::DOC_ID, owner.doc_id.as_str()),
+                            Input::new().set(fields::STOPPED_AT, &stopped_at),
+                        )
+                        .filter(session_scope(
+                            &node_did,
+                            &session_id,
+                            requester_did.as_deref(),
+                        ))
+                        .render(),
+                    )
+                    .await?
+                };
                 anyhow::ensure!(
                     response.pointer("/data/update_AgentSession/0/_docID")
                         == Some(&serde_json::Value::String(owner.doc_id.clone())),
@@ -164,19 +168,24 @@ pub async fn resume_session_with_access(
                     &job_driver,
                 )
                 .await?;
-                let doc_id = crate::store::graphql::escape_graphql_string(&owner.doc_id);
-                let scope = gents_protocol::session::session_scope_filter(
-                    &node_did,
-                    &session_id,
-                    requester_did.as_deref(),
-                );
-                let response = txn
-                    .execute(&format!(
-                        r#"mutation {{ update_AgentSession(filter: {{
-                            _docID: {{ _eq: "{doc_id}" }}, {scope}
-                        }}, input: {{ stopped_at: null }}) {{ _docID }} }}"#
-                    ))
-                    .await?;
+                let response = {
+                    use gents_protocol::document_query::{
+                        fields::agent_session as fields, session_scope, Filter, Input, Update,
+                    };
+                    txn.run(
+                        &Update::matching(
+                            Filter::eq(fields::DOC_ID, owner.doc_id.as_str()),
+                            Input::new().set_null(fields::STOPPED_AT),
+                        )
+                        .filter(session_scope(
+                            &node_did,
+                            &session_id,
+                            requester_did.as_deref(),
+                        ))
+                        .render(),
+                    )
+                    .await?
+                };
                 anyhow::ensure!(
                     response.pointer("/data/update_AgentSession/0/_docID")
                         == Some(&serde_json::Value::String(owner.doc_id.clone())),

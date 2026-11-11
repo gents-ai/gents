@@ -218,7 +218,7 @@ impl ConfigApplyTxn<'_> {
     }
 
     /// Create using the authenticated client's key and an application-owned bundled SDL.
-    pub(crate) async fn execute_client_signed_create(
+    pub async fn execute_client_signed_create(
         &self,
         document: &str,
         variables: &Value,
@@ -268,7 +268,7 @@ impl ConfigApplyTxn<'_> {
 
     /// Execute a client-approved update using an application-owned bundled SDL.
     /// The existing transaction evaluates the complete mutation predicate.
-    pub(crate) async fn execute_client_signed_update(
+    pub async fn execute_client_signed_update(
         &self,
         document: &str,
         variables: &Value,
@@ -774,6 +774,12 @@ impl ConfigApplyTxn<'_> {
         Ok(())
     }
 
+    /// Execute a rendered read or write inside this snapshot.
+    pub async fn run(&self, rendered: &gents_protocol::document_query::Rendered) -> Result<Value> {
+        self.execute_with_variables(&rendered.document, &rendered.variables)
+            .await
+    }
+
     /// Execute with typed GraphQL variables. JSON scalar payloads retain
     /// arbitrary keys and nested empty arrays; ordinary nillable list fields
     /// remain the caller's responsibility.
@@ -1124,6 +1130,29 @@ impl ConfigApplyTxn<'_> {
         };
         self.execute_local_response_with_actor(
             document,
+            None,
+            identity.clone(),
+            agent_signer.as_deref().cloned(),
+        )
+        .await
+    }
+
+    /// [`Self::execute_local_response`] for a rendered read or write.
+    pub(crate) async fn run_local_response(
+        &self,
+        rendered: &gents_protocol::document_query::Rendered,
+    ) -> Result<defra_node::QueryResponse> {
+        let TxnBackend::Embedded {
+            identity,
+            agent_signer,
+            ..
+        } = &self.backend
+        else {
+            return Err(ConfigClientError::EmbeddedAccessRequired);
+        };
+        self.execute_local_response_with_actor(
+            &rendered.document,
+            Some(rendered.variables.clone()),
             identity.clone(),
             agent_signer.as_deref().cloned(),
         )
@@ -1177,13 +1206,14 @@ impl ConfigApplyTxn<'_> {
         let runtime =
             identity::Did::new(node_did).map_err(ConfigClientError::RelationshipTargetIdentity)?;
         graphql::ensure_query_document(query)?;
-        self.execute_local_response_with_actor(query, Some(runtime), None)
+        self.execute_local_response_with_actor(query, None, Some(runtime), None)
             .await
     }
 
     async fn execute_local_response_with_actor(
         &self,
         document: &str,
+        variables: Option<Value>,
         identity: Option<identity::Did>,
         agent_signer: Option<crate::store::identity::ManagedAgentSigner>,
     ) -> Result<defra_node::QueryResponse> {
@@ -1198,7 +1228,10 @@ impl ConfigApplyTxn<'_> {
         };
         let started = Instant::now();
         let node = Arc::clone(node);
-        let request = QueryRequest::new(document).with_identity(identity);
+        let mut request = QueryRequest::new(document).with_identity(identity);
+        if let Some(variables) = variables {
+            request = request.with_variables(variables);
+        }
         let handle = handle.clone();
         let result = execute_owned_native(
             async move {

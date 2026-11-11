@@ -1,5 +1,6 @@
 use crate::inference::llm::message::{AssistantContent, Message, ToolResultContent, UserContent};
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+#[cfg(test)]
 use crate::store::graphql::escape_graphql_string;
 use anyhow::{anyhow, Context, Result};
 use gents_protocol::output::{
@@ -29,6 +30,13 @@ impl ReadSource<'_, '_> {
         match self {
             Self::Access(access) => Ok(access.execute(query).await?),
             Self::Txn(txn) => Ok(txn.execute(query).await?),
+        }
+    }
+
+    async fn run(self, rendered: &gents_protocol::document_query::Rendered) -> Result<Value> {
+        match self {
+            Self::Access(access) => Ok(access.read(rendered).await?),
+            Self::Txn(txn) => Ok(txn.run(rendered).await?),
         }
     }
 
@@ -211,10 +219,23 @@ async fn load_tool_file_change_observation_source(
     {
         return Ok(ToolFileChangeRead::Unsupported);
     }
-    let response = source.execute(&format!(
-        r#"{{ ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_doc_id node_did session_id requester_did file_changes }} }}"#,
-        escape_graphql_string(tool_call_doc_id),
-    )).await?;
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::tool_file_change as fields, Filter, Query, Selection,
+        };
+        Query::select(
+            Selection::doc_id()
+                .field(fields::REQUEST_DOC_ID)
+                .field(fields::NODE_DID)
+                .field(fields::SESSION_ID)
+                .field(fields::REQUESTER_DID)
+                .field(fields::FILE_CHANGES),
+        )
+        .filter(Filter::eq(fields::TOOL_CALL_DOC_ID, tool_call_doc_id))
+        .limit(2)
+        .render()
+    };
+    let response = source.run(&rendered).await?;
     let rows = response["data"]["ToolFileChange"]
         .as_array()
         .context("file change lookup omitted observations")?;
@@ -885,14 +906,19 @@ async fn scoped_canonical_headers(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Vec<gents_protocol::output::rows::TranscriptMessageRow>> {
-    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
-    let query = format!(
-        r#"{{ AgentMessage(filter: {{ {scope} }}, order: {{ sequence: ASC }}) {{ {fields} }} }}"#,
-        scope = scope,
-        fields = gents_protocol::output::rows::AGENT_MESSAGE_FIELDS,
-    );
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::agent_message as fields, session_scope, Direction, Query, Selection,
+        };
+        Query::select(Selection::owned(
+            gents_protocol::output::rows::AGENT_MESSAGE_FIELDS,
+        ))
+        .filter(session_scope(node_did, session_id, requester_did))
+        .order_by(fields::SEQUENCE, Direction::Asc)
+        .render()
+    };
 
-    let resp = source.execute(&query).await?;
+    let resp = source.run(&rendered).await?;
     if resp
         .get("errors")
         .is_some_and(|errors| !errors.is_null() && !errors.as_array().is_some_and(Vec::is_empty))
@@ -945,21 +971,22 @@ async fn load_tool_call_identity(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<ToolCallIdentityRow> {
-    let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
-    let escaped_doc_id = escape_graphql_string(tool_call_doc_id);
-    let query = format!(
-        r#"{{
-            AgentToolCall(
-                filter: {{ {scope}, _docID: {{ _eq: "{escaped_doc_id}" }} }},
-                limit: 2
-            ) {{
-                _docID node_did requester_did session_id tool_call_id tool_call_key tool_name message_sequence request_doc_id spawned_by_tool_call_doc_id plugin_parent_tool_call_doc_id plugin_effect_ordinal await_mode terminal_output started_at lifecycle_state
-            }}
-        }}"#,
-        scope = scope,
-    );
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::agent_tool_call as fields, session_scope, Filter, Query, Selection,
+        };
+        Query::select(Selection::owned(
+            "_docID node_did requester_did session_id tool_call_id tool_call_key tool_name message_sequence request_doc_id spawned_by_tool_call_doc_id plugin_parent_tool_call_doc_id plugin_effect_ordinal await_mode terminal_output started_at lifecycle_state",
+        ))
+        .filter(
+            session_scope(node_did, session_id, requester_did)
+                .and(Filter::eq(fields::DOC_ID, tool_call_doc_id)),
+        )
+        .limit(2)
+        .render()
+    };
 
-    let resp = source.execute(&query).await?;
+    let resp = source.run(&rendered).await?;
     if resp
         .get("errors")
         .is_some_and(|errors| !errors.is_null() && !errors.as_array().is_some_and(Vec::is_empty))

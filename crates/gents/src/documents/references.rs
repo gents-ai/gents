@@ -44,7 +44,7 @@ pub(crate) struct RequiredReference {
 }
 
 impl ConfigReferences {
-    pub(crate) fn documents(&self) -> impl Iterator<Item = (&(Collection, String), &Value)> {
+    pub fn documents(&self) -> impl Iterator<Item = (&(Collection, String), &Value)> {
         self.documents.iter()
     }
 
@@ -267,7 +267,7 @@ impl ConfigReferences {
         Ok(())
     }
 
-    pub(crate) fn validate_document(&self, collection: Collection, value: &Value) -> Result<()> {
+    pub fn validate_document(&self, collection: Collection, value: &Value) -> Result<()> {
         ensure!(
             value["node_did"].as_str() == Some(&self.node_did),
             "{} configuration owner does not match reference scope",

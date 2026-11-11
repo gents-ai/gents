@@ -34,6 +34,9 @@ pub(super) async fn prune_expired_intents(
     identity: &dyn NodeIdentity,
     cursor: &mut Option<String>,
 ) -> Result<()> {
+    use gents_protocol::document_query::{
+        fields::enrollment_renewal_intent as fields, Delete, Filter,
+    };
     let member = escape_graphql_string(identity.did());
     let now = Utc::now();
     let cutoff = escape_graphql_string(&now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
@@ -99,15 +102,20 @@ pub(super) async fn prune_expired_intents(
         ) {
             continue;
         }
-        let id = escape_graphql_string(&row.doc_id);
-        let mutation = format!(
-            r#"mutation {{ delete_EnrollmentRenewalIntent(filter: {{ _docID: {{ _eq: "{id}" }}, member_did: {{ _eq: "{member}" }}, expires_at: {{ _lt: "{cutoff}" }} }}) {{ _docID }} }}"#
-        );
+        let rendered = Delete::matching(
+            Filter::eq(fields::DOC_ID, &row.doc_id)
+                .and(Filter::eq(fields::MEMBER_DID, identity.did()))
+                .and(Filter::lt(
+                    fields::EXPIRES_AT,
+                    now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                )),
+        )
+        .render();
         crate::store::config_client::ConfigAccess::local_as(
             node.clone(),
             ::identity::Did::new(identity.did())?,
         )
-        .write("enrollment.prune_expired_intent", &mutation)
+        .write_rendered("enrollment.prune_expired_intent", &rendered)
         .await?;
     }
     Ok(())

@@ -337,30 +337,45 @@ pub(crate) async fn consume_folded_in_txn(
     } else if row.admission_kind.as_deref() == Some("client") {
         return Err(PendingInputChanged.into());
     }
-    let doc_id = escape_graphql_string(&consumption.folded_request_doc_id);
-    let mutation = format!(
-        r#"mutation {{ update_AgentRequest(docID: "{doc_id}", filter: {{
-            _docID: {{ _eq: "{doc_id}" }},
-            node_did: {{ _eq: "{}" }},
-            lifecycle_state: {{ _eq: "{pending}" }},
-            interrupt_requested_at: {{ _eq: null }}
-        }}, input: {{
-            lifecycle_state: "{superseded}",
-            superseded_by_request: "{}",
-            superseded_by_request_doc_id: "{}",
-            failure_reason: "{}",
-            terminalized_at: "{}",
-            terminal_redrive_attempts: 0
-        }}) {{ _docID request_id workspace_id workspace_owner_node_did }} }}"#,
-        escape_graphql_string(&consumption.node_did),
-        escape_graphql_string(&consumption.head_request_id),
-        escape_graphql_string(&consumption.head_doc_id),
-        escape_graphql_string(FOLDED_REASON),
-        escape_graphql_string(published_at),
-        pending = RequestLifecycleState::Pending.as_str(),
-        superseded = RequestLifecycleState::Superseded.as_str()
-    );
-    let response = txn.execute(&mutation).await?;
+    use gents_protocol::document_query::{
+        fields::agent_request as fields, Filter, Input, Selection, Update,
+    };
+    let mutation = Update::doc(
+        consumption.folded_request_doc_id.as_str(),
+        Input::new()
+            .set(
+                fields::LIFECYCLE_STATE,
+                RequestLifecycleState::Superseded.as_str(),
+            )
+            .set(
+                fields::SUPERSEDED_BY_REQUEST,
+                consumption.head_request_id.as_str(),
+            )
+            .set(
+                fields::SUPERSEDED_BY_REQUEST_DOC_ID,
+                consumption.head_doc_id.as_str(),
+            )
+            .set(fields::FAILURE_REASON, FOLDED_REASON)
+            .set(fields::TERMINALIZED_AT, published_at)
+            .set(fields::TERMINAL_REDRIVE_ATTEMPTS, 0),
+    )
+    .filter(
+        Filter::eq(fields::DOC_ID, consumption.folded_request_doc_id.as_str())
+            .and(Filter::eq(fields::NODE_DID, consumption.node_did.as_str()))
+            .and(Filter::eq(
+                fields::LIFECYCLE_STATE,
+                RequestLifecycleState::Pending.as_str(),
+            ))
+            .and(Filter::is_null(fields::INTERRUPT_REQUESTED_AT)),
+    )
+    .returning(
+        Selection::doc_id()
+            .field(fields::REQUEST_ID)
+            .field(fields::WORKSPACE_ID)
+            .field(fields::WORKSPACE_OWNER_NODE_DID),
+    )
+    .render();
+    let response = txn.run(&mutation).await?;
     let updated = response["data"]["update_AgentRequest"]
         .as_array()
         .context("folded input publication omitted affected rows")?;
@@ -391,15 +406,23 @@ pub(crate) async fn ensure_folded_consumed_in_txn(
     txn: &ConfigApplyTxn<'_>,
     consumption: &FoldedConsumption,
 ) -> Result<()> {
-    let response = txn
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }} }}) {{
-                request_id lifecycle_state superseded_by_request_doc_id failure_reason
-            }} }}"#,
-            escape_graphql_string(&consumption.folded_request_doc_id),
-            escape_graphql_string(&consumption.node_did),
-        ))
-        .await?;
+    use gents_protocol::document_query::{
+        fields::agent_request as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::new()
+            .field(fields::REQUEST_ID)
+            .field(fields::LIFECYCLE_STATE)
+            .field(fields::SUPERSEDED_BY_REQUEST_DOC_ID)
+            .field(fields::FAILURE_REASON),
+    )
+    .filter(Filter::eq(
+        fields::DOC_ID,
+        consumption.folded_request_doc_id.as_str(),
+    ))
+    .filter(Filter::eq(fields::NODE_DID, consumption.node_did.as_str()))
+    .render();
+    let response = txn.run(&query).await?;
     let rows: Vec<AgentRequestRow> =
         serde_json::from_value(response["data"]["AgentRequest"].clone())?;
     anyhow::ensure!(
@@ -423,25 +446,32 @@ pub(crate) async fn load_consumed_folded_inputs(
     if !heads_user_turn(head) {
         return Ok(Vec::new());
     }
-    let query = format!(
-        r#"{{ AgentRequest(filter: {{
-            node_did: {{ _eq: "{}" }},
-            session_id: {{ _eq: "{}" }},
-            superseded_by_request_doc_id: {{ _eq: "{}" }},
-            lifecycle_state: {{ _eq: "{superseded}" }},
-            failure_reason: {{ _eq: "{}" }}
-        }}) {{ _docID request_id requester_did content }} }}"#,
-        escape_graphql_string(&head.node_did),
-        escape_graphql_string(&head.session_id),
-        escape_graphql_string(&head.doc_id),
-        escape_graphql_string(FOLDED_REASON),
-        superseded = RequestLifecycleState::Superseded.as_str()
-    );
+    use gents_protocol::document_query::{
+        fields::agent_request as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::doc_id()
+            .field(fields::REQUEST_ID)
+            .field(fields::REQUESTER_DID)
+            .field(fields::CONTENT),
+    )
+    .filter(Filter::eq(fields::NODE_DID, head.node_did.as_str()))
+    .filter(Filter::eq(fields::SESSION_ID, head.session_id.as_str()))
+    .filter(Filter::eq(
+        fields::SUPERSEDED_BY_REQUEST_DOC_ID,
+        head.doc_id.as_str(),
+    ))
+    .filter(Filter::eq(
+        fields::LIFECYCLE_STATE,
+        RequestLifecycleState::Superseded.as_str(),
+    ))
+    .filter(Filter::eq(fields::FAILURE_REASON, FOLDED_REASON))
+    .render();
     anyhow::ensure!(
         access.actor_did().as_deref() == Some(head.agent_did.as_str()),
         "folded inputs are read by the claimed Agent"
     );
-    let observed = access.execute(&query).await?;
+    let observed = access.read(&query).await?;
     let rows: Vec<AgentRequestRow> =
         serde_json::from_value(observed["data"]["AgentRequest"].clone())
             .context("decode folded requests")?;
@@ -452,7 +482,7 @@ pub(crate) async fn load_consumed_folded_inputs(
     access
         .transact_write("lifecycle.load_folded_inputs", move |txn| {
             Box::pin(async move {
-                let response = txn.execute(query).await?;
+                let response = txn.run(query).await?;
                 let rows: Vec<AgentRequestRow> =
                     serde_json::from_value(response["data"]["AgentRequest"].clone())
                         .context("decode folded requests")?;

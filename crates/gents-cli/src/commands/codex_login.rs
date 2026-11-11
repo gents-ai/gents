@@ -4,8 +4,10 @@ use gents_chatgpt_login::{
 };
 use gents_protocol::chatgpt_oauth::CLIENT_ID;
 use serde_json::{json, Value};
+use tokio_util::sync::CancellationToken;
 
 use crate::cli::args::CodexLoginArgs;
+use crate::commands::login_wait::{print_sign_in_notes, until_cancelled};
 use crate::config_writes::ConfigAccess;
 use crate::{print_json, resolve_config_access, resolve_node_did};
 
@@ -35,17 +37,25 @@ pub(crate) async fn codex_login(args: CodexLoginArgs) -> Result<()> {
             issuer: args.issuer,
             device_auth: args.device_auth,
         },
+        |url| eprintln!("Open this URL to sign in with ChatGPT:\n{url}"),
+        &CancellationToken::new(),
     )
     .await?;
+    print_sign_in_notes(&outcome.sign_in);
     print_json(&codex_login_result_json(&outcome))?;
     Ok(())
 }
 
-pub(crate) async fn run_codex_login(
+pub(crate) async fn run_codex_login<O>(
     access: &ConfigAccess,
     node_did: &str,
     opts: &CodexLoginOptions,
-) -> Result<CodexLoginOutcome> {
+    on_url: O,
+    cancel: &CancellationToken,
+) -> Result<CodexLoginOutcome>
+where
+    O: FnOnce(&str),
+{
     let provider = gents::inference::clients::chatgpt_codex::normalize_provider(&opts.provider);
     let mut login_options = LoginOptions {
         client_id: opts
@@ -77,14 +87,19 @@ pub(crate) async fn run_codex_login(
             .context("ChatGPT device-code login failed")?
     } else {
         let server = run_login_server(login_options).context("starting ChatGPT login server")?;
-        eprintln!(
-            "Open this URL to sign in with ChatGPT:\n{}",
-            server.auth_url
-        );
-        server
-            .block_until_done()
-            .await
-            .context("ChatGPT browser login failed")?
+        let stop = server.cancel_handle();
+        on_url(&server.auth_url);
+        until_cancelled(
+            async {
+                server
+                    .block_until_done()
+                    .await
+                    .context("ChatGPT browser login failed")
+            },
+            cancel,
+            || stop.shutdown(),
+        )
+        .await?
     };
 
     let credential = gents::inference::auth::credential::OAuthCredential::from_login_tokens(
@@ -101,12 +116,6 @@ pub(crate) async fn run_codex_login(
         opts.label.as_deref(),
     )
     .await?;
-    if let Some(hint) = sign_in.account_chooser_hint() {
-        eprintln!("{hint}");
-    }
-    if let Some(note) = sign_in.profiles_note() {
-        eprintln!("{note}");
-    }
     Ok(CodexLoginOutcome { sign_in })
 }
 

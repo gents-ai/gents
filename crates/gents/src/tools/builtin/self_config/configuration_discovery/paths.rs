@@ -39,22 +39,6 @@ pub(super) fn layout(
             vec!["AGENTS.md".into()],
             vec![".codex/skills".into()],
         ),
-        (DiscoverySourceKind::Grok, DiscoveryScope::User) => (
-            vec![
-                ("config.toml".into(), ConfigFormat::GrokToml),
-                ("mcp.json".into(), ConfigFormat::McpJson),
-            ],
-            vec!["AGENTS.md".into()],
-            vec!["skills".into()],
-        ),
-        (DiscoverySourceKind::Grok, DiscoveryScope::Project) => (
-            vec![
-                (".grok/config.toml".into(), ConfigFormat::GrokToml),
-                (".mcp.json".into(), ConfigFormat::McpJson),
-            ],
-            vec!["AGENTS.md".into()],
-            vec![".grok/skills".into()],
-        ),
     }
 }
 
