@@ -378,6 +378,13 @@ impl RequestOperationError {
         }
     }
 
+    pub fn into_passthrough(self) -> Result<Box<dyn Error + Send + Sync>, Self> {
+        match self {
+            Self::Passthrough(error) => Ok(error),
+            other => Err(other),
+        }
+    }
+
     pub fn source_passthrough(&self) -> Option<&(dyn Error + Send + Sync + 'static)> {
         match self {
             Self::Passthrough(error) => Some(error.as_ref()),
