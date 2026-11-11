@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { SendStatus } from "@source-inc/gents-desktop-chat";
 import type { ShellView } from "@/../hooks/shellView";
 
@@ -31,17 +31,47 @@ export function ComposerFooter({
   );
 }
 
+/* A re-read that settles within this shows nothing, so a quick switch doesn't
+   flash the line. */
+const REFRESH_LINE_DELAY_MS = 400;
+
+function useShownAfter(on: boolean, delayMs: number) {
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    if (!on) {
+      setShown(false);
+      return;
+    }
+    const timer = setTimeout(() => setShown(true), delayMs);
+    return () => clearTimeout(timer);
+  }, [on, delayMs]);
+  return on && shown;
+}
+
 export function SessionSubmissionStatus({
   activityStatus,
   hint,
+  refresh,
 }: {
   activityStatus: ShellView["shellProjection"]["activityStatus"];
   hint?: string | null;
+  /** the shown session's quiet re-read, as a footer line */
+  refresh?: { title: string; detail: string } | null;
 }) {
   const status = activityStatus?.kind === "working" ? null : activityStatus;
   const quiet = !status && hint;
+  const refreshing = useShownAfter(!!refresh, REFRESH_LINE_DELAY_MS);
   return (
     <div className="min-w-0" data-testid="composer-status">
+      {refreshing && !status && !quiet && refresh && (
+        <p
+          role="status"
+          title={refresh.detail}
+          className="text-xs leading-4 text-muted-foreground animate-in fade-in-0 duration-200 motion-reduce:animate-none"
+        >
+          Updating…
+        </p>
+      )}
       {status && (
         <div
           role="status"

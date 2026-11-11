@@ -557,6 +557,7 @@ export function OpenSessionComposer({
           reason ? null : (
             <SessionSubmissionStatus
               activityStatus={activityStatus}
+              refresh={loadingStatus?.quiet ? loadingStatus : null}
               hint={
                 status.kind === "disabled" &&
                 !inFlight &&

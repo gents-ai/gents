@@ -232,6 +232,11 @@ export type SessionLoadingStatus = {
   title: string;
   detail: string;
   action: SessionLoadingAction | null;
+  /** Set by the view, not the projection: drawn as a line in the composer's
+   * footer instead of a card, because the shown session is only being read
+   * again, and a card that comes and goes would move the transcript on every
+   * switch. */
+  quiet?: true;
 };
 
 const LOADING_STATUS: SessionLoadingStatus = {
