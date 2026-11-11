@@ -117,8 +117,8 @@ pub(crate) use shared::{
     prepare_managed_command,
 };
 pub use shared::{
-    workspace_write_sandbox_enforced, CommandConstraints, CommandExecutionMode,
-    CommandExecutionPolicy, CommandNetworkMode, WorkspaceAuthority,
+    CommandConstraints, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode,
+    WorkspaceAuthority,
 };
 
 pub fn default_read_only_command_policy() -> CommandExecutionPolicy {

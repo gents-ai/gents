@@ -14,6 +14,7 @@ use super::command_validation::policy_denial;
 #[cfg(target_os = "macos")]
 use super::SANDBOX_EXEC;
 use super::{CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode, WorkspaceAuthority};
+use crate::workspace::sandbox::workspace_write_sandbox_enforced;
 use gents_loop::tool_call_lifecycle::FailureClass;
 use crate::tools::native::DenialReason;
 
@@ -45,16 +46,6 @@ pub(crate) fn select_sandbox_for_policy(
             }
         }
     }
-}
-
-#[cfg(target_os = "macos")]
-pub fn workspace_write_sandbox_enforced() -> bool {
-    Path::new(SANDBOX_EXEC).exists()
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn workspace_write_sandbox_enforced() -> bool {
-    false
 }
 
 pub(super) fn artifact_policy_denial(message: impl Into<String>) -> ToolError {

@@ -896,7 +896,7 @@ async fn read_write_overlay_meets_unrestricted_bash_to_workspace_write() {
             },
         )
         .await;
-    if crate::tools::native::workspace_write_sandbox_enforced() {
+    if crate::workspace::sandbox::workspace_write_sandbox_enforced() {
         let output = result.expect("WorkspaceWrite bash should run when Seatbelt is available");
         let value: serde_json::Value = serde_json::from_str(&output).unwrap_or_else(|_| {
             serde_json::from_str(output.lines().next().unwrap_or(&output))

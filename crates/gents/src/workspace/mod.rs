@@ -12,6 +12,7 @@ mod path_capability;
 mod publication;
 mod quickstart;
 mod runtime;
+pub mod sandbox;
 
 pub(crate) use action_plan::{
     action_plan_canonical_json, canonical_json_string, parse_action_plan_json, ACTION_PLAN_ABI,

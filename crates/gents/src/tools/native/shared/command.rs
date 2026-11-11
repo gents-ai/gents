@@ -29,17 +29,15 @@ mod command_temp;
 pub(super) mod command_validation;
 
 use command_host_executable::admit_host_executable;
-use command_launch::{
-    artifact_policy_denial, command_guard_error, prepare_command_launch,
-    workspace_write_sandbox_enforced,
-};
+use command_launch::{artifact_policy_denial, command_guard_error, prepare_command_launch};
 use command_validation::{policy_denial, validate_command_policy_with_resolved_executable};
 
 #[cfg(all(test, target_os = "macos"))]
 #[path = "command_protection_tests.rs"]
 mod command_protection_tests;
 #[cfg(target_os = "macos")]
-const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
+use crate::workspace::sandbox::SANDBOX_EXEC;
+use crate::workspace::sandbox::workspace_write_sandbox_enforced;
 
 pub(crate) fn apply_workspace_authority(
     policy: &CommandExecutionPolicy,
