@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use gents_session::session::{fork_on, ForkBoundary, ForkError, ForkOutcome, ForkParams};
-use gents_store::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
 use crate::cli::args::{ConfigListArgs, ConfigShowArgs, SessionCommand, SessionForkArgs};
@@ -99,22 +98,18 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
 }
 
 async fn query_sessions(access: &ConfigAccess, session_id: Option<&str>) -> Result<Vec<Value>> {
-    let args = session_id
-        .map(|id| {
-            format!(
-                r#"(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1)"#,
-                escape_graphql_string(id)
-            )
-        })
-        .unwrap_or_default();
-    let query = format!(
-        r#"{{
-            AgentSession{args} {{
-                {SESSION_FIELDS}
-            }}
-        }}"#
-    );
-    graphql_rows(access, "AgentSession", &query).await
+    use gents_protocol::document_query::{
+        fields::agent_session as fields, Filter, Query, Selection,
+    };
+    let mut query = Query::select(Selection::owned(SESSION_FIELDS));
+    if let Some(id) = session_id {
+        query = query.filter(Filter::eq(fields::SESSION_ID, id)).limit(1);
+    }
+    let rendered = query.render();
+    Ok(gents_protocol::graphql::graphql_rows_from_response(
+        &access.read(&rendered).await?,
+        "AgentSession",
+    ))
 }
 
 async fn add_request_count(access: &ConfigAccess, row: &mut Value) -> Result<()> {

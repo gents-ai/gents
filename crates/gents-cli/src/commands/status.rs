@@ -316,25 +316,26 @@ pub(crate) async fn load_node_readiness(
     access: &ConfigAccess,
     node_did: &str,
 ) -> Result<Option<NodeReadinessRow>> {
-    let query = format!(
-        r#"{{
-            NodeReadiness(
-                filter: {{ node_did: {{ _eq: "{node_did}" }} }},
-                limit: 1
-            ) {{
-                node_did
-                snapshot_json
-                updated_at
-            }}
-        }}"#,
-        node_did = escape_graphql_string(node_did),
-    );
-    crate::graphql_rows(access, "NodeReadiness", &query)
-        .await?
-        .into_iter()
-        .next()
-        .map(|row| serde_json::from_value(row).context("decoding node readiness row"))
-        .transpose()
+    use gents_protocol::document_query::{
+        fields::node_readiness as fields, Filter, Query, Selection,
+    };
+    let rendered = Query::select(
+        Selection::new()
+            .field(fields::NODE_DID)
+            .field(fields::SNAPSHOT_JSON)
+            .field(fields::UPDATED_AT),
+    )
+    .filter(Filter::eq(fields::NODE_DID, node_did))
+    .limit(1)
+    .render();
+    gents_protocol::graphql::graphql_rows_from_response(
+        &access.read(&rendered).await?,
+        "NodeReadiness",
+    )
+    .into_iter()
+    .next()
+    .map(|row| serde_json::from_value(row).context("decoding node readiness row"))
+    .transpose()
 }
 
 #[cfg(test)]
