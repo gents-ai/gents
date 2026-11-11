@@ -585,7 +585,9 @@ async fn configure_automation_creates_one_chain_and_preserves_runtime_ownership(
 #[tokio::test]
 async fn task_run_fires_a_task_now_and_reuses_target_id() {
     let f = SelfConfig::new("self-config-task-run").await;
-    let tools = f.tools(&f.config(&["tools", "automation"], false, false)).await;
+    let tools = f
+        .tools(&f.config(&["tools", "automation"], false, false))
+        .await;
     let config = |argv: Value| {
         let tools = &tools;
         async move {
