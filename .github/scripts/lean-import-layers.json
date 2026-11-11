@@ -1,0 +1,297 @@
+{
+  "about": "Layer of every Lean proof module, one layer per Rust crate it specifies, bottom to top. A module may import modules of its own layer or of layers below it (transitively through `below`). A module's layer is the layer whose `directory` holds it; `modules` names the modules outside every layer directory (the root barrel and the programs beside it). The pack layer has no models yet. `placements` records modules whose layer differs from the Rust crate that owns the code, and why. `exceptions` lists upward imports that remain because removing them would change a model. Checked by check-lean-import-layers.py.",
+  "root": "crates/gents/proofs",
+  "layers": [
+    {
+      "name": "shared",
+      "crates": [
+        "gents-protocol",
+        "gents-loop",
+        "gents-claude"
+      ],
+      "below": [],
+      "directory": "Proofs/Shared"
+    },
+    {
+      "name": "store",
+      "crates": [
+        "gents-store"
+      ],
+      "below": [
+        "shared"
+      ],
+      "directory": "Proofs/Store"
+    },
+    {
+      "name": "documents",
+      "crates": [
+        "gents-documents"
+      ],
+      "below": [
+        "store"
+      ],
+      "directory": "Proofs/Documents"
+    },
+    {
+      "name": "inference",
+      "crates": [
+        "gents-inference"
+      ],
+      "below": [
+        "documents"
+      ],
+      "directory": "Proofs/Inference"
+    },
+    {
+      "name": "p2p",
+      "crates": [
+        "gents-p2p"
+      ],
+      "below": [
+        "documents"
+      ],
+      "directory": "Proofs/P2P"
+    },
+    {
+      "name": "pack",
+      "crates": [
+        "gents-pack"
+      ],
+      "below": [
+        "inference"
+      ],
+      "directory": null
+    },
+    {
+      "name": "session",
+      "crates": [
+        "gents-session"
+      ],
+      "below": [
+        "inference",
+        "p2p"
+      ],
+      "directory": "Proofs/Session"
+    },
+    {
+      "name": "tools",
+      "crates": [
+        "gents-tools"
+      ],
+      "below": [
+        "pack",
+        "session"
+      ],
+      "directory": "Proofs/Tools"
+    },
+    {
+      "name": "toolcalls",
+      "crates": [
+        "gents-toolcalls"
+      ],
+      "below": [
+        "tools"
+      ],
+      "directory": "Proofs/ToolCalls"
+    },
+    {
+      "name": "automation",
+      "crates": [
+        "gents-automation"
+      ],
+      "below": [
+        "toolcalls"
+      ],
+      "directory": "Proofs/Automation"
+    },
+    {
+      "name": "observe",
+      "crates": [
+        "gents-observe"
+      ],
+      "below": [
+        "automation"
+      ],
+      "directory": "Proofs/Observe"
+    },
+    {
+      "name": "runtime",
+      "crates": [
+        "gents"
+      ],
+      "below": [
+        "observe"
+      ],
+      "directory": "Proofs/Runtime"
+    },
+    {
+      "name": "clients",
+      "crates": [
+        "gents-desktop-core",
+        "gents-desktop-bridge",
+        "gents-desktop",
+        "gents-cli",
+        "apps/gents-desktop",
+        "packages/gents-desktop-chat"
+      ],
+      "below": [
+        "runtime"
+      ],
+      "directory": "Proofs/Clients"
+    },
+    {
+      "name": "conformance",
+      "crates": [
+        "gents-lean-contract",
+        "gents-lean-vocab"
+      ],
+      "below": [
+        "clients"
+      ],
+      "directory": "Proofs/Conformance"
+    }
+  ],
+  "modules": {
+    "EngineerSelfConfigConformance": "conformance",
+    "GenerateHouseholdPolicy": "conformance",
+    "GenerateMailboxPolicy": "conformance",
+    "GoalSessionObservationConformance": "conformance",
+    "MailboxAnswerCacheConformance": "conformance",
+    "Proofs": "conformance"
+  },
+  "placements": {
+    "Proofs.Automation.Hooks.GoalFence": {
+      "rust_owner": "gents-automation",
+      "reason": "Goal instance of the hook contract"
+    },
+    "Proofs.Automation.Hooks.GoalTask": {
+      "rust_owner": "gents-automation",
+      "reason": "Goal instance of the hook contract"
+    },
+    "Proofs.Automation.Hooks.Mailbox": {
+      "rust_owner": "gents-automation",
+      "reason": "Mailbox instance of the hook contract"
+    },
+    "Proofs.Automation.Hooks.QueueScope": {
+      "rust_owner": "gents-automation",
+      "reason": "composes the Goal task instance"
+    },
+    "Proofs.Automation.Process": {
+      "rust_owner": "gents",
+      "reason": "lowered with RuntimeReconcile.State, whose runtime state carries the process state"
+    },
+    "Proofs.Automation.RuntimeReconcile.State": {
+      "rust_owner": "gents",
+      "reason": "lowered: the runtime snapshot the trigger types read; Rust moved ActiveRuntimeSnapshot to gents-automation triggers::runtime_snapshot"
+    },
+    "Proofs.Automation.Session.Control": {
+      "rust_owner": "gents-automation",
+      "reason": "Rust moved session::control to gents-automation; it pauses and resumes Goals"
+    },
+    "Proofs.Clients.QueuedSteering": {
+      "rust_owner": "gents",
+      "reason": "raised: steering composition includes the client pending-turn projection (ClientShell.Projection)"
+    },
+    "Proofs.Runtime.ApplyReconcile.Convergence": {
+      "rust_owner": "gents-documents",
+      "reason": "raised: convergence is stated through the runtime bridge"
+    },
+    "Proofs.Runtime.ApplyReconcile.RuntimeBridge": {
+      "rust_owner": "gents-documents",
+      "reason": "raised: the bridge from desired-state apply to the runtime snapshot"
+    },
+    "Proofs.Runtime.AuxiliaryAdmission": {
+      "rust_owner": "gents-inference",
+      "reason": "raised: auxiliary admission is stated over the session composition of the execution world"
+    },
+    "Proofs.Runtime.BackendHealth": {
+      "rust_owner": "gents-inference",
+      "reason": "raised: backend health reads the runtime state and is checked by the root conformance suite"
+    },
+    "Proofs.Runtime.Background.ToolOutput": {
+      "rust_owner": "gents-toolcalls",
+      "reason": "raised: background output paging reads owned tools and open prefixes of the execution world"
+    },
+    "Proofs.Runtime.Background.ToolOutputCases": {
+      "rust_owner": "gents-toolcalls",
+      "reason": "raised with Background.ToolOutput; its cases build execution-world examples"
+    },
+    "Proofs.Runtime.CompletionRetry": {
+      "rust_owner": "gents-loop",
+      "reason": "the per-completion retry machine lives in gents-loop; only its composition with the execution gate (CanonicalExecution, CanonicalGate, CanonicalGateCases) and LogicalOutputObligation sit in runtime"
+    },
+    "Proofs.Runtime.InferenceCall.UsageProjection": {
+      "rust_owner": "gents-inference",
+      "reason": "raised: the usage projection reads the execution world (CanonicalOutput.Execution.State)"
+    },
+    "Proofs.Runtime.Recovery": {
+      "rust_owner": "gents",
+      "reason": "the sweep registry and startup order stay in runtime; per-collection sweeps sit with their rows: Contract and Inference in inference, Requests and owed-delivery in session, tool-call, session-message, background-restart, plugin-job and task-hook sweeps in toolcalls"
+    },
+    "Proofs.Session.Client": {
+      "rust_owner": "gents-protocol",
+      "reason": "raised: the client turn projection is defined over the request and streaming-response models (session); Rust owner is gents-protocol client_protocol"
+    },
+    "Proofs.Session.Compaction": {
+      "rust_owner": "gents-loop",
+      "reason": "raised: reduction is defined over the transcript, streaming response and prompt-assembly models (session); Rust owners are gents-loop and gents-inference"
+    },
+    "Proofs.Session.Fleet": {
+      "rust_owner": "gents-inference",
+      "reason": "raised: fleet state carries request state (session)"
+    },
+    "Proofs.Session.Identity.DelegatedPublication": {
+      "rust_owner": "gents-store",
+      "reason": "raised: delegated publication is stated over request cross-actor authorization and admission"
+    },
+    "Proofs.Session.Identity.DelegatedPublicationCases": {
+      "rust_owner": "gents-store",
+      "reason": "raised with Identity.DelegatedPublication"
+    },
+    "Proofs.Session.Identity.SessionInputEdit": {
+      "rust_owner": "gents-store",
+      "reason": "raised: input edits are stated over the request cross-actor and signed-edit handoff models"
+    },
+    "Proofs.Session.PromptAssembly": {
+      "rust_owner": "gents-loop",
+      "reason": "raised: provider-input assembly reads the session transcript, canonical message and captured-context models, so it sits at the lowest layer that has them; Rust owners are gents-loop, gents-claude and the root turn module"
+    },
+    "Proofs.Session.ToolExecution": {
+      "rust_owner": "gents-toolcalls",
+      "reason": "lowered: tool-call row state is vocabulary of the request lifecycle, transcript and canonical output (Rust keeps tool_call::query::result in gents-session); Parallel is the gents-loop parallel batch"
+    },
+    "Proofs.Shared.AccountRotation": {
+      "rust_owner": "gents-claude",
+      "reason": "gents-claude rotation; imports only Basic"
+    },
+    "Proofs.Shared.CanonicalOutput.State": {
+      "rust_owner": "gents-session",
+      "reason": "lowered: immutable output facts are the gents_protocol::output vocabulary and the completion-retry state (gents-loop) reads them"
+    },
+    "Proofs.Shared.RenderedCapture": {
+      "rust_owner": "gents-inference",
+      "reason": "persist-before-send at the provider boundary, imported by nothing but Basic; gents-loop owns the send fence"
+    },
+    "Proofs.Shared.ToolPolicy.WriteInput": {
+      "rust_owner": "gents-tools",
+      "reason": "lowered: tool-argument kind compatibility is read by the completion-retry count carrier (gents-loop)"
+    },
+    "Proofs.ToolCalls.Identity.ClientAgentJournal": {
+      "rust_owner": "gents-store",
+      "reason": "raised: the client agent journal admits through the plugin data seam (ToolPolicy.PluginData)"
+    },
+    "Proofs.ToolCalls.Triggers.Identity": {
+      "rust_owner": "gents-automation",
+      "reason": "lowered: plugin-job spawn keys (gents-toolcalls background::job) are built from the canonical fire identity"
+    },
+    "Proofs.Tools.Identity.Configuration": {
+      "rust_owner": "gents-store",
+      "reason": "raised: the configuration authorization join reads the tool surface (ToolPolicy.Types); used by the self-config tools"
+    },
+    "Proofs.Tools.Identity.TaskTarget": {
+      "rust_owner": "gents-store",
+      "reason": "raised with Identity.Configuration"
+    }
+  },
+  "exceptions": []
+}

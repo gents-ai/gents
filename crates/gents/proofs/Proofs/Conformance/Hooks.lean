@@ -1,9 +1,9 @@
-import Proofs.Hooks.Claim
-import Proofs.Hooks.Grant
-import Proofs.Hooks.MustCommit
-import Proofs.Hooks.OwedDelivery
-import Proofs.Hooks.Prepared
-import Proofs.Hooks.QueueScope
+import Proofs.Session.Hooks.Claim
+import Proofs.Session.Hooks.Grant
+import Proofs.Session.Hooks.MustCommit
+import Proofs.Session.Hooks.OwedDelivery
+import Proofs.Session.Hooks.Prepared
+import Proofs.Automation.Hooks.QueueScope
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.HooksContracts

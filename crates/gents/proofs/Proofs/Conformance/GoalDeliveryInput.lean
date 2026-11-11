@@ -1,4 +1,4 @@
-import Proofs.GoalAutomation.DeliveryInput
+import Proofs.Automation.GoalAutomation.DeliveryInput
 import Proofs.Conformance.GoalRequestAssignment
 
 namespace Conformance.GoalDeliveryInput

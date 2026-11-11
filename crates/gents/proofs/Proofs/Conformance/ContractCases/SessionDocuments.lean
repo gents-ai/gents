@@ -1,6 +1,6 @@
-import Proofs.AgentSession
-import Proofs.SessionFork
-import Proofs.SessionRecovery
+import Proofs.Session.AgentSession
+import Proofs.Session.SessionFork
+import Proofs.Session.SessionRecovery
 
 namespace Conformance.SessionDocuments
 open AgentSession

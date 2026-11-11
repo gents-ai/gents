@@ -1,6 +1,6 @@
 # Fleet-discovery directory: one row per (source DID, node DID), maintained by
 # the directory projection reconciler (modeled in
-# Proofs/PeerRegistryDiscovery/DirectoryProjection.lean). Pure derived state,
+# Proofs/P2P/PeerRegistryDiscovery/DirectoryProjection.lean). Pure derived state,
 # rebuildable from Node x Agent x NodeReadiness; a row grants nothing —
 # discovery is not a privilege boundary. `@branchable` is required: the
 # machine template replicates this collection to attached clients.

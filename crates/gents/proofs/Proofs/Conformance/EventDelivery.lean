@@ -1,4 +1,4 @@
-import Proofs.EventDelivery
+import Proofs.Automation.EventDelivery
 import Proofs.Conformance.EventGroups
 import Proofs.Conformance.ContractTypes
 

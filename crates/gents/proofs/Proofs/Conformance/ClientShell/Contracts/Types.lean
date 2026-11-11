@@ -1,5 +1,5 @@
-import Proofs.ClientShell
-import Proofs.ClientShell.SessionTurn
+import Proofs.Clients.ClientShell
+import Proofs.Clients.ClientShell.SessionTurn
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.ClientShellContracts

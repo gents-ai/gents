@@ -78,8 +78,8 @@ fn build_models(proofs: &Path) -> Result<()> {
     let build = Command::new("lake")
         .args([
             "build",
-            "Proofs.Identity.Household",
-            "Proofs.Identity.MailboxAccess",
+            "Proofs.Store.Identity.Household",
+            "Proofs.Store.Identity.MailboxAccess",
         ])
         .current_dir(proofs)
         .status()

@@ -1,4 +1,4 @@
-import Proofs.ClientShell.OptimisticSend
+import Proofs.Clients.ClientShell.OptimisticSend
 
 /-- The optimistic send's views and generated traces, executed from the Lean
 owner for the desktop's `chatDeliveryView` binding and the native

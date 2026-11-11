@@ -1,9 +1,9 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.Contracts.Json.FileInventoryClosure
 import Proofs.Conformance.ContractCases.PromptAssembly
-import Proofs.Compaction.Executable
-import Proofs.PromptAssembly.ClaudeWire
-import Proofs.PromptAssembly.ResponsesStorage
+import Proofs.Session.Compaction.Executable
+import Proofs.Session.PromptAssembly.ClaudeWire
+import Proofs.Session.PromptAssembly.ResponsesStorage
 
 namespace Conformance.Contracts
 

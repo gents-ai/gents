@@ -1,5 +1,5 @@
 import Proofs.Conformance.ContractCases.Types
-import Proofs.PromptAssembly
+import Proofs.Session.PromptAssembly
 
 namespace Conformance.ContractCases
 

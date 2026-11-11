@@ -1,5 +1,5 @@
 import Lean
-import Proofs.ClientShell.Voice
+import Proofs.Clients.ClientShell.Voice
 
 namespace Conformance.ClientVoice
 

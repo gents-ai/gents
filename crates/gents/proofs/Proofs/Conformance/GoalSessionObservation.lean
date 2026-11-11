@@ -1,4 +1,4 @@
-import Proofs.GoalAutomation.SessionObservation
+import Proofs.Automation.GoalAutomation.SessionObservation
 import Lean
 
 namespace Conformance.GoalSessionObservationContracts

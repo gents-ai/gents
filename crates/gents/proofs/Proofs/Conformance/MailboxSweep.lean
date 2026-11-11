@@ -1,4 +1,4 @@
-import Proofs.Mailbox.Sweep
+import Proofs.Automation.Mailbox.Sweep
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.MailboxSweepContracts

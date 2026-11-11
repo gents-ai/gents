@@ -1,12 +1,12 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases
-import Proofs.StreamingResponse.Executable
-import Proofs.StreamingResponse.ReasoningAudit
-import Proofs.StreamingResponse.ReasoningDeltas
-import Proofs.CanonicalOutput.Execution.AuxiliaryCases
-import Proofs.Compaction.Executable
-import Proofs.Recovery.ContractCases
-import Proofs.QueuedSteering
+import Proofs.Session.StreamingResponse.Executable
+import Proofs.Session.StreamingResponse.ReasoningAudit
+import Proofs.Session.StreamingResponse.ReasoningDeltas
+import Proofs.Runtime.CanonicalOutput.Execution.AuxiliaryCases
+import Proofs.Session.Compaction.Executable
+import Proofs.Conformance.Recovery.ContractCases
+import Proofs.Clients.QueuedSteering
 
 namespace Conformance.Contracts
 

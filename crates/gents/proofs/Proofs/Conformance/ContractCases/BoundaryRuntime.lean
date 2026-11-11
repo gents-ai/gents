@@ -1,5 +1,5 @@
-import Proofs.Persistence
-import Proofs.StorageObservation
+import Proofs.Store.Persistence
+import Proofs.Store.StorageObservation
 import Proofs.Conformance.ContractCases.Types
 
 namespace Conformance.ContractCases

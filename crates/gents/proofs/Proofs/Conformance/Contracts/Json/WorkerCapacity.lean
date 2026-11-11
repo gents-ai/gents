@@ -1,4 +1,4 @@
-import Proofs.CanonicalOutput.Execution.WorkerCapacity
+import Proofs.Runtime.CanonicalOutput.Execution.WorkerCapacity
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.WorkerCapacityContracts

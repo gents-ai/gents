@@ -1,4 +1,4 @@
-import Proofs.GoalAutomation.ToolContext
+import Proofs.Automation.GoalAutomation.ToolContext
 import Proofs.Conformance.GoalRequestAssignment
 
 namespace Conformance.GoalToolContextContracts

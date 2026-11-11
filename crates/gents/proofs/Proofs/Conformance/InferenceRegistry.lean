@@ -1,4 +1,4 @@
-import Proofs.InferenceCall.Registry
+import Proofs.Inference.InferenceCall.Registry
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.InferenceRegistry

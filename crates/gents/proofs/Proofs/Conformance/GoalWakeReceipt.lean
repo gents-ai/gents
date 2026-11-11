@@ -1,4 +1,4 @@
-import Proofs.GoalAutomation.WakeReceipt
+import Proofs.Automation.GoalAutomation.WakeReceipt
 import Lean
 
 namespace Conformance.GoalWakeReceiptContracts

@@ -77,8 +77,8 @@ fn stub_principal() -> Arc<gents_store::identity::RuntimeNode> {
 }
 
 const LEAN_TRIGGER_TYPES_MODEL: &str =
-    include_str!("../../../../../gents/proofs/Proofs/Triggers/Types.lean");
-const LEAN_TRIGGER_TYPES_FILE: &str = "crates/gents/proofs/Proofs/Triggers/Types.lean";
+    include_str!("../../../../../gents/proofs/Proofs/Automation/Triggers/Types.lean");
+const LEAN_TRIGGER_TYPES_FILE: &str = "crates/gents/proofs/Proofs/Automation/Triggers/Types.lean";
 
 #[test]
 fn durable_fire_keys_are_unambiguous_across_component_delimiters() {

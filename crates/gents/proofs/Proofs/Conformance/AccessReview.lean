@@ -1,7 +1,7 @@
-import Proofs.ToolPolicy.AccessReview
+import Proofs.Tools.ToolPolicy.AccessReview
 import Proofs.Conformance.Contracts.Json.ToolPolicy
-import Proofs.CanonicalOutput.Execution.Examples
-import Proofs.CanonicalOutput.Execution.Gate
+import Proofs.Runtime.CanonicalOutput.Execution.Examples
+import Proofs.Runtime.CanonicalOutput.Execution.Gate
 
 namespace Conformance.AccessReview
 open Lean ToolPolicy ToolPolicy.WorkspacePermissions
@@ -135,7 +135,7 @@ def taskCasesJson : Json :=
     taskCaseJson { base with goal := true } true,
     taskCaseJson base false (some "Earlier policy."),
     taskCaseJson base false (some (base.prompt ++ " "))] ++
-    GoalAutomation.objectiveWhitespaceCodepoints.map (fun value =>
+    TextNormalization.objectiveWhitespaceCodepoints.map (fun value =>
       taskCaseJson { base with prompt := String.singleton (Char.ofNat value) }))
 
 end Conformance.AccessReview

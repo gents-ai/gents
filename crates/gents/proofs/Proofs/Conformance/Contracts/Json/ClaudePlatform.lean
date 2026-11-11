@@ -1,4 +1,4 @@
-import Proofs.Configuration.ClaudePlatform
+import Proofs.Documents.Configuration.ClaudePlatform
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.Contracts.ClaudePlatform

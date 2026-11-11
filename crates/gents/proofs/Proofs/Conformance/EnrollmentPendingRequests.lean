@@ -1,4 +1,4 @@
-import Proofs.Enrollment.DurableProjection
+import Proofs.P2P.Enrollment.DurableProjection
 import Proofs.Conformance.ContractCases.Enrollment
 import Proofs.Conformance.Contracts.Json.Helpers
 

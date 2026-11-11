@@ -1,6 +1,6 @@
-import Proofs.Session.FoldCases
-import Proofs.Session.Management
-import Proofs.Enrollment.RequestInput
+import Proofs.Session.SessionQueue.FoldCases
+import Proofs.Session.SessionQueue.Management
+import Proofs.Session.Enrollment.RequestInput
 import Lean
 
 namespace Conformance.GoalQueueAssignmentContracts

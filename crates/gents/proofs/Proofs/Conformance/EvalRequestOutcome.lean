@@ -1,4 +1,4 @@
-import Proofs.Eval
+import Proofs.Runtime.Eval
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.EvalRequestOutcome

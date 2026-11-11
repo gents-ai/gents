@@ -1,5 +1,5 @@
 import Proofs.Conformance.ContractCases.Types
-import Proofs.Compaction.Rolling
+import Proofs.Session.Compaction.Rolling
 
 namespace Conformance.ContractCases
 

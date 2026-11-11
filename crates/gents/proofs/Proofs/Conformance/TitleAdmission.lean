@@ -1,6 +1,6 @@
-import Proofs.AuxiliaryAdmission
+import Proofs.Runtime.AuxiliaryAdmission
 import Proofs.Conformance.ContractCases.Enrollment
-import Proofs.Compaction.State
+import Proofs.Session.Compaction.State
 import Lean
 
 namespace Conformance.TitleAdmission

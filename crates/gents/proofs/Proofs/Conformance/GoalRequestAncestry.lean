@@ -1,4 +1,4 @@
-import Proofs.GoalAutomation.RequestAncestry
+import Proofs.Automation.GoalAutomation.RequestAncestry
 import Proofs.Conformance.GoalRequestHead
 import Proofs.Conformance.GoalRequestAssignment
 import Lean

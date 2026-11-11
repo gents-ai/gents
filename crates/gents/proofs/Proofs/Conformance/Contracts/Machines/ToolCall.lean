@@ -1,4 +1,4 @@
-import Proofs.ToolExecution
+import Proofs.Session.ToolExecution
 import Proofs.Conformance.ContractTypes
 
 namespace Conformance.Contracts

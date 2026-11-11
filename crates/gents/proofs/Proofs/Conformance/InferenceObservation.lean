@@ -1,4 +1,4 @@
-import Proofs.ClientShell.InferenceObservation
+import Proofs.Clients.ClientShell.InferenceObservation
 
 namespace Conformance.InferenceObservation
 open ClientInferenceObservation

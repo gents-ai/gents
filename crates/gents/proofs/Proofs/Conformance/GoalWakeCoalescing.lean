@@ -1,4 +1,4 @@
-import Proofs.Background.CompletionContinuation
+import Proofs.ToolCalls.Background.CompletionContinuation
 import Proofs.Conformance.GoalRequestAssignment
 import Lean
 

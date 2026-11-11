@@ -1,4 +1,4 @@
-import Proofs.Session.Control
+import Proofs.Automation.Session.Control
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.SessionControlContracts

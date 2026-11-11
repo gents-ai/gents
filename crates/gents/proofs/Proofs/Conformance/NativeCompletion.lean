@@ -1,4 +1,4 @@
-import Proofs.NativeCompletion
+import Proofs.Store.NativeCompletion
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.NativeCompletion

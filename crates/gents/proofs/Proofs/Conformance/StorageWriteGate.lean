@@ -1,4 +1,4 @@
-import Proofs.StorageWriteGate
+import Proofs.Store.StorageWriteGate
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.StorageWriteGateContracts

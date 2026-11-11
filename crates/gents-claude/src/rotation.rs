@@ -1,7 +1,7 @@
 //! Account-aware rotation over a pool of Claude subscription accounts.
 //! Lean: `AccountRotation`.
 //!
-//! A port of `Proofs/AccountRotation/Policy.lean`, bound by its generated
+//! A port of `Proofs/Shared/AccountRotation/Policy.lean`, bound by its generated
 //! conformance cases. Invariants: `select` never returns a disabled, blocked or
 //! limit-exhausted account, returns `Some` whenever any account is eligible,
 //! prefers the best tier, and keeps a session on its account while that account

@@ -1,11 +1,11 @@
-import Proofs.ToolPolicy.PluginPublication
-import Proofs.ToolPolicy.Configuration
-import Proofs.ToolPolicy.PluginNetwork
-import Proofs.ToolPolicy.PluginInvocation
+import Proofs.Tools.ToolPolicy.PluginPublication
+import Proofs.Tools.ToolPolicy.Configuration
+import Proofs.Tools.ToolPolicy.PluginNetwork
+import Proofs.Tools.ToolPolicy.PluginInvocation
 import Proofs.Conformance.PluginReceipt
 
-import Proofs.ToolPolicy.PluginCalls
-import Proofs.ToolPolicy.PluginData
+import Proofs.Tools.ToolPolicy.PluginCalls
+import Proofs.Tools.ToolPolicy.PluginData
 import Proofs.Conformance.PluginEffects
 import Lean
 

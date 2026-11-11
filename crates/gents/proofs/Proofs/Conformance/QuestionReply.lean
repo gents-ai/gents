@@ -1,4 +1,4 @@
-import Proofs.ClientShell.QuestionReply
+import Proofs.Clients.ClientShell.QuestionReply
 import Lean
 
 namespace Conformance.QuestionReply

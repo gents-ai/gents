@@ -1,5 +1,5 @@
 import Proofs.Conformance.ContractCases.Types
-import Proofs.Compaction.ReductionEngine
+import Proofs.Session.Compaction.ReductionEngine
 
 namespace Conformance.ContractCases
 

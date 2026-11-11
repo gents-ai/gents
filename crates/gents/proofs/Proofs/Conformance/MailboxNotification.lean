@@ -1,4 +1,4 @@
-import Proofs.Mailbox.Notification
+import Proofs.Automation.Mailbox.Notification
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.MailboxNotificationContracts

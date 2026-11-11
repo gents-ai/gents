@@ -1,4 +1,4 @@
-import Proofs.StoreEncryptionUpgrade
+import Proofs.Store.StoreEncryptionUpgrade
 import Proofs.Conformance.Contracts.Json.Helpers
 
 namespace Conformance.StoreEncryptionUpgrade

@@ -1,6 +1,6 @@
 import Proofs.Conformance.ContractCases.Enrollment
 import Proofs.Conformance.Contracts.Json.Core
-import Proofs.Enrollment.AutoRenewal
+import Proofs.P2P.Enrollment.AutoRenewal
 
 namespace Conformance.Contracts
 

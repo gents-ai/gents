@@ -1,10 +1,10 @@
 import Proofs.Conformance.Contracts.Json.Helpers
-import Proofs.ToolPolicy.Cases
-import Proofs.ToolPolicy.FieldRead
-import Proofs.ToolPolicy.WriteInput
-import Proofs.ToolPolicy.ApplicationWrite
+import Proofs.Tools.ToolPolicy.Cases
+import Proofs.Tools.ToolPolicy.FieldRead
+import Proofs.Shared.ToolPolicy.WriteInput
+import Proofs.Tools.ToolPolicy.ApplicationWrite
 
-import Proofs.ToolPolicy.WorkspacePermissions
+import Proofs.Tools.ToolPolicy.WorkspacePermissions
 
 namespace Conformance.Contracts
 

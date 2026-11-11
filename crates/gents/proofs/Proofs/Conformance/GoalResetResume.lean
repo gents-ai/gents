@@ -1,4 +1,4 @@
-import Proofs.GoalAutomation.ResetResume
+import Proofs.Automation.GoalAutomation.ResetResume
 import Proofs.Conformance.GoalOperatorResume
 
 /-! Times are seconds after 2030-01-01T00:00:00Z. -/
