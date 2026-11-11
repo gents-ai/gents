@@ -1,14 +1,16 @@
 use super::*;
 use agent::admit;
 use gents_documents::{
-    validate_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    validate_desired_state_plan, DefaultAgentSelection, DesiredStateApplyDocument,
+    DesiredStateApplyPlan,
 };
 use gents_documents::{Agent, AgentContext, BashTools, BuiltInTools, FileTools, HostTools, Tools};
-use gents_protocol::agent_identity::AgentIdentityBinding;
+use gents_protocol::agent_identity::{AgentAdmissionFacts, AgentIdentityBinding};
 use gents_protocol::operations::agent::{
-    AgentCreateInput, AgentOperationError, AgentOperationKind, AgentReceipt,
+    AgentCreateInput, AgentCreateOperation, AgentOperationError, AgentOperationKind, AgentOutcome,
+    AgentReceipt, NextCall,
 };
-use gents_session::session::output_render::{ordered, Ordered};
+use gents_session::session::output_render::Ordered;
 use gents_store::config_client::{ConfigAccess, ConfigClientError, TransactionFailure};
 
 /// A materializer failure: the operation's own refusal, or another owner's
@@ -83,19 +85,9 @@ fn catalog_from_documents(
             gents_store::collection::Collection::Agent => {
                 let doc: Agent = serde_json::from_value(value.clone())?;
                 view.agents.insert(id.clone(), doc.enabled);
-                if doc.tags.iter().any(|tag| tag == ENGINEER_AGENT_TAG) {
-                    view.protected_ids.insert(id.clone());
-                }
             }
             gents_store::collection::Collection::InferenceProfile => {
                 view.published_profiles.insert(id.clone());
-            }
-            gents_store::collection::Collection::Node => {
-                view.default_id = value
-                    .get("default_agent_did")
-                    .and_then(Value::as_str)
-                    .filter(|id| !id.is_empty())
-                    .map(str::to_owned);
             }
             _ => {}
         }
@@ -121,6 +113,83 @@ pub(super) async fn load_agent_catalog(core: &SelfConfigCore) -> Result<agent::A
     .await
 }
 
+/// Lean `SelfConfig.ActorGrants` and the Node's current default, for one
+/// materializer call.
+pub(super) enum AdmissionFacts {
+    Observed(AgentAdmissionFacts),
+    /// Identity-less embedded access. DefraDB evaluates no document ACP for
+    /// an operation without an identity, so such access holds every grant the
+    /// admission reads; the default is read in the materializer's transaction.
+    Unrestricted,
+}
+
+/// The one facts entry of the materializer. Embedded access with an actor
+/// asks native ACP on its node directly; GraphQL access asks the runtime,
+/// which answers for the endpoint's authenticated principal; identity-less
+/// embedded access is [`AdmissionFacts::Unrestricted`].
+async fn admission_facts(
+    access: &ConfigAccess,
+    node_did: &str,
+    targets: &[String],
+) -> Result<AdmissionFacts, AgentApplyError> {
+    let facts = match (access, access.local_node(), access.actor_did()) {
+        (ConfigAccess::Graphql(endpoint), _, _) => {
+            gents_store::identity::observe_agent_admission_remote(endpoint, node_did, targets)
+                .await
+                .map_err(anyhow::Error::from)?
+        }
+        (_, Some(_), None) => return Ok(AdmissionFacts::Unrestricted),
+        (_, Some(node), Some(actor)) => {
+            let actor = ::identity::Did::new(actor).map_err(anyhow::Error::from)?;
+            gents_store::identity::observe_agent_admission(node, node_did, &actor, targets)
+                .await
+                .map_err(anyhow::Error::from)?
+        }
+        (_, None, _) => {
+            return Err(anyhow!("agent admission requires embedded or GraphQL access").into())
+        }
+    };
+    Ok(AdmissionFacts::Observed(facts))
+}
+
+/// Lean `SelfConfig.Actor` from the facts, and the catalog's default.
+async fn admission_actor(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    owner: &str,
+    facts: &AdmissionFacts,
+    actor_did: &str,
+    view: &mut agent::AgentCatalogView,
+) -> Result<agent::AgentActor, AgentApplyError> {
+    Ok(match facts {
+        AdmissionFacts::Observed(facts) => {
+            view.default_id = facts.default_agent_did.clone();
+            agent::AgentActor {
+                did: actor_did.to_owned(),
+                catalog: facts.catalog,
+                configures: facts.configures.iter().cloned().collect(),
+            }
+        }
+        AdmissionFacts::Unrestricted => {
+            view.default_id = gents_documents::load_default_agent_did_in_txn(txn, owner).await?;
+            agent::AgentActor {
+                did: actor_did.to_owned(),
+                catalog: true,
+                configures: view.agents.keys().cloned().collect(),
+            }
+        }
+    })
+}
+
+/// What a materializer call carries besides its request: the caller's
+/// held-grant bound and Node binding when the caller is an Agent, and the
+/// invoking Agent's own no-lockout chain.
+#[derive(Clone, Copy, Default)]
+pub(super) struct AgentCaller<'a> {
+    pub held: Option<&'a ops::OperatorGrants>,
+    pub node_binding: Option<&'a gents_documents::ConfigurationNodeBinding>,
+    pub lockout: Option<&'a SelfConfigCore>,
+}
+
 fn replacement(
     collection: gents_store::collection::Collection,
     value: impl serde::Serialize,
@@ -139,16 +208,28 @@ pub(super) fn receipt_text(receipt: &AgentReceipt<Agent>) -> Result<String> {
     Ordered::from_serialize(receipt)?.pretty()
 }
 
+/// The operation the parameters request: `operation` on a preview, else the
+/// action.
+fn requested_operation(args: &ConfigureAgentParams) -> &str {
+    args.operation.as_deref().unwrap_or(&args.action)
+}
+
+/// The call that corrects a failure of the requested operation.
+pub(super) fn recovery_for(args: &ConfigureAgentParams, error: &AgentOperationError) -> NextCall {
+    match AgentCreateOperation::for_verb(requested_operation(args)) {
+        Some(operation) => error.recovery(operation),
+        None => error.edit_recovery(),
+    }
+}
+
 fn create_params(input: &AgentCreateInput, preview: bool) -> ConfigureAgentParams {
     let operation = input.operation.kind().as_str();
     ConfigureAgentParams {
         action: if preview { "preview" } else { operation }.to_owned(),
-        identity_binding: None,
         operation: preview.then(|| operation.to_owned()),
         display_name: StringUpdate::Set(input.display_name.clone()),
         description: input.description.clone(),
         system_prompt: input.system_prompt.clone(),
-        agent_did: None,
         clone_from: input.clone_from.clone(),
         root: input.root.clone(),
         preset: input
@@ -158,9 +239,107 @@ fn create_params(input: &AgentCreateInput, preview: bool) -> ConfigureAgentParam
             .unwrap_or_default(),
         profile_id: StringUpdate::Set(input.profile_id.clone()),
         make_default: input.make_default,
-        enable_lsp: None,
-        network_mode: None,
+        ..Default::default()
     }
+}
+
+/// `operations::agent::put`: a whole Agent document becomes the edit of its
+/// changed writable fields when the Agent exists, else a create that selects
+/// the document's Context and profile; that create's input prompt is the
+/// selected Context's.
+fn put_params(
+    args: &ConfigureAgentParams,
+    agent: &Agent,
+    refs: &gents_documents::ConfigReferences,
+) -> Result<ConfigureAgentParams, AgentApplyError> {
+    let find = |collection: gents_store::collection::Collection, id: &str| {
+        refs.documents()
+            .find(|((c, key), _)| *c == collection && key == id)
+            .map(|(_, value)| value.clone())
+    };
+    let update = |before: Option<&str>, after: Option<&str>| match (before, after) {
+        (before, after) if before == after => StringUpdate::Omitted,
+        (_, Some(after)) => StringUpdate::Set(after.to_owned()),
+        (_, None) => StringUpdate::Clear,
+    };
+    let mut params = ConfigureAgentParams {
+        make_default: args.make_default,
+        identity_binding: args.identity_binding.clone(),
+        ..Default::default()
+    };
+    match find(gents_store::collection::Collection::Agent, &agent.agent_did) {
+        Some(stored) => {
+            let stored: Agent = serde_json::from_value(stored)?;
+            params.action = AgentOperationKind::Edit.as_str().to_owned();
+            params.agent_did = Some(agent.agent_did.clone());
+            params.display_name = update(
+                stored.display_name.as_deref(),
+                agent.display_name.as_deref(),
+            );
+            params.description =
+                update(stored.description.as_deref(), agent.description.as_deref());
+            params.context_id = update(stored.context_id.as_deref(), agent.context_id.as_deref());
+            params.profile_id = update(
+                Some(&stored.inference_profile_id),
+                Some(&agent.inference_profile_id),
+            );
+            params.enabled = (stored.enabled != agent.enabled).then_some(agent.enabled);
+            params.tags = (stored.tags != agent.tags).then(|| agent.tags.clone());
+        }
+        None => {
+            let binding = args
+                .identity_binding
+                .as_ref()
+                .ok_or(AgentOperationError::IdentityBindingRequired)?;
+            if binding.agent_did != agent.agent_did {
+                return Err(AgentOperationError::IdentityBindingMismatch {
+                    binding: binding.agent_did.clone(),
+                    agent: agent.agent_did.clone(),
+                }
+                .into());
+            }
+            admit(agent.enabled, AgentOperationError::NewAgentDisabled)?;
+            params.action = AgentOperationKind::Create.as_str().to_owned();
+            params.display_name = agent
+                .display_name
+                .clone()
+                .map(StringUpdate::Set)
+                .unwrap_or_default();
+            params.description = agent
+                .description
+                .clone()
+                .map(StringUpdate::Set)
+                .unwrap_or_default();
+            params.profile_id = StringUpdate::Set(agent.inference_profile_id.clone());
+            params.tags = Some(agent.tags.clone()).filter(|tags| !tags.is_empty());
+            if let Some(context_id) = &agent.context_id {
+                params.context_id = StringUpdate::Set(context_id.clone());
+                params.system_prompt = find(
+                    gents_store::collection::Collection::AgentContext,
+                    context_id,
+                )
+                .and_then(|context| {
+                    context
+                        .get("system_prompt")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .map(StringUpdate::Set)
+                .unwrap_or_default();
+            }
+        }
+    }
+    Ok(params)
+}
+
+/// The Agents whose `update` grant the request's admission reads.
+fn admission_targets(args: &ConfigureAgentParams) -> Vec<String> {
+    args.put
+        .as_ref()
+        .map(|agent| agent.agent_did.clone())
+        .or_else(|| args.agent_did.clone())
+        .into_iter()
+        .collect()
 }
 
 #[cfg(test)]
@@ -190,8 +369,7 @@ pub async fn configure_agent(
         args,
         ceiling,
         args.action == "preview",
-        None,
-        None,
+        AgentCaller::default(),
     )
     .await?;
     receipt_text(&receipt)
@@ -208,7 +386,87 @@ pub async fn create_agent(
 ) -> Result<AgentReceipt<Agent>, AgentOperationError> {
     let mut args = create_params(input, false);
     args.identity_binding = Some(identity_binding);
-    Ok(agent_apply_access(access, owner, &args, ceiling, false, None, None).await?)
+    apply_agent(access, owner, &args, ceiling).await
+}
+
+/// The operations layer's commit of any agent operation: admission refusals
+/// and other owners' failures are both errors.
+pub async fn apply_agent(
+    access: &ConfigAccess,
+    owner: &str,
+    args: &ConfigureAgentParams,
+    ceiling: &crate::surface::SelfConfigProcessCeiling,
+) -> Result<AgentReceipt<Agent>, AgentOperationError> {
+    Ok(agent_apply_access(access, owner, args, ceiling, false, AgentCaller::default()).await?)
+}
+
+/// The operations layer's preview (Lean `agentOutcome .preview`): a refusal is
+/// the successful refused answer with the commit's recovery; other failures
+/// stay errors.
+pub async fn preview_agent(
+    access: &ConfigAccess,
+    owner: &str,
+    args: &ConfigureAgentParams,
+    ceiling: &crate::surface::SelfConfigProcessCeiling,
+) -> Result<AgentOutcome<AgentReceipt<Agent>>, AgentOperationError> {
+    match agent_apply_access(access, owner, args, ceiling, true, AgentCaller::default()).await {
+        Ok(receipt) => Ok(AgentOutcome::Admitted(receipt)),
+        Err(error) => {
+            let error = AgentOperationError::from(error);
+            let next_call = recovery_for(args, &error);
+            error.preview_outcome(next_call)
+        }
+    }
+}
+
+/// The grants and default observed for one access, for a caller that
+/// admits agent writes inside a transaction it already holds on that access.
+pub struct ObservedAdmission {
+    facts: AdmissionFacts,
+    actor_did: String,
+}
+
+/// Observes what `access` holds over `targets` before its transaction opens:
+/// a transaction reads only as its own actor, and the default must be read
+/// authoritatively.
+pub async fn observe_admission(
+    access: &ConfigAccess,
+    owner: &str,
+    targets: &[String],
+) -> Result<ObservedAdmission, AgentOperationError> {
+    Ok(ObservedAdmission {
+        facts: admission_facts(access, owner, targets).await?,
+        actor_did: access.actor_did().unwrap_or_default(),
+    })
+}
+
+/// The operations layer's commit inside the caller's transaction, for a
+/// front end whose agent write is one part of a larger atomic save. The
+/// transaction must be on the access `admission` was observed for.
+pub async fn apply_agent_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    owner: &str,
+    admission: &ObservedAdmission,
+    args: &ConfigureAgentParams,
+    ceiling: &crate::surface::SelfConfigProcessCeiling,
+) -> Result<AgentReceipt<Agent>, AgentOperationError> {
+    admit(
+        txn.actor_did().unwrap_or_default() == admission.actor_did,
+        AgentOperationError::AdmissionActorMismatch,
+    )?;
+    Ok(agent_apply_in_txn(
+        txn,
+        &AgentApplyRequest {
+            owner,
+            args,
+            ceiling,
+            preview: false,
+            facts: &admission.facts,
+            actor_did: &admission.actor_did,
+            caller: AgentCaller::default(),
+        },
+    )
+    .await?)
 }
 
 #[cfg(test)]
@@ -225,62 +483,87 @@ async fn agent_apply(
         args,
         ceiling,
         preview,
-        None,
-        None,
+        AgentCaller::default(),
     )
     .await?;
     receipt_text(&receipt)
 }
 
-pub(super) async fn model_agent_preview(
+/// The model's preview text: the receipt when admitted; when refused, the
+/// refusal with the message and next call the commit's guidance carries.
+pub(super) async fn model_agent_outcome(
     core: &SelfConfigCore,
     args: &ConfigureAgentParams,
-) -> Result<String> {
+) -> Result<AgentOutcome<String>, AgentApplyError> {
     let mut args = args.clone();
-    if matches!(
-        args.operation.as_deref().unwrap_or(&args.action),
-        "create" | "clone"
-    ) {
+    if AgentCreateOperation::for_verb(requested_operation(&args)).is_some() {
         let runtime = core.runtime_identity()?;
-        anyhow::ensure!(
-            runtime.did() == core.node_did(),
-            "runtime identity does not match node"
+        if runtime.did() != core.node_did() {
+            return Err(anyhow!("runtime identity does not match node").into());
+        }
+        args.identity_binding = Some(
+            gents_store::identity::provision_agent_identity(runtime)
+                .map_err(anyhow::Error::from)?,
         );
-        args.identity_binding = Some(gents_store::identity::provision_agent_identity(runtime)?);
     }
+    let caller = AgentCaller {
+        held: Some(core.held_grants()),
+        node_binding: core.node_binding(),
+        lockout: Some(core),
+    };
     match agent_apply_access(
         &core.access()?,
         core.node_did(),
         &args,
         core.process_ceiling(),
         true,
-        Some(core.held_grants()),
-        core.node_binding(),
+        caller,
     )
     .await
     {
-        Ok(receipt) => receipt_text(&receipt),
-        Err(error) => {
-            let error = anyhow::Error::from(error);
-            ordered! {"admitted":false,"committed":false,"rejection":format!("{error:#}")}.pretty()
+        Ok(receipt) => Ok(AgentOutcome::Admitted(receipt_text(&receipt)?)),
+        Err(AgentApplyError::Operation(error)) => {
+            let next_call = recovery_for(&args, &error);
+            error.preview_outcome(next_call).map_err(Into::into)
         }
+        Err(error) => Err(error),
     }
 }
 
 pub(super) async fn model_agent_create_preview(
     core: &SelfConfigCore,
     input: &AgentCreateInput,
-) -> Result<String> {
-    model_agent_preview(core, &create_params(input, true)).await
+) -> Result<AgentOutcome<String>, AgentApplyError> {
+    model_agent_outcome(core, &create_params(input, true)).await
 }
 
+/// The preview as text, a refusal without its rendered next call.
+#[cfg(test)]
+pub(super) async fn model_agent_preview(
+    core: &SelfConfigCore,
+    args: &ConfigureAgentParams,
+) -> Result<String> {
+    match model_agent_outcome(core, args).await? {
+        AgentOutcome::Admitted(text) => Ok(text),
+        AgentOutcome::Refused {
+            refusal, message, ..
+        } => gents_session::session::output_render::ordered! {
+            "admitted": false,
+            "committed": false,
+            "refusal": refusal.as_str(),
+            "message": message,
+        }
+        .pretty(),
+    }
+}
+
+#[cfg(test)]
 pub(super) async fn model_agent_mutate(
     core: &SelfConfigCore,
     identity: &dyn NodeIdentity,
     args: &ConfigureAgentParams,
 ) -> Result<String> {
-    let receipt = model_agent_apply(core, identity, args.clone()).await?;
-    receipt_text(&receipt)
+    receipt_text(&model_agent_apply(core, identity, args.clone()).await?)
 }
 
 pub(super) async fn model_agent_create(
@@ -291,7 +574,7 @@ pub(super) async fn model_agent_create(
     model_agent_apply(core, identity, create_params(input, false)).await
 }
 
-async fn model_agent_apply(
+pub(super) async fn model_agent_apply(
     core: &SelfConfigCore,
     identity: &dyn NodeIdentity,
     mut args: ConfigureAgentParams,
@@ -300,10 +583,7 @@ async fn model_agent_apply(
     if identity.did() != actor.to_string() {
         return Err(anyhow!("agent configuration requires its selected actor signer").into());
     }
-    if matches!(
-        args.operation.as_deref().unwrap_or(&args.action),
-        "create" | "clone"
-    ) {
+    if AgentCreateOperation::for_verb(requested_operation(&args)).is_some() {
         args.identity_binding = Some(
             gents_store::identity::provision_agent_identity_for_agent(
                 &core.node_handle(),
@@ -321,8 +601,11 @@ async fn model_agent_apply(
         &args,
         core.process_ceiling(),
         false,
-        Some(core.held_grants()),
-        core.node_binding(),
+        AgentCaller {
+            held: Some(core.held_grants()),
+            node_binding: core.node_binding(),
+            lockout: Some(core),
+        },
     )
     .await
 }
@@ -333,56 +616,76 @@ async fn agent_apply_access(
     args: &ConfigureAgentParams,
     ceiling: &crate::surface::SelfConfigProcessCeiling,
     preview: bool,
-    held: Option<&ops::OperatorGrants>,
-    node_binding: Option<&gents_documents::ConfigurationNodeBinding>,
+    caller: AgentCaller<'_>,
 ) -> Result<AgentReceipt<Agent>, AgentApplyError> {
+    let facts = admission_facts(access, owner, &admission_targets(args)).await?;
+    let actor_did = access.actor_did().unwrap_or_default();
+    let request = AgentApplyRequest {
+        owner,
+        args,
+        ceiling,
+        preview,
+        facts: &facts,
+        actor_did: &actor_did,
+        caller,
+    };
+    let request = &request;
     if preview {
         access
             .transact_readonly("self_config.agent", |txn| {
-                Box::pin(agent_apply_in_txn(
-                    txn,
-                    owner,
-                    args,
-                    ceiling,
-                    preview,
-                    held,
-                    node_binding,
-                ))
+                Box::pin(agent_apply_in_txn(txn, request))
             })
             .await
     } else {
         access
             .transact_write("self_config.agent", |txn| {
-                Box::pin(agent_apply_in_txn(
-                    txn,
-                    owner,
-                    args,
-                    ceiling,
-                    preview,
-                    held,
-                    node_binding,
-                ))
+                Box::pin(agent_apply_in_txn(txn, request))
             })
             .await
     }
 }
 
+struct AgentApplyRequest<'a> {
+    owner: &'a str,
+    args: &'a ConfigureAgentParams,
+    ceiling: &'a crate::surface::SelfConfigProcessCeiling,
+    preview: bool,
+    facts: &'a AdmissionFacts,
+    actor_did: &'a str,
+    caller: AgentCaller<'a>,
+}
+
+/// Lean `SelfConfig.materializedAgent`: admits the request through
+/// `decide_agent_operation` and publishes its documents in this transaction.
 async fn agent_apply_in_txn(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
-    owner: &str,
-    args: &ConfigureAgentParams,
-    ceiling: &crate::surface::SelfConfigProcessCeiling,
-    preview: bool,
-    held: Option<&ops::OperatorGrants>,
-    node_binding: Option<&gents_documents::ConfigurationNodeBinding>,
+    request: &AgentApplyRequest<'_>,
 ) -> Result<AgentReceipt<Agent>, AgentApplyError> {
+    let AgentApplyRequest {
+        owner,
+        ceiling,
+        preview,
+        facts,
+        actor_did,
+        caller,
+        ..
+    } = *request;
     let refs = gents_documents::ConfigReferences::load_in_txn(txn, owner).await?;
-    let view = catalog_from_documents(&refs)?;
+    let mut view = catalog_from_documents(&refs)?;
+    let actor = admission_actor(txn, owner, facts, actor_did, &mut view).await?;
+    let resolved;
+    let args = match request.args.put.as_deref() {
+        Some(agent) => {
+            resolved = put_params(request.args, agent, &refs)?;
+            &resolved
+        }
+        None => request.args,
+    };
     admit(
         args.action != "preview" || args.operation.is_some(),
         AgentOperationError::PreviewRequiresOperation,
     )?;
-    let operation = args.operation.as_deref().unwrap_or(&args.action);
+    let operation = requested_operation(args);
     if operation == "edit" {
         admit(
             args.clone_from.is_none(),
@@ -402,6 +705,9 @@ async fn agent_apply_in_txn(
                 && !args.description.is_present()
                 && !args.system_prompt.is_present()
                 && !args.profile_id.is_present()
+                && !args.context_id.is_present()
+                && args.enabled.is_none()
+                && args.tags.is_none()
                 && !args.root.is_present()
                 && !args.preset.is_present()
                 && args.clone_from.is_none()
@@ -416,10 +722,17 @@ async fn agent_apply_in_txn(
         ("description", &args.description),
         ("system_prompt", &args.system_prompt),
         ("inference_profile_id", &args.profile_id),
+        ("context_id", &args.context_id),
     ] {
         if update.is_present() {
             patch.push((name.to_owned(), update.value().map(|value| json!(value))));
         }
+    }
+    if let Some(enabled) = args.enabled {
+        patch.push(("enabled".to_owned(), Some(json!(enabled))));
+    }
+    if let Some(tags) = &args.tags {
+        patch.push(("tags".to_owned(), (!tags.is_empty()).then(|| json!(tags))));
     }
     let (kind, op) = match operation {
         "create" | "clone" => {
@@ -460,7 +773,7 @@ async fn agent_apply_in_txn(
             .clone()
             .ok_or(AgentOperationError::AgentDidRequired)?,
     };
-    agent::decide_agent_operation(&view, &op, &id, args.make_default)?;
+    agent::decide_agent_operation(&view, &actor, &op, &id, args.make_default)?;
     let load = |collection: gents_store::collection::Collection, id: &str| {
         refs.documents()
             .find(|((c, key), _)| *c == collection && key == id)
@@ -470,10 +783,51 @@ async fn agent_apply_in_txn(
                 id: id.to_owned(),
             })
     };
+    let selected_tools = |agent: &serde_json::Map<String, Value>| -> Result<
+        Option<serde_json::Map<String, Value>>,
+        AgentOperationError,
+    > {
+        let Some(context_id) = agent.get("context_id").and_then(Value::as_str) else {
+            return Ok(None);
+        };
+        let context = load(
+            gents_store::collection::Collection::AgentContext,
+            context_id,
+        )?;
+        let Some(tools_id) = context.get("tools_id").and_then(Value::as_str) else {
+            return Ok(None);
+        };
+        Ok(Some(
+            load(gents_store::collection::Collection::Tools, tools_id)?
+                .as_object()
+                .ok_or(AgentOperationError::ObjectRequired("Tools"))?
+                .clone(),
+        ))
+    };
     let mut documents = Vec::new();
-    let mut doc: Agent;
+    let doc: Agent;
     let mut root_access = None;
     match &op {
+        agent::AgentOperation::Create(input) if args.context_id.is_present() => {
+            let context_id = args
+                .context_id
+                .value()
+                .ok_or(AgentOperationError::ContextIdBlank)?;
+            load(
+                gents_store::collection::Collection::AgentContext,
+                context_id,
+            )?;
+            doc = serde_json::from_value(
+                json!({"agent_did":id,"creation_nonce":args.identity_binding.as_ref().ok_or(AgentOperationError::IdentityBindingMissing)?.creation_nonce,"node_did":owner,"display_name":input.display_name,"description":args.description.value(),"context_id":context_id,"inference_profile_id":input.inference_profile_id,"tags":args.tags}),
+            )?;
+            if let Some(held) = caller.held {
+                let selected =
+                    serde_json::Map::from_iter([("context_id".to_owned(), json!(context_id))]);
+                ops::reselection_keeps_grants(held, None, selected_tools(&selected)?.as_ref())?;
+            }
+            guard_agent_profile_choice(txn, owner, None, None, Some(&input.inference_profile_id))
+                .await?;
+        }
         agent::AgentOperation::Create(input) => {
             let mut context: AgentContext = match input.clone_from.as_deref() {
                 Some(source) => {
@@ -604,7 +958,7 @@ async fn agent_apply_in_txn(
                 }
                 validate_tool_network_selection(args.network_mode)?;
                 context.tools_id = Some(tools.tools_id.clone());
-                if let Some(held) = held {
+                if let Some(held) = caller.held {
                     let candidate = serde_json::to_value(&tools)?;
                     ops::guard_tools_keep_grants(
                         held,
@@ -626,7 +980,7 @@ async fn agent_apply_in_txn(
                 )?);
             }
             doc = serde_json::from_value(
-                json!({"agent_did":id,"creation_nonce":args.identity_binding.as_ref().ok_or(AgentOperationError::IdentityBindingMissing)?.creation_nonce,"node_did":owner,"display_name":input.display_name,"description":args.description.value(),"context_id":context.context_id,"inference_profile_id":input.inference_profile_id}),
+                json!({"agent_did":id,"creation_nonce":args.identity_binding.as_ref().ok_or(AgentOperationError::IdentityBindingMissing)?.creation_nonce,"node_did":owner,"display_name":input.display_name,"description":args.description.value(),"context_id":context.context_id,"inference_profile_id":input.inference_profile_id,"tags":args.tags}),
             )?;
             guard_agent_profile_choice(
                 txn,
@@ -641,46 +995,22 @@ async fn agent_apply_in_txn(
                 context,
             )?);
         }
-        agent::AgentOperation::Edit(patch) => {
+        agent::AgentOperation::Edit(_) | agent::AgentOperation::Disable => {
+            let edit = op.edit_fields().unwrap_or_default();
             let stored = load(gents_store::collection::Collection::Agent, &id)?;
-            let mut merged = stored
+            let stored = stored
                 .as_object()
                 .ok_or(AgentOperationError::ObjectRequired("agent"))?
                 .clone();
-            let agent_patch = patch
+            let agent_patch = edit
                 .iter()
                 .filter(|(field, _)| field != "system_prompt")
                 .cloned()
                 .collect();
-            merged =
-                gents_documents::patch::apply_patch(SelfConfigTarget::Agent, &merged, &agent_patch);
-            if let Some(held) = held {
-                let selected_tools = |agent: &serde_json::Map<String, Value>| -> Result<
-                    Option<serde_json::Map<String, Value>>,
-                    AgentOperationError,
-                > {
-                    let Some(context_id) = agent.get("context_id").and_then(Value::as_str) else {
-                        return Ok(None);
-                    };
-                    let context = load(
-                        gents_store::collection::Collection::AgentContext,
-                        context_id,
-                    )?;
-                    let Some(tools_id) = context.get("tools_id").and_then(Value::as_str) else {
-                        return Ok(None);
-                    };
-                    Ok(Some(
-                        load(gents_store::collection::Collection::Tools, tools_id)?
-                            .as_object()
-                            .ok_or(AgentOperationError::ObjectRequired("Tools"))?
-                            .clone(),
-                    ))
-                };
-                let before = selected_tools(
-                    stored
-                        .as_object()
-                        .ok_or(AgentOperationError::ObjectRequired("Agent"))?,
-                )?;
+            let merged =
+                gents_documents::patch::apply_patch(SelfConfigTarget::Agent, &stored, &agent_patch);
+            if let Some(held) = caller.held {
+                let before = selected_tools(&stored)?;
                 let after = selected_tools(&merged)?;
                 ops::reselection_keeps_grants(held, before.as_ref(), after.as_ref())?;
             }
@@ -709,11 +1039,24 @@ async fn agent_apply_in_txn(
             }
             guard_agent_profile_choice(txn, owner, Some(&id), None, args.profile_id.value())
                 .await?;
+            let anchor = ops::AgentAnchor {
+                doc: stored.clone(),
+                context: serde_json::Map::new(),
+                profile: serde_json::Map::new(),
+                execution: serde_json::Map::new(),
+            };
+            ops::guard_compaction_choice_in_txn(
+                txn,
+                SelfConfigTarget::Agent,
+                &anchor,
+                &stored,
+                &merged,
+            )
+            .await?;
+            if let Some(core) = caller.lockout {
+                core.guard_lockout_chain_in_txn(txn, &merged).await?;
+            }
             doc = serde_json::from_value(Value::Object(merged))?;
-        }
-        agent::AgentOperation::Disable => {
-            doc = serde_json::from_value(load(gents_store::collection::Collection::Agent, &id)?)?;
-            doc.enabled = false;
         }
     }
     documents.push(replacement(
@@ -721,13 +1064,9 @@ async fn agent_apply_in_txn(
         &doc,
     )?);
     if args.make_default {
-        let mut node = load(gents_store::collection::Collection::Node, owner)?;
-        node.as_object_mut()
-            .ok_or(AgentOperationError::ObjectRequired("node"))?
-            .insert("default_agent_did".into(), json!(id));
         documents.push(replacement(
-            gents_store::collection::Collection::Node,
-            node,
+            gents_store::collection::Collection::DefaultAgentSelection,
+            DefaultAgentSelection::new(owner, &id),
         )?);
     }
     let plan = DesiredStateApplyPlan::new(documents)?;
@@ -737,7 +1076,7 @@ async fn agent_apply_in_txn(
         &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await?;
-    if doc.enabled && !matches!(op, agent::AgentOperation::Disable) {
+    if doc.enabled {
         let mut merged: BTreeMap<_, _> = refs
             .documents()
             .map(|(key, value)| (key.clone(), value.clone()))
@@ -768,8 +1107,16 @@ async fn agent_apply_in_txn(
             }
         }
         admit(
-            agent::materialize_agent(&view, &op, &id, args.make_default, &candidate, owner)
-                .is_some(),
+            agent::materialize_agent(
+                &view,
+                &actor,
+                &op,
+                &id,
+                args.make_default,
+                &candidate,
+                owner,
+            )
+            .is_some(),
             AgentOperationError::CandidateDoesNotResolve,
         )?;
     }
@@ -777,7 +1124,7 @@ async fn agent_apply_in_txn(
         gents_documents::apply_desired_state_plan_with_node_binding(
             txn,
             &plan,
-            node_binding,
+            caller.node_binding,
             &gents_inference::resolved::ProviderProfilePolicy,
         )
         .await?;

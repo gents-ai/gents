@@ -2,9 +2,9 @@ use anyhow::{anyhow, bail, Context, Result};
 use defra_node::Node as EmbeddedNode;
 use gents_documents::{
     Agent, AgentContext, AgentTargetDocument, CompactionConfig, DatastoreToolSurfaceDocument,
-    EventSource, InferenceBackend, InferenceBackendObservation, InferenceExecution,
-    InferenceProfile, InferenceSampling, Node, Schedule, ScheduleObservation, SkillDocument, Task,
-    ToolServiceRegistry, Tools, Trigger, TriggerObservation,
+    DefaultAgentSelection, EventSource, InferenceBackend, InferenceBackendObservation,
+    InferenceExecution, InferenceProfile, InferenceSampling, Node, Schedule, ScheduleObservation,
+    SkillDocument, Task, ToolServiceRegistry, Tools, Trigger, TriggerObservation,
 };
 use gents_protocol::client_protocol::SessionRowObservation;
 use gents_protocol::graphql::escape_graphql_string;
@@ -16,7 +16,8 @@ use gents_protocol::row::{
 };
 use gents_protocol::schemas::{
     AGENT_MESSAGE_NAME, AGENT_NAME, AGENT_OUTPUT_SEGMENT_NAME, AGENT_REQUEST_NAME,
-    AGENT_SESSION_NAME, AGENT_TARGET_NAME, AGENT_TOOL_CALL_NAME, COMPACTION_ENTRY_NAME, GOAL_NAME,
+    AGENT_SESSION_NAME, AGENT_TARGET_NAME, AGENT_TOOL_CALL_NAME, COMPACTION_ENTRY_NAME,
+    DEFAULT_AGENT_SELECTION_NAME, GOAL_NAME,
     INFERENCE_BACKEND_METADATA_NAME as INFERENCE_BACKEND_NAME, INFERENCE_BACKEND_OBSERVATION_NAME,
     INFERENCE_PROFILE_NAME, MAILBOX_ITEM_NAME, NODE_NAME, NODE_READINESS_NAME, NODE_RUNTIME_NAME,
     SCHEDULE_NAME, SKILL_NAME, TASK_NAME, TOOLS_NAME, TOOL_SERVICE_REGISTRY_NAME, TRIGGER_NAME,
@@ -116,7 +117,8 @@ pub(super) struct TranscriptCursorRow {
 }
 
 pub(super) const NODE_FIELDS: &str =
-    "node_did display_name avatar default_agent_did enabled created_at created_by max_request_hop tags";
+    "node_did display_name avatar enabled created_at created_by max_request_hop tags";
+pub(super) const DEFAULT_AGENT_SELECTION_FIELDS: &str = "node_did default_agent_did updated_at";
 pub(super) const AGENT_FIELDS: &str = "agent_did creation_nonce node_did display_name description context_id inference_profile_id enabled tags created_at";
 pub(super) const NODE_RUNTIME_FIELDS: &str = "node_did reconcile_phase agent_executor_capacity agent_executor_queue_depth agent_executor_status_json last_reconcile_result last_reconcile_error last_reconcile_completed_at updated_at";
 pub(super) const NODE_READINESS_FIELDS: &str = "node_did snapshot_json updated_at";

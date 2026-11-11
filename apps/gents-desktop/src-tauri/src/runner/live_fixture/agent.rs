@@ -203,7 +203,8 @@ async fn seed_live_agent_documents(
     let target_id = format!("{agent_did}-target");
     let target = target_backend.unwrap_or(backend);
     let mut config = json!({
-        "node":{"node_did":node_did,"display_name":agent_name,"default_agent_did":agent_did,"created_by":config_actor_did},
+        "node":{"node_did":node_did,"display_name":agent_name,"created_by":config_actor_did},
+        "default_agent_selection":{"node_did":node_did,"default_agent_did":agent_did},
         "agents":[
             {"agent_did":agent_did,"creation_nonce":binding.creation_nonce,"node_did":node_did,"display_name":"Live Repo Audit Default","context_id":context_id,"inference_profile_id":inference_profile_id},
             {"agent_did":target_agent_did,"creation_nonce":target_binding.creation_nonce,"node_did":node_did,"display_name":"Live Repo Audit","context_id":target_context_id,"inference_profile_id":target_profile_id}

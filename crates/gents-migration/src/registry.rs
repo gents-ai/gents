@@ -229,6 +229,10 @@ static BASELINE_SCHEMAS: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::NODE
     ),
     baseline_entry!(
+        gents_protocol::schemas::DEFAULT_AGENT_SELECTION_NAME,
+        gents_protocol::schemas::DEFAULT_AGENT_SELECTION
+    ),
+    baseline_entry!(
         gents_protocol::schemas::AGENT_NAME,
         gents_protocol::schemas::AGENT
     ),

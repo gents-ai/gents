@@ -1,4 +1,6 @@
-use super::plan::{document_identity, validate_node_replacement, DesiredStateApplyPlan};
+use super::plan::{
+    document_identity, validate_default_selection_replacement, DesiredStateApplyPlan,
+};
 use super::schema_fields::{
     declared_fields, prefetch_declared_fields, validate_event_source_live_fields,
     validate_output_obligation_count_fields, IntrospectedFields,
@@ -54,8 +56,8 @@ pub async fn validate_desired_state_plan(
             }
             let key = (document.collection, id.to_owned());
             let replacement = if let Some(current) = candidate.get(&key) {
-                if document.collection == Collection::Node {
-                    validate_node_replacement(current, &document.update)?;
+                if document.collection == Collection::DefaultAgentSelection {
+                    validate_default_selection_replacement(current, &document.update)?;
                 }
                 &document.update
             } else {

@@ -56,7 +56,9 @@ mod trigger;
 mod unattended_admission;
 mod write_tool;
 
-pub use principal::{load_node, Node};
+pub use principal::{
+    load_default_agent_did, load_default_agent_did_in_txn, load_node, DefaultAgentSelection, Node,
+};
 
 pub use callback::{
     BuiltInCallback, Callback, CallbackBinding, CallbackHandler, CallbackInvocationOrigin,
@@ -78,7 +80,10 @@ pub use desired_state::schema_fields::collection_is_installed;
 pub use desired_state::validate::{
     event_trigger_document_field_names, validate_event_trigger_document_fields,
 };
-pub use desired_state::{apply_desired_state_plan, grant_selected_self_configuration};
+pub use desired_state::{
+    apply_desired_state_plan, grant_agent_catalog, grant_node_administration,
+    grant_selected_self_configuration, revoke_agent_catalog,
+};
 pub use desired_state::{
     apply_desired_state_plan_with_node_binding, configuration_node_doc, ConfigurationNodeBinding,
 };

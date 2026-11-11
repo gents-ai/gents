@@ -107,7 +107,8 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         .collect::<std::collections::BTreeSet<_>>();
     let default_agent_did = bundle
         .as_ref()
-        .and_then(|bundle| bundle.config.node.default_agent_did.as_deref());
+        .and_then(|bundle| bundle.config.default_agent_selection.as_ref())
+        .and_then(|selection| selection.selected());
     let default_agent_check = match default_agent_did {
         Some(agent_did) if agent_dids.contains(agent_did) => json!({
             "ok": true,
@@ -120,7 +121,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         }),
         None => json!({
             "ok": false,
-            "error": format!("Node {} is missing or has no default_agent_did", node_did),
+            "error": format!("Node {} is missing or has no default agent selection", node_did),
         }),
     };
     let tool_ceiling_check = diagnose_tool_ceiling(init_config.as_ref());
@@ -457,7 +458,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         "config_counts": bundle.as_ref().map(|bundle| {
             gents_store::collection::Collection::ALL.into_iter().map(|collection| {
                 let count = bundle.docs_for_collection(collection)?.len();
-                Ok((collection.dir_name().unwrap_or("node").to_owned(), count))
+                Ok((collection.to_string(), count))
             }).collect::<Result<std::collections::BTreeMap<_, _>>>()
         }).transpose()?,
     });

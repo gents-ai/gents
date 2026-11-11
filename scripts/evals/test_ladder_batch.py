@@ -45,6 +45,7 @@ log = pathlib.Path(os.environ["CALL_LOG"])
 with log.open("a") as stream:
     stream.write(json.dumps(args) + "\\n")
 if args[:3] == ["utils", "data", "query"]:
+    assert args[args.index("--collection") + 1] == "DefaultAgentSelection", args
     print(json.dumps({"results": [{"node_did": "did:test:node", "default_agent_did": None if os.getenv("MISSING_DEFAULT_AGENT") else "did:test:provisioned-agent"}]}))
 elif args[:2] == ["config", "apply"] and os.getenv("FAIL_CONFIG_APPLY"):
     print(json.dumps({"errors": ["specific validation failure"]}))
@@ -57,7 +58,8 @@ elif args[:3] == ["utils", "eval", "batch"]:
     assert all(pathlib.Path(path).is_dir() for path in applied)
     for path in applied:
         config = json.loads((pathlib.Path(path) / "pack_config.json").read_text())
-        assert config["node"]["default_agent_did"] == "did:test:provisioned-agent", config
+        assert "default_agent_did" not in config["node"], config
+        assert config["default_agent_selection"]["default_agent_did"] == "did:test:provisioned-agent", config
         if "inference_profiles" in config:
             assert config["inference_profiles"][0]["execution_id"] == config["inference_execution"][0]["execution_id"], config
     assert len(plan["runs"]) == 4, plan

@@ -288,6 +288,20 @@ impl SelfConfigFixture {
             .unwrap();
     }
 
+    /// Lean `SelfConfig.ActorGrants.catalog`: the Node's owner gives this
+    /// Agent `nodes#agent_manager`, which is `manage_agents` on the Node.
+    pub(super) async fn grant_agent_catalog(&self) {
+        self.user_access
+            .add_actor_relationship(
+                "Node",
+                &self.node_binding.doc_id,
+                "agent_manager",
+                &identity::Did::new(&self.agent_did).unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+
     async fn grant_account_fixture_selections(
         &self,
         documents: &[(gents_store::collection::Collection, String, bool)],
@@ -582,6 +596,9 @@ impl SelfConfigFixture {
                 gents_protocol::schemas::INFERENCE_PROFILE
             }
             gents_store::collection::Collection::Node => gents_protocol::schemas::NODE,
+            gents_store::collection::Collection::DefaultAgentSelection => {
+                gents_protocol::schemas::DEFAULT_AGENT_SELECTION
+            }
             gents_store::collection::Collection::Tools => gents_protocol::schemas::TOOLS,
             _ => panic!("no fixture schema for {}", collection.graphql_type()),
         };
@@ -3138,12 +3155,25 @@ async fn agent_only_grant_cannot_acquire_node_authority_and_writes_require_exact
     let profile = format!("{current}:inference");
     let tools = fixture.tools(&["agent"]);
     // The agent category exposes the Agent command (NodeProvisioning.agentCommandExposed);
-    // node-catalog operations stay refused before any write.
+    // catalog operations are refused before any write because the Agent does
+    // not hold manage_agents (SelfConfig.catalog_refused_without_grants).
     call_config_tool(&tools, vec!["agent".into(), "list".into()])
         .await
         .expect("agent authority can read the agent catalog");
+    let preview: Value = serde_json::from_str(
+        &call_config_tool(
+            &tools,
+            ["agent", "preview", "default", current]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+        )
+        .await
+        .expect("a refused preview is an answer"),
+    )
+    .unwrap();
+    assert_eq!(preview["refusal"], "catalog_not_held", "{preview}");
     for argv in [
-        vec!["agent", "preview", "default", current],
         vec!["agent", "default", current],
         vec![
             "agent",
@@ -3160,7 +3190,7 @@ async fn agent_only_grant_cannot_acquire_node_authority_and_writes_require_exact
         let error = call_config_tool(&tools, argv.into_iter().map(str::to_owned).collect())
             .await
             .expect_err("agent-only authority cannot manage the node catalog");
-        assert!(error.contains("category node"), "{error}");
+        assert!(error.contains("manage_agents"), "{error}");
     }
     let edited = call_config_tool(
         &tools,
@@ -3396,6 +3426,7 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
     fixture.grant_selected_configuration().await;
     fixture.grant_engineer_tool_sources().await;
     fixture.grant_node_reader().await;
+    fixture.grant_agent_catalog().await;
     fixture.grant_agent_relation_delete().await;
     let working_did = fixture.install_sibling("working").await;
     fixture.grant_sibling_configuration(&working_did).await;
@@ -3755,6 +3786,7 @@ async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
     fixture.grant_selected_configuration().await;
     let root = fixture.admitted_workspace_root().await;
     fixture.grant_node_reader().await;
+    fixture.grant_agent_catalog().await;
     fixture.grant_agent_delete().await;
     fixture.grant_agent_relation_delete().await;
     let mut tool_config = config(&["node", "tools", "profile", "backend"]);
@@ -3922,55 +3954,12 @@ fn take_agent_tool(
         .expect("config registered")
 }
 
+/// Lean `SelfConfig.catalog_refused_without_grants`: choosing the default needs
+/// `manage_agents` on the Node, which an Agent holding only its own grants does
+/// not hold, whatever its Tools categories; the Node's owner chooses it through
+/// the selection document.
 #[tokio::test]
 async fn user_owned_node_default_rejects_agent_update_and_accepts_user() {
-    use gents_lean_vocab::{LeanIdentityAction, LeanIdentitySubject};
-    let model = gents_lean_vocab::lean_identity_household_cases()
-        .iter()
-        .find(|case| case.name == "user-node-agents-mixed-session-ownership-policy-followup")
-        .unwrap();
-    let user = &model
-        .objects
-        .iter()
-        .find(|object| object.resource == "nodes" && object.id == "home")
-        .unwrap()
-        .owner;
-    let agent = model
-        .relations
-        .iter()
-        .find_map(|relation| match &relation.subject {
-            LeanIdentitySubject::Actor { actor }
-                if relation.resource == "agents"
-                    && relation.id == "general"
-                    && relation.relation == "executor" =>
-            {
-                Some(actor)
-            }
-            _ => None,
-        })
-        .unwrap();
-    let may_update_node = |actor: &str| {
-        model
-            .actions
-            .iter()
-            .find_map(|action| match action {
-                LeanIdentityAction::Check {
-                    actor: candidate,
-                    resource,
-                    id,
-                    permission,
-                    expected,
-                } if candidate == actor
-                    && resource == "nodes"
-                    && id == "home"
-                    && permission == "update" =>
-                {
-                    Some(*expected)
-                }
-                _ => None,
-            })
-            .unwrap()
-    };
     let fixture = SelfConfigFixture::new("agent-default-authority").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_node_reader().await;
@@ -3993,6 +3982,13 @@ async fn user_owned_node_default_rejects_agent_update_and_accepts_user() {
     )
     .unwrap();
     assert_eq!(preview["committed"], false);
+    assert_eq!(preview["admitted"], false, "{preview}");
+    assert_eq!(preview["refusal"], "catalog_not_held", "{preview}");
+    assert_eq!(
+        preview["next_call"],
+        json!({"argv":["agent","get"]}),
+        "{preview}"
+    );
     assert_eq!(
         node_default_agent(&core).await.unwrap().as_deref(),
         Some(seed)
@@ -4001,20 +3997,24 @@ async fn user_owned_node_default_rejects_agent_update_and_accepts_user() {
         &tools,
         vec!["agent".into(), "default".into(), working.clone()],
     )
-    .await;
-    assert_eq!(agent_update.is_ok(), may_update_node(agent));
+    .await
+    .expect_err("an Agent without manage_agents cannot choose the default");
+    assert!(agent_update.contains("manage_agents"), "{agent_update}");
+    assert!(
+        agent_update.contains(r#""next_call":{"argv":["agent","get"]}"#),
+        "{agent_update}"
+    );
     assert_eq!(
         node_default_agent(&core).await.unwrap().as_deref(),
         Some(seed)
     );
     fixture
         .update_signed_configuration(
-            gents_store::collection::Collection::Node,
+            gents_store::collection::Collection::DefaultAgentSelection,
             fixture.node_did(),
             json!({"default_agent_did": working}),
         )
         .await;
-    assert!(may_update_node(user));
     assert_eq!(
         node_default_agent(&core).await.unwrap().as_deref(),
         Some(working.as_str())
@@ -4026,6 +4026,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
     let fixture = SelfConfigFixture::new("agent-create").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_node_reader().await;
+    fixture.grant_agent_catalog().await;
     let root = fixture.admitted_workspace_root().await;
     let node = fixture.db.node.clone();
     let node_did = fixture.node_did().to_owned();
@@ -4050,10 +4051,15 @@ async fn agent_create_commits_and_resolves_after_restart() {
     let rejected_preview: Value = serde_json::from_str(&rejected_preview).unwrap();
     assert_eq!(rejected_preview["committed"], false);
     assert_eq!(rejected_preview["admitted"], false);
-    assert!(rejected_preview["rejection"]
+    assert_eq!(rejected_preview["refusal"], "invalid_input");
+    assert!(rejected_preview["message"]
         .as_str()
         .unwrap()
         .contains("fresh agents require system_prompt"));
+    assert_eq!(
+        rejected_preview["next_call"],
+        json!({"argv":["agent","create","--help"]})
+    );
     let admitted_preview = call_config_tool(
         &tools,
         vec![
@@ -4200,7 +4206,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
 
     fixture
         .update_signed_configuration(
-            gents_store::collection::Collection::Node,
+            gents_store::collection::Collection::DefaultAgentSelection,
             fixture.node_did(),
             json!({"default_agent_did": created[0].agent_did}),
         )
@@ -4247,6 +4253,7 @@ async fn agent_clone_accepts_sibling_agent_did() {
     let fixture = SelfConfigFixture::new("agent-clone").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_node_reader().await;
+    fixture.grant_agent_catalog().await;
     let node = &fixture.db.node;
     let node_did = fixture.node_did();
     let qualified_sibling_id = fixture.install_sibling("sibling-agent").await;
@@ -4351,6 +4358,7 @@ async fn agent_clone_by_holder_copies_granted_source() {
     let fixture = SelfConfigFixture::new("agent-clone-holder").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_node_reader().await;
+    fixture.grant_agent_catalog().await;
     let node = &fixture.db.node;
     let node_did = fixture.node_did();
     let granted = fixture.install_sibling("granted").await;
@@ -4447,6 +4455,7 @@ async fn clone_does_not_inherit_self_config_from_its_source() {
     let fixture = SelfConfigFixture::new("clone-self-config").await;
     fixture.grant_selected_configuration().await;
     fixture.grant_node_reader().await;
+    fixture.grant_agent_catalog().await;
     let node_did = fixture.node_did().to_owned();
     let source = fixture.install_sibling("self-config-source").await;
     fixture.grant_pack_install_to(&source).await;
@@ -4803,7 +4812,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
     .unwrap();
     fixture
         .update_signed_configuration(
-            gents_store::collection::Collection::Node,
+            gents_store::collection::Collection::DefaultAgentSelection,
             &owner,
             json!({"default_agent_did": created.agent_did}),
         )
@@ -5315,6 +5324,7 @@ async fn backend_choice_uses_runtime_visible_default_in_agent_transaction() {
 async fn account_choice_core(name: &str) -> (SelfConfigFixture, SelfConfigCore) {
     let fixture = SelfConfigFixture::new(name).await;
     fixture.grant_node_reader().await;
+    fixture.grant_agent_catalog().await;
     fixture.grant_user_relation_delete().await;
     fixture.grant_agent_relation_delete().await;
     let owner = fixture.node_did().to_owned();
@@ -5881,18 +5891,18 @@ async fn agent_preview_agrees_with_the_account_choice_fence() {
             .map(|arg| (*arg).to_owned())
             .collect();
         let params = agent_params("preview", Some(operation.into()), &argv).unwrap();
-        let preview: Value =
-            serde_json::from_str(&model_agent_preview(&core, &params).await.unwrap()).unwrap();
-        assert_eq!(
-            preview["admitted"], admitted,
-            "{operation} {profile}: {preview}"
-        );
-        if !admitted {
+        let preview = model_agent_preview(&core, &params).await;
+        if admitted {
+            let preview: Value = serde_json::from_str(&preview.unwrap()).unwrap();
+            assert_eq!(
+                preview["admitted"], true,
+                "{operation} {profile}: {preview}"
+            );
+        } else {
+            let error = preview.expect_err("an account switch is not an admission refusal");
             assert!(
-                preview["rejection"]
-                    .as_str()
-                    .is_some_and(|rejection| rejection.contains("selects another")),
-                "{preview}"
+                format!("{error:#}").contains("selects another"),
+                "{operation} {profile}: {error:#}"
             );
         }
     }
@@ -5956,13 +5966,13 @@ async fn agent_clone_inherited_compaction_cannot_switch_account() {
         agent_params(action, operation, &argv).unwrap()
     };
     for (source, profile) in [(chat_b.as_str(), "p-original"), (chat_b.as_str(), "p-grok")] {
-        let preview: Value = serde_json::from_str(
-            &model_agent_preview(&core, &clone("preview", source, profile))
-                .await
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(preview["admitted"], false, "{source} {profile}: {preview}");
+        let preview = model_agent_preview(&core, &clone("preview", source, profile))
+            .await
+            .expect_err("an inherited account switch is not an admission refusal");
+        assert!(
+            format!("{preview:#}").contains("selects another"),
+            "{source} {profile}: {preview:#}"
+        );
         let error = model_agent_mutate(
             &core,
             fixture.agent.as_ref(),
@@ -6334,8 +6344,10 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
     )
     .await
     .unwrap_err();
-    assert!(disable.contains("no-lockout"), "{disable}");
-    let untag = call_config_tool(
+    assert!(disable.contains("cannot disable itself"), "{disable}");
+    // Lean `SelfConfig.keepsReach`: the Engineer tag confers nothing, so
+    // dropping it is an ordinary edit.
+    ok(call_config_tool(
         &tools,
         command(&[
             "agent",
@@ -6345,9 +6357,7 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
             "tags=[\"ui:engineer\"]",
         ]),
     )
-    .await
-    .unwrap_err();
-    assert!(untag.contains("Engineer tag must remain"), "{untag}");
+    .await);
     ok(call_config_tool(
         &tools,
         command(&[
@@ -6369,7 +6379,10 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
         call_config_tool(&tools, command(&["agent", "disable", "--id", &setup_did]))
             .await
             .unwrap_err();
-    assert!(agent_disable.contains("no-lockout"), "{agent_disable}");
+    assert!(
+        agent_disable.contains("cannot disable itself"),
+        "{agent_disable}"
+    );
     for name in ["\"\"", "\"   \""] {
         let blank = call_config_tool(
             &tools,
@@ -7767,7 +7780,7 @@ async fn no_lockout_rejects_current_agent_disable_in_preview_and_commit() {
     fixture.grant_node_reader().await;
     fixture
         .update_signed_configuration(
-            gents_store::collection::Collection::Node,
+            gents_store::collection::Collection::DefaultAgentSelection,
             fixture.node_did(),
             json!({"default_agent_did": default}),
         )
@@ -7778,18 +7791,34 @@ async fn no_lockout_rejects_current_agent_disable_in_preview_and_commit() {
     grants.no_lockout = true;
     grants.preview = true;
     let tools = fixture.tools_with_config(&grants);
-    for argv in [
-        vec!["agent", "preview", "disable", "--id", current],
-        vec!["agent", "disable", "--id", current],
-    ] {
-        let error = call_config_tool(&tools, argv.into_iter().map(str::to_owned).collect())
-            .await
-            .unwrap_err();
-        assert!(
-            error.contains("no-lockout guard: agent must remain enabled"),
-            "{error}"
-        );
-    }
+    let preview: Value = serde_json::from_str(
+        &call_config_tool(
+            &tools,
+            ["agent", "preview", "disable", "--id", current]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(preview["admitted"], false, "{preview}");
+    assert_eq!(preview["refusal"], "self_lockout", "{preview}");
+    let error = call_config_tool(
+        &tools,
+        ["agent", "disable", "--id", current]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("an actor cannot disable itself"), "{error}");
+    assert!(
+        error.contains(&preview["message"].as_str().unwrap().replace('"', "\\\"")),
+        "{error}"
+    );
     let current = gents_documents::list_agents(&fixture.db.node, fixture.node_did())
         .await
         .unwrap()

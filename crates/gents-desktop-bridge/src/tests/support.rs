@@ -192,7 +192,16 @@ impl RunningDesktop {
             .publish_delegating_agents(provider.endpoint(), SCRIPTED_MODEL)
             .await;
         runtime
-            .publish_node(serde_json::json!({"default_agent_did": lead.agent_did}))
+            .apply_as_user(
+                "test.served_runtime.default_agent",
+                vec![(
+                    gents_store::collection::Collection::DefaultAgentSelection,
+                    serde_json::json!({
+                        "node_did": runtime.node_did(),
+                        "default_agent_did": lead.agent_did,
+                    }),
+                )],
+            )
             .await;
         runtime.connect(&core).await;
         core.set_selected_node_did(Some(runtime.node_did().to_owned()));

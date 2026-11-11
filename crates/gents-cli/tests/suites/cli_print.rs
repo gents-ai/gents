@@ -144,7 +144,7 @@ async fn yolo_makes_one_agent_with_the_default_agents_tools_and_reuses_it() -> R
         &graphql,
         &format!(
             r#"{{
-                Node(filter: {{node_did: {{_eq: "{node_did}"}}}}) {{ default_agent_did }}
+                DefaultAgentSelection(filter: {{node_did: {{_eq: "{node_did}"}}}}) {{ default_agent_did }}
                 Agent(filter: {{node_did: {{_eq: "{node_did}"}}}}) {{ agent_did display_name context_id }}
                 AgentContext(filter: {{node_did: {{_eq: "{node_did}"}}}}) {{ context_id tools_id system_prompt }}
                 AgentRequest(filter: {{node_did: {{_eq: "{node_did}"}}}}) {{ agent_did session_id }}
@@ -153,7 +153,7 @@ async fn yolo_makes_one_agent_with_the_default_agents_tools_and_reuses_it() -> R
     )
     .await?;
     let agents = rows["data"]["Agent"].as_array().context("Agent rows")?;
-    let default_did = rows["data"]["Node"][0]["default_agent_did"]
+    let default_did = rows["data"]["DefaultAgentSelection"][0]["default_agent_did"]
         .as_str()
         .context("the node names its default agent")?
         .to_owned();

@@ -106,13 +106,16 @@ impl SelfConfig {
 
     async fn seed(&self) {
         let node_did = self.node_did().to_owned();
-        let mut node = self.read(Collection::Node, &node_did).await;
-        node["default_agent_did"] = self.agent_did().into();
+        let node = self.read(Collection::Node, &node_did).await;
         let mut agent = self.read(Collection::Agent, self.agent_did()).await;
         agent["context_id"] = CONTEXT_ID.into();
         agent["inference_profile_id"] = PROFILE_ID.into();
         self.apply(vec![
             (Collection::Node, node),
+            (
+                Collection::DefaultAgentSelection,
+                json!({"node_did":node_did,"default_agent_did":self.agent_did()}),
+            ),
             (Collection::InferenceBackend, json!({"node_did":node_did,"backend_id":BACKEND_ID,"name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:11434/v1","auth":{"kind":"api_key","key":SECRET},"max_concurrent":1})),
             (Collection::InferenceSampling, json!({"node_did":node_did,"sampling_id":"sampling","temperature":0.7})),
             (Collection::InferenceExecution, json!({"node_did":node_did,"execution_id":"execution","max_turns":40})),

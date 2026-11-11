@@ -122,13 +122,20 @@ pub(super) async fn plugin_runtime_fixture(
         .and_then(|row| row["_docID"].as_str())
         .ok_or_else(|| anyhow::anyhow!("plugin fixture Node missing"))?
         .to_owned();
-    let default_node =
-        json!({"node_did":runtime.did(), "enabled":true, "default_agent_did":agent_did});
-    let default_plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::Node,
-        add: default_node.clone(),
-        update: default_node,
-    }])?;
+    let default_node = json!({"node_did":runtime.did(), "enabled":true});
+    let default_selection = json!({"node_did":runtime.did(), "default_agent_did":agent_did});
+    let default_plan = DesiredStateApplyPlan::new(vec![
+        DesiredStateApplyDocument {
+            collection: Collection::Node,
+            add: default_node.clone(),
+            update: default_node,
+        },
+        DesiredStateApplyDocument {
+            collection: Collection::DefaultAgentSelection,
+            add: default_selection.clone(),
+            update: default_selection,
+        },
+    ])?;
     user_access
         .transact_write("test.plugin.default", |txn| {
             let plan = &default_plan;

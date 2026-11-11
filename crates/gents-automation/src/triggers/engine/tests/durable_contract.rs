@@ -1436,7 +1436,8 @@ async fn budget_fixture(
     let owner = behavior.node_did().to_owned();
     let agent_did = behavior.agent_did.clone();
     let config = serde_json::from_value(serde_json::json!({
-        "node":{"node_did":owner,"default_agent_did":agent_did},
+        "node":{"node_did":owner},
+        "default_agent_selection":{"node_did":owner,"default_agent_did":agent_did},
         "tasks":[{"node_did":owner,"task_id":"budget-task","agent_did":agent_did,"prompt_template":"work"}],
         "schedules":[{"node_did":owner,"schedule_id":"s","cadence":{"kind":"interval","interval_secs":60}}],
         "triggers":[{"node_did":owner,"trigger_id":"handoff","task_id":"budget-task","source":{"kind":"schedule","schedule_id":"s"}}]

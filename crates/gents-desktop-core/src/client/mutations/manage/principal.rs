@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 mod editor;
 pub use editor::*;
 use gents_documents::apply_desired_state_plan;
@@ -17,53 +17,20 @@ pub async fn upsert_node_on(access: &ConfigAccess, document: &Node) -> Result<()
     super::apply_plan(access, "desktop.node.save", plan).await
 }
 
-/// Publication rejects a disabled default, so enabling the new default and
-/// replacing a stored default that is disabled must land in one apply.
+/// Choosing the default enables it in the same operation (Lean
+/// `SelfConfig.chooseDefault`), admitted from the acting User's grants.
 pub async fn set_default_agent_on(
     access: &ConfigAccess,
     node_did: &str,
     agent_did: &str,
 ) -> Result<()> {
-    access
-        .transact_write("desktop.node.default_agent", |txn| {
-            Box::pin(async move { set_default_agent_in_txn(txn, node_did, agent_did).await })
-        })
+    gents::operations::agent::choose_default(access, node_did, agent_did, true)
         .await
-}
-
-async fn set_default_agent_in_txn(
-    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
-    node_did: &str,
-    agent_did: &str,
-) -> Result<()> {
-    use anyhow::Context;
-    use gents_documents::read_desired_state_record_in_txn;
-    let (_, mut node) = read_desired_state_record_in_txn(txn, Collection::Node, node_did, node_did)
-        .await?
-        .context("default agent requires an existing node")?;
-    let (_, mut agent) =
-        read_desired_state_record_in_txn(txn, Collection::Agent, node_did, agent_did)
-            .await?
-            .with_context(|| format!("Agent {agent_did:?} does not exist"))?;
-    node["default_agent_did"] = agent_did.into();
-    agent["enabled"] = true.into();
-    let plan = DesiredStateApplyPlan::new(
-        [(Collection::Agent, agent), (Collection::Node, node)]
-            .into_iter()
-            .map(|(collection, value)| DesiredStateApplyDocument {
-                collection,
-                add: value.clone(),
-                update: value,
-            })
-            .collect(),
-    )?;
-    apply_desired_state_plan(
-        txn,
-        &plan,
-        &gents_inference::resolved::ProviderProfilePolicy,
-    )
-    .await?;
-    Ok(())
+        .map(|_| ())
+        .map_err(|error| {
+            let next = error.edit_recovery();
+            crate::error::agent_operation_failure(error, next)
+        })
 }
 
 #[cfg(test)]
@@ -123,7 +90,6 @@ async fn apply_config_components_in_txn(
     owner: &str,
     plan: &DesiredStateApplyPlan,
 ) -> Result<()> {
-    use anyhow::Context;
     gents_documents::read_desired_state_record_in_txn(txn, Collection::Node, owner, owner)
         .await?
         .context("component apply requires an existing node")?;
@@ -161,6 +127,8 @@ fn config_components_plan(
 
 /// Patch existing scoped components atomically; omitted fields (including
 /// hidden credentials) are retained. Never creates or removes documents.
+/// Agent targets are edits admitted by the operations layer in the same
+/// transaction as the other targets.
 pub async fn patch_config_components_on(
     access: &ConfigAccess,
     node_did: &str,
@@ -170,10 +138,21 @@ pub async fn patch_config_components_on(
         gents_documents::patch::SelfConfigPatch,
     )],
 ) -> Result<()> {
-    patch_config_components_with(access, node_did, patches).await
+    let admission = observe_agent_patches(access, node_did, patches).await?;
+    access
+        .transact_write("desktop.config.components.patch", |txn| {
+            let admission = admission.as_ref();
+            Box::pin(async move {
+                patch_config_components_in_txn(txn, node_did, admission, patches).await
+            })
+        })
+        .await
 }
 
-async fn patch_config_components_with(
+/// The operations layer's observation of the actor's grants on every Agent
+/// the patches name, taken before the transaction opens; `None` when no Agent
+/// is patched.
+pub(crate) async fn observe_agent_patches(
     access: &ConfigAccess,
     node_did: &str,
     patches: &[(
@@ -181,24 +160,86 @@ async fn patch_config_components_with(
         String,
         gents_documents::patch::SelfConfigPatch,
     )],
-) -> Result<()> {
-    access
-        .transact_write("desktop.config.components.patch", |txn| {
-            Box::pin(async move { patch_config_components_in_txn(txn, node_did, patches).await })
-        })
+) -> Result<Option<gents_tools::builtin::self_config::ObservedAdmission>> {
+    let agents: Vec<String> = patches
+        .iter()
+        .filter(|(target, _, _)| *target == gents_documents::patch::SelfConfigTarget::Agent)
+        .map(|(_, id, _)| id.clone())
+        .collect();
+    if agents.is_empty() {
+        return Ok(None);
+    }
+    gents::operations::agent::observe(access, node_did, &agents)
         .await
+        .map(Some)
+        .map_err(agent_failure)
 }
 
-async fn patch_config_components_in_txn(
+pub(crate) fn agent_failure(
+    error: gents_protocol::operations::agent::AgentOperationError,
+) -> anyhow::Error {
+    let next = error.edit_recovery();
+    crate::error::agent_operation_failure(error, next)
+}
+
+/// The Agent edit a generic patch of the Agent target stands for. A field the
+/// edit does not carry is refused as the operation refuses it.
+pub(crate) fn agent_edit_from_patch(
+    patch: &gents_documents::patch::SelfConfigPatch,
+) -> Result<gents_protocol::operations::agent::AgentEdit> {
+    use gents_protocol::operations::agent::AgentOperationError;
+    use gents_protocol::operations::StringUpdate;
+    let text = |field: &str, value: &Option<serde_json::Value>| -> Result<StringUpdate> {
+        match value {
+            None | Some(serde_json::Value::Null) => Ok(StringUpdate::Clear),
+            Some(serde_json::Value::String(value)) => Ok(StringUpdate::Set(value.clone())),
+            Some(_) => anyhow::bail!("{field} must be text"),
+        }
+    };
+    let mut edit = gents_protocol::operations::agent::AgentEdit::default();
+    for (field, value) in patch {
+        match field.as_str() {
+            "display_name" => edit.display_name = text(field, value)?,
+            "description" => edit.description = text(field, value)?,
+            "system_prompt" => edit.system_prompt = text(field, value)?,
+            "inference_profile_id" => edit.inference_profile_id = text(field, value)?,
+            "context_id" => edit.context_id = text(field, value)?,
+            "enabled" => {
+                edit.enabled = Some(
+                    value
+                        .as_ref()
+                        .and_then(serde_json::Value::as_bool)
+                        .context("enabled must be true or false")?,
+                )
+            }
+            "tags" => {
+                edit.tags = Some(match value {
+                    None | Some(serde_json::Value::Null) => Vec::new(),
+                    Some(value) => serde_json::from_value(value.clone())
+                        .context("tags must be a list of text")?,
+                })
+            }
+            other => {
+                return Err(agent_failure(AgentOperationError::UnsupportedEditField(
+                    other.to_owned(),
+                )))
+            }
+        }
+    }
+    Ok(edit)
+}
+
+pub(crate) async fn patch_config_components_in_txn(
     txn: &gents_store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
+    admission: Option<&gents_tools::builtin::self_config::ObservedAdmission>,
     patches: &[(
         gents_documents::patch::SelfConfigTarget,
         String,
         gents_documents::patch::SelfConfigPatch,
     )],
 ) -> Result<()> {
-    use anyhow::Context;
+    use gents_documents::patch::SelfConfigTarget;
     use gents_documents::{
         patch::{apply_patch, ensure_admissible},
         read_desired_state_record_in_txn,
@@ -223,7 +264,12 @@ async fn patch_config_components_in_txn(
         .await?
         .context("component patch requires an existing node")?;
     let mut documents = Vec::with_capacity(patches.len());
+    let mut edits = Vec::new();
     for (target, id, patch) in patches {
+        if *target == SelfConfigTarget::Agent {
+            edits.push((id, agent_edit_from_patch(patch)?));
+            continue;
+        }
         let (_, retained) =
             read_desired_state_record_in_txn(txn, target.collection(), node_did, id)
                 .await?
@@ -251,6 +297,12 @@ async fn patch_config_components_in_txn(
         &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await?;
+    for (id, edit) in &edits {
+        let admission = admission.context("an Agent patch requires its observed admission")?;
+        gents::operations::agent::edit_in_txn(txn, node_did, admission, id, edit)
+            .await
+            .map_err(agent_failure)?;
+    }
     Ok(())
 }
 
@@ -290,12 +342,10 @@ mod tests {
             })
             .await?;
         let target = target.as_str();
-        let mut document: Node = serde_json::from_value(
+        let document: Node = serde_json::from_value(
             json!({"node_did":target,"display_name":"Agent","avatar":"12","created_at":"2026-01-01T00:00:00Z","created_by":"did:test:creator","tags":["team"]}),
         )?;
         upsert_node_on(&access, &document).await?;
-        document.default_agent_did = Some(default.agent_did.clone());
-        assert!(upsert_node_on(&access, &document).await.is_err());
         access
             .transact_readonly("desktop.node.verify", |txn| {
                 Box::pin(async move {
@@ -308,7 +358,6 @@ mod tests {
                     assert_eq!(saved.created_by.as_deref(), Some("did:test:creator"));
                     assert_eq!(saved.tags, vec!["team"]);
                     assert_eq!(saved.avatar.as_deref(), Some("12"));
-                    assert!(saved.default_agent_did.is_none());
                     Ok::<_, anyhow::Error>(())
                 })
             })
@@ -324,7 +373,8 @@ mod tests {
         let first = runtime.provision_agent().await;
         let second = runtime.provision_agent().await;
         let seed: gents_documents::PackConfig = serde_json::from_value(json!({
-            "node":{"node_did":owner,"default_agent_did":first.agent_did,"avatar":"12","tags":["keep"]},
+            "node":{"node_did":owner,"avatar":"12","tags":["keep"]},
+            "default_agent_selection":{"node_did":owner,"default_agent_did":first.agent_did},
             "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
             "agents":[
@@ -372,11 +422,19 @@ mod tests {
         access
             .transact_readonly("desktop.default.verify", |txn| {
                 Box::pin(async move {
+                    let (_, selection) = read_desired_state_record_in_txn(
+                        txn,
+                        Collection::DefaultAgentSelection,
+                        owner,
+                        owner,
+                    )
+                    .await?
+                    .unwrap();
+                    assert_eq!(selection["default_agent_did"], second_did);
                     let (_, node) =
                         read_desired_state_record_in_txn(txn, Collection::Node, owner, owner)
                             .await?
                             .unwrap();
-                    assert_eq!(node["default_agent_did"], second_did);
                     assert_eq!(node["tags"], json!(["keep"]));
                     assert_eq!(node["avatar"], "12");
                     let (_, second) =
@@ -404,7 +462,8 @@ mod tests {
         let missing = runtime.fresh_did().await;
         let missing = missing.as_str();
         let seed: gents_documents::PackConfig = serde_json::from_value(json!({
-            "node":{"node_did":owner,"display_name":"Keep name","avatar":"12","default_agent_did":agent.agent_did,"created_at":"2026-01-01T00:00:00Z","created_by":"did:test:creator","tags":["keep"]},
+            "node":{"node_did":owner,"display_name":"Keep name","avatar":"12","created_at":"2026-01-01T00:00:00Z","created_by":"did:test:creator","tags":["keep"]},
+            "default_agent_selection":{"node_did":owner,"default_agent_did":agent.agent_did},
             "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
             "agents":[{"node_did":owner,"agent_did":agent.agent_did,"creation_nonce":agent.creation_nonce,"context_id":"context","inference_profile_id":"profile"}],
@@ -445,7 +504,6 @@ mod tests {
         );
         for (key, value) in [
             ("display_name", json!("discarded")),
-            ("default_agent_did", json!("different")),
             ("created_at", json!("2026-02-01T00:00:00Z")),
             ("created_by", json!("other")),
             ("enabled", json!(false)),
@@ -471,7 +529,15 @@ mod tests {
                             .await?
                             .unwrap();
                     assert_eq!(node["display_name"], "Keep name");
-                    assert_eq!(node["default_agent_did"], agent_did);
+                    let (_, selection) = read_desired_state_record_in_txn(
+                        txn,
+                        Collection::DefaultAgentSelection,
+                        owner,
+                        owner,
+                    )
+                    .await?
+                    .unwrap();
+                    assert_eq!(selection["default_agent_did"], agent_did);
                     assert_eq!(node["created_by"], "did:test:creator");
                     assert_eq!(node["tags"], json!(["keep"]));
                     assert_eq!(node["avatar"], "12");

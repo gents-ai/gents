@@ -305,7 +305,11 @@ fn skill_instructions_load_from_a_literal_sidecar() {
 
 #[test]
 fn a_pack_that_selects_the_default_agent_is_refused() {
-    let error = load(json!({"node":{"default_agent_did":"worker"}})).unwrap_err();
+    let error = load(json!({
+        "node":{},
+        "default_agent_selection":{"node_did":"did:key:owner","default_agent_did":"worker"}
+    }))
+    .unwrap_err();
     let message = format!("{error:#}");
     assert!(
         message.contains("must not choose the default agent") && message.contains("worker"),

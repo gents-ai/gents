@@ -405,8 +405,9 @@ async fn configure_background_bash(
                         .await
                         .map(|found| found.expect("published fixture document").1)
                 };
-                let mut node = read(Collection::Node, node_did.clone()).await?;
-                node["default_agent_did"] = agent_did.as_str().into();
+                let selection = serde_json::to_value(gents_documents::DefaultAgentSelection::new(
+                    node_did, agent_did,
+                ))?;
                 let mut agent = read(Collection::Agent, agent_did.clone()).await?;
                 agent["context_id"] = context_id.as_str().into();
                 let mut backend =
@@ -423,7 +424,7 @@ async fn configure_background_bash(
                     (Collection::InferenceBackend, backend),
                     (Collection::InferenceProfile, profile),
                     (Collection::Agent, agent),
-                    (Collection::Node, node),
+                    (Collection::DefaultAgentSelection, selection),
                 ])?;
                 apply_desired_state_plan(
                     txn,

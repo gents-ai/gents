@@ -35,6 +35,7 @@ pub(super) fn pack_part(collection: Collection) -> Option<PackPart> {
         | Collection::Page
         | Collection::PluginSource => collection.dir_name().map(PackPart::Documents),
         Collection::Node
+        | Collection::DefaultAgentSelection
         | Collection::InferenceBackend
         | Collection::InferenceProfile
         | Collection::InferenceSampling

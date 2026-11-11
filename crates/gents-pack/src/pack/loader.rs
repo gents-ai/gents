@@ -137,12 +137,13 @@ pub(super) fn load_pack_config_value(
 }
 
 pub fn ensure_pack_leaves_default_unselected(config: &PackConfig) -> Result<()> {
-    if let Some(default) = &config.node.default_agent_did {
+    if let Some(selection) = &config.default_agent_selection {
         anyhow::bail!(
-            "pack node sets default_agent_did {default:?}; a pack must not choose \
+            "pack sets default_agent_selection {:?}; a pack must not choose \
              the default agent. Remove it from the pack: the user selects the default \
-             (\"Make default\" in the desktop, or default_agent_did in the \
-             node of their own `gents config apply` root)"
+             (\"Make default\" in the desktop, or default_agent_selection in their own \
+             `gents config apply` root)",
+            selection.default_agent_did.as_deref().unwrap_or_default()
         );
     }
     Ok(())
@@ -204,6 +205,12 @@ pub fn decode_pack_config(
         owner,
         "node",
     )?;
+    if let Some(selection) = root
+        .get_mut("default_agent_selection")
+        .filter(|value| !value.is_null())
+    {
+        bind_owner(selection, owner, "default_agent_selection")?;
+    }
     for collection in gents_store::collection::Collection::ALL
         .into_iter()
         .filter_map(|collection| collection.dir_name())

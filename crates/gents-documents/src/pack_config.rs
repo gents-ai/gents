@@ -10,6 +10,11 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct PackConfig {
     pub node: Node,
+    /// The Node's default Agent selection. Absent leaves the stored selection
+    /// unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub default_agent_selection: Option<DefaultAgentSelection>,
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
