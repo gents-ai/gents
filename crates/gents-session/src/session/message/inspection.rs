@@ -599,6 +599,26 @@ mod tests {
         ) -> Result<gents_protocol::request_lifecycle::EnqueuedAgentRequest> {
             anyhow::bail!("session inspection stages no request")
         }
+
+        async fn prepare_goal_input_in_txn(
+            &self,
+            _txn: &ConfigApplyTxn<'_>,
+            _node_did: &str,
+            _session_id: &str,
+            _agent_did: &str,
+            _requester_did: Option<&str>,
+            _input: gents_protocol::request_input::RequestInput,
+        ) -> Result<gents_protocol::request_input::RequestInput> {
+            anyhow::bail!("session inspection prepares no request input")
+        }
+
+        async fn request_assignment(
+            &self,
+            _access: &gents_store::config_client::ConfigAccess,
+            _request: &gents_protocol::row::AgentRequestRow,
+        ) -> Result<super::super::RequestGoalAssignment> {
+            anyhow::bail!("session inspection observes no request assignment")
+        }
     }
 
     #[tokio::test]

@@ -185,6 +185,7 @@ async fn later_stop_preserves_first_timeout_or_failure_and_projects_completion()
         let response = crate::call::control::cancel_loaded_background_tool_call(
             node.clone(),
             &registry,
+            &gents_session::session::message::NoSessionMessageGoals,
             lifecycle,
             "later operator stop",
         )
@@ -461,6 +462,7 @@ async fn native_failure_decision_precedes_cancel_during_cleanup() {
     let _ = crate::call::control::cancel_loaded_background_tool_call(
         node.clone(),
         &registry,
+        &gents_session::session::message::NoSessionMessageGoals,
         lifecycle,
         "later stop",
     )

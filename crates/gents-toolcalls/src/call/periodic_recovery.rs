@@ -69,6 +69,7 @@ type PeriodicRecoverySweepFn = for<'a> fn(
     &'a str,
     &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
     &'a crate::call::hook::BackgroundExecutionRegistry,
+    &'a dyn gents_session::session::message::SessionMessageGoals,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>>;
 
 struct PeriodicRecoverySweepExecutor {
@@ -155,11 +156,12 @@ pub async fn run_periodic_recovery_sweeps_with_identities(
     node_did: &str,
     identities: &[std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
     background_executions: &crate::call::hook::BackgroundExecutionRegistry,
+    goals: &dyn gents_session::session::message::SessionMessageGoals,
 ) -> Result<Vec<PeriodicRecoverySweepRun>> {
     let mut runs = Vec::with_capacity(PERIODIC_RECOVERY_SWEEP_EXECUTORS.len());
     for executor in PERIODIC_RECOVERY_SWEEP_EXECUTORS {
         let metadata = PERIODIC_RECOVERY_SWEEP_METADATA[executor.metadata_index];
-        match (executor.run)(node, node_did, identities, background_executions).await {
+        match (executor.run)(node, node_did, identities, background_executions, goals).await {
             Ok(outcome) => runs.push(PeriodicRecoverySweepRun { metadata, outcome }),
             Err(error) => {
                 tracing::warn!(
@@ -179,6 +181,7 @@ fn reconcile_terminal_parent_owned_tools<'a>(
     node_did: &'a str,
     identities: &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
     background_executions: &'a crate::call::hook::BackgroundExecutionRegistry,
+    _goals: &'a dyn gents_session::session::message::SessionMessageGoals,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
         ToolCallLifecycle::reconcile_terminal_parent_owned_tools_with_executions(
@@ -197,6 +200,7 @@ fn reconcile_orphaned_background_tools<'a>(
     node_did: &'a str,
     identities: &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
     background_executions: &'a crate::call::hook::BackgroundExecutionRegistry,
+    _goals: &'a dyn gents_session::session::message::SessionMessageGoals,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
         ToolCallLifecycle::reconcile_orphaned_background_tools(
@@ -215,6 +219,7 @@ fn reconcile_background_completion_side_effects<'a>(
     node_did: &'a str,
     identities: &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
     _background_executions: &'a crate::call::hook::BackgroundExecutionRegistry,
+    _goals: &'a dyn gents_session::session::message::SessionMessageGoals,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
         ToolCallLifecycle::reconcile_background_completion_side_effects(node, node_did, identities)
@@ -228,6 +233,7 @@ fn repair_terminal_requests<'a>(
     node_did: &'a str,
     identities: &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
     _background_executions: &'a crate::call::hook::BackgroundExecutionRegistry,
+    _goals: &'a dyn gents_session::session::message::SessionMessageGoals,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
         RequestLifecycle::repair_terminal_requests_with_identities(node, node_did, identities)
@@ -241,6 +247,7 @@ fn recover_inference_calls<'a>(
     node_did: &'a str,
     identities: &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
     _background_executions: &'a crate::call::hook::BackgroundExecutionRegistry,
+    _goals: &'a dyn gents_session::session::message::SessionMessageGoals,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
         InferenceCall::recover_all_with_identities(node, node_did, identities)
@@ -254,6 +261,7 @@ fn settle_session_message_rows<'a>(
     node_did: &'a str,
     identities: &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
     _background_executions: &'a crate::call::hook::BackgroundExecutionRegistry,
+    goals: &'a dyn gents_session::session::message::SessionMessageGoals,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
         let mut settled = 0;
@@ -274,7 +282,7 @@ fn settle_session_message_rows<'a>(
                 }
             };
             match crate::background::completion::settle_running_session_message_rows_with_access(
-                node, &access, node_did,
+                node, &access, goals, node_did,
             )
             .await
             {
@@ -293,6 +301,7 @@ fn recover_task_hook_records<'a>(
     node_did: &'a str,
     identities: &'a [std::sync::Arc<dyn gents_store::identity::NodeIdentity>],
     background_executions: &'a crate::call::hook::BackgroundExecutionRegistry,
+    _goals: &'a dyn gents_session::session::message::SessionMessageGoals,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
         crate::call::task_hooks::recover_task_hook_records(

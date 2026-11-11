@@ -161,7 +161,10 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
         .await;
     }
     let settled = crate::background::completion::settle_running_session_message_rows_with_access(
-        &node, &access, node_did,
+        &node,
+        &access,
+        &gents_session::session::message::NoSessionMessageGoals,
+        node_did,
     )
     .await
     .unwrap();

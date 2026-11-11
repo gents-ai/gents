@@ -116,14 +116,19 @@ impl DefraSessionHook {
 
         if lifecycle.kind() == crate::call::lifecycle::ToolRowKind::SessionMessage {
             let mut lifecycle = lifecycle;
-            let (status, request_id) =
-                match crate::background::caused::kill(&self.node, &mut lifecycle).await? {
-                    crate::background::caused::KillOutcome::Interrupting { request_id } => {
-                        ("interrupting", Some(request_id))
-                    }
-                    crate::background::caused::KillOutcome::Cancelled => ("cancelled", None),
-                    crate::background::caused::KillOutcome::Settled => ("already_terminal", None),
-                };
+            let (status, request_id) = match crate::background::caused::kill(
+                &self.node,
+                self.session_goals.as_ref(),
+                &mut lifecycle,
+            )
+            .await?
+            {
+                crate::background::caused::KillOutcome::Interrupting { request_id } => {
+                    ("interrupting", Some(request_id))
+                }
+                crate::background::caused::KillOutcome::Cancelled => ("cancelled", None),
+                crate::background::caused::KillOutcome::Settled => ("already_terminal", None),
+            };
             let result = json_string(json!({
                 "ok": true,
                 "tool_call_id": background_tool_call_id,
@@ -185,6 +190,7 @@ impl DefraSessionHook {
         let result = match crate::call::control::cancel_loaded_background_tool_call(
             self.node.clone(),
             &self.background_executions,
+            self.session_goals.as_ref(),
             lifecycle,
             notification_reason,
         )

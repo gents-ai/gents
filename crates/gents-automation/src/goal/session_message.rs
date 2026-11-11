@@ -4,9 +4,11 @@
 use async_trait::async_trait;
 
 use gents_protocol::request_admission::AgentRequestCreate;
+use gents_protocol::request_input::RequestInput;
 use gents_protocol::request_lifecycle::EnqueuedAgentRequest;
-use gents_session::session::message::{SessionGoal, SessionMessageGoals};
-use gents_store::config_client::ConfigApplyTxn;
+use gents_protocol::row::AgentRequestRow;
+use gents_session::session::message::{RequestGoalAssignment, SessionGoal, SessionMessageGoals};
+use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 
 #[cfg(test)]
 mod agent_tools_tests;
@@ -57,5 +59,35 @@ impl SessionMessageGoals for SessionGoals {
             request,
         )
         .await
+    }
+
+    async fn prepare_goal_input_in_txn(
+        &self,
+        txn: &ConfigApplyTxn<'_>,
+        node_did: &str,
+        session_id: &str,
+        agent_did: &str,
+        requester_did: Option<&str>,
+        input: RequestInput,
+    ) -> anyhow::Result<RequestInput> {
+        super::prepare_goal_input_in_txn(txn, node_did, session_id, agent_did, requester_did, input)
+            .await
+    }
+
+    async fn request_assignment(
+        &self,
+        access: &ConfigAccess,
+        request: &AgentRequestRow,
+    ) -> anyhow::Result<RequestGoalAssignment> {
+        Ok(
+            match super::load_request_assignment(access, request).await? {
+                super::RequestAssignmentObservation::Assigned(goal) => goal
+                    .parsed_status()
+                    .map(RequestGoalAssignment::Assigned)
+                    .unwrap_or(RequestGoalAssignment::Unknown),
+                super::RequestAssignmentObservation::None => RequestGoalAssignment::None,
+                super::RequestAssignmentObservation::Unknown => RequestGoalAssignment::Unknown,
+            },
+        )
     }
 }

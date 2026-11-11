@@ -595,7 +595,7 @@ pub(super) mod tests {
                             .await;
                             assert_eq!(
                                 gents_toolcalls::background::completion::settle_running_session_message_rows_with_access(
-                                    node, &gents_store::config_client::ConfigAccess::local_with_agent_signer(node.clone(), identity::Did::new(signer.did()).unwrap(), signer.clone()).unwrap(), did
+                                    node, &gents_store::config_client::ConfigAccess::local_with_agent_signer(node.clone(), identity::Did::new(signer.did()).unwrap(), signer.clone()).unwrap(), &gents_automation::goal::session_message::SessionGoals, did
                                 )
                                 .await
                                 .unwrap(),

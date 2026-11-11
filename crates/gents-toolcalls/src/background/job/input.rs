@@ -1787,6 +1787,7 @@ pub(crate) mod tests {
             home: home.path().to_path_buf(),
             tool_root: Some(cwd.path().to_path_buf()),
             agent_snapshots: Default::default(),
+            session_goals: Arc::new(gents_session::session::message::NoSessionMessageGoals),
         };
         let (_snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(agent_snapshot());
         runtime

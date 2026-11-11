@@ -50,6 +50,8 @@ pub struct JobRuntime {
     /// The operator tool root: step 0's working folder when the request names no workspace.
     pub tool_root: Option<PathBuf>,
     pub agent_snapshots: Arc<std::sync::RwLock<Option<AgentSnapshots>>>,
+    /// The Goals the requests a job stages are planned with.
+    pub session_goals: Arc<dyn gents_session::session::message::SessionMessageGoals>,
 }
 
 impl JobRuntime {
@@ -65,7 +67,16 @@ impl JobRuntime {
             home,
             tool_root,
             agent_snapshots: Default::default(),
+            session_goals: Arc::new(gents_session::session::message::NoSessionMessageGoals),
         }
+    }
+
+    pub fn with_session_goals(
+        mut self,
+        goals: Arc<dyn gents_session::session::message::SessionMessageGoals>,
+    ) -> Self {
+        self.session_goals = goals;
+        self
     }
 
     /// Startup resolves Agent bindings before starting background completion
