@@ -5,29 +5,8 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 use super::adapter::DIRTY_BASE_SUMMARY_LIMIT;
-use super::test_support::*;
+use super::fixture::*;
 use super::*;
-
-
-
-
-
-
-
-
-
-fn cleanup_caps() -> BTreeSet<String> {
-    [CAP_CLEANUP_WORKSPACE]
-        .into_iter()
-        .map(str::to_string)
-        .collect()
-}
-
-
-
-
-
-
 
 #[test]
 fn builtin_emitter_omits_absolute_destination() {
@@ -529,8 +508,6 @@ impl IsolatedWorkspaceDocExt for IsolatedWorkspaceDoc {
     }
 }
 
-
-
 #[test]
 fn writer_seal_persists_receipt_and_forbids_read_write() {
     let fx = Fixture::new();
@@ -870,10 +847,6 @@ fn seal_workspace_plan_omits_host_path() {
     }))
     .is_err());
 }
-
-
-
-
 
 fn cleanup_ws(
     fx: &Fixture,

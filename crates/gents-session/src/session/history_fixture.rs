@@ -1,6 +1,5 @@
 use super::*;
 use gents_inference::llm::message::{Text, ToolResult, ToolResultContent, UserContent};
-use gents_store::test_support::first_content;
 
 #[expect(
     clippy::too_many_arguments,
@@ -264,4 +263,3 @@ pub async fn import_history_observation_as(
         .unwrap();
     assert_eq!(reconstructed, history_observation_message(text, tool_call));
 }
-

@@ -1,11 +1,12 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+
 use tempfile::TempDir;
-use super::adapter::DIRTY_BASE_SUMMARY_LIMIT;
+
 use super::*;
 
-pub(crate) fn capabilities() -> BTreeSet<String> {
+pub fn capabilities() -> BTreeSet<String> {
     [
         CAP_CREATE_WORKSPACE,
         CAP_OBSERVE_DIRTY_BASE,
@@ -23,15 +24,22 @@ pub fn git_worktree_caps() -> BTreeSet<String> {
         .collect()
 }
 
-pub(crate) fn seal_caps() -> BTreeSet<String> {
+pub fn seal_caps() -> BTreeSet<String> {
     [CAP_SEAL_WORKSPACE]
         .into_iter()
         .map(str::to_string)
         .collect()
 }
 
-pub(crate) fn integrate_caps() -> BTreeSet<String> {
+pub fn integrate_caps() -> BTreeSet<String> {
     [CAP_INTEGRATE_WORKSPACE]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
+pub fn cleanup_caps() -> BTreeSet<String> {
+    [CAP_CLEANUP_WORKSPACE]
         .into_iter()
         .map(str::to_string)
         .collect()
@@ -59,13 +67,13 @@ pub fn git(cwd: &Path, args: &[&str]) -> String {
 }
 
 pub struct Fixture {
-    pub(crate) _root: TempDir,
-    pub(crate) repo: PathBuf,
-    pub(crate) base_sha: String,
+    pub _root: TempDir,
+    pub repo: PathBuf,
+    pub base_sha: String,
 }
 
 impl Fixture {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         let root = TempDir::new().expect("tempdir");
         let repo = root.path().join("repo");
         fs::create_dir_all(&repo).unwrap();
@@ -83,11 +91,11 @@ impl Fixture {
         }
     }
 
-    pub(crate) fn parent(&self) -> &Path {
+    pub fn parent(&self) -> &Path {
         self.repo.parent().expect("repo parent")
     }
 
-    pub(crate) fn action(
+    pub fn action(
         &self,
         workspace_id: &str,
         work_unit_id: &str,
@@ -126,14 +134,14 @@ impl Fixture {
         }
     }
 
-    pub(crate) fn commit(&mut self, rel: &str, content: &str) {
+    pub fn commit(&mut self, rel: &str, content: &str) {
         fs::write(self.repo.join(rel), content).unwrap();
         git(&self.repo, &["add", rel]);
         git(&self.repo, &["commit", "-m", rel]);
         self.base_sha = git(&self.repo, &["rev-parse", "HEAD"]);
     }
 
-    pub(crate) fn ctx<'a>(
+    pub fn ctx<'a>(
         &'a self,
         docs: &'a mut MemoryWorkspaceDocuments,
         caps: BTreeSet<String>,
