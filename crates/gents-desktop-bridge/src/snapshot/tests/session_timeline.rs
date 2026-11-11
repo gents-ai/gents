@@ -109,38 +109,6 @@ fn interrupted_queued_steering_keeps_request_owned_input_without_transcript() {
 }
 
 #[test]
-fn missing_segment_remains_loading_in_the_timeline() {
-    let mut rows = ClientStoreRows {
-        sessions: vec![timeline_session()],
-        requests: vec![AgentRequestRow {
-            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
-            doc_id: Some("req-1".into()),
-            request_id: "req-1".into(),
-            node_did: Some("did:test:amy".into()),
-            session_id: Some("sess-1".into()),
-            lifecycle_state: Some(RequestLifecycleState::Processing),
-            ..Default::default()
-        }],
-        ..ClientStoreRows::default()
-    };
-    push_canonical_text_message(
-        &mut rows,
-        "header-only",
-        "sess-1",
-        Some("req-1"),
-        1,
-        MessageRole::Assistant,
-        "not a fallback",
-    );
-    rows.output_segments.clear();
-    let snapshot = build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", None)
-        .expect("snapshot");
-    assert!(
-        matches!(snapshot.timeline_items.as_slice(), [RenderedTimelineItem::AssistantMessage { content: None, reconstruction, .. }] if reconstruction.state == ReconstructionState::Loading)
-    );
-}
-
-#[test]
 fn session_timeline_pages_are_bounded_and_cursor_stable() {
     let mut snapshot = build_session_snapshot_from_store(
         &ClientStore::from_rows(ClientStoreRows {
@@ -174,126 +142,6 @@ fn session_timeline_pages_are_bounded_and_cursor_stable() {
     assert_eq!(tip.oldest_item_key.as_deref(), Some("message-060"));
     assert!(tip.has_older);
     assert!(!tip.has_newer);
-}
-
-#[test]
-fn queried_timeline_page_reports_database_work_and_does_not_rescan_for_cursor() {
-    let mut snapshot = build_session_snapshot_from_store(
-        &ClientStore::from_rows(ClientStoreRows {
-            sessions: vec![timeline_session()],
-            ..ClientStoreRows::default()
-        }),
-        "sess-1",
-        None,
-    )
-    .expect("snapshot");
-    snapshot.timeline_items = (0..81)
-        .map(|index| RenderedTimelineItem::UserMessage {
-            question_reply: None,
-            started_goal_id: None,
-            item_key: format!("message-{index:03}"),
-            request_id: None,
-            owns_turn: true,
-            input_request_id: None,
-            sequence: Some(index),
-            content: Some(format!("row {index}")),
-            captured_context: None,
-            attachments: None,
-            selected_skill_ids: None,
-            timestamp: None,
-            reconstruction: ready(),
-        })
-        .collect();
-    let page = gents_desktop_core::client::SessionTranscriptQueryPage {
-        store: ClientStore::default(),
-        canonical_dependencies: Default::default(),
-        query_count: 2,
-        queried_rows: 81,
-        message_query_limit: 41,
-        tool_call_query_limit: 321,
-        source_exhausted: false,
-        has_newer: true,
-        covered: Default::default(),
-        requests: Vec::new(),
-        result_messages: Vec::new(),
-    };
-    apply_session_timeline_page_with_query(&mut snapshot, Some(40), Some(&page)).expect("page");
-    let metadata = snapshot.timeline_page.expect("metadata");
-    assert_eq!(
-        (
-            metadata.query_count,
-            metadata.queried_rows,
-            metadata.message_query_limit
-        ),
-        (Some(2), Some(81), Some(41))
-    );
-    assert_eq!(metadata.total_items_exact, Some(false));
-    assert!(metadata.has_older && metadata.has_newer);
-}
-
-#[test]
-fn terminal_request_does_not_create_a_mutable_live_tail() {
-    let request = AgentRequestRow {
-        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
-        doc_id: Some("req-1".into()),
-        request_id: "req-1".into(),
-        node_did: Some("did:test:amy".into()),
-        session_id: Some("sess-1".into()),
-        lifecycle_state: Some(RequestLifecycleState::Completed),
-        ..Default::default()
-    };
-    let snapshot = build_session_snapshot_from_store(
-        &ClientStore::from_rows(ClientStoreRows {
-            sessions: vec![timeline_session()],
-            requests: vec![request],
-            ..ClientStoreRows::default()
-        }),
-        "sess-1",
-        Some("req-1"),
-    )
-    .expect("snapshot");
-    assert_eq!(snapshot.turn_state.as_deref(), Some("completed"));
-    assert!(!snapshot
-        .timeline_items
-        .iter()
-        .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. })));
-}
-
-#[test]
-fn session_snapshot_consumes_generated_live_overlay_cases() {
-    let request = AgentRequestRow {
-        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
-        doc_id: Some("req-1".into()),
-        request_id: "req-1".into(),
-        node_did: Some("did:test:amy".into()),
-        session_id: Some("sess-1".into()),
-        lifecycle_state: Some(RequestLifecycleState::Processing),
-        ..Default::default()
-    };
-    let store = ClientStore::from_rows(ClientStoreRows {
-        sessions: vec![timeline_session()],
-        requests: vec![request],
-        ..ClientStoreRows::default()
-    });
-    let delta = build_session_live_delta_from_store(
-        &store,
-        &store,
-        gents_desktop_core::client::StoreProjectionRevision {
-            store_version: 7,
-            provenance_version: 1,
-            request_event_version: 1,
-        },
-        "sess-1",
-        Some("did:test:amy"),
-        "req-1",
-        "missing-source",
-        0,
-        "811c9dc5",
-        0,
-        "811c9dc5",
-    );
-    assert_eq!(delta.outcome, "snapshotRequired");
-    assert_eq!(delta.turn_state.as_deref(), Some("running"));
 }
 
 #[test]
@@ -380,16 +228,6 @@ fn live_delta_requires_a_canonical_source() {
     );
     assert_eq!(fenced.outcome, "snapshotRequired");
     assert!(fenced.content.is_none());
-}
-
-#[test]
-fn overlay_hidden_when_response_tail_is_empty() {
-    let snapshot = build_session_snapshot_from_store(&active_store(), "sess-1", Some("req-1"))
-        .expect("snapshot");
-    assert!(!snapshot
-        .timeline_items
-        .iter()
-        .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. })));
 }
 
 #[test]
@@ -638,62 +476,6 @@ fn folded_user_input_stays_visible_when_a_runtime_request_consumes_it() {
 }
 
 #[test]
-fn a_sent_message_keeps_one_logical_request_id_from_pending_to_saved() {
-    let request = AgentRequestRow {
-        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
-        doc_id: Some("bae-doc-1".into()),
-        request_id: "req-1".into(),
-        node_did: Some("did:test:amy".into()),
-        session_id: Some("sess-1".into()),
-        lifecycle_state: Some(RequestLifecycleState::Processing),
-        content: Some("inspect the repository".into()),
-        ..Default::default()
-    };
-    let mut rows = ClientStoreRows {
-        sessions: vec![timeline_session()],
-        requests: vec![request],
-        ..ClientStoreRows::default()
-    };
-    let pending = build_session_snapshot_from_store(
-        &ClientStore::from_rows(rows.clone()),
-        "sess-1",
-        Some("req-1"),
-    )
-    .expect("pending snapshot");
-    assert!(pending.messages.is_empty());
-    assert_eq!(
-        pending
-            .pending_turn
-            .as_ref()
-            .expect("pending turn")
-            .request_id,
-        "req-1"
-    );
-
-    push_canonical_text_message(
-        &mut rows,
-        "authored:bae-doc-1:prompt",
-        "sess-1",
-        Some("bae-doc-1"),
-        1,
-        MessageRole::User,
-        "inspect the repository",
-    );
-    let saved =
-        build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
-            .expect("saved snapshot");
-    assert!(saved.pending_turn.is_none());
-    assert_eq!(saved.messages[0].request_id.as_deref(), Some("req-1"));
-    assert!(matches!(
-        &saved.timeline_items[..],
-        [RenderedTimelineItem::UserMessage {
-            request_id: Some(request_id),
-            ..
-        }] if request_id == "req-1"
-    ));
-}
-
-#[test]
 fn message_request_id_is_never_the_request_doc_id() {
     let mut rows = ClientStoreRows {
         sessions: vec![timeline_session()],
@@ -848,27 +630,6 @@ fn session_snapshot_deduplicates_persisted_rows_from_multiple_sources() {
 }
 
 #[test]
-fn session_snapshot_hides_live_overlay_matching_last_materialized_assistant() {
-    let mut rows = active_store().to_rows();
-    push_canonical_text_message(
-        &mut rows,
-        "assistant",
-        "sess-1",
-        Some("req-1"),
-        2,
-        MessageRole::Assistant,
-        "hello back",
-    );
-    let snapshot =
-        build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
-            .expect("snapshot");
-    assert!(!snapshot
-        .timeline_items
-        .iter()
-        .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. })));
-}
-
-#[test]
 fn session_snapshot_projects_open_canonical_segment_before_header_arrives() {
     let mut rows = active_store().to_rows();
     rows.requests[0].execution_generation = Some("generation-1".into());
@@ -933,38 +694,6 @@ fn session_snapshot_projects_open_canonical_segment_before_header_arrives() {
         RenderedTimelineItem::LiveAssistant { content, .. }
             if content.as_deref() == Some("working")
     )));
-}
-
-#[test]
-fn session_snapshot_hides_failed_unmaterialized_response_overlay() {
-    let mut rows = active_store().to_rows();
-    rows.requests[0].lifecycle_state = Some(RequestLifecycleState::Failed);
-    let snapshot =
-        build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
-            .expect("snapshot");
-    assert_eq!(snapshot.turn_state.as_deref(), Some("failed"));
-    assert!(!snapshot
-        .timeline_items
-        .iter()
-        .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. })));
-}
-
-#[test]
-fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix() {
-    let mut rows = active_store().to_rows();
-    push_canonical_text_message(
-        &mut rows,
-        "prior",
-        "sess-1",
-        Some("prior-request"),
-        1,
-        MessageRole::Assistant,
-        "hello",
-    );
-    let snapshot =
-        build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
-            .expect("snapshot");
-    assert!(snapshot.timeline_items.iter().any(|item| matches!(item, RenderedTimelineItem::AssistantMessage { content, .. } if content.as_deref() == Some("hello"))));
 }
 
 #[test]

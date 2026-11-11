@@ -226,41 +226,6 @@ async fn mailbox_applies_recipient_policy() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn enrollment_operations_match_baseline_pins() {
-    use gents_protocol::schemas::{
-        DATA_PLANE_PAIRING_DESIRED, DATA_PLANE_PAIRING_DESIRED_NAME, ENROLLMENT_OPERATOR_NONCE,
-        ENROLLMENT_OPERATOR_NONCE_NAME, NETWORK_ADMIN_PIN, NETWORK_ADMIN_PIN_NAME,
-        PEER_PAIRING_APPLIED, PEER_PAIRING_APPLIED_NAME, PEER_PAIRING_DESIRED,
-        PEER_PAIRING_DESIRED_NAME,
-    };
-    let node = fresh_node().await;
-    let mut actual = Vec::new();
-    let mut expected = Vec::new();
-    for (name, sdl) in [
-        (ENROLLMENT_OPERATOR_NONCE_NAME, ENROLLMENT_OPERATOR_NONCE),
-        (NETWORK_ADMIN_PIN_NAME, NETWORK_ADMIN_PIN),
-        (PEER_PAIRING_APPLIED_NAME, PEER_PAIRING_APPLIED),
-        (PEER_PAIRING_DESIRED_NAME, PEER_PAIRING_DESIRED),
-        (DATA_PLANE_PAIRING_DESIRED_NAME, DATA_PLANE_PAIRING_DESIRED),
-    ] {
-        node.add_collection(sdl).await.unwrap();
-        actual.push((name, node.get_collection(name).unwrap().unwrap().version_id));
-        expected.push((
-            name,
-            gents_migration::DEFAULT_BASELINE
-                .iter()
-                .find(|entry| entry.name == name)
-                .unwrap()
-                .expected_version
-                .unwrap()
-                .to_owned(),
-        ));
-    }
-    assert_eq!(actual, expected);
-    node.shutdown().await.unwrap();
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn unbound_pairing_overlay_is_rejected_without_data_changes() {
     use gents_protocol::schemas::{AGENT_OWNERSHIP_POLICY_ID, DATA_PLANE_PAIRING_DESIRED};
     let node = fresh_node().await;

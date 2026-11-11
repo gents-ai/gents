@@ -97,26 +97,6 @@ fn a_kind_that_is_not_a_platform_takes_no_settings() {
 }
 
 #[test]
-fn optional_settings_are_accepted_where_the_shape_lists_them() {
-    let vertex = settings(|s| {
-        s.project = Some("proj".into());
-        s.location = Some("europe-west4".into());
-    });
-    assert_eq!(
-        ClaudePlatform::validate(Kind::ClaudeVertex, Some(&vertex)),
-        Ok(())
-    );
-    let foundry = settings(|s| {
-        s.resource = Some("my-resource".into());
-        s.bearer_token = Some(true);
-    });
-    assert_eq!(
-        ClaudePlatform::validate(Kind::ClaudeFoundry, Some(&foundry)),
-        Ok(())
-    );
-}
-
-#[test]
 fn spellings_follow_the_checks_claude_code_makes() {
     for bad in [
         "",

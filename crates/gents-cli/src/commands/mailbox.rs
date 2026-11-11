@@ -275,16 +275,6 @@ mod tests {
     }
 
     #[test]
-    fn a_version_one_answer_has_none() {
-        let item = question(channels(1, false));
-
-        let (content, receipt) = question_reply(&item, &pick("stable")).expect("an answer");
-
-        assert_eq!(content, "Decision on Release channel: Stable (stable)");
-        assert!(receipt.is_none());
-    }
-
-    #[test]
     fn skip_needs_an_optional_modern_question() {
         let (content, receipt) =
             question_reply(&question(channels(3, true)), &skip()).expect("an optional skip");

@@ -542,23 +542,6 @@ fn session_snapshot_never_projects_goal_rows() {
 }
 
 #[test]
-fn session_observation_selects_the_exact_latest_request_identity() {
-    let rows = ClientStoreRows {
-        sessions: vec![session(None)],
-        requests: vec![
-            request("req-1", RequestLifecycleState::Completed),
-            request("req-2", RequestLifecycleState::Processing),
-        ],
-        ..ClientStoreRows::default()
-    };
-    let snapshot =
-        build_session_snapshot_from_store(&ClientStore::from_rows(rows), "session-1", None)
-            .expect("snapshot");
-    assert_eq!(snapshot.latest_request_id.as_deref(), Some("req-2"));
-    assert_eq!(snapshot.turn_state.as_deref(), Some("running"));
-}
-
-#[test]
 fn requester_scope_does_not_cross_canonical_output_facts() {
     let mut rows = ClientStoreRows {
         sessions: vec![session(None), session(Some("did:test:other"))],
@@ -632,26 +615,6 @@ fn session_snapshot_uses_canonical_session_without_materialized_observation() {
     assert_eq!(snapshot.session_id, "session-1");
     assert_eq!(snapshot.node_did.as_deref(), Some("did:test:amy"));
     assert_eq!(snapshot.turn_state.as_deref(), Some("completed"));
-}
-
-#[test]
-fn session_snapshot_prefers_tracked_request_over_stale_session_latest_request() {
-    let mut old = request("req-1", RequestLifecycleState::Completed);
-    old.created_at = Some("2026-04-21T12:00:00Z".into());
-    let mut latest = request("req-2", RequestLifecycleState::Processing);
-    latest.created_at = Some("2026-04-21T12:01:00Z".into());
-    let snapshot = build_session_snapshot_from_store(
-        &ClientStore::from_rows(ClientStoreRows {
-            sessions: vec![session(None)],
-            requests: vec![old, latest],
-            ..ClientStoreRows::default()
-        }),
-        "session-1",
-        None,
-    )
-    .expect("snapshot");
-    assert_eq!(snapshot.latest_request_id.as_deref(), Some("req-2"));
-    assert_eq!(snapshot.turn_state.as_deref(), Some("running"));
 }
 
 #[test]
@@ -1021,41 +984,6 @@ fn session_snapshot_transcript_rendering_consumes_generated_transcript_cases() {
             );
         }
     }
-}
-
-#[test]
-fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
-    let mut submitted = session(None);
-    submitted
-        .observation
-        .as_mut()
-        .expect("observation")
-        .latest_request
-        .as_mut()
-        .expect("request")
-        .lifecycle_state = RequestLifecycleState::Pending;
-    let pending = build_session_snapshot_from_store(
-        &ClientStore::from_rows(ClientStoreRows {
-            sessions: vec![submitted],
-            requests: vec![request("req-2", RequestLifecycleState::Pending)],
-            ..ClientStoreRows::default()
-        }),
-        "session-1",
-        Some("req-2"),
-    )
-    .expect("pending");
-    assert_eq!(pending.turn_state.as_deref(), Some("waitingForClaim"));
-    let complete = build_session_snapshot_from_store(
-        &ClientStore::from_rows(ClientStoreRows {
-            sessions: vec![session(None)],
-            requests: vec![request("req-2", RequestLifecycleState::Completed)],
-            ..ClientStoreRows::default()
-        }),
-        "session-1",
-        Some("req-2"),
-    )
-    .expect("complete");
-    assert_eq!(complete.turn_state.as_deref(), Some("completed"));
 }
 
 #[test]

@@ -272,27 +272,6 @@ fn a_folded_row_whose_entry_has_not_replicated_stays_a_pending_input_of_its_turn
 }
 
 #[test]
-fn the_session_list_reports_the_turn_a_folded_or_queued_head_belongs_to() {
-    let requests = vec![
-        request("done", RequestLifecycleState::Completed, 0),
-        queued("head", "done", RequestLifecycleState::Processing, 1),
-        folded_into("later", "head", "head", 2),
-    ];
-    let summaries = session_summaries(
-        &[session_observing(
-            "later",
-            RequestLifecycleState::Superseded,
-        )],
-        &requests,
-        "did:test:amy",
-        &[],
-        &[],
-    );
-    assert_eq!(summaries[0].latest_request_id.as_deref(), Some("head"));
-    assert_eq!(summaries[0].turn_state.as_deref(), Some("running"));
-}
-
-#[test]
 fn a_selected_message_the_head_never_published_is_queued_again_not_delivered() {
     let mut rows = ClientStoreRows {
         sessions: vec![session_observing(

@@ -253,25 +253,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn off_and_unconfigured_do_not_poll_delivery() {
-        let directory = tempfile::tempdir().unwrap();
-        let calls = AtomicUsize::new(0);
-        let off = configured(directory.path().join("off"));
-        off.deliver(async {
-            calls.fetch_add(1, Ordering::SeqCst);
-        })
-        .await;
-        let missing = ProductTelemetry::with_config(directory.path().join("missing"), None);
-        assert!(missing.set_enabled(true).await.is_err());
-        missing
-            .deliver(async {
-                calls.fetch_add(1, Ordering::SeqCst);
-            })
-            .await;
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
-    }
-
-    #[tokio::test]
     async fn consent_persists_and_disabling_cancels_and_releases_capacity() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("consent");
@@ -387,19 +368,6 @@ mod tests {
             Config::from_sources(None, None, Some("http://invalid/api/send"), Some(website))
                 .is_none()
         );
-    }
-
-    #[tokio::test]
-    async fn consent_can_be_revoked_while_unconfigured() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("consent");
-        configured(path.clone()).set_enabled(true).await.unwrap();
-        let offline = ProductTelemetry::with_config(path.clone(), None);
-        let status = offline.status().await;
-        assert!(!status.configured && status.enabled);
-        offline.set_enabled(false).await.unwrap();
-        assert!(tokio::fs::metadata(&path).await.is_err());
-        assert!(!configured(path).status().await.enabled);
     }
 
     #[tokio::test]

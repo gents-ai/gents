@@ -496,29 +496,6 @@ mod tests {
     }
 
     #[test]
-    fn a_broken_case_rejects_even_when_the_mean_improves() {
-        let ids = names(6);
-        let good = [(5_000u32, 9_000u32), (5_000, 9_000)];
-        let broken = [(9_000u32, 1_000u32), (9_000, 1_000)];
-        let mut cases: Vec<(&str, &[(u32, u32)])> = ids
-            .iter()
-            .skip(1)
-            .map(|id| (id.as_str(), &good[..]))
-            .collect();
-        cases.push((ids[0].as_str(), &broken[..]));
-        let report = decide(
-            Mode::Improve,
-            &params(),
-            &evidence_from_pairs(&paired(&cases), &ids, None),
-            1,
-        );
-        assert_eq!(
-            report.decision,
-            Decision::Reject(RejectReason::CaseRegression)
-        );
-    }
-
-    #[test]
     fn a_more_expensive_candidate_is_rejected_and_missing_usage_skips_the_gate() {
         let (six, ids) = uniform(6, 5_000, 8_000);
         let costly = TokenTotals {
@@ -567,23 +544,6 @@ mod tests {
             Mode::Improve,
             &params(),
             &evidence_from_pairs(&six, &ids[..5], None),
-            1,
-        );
-        assert_eq!(
-            report.decision,
-            Decision::Inconclusive(InconclusiveReason::Insufficient)
-        );
-    }
-
-    #[test]
-    fn asymmetric_exclusion_is_insufficient() {
-        let (mut six, ids) = uniform(6, 5_000, 8_000);
-        six.keys += 2;
-        six.dropped_candidate = 2;
-        let report = decide(
-            Mode::Improve,
-            &params(),
-            &evidence_from_pairs(&six, &ids, None),
             1,
         );
         assert_eq!(

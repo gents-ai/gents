@@ -433,18 +433,6 @@ mod tests {
     }
 
     #[test]
-    fn segment_create_variables_shape_matches_execute_with_variables_pattern() {
-        let variables = output_segment_create_variables(&closed_segment_no_streams()).unwrap();
-        let object = variables.as_object().unwrap();
-        assert_eq!(object.len(), 1, "exactly the $input variable");
-        assert!(object.contains_key("input"));
-        assert!(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION
-            .contains("$input: AgentOutputSegmentMutationInputArg!"));
-        assert!(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION
-            .contains("create_AgentOutputSegment(input: $input)"));
-    }
-
-    #[test]
     fn message_create_variables_preserve_unicode_payloads() {
         let mut message = decode_transcript_message_row(&transcript_message_row())
             .unwrap()

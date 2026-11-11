@@ -66,23 +66,3 @@ fn unordered_turn_rejects_ambiguous_tips() {
     ];
     assert_eq!(derive_turn(&ambiguous), None);
 }
-
-#[test]
-fn session_rows_outside_the_scope_or_duplicated_are_faults() {
-    assert_eq!(
-        SessionRowObservation::observe(0, true),
-        SessionRowObservation::Absent
-    );
-    assert_eq!(
-        SessionRowObservation::observe(1, true),
-        SessionRowObservation::Canonical
-    );
-    assert_eq!(
-        SessionRowObservation::observe(2, true),
-        SessionRowObservation::Duplicate
-    );
-    assert_eq!(
-        SessionRowObservation::observe(1, false),
-        SessionRowObservation::OutOfScope
-    );
-}

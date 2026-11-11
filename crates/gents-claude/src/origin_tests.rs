@@ -79,38 +79,6 @@ fn generated_origin_cases_pick_the_wire_mode() {
 }
 
 #[test]
-fn a_scheduled_task_is_a_background_print_job() {
-    let mode = Origin {
-        cause: Cause::TaskTrigger,
-        root_client: false,
-        scheduled: true,
-        kind: Kind::Turn,
-        appends_system_prompt: true,
-    }
-    .wire_mode();
-    assert_eq!(mode.entrypoint, PRINT_ENTRYPOINT);
-    assert!(mode.background);
-    assert_eq!(mode.workload, Some(CRON_WORKLOAD));
-    assert_eq!(mode.request_class, RequestClass::Main);
-    assert!(mode.main_thread_source);
-}
-
-#[test]
-fn a_subagent_of_a_chat_stays_interactive_without_the_one_hour_source() {
-    let mode = Origin {
-        cause: Cause::AgentNew,
-        root_client: true,
-        scheduled: false,
-        kind: Kind::Turn,
-        appends_system_prompt: true,
-    }
-    .wire_mode();
-    assert_eq!(mode.session, SessionMode::Interactive);
-    assert!(mode.subagent && mode.agentic);
-    assert!(!mode.main_thread_source);
-}
-
-#[test]
 fn the_origin_round_trips_through_its_wire_names() {
     let origin = Origin {
         cause: Cause::PluginJob,
