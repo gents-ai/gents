@@ -186,7 +186,8 @@ impl PackInstaller {
             &coordinate,
             crate::pack::DriftPolicy::Refuse,
         )
-        .await?;
+        .await
+        .map_err(|error| error.into_anyhow())?;
         if let Some(home) = self.home.as_deref() {
             crate::pack::forget_home_install(home, &coordinate)?;
             for removed in std::iter::once(&report).chain(&report.dependencies) {

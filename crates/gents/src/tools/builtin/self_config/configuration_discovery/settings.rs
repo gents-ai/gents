@@ -14,13 +14,9 @@ impl Scanner {
             ConfigFormat::ClaudeJson | ConfigFormat::McpJson => {
                 serde_json::from_str(content).map_err(|error| error.to_string())
             }
-            ConfigFormat::CodexToml | ConfigFormat::GrokToml => {
-                toml::from_str::<toml::Value>(content)
-                    .map_err(|error| error.to_string())
-                    .and_then(|value| {
-                        serde_json::to_value(value).map_err(|error| error.to_string())
-                    })
-            }
+            ConfigFormat::CodexToml => toml::from_str::<toml::Value>(content)
+                .map_err(|error| error.to_string())
+                .and_then(|value| serde_json::to_value(value).map_err(|error| error.to_string())),
         };
         let value = match value {
             Ok(value) => value,
@@ -40,7 +36,6 @@ impl Scanner {
         match format {
             ConfigFormat::ClaudeJson => self.parse_claude(source, relative, &value),
             ConfigFormat::CodexToml => self.parse_codex(source, relative, &value),
-            ConfigFormat::GrokToml => self.parse_grok(source, relative, &value),
             ConfigFormat::McpJson => self.parse_mcp_object(source, relative, &value),
         }
     }
@@ -51,7 +46,7 @@ impl Scanner {
             return;
         };
         if let Some(model) = object.get("model").and_then(Value::as_str) {
-            self.model_item(source, relative, "default", model, None, None);
+            self.model_item(source, relative, model, None);
         }
         if let Some(permissions) = object.get("permissions").and_then(Value::as_object) {
             for effect in ["allow", "deny", "ask"] {
@@ -82,10 +77,8 @@ impl Scanner {
             self.model_item(
                 source,
                 relative,
-                "default",
                 model,
                 object.get("model_provider").and_then(Value::as_str),
-                None,
             );
         }
         if let Some(servers) = object.get("mcp_servers").and_then(Value::as_object) {
@@ -117,64 +110,6 @@ impl Scanner {
                 "skills",
             ]
             .contains(&key.as_str())
-            {
-                self.unsupported_setting(source, relative, key, &object[key]);
-            }
-        }
-    }
-
-    pub(super) fn parse_grok(&mut self, source: &mut SourceScan, relative: &Path, value: &Value) {
-        let Some(object) = value.as_object() else {
-            self.malformed_object(source, relative);
-            return;
-        };
-        if let Some(models) = object.get("models").and_then(Value::as_object) {
-            for role in ["default", "web_search"] {
-                if let Some(model) = models.get(role).and_then(Value::as_str) {
-                    self.model_item(source, relative, role, model, None, None);
-                }
-            }
-        }
-        self.unsupported_nested_settings(
-            source,
-            relative,
-            object,
-            "models",
-            &["default", "web_search"],
-        );
-        if let Some(custom_models) = object.get("model").and_then(Value::as_object) {
-            for (name, config) in custom_models {
-                let config = config.as_object();
-                let model = config
-                    .and_then(|value| value.get("model"))
-                    .and_then(Value::as_str)
-                    .unwrap_or(name);
-                let endpoint = config
-                    .and_then(|value| value.get("base_url"))
-                    .and_then(Value::as_str);
-                self.model_item(source, relative, name, model, None, endpoint);
-            }
-        }
-        if let Some(servers) = object.get("mcp_servers").and_then(Value::as_object) {
-            self.remote_tool_items(source, relative, servers);
-        }
-        if let Some(hooks) = object.get("hooks").and_then(Value::as_object) {
-            self.hook_items(source, relative, hooks);
-        }
-        if let Some(ui) = object.get("ui").and_then(Value::as_object) {
-            if let Some(permission) = ui.get("default_selected_permission") {
-                self.permission_item(
-                    source,
-                    relative,
-                    "default_selected_permission",
-                    std::slice::from_ref(permission),
-                );
-            }
-        }
-        collect_disabled_skills(object, &mut source.disabled_skills);
-        self.unsupported_nested_settings(source, relative, object, "skills", &["disabled"]);
-        for key in object.keys() {
-            if !["models", "model", "mcp_servers", "hooks", "ui", "skills"].contains(&key.as_str())
             {
                 self.unsupported_setting(source, relative, key, &object[key]);
             }
@@ -366,22 +301,20 @@ impl Scanner {
         &mut self,
         source: &mut SourceScan,
         relative: &Path,
-        role: &str,
         model: &str,
         provider: Option<&str>,
-        endpoint: Option<&str>,
     ) {
         self.emit(
             source,
             relative,
             DiscoveryCategory::ModelPreference,
-            role,
+            "default",
             DiscoveryItemState::Enabled,
             DiscoveryFacts::ModelPreference {
-                role: sanitize_text(role),
+                role: sanitize_text("default"),
                 model: sanitize_text(model),
                 provider: provider.map(sanitize_text),
-                endpoint_origin: endpoint.and_then(safe_endpoint_origin),
+                endpoint_origin: None,
             },
             MappingSupport::partial(
                 "model names and provider catalogs differ; this is a preference hint, not a compatible binding",

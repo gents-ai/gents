@@ -63,7 +63,7 @@ impl ConfigCommandTool {
 fn parse_sources(argv: &[String]) -> Result<Vec<RequestedSource>> {
     anyhow::ensure!(
         argv.first().is_some_and(|value| value == "scan"),
-        "use config discovery scan --source SOURCE_ID claude|codex|grok user|project PATH"
+        "use config discovery scan --source SOURCE_ID claude|codex user|project PATH"
     );
     let mut index = 1;
     let mut sources = Vec::new();
@@ -71,7 +71,7 @@ fn parse_sources(argv: &[String]) -> Result<Vec<RequestedSource>> {
         anyhow::ensure!(
             argv.get(index).is_some_and(|value| value == "--source")
                 && argv.len().saturating_sub(index) >= 5,
-            "each discovery source must be --source SOURCE_ID claude|codex|grok user|project PATH"
+            "each discovery source must be --source SOURCE_ID claude|codex user|project PATH"
         );
         let source_id = argv[index + 1].clone();
         anyhow::ensure!(
@@ -85,9 +85,8 @@ fn parse_sources(argv: &[String]) -> Result<Vec<RequestedSource>> {
         let kind = match argv[index + 2].as_str() {
             "claude" => DiscoverySourceKind::Claude,
             "codex" => DiscoverySourceKind::Codex,
-            "grok" => DiscoverySourceKind::Grok,
             other => anyhow::bail!(
-                "unsupported discovery source kind {other:?}; expected claude, codex, or grok"
+                "unsupported discovery source kind {other:?}; expected claude or codex"
             ),
         };
         let scope = match argv[index + 3].as_str() {

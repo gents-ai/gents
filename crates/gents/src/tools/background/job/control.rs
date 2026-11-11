@@ -402,7 +402,7 @@ pub async fn control(
     };
     let ConfigAccess::Local(node) = access else {
         return Err(JobReadError::Unavailable {
-            message: "job control is local-only in v1; stop or pause the job from its session (`workflow stop|pause <handle>`), the desktop, Grok or Codex".into(),
+            message: "job control is local-only in v1; stop or pause the job from its session (`workflow stop|pause <handle>`), the desktop or Codex".into(),
         });
     };
     let actor = access

@@ -338,8 +338,7 @@
         "crates/gents-desktop-core/src/client/store/turns.rs",
         "crates/gents-desktop-core/src/client/store/indexing.rs",
         "crates/gents-desktop-core/src/client/observe/projection_store.rs",
-        "crates/gents-desktop-core/src/client/query/session_transcript.rs",
-        "crates/gents-cli/src/commands/codex_shim/turn/active.rs"
+        "crates/gents-desktop-core/src/client/query/session_transcript.rs"
       ],
       "consumer_paths": [
         "crates/gents-protocol/src/client_protocol/tests.rs",
