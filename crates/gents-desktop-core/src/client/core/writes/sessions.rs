@@ -26,8 +26,9 @@ impl ClientCore {
         let snapshot = self.store.snapshot();
         let node_did = mailbox_node_for_document(&snapshot.mailbox_items, doc_id)?;
         let access = self.operator_access(node_did)?;
-        let result =
-            gents_session::session::mailbox::dismiss_mailbox_item_on(&access, doc_id).await;
+        let result = gents_session::operations::mailbox::dismiss(&access, doc_id)
+            .await
+            .map_err(crate::error::mailbox_operation_failure);
         match result {
             Ok(item) => {
                 if self.refresh_node(node_did).await?.is_none() {

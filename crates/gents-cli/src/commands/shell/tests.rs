@@ -3200,9 +3200,8 @@ async fn dismissing_sends_the_mailbox_dismiss_and_shows_the_rest() {
 
     let read = shell.until(is_prompts).await;
     assert_eq!(read, [prompts("s1", vec![asking])], "no notice: {read:?}");
-    let stored =
-        gents_session::session::mailbox::load_mailbox_item_with_access(&access, &gate).await;
-    assert_eq!(stored.unwrap().unwrap().status, "dismissed");
+    let stored = gents_session::operations::mailbox::get(&access, &gate).await;
+    assert_eq!(stored.unwrap().status, "dismissed");
     node.shutdown().await.expect("node shutdown");
 }
 
@@ -3498,9 +3497,8 @@ async fn an_act_notices_and_rereads_its_menu() {
         shell.until(is_menu).await,
         [Update::Notice("dismissed".to_string()), reread]
     );
-    let stored =
-        gents_session::session::mailbox::load_mailbox_item_with_access(&access, &item).await;
-    assert_eq!(stored.unwrap().unwrap().status, "dismissed");
+    let stored = gents_session::operations::mailbox::get(&access, &item).await;
+    assert_eq!(stored.unwrap().status, "dismissed");
     node.shutdown().await.expect("node shutdown");
 }
 

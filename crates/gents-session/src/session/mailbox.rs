@@ -19,9 +19,7 @@ use gents_store::graphql::{
     validate_graphql_name,
 };
 
-mod dismiss;
 mod domain;
-pub use dismiss::dismiss_mailbox_item_on;
 #[cfg(test)]
 mod native_policy_conformance;
 mod notification;
@@ -846,49 +844,6 @@ pub fn validate_close_collections(entries: &[MailboxCloseCollection]) -> Result<
         validate_graphql_name(entry.correlation_field)?;
     }
     Ok(())
-}
-
-pub async fn list_mailbox_items(
-    node: &EmbeddedNode,
-    requester_did: &str,
-    status: Option<MailboxStatus>,
-) -> Result<Vec<MailboxItem>> {
-    let query = mailbox_list_query(requester_did, status)?;
-    let response = gents_store::graphql::read_rendered(node, &query, "list mailbox items").await?;
-    Ok(rows(&response, MAILBOX_COLLECTION)?)
-}
-
-pub async fn list_mailbox_items_on(
-    access: &gents_store::config_client::ConfigAccess,
-    requester_did: &str,
-    status: Option<MailboxStatus>,
-) -> Result<Vec<MailboxItem>> {
-    let response = access
-        .read(&mailbox_list_query(requester_did, status)?)
-        .await?;
-    let values = response
-        .pointer("/data/MailboxItem")
-        .context("mailbox list omitted rows")?;
-    Ok(serde_json::from_value(values.clone())?)
-}
-
-fn mailbox_list_query(
-    requester_did: &str,
-    status: Option<MailboxStatus>,
-) -> Result<gents_protocol::document_query::Rendered> {
-    use gents_protocol::document_query::{
-        fields::mailbox_item as fields, Direction, Filter, Query, Selection,
-    };
-    if requester_did.trim().is_empty() {
-        bail!("mailbox list requires requester DID");
-    }
-    let mut query = Query::select(Selection::owned(MAILBOX_FIELDS))
-        .filter(Filter::eq(fields::REQUESTER_DID, requester_did))
-        .order_by(fields::CREATED_AT, Direction::Desc);
-    if let Some(status) = status {
-        query = query.filter(Filter::eq(fields::STATUS, status.as_str()));
-    }
-    Ok(query.render())
 }
 
 async fn transition_open_item(

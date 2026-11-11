@@ -212,7 +212,7 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
         );
     }
     assert!(
-        crate::session::mailbox::dismiss_mailbox_item_on(&outsider_access, doc)
+        crate::operations::mailbox::dismiss(&outsider_access, doc)
             .await
             .is_err()
     );
@@ -303,7 +303,7 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
             visible
         );
     }
-    crate::session::mailbox::dismiss_mailbox_item_on(&user_access, &notice.doc_id).await?;
+    crate::operations::mailbox::dismiss(&user_access, &notice.doc_id).await?;
     let replayed = crate::session::mailbox::publish_runtime_notice(
         &node,
         runtime.did(),
@@ -368,9 +368,8 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
         .await?;
     assert!(reply_lifecycle.claim_with_identity().await.is_err());
     assert_eq!(
-        crate::session::mailbox::load_mailbox_item_with_access(&agent_access, doc)
+        crate::operations::mailbox::get(&agent_access, doc)
             .await?
-            .unwrap()
             .status,
         "open"
     );
@@ -382,9 +381,8 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
         ClaimOutcome::Claimed
     );
     assert_eq!(
-        crate::session::mailbox::load_mailbox_item_with_access(&agent_access, doc)
+        crate::operations::mailbox::get(&agent_access, doc)
             .await?
-            .unwrap()
             .status,
         "acted"
     );

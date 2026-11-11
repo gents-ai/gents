@@ -162,7 +162,7 @@ async fn private_snapshot_keeps_the_current_requesters_questions_without_config_
     )
     .await;
     let closed = file("closed", &requester, "flag", "ack", None).await;
-    gents_session::session::mailbox::dismiss_mailbox_item_on(
+    gents_session::operations::mailbox::dismiss(
         &core.operator_access(&node).unwrap(),
         &closed.doc_id,
     )

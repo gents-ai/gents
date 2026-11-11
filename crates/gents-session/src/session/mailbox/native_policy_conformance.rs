@@ -249,7 +249,7 @@ async fn native_mailbox_recipient_and_creator_follow_modeled_policy() -> anyhow:
         .iter()
         .find(|case| case["actor"] == "other" && case["permission"] == "update")
         .unwrap();
-    let outsider_result = dismiss_mailbox_item_on(&other_access, &doc).await;
+    let outsider_result = crate::operations::mailbox::dismiss(&other_access, &doc).await;
     assert_eq!(
         outsider_result.is_ok(),
         other_update["expected"].as_bool().unwrap()
@@ -295,7 +295,7 @@ async fn native_mailbox_recipient_and_creator_follow_modeled_policy() -> anyhow:
             })
         })
         .await?;
-    let dismissed = dismiss_mailbox_item_on(&user_access, &doc).await?;
+    let dismissed = crate::operations::mailbox::dismiss(&user_access, &doc).await?;
     assert_eq!(dismissed.status, "dismissed");
     let response = user_access
         .execute(&format!(
@@ -331,7 +331,7 @@ async fn native_mailbox_recipient_and_creator_follow_modeled_policy() -> anyhow:
         !envelope_rows(&revoked, "MailboxItem")?.is_empty(),
         modeled_revocation["revoked_expected"].as_bool().unwrap()
     );
-    assert!(dismiss_mailbox_item_on(&user_access, &doc).await.is_err());
+    assert!(crate::operations::mailbox::dismiss(&user_access, &doc).await.is_err());
     node.shutdown().await?;
     Ok(())
 }

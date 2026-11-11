@@ -6,13 +6,13 @@ use gents_protocol::job::{
     JobChildState, JobPauseReason, JobPhaseState, JobReadError, JobState, JobView,
 };
 use gents_protocol::mailbox_question::{MailboxQuestion, MailboxQuestionAnswer};
+use gents_protocol::operations::mailbox::MailboxReply;
 use gents_session::session::mailbox::MailboxItem;
 use gents_shell::source::{Answer, BackgroundCall, Job, JobEnd, Prompt, PromptKind};
 use gents_store::config_client::{ConfigAccess, GraphqlEndpoint};
 use gents_toolcalls::background::job::view::{list_jobs, JobFilter, StateFilter};
 
 use crate::commands::background::{load_background_tool_calls, BackgroundToolCallRow};
-use crate::commands::mailbox::{needs_answer, Reply};
 
 /// This home's GraphQL, read as the home's node, which signs its mailbox replies.
 #[derive(Clone)]
@@ -241,7 +241,11 @@ pub(super) fn prompt(item: &MailboxItem) -> Option<Prompt> {
         title: item.title.clone(),
         summary,
         answer,
-        dismissable: !needs_answer(item),
+        dismissable: !gents_session::operations::mailbox::needs_answer(
+            &item.kind,
+            &item.action,
+            item.payload.as_deref(),
+        ),
     })
 }
 
@@ -260,12 +264,12 @@ pub(super) fn prompts(items: &[MailboxItem], principal: &str, session: &str) -> 
 
 /// What the user typed, as the item takes it: a question by option numbers, by `skip` where it
 /// may be skipped, or in the user's own words where it allows them.
-pub(super) fn reply_from_text(text: &str, item: &MailboxItem) -> Result<Reply, String> {
+pub(super) fn reply_from_text(text: &str, item: &MailboxItem) -> Result<MailboxReply, String> {
     let Some(question) = question(item) else {
-        return Ok(Reply::Text(text.to_string()));
+        return Ok(MailboxReply::Text(text.to_string()));
     };
     if skippable(&question) && text.trim().eq_ignore_ascii_case("skip") {
-        return Ok(Reply::Answer(MailboxQuestionAnswer {
+        return Ok(MailboxReply::Answer(MailboxQuestionAnswer {
             skip: Some(true),
             ..Default::default()
         }));
@@ -293,7 +297,7 @@ pub(super) fn reply_from_text(text: &str, item: &MailboxItem) -> Result<Reply, S
         },
         _ => return Err(format!("type 1-{count}")),
     };
-    Ok(Reply::Answer(answer))
+    Ok(MailboxReply::Answer(answer))
 }
 
 #[cfg(test)]
@@ -304,7 +308,6 @@ mod tests {
     use serde_json::{json, Value};
 
     use super::*;
-    use crate::commands::mailbox::question_reply;
 
     /// A job row as `list_jobs` returns it.
     fn view(state: &str, progress: Value) -> JobView {
@@ -634,8 +637,8 @@ mod tests {
         }
     }
 
-    fn answer(option_ids: &[&str], free_text: Option<&str>, skip: Option<bool>) -> Reply {
-        Reply::Answer(MailboxQuestionAnswer {
+    fn answer(option_ids: &[&str], free_text: Option<&str>, skip: Option<bool>) -> MailboxReply {
+        MailboxReply::Answer(MailboxQuestionAnswer {
             option_ids: option_ids.iter().map(|id| id.to_string()).collect(),
             free_text: free_text.map(str::to_string),
             skip,
@@ -767,10 +770,17 @@ mod tests {
 
         let two = reply_from_text(" 1, 2 ", &single).expect("two numbers");
         assert_eq!(two, answer(&["stable", "beta"], None, None));
-        let Reply::Answer(two) = two else {
+        let MailboxReply::Answer(two) = two else {
             unreachable!()
         };
-        let refused = question_reply(&single, &two).expect_err("a single choice");
+        let two = gents_session::operations::mailbox::answer_observing((&single).into(), two)
+            .expect("the question as read");
+        let refused = gents_session::operations::mailbox::prepare_reply(
+            (&single).into(),
+            MailboxReply::Answer(two),
+            &Default::default(),
+        )
+        .expect_err("a single choice");
         assert_eq!(
             refused.to_string(),
             "answer selects more than one option of a single-select question"
@@ -779,7 +789,7 @@ mod tests {
         let plain = item("r1", "ask", "start_request", None);
         assert_eq!(
             reply_from_text("looks good", &plain),
-            Ok(Reply::Text("looks good".to_string()))
+            Ok(MailboxReply::Text("looks good".to_string()))
         );
     }
 }

@@ -58,7 +58,13 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             let mailbox_items = store
                 .mailbox_items
                 .iter()
-                .filter(|row| row.node_did == peer.node_did && row.status == "open")
+                .filter(|row| {
+                    row.node_did == peer.node_did
+                        && gents_session::operations::mailbox::serves_stored(
+                            gents_protocol::operations::mailbox::MailboxListScope::Waiting,
+                            &row.status,
+                        )
+                })
                 .map(MailboxItemView::from)
                 .collect::<Vec<_>>();
             let inference =

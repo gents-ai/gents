@@ -99,7 +99,7 @@ pub async fn send_chat_message(
 
     let captured_context = request.captured_context.unwrap_or_default();
     let attachments = request.attachments.unwrap_or_default();
-    let (content, question_reply) = match &request.answer {
+    let (content, question_reply, asking_agent) = match &request.answer {
         Some(answer) => {
             if !request.content.trim().is_empty()
                 || !captured_context.is_empty()
@@ -107,27 +107,34 @@ pub async fn send_chat_message(
             {
                 bail!("an answer renders its own content; send empty content");
             }
-            super::mailbox::question_reply_content(
+            let prepared = super::mailbox::question_reply_content(
                 core,
                 request.caused_by_source_doc_id.as_deref(),
                 request.session_id.as_deref(),
                 &node_did,
                 request.agent_did.as_deref(),
                 answer,
-            )?
+            )?;
+            (
+                prepared.content,
+                prepared.question_reply,
+                Some(prepared.agent_did),
+            )
         }
-        None => (request.content.trim().to_string(), None),
+        None => (request.content.trim().to_string(), None, None),
     };
     if content.is_empty() && captured_context.is_empty() && attachments.is_empty() {
         bail!("content is required");
     }
 
-    let agent_did = request
-        .agent_did
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
+    let agent_did = asking_agent.or_else(|| {
+        request
+            .agent_did
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    });
 
     let requested_session_id = request
         .session_id

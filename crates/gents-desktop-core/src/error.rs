@@ -213,6 +213,27 @@ pub fn admitted_agent_preview<R>(
     }
 }
 
+/// A mailbox operation the shared handler refused or failed, as the message
+/// the UI shows: what happened, then the next step in desktop terms.
+pub fn mailbox_operation_failure(
+    error: gents_protocol::operations::mailbox::MailboxOperationError,
+) -> anyhow::Error {
+    use gents_protocol::operations::agent::NextCall;
+    let next = match error.recovery() {
+        NextCall::List { .. } => "Reload the mailbox; this item may already be closed.",
+        NextCall::Inspect { .. } => "Open the item again and reply to what it now shows.",
+        NextCall::VerbHelp { .. } => "Answer the question, or skip it when it is optional.",
+        NextCall::ResourceHelp { .. } => "Check the runtime connection and try again.",
+    };
+    let message = format!(
+        "{}. {next}",
+        gents_protocol::error_chain::ErrorChain(&error)
+            .to_string()
+            .trim_end_matches('.')
+    );
+    anyhow::Error::new(error).context(message)
+}
+
 fn refusal_message(message: &str, next_call: gents::operations::agent::NextCall) -> String {
     use gents::operations::agent::NextCall;
     let next = match next_call {
