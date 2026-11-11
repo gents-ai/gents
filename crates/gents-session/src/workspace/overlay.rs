@@ -13,13 +13,13 @@ use gents_documents::FileToolMode;
 use gents_loop::tool_policy::WorkspaceAuthority;
 use gents_protocol::row::AgentRequest;
 use gents_store::graphql::escape_graphql_string;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 use gents_store::graphql::{first_row, graphql_with_transaction_retry, rows};
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 use super::binding::{admit_workspace_binding, new_binding, AdmitBinding};
 use super::documents::WorkspaceBindingDoc;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 use super::documents::{workspace_binding_upsert_mutation, workspace_bindings_upsert_mutation};
 
 static PROCESS_OPERATOR_TOOL_ROOT: RwLock<Option<PathBuf>> = RwLock::new(None);
@@ -127,7 +127,7 @@ pub(crate) fn require_workspace_principal(
 }
 
 #[inline(never)]
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn resolve_request_workspace_overlay(
     node: &Arc<EmbeddedNode>,
     request: &AgentRequest,
@@ -200,7 +200,7 @@ pub async fn resolve_request_workspace_overlay_with_identity(
     Ok(Some(overlay))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn resolve_request_workspace_overlay_on_host(
     node: &Arc<EmbeddedNode>,
     request: &AgentRequest,
@@ -248,7 +248,7 @@ pub async fn resolve_request_workspace_overlay_on_host(
     Ok(Some(overlay))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub(crate) async fn validate_request_workspace_input(
     node: &Arc<EmbeddedNode>,
     request: &AgentRequest,
@@ -375,12 +375,12 @@ async fn load_request_workspace_overlay(
             )
             .await?
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         None => {
             load_isolated_workspace_record(_node, workspace_id, request_workspace_owner(request)?)
                 .await?
         }
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-fixtures")))]
         None => bail!("workspace access requires the selected Agent"),
     }
     .ok_or_else(|| anyhow!("isolated workspace {workspace_id} not found"))?;
@@ -390,9 +390,9 @@ async fn load_request_workspace_overlay(
         Some(access) => {
             load_workspace_placement_with_access(access, workspace_id, node_did).await?
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         None => load_workspace_placement(_node, workspace_id, node_did).await?,
-        #[cfg(not(test))]
+        #[cfg(not(any(test, feature = "test-fixtures")))]
         None => bail!("workspace access requires the selected Agent"),
     }
     .ok_or_else(|| anyhow!("workspace placement for {workspace_id} not found on this node"))?;
@@ -591,7 +591,7 @@ pub fn request_workspace_cwd(request: &AgentRequest) -> Option<PathBuf> {
     request.input.cwd.as_deref().map(PathBuf::from)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 async fn ensure_request_binding(
     node: &Arc<EmbeddedNode>,
     request: &AgentRequest,
@@ -656,7 +656,7 @@ async fn ensure_request_binding(
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub(super) async fn previous_exclusive_is_stale(
     node: &EmbeddedNode,
     workspace_id: &str,
@@ -678,7 +678,7 @@ pub(super) async fn previous_exclusive_is_stale(
     .await?)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub(super) async fn previous_exclusive_is_stale_with_access(
     access: &gents_store::config_client::ConfigAccess,
     workspace_id: &str,
@@ -741,7 +741,7 @@ fn request_lifecycle_is_live(lifecycle_state: Option<RequestLifecycleState>) -> 
     !state.is_terminal()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 async fn request_is_live(
     node: &EmbeddedNode,
     request_doc_id: &str,
@@ -799,7 +799,7 @@ pub(super) fn validate_request_liveness(
     Ok(request_lifecycle_is_live(row.lifecycle_state))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub(super) async fn load_workspace_bindings_for(
     node: &EmbeddedNode,
     workspace_id: &str,
@@ -871,7 +871,7 @@ pub(super) fn validate_workspace_bindings(
     Ok(bindings)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub(super) async fn persist_workspace_binding_doc(
     node: &std::sync::Arc<EmbeddedNode>,
     actor_did: &str,
@@ -880,7 +880,7 @@ pub(super) async fn persist_workspace_binding_doc(
     persist_workspace_binding_docs(node, actor_did, std::slice::from_ref(doc)).await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub(super) async fn persist_workspace_binding_docs(
     node: &std::sync::Arc<EmbeddedNode>,
     actor_did: &str,
@@ -893,7 +893,7 @@ pub(super) async fn persist_workspace_binding_docs(
     persist_workspace_binding_docs_with_access(&access, docs).await
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub(super) async fn persist_workspace_binding_docs_with_access(
     access: &gents_store::config_client::ConfigAccess,
     docs: &[WorkspaceBindingDoc],
@@ -999,7 +999,7 @@ pub(super) fn decode_isolated_workspace_record(
     })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub(crate) async fn load_isolated_workspace_record(
     node: &EmbeddedNode,
     workspace_id: &str,
@@ -1034,7 +1034,7 @@ pub(crate) async fn load_isolated_workspace_record_with_access(
         .transpose()
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 async fn load_workspace_placement(
     node: &EmbeddedNode,
     workspace_id: &str,
@@ -1110,6 +1110,6 @@ fn decode_workspace_placement(
     }))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 #[path = "overlay_tests.rs"]
 pub mod overlay_tests;
