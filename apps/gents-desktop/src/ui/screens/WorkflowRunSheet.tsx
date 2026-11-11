@@ -21,7 +21,7 @@ import { EditorSheet } from "./agent/EditorSheet";
 import { JobProgressBody, JobStatePill, useAnswerJob, words } from "./jobParts";
 import { PromoteWorkflowDialog } from "./PromoteWorkflowDialog";
 
-const at = (ms: number) =>
+export const runAt = (ms: number) =>
   new Date(ms).toLocaleString(undefined, {
     month: "short",
     day: "numeric",
@@ -162,11 +162,11 @@ export function WorkflowRunSheet({
                 className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-0.5 text-xs"
               >
                 <dt className="text-muted-foreground">Started</dt>
-                <dd>{at(view.created_at)}</dd>
+                <dd>{runAt(view.created_at)}</dd>
                 {view.completed_at != null && (
                   <>
                     <dt className="text-muted-foreground">Finished</dt>
-                    <dd>{at(view.completed_at)}</dd>
+                    <dd>{runAt(view.completed_at)}</dd>
                     <dt className="text-muted-foreground">Duration</dt>
                     <dd data-testid="run-duration">
                       {duration(view.completed_at - view.created_at)}

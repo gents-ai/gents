@@ -12,7 +12,13 @@ import { nodeKeyOf, type NodeView } from "../../../hooks/fleetStore";
 import { useBootstrap } from "@/hooks/useClient";
 import { NO_SESSIONS, useFleet } from "@/hooks/useFleet";
 import { isLocalNode } from "@/lib/firstRun";
-import { ACTIVE_STATES, RunningRuns, observedOf, useJobs } from "./WorkflowRuns";
+import {
+  ACTIVE_STATES,
+  RunHistory,
+  RunningRuns,
+  observedOf,
+  useJobs,
+} from "./WorkflowRuns";
 
 /* the node's running runs, read for any node; then, on the local node, its
    installed workflows and the dynamic scripts it completed, one row per
@@ -43,7 +49,7 @@ export function WorkflowsPanel({ deployment }: { deployment: NodeView }) {
         sessions={sessions}
         onOpen={open}
       />
-      {local && <LocalWorkflows />}
+      {local && <LocalWorkflows nodeDid={nodeDid} observed={sessions} onOpen={open} />}
       {opened && (
         <WorkflowRunSheet
           open={sheetOpen}
@@ -58,8 +64,33 @@ export function WorkflowsPanel({ deployment }: { deployment: NodeView }) {
 }
 
 /* read from this desktop's own home, so only for the local node */
-function LocalWorkflows() {
+function LocalWorkflows({
+  nodeDid,
+  observed,
+  onOpen,
+}: {
+  nodeDid: string;
+  observed: unknown;
+  onOpen: (run: JobView) => void;
+}) {
   const { actions } = useApp();
+  /* the workflows whose runs are shown, by plugin or script id */
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const toggle = (id: string) =>
+    setExpanded((held) => {
+      const next = new Set(held);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  const runsButton = (id: string) => (
+    <Button
+      variant="outline"
+      aria-expanded={expanded.has(id)}
+      onClick={() => toggle(id)}
+    >
+      Runs
+    </Button>
+  );
   const [workflows, setWorkflows] = useState<DynamicWorkflows | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selector, setSelector] = useState<string | null>(null);
@@ -91,7 +122,17 @@ function LocalWorkflows() {
                 description={[w.version, w.pack, w.description]
                   .filter(Boolean)
                   .join(" · ")}
-              />
+              >
+                {runsButton(w.plugin)}
+              </Row>
+              {expanded.has(w.plugin) && (
+                <RunHistory
+                  nodeDid={nodeDid}
+                  plugin={w.plugin}
+                  observed={observed}
+                  onOpen={onOpen}
+                />
+              )}
             </div>
           ))}
         </Group>
@@ -116,15 +157,26 @@ function LocalWorkflows() {
                   .filter(Boolean)
                   .join(" · ")}
               >
-                {w.promoted_as.length === 0 && (
-                  <Button
-                    variant="outline"
-                    onClick={() => setSelector(w.latest_address)}
-                  >
-                    Promote…
-                  </Button>
-                )}
+                <span className="flex gap-2">
+                  {runsButton(w.script_id)}
+                  {w.promoted_as.length === 0 && (
+                    <Button
+                      variant="outline"
+                      onClick={() => setSelector(w.latest_address)}
+                    >
+                      Promote…
+                    </Button>
+                  )}
+                </span>
               </Row>
+              {expanded.has(w.script_id) && (
+                <RunHistory
+                  nodeDid={nodeDid}
+                  scriptId={w.script_id}
+                  observed={observed}
+                  onOpen={onOpen}
+                />
+              )}
             </div>
           ))}
         </Group>
