@@ -13,7 +13,7 @@ fn fixture_pack_dir(name: &str) -> (tempfile::TempDir, std::path::PathBuf) {
 
 fn fixture_manifest_dir(name: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/packs")
+        .join("../gents/tests/fixtures/packs")
         .join(name)
 }
 
