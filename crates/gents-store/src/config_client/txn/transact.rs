@@ -89,7 +89,7 @@ impl TransactionMode {
         match self {
             Self::ConflictRetry | Self::SignedConflictRebuild | Self::Idempotent(_) => true,
             Self::SingleAttempt => false,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-fixtures"))]
             Self::ObserveConflict => false,
         }
     }
