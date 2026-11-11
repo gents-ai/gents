@@ -103,33 +103,6 @@ theorem completed_child_cannot_restore_revoked_parent :
     recoverSessionChild ⟨true, false, true⟩ (some "agent") (some "agent")
       (some "agent") true true = ⟨true, false, true⟩ := by decide
 
-structure SessionChildCase where
-  name : String
-  initial : ParentPublication
-  owner : Option DID
-  creator : Option DID
-  actor : Option DID
-  grant : Bool
-  mark : Bool
-
-def sessionChildCases : List SessionChildCase :=
-  [⟨"complete", beginParentPublication, some "agent", some "agent", some "agent", true, true⟩,
-   ⟨"grant_failed", beginParentPublication, some "agent", some "agent", some "agent", false, true⟩,
-   ⟨"mark_failed", beginParentPublication, some "agent", some "agent", some "agent", true, false⟩,
-   ⟨"wrong_owner", beginParentPublication, some "other", some "agent", some "agent", true, true⟩,
-   ⟨"completed_revoked", ⟨true, false, true⟩, some "agent", some "agent", some "agent", true, true⟩]
-
-def sessionChildCaseJson (c : SessionChildCase) : Lean.Json :=
-  let result := recoverSessionChild c.initial c.owner c.creator c.actor c.grant c.mark
-  Lean.Json.mkObj [("name", Lean.toJson c.name), ("committed", Lean.toJson c.initial.committed),
-    ("parent_granted", Lean.toJson c.initial.parentGranted), ("parent_linked", Lean.toJson c.initial.parentLinked),
-    ("owner", Lean.toJson c.owner), ("creator", Lean.toJson c.creator), ("actor", Lean.toJson c.actor),
-    ("grant", Lean.toJson c.grant), ("mark", Lean.toJson c.mark),
-    ("expected_granted", Lean.toJson result.parentGranted), ("expected_linked", Lean.toJson result.parentLinked)]
-
-def sessionChildCasesJson : String :=
-  (Lean.toJson (sessionChildCases.map sessionChildCaseJson)).compress
-
 /-- An auxiliary audit is signed by the selected Agent even when the ordinary
 parent session belongs to a distinct requester. The physical child/session
 link is authorized only by the immutable signed auxiliary and exact signed

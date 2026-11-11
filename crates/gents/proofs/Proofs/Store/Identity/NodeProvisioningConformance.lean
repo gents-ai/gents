@@ -28,15 +28,6 @@ def agentCreationExposureCasesJson : String := (toJson (agentCreationExposureCas
   Json.mkObj [("name", toJson name), ("node_category", toJson node),
     ("agent_category", toJson agent), ("exposed", toJson (agentCommandExposed node agent))])).compress
 
-def createdAgentAccessCases : List (String × String) :=
-  [("creator", "read"), ("creator", "update"), ("user", "read"),
-   ("user", "update"), ("sibling", "read"), ("sibling", "update")]
-
-def createdAgentAccessCasesJson : String := (toJson (createdAgentAccessCases.map fun (actor, permission) =>
-  Json.mkObj [("actor", toJson actor), ("permission", toJson permission),
-    ("allowed", toJson (Identity.Household.allowed 5 Identity.Household.agentCreatedAgentFixture
-      actor "agents" "child" permission))])).compress
-
 def freshBootstrap : BootstrapObservation := ⟨true, true, true, true, true, true, true, true, false⟩
 
 def bootstrapCases : List (String × BootstrapObservation) :=

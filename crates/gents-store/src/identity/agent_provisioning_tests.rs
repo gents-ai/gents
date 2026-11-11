@@ -8,12 +8,7 @@ async fn modeled_agent_creator_and_node_owner_control_native_agent() -> anyhow::
         DocumentACP, DocumentPermission, Identity, MemoryZanzibarStore, ZanzibarDocumentACP,
         ZanzibarStore,
     };
-    let cases = tokio::task::spawn_blocking(|| {
-        gents_lean_vocab::lean_contract_snapshot()
-            .identity_created_agent_access_cases
-            .clone()
-    })
-    .await?;
+    let cases = gents_lean_vocab::families::created_agent_access_cases::cases();
     let dir = tempfile::tempdir()?;
     let user = KeyIdentity::load_or_create(dir.path().join("user"), None)?;
     let creator = KeyIdentity::load_or_create(dir.path().join("creator"), None)?;
@@ -45,14 +40,14 @@ async fn modeled_agent_creator_and_node_owner_control_native_agent() -> anyhow::
         )
         .await?
     );
-    for case in &cases {
-        let actor = match case["actor"].as_str().unwrap() {
+    for case in cases {
+        let actor = match case.input.actor.as_str() {
             "user" => &user_did,
             "creator" => &creator_did,
             "sibling" => &sibling_did,
             actor => panic!("unknown modeled actor {actor}"),
         };
-        let permission = match case["permission"].as_str().unwrap() {
+        let permission = match case.input.permission.as_str() {
             "read" => DocumentPermission::Read,
             "update" => DocumentPermission::Update,
             permission => panic!("unknown modeled permission {permission}"),
@@ -66,7 +61,7 @@ async fn modeled_agent_creator_and_node_owner_control_native_agent() -> anyhow::
                 "child",
             )
             .await?;
-        assert_eq!(actual, case["allowed"].as_bool().unwrap(), "{case}");
+        case.check(actual);
     }
     Ok(())
 }

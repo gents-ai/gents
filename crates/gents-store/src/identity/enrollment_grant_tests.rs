@@ -4,18 +4,37 @@ fn names(tuples: &[EnrollmentGrantTuple]) -> Vec<&'static str> {
     tuples.iter().map(|tuple| tuple.name()).collect()
 }
 
-#[test]
-fn derived_tuples_match_lean() {
-    let contract = &gents_lean_vocab::lean_contract_snapshot().identity_enrollment_grant_cases;
-    let expected: Vec<&str> = contract["derived"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|name| name.as_str().unwrap())
-        .collect();
-    assert_eq!(names(&EnrollmentGrantTuple::derived()), expected);
-    for name in expected {
-        assert_eq!(EnrollmentGrantTuple::parse(name).unwrap().name(), name);
+use gents_lean_vocab::families::enrollment_grant_traces_cases as family;
+
+fn observe(
+    subjects: &[String],
+    held: &[(String, EnrollmentGrantTuple)],
+    receipts: &[EnrollmentGrantReceipt],
+) -> family::StepObservation {
+    family::StepObservation {
+        holdings: subjects
+            .iter()
+            .map(|subject| family::Holding {
+                subject: subject.clone(),
+                tuples: EnrollmentGrantTuple::derived()
+                    .into_iter()
+                    .filter(|tuple| held.contains(&(subject.clone(), *tuple)))
+                    .map(|tuple| tuple.name().to_owned())
+                    .collect(),
+            })
+            .collect(),
+        receipts: receipts
+            .iter()
+            .map(|receipt| family::ReceiptObservation {
+                request: receipt.request_id.clone(),
+                member: receipt.member_did.clone(),
+                tuples: names(&receipt.tuples)
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+                withdrawn: receipt.withdrawn,
+            })
+            .collect(),
     }
 }
 
@@ -24,19 +43,19 @@ fn derived_tuples_match_lean() {
 /// a revocation removes exactly what `plan_withdrawal` returns.
 #[test]
 fn grant_and_revocation_planners_replay_lean_traces() {
-    let contract = &gents_lean_vocab::lean_contract_snapshot().identity_enrollment_grant_cases;
-    let cases = contract["cases"].as_array().unwrap();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let name = case["name"].as_str().unwrap();
+    family::replay(|input| {
+        let derived = EnrollmentGrantTuple::derived();
+        for tuple in &derived {
+            assert_eq!(EnrollmentGrantTuple::parse(tuple.name()), Some(*tuple));
+        }
         let mut held: Vec<(String, EnrollmentGrantTuple)> = Vec::new();
         let mut receipts: Vec<EnrollmentGrantReceipt> = Vec::new();
-        for (index, step) in case["steps"].as_array().unwrap().iter().enumerate() {
-            let action = &step["step"];
-            match action["action"].as_str().unwrap() {
+        let mut steps = Vec::new();
+        for step in &input.steps {
+            match step.action.as_str() {
                 "grant" => {
-                    let request = action["request"].as_str().unwrap();
-                    let member = action["member"].as_str().unwrap();
+                    let request = step.request.as_str();
+                    let member = step.member.as_str();
                     if !receipts.iter().any(|receipt| receipt.request_id == request) {
                         let member_held: Vec<_> = held
                             .iter()
@@ -59,15 +78,14 @@ fn grant_and_revocation_planners_replay_lean_traces() {
                     }
                 }
                 "independent" => {
-                    let member = action["member"].as_str().unwrap().to_owned();
-                    let tuple =
-                        EnrollmentGrantTuple::parse(action["tuple"].as_str().unwrap()).unwrap();
+                    let member = step.member.clone();
+                    let tuple = EnrollmentGrantTuple::parse(&step.tuple).unwrap();
                     if !held.contains(&(member.clone(), tuple)) {
                         held.push((member, tuple));
                     }
                 }
                 "revoke" => {
-                    let request = action["request"].as_str().unwrap();
+                    let request = step.request.as_str();
                     let live = receipts
                         .iter()
                         .find(|receipt| receipt.request_id == request && !receipt.withdrawn)
@@ -84,41 +102,15 @@ fn grant_and_revocation_planners_replay_lean_traces() {
                         }
                     }
                 }
-                other => panic!("{name}: unknown action {other}"),
+                other => panic!("{}: unknown action {other}", input.name),
             }
-            let expected = &step["expected"];
-            for (subject, tuples) in expected["held"].as_object().unwrap() {
-                let observed: Vec<&str> = EnrollmentGrantTuple::derived()
-                    .into_iter()
-                    .filter(|tuple| held.contains(&(subject.clone(), *tuple)))
-                    .map(EnrollmentGrantTuple::name)
-                    .collect();
-                let expected: Vec<&str> = tuples
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|name| name.as_str().unwrap())
-                    .collect();
-                assert_eq!(observed, expected, "{name} step {index}: {subject} holds");
-            }
-            let observed_receipts: Vec<_> = receipts
-                .iter()
-                .map(|receipt| {
-                    json!({
-                        "request": receipt.request_id,
-                        "member": receipt.member_did,
-                        "tuples": names(&receipt.tuples),
-                        "withdrawn": receipt.withdrawn,
-                    })
-                })
-                .collect();
-            assert_eq!(
-                Value::Array(observed_receipts),
-                expected["receipts"],
-                "{name} step {index}: receipts"
-            );
+            steps.push(observe(&input.subjects, &held, &receipts));
         }
-    }
+        family::TraceOutput {
+            derived: names(&derived).into_iter().map(str::to_owned).collect(),
+            steps,
+        }
+    });
 }
 
 #[test]
