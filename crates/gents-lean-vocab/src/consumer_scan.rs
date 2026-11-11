@@ -31,8 +31,10 @@ const DOMAIN_FAMILIES: &[(&str, &str)] = &[
     ("state_machines", "state_machine"),
 ];
 
-/// The snapshot key holding the families whose types and replay are generated.
+/// The snapshot keys holding the families whose types and replay are
+/// generated; both are replayed as `families::<key>`.
 const DERIVED_FAMILIES: &str = "families";
+const DERIVED_VOCABULARIES: &str = "family_vocabularies";
 
 /// Ledger categories the snapshot scan cannot see: follow-up hooks, accepted
 /// boundaries on domains with no emitted machine, and the standalone
@@ -200,7 +202,7 @@ pub fn emitted_families(snapshot: &Value) -> BTreeSet<String> {
         .filter(|(key, value)| {
             (value.is_array() || value.is_object())
                 && !CONTRACT_METADATA.contains(&key.as_str())
-                && key.as_str() != DERIVED_FAMILIES
+                && ![DERIVED_FAMILIES, DERIVED_VOCABULARIES].contains(&key.as_str())
         })
         .map(|(key, _)| key.clone())
         .collect();
@@ -210,14 +212,14 @@ pub fn emitted_families(snapshot: &Value) -> BTreeSet<String> {
             families.insert(format!("{key}/{domain}"));
         }
     }
-    let derived = snapshot[DERIVED_FAMILIES]
-        .as_object()
-        .expect("derived families");
-    families.extend(
-        derived
-            .keys()
-            .map(|key| format!("{DERIVED_FAMILIES}/{key}")),
-    );
+    for derived in [DERIVED_FAMILIES, DERIVED_VOCABULARIES] {
+        let derived = snapshot[derived].as_object().expect("derived families");
+        families.extend(
+            derived
+                .keys()
+                .map(|key| format!("{DERIVED_FAMILIES}/{key}")),
+        );
+    }
     families
 }
 

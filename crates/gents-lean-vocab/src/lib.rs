@@ -621,6 +621,7 @@ pub struct LeanContractSnapshot {
     pub aggregate_token_budget_cases: Vec<LeanAggregateTokenBudgetCase>,
     pub task_hook_admission_cases: Vec<LeanTaskHookAdmissionCase>,
     pub families: BTreeMap<String, family::LeanFamily>,
+    pub family_vocabularies: BTreeMap<String, serde_json::Value>,
     pub task_hook_run_cases: Vec<LeanTaskHookRunCase>,
     pub task_hook_recovery_cases: Vec<LeanTaskHookRecoveryCase>,
     pub lifecycle_hook_effect_cases: Vec<LeanLifecycleHookEffectCase>,

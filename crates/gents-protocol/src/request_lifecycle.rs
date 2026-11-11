@@ -301,3 +301,13 @@ mod tests {
         assert_eq!(RequestLifecycleState::inline(), expected);
     }
 }
+
+#[cfg(test)]
+mod conformance {
+    use super::RequestLifecycleState;
+
+    #[test]
+    fn lifecycle_states_are_the_lean_request_states() {
+        gents_lean_vocab::families::request_state::replay(&RequestLifecycleState::ALL);
+    }
+}

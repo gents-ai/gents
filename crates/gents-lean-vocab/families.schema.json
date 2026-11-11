@@ -1,88 +1,108 @@
 {
-  "store_encryption_upgrade_after_recheck": {
-    "input": {
-      "fields": [
-        [
-          "equal",
-          "bool"
+  "functions": {
+    "store_encryption_upgrade_after_recheck": {
+      "input": {
+        "fields": [
+          [
+            "equal",
+            "bool"
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": {
+        "enum": "Phase",
+        "values": [
+          "copying",
+          "verified",
+          "installed"
         ]
-      ],
-      "struct": "Input"
+      }
     },
-    "output": {
-      "enum": "Phase",
-      "values": [
-        "copying",
-        "verified",
-        "installed"
-      ]
+    "store_encryption_upgrade_may_finish": {
+      "input": {
+        "fields": [
+          [
+            "phase",
+            {
+              "enum": "Phase",
+              "values": [
+                "copying",
+                "verified",
+                "installed"
+              ]
+            }
+          ],
+          [
+            "metadata_committed",
+            "bool"
+          ],
+          [
+            "native_accepted",
+            "bool"
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": "bool"
+    },
+    "store_encryption_upgrade_next": {
+      "input": {
+        "fields": [
+          [
+            "phase",
+            {
+              "enum": "Phase",
+              "values": [
+                "copying",
+                "verified",
+                "installed"
+              ]
+            }
+          ],
+          [
+            "source",
+            "bool"
+          ],
+          [
+            "stage",
+            "bool"
+          ],
+          [
+            "retired",
+            "bool"
+          ]
+        ],
+        "struct": "Input"
+      },
+      "output": {
+        "enum": "Action",
+        "values": [
+          "copy",
+          "retire_source",
+          "promote",
+          "record_installed",
+          "open",
+          "refuse"
+        ]
+      }
     }
   },
-  "store_encryption_upgrade_may_finish": {
-    "input": {
-      "fields": [
-        [
-          "phase",
-          {
-            "enum": "Phase",
-            "values": [
-              "copying",
-              "verified",
-              "installed"
-            ]
-          }
-        ],
-        [
-          "metadata_committed",
-          "bool"
-        ],
-        [
-          "native_accepted",
-          "bool"
-        ]
-      ],
-      "struct": "Input"
-    },
-    "output": "bool"
-  },
-  "store_encryption_upgrade_next": {
-    "input": {
-      "fields": [
-        [
-          "phase",
-          {
-            "enum": "Phase",
-            "values": [
-              "copying",
-              "verified",
-              "installed"
-            ]
-          }
-        ],
-        [
-          "source",
-          "bool"
-        ],
-        [
-          "stage",
-          "bool"
-        ],
-        [
-          "retired",
-          "bool"
-        ]
-      ],
-      "struct": "Input"
-    },
-    "output": {
-      "enum": "Action",
+  "vocabularies": {
+    "request_state": {
+      "enum": "RequestState",
       "values": [
-        "copy",
-        "retire_source",
-        "promote",
-        "record_installed",
-        "open",
-        "refuse"
+        "workspaceBindingPending",
+        "pending",
+        "claimed",
+        "processing",
+        "waitingForBackend",
+        "resumingBackend",
+        "completed",
+        "failed",
+        "superseded",
+        "dead",
+        "interrupted"
       ]
     }
   }

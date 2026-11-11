@@ -22,15 +22,60 @@ pub struct LeanFamilyCase {
     pub expected: Value,
 }
 
-fn live_schema() -> BTreeMap<&'static str, Value> {
-    crate::lean_contract_snapshot()
-        .families
+fn live_schema() -> BTreeMap<&'static str, BTreeMap<&'static str, Value>> {
+    let snapshot = crate::lean_contract_snapshot();
+    let functions = snapshot.families.iter().map(|(key, family)| {
+        let shape = serde_json::json!({ "input": family.input, "output": family.output });
+        (key.as_str(), shape)
+    });
+    let vocabularies = snapshot
+        .family_vocabularies
         .iter()
-        .map(|(key, family)| {
-            let shape = serde_json::json!({ "input": family.input, "output": family.output });
-            (key.as_str(), shape)
-        })
-        .collect()
+        .map(|(key, vocabulary)| (key.as_str(), vocabulary.clone()));
+    BTreeMap::from([
+        ("functions", functions.collect()),
+        ("vocabularies", vocabularies.collect()),
+    ])
+}
+
+fn assert_shape_is_checked_in(kind: &str, key: &str) {
+    let checked_in: BTreeMap<&str, BTreeMap<&str, Value>> =
+        serde_json::from_str(CHECKED_IN_SCHEMA).expect("checked-in family schema");
+    assert_eq!(
+        live_schema()[kind].get(key),
+        checked_in[kind].get(key),
+        "family {key} changed shape in Lean; regenerate families.schema.json with \
+         GENTS_WRITE_FAMILY_SCHEMA=1 cargo test -p gents-lean-vocab family_schema"
+    );
+}
+
+/// Checks that the production enum and the Lean enum have the same wire names:
+/// every Lean name decodes into the production enum, and `all` encodes to
+/// exactly the Lean names.
+pub fn replay_vocabulary<T>(key: &str, all: &[T])
+where
+    T: Serialize + DeserializeOwned + PartialEq + std::fmt::Debug,
+{
+    assert_shape_is_checked_in("vocabularies", key);
+    let lean = &crate::lean_contract_snapshot().family_vocabularies[key]["values"];
+    let lean: Vec<&Value> = lean.as_array().expect("vocabulary values").iter().collect();
+    for name in &lean {
+        let decoded: T = serde_json::from_value((*name).clone()).unwrap_or_else(|error| {
+            panic!("vocabulary {key}: {name} is not a production value: {error}")
+        });
+        assert!(
+            all.contains(&decoded),
+            "vocabulary {key}: {decoded:?} is missing from the production list"
+        );
+    }
+    for value in all {
+        let name = serde_json::to_value(value).expect("vocabulary value encodes");
+        assert!(
+            lean.contains(&&name),
+            "vocabulary {key}: production {name} is not a Lean value"
+        );
+    }
+    assert_eq!(all.len(), lean.len(), "vocabulary {key} repeats a value");
 }
 
 /// Decodes each Lean input into the owner's types, runs the owner and compares
@@ -40,14 +85,7 @@ where
     I: DeserializeOwned,
     O: Serialize,
 {
-    let checked_in: BTreeMap<&str, Value> =
-        serde_json::from_str(CHECKED_IN_SCHEMA).expect("checked-in family schema");
-    assert_eq!(
-        live_schema().get(key),
-        checked_in.get(key),
-        "family {key} changed shape in Lean; regenerate families.schema.json with \
-         GENTS_WRITE_FAMILY_SCHEMA=1 cargo test -p gents-lean-vocab family_schema"
-    );
+    assert_shape_is_checked_in("functions", key);
     let family = &crate::lean_contract_snapshot().families[key];
     assert!(!family.cases.is_empty(), "family {key} has no cases");
     for case in &family.cases {
@@ -71,6 +109,7 @@ mod tests {
         let live = serde_json::to_string_pretty(&live_schema()).unwrap() + "\n";
         if std::env::var_os("GENTS_WRITE_FAMILY_SCHEMA").is_some() {
             fs::write(SCHEMA_PATH, &live).unwrap();
+            return;
         }
         assert_eq!(live, CHECKED_IN_SCHEMA);
     }

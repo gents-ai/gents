@@ -285,6 +285,7 @@ def snapshotCaptureTailJson : String :=
     ++ "\"task_hook_admission_cases\":"
       ++ Conformance.TaskHooksContracts.admissionCasesJson ++ ","
     ++ "\"families\":" ++ (conformance_families%).compress ++ ","
+    ++ "\"family_vocabularies\":" ++ (conformance_vocabularies%).compress ++ ","
     ++ "\"task_hook_run_cases\":"
       ++ Conformance.TaskHooksContracts.runCasesJson ++ ","
     ++ "\"task_hook_recovery_cases\":"

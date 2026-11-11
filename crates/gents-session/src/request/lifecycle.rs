@@ -785,20 +785,6 @@ mod tests {
     };
 
     #[test]
-    fn rust_request_lifecycle_state_vocabulary_matches_lean_model() {
-        let rust_states = RequestLifecycleState::ALL
-            .iter()
-            .copied()
-            .map(RequestLifecycleState::as_str)
-            .collect::<Vec<_>>();
-        assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
-            domain: "RequestState",
-            rust_source: "RequestLifecycleState::ALL",
-            rust_values: &rust_states,
-        });
-    }
-
-    #[test]
     fn rust_execution_origin_vocabulary_matches_lean_model() {
         let rust_origins = vec![
             ExecutionOrigin::Interactive.as_str(),

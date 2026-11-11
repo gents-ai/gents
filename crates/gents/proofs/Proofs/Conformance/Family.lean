@@ -8,11 +8,12 @@ namespace Conformance
 
 open Lean
 
-/-- The wire shape of a family type. Names are the Lean names; `wireName` is
-the one convention that maps them to wire names. -/
+/-- The wire shape of a family type. An enum carries each constructor with its
+wire name: the name its `conformance_vocabulary` function gives it, or
+`wireName` of the constructor when it has none. -/
 inductive Schema where
   | bool
-  | enum (name : String) (values : List String)
+  | enum (name : String) (values : List (String × String))
   | struct (name : String) (fields : List (String × Schema))
 
 def wireName (leanName : String) : String :=
@@ -26,14 +27,14 @@ def wireKey (declaration : Name) : String :=
 partial def Schema.wire : Schema → Json
   | .bool => "bool"
   | .enum name values =>
-      Json.mkObj [("enum", name), ("values", Json.arr (values.map (Json.str ∘ wireName)).toArray)]
+      Json.mkObj [("enum", name), ("values", Json.arr (values.map (Json.str ·.2)).toArray)]
   | .struct name fields =>
       Json.mkObj [("struct", name), ("fields", Json.arr (fields.map fun (field, schema) =>
         Json.arr #[Json.str (wireName field), schema.wire]).toArray)]
 
 /-- Rewrites derived `ToJson` output to wire names. -/
 partial def Schema.encode : Schema → Json → Json
-  | .enum _ _, .str value => Json.str (wireName value)
+  | .enum _ values, .str value => Json.str ((values.lookup value).getD value)
   | .struct _ fields, value =>
       Json.mkObj (fields.map fun (field, schema) =>
         (wireName field, schema.encode ((value.getObjVal? field).toOption.getD Json.null)))
@@ -52,11 +53,36 @@ private def enumConstructors (type : Expr) : MetaM (Name × List Name) := do
       throwError "conformance enum {name} has a constructor with fields: {constructor}"
   pure (name, induct.ctors)
 
+initialize vocabularyExtension :
+    SimplePersistentEnvExtension (Name × Name) (Array (Name × Name)) ←
+  registerSimplePersistentEnvExtension
+    { addEntryFn := Array.push
+    , addImportedFn := fun imported => imported.foldl (· ++ ·) #[] }
+
+syntax (name := conformanceVocabulary) "conformance_vocabulary" : attr
+
+initialize registerBuiltinAttribute {
+  name := `conformanceVocabulary
+  descr := "this function gives each constructor of its enum the wire name production uses"
+  add := fun declaration _ _ => do
+    let .forallE _ (.const type _) (.const ``String _) _ := (← getConstInfo declaration).type
+      | throwError "a conformance vocabulary maps an enum to String: {declaration}"
+    modifyEnv (vocabularyExtension.addEntry · (type, declaration)) }
+
+private def enumSchemaTerm (name : Name) (constructors : List Name) : MetaM (TSyntax `term) := do
+  let vocabulary := (vocabularyExtension.getState (← getEnv)).find? (·.1 == name)
+  let values ← constructors.toArray.mapM fun constructor => do
+    let wire ← match vocabulary with
+      | some (_, function) => `($(mkIdent function) $(mkIdent constructor))
+      | none => `(wireName $(quote constructor.getString!))
+    `(($(quote constructor.getString!), $wire))
+  `(Schema.enum $(quote name.getString!) [$values,*])
+
 private def schemaTerm (type : Expr) : MetaM (TSyntax `term) := do
   let type ← whnfR type
   if type.isConstOf ``Bool then return ← `(Schema.bool)
   let (name, constructors) ← enumConstructors type
-  `(Schema.enum $(quote name.getString!) $(quote (constructors.map (·.getString!))))
+  enumSchemaTerm name constructors
 
 /-- Every value of a finite type, in declaration order. -/
 private def allTerm (type : Expr) : MetaM (TSyntax `term) := do
@@ -105,6 +131,14 @@ elab "conformance_families%" : term => do
   let declarations := (functionExtension.getState (← getEnv)).qsort Name.lt
   let entries ← declarations.mapM fun declaration => do
     `(($(quote (wireKey declaration)), $(← familyTerm declaration)))
+  elabTerm (← `(Json.mkObj [$entries,*])) (some (mkConst ``Json))
+
+/-- The wire names of every enum with a `conformance_vocabulary`, by key. -/
+elab "conformance_vocabularies%" : term => do
+  let vocabularies := (vocabularyExtension.getState (← getEnv)).qsort (Name.lt ·.1 ·.1)
+  let entries ← vocabularies.mapM fun (type, _) => do
+    let (name, constructors) ← enumConstructors (mkConst type)
+    `(($(quote (wireKey type)), Schema.wire $(← enumSchemaTerm name constructors)))
   elabTerm (← `(Json.mkObj [$entries,*])) (some (mkConst ``Json))
 
 end Conformance

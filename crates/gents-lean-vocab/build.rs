@@ -70,12 +70,29 @@ fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
     let path = manifest.join("families.schema.json");
     println!("cargo:rerun-if-changed={}", path.display());
-    let schema: BTreeMap<String, Value> =
+    let schema: BTreeMap<String, BTreeMap<String, Value>> =
         serde_json::from_str(&fs::read_to_string(&path).expect("family schema"))
             .expect("family schema JSON");
 
     let mut out = String::new();
-    for (key, family) in &schema {
+    for (key, vocabulary) in &schema["vocabularies"] {
+        assert!(
+            !schema["functions"].contains_key(key),
+            "family key {key} names a function and a vocabulary"
+        );
+        let name = vocabulary["enum"].as_str().expect("vocabulary enum name");
+        writeln!(
+            out,
+            "pub mod {key} {{\n    \
+             /// Checks that `all`, every value of the production enum, is Lean `{name}`\n    \
+             /// under the same wire names.\n    \
+             pub fn replay<T>(all: &[T])\n    where\n        \
+             T: serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,\n    {{\n        \
+             crate::family::replay_vocabulary({key:?}, all)\n    }}\n}}"
+        )
+        .unwrap();
+    }
+    for (key, family) in &schema["functions"] {
         let mut module = Module::default();
         let mut enums = Vec::new();
         let input = module.rust_type(&family["input"], &mut enums);

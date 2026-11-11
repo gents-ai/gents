@@ -11,6 +11,9 @@ import Proofs.Conformance.Contracts.Machines.Goal
 import Proofs.Conformance.Contracts.Machines.Mailbox
 import Proofs.Conformance.CompletionRetry.Contracts
 import Proofs.Runtime.Eval
+import Proofs.Conformance.Family
+
+attribute [conformance_vocabulary] RequestState.toDefraDB
 
 namespace Conformance.Contracts
 
