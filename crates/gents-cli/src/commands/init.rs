@@ -1274,7 +1274,10 @@ async fn initialize_runtime_home(
             "Default".to_string()
         }),
         description: if args.engineer {
-            Some("Walks you through configuring Gents for the work you want to do.".to_string())
+            Some(
+                "Builds what you need on this node: apps, automations and teams of agents."
+                    .to_string(),
+            )
         } else {
             None
         },
@@ -1754,10 +1757,11 @@ fn init_next_steps(
     {
         steps.push("gents accounts login claude".to_string());
     }
+    let home = crate::shell_word(home);
     if summary.model_name.is_empty() {
-        steps.push(
-            "Select a provider and model in Gents settings before starting work.".to_string(),
-        );
+        steps.push(format!(
+            "No model is selected yet, so the Engineer cannot answer. Choose one with `gents config profile set --file <profile.json> --home {home}`, or in the desktop under the node's Providers settings."
+        ));
     } else if is_probably_ollama_endpoint(&summary.endpoint) {
         steps.push(format!("ollama pull {}", summary.model_name));
     } else if is_probably_llama_server_endpoint(&summary.endpoint) {
@@ -1765,7 +1769,6 @@ fn init_next_steps(
     }
     steps.push("gents runtime server".to_string());
     steps.push("gents codex".to_string());
-    let home = crate::shell_word(home);
     steps.push(format!(
         "To change the model's address, save the output of `gents config backend show {} --home {home}` without its `_docID`, edit `endpoint`, and load it with `gents config backend set --file <backend.json> --home {home}`.",
         summary.backend_id

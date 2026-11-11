@@ -26,8 +26,8 @@ pub enum BackendProtectionError {
     /// which this release does not convert.
     #[error(
         "this home was created by an older Gents version (v1.0.0-rc1 or earlier), which this \
-         release cannot open or convert: back the home up or delete it, then run `gents init` \
-         to start fresh, or use the release that created it to export what you need first"
+         release cannot open or convert. Back the home up or delete it, then run `gents` to set \
+         up a fresh one. To keep anything, export it first with the release that created it."
     )]
     MissingProvenance,
     #[error("legacy backend policy binding is missing or incompatible")]

@@ -149,10 +149,10 @@ applies it locally, and verifies an exact post-apply diff.
 
 Examples:
   gents runtime provision --home /path/to/home --root infra/agents/HOST/AGENT
-  gents runtime provision --root infra/agents/mini-1/mini-1-steward
+  gents runtime provision --root infra/agents/mini-1/mini-1-engineer
   gents runtime provision --root infra/agents/dev/dev-agent --bootstrap-file-identity
-  gents runtime provision --root infra/agents/mini-1/mini-1-steward --bootstrap-macos-keychain --keychain-label LABEL
-  gents runtime provision --root infra/agents/mini-1/mini-1-steward --bootstrap-macos-secure-enclave --secure-enclave-label LABEL
+  gents runtime provision --root infra/agents/mini-1/mini-1-engineer --bootstrap-macos-keychain --keychain-label LABEL
+  gents runtime provision --root infra/agents/mini-1/mini-1-engineer --bootstrap-macos-secure-enclave --secure-enclave-label LABEL
 
 Production low-level flow:
   gents init --identity-only --identity-backend macos-keychain --keychain-label LABEL

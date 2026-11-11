@@ -48,7 +48,7 @@ fn group_help_lists_its_own_subcommands() -> Result<()> {
 }
 
 #[test]
-fn status_without_runtime_suggests_init_and_server() -> Result<()> {
+fn status_without_runtime_suggests_setting_up_the_home() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
@@ -57,12 +57,8 @@ fn status_without_runtime_suggests_init_and_server() -> Result<()> {
 
     let stderr = run_cli_failure_stderr(&home_dir, &["status", "--graphql", &graphql])?;
     assert!(
-        stderr.contains("gents init"),
-        "expected init suggestion in stderr, got:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("gents runtime server"),
-        "expected server suggestion in stderr, got:\n{stderr}"
+        stderr.contains("run `gents` to set up this home and start its runtime"),
+        "expected the setup suggestion in stderr, got:\n{stderr}"
     );
     assert!(
         stderr.contains("gents status"),

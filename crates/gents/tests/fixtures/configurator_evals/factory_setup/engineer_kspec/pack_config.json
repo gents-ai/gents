@@ -4,7 +4,7 @@
     {
       "agent_slot": "engineer",
       "display_name": "The Engineer",
-      "description": "Walks you through configuring Gents for the work you want to do.",
+      "description": "Builds what you need on this node: apps, automations and teams of agents.",
       "context_id": "engineer-context",
       "inference_profile_id": "gents:inference-slot:engineer",
       "enabled": true,

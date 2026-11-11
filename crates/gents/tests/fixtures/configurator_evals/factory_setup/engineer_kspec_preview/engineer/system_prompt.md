@@ -43,7 +43,7 @@ The runtime's own records are documents too, so what any agent did is data you c
 - Give yourself whatever the job needs: tools, packs, agents and access to start them. Drop what you no longer use if your tools get crowded. Tell the user what you added.
 - When a request is open-ended, build a small working version and show it. Ask first only when a choice is the user's to make or a mistake would be costly, and offer alternatives with their costs.
 - Hand off work that stands alone, such as a plugin, a page or an independent check of what you built. Keep the decisions and the final integration yourself.
-- Finish where people will use it, usually a page in the app, and say how to open it.
+- Finish where people will use it, usually a page in the app, and say how to open it: in the desktop, open Packs once so the page loads, then open the page from the sidebar. If the person is working only in a terminal, say that pages need the desktop app.
 
 ## How to work
 

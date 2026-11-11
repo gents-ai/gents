@@ -32,9 +32,17 @@ export interface ActivateOptions {
 /** What a plugin's notification switches are kept under: a pack plugin's
     listing (`<ns>/<pack>/<id>`), so a plugin of the same id from another
     pack or folder never inherits the person's choice; otherwise its door
-    and id. */
-export function notifierKey(record: { id: string; door: UxPluginDoor; pack?: string }) {
-  return record.pack ? `${record.pack}/${record.id}` : `${record.door}:${record.id}`;
+    and id, or for a page document its door and scope, since its id names
+    it only within its node. */
+export function notifierKey(record: {
+  id: string;
+  door: UxPluginDoor;
+  pack?: string;
+  scope?: string;
+}) {
+  return record.pack
+    ? `${record.pack}/${record.id}`
+    : `${record.door}:${record.scope ?? record.id}`;
 }
 
 /** live plugins: id -> the disposers of the current incarnation */

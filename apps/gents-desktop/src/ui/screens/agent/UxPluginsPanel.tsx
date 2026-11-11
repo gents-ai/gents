@@ -68,7 +68,7 @@ export function UxPluginsPanel() {
         {rows.length === 0 && (
           <Row
             label="None loaded"
-            description="Drop a plugin.js into <home>/ux-plugins/<id>/ or install a pack that ships one, then Reload."
+            description="Ask the Engineer for a page and it appears here. To add one by hand, drop a plugin.js into <home>/ux-plugins/<id>/ or install a pack that ships one, then Reload."
           />
         )}
         {rows.map((record) => (

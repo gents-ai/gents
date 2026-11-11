@@ -26,7 +26,7 @@ pub(super) const RUNTIME_UP: Duration = Duration::from_secs(90);
 pub(super) const EXIT: Duration = Duration::from_secs(10);
 pub(super) const PROMPT: Duration = Duration::from_secs(30);
 pub(super) const TURN: Duration = Duration::from_secs(240);
-pub(super) const FOLDER_QUESTION: &str = "Data folder [";
+pub(super) const FOLDER_QUESTION: &str = "Gents home [";
 pub(super) const INFERENCE_QUESTION: &str = "Choose an inference provider";
 /// The answer to `INFERENCE_QUESTION` that picks a local server.
 pub(super) const LOCAL_PROVIDER: &str = "4";
