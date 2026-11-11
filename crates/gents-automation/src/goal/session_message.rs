@@ -13,6 +13,12 @@ use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 #[cfg(test)]
 mod agent_tools_tests;
 #[cfg(test)]
+mod assignment_handoff_tests;
+#[cfg(test)]
+mod delivery_goal_input_tests;
+#[cfg(test)]
+mod recovery_closeout_tests;
+#[cfg(test)]
 mod goal_input_tests;
 #[cfg(test)]
 mod tests;

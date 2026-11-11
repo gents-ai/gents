@@ -584,3 +584,49 @@ pub async fn ensure_runtime_session(
     Ok(access)
 }
 
+
+pub async fn claim_request_fixture(
+    node: &Arc<EmbeddedNode>,
+    hook: &DefraSessionHook,
+    request_id: &str,
+    session: &str,
+    signature_valid: bool,
+) {
+    let access = gents_store::config_client::ConfigAccess::local(node.clone());
+    let response = access.execute(&format!(r#"{{AgentRequest(filter: {{request_id: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}) {{{}}}}}"#,
+        gents_store::graphql::escape_graphql_string(request_id), gents_store::graphql::escape_graphql_string(session), gents_protocol::request_admission::SIGNED_REQUEST_FIELDS)).await.unwrap();
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+    assert_eq!(
+        gents_store::identity::request_receipt::verify_request_receipt_signature(&row).is_ok(),
+        signature_valid
+    );
+    let mut lifecycle = gents_session::request::lifecycle::RequestLifecycle::new_with_node_did(
+        node.clone(),
+        row.try_into().unwrap(),
+        60,
+    );
+    assert_eq!(
+        lifecycle.claim().await.unwrap(),
+        gents_session::request::lifecycle::ClaimOutcome::Claimed
+    );
+    let writer = gents_session::request::streaming::DefraStreamWriter::new(
+        node.clone(),
+        &hook.node_did,
+        std::time::Duration::ZERO,
+    );
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    hook.set_active_request_lineage(Some(request_id.into()), Some(hook.node_did.clone()))
+        .await
+        .unwrap();
+    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::minutes(5)))
+        .await;
+    hook_execution_fixtures().lock().await.insert(
+        hook_execution_fixture_key(hook, request_id),
+        HookExecutionFixture {
+            lifecycle,
+            writer,
+            turn: 0,
+        },
+    );
+}

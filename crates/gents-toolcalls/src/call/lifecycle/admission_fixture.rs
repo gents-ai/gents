@@ -1357,12 +1357,220 @@ pub async fn completion_obligations(
 }
 
 pub async fn settle(admission: &PublishedAdmission) -> usize {
+    settle_with(
+        admission,
+        &gents_session::session::message::NoSessionMessageGoals,
+    )
+    .await
+}
+
+pub async fn settle_with(
+    admission: &PublishedAdmission,
+    goals: &dyn gents_session::session::message::SessionMessageGoals,
+) -> usize {
     crate::background::completion::settle_running_session_message_rows_with_access(
         &admission.node,
         &admission.tool.access().unwrap(),
-        &gents_session::session::message::NoSessionMessageGoals,
+        goals,
         &admission.node_did,
     )
     .await
     .unwrap()
+}
+
+pub async fn tool_call_row(
+    access: &gents_store::config_client::ConfigAccess,
+    tool_doc_id: &str,
+) -> serde_json::Value {
+    let escaped = gents_store::graphql::escape_graphql_string(tool_doc_id);
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ status lifecycle_state }} }}"#
+        ))
+        .await
+        .expect("read the tool call row as its owning Agent");
+    response["data"]["AgentToolCall"][0].clone()
+}
+
+/// Notices are owned by the Agent that published them, so they are read
+/// through that Agent's access rather than anonymously.
+pub async fn session_message_notifications(
+    access: &gents_store::config_client::ConfigAccess,
+    did: &str,
+    session_id: &str,
+) -> Vec<String> {
+    let escaped = gents_store::graphql::escape_graphql_string(session_id);
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{escaped}" }} }}) {{ _docID requester_did }} }}"#
+        ))
+        .await
+        .expect("read session messages as their owning Agent");
+    let mut notifications = Vec::new();
+    for row in response["data"]["AgentMessage"].as_array().unwrap() {
+        let (_, message) = gents_session::session::load_canonical_message(
+            access,
+            row["_docID"].as_str().unwrap(),
+            did,
+            row["requester_did"].as_str(),
+        )
+        .await
+        .expect("reconstruct canonical session message");
+        if let gents_inference::llm::message::Message::User { content } = message {
+            for item in content {
+                if let gents_inference::llm::message::UserContent::Text(text) = item {
+                    if text.text.contains("<tool-completion") {
+                        notifications.push(text.text);
+                    }
+                }
+            }
+        }
+    }
+    notifications
+}
+
+pub async fn caused_session_id(
+    access: &gents_store::config_client::ConfigAccess,
+    caused_request_doc_id: &str,
+) -> String {
+    let doc_id = gents_store::graphql::escape_graphql_string(caused_request_doc_id);
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ session_id }} }}"#
+        ))
+        .await
+        .unwrap();
+    response["data"]["AgentRequest"][0]["session_id"]
+        .as_str()
+        .expect("the caused request names its session")
+        .to_owned()
+}
+
+pub async fn cause(
+    message: &PublishedSessionMessage,
+    caller_hop: u32,
+) -> gents_protocol::request_lifecycle::SessionMessageCause {
+    let tool = &message.admission.tool;
+    gents_protocol::request_lifecycle::SessionMessageCause {
+        caller_node_did: message.admission.node_did.clone(),
+        caller_agent_did: tool.actor().to_string(),
+        caller_session_id: tool.session_id().to_owned(),
+        caller_requester_did: tool.requester_did().map(str::to_owned),
+        caller_request_id: tool.calling_request_id().await.unwrap(),
+        caller_request_doc_id: tool.request_doc_id().unwrap().to_owned(),
+        caller_hop,
+        tool_call_id: tool.tool_call_id().to_owned(),
+        tool_call_doc_id: tool.doc_id().unwrap().to_owned(),
+        correlation: None,
+    }
+}
+
+pub fn signer(message: &PublishedSessionMessage) -> gents_store::identity::ManagedAgentSigner {
+    message
+        .admission
+        .tool
+        .access()
+        .unwrap()
+        .managed_agent_signer()
+        .unwrap()
+}
+
+pub async fn started(
+    name: &str,
+) -> (
+    PublishedSessionMessage,
+    gents_protocol::row::AgentRequest,
+    gents_protocol::row::AgentRequest,
+) {
+    let message = published_session_message(PublishedAdmissionOptions {
+        name: name.to_owned(),
+        real_identity: true,
+        await_mode: AwaitMode::Background,
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let caller = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
+        &message.admission.tool.access().unwrap(),
+        message.admission.tool.request_doc_id().unwrap(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let caused = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
+        &message.admission.tool.access().unwrap(),
+        &message.caused_request_doc_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    materialize_session(&message.admission.tool.access().unwrap(), &caused).await;
+    (message, caller, caused)
+}
+
+pub fn owner(message: &PublishedSessionMessage) -> gents_store::config_client::ConfigAccess {
+    message.admission.tool.access().unwrap()
+}
+
+/// `commit` already materializes the caused session; this is the idempotent
+/// re-check, which must read the session through its owning Agent.
+pub async fn materialize_session(
+    access: &gents_store::config_client::ConfigAccess,
+    caused: &gents_protocol::row::AgentRequest,
+) {
+    // Sessions record created_at in the canonical second-precision UTC form.
+    materialize_session_at(
+        access,
+        caused,
+        &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    )
+    .await;
+}
+
+pub async fn materialize_session_at(
+    access: &gents_store::config_client::ConfigAccess,
+    caused: &gents_protocol::row::AgentRequest,
+    created_at: &str,
+) {
+    let caused = caused.clone();
+    let created_at = created_at.to_owned();
+    access
+        .transact_write("test.materialize_session", move |txn| {
+            let caused = caused.clone();
+            let created_at = created_at.clone();
+            Box::pin(async move {
+                gents_session::session::ensure_session_in_txn(
+                    txn,
+                    &caused.session_id,
+                    &caused.node_did,
+                    &caused.agent_did,
+                    caused.requester_did.as_deref(),
+                    None,
+                    gents_session::request::lifecycle::materialize::created_session_provenance(
+                        &caused,
+                    ),
+                    &created_at,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+}
+
+pub async fn set_state(
+    access: &gents_store::config_client::ConfigAccess,
+    doc_id: &str,
+    state: &str,
+) {
+    access
+        .write(
+            "test.set_state",
+            &format!(
+                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "{state}" }}) {{ _docID }} }}"#,
+                gents_store::graphql::escape_graphql_string(doc_id)
+            ),
+        )
+        .await
+        .unwrap();
 }

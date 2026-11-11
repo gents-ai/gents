@@ -1,5 +1,4 @@
 use super::*;
-use chrono::Utc;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -13,7 +12,7 @@ fn goal_id(owner: &str, session: &str, id: u64) -> String {
     if id == 1 {
         gents_protocol::goal::deterministic_goal_id(owner, session)
     } else {
-        gents_automation::goal::replacement_goal_identity(owner, session, &format!("assignment-{id}")).goal_id
+        crate::goal::replacement_goal_identity(owner, session, &format!("assignment-{id}")).goal_id
     }
 }
 
@@ -54,124 +53,6 @@ async fn request(
     gents_store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
 }
 
-pub(super) async fn bind_signed_request(
-    node: &Arc<EmbeddedNode>,
-    hook: &DefraSessionHook,
-    identity: &KeyIdentity,
-    request_id: &str,
-    session: &str,
-    reference: Option<GoalAssignmentInput>,
-) {
-    let access = ConfigAccess::local(node.clone());
-    let mut request = AgentRequestCreate::base(
-        RequestPurpose::Normal,
-        request_id,
-        identity.did(),
-        identity.did(),
-        identity.did(),
-        session,
-        "Goal control request",
-        "interactive",
-        "2026-10-21T00:00:00Z",
-        AgentRequestAdmissionRecord::local_self(identity.did()),
-    );
-    request.input.goal_assignment = reference;
-    gents_session::request::admission::sign_agent_request_create(identity, &mut request)
-        .await
-        .unwrap();
-    let response = access
-        .write(
-            "test.goal_tool_bound_request",
-            &request.graphql_mutation().unwrap(),
-        )
-        .await
-        .unwrap();
-    let doc = gents_store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
-    access
-        .transact_write("test.goal_tool_bind_existing_goal", |txn| {
-            Box::pin(async {
-                if let Some(goal) =
-                    gents_automation::goal::load_canonical_goal_in_txn(txn, identity.did(), session).await?
-                {
-                    if goal.assignment_root_request_doc_id.is_none() {
-                        gents_automation::goal::bind_goal_first_request_in_txn(
-                            txn,
-                            &goal,
-                            &doc,
-                            request.input.goal_assignment.as_ref(),
-                        )
-                        .await?;
-                    }
-                }
-                Ok::<_, anyhow::Error>(())
-            })
-        })
-        .await
-        .unwrap();
-    access.write("test.goal_tool_finish_previous_requests", &format!(r#"mutation {{update_AgentRequest(filter: {{_docID: {{_neq: "{}"}}}}, input: {{lifecycle_state: "completed"}}) {{_docID}}}}"#,
-        gents_store::graphql::escape_graphql_string(&doc))).await.unwrap();
-    claim_signed_request(node, hook, request_id, session).await;
-}
-
-async fn claim_signed_request(
-    node: &Arc<EmbeddedNode>,
-    hook: &DefraSessionHook,
-    request_id: &str,
-    session: &str,
-) {
-    claim_request_fixture(node, hook, request_id, session, true).await;
-}
-
-async fn claim_request_fixture(
-    node: &Arc<EmbeddedNode>,
-    hook: &DefraSessionHook,
-    request_id: &str,
-    session: &str,
-    signature_valid: bool,
-) {
-    let access = ConfigAccess::local(node.clone());
-    let response = access.execute(&format!(r#"{{AgentRequest(filter: {{request_id: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}) {{{}}}}}"#,
-        gents_store::graphql::escape_graphql_string(request_id), gents_store::graphql::escape_graphql_string(session), gents_protocol::request_admission::SIGNED_REQUEST_FIELDS)).await.unwrap();
-    let row: gents_protocol::row::AgentRequestRow =
-        serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-    assert_eq!(
-        gents_store::identity::request_receipt::verify_request_receipt_signature(&row).is_ok(),
-        signature_valid
-    );
-    let mut lifecycle = gents_session::request::lifecycle::RequestLifecycle::new_with_node_did(
-        node.clone(),
-        row.try_into().unwrap(),
-        60,
-    );
-    assert_eq!(
-        lifecycle.claim().await.unwrap(),
-        gents_session::request::lifecycle::ClaimOutcome::Claimed
-    );
-    let writer = gents_session::request::streaming::DefraStreamWriter::new(
-        node.clone(),
-        identity_owner(hook),
-        std::time::Duration::ZERO,
-    );
-    lifecycle.begin_owned_execution(&writer).await.unwrap();
-    hook.set_active_request_lineage(Some(request_id.into()), Some(identity_owner(hook).into()))
-        .await
-        .unwrap();
-    hook.set_request_deadline_at(Some(Utc::now() + chrono::Duration::minutes(5)))
-        .await;
-    hook_execution_fixtures().lock().await.insert(
-        hook_execution_fixture_key(hook, request_id),
-        HookExecutionFixture {
-            lifecycle,
-            writer,
-            turn: 0,
-        },
-    );
-}
-
-fn identity_owner(hook: &DefraSessionHook) -> &str {
-    &hook.node_did
-}
-
 async fn versions(access: &ConfigAccess) -> Value {
     let mut rows = access
         .execute("{Goal(showDeleted: true) {_docID _version {cid}}}")
@@ -209,13 +90,15 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
             gents_store::schema::ensure_runtime_schemas(&node)
                 .await
                 .unwrap();
+            crate::lifecycle_hooks::attach(&node).unwrap();
             let access = ConfigAccess::local(node.clone());
             let hook = DefraSessionHook::with_identity(
                 node.clone(),
                 identity.did(),
                 FailurePolicy::FailClosed,
             )
-            .with_goal_tool_authority(true, true);
+            .with_goal_tool_authority(true, true)
+            .with_goal_tools(Arc::new(crate::goal::goal_tools::GoalToolAnswers));
             assert!(matches!(
                 hook.on_completion_call(&user_text_message("Work on this goal"), &[])
                     .await,
@@ -224,7 +107,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
             let session = hook.session_id().await.unwrap();
             // In this fixture the runtime identity is also the session's working
             // Agent; Goal history is written and retired as that creator.
-            let agent_access = gents_toolcalls::call::hook::fixtures::ensure_runtime_session(&node, &identity, &session)
+            let agent_access = ensure_runtime_session(&node, &identity, &session)
                 .await
                 .unwrap();
             let session_doc_id = agent_access
@@ -298,7 +181,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 let creation_key = if goal_identity == 1 {
                     gents_protocol::goal::deterministic_goal_creation_key(identity.did(), &session)
                 } else {
-                    gents_automation::goal::replacement_goal_identity(
+                    crate::goal::replacement_goal_identity(
                         identity.did(),
                         &session,
                         &format!("assignment-{goal_identity}"),
@@ -335,7 +218,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 let creation_key = if id == 1 {
                     gents_protocol::goal::deterministic_goal_creation_key(identity.did(), &session)
                 } else {
-                    gents_automation::goal::replacement_goal_identity(
+                    crate::goal::replacement_goal_identity(
                         identity.did(),
                         &session,
                         &format!("assignment-{id}"),
@@ -382,7 +265,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
             accept_hook_tool_call(&hook, "goal-context-call", tool, args, None).await;
             let before = versions(&access).await;
             if tool == gents_protocol::goal_names::GET_GOAL_TOOL_NAME && case["read_only"] == true {
-                let context = gents_automation::goal::load_goal_tool_context(
+                let context = crate::goal::load_goal_tool_context(
                     &access,
                     identity.did(),
                     &session,
@@ -391,16 +274,16 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 )
                 .await
                 .unwrap();
-                let gents_automation::goal::RequestAssignmentObservation::Assigned(observed) =
+                let crate::goal::RequestAssignmentObservation::Assigned(observed) =
                     context.assignment
                 else {
                     panic!("{name}: retained assignment unavailable");
                 };
                 assert!(
-                    gents_automation::goal::edit_active_goal(
+                    crate::goal::edit_active_goal(
                         &node,
                         &observed,
-                        &gents_automation::goal::GoalEdit {
+                        &crate::goal::GoalEdit {
                             objective: Some("Stale edit".into()),
                             budget: None
                         }
@@ -411,7 +294,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     "{name}: edit crossed physical root"
                 );
                 assert!(
-                    !gents_automation::goal::update_goal_fields_if_status_from_access(
+                    !crate::goal::update_goal_fields_if_status_from_access(
                         &gents_store::config_client::ConfigAccess::local_as(
                             node.clone(),
                             identity::Did::new(identity.did()).unwrap()
@@ -424,7 +307,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     .unwrap(),
                     "{name}: controller crossed physical root"
                 );
-                gents_automation::goal::refresh_goal_usage_from_access(
+                crate::goal::refresh_goal_usage_from_access(
                     &gents_store::config_client::ConfigAccess::local_as(
                         node.clone(),
                         identity::Did::new(identity.did()).unwrap(),
@@ -527,7 +410,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     );
                 }
                 if allowed && tool == gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME {
-                    let goal = gents_automation::goal::load_canonical_goal(&node, identity.did(), &session)
+                    let goal = crate::goal::load_canonical_goal(&node, identity.did(), &session)
                         .await
                         .unwrap()
                         .unwrap();

@@ -1,45 +1,12 @@
 use gents_toolcalls::call::lifecycle::admission_fixture::{
-    published_session_message, PublishedAdmissionOptions,
+    cause, published_session_message, signer, PublishedAdmissionOptions,
 };
 use gents_session::session::message::plan::PlannedWrite;
 use gents_session::session::message::*;
 use gents_protocol::tool_call::AwaitMode;
-use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};
+use gents_protocol::request_lifecycle::SessionMessageTarget;
 use gents_session::session::message::Delivery;
 use gents_store::graphql::escape_graphql_string;
-
-/// The accepted tool row does not carry its calling request's id; the id is
-/// read from the calling request document, as the owning lifecycle does.
-pub(crate) async fn cause(
-    message: &gents_toolcalls::call::lifecycle::admission_fixture::PublishedSessionMessage,
-    caller_hop: u32,
-) -> SessionMessageCause {
-    let tool = &message.admission.tool;
-    SessionMessageCause {
-        caller_node_did: message.admission.node_did.clone(),
-        caller_agent_did: tool.actor().to_string(),
-        caller_session_id: tool.session_id().to_owned(),
-        caller_requester_did: tool.requester_did().map(str::to_owned),
-        caller_request_id: tool.calling_request_id().await.unwrap(),
-        caller_request_doc_id: tool.request_doc_id().unwrap().to_owned(),
-        caller_hop,
-        tool_call_id: tool.tool_call_id().to_owned(),
-        tool_call_doc_id: tool.doc_id().unwrap().to_owned(),
-        correlation: None,
-    }
-}
-
-pub(crate) fn signer(
-    message: &gents_toolcalls::call::lifecycle::admission_fixture::PublishedSessionMessage,
-) -> gents_store::identity::ManagedAgentSigner {
-    message
-        .admission
-        .tool
-        .access()
-        .unwrap()
-        .managed_agent_signer()
-        .unwrap()
-}
 
 #[tokio::test]
 async fn generated_session_message_writes_carry_the_calling_edge() {
