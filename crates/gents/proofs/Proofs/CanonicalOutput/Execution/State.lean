@@ -4,7 +4,6 @@ import Proofs.RequestExecutionLease
 import Proofs.Transcript
 import Proofs.ToolExecution.Executable
 import Proofs.Session.State
-import Proofs.Goals
 import Proofs.StorageWriteGate
 import Proofs.Background.CompletionContinuation
 import Proofs.CompletionRetry.State

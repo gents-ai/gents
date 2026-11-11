@@ -1,7 +1,6 @@
 import Proofs.Session.Properties.Executable
 import Proofs.AgentSession
 import Proofs.Request
-import Proofs.Goals
 import Proofs.ToolExecution.State
 import Proofs.Transcript.State
 
