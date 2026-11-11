@@ -5,3 +5,6 @@ import Proofs.Hooks.Claim
 import Proofs.Hooks.Prepared
 import Proofs.Hooks.Delivery
 import Proofs.Hooks.Mailbox
+import Proofs.Hooks.GoalFence
+import Proofs.Hooks.GoalTask
+import Proofs.Hooks.Catalog
