@@ -2165,15 +2165,15 @@ mod tests {
         let resolved = agent
             .agents()
             .iter()
-            .find(|resolved| resolved.agent_did == agent_did)
+            .find(|resolved| resolved.agent.agent_did == agent_did)
             .expect("init default agent resolves");
         assert_eq!(
-            resolved.max_turns,
+            resolved.agent.max_turns,
             gents_inference::resolved::DEFAULT_MAX_TURNS
         );
-        assert_eq!(resolved.max_turns, 1_000);
+        assert_eq!(resolved.agent.max_turns, 1_000);
         assert_eq!(
-            resolved.max_turns_provenance,
+            resolved.agent.max_turns_provenance,
             gents_inference::resolved::MaxTurnsProvenance::Default
         );
     }
@@ -2260,12 +2260,12 @@ mod tests {
         let resolved = agent
             .agents()
             .iter()
-            .find(|resolved| resolved.agent_did == summary.default_agent_did)
+            .find(|resolved| resolved.agent.agent_did == summary.default_agent_did)
             .expect("init default agent resolves")
             .clone();
-        assert_eq!(resolved.max_turns, 250);
+        assert_eq!(resolved.agent.max_turns, 250);
         assert_eq!(
-            resolved.max_turns_provenance,
+            resolved.agent.max_turns_provenance,
             gents_inference::resolved::MaxTurnsProvenance::ExecutionProfile
         );
     }
@@ -2323,7 +2323,7 @@ mod tests {
         agent
             .agents()
             .iter()
-            .find(|resolved| resolved.agent_did == summary.default_agent_did)
+            .find(|resolved| resolved.agent.agent_did == summary.default_agent_did)
             .expect("init default agent resolves")
             .tools
             .explain_with_runtime(

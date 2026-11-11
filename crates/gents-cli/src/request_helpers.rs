@@ -1554,7 +1554,7 @@ mod tests {
     fn successor_output_target_rejects_missing_physical_identity_and_self_cycles() {
         let mut row: AgentRequestRow = serde_json::from_value(json!({
             "_docID":"input", "request_id":"input", "lifecycle_state":"superseded",
-            "failure_reason":gents::request::lifecycle::FOLDED_REASON, "superseded_by_request":"active"
+            "failure_reason":gents_session::request::lifecycle::FOLDED_REASON, "superseded_by_request":"active"
         }))
         .unwrap();
         assert!(successor_output_target(&row).is_err());
