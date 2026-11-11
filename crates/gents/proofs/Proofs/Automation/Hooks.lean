@@ -9,6 +9,7 @@ import Proofs.Session.Hooks.Prepared
 import Proofs.Session.Hooks.Delivery
 import Proofs.Session.Hooks.OwedDelivery
 import Proofs.Session.Hooks.MustCommit
+import Proofs.Session.Hooks.History
 import Proofs.Session.Hooks.Safety
 import Proofs.Session.Hooks.Resume
 import Proofs.Automation.Hooks.Mailbox
