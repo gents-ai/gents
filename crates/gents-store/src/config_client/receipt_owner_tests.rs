@@ -22,30 +22,42 @@ enum ReceiptProbeError {
     GraphqlErrors(#[source] gents_protocol::database_error::GraphqlFailure),
 }
 
-#[derive(Clone, Copy)]
-enum Scenario {
-    CommitThenAmbiguous,
-    AbsentThenCommit,
-    ReceiptTransientThenPresent,
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Post {
+    Commits,
+    LostReply,
+    Conflict,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Read {
+    Answers,
+    Transient,
+    Fails,
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Outcome {
+    Written,
+    WriteFailed,
+    ReceiptFailed,
 }
 
 #[derive(Clone)]
 struct ScriptedWrite {
-    scenario: Scenario,
+    posts: Arc<Vec<Post>>,
+    reads: Arc<Vec<Read>>,
     mutation_count: Arc<AtomicUsize>,
     receipt_count: Arc<AtomicUsize>,
     durable: Arc<AtomicBool>,
 }
 
-impl ScriptedWrite {
-    fn new(scenario: Scenario) -> Self {
-        Self {
-            scenario,
-            mutation_count: Arc::new(AtomicUsize::new(0)),
-            receipt_count: Arc::new(AtomicUsize::new(0)),
-            durable: Arc::new(AtomicBool::new(false)),
-        }
-    }
+fn rejection() -> Value {
+    json!({"data": null, "errors": [{"message": "opaque"}]})
 }
 
 async fn scripted_graphql(
@@ -57,29 +69,33 @@ async fn scripted_graphql(
         .and_then(Value::as_str)
         .unwrap_or_default();
     if query.trim_start().starts_with("mutation") {
-        let attempt = state.mutation_count.fetch_add(1, Ordering::SeqCst) + 1;
-        match state.scenario {
-            Scenario::CommitThenAmbiguous | Scenario::ReceiptTransientThenPresent => {
-                state.durable.store(true, Ordering::SeqCst);
-                Json(transaction_conflict())
-            }
-            Scenario::AbsentThenCommit if attempt == 1 => Json(transaction_conflict()),
-            Scenario::AbsentThenCommit => {
+        let attempt = state.mutation_count.fetch_add(1, Ordering::SeqCst);
+        match state.posts.get(attempt).copied().unwrap_or(Post::Commits) {
+            Post::Commits => {
                 state.durable.store(true, Ordering::SeqCst);
                 Json(json!({"data": {"create_ReceiptFact": [{"_docID": "stable-id"}]}}))
             }
+            Post::LostReply => {
+                state.durable.store(true, Ordering::SeqCst);
+                Json(transaction_conflict())
+            }
+            Post::Conflict => Json(transaction_conflict()),
+            Post::Rejected => Json(rejection()),
         }
     } else {
-        let attempt = state.receipt_count.fetch_add(1, Ordering::SeqCst) + 1;
-        if matches!(state.scenario, Scenario::ReceiptTransientThenPresent) && attempt == 1 {
-            return Json(transaction_conflict());
+        let attempt = state.receipt_count.fetch_add(1, Ordering::SeqCst);
+        match state.reads.get(attempt).copied().unwrap_or(Read::Answers) {
+            Read::Transient => Json(transaction_conflict()),
+            Read::Fails => Json(rejection()),
+            Read::Answers => {
+                let rows = if state.durable.load(Ordering::SeqCst) {
+                    vec![json!({"stable_id": "stable-id"})]
+                } else {
+                    Vec::new()
+                };
+                Json(json!({"data": {"ReceiptFact": rows}}))
+            }
         }
-        let rows = if state.durable.load(Ordering::SeqCst) {
-            vec![json!({"stable_id": "stable-id"})]
-        } else {
-            Vec::new()
-        };
-        Json(json!({"data": {"ReceiptFact": rows}}))
     }
 }
 
@@ -122,54 +138,37 @@ const MUTATION: &str =
     r#"mutation { create_ReceiptFact(input: {stable_id: "stable-id"}) { _docID } }"#;
 
 #[tokio::test]
-async fn confirmed_receipt_recovers_without_reposting() -> TestResult {
-    let state = ScriptedWrite::new(Scenario::CommitThenAmbiguous);
-    let (endpoint, server) = start_server(state.clone()).await?;
-    let access = ConfigAccess::graphql(endpoint.clone());
-
-    access
-        .write_with_receipt("test.receipt_recovered", MUTATION, || {
-            receipt_once(&endpoint)
+async fn receipt_recovery_matches_the_lean_model() -> TestResult {
+    use gents_lean_vocab::families::receipt_recovery_http as family;
+    let cases = tokio::task::spawn_blocking(family::cases::<Outcome, Post, Read>).await?;
+    let observed = futures::future::join_all(cases.iter().map(|case| async {
+        let state = ScriptedWrite {
+            posts: Arc::new(case.input.posts.clone()),
+            reads: Arc::new(case.input.reads.clone()),
+            mutation_count: Arc::new(AtomicUsize::new(0)),
+            receipt_count: Arc::new(AtomicUsize::new(0)),
+            durable: Arc::new(AtomicBool::new(false)),
+        };
+        let (endpoint, server) = start_server(state.clone()).await?;
+        let result = ConfigAccess::graphql(endpoint.clone())
+            .write_with_receipt("test.receipt", MUTATION, || receipt_once(&endpoint))
+            .await;
+        server.abort();
+        TestResult::Ok(family::Observed {
+            outcome: match result {
+                Ok(()) => Outcome::Written,
+                Err(super::ReceiptWriteError::Write(_)) => Outcome::WriteFailed,
+                Err(super::ReceiptWriteError::Receipt(_)) => Outcome::ReceiptFailed,
+            },
+            posts: state.mutation_count.load(Ordering::SeqCst) as u64,
+            reads: state.receipt_count.load(Ordering::SeqCst) as u64,
+            durable: state.durable.load(Ordering::SeqCst),
         })
-        .await?;
-
-    assert_eq!(state.mutation_count.load(Ordering::SeqCst), 1);
-    assert_eq!(state.receipt_count.load(Ordering::SeqCst), 1);
-    server.abort();
-    Ok(())
-}
-
-#[tokio::test]
-async fn successful_absent_receipt_allows_one_repost() -> TestResult {
-    let state = ScriptedWrite::new(Scenario::AbsentThenCommit);
-    let (endpoint, server) = start_server(state.clone()).await?;
-    let access = ConfigAccess::graphql(endpoint.clone());
-
-    access
-        .write_with_receipt("test.receipt_absent", MUTATION, || receipt_once(&endpoint))
-        .await?;
-
-    assert_eq!(state.mutation_count.load(Ordering::SeqCst), 2);
-    assert_eq!(state.receipt_count.load(Ordering::SeqCst), 1);
-    server.abort();
-    Ok(())
-}
-
-#[tokio::test]
-async fn transient_receipt_read_retries_without_reposting() -> TestResult {
-    let state = ScriptedWrite::new(Scenario::ReceiptTransientThenPresent);
-    let (endpoint, server) = start_server(state.clone()).await?;
-    let access = ConfigAccess::graphql(endpoint.clone());
-
-    access
-        .write_with_receipt("test.receipt_read_retry", MUTATION, || {
-            receipt_once(&endpoint)
-        })
-        .await?;
-
-    assert_eq!(state.mutation_count.load(Ordering::SeqCst), 1);
-    assert_eq!(state.receipt_count.load(Ordering::SeqCst), 2);
-    server.abort();
+    }))
+    .await;
+    for (case, observed) in cases.iter().zip(observed) {
+        case.check(observed?);
+    }
     Ok(())
 }
 
