@@ -937,7 +937,7 @@ async fn an_install_grants_reader_only_on_its_own_root_and_only_with_the_flag() 
         roots[0]["not_granted"]
             .as_str()
             .unwrap()
-            .contains("not the one this install supplied")
+            .contains("this install supplied no tool root")
             && roots[0]["next"]
                 .as_str()
                 .unwrap()
@@ -1213,6 +1213,112 @@ async fn a_root_a_pack_names_itself_is_not_granted_even_when_it_equals_the_insta
                 .as_str()
                 .unwrap()
                 .starts_with("gents config workspace-root grant-reader "),
+        "{report}"
+    );
+}
+
+/// The Tools a review lists are the Tools the install writes: an id that
+/// depends on the node is rendered with the node's own DID, so its agent is
+/// granted, and an installed dependency whose Tools carry the id a
+/// placeholder rendering would have produced, under a root they name
+/// themselves, is not granted in its place.
+#[tokio::test]
+async fn the_reviewed_tools_are_the_installed_ones_when_their_id_names_the_node() {
+    let (home, initialized) = engineer_home().await;
+    let engineer_root = initialized["tool_root"].as_str().unwrap().to_owned();
+    let pack_dir = |name: &str, tools_id: &str, host: serde_json::Value, dependencies: &[&str]| {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("manifest.json"),
+            serde_json::to_vec(&json!({
+                "manifest_version": 1, "name": name, "namespace": "fixture", "version": "1.0.0",
+                "description": "An agent with host tools", "authors": ["tests"], "tags": [],
+                "kind": "documents", "assets": ["README.md", "pack_config.json"],
+                "dependencies": dependencies, "config": "pack_config.json",
+                "inference_slots": [{"name": "worker", "description": "The worker.",
+                    "agents": [format!("{name}-worker")]}],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("README.md"), "# fixture").unwrap();
+        std::fs::write(
+            dir.path().join("pack_config.json"),
+            serde_json::to_vec(&json!({
+                "node": {},
+                "agents": [{"agent_slot": format!("{name}-worker"),
+                    "context_id": format!("{name}-context"),
+                    "display_name": format!("{name} worker"), "description": "Does one task.",
+                    "inference_profile_id": "gents:inference-slot:worker"}],
+                "contexts": [{"context_id": format!("{name}-context"), "system_prompt": "Work.",
+                    "tools_id": tools_id}],
+                "tools": [{"tools_id": tools_id, "display_name": "Read-only files",
+                    "host": host}],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        dir
+    };
+    // The id the node-dependent one below would have under a placeholder DID.
+    let lookalike = pack_dir(
+        "lookalike",
+        "did:pack:installer-tools",
+        json!({"files": {"mode": "ReadOnly"},
+            "root": format!("${{GENTS_FIXTURE_UNSET_ROOT:-{engineer_root}}}")}),
+        &[],
+    );
+    let mut args = document_install_args(home.path(), lookalike.path(), Vec::new());
+    args.grant_authority = true;
+    let report = crate::request_helpers::capture_report(install(args))
+        .await
+        .unwrap();
+    let roots = report["host_tool_roots"].as_array().unwrap();
+    assert_eq!(roots.len(), 1, "{report}");
+    assert_eq!(roots[0].get("reader_on"), None, "{report}");
+    let lookalike_agent = roots[0]["agent"].clone();
+
+    let noded = pack_dir(
+        "noded",
+        "${GENTS_PACK_NODE_DID}-tools",
+        json!({"files": {"mode": "ReadOnly"}}),
+        &["fixture/lookalike"],
+    );
+    let mut args = document_install_args(home.path(), noded.path(), Vec::new());
+    args.preview = true;
+    let preview = crate::request_helpers::capture_report(install(args))
+        .await
+        .unwrap();
+    let owner = preview["owner"].as_str().unwrap();
+    assert_eq!(
+        preview["host_tool_roots"]["tools"],
+        json!([format!("{owner}-tools")]),
+        "{preview}"
+    );
+    let mut args = document_install_args(home.path(), noded.path(), Vec::new());
+    args.grant_authority = true;
+    let report = crate::request_helpers::capture_report(install(args))
+        .await
+        .unwrap();
+    let roots = report["host_tool_roots"].as_array().unwrap();
+    assert_eq!(roots.len(), 2, "{report}");
+    let granted: Vec<_> = roots
+        .iter()
+        .filter(|step| step["reader_on"].is_string())
+        .collect();
+    assert_eq!(granted.len(), 1, "{report}");
+    assert_ne!(granted[0]["agent"], lookalike_agent, "{report}");
+    assert_eq!(granted[0]["root"], engineer_root, "{report}");
+    let step = roots
+        .iter()
+        .find(|step| step["agent"] == lookalike_agent)
+        .unwrap();
+    assert!(
+        step["not_granted"]
+            .as_str()
+            .unwrap()
+            .contains("name that root themselves")
+            && step["next"].is_string(),
         "{report}"
     );
 }

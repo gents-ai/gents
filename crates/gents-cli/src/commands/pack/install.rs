@@ -842,21 +842,19 @@ pub(super) async fn install_documents_report(
         );
         let dependencies = resolve_dependencies(pack, args).await?;
         // The root pack and its dependencies: the agents an approved install
-        // grants its root, whichever install first put them on the node.
-        let installing: Vec<&PackSource> =
-            std::iter::once(pack).chain(&dependencies).collect();
-        let coordinates: Vec<String> = installing
-            .iter()
-            .map(|source| {
-                format!(
-                    "{}/{}",
-                    source.manifest().metadata.namespace,
-                    source.manifest().name
-                )
-            })
+        // grants its root, whichever install first put them on the node. One
+        // listing serves the preview and the grant.
+        let listed: Vec<wire::InstallerRootTools> = std::iter::once(pack)
+            .chain(&dependencies)
+            .map(|source| wire::tools_taking_installer_root(source, &owner))
             .collect();
-        let supplied = wire::supplied_tool_root(&access, &owner, None, &installing).await?;
-        drop(installing);
+        for unread in listed.iter().filter_map(|pack| pack.unread.as_deref()) {
+            // An install variable this load cannot see may be what the
+            // install itself resolves, so the install goes on; the pack's
+            // Tools are not listed and its agents are not granted.
+            tracing::warn!(reason = unread, "no host tool root is listed or granted for this pack");
+        }
+        let supplied = wire::supplied_tool_root(&access, &owner, None, &listed).await?;
         if let Some(published) = supplied
             .as_ref()
             .and_then(|supplied| supplied["reader_on"].as_str())
@@ -905,21 +903,13 @@ pub(super) async fn install_documents_report(
                 output["host_tool_roots"] = supplied;
             }
         } else {
-            let inherited: Vec<String> = supplied
-                .as_ref()
-                .and_then(|supplied| supplied["tools"].as_array())
-                .into_iter()
-                .flatten()
-                .filter_map(|tools| tools.as_str().map(ToOwned::to_owned))
-                .collect();
             match wire::grant_pack_root_readers(
                 &access,
                 &owner,
-                &coordinates,
+                &listed,
                 supplied
                     .as_ref()
                     .and_then(|supplied| supplied["root"].as_str()),
-                &inherited,
                 args.grant_authority,
             )
             .await

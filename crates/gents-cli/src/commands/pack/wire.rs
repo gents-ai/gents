@@ -214,29 +214,50 @@ fn grant_reader_command(root: &str, agent: &str) -> String {
     )
 }
 
-/// The Tools `pack` ships that select host tools and name no root: the ones
-/// an install runs under its installer's own root, and whose agents an
-/// approved install grants reader there.
-#[derive(Default)]
+/// The Tools one pack of an install ships that select host tools and name no
+/// root: the ones the install runs under its installer's own root, and whose
+/// agents an approved install grants reader there. This is what a review
+/// lists, and the grant is made from the same value, so the two cannot name
+/// different Tools.
 pub(crate) struct InstallerRootTools {
-    /// By `tools_id`.
+    /// The pack, as `namespace/name`.
+    pub(crate) coordinate: String,
+    /// By `tools_id`, as the install writes them on this node.
     pub(crate) tools: Vec<String>,
     /// The agents whose Context selects one of them, by the name the pack
     /// gives each: who a review says will read the folder.
     pub(crate) agents: Vec<String>,
+    /// Why the pack's config did not load for the review, when it did not:
+    /// nothing of it is listed, so nothing of it is granted.
+    pub(crate) unread: Option<String>,
 }
 
-/// [`InstallerRootTools`] of `pack`. A config that does not load offline is
-/// an error, never "no such Tools": what was not read was not shown, and a
-/// grant follows only what was shown.
-pub(crate) fn tools_taking_installer_root(pack: &super::PackSource) -> Result<InstallerRootTools> {
+/// [`InstallerRootTools`] of `pack` on the node `node_did`. The config is
+/// rendered with that node's DID, as its install renders it, so a Tools id
+/// that depends on the node is the id the installed document has. A config
+/// that does not load is reported `unread`, never as shipping no such Tools.
+pub(crate) fn tools_taking_installer_root(
+    pack: &super::PackSource,
+    node_did: &str,
+) -> InstallerRootTools {
+    let coordinate = format!(
+        "{}/{}",
+        pack.manifest().metadata.namespace,
+        pack.manifest().name
+    );
+    let mut listed = InstallerRootTools {
+        coordinate,
+        tools: Vec::new(),
+        agents: Vec::new(),
+        unread: None,
+    };
     if pack.manifest().config.is_none() {
-        return Ok(InstallerRootTools::default());
+        return listed;
     }
-    gents::pack::load_pack_authoring_config(
+    let loaded = gents::pack::load_pack_authoring_config(
         pack.manifest(),
         &gents::pack::PackInstallOptions {
-            node_did: "did:pack:installer".to_owned(),
+            node_did: node_did.to_owned(),
         },
         &|path| Ok(pack.asset(path)?.to_vec()),
         &|name| std::env::var(name).ok(),
@@ -262,47 +283,37 @@ pub(crate) fn tools_taking_installer_root(pack: &super::PackSource) -> Result<In
                     .map(ToOwned::to_owned)
             })
             .collect();
-        Ok(InstallerRootTools { tools, agents })
-    })
-    .with_context(|| {
-        format!(
-            "{}/{} did not load for its host tool review, so the folder its agents would read is unknown",
-            pack.manifest().metadata.namespace,
-            pack.manifest().name
-        )
-    })
+        Ok((tools, agents))
+    });
+    match loaded {
+        Ok((tools, agents)) => {
+            listed.tools = tools;
+            listed.agents = agents;
+        }
+        Err(error) => {
+            listed.unread = Some(format!(
+                "{} did not load for its host tool review, so the folder its agents would read is unknown: {error:#}",
+                listed.coordinate
+            ));
+        }
+    }
+    listed
 }
 
 /// The root an install by `installer` (the node's User when `None`) supplies
-/// to the Tools `packs` (the root pack and its dependencies) ship without
-/// one, and the reader their agents need there: what a
-/// preview lists and an approval covers. `None` when they ship no such
-/// Tools, one of them did not load for the review, the installer has no
-/// root, or no reader is needed.
+/// to the Tools `listed` (of the root pack and its dependencies), and the
+/// reader their agents need there: what a preview lists and an approval
+/// covers. `None` when no such Tools are listed, the installer has no root,
+/// or no reader is needed.
 pub(crate) async fn supplied_tool_root(
     access: &ConfigAccess,
     owner: &str,
     installer: Option<&str>,
-    packs: &[&super::PackSource],
+    listed: &[InstallerRootTools],
 ) -> Result<Option<Value>> {
     use gents::tools::surface::ToolRootReader;
-    let mut tools = Vec::new();
-    let mut agents = Vec::new();
-    for pack in packs {
-        match tools_taking_installer_root(pack) {
-            Ok(shipped) => {
-                tools.extend(shipped.tools);
-                agents.extend(shipped.agents);
-            }
-            // An install variable the offline load cannot see may be what the
-            // install itself resolves, so the install goes on; with nothing
-            // listed, no root is supplied to the grant and none is made.
-            Err(error) => {
-                tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(error.as_ref()), "no host tool root is listed or granted for this install");
-                return Ok(None);
-            }
-        }
-    }
+    let tools: Vec<&String> = listed.iter().flat_map(|pack| &pack.tools).collect();
+    let agents: Vec<&String> = listed.iter().flat_map(|pack| &pack.agents).collect();
     if tools.is_empty() {
         return Ok(None);
     }
@@ -326,7 +337,7 @@ pub(crate) async fn supplied_tool_root(
 #[cfg(test)]
 pub(crate) static FAIL_GRANTS_FOR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
-/// Grants each agent the installed packs `coordinates` (a pack and its
+/// Grants each agent the installed packs `listed` (a pack and its
 /// dependencies) ship with host tools reader on the published WorkspaceRoot
 /// covering its tool root, as the User holding `access`: a new agent lacks
 /// that grant, only a User makes it, and without it the runtime reports the
@@ -337,33 +348,49 @@ pub(crate) static FAIL_GRANTS_FOR: std::sync::Mutex<Option<String>> = std::sync:
 ///
 /// The grant is the installer's consent to its own root and nothing else: it
 /// is made only when the install was `approved`, and only for an agent whose
-/// Tools are among `inherited`, the rootless Tools the review listed and the
-/// install gave its root `supplied` ([`gents::pack::installer_tool_root`]).
-/// Tools that name their own root are never granted here, even when that
-/// root renders equal to the installer's: the review did not list them. An
-/// agent under any other root, one an install variable set or a later edit
-/// wrote, is listed with the User command that grants it. Returns one entry
-/// per agent.
+/// Tools document the review listed for the pack that installed it (the
+/// rootless Tools the install gave its root `supplied`,
+/// [`gents::pack::installer_tool_root`]). A listed id counts only as a
+/// Tools document of its own pack, so another pack's Tools with the same id
+/// are not it. Tools that name their own root are never granted here, even
+/// when that root renders equal to the installer's: the review did not list
+/// them. An agent under any other root, one an install variable set or a
+/// later edit wrote, is listed with the User command that grants it.
+/// Returns one entry per agent.
 pub(crate) async fn grant_pack_root_readers(
     access: &ConfigAccess,
     owner: &str,
-    coordinates: &[String],
+    listed: &[InstallerRootTools],
     supplied: Option<&str>,
-    inherited: &[String],
     approved: bool,
 ) -> Result<Vec<Value>> {
     use gents::tools::surface::ToolRootReader;
     let mut granted = Vec::new();
     let mut agents = Vec::new();
-    for coordinate in coordinates {
-        agents.extend(
-            installed_pack_documents(access, owner, coordinate)
-                .await?
-                .into_iter()
-                .filter(|(collection, _)| *collection == Collection::Agent)
-                .map(|(_, agent)| agent),
-        );
+    // The Tools documents the review listed that their own pack installed.
+    let mut inherited = Vec::new();
+    // Each agent's pack, when that pack did not load for the review.
+    let mut unread = Vec::new();
+    for pack in listed {
+        for (collection, id) in installed_pack_documents(access, owner, &pack.coordinate).await? {
+            match collection {
+                Collection::Agent => {
+                    if pack.unread.is_some() {
+                        unread.push(id.clone());
+                    }
+                    agents.push(id);
+                }
+                Collection::Tools if pack.tools.contains(&id) => inherited.push(id),
+                _ => {}
+            }
+        }
     }
+    #[cfg(test)]
+    let failing = FAIL_GRANTS_FOR
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|failing| listed.iter().any(|pack| pack.coordinate == *failing));
     for (agent, tools, root, reader) in
         gents::tools::surface::agents_tool_root_readers(access, owner, &agents).await?
     {
@@ -375,11 +402,10 @@ pub(crate) async fn grant_pack_root_readers(
                         .await
                         .map_err(anyhow::Error::from);
                 #[cfg(test)]
-                let grant = match &*FAIL_GRANTS_FOR.lock().unwrap() {
-                    Some(failing) if coordinates.contains(failing) => {
-                        Err(anyhow::anyhow!("simulated reader grant failure"))
-                    }
-                    _ => grant,
+                let grant = if failing {
+                    Err(anyhow::anyhow!("simulated reader grant failure"))
+                } else {
+                    grant
                 };
                 // One agent's failed grant does not hide the others': each is
                 // reported with the command that makes it.
@@ -396,6 +422,10 @@ pub(crate) async fn grant_pack_root_readers(
             ToolRootReader::Published(published) => {
                 let reason = if listed {
                     "the install was not approved to grant it"
+                } else if unread.contains(&agent) {
+                    "its pack's configuration did not load for the install's review, so its Tools were not listed"
+                } else if supplied.is_none() {
+                    "this install supplied no tool root"
                 } else if supplied == Some(root.as_str()) {
                     "its Tools name that root themselves, so the install's review did not list it"
                 } else {

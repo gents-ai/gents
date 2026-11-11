@@ -197,9 +197,9 @@ pub(crate) async fn install(
         on_node
     }
     .await
-    .unwrap_or_else(|error| {
-        tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(error.as_ref()), "the packs on the node could not be read; dependencies resolve by name");
-        OnNode::new()
+    .unwrap_or_else(|error| OnNode {
+        node_did: Err(format!("{error:#}")),
+        packs: Default::default(),
     });
     let resolved = futures_util::future::join_all(
         packs
@@ -433,7 +433,7 @@ pub(crate) async fn status(
             match resolved {
                 None => {}
                 Some(Ok(resolved)) => {
-                    status.turns_on = turns_on(pack, !resolved.host_tools.is_empty());
+                    status.turns_on = turns_on(pack, resolved.reads_root());
                     status.state = if resolved.asks() || !status.turns_on.is_empty() {
                         PackState::NeedsApproval
                     } else {
@@ -537,9 +537,9 @@ struct Resolved {
     requested: Value,
     /// The archives of the packs it depends on.
     dependencies: Vec<command::PackSource>,
-    /// The Tools it and its dependencies ship that run under the Engineer's
-    /// tool root.
-    host_tools: Vec<String>,
+    /// The Tools it and each dependency ship that run under the Engineer's
+    /// tool root, pack by pack: what an approval lists and its grant follows.
+    host_tools: Vec<command::wire::InstallerRootTools>,
 }
 
 impl Resolved {
@@ -572,6 +572,11 @@ impl Resolved {
         )
     }
 
+    /// Whether it or a dependency ships Tools that take the Engineer's root.
+    fn reads_root(&self) -> bool {
+        self.host_tools.iter().any(|pack| !pack.tools.is_empty())
+    }
+
     fn asks(&self) -> bool {
         self.requested
             .as_array()
@@ -579,17 +584,25 @@ impl Resolved {
     }
 }
 
-/// The digest each pack on `home`'s node is installed at, by coordinate.
-type OnNode = std::collections::BTreeMap<String, String>;
+/// `home`'s node as a pack's install finds it: its DID, which the install
+/// renders the pack's config with, and the digest each pack on it is
+/// installed at, by coordinate.
+struct OnNode {
+    /// Or why the node could not be read: a pack is then still resolved,
+    /// within its bound, and refused at its host tool review.
+    node_did: Result<String, String>,
+    packs: std::collections::BTreeMap<String, String>,
+}
 
 async fn packs_on_node(home: &Path, access: &gents::ConfigAccess, owner: &str) -> Result<OnNode> {
-    Ok(
-        gents::pack::installed_packs(Some(home), Some((access, owner)))
+    Ok(OnNode {
+        node_did: Ok(owner.to_owned()),
+        packs: gents::pack::installed_packs(Some(home), Some((access, owner)))
             .await?
             .into_iter()
             .map(|pack| (pack.coordinate, pack.digest))
             .collect(),
-    )
+    })
 }
 
 /// Resolves `pack` and its dependencies as its install will: a dependency
@@ -617,7 +630,7 @@ async fn resolve(
         futures_util::future::join_all(source.manifest().metadata.dependencies.iter().map(
             |coordinate| async move {
                 let (namespace, name) = command::split_namespace(coordinate);
-                let installed = on_node.get(&format!("{namespace}/{name}"));
+                let installed = on_node.packs.get(&format!("{namespace}/{name}"));
                 let spec = installed.map_or(coordinate.as_str(), String::as_str);
                 tokio::time::timeout(
                     RESOLVE_BOUND,
@@ -645,9 +658,17 @@ async fn resolve(
             .map(|dependency| dependency.manifest())
             .collect::<Vec<_>>(),
     )?;
-    let mut host_tools = Vec::new();
-    for pack in std::iter::once(&source).chain(&dependencies) {
-        host_tools.extend(command::wire::tools_taking_installer_root(pack)?.tools);
+    let node_did = on_node.node_did.as_deref().map_err(|error| {
+        anyhow::anyhow!("this home's node could not be read, so what its install would write is unknown: {error}")
+    })?;
+    let host_tools: Vec<_> = std::iter::once(&source)
+        .chain(&dependencies)
+        .map(|pack| command::wire::tools_taking_installer_root(pack, node_did))
+        .collect();
+    // What was not read was not shown, and an approval covers only what it
+    // showed, so a starter pack that does not load is not offered.
+    if let Some(unread) = host_tools.iter().find_map(|pack| pack.unread.as_deref()) {
+        anyhow::bail!("{unread}");
     }
     Ok(Resolved {
         source,
@@ -680,7 +701,7 @@ async fn install_one(
     let asks = requested.as_array().is_some_and(|asks| !asks.is_empty());
     let tool_calls = TOOL_CALLS_ON_APPROVAL.contains(&pack);
     let dynamic = DYNAMIC_RUN_ON_APPROVAL.contains(&pack);
-    let reads_root = !host_tools.is_empty();
+    let reads_root = host_tools.iter().any(|pack| !pack.tools.is_empty());
     let approved = (asks || tool_calls || dynamic || reads_root)
         && match approval {
             Approval::Approved => true,
@@ -733,17 +754,6 @@ async fn install_one(
     let (access, owner) = command::resolve_scope_owner(&scope(home)).await?;
     let already = gents::pack::read_home_install(home, &coordinate)?
         .is_some_and(|record| record.digest == source.digest());
-    // The pack and its dependencies: the agents an approval grants the
-    // Engineer's root, whichever attempt installed them.
-    let installing: Vec<String> = std::iter::once(coordinate.clone())
-        .chain(dependencies.iter().map(|dependency| {
-            format!(
-                "{}/{}",
-                dependency.manifest().metadata.namespace,
-                dependency.manifest().name
-            )
-        }))
-        .collect();
     let installed = if already {
         Ok(())
     } else {
@@ -791,9 +801,8 @@ async fn install_one(
             let readers = command::wire::grant_pack_root_readers(
                 &access,
                 &owner,
-                &installing,
-                supplied.as_deref(),
                 &host_tools,
+                supplied.as_deref(),
                 approved,
             )
             .await?;
@@ -2302,6 +2311,63 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(updated["failed"], json!([]), "{updated}");
+    }
+
+    /// A starter pack's rootless Tools whose id depends on the node are the
+    /// Tools its install writes, so the approval grants their agent.
+    #[tokio::test]
+    async fn an_approval_grants_tools_whose_id_names_the_node() {
+        let (home, initialized) = engineer_home().await;
+        let packs = tempfile::tempdir().unwrap();
+        let dir = packs.path().join("nodehands");
+        write_pack(
+            &dir,
+            json!({
+                "manifest_version": 1, "name": "nodehands", "namespace": "fixture",
+                "version": "1.0.0", "description": "An agent with host tools",
+                "authors": ["tests"], "tags": [], "kind": "documents",
+                "assets": ["README.md", "pack_config.json"],
+                "dependencies": [], "config": "pack_config.json",
+                "inference_slots": [{"name": "worker", "description": "The worker.",
+                    "agents": ["nodehands-worker"]}],
+            }),
+            &[(
+                "pack_config.json",
+                serde_json::to_vec(&json!({
+                    "node": {},
+                    "agents": [{"agent_slot": "nodehands-worker",
+                        "context_id": "nodehands-context",
+                        "display_name": "Node hands", "description": "Does one task.",
+                        "inference_profile_id": "gents:inference-slot:worker"}],
+                    "contexts": [{"context_id": "nodehands-context", "system_prompt": "Work.",
+                        "tools_id": "${GENTS_PACK_NODE_DID}-hands"}],
+                    "tools": [{"tools_id": "${GENTS_PACK_NODE_DID}-hands",
+                        "display_name": "Read-only files",
+                        "host": {"files": {"mode": "ReadOnly"}}}],
+                }))
+                .unwrap(),
+            )],
+        );
+        gents::pack::local::open(&gents::pack::local::LocalName::Path(&dir), home.path()).unwrap();
+        let names = ["fixture/nodehands"];
+        let unreachable = Some("http://127.0.0.1:9");
+        let listed = status(home.path(), &names, unreachable).await.unwrap();
+        assert_eq!(listed[0].turns_on, [READS_ENGINEER_ROOT], "{listed:?}");
+        let approved = approve(
+            home.path(),
+            &names,
+            &[("fixture/nodehands".to_owned(), listed[0].digest.clone())],
+            unreachable,
+        )
+        .await
+        .unwrap();
+        assert_eq!(approved["failed"], json!([]), "{approved}");
+        let roots = approved["installed"][0]["host_tool_roots"]
+            .as_array()
+            .unwrap();
+        assert_eq!(roots.len(), 1, "{approved}");
+        assert_eq!(roots[0]["root"], initialized["tool_root"], "{approved}");
+        assert!(roots[0]["reader_on"].is_string(), "{approved}");
     }
 
     /// Only a terminal is asked, and only when the caller may prompt; the
