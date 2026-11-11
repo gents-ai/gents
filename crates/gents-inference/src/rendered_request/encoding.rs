@@ -1260,13 +1260,9 @@ mod tests {
 
     #[test]
     fn generated_storage_cases_drive_the_lossless_codec() {
-        let cases = gents_lean_vocab::lean_rendered_capture_storage_cases();
-        assert_eq!(
-            cases.len(),
-            13,
-            "Lean storage cases changed without a Rust fence"
-        );
-        for case in cases {
+        use gents_lean_vocab::families::contract_cases_rendered_capture_storage_resolution as family;
+
+        family::replay::<String>(|case| {
             let request = json!({"request": case.request, "payload": "x".repeat(2048)});
             let resolved = match case.encoding.as_str() {
                 "legacy_full" => resolve_with_limit(
@@ -1335,7 +1331,7 @@ mod tests {
                     let mut entries = Vec::new();
                     let mut store = BTreeMap::new();
                     for (block, chunk) in case.manifest_blocks.iter().zip(&chunks) {
-                        let doc_id = format!("block-{}", block.r#ref);
+                        let doc_id = format!("block-{}", block.artifact);
                         entries.push(ManifestEntry {
                             doc_id: doc_id.clone(),
                             content_key: chunk.content_key.clone(),
@@ -1349,13 +1345,13 @@ mod tests {
                     }
                     if let Some(root) = &case.manifest_root {
                         assert!(
-                            case.max_depth >= case.manifest_blocks.len() + 2,
+                            case.max_depth >= case.manifest_blocks.len() as u64 + 2,
                             "{}: this adapter supports only nonbinding tree fuel",
                             case.name
                         );
                         let bytes = serde_json::to_vec(&entries).unwrap();
                         let entry = ManifestEntry {
-                            doc_id: format!("block-{}", root.r#ref),
+                            doc_id: format!("block-{}", root.artifact),
                             content_key: block_content_key(&bytes),
                             field_commit_cid: format!("witness-{}", root.pinned_witness),
                             byte_len: bytes.len() as u64,
@@ -1381,7 +1377,7 @@ mod tests {
                         )
                     } else {
                         let manifest = encode_manifest(&entries).unwrap();
-                        resolve_manifest_with_limit(case.max_depth + 1, &manifest.stored, |entry| {
+                        resolve_manifest_with_limit(case.max_depth as usize + 1, &manifest.stored, |entry| {
                             store
                                 .get(&entry.doc_id)
                                 .cloned()
@@ -1391,14 +1387,11 @@ mod tests {
                 }
                 other => panic!("unknown Lean encoding {other}"),
             };
-            assert_eq!(resolved.is_ok(), case.send_permitted, "{}", case.name);
-            assert_eq!(
-                resolved.ok().and_then(|value| value["request"].as_u64()),
-                case.decoded_request,
-                "{}",
-                case.name
-            );
-        }
+            family::RenderedCaptureStorageOutput {
+                send_permitted: resolved.is_ok(),
+                decoded_request: resolved.ok().and_then(|value| value["request"].as_u64()),
+            }
+        });
     }
 
     fn deterministic_capture_text(len: usize) -> String {

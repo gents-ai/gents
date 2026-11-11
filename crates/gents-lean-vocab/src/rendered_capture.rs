@@ -20,28 +20,6 @@ pub struct LeanRenderedCaptureCase {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct LeanRenderedCaptureStorageCase {
-    pub name: String,
-    pub encoding: String,
-    pub request: u64,
-    pub base_witness: Option<u64>,
-    pub base_depth: usize,
-    pub max_depth: usize,
-    pub base_verified: bool,
-    pub manifest_blocks: Vec<LeanRenderedCaptureManifestBlock>,
-    pub manifest_root: Option<LeanRenderedCaptureManifestBlock>,
-    pub decoded_request: Option<u64>,
-    pub send_permitted: bool,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct LeanRenderedCaptureManifestBlock {
-    pub r#ref: u64,
-    pub pinned_witness: u64,
-    pub stored_witness: Option<u64>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
 pub struct LeanRenderedCaptureKeyCase {
     pub name: String,
     pub left_node_did: u64,

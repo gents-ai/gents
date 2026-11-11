@@ -2783,10 +2783,8 @@ pub mod family;
 mod hooks;
 mod optimization;
 mod prompt_assembly;
-mod reduction_engine;
 mod rendered_capture;
 mod request_execution_lease;
-mod rolling_compaction;
 mod self_config;
 mod session_documents;
 mod slot_persistence_health;
@@ -2816,10 +2814,8 @@ pub use event_delivery::*;
 pub use hooks::*;
 pub use optimization::*;
 pub use prompt_assembly::*;
-pub use reduction_engine::*;
 pub use rendered_capture::*;
 pub use request_execution_lease::*;
-pub use rolling_compaction::*;
 pub use self_config::*;
 pub use session_documents::*;
 pub use slot_persistence_health::*;
@@ -3867,20 +3863,8 @@ pub fn lean_rendered_capture_cases() -> &'static [LeanRenderedCaptureCase] {
     &lean_contract_snapshot().rendered_capture_cases
 }
 
-pub fn lean_rendered_capture_storage_cases() -> &'static [LeanRenderedCaptureStorageCase] {
-    &lean_contract_snapshot().rendered_capture_storage_cases
-}
-
 pub fn lean_durable_reduction_cases() -> &'static [LeanDurableReductionCase] {
     &lean_contract_snapshot().durable_reduction_cases
-}
-
-pub fn lean_rolling_compaction_cases() -> &'static [LeanRollingCompactionCase] {
-    &lean_contract_snapshot().rolling_compaction_cases
-}
-
-pub fn lean_reduction_engine_cases() -> &'static [LeanReductionEngineCase] {
-    &lean_contract_snapshot().reduction_engine_cases
 }
 
 pub fn lean_compaction_projection_join_cases() -> &'static [LeanCompactionProjectionJoinCase] {
