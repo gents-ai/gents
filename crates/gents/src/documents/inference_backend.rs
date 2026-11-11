@@ -738,6 +738,48 @@ impl BackendAuth {
             _ => None,
         }
     }
+
+    /// The key a health probe may send: cloud credentials sign requests rather than
+    /// travel as a key, so a probe has none to resolve for them.
+    pub fn probe_key(&self) -> anyhow::Result<Option<String>> {
+        match self {
+            Self::AwsCredentials { .. } | Self::GoogleCredentials { .. } => Ok(None),
+            other => other.resolve_api_key(),
+        }
+    }
+
+    pub fn resolve_api_key(&self) -> anyhow::Result<Option<String>> {
+        match self {
+            Self::Unauthenticated => Ok(None),
+            Self::ApiKey { key } => {
+                anyhow::ensure!(!key.trim().is_empty(), "API key must not be blank");
+                Ok(Some(key.clone()))
+            }
+            Self::Environment { variable } => {
+                anyhow::ensure!(
+                    !variable.trim().is_empty(),
+                    "API key environment variable must not be blank"
+                );
+                let key = std::env::var(variable).with_context(|| {
+                    format!("API key environment variable {variable:?} is unavailable")
+                })?;
+                anyhow::ensure!(
+                    !key.trim().is_empty(),
+                    "API key environment variable {variable:?} is blank"
+                );
+                Ok(Some(key))
+            }
+            Self::NodeOAuth { .. } | Self::NodeOAuthPool { .. } => {
+                anyhow::bail!("node OAuth requires the invoking node's OAuthCredential")
+            }
+            Self::Credential { .. } => {
+                anyhow::bail!("backend credential requires runtime resolution")
+            }
+            // AWS credentials sign each request and Google credentials mint
+            // tokens; neither is a key to send.
+            Self::AwsCredentials { .. } | Self::GoogleCredentials { .. } => Ok(None),
+        }
+    }
 }
 
 /// One backend catalog observed under a particular authentication scope; a

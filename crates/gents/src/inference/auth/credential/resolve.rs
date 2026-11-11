@@ -2,6 +2,7 @@ use anyhow::Result;
 use serde_json::Value;
 
 use super::*;
+use crate::documents::BackendAuth;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccountPick<'a> {
@@ -9,16 +10,16 @@ pub enum AccountPick<'a> {
     Reference(Option<&'a str>),
 }
 
-impl crate::documents::BackendAuth {
-    /// How a node OAuth backend resolves one account for readiness, discovery
-    /// and resume: its named account, or for a pool the earliest-connected
-    /// enabled account, so a pool resolves while any of its accounts does.
-    pub fn account_pick(&self) -> Option<AccountPick<'_>> {
-        match self {
-            Self::NodeOAuth { account_ref } => Some(AccountPick::Reference(account_ref.as_deref())),
-            Self::NodeOAuthPool { .. } => Some(AccountPick::ProviderDefault),
-            _ => None,
+/// How a node OAuth backend resolves one account for readiness, discovery
+/// and resume: its named account, or for a pool the earliest-connected
+/// enabled account, so a pool resolves while any of its accounts does.
+pub fn account_pick(auth: &BackendAuth) -> Option<AccountPick<'_>> {
+    match auth {
+        BackendAuth::NodeOAuth { account_ref } => {
+            Some(AccountPick::Reference(account_ref.as_deref()))
         }
+        BackendAuth::NodeOAuthPool { .. } => Some(AccountPick::ProviderDefault),
+        _ => None,
     }
 }
 
