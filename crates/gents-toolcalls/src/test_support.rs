@@ -1,3 +1,5 @@
+pub mod plugin;
+
 #[cfg(test)]
 use gents_pack::test_support::fixture_pack_copy;
 

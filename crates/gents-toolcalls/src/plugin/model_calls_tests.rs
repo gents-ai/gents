@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use super::*;
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::rounds::{drive, HostCalls, Round, MAX_ROUNDS};
-use crate::plugin::tests::executor::{asking_plugin_wat, installed_plugin};
+use crate::test_support::plugin::{asking_plugin_wat, installed_plugin};
 use futures::future::BoxFuture;
 use gents_documents::InferenceProfile;
 use gents_pack::plugin::model_binding::{

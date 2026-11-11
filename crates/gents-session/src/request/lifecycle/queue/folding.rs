@@ -17,7 +17,7 @@ pub fn folded_input_key(folded_request_doc_id: &str) -> String {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FoldedInput {
-    pub(crate) request_doc_id: String,
+    pub request_doc_id: String,
     pub(crate) request_id: String,
     pub(crate) content: String,
     pub(crate) input: gents_protocol::request_input::RequestInput,

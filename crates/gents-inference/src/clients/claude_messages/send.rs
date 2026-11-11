@@ -326,9 +326,9 @@ where
     });
     // Only a request that would be sent consumes a fixture: a test whose body
     // fails to build must not take a body queued by a concurrent test.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     let fixture = super::take_messages_sse_fixture();
-    #[cfg(not(test))]
+    #[cfg(not(any(test, feature = "test-fixtures")))]
     let fixture: Option<String> = None;
 
     let mut token = if let Some(token) = early_token {

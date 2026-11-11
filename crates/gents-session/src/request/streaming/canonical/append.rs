@@ -41,7 +41,7 @@ pub(in crate::request::streaming) async fn append_provider_segment_with_signer(
     Ok(result)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn append_provider_segment_at_with_access(
     access: &ConfigAccess,
     generation: &str,
@@ -74,8 +74,8 @@ pub(crate) async fn append_in_txn(
     append_in_txn_with_time(txn, generation, prepared, None).await
 }
 
-#[cfg(test)]
-pub(crate) async fn append_in_txn_at(
+#[cfg(any(test, feature = "test-fixtures"))]
+pub async fn append_in_txn_at(
     txn: &ConfigApplyTxn<'_>,
     generation: &str,
     prepared: &OutputSegment,

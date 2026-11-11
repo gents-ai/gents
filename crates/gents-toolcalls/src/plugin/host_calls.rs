@@ -264,7 +264,7 @@ mod tests {
     }
 
     async fn execute(request: Value, count: u32, grant: bool, input: Value) -> PluginOutcome {
-        let (home, mut record) = crate::plugin::tests::executor::installed_plugin(
+        let (home, mut record) = crate::test_support::plugin::installed_plugin(
             &crate::plugin::tests::executor::host_call_plugin_wat(&request, count),
             None,
         );
@@ -318,7 +318,7 @@ mod tests {
     /// caller's Tools select it with `tool_calls: true`.
     #[tokio::test]
     async fn plugin_run_serves_a_host_call_plugin_under_the_callers_selection() {
-        let (home, mut record) = crate::plugin::tests::executor::installed_plugin(
+        let (home, mut record) = crate::test_support::plugin::installed_plugin(
             &crate::plugin::tests::executor::host_call_plugin_wat(
                 &json!({"tool_name": "query", "arguments": {}}),
                 1,

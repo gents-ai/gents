@@ -1,7 +1,7 @@
 use super::*;
 use anyhow::Context;
 
-pub(crate) struct DurableClaimReceipt {
+pub struct DurableClaimReceipt {
     request: AgentRequest,
     request_commit_cid: String,
     deadline_at: chrono::DateTime<chrono::Utc>,
@@ -12,14 +12,14 @@ pub(crate) struct DurableClaimReceipt {
     folded_selection: Vec<super::queue::FoldedInput>,
 }
 
-pub(crate) enum DurableClaimOutcome {
+pub enum DurableClaimOutcome {
     Claimed(Box<DurableClaimReceipt>),
     NotClaimed(ClaimOutcome),
 }
 
 impl DurableClaimOutcome {
-    #[cfg(test)]
-    pub(crate) fn was_claimed(&self) -> bool {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn was_claimed(&self) -> bool {
         matches!(self, Self::Claimed(_))
     }
 }
@@ -439,7 +439,7 @@ impl RequestLifecycle {
         self.claim_inner(true).await
     }
 
-    pub(crate) async fn claim_pending_durable_with_inputs<T, F>(
+    pub async fn claim_pending_durable_with_inputs<T, F>(
         &mut self,
         ttl_now: T,
         claim_inputs: F,
@@ -511,8 +511,8 @@ impl RequestLifecycle {
         Ok(())
     }
 
-    #[cfg(test)]
-    pub(crate) async fn begin_owned_execution_at_with_access<F>(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn begin_owned_execution_at_with_access<F>(
         access: &gents_store::config_client::ConfigAccess,
         request_doc_id: &str,
         generation: &str,

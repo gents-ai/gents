@@ -1004,7 +1004,7 @@ async fn generated_plugin_call_access_cases_drive_bind_admission() {
         let declared = access(&case["declared"]).unwrap();
         let write_fields = case["write_fields"].as_bool().unwrap();
         let sets = case["sets_write_field"].as_bool().unwrap();
-        let (home, mut record) = executor::installed_plugin(ECHO_WAT, Some(declared));
+        let (home, mut record) = crate::test_support::plugin::installed_plugin(ECHO_WAT, Some(declared));
         let binding = record.declaration.bind_dir.as_mut().unwrap();
         if write_fields {
             binding.write_fields = vec!["output".into()];

@@ -205,8 +205,8 @@ pub struct ProcessIdentity {
 }
 
 impl ProcessIdentity {
-    #[cfg(all(unix, test))]
-    pub(crate) fn of_live(pid: i32) -> Option<Self> {
+    #[cfg(all(unix, any(test, feature = "test-fixtures")))]
+    pub fn of_live(pid: i32) -> Option<Self> {
         let info = platform::process_info(pid)?;
         (!info.zombie).then_some(Self {
             pid,
@@ -631,20 +631,20 @@ mod platform {
 }
 
 // A test-owned process group. Tests signal only groups spawned here.
-#[cfg(all(test, unix))]
+#[cfg(all(any(test, feature = "test-fixtures"), unix))]
 pub mod test_support {
     use super::{scope_process_recorder, ProcessIdentity, ProcessRecorder};
     use crate::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
     use tokio_util::sync::CancellationToken;
 
     pub struct OwnedTestProcess {
-        pub(crate) identity: ProcessIdentity,
+        pub identity: ProcessIdentity,
         token: CancellationToken,
         task: Option<tokio::task::JoinHandle<ManagedExecOutcome>>,
     }
 
     impl OwnedTestProcess {
-        pub(crate) async fn spawn(recorder: Option<ProcessRecorder>) -> Self {
+        pub async fn spawn(recorder: Option<ProcessRecorder>) -> Self {
             let (sender, receiver) = tokio::sync::oneshot::channel();
             let sender = std::sync::Mutex::new(Some(sender));
             let observer = ProcessRecorder::new(move |identity: ProcessIdentity| {

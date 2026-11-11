@@ -189,7 +189,7 @@ async fn persist_background_completion_with_message_canonical_inner(
     Ok(enqueued)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 #[allow(clippy::too_many_arguments)]
 pub async fn persist_background_completion_with_message_waking_with_access(
     access: &gents_store::config_client::ConfigAccess,

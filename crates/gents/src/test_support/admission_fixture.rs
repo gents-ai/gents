@@ -2,11 +2,13 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use defra_node::Node as EmbeddedNode;
 
-use crate::call::lifecycle::ToolCallLifecycle;
+use gents_loop::stream_writer::CanonicalStreamWriter;
 use gents_protocol::tool_call::AwaitMode;
 use gents_session::request::lifecycle::{ClaimOutcome, RequestLifecycle};
 use gents_session::request::streaming::DefraStreamWriter;
+use gents_session::session::message::NoSessionMessageGoals;
 use gents_store::identity::NodeIdentity;
+use gents_toolcalls::call::lifecycle::ToolCallLifecycle;
 
 pub struct PublishedAdmissionOptions {
     pub name: String,
@@ -921,8 +923,9 @@ pub(crate) async fn materialize_session_message(
     let signer = tool.access()?.managed_agent_signer().ok_or_else(|| {
         anyhow::anyhow!("fixture session message requires a managed Agent signer")
     })?;
-    let mut plan = gents_session::session::message::plan(
+    let mut plan = gents_session::session::message::plan::plan(
         node,
+        &NoSessionMessageGoals,
         &cause,
         &target,
         gents_session::session::message::RenderedBody {
@@ -937,7 +940,7 @@ pub(crate) async fn materialize_session_message(
     .map_err(anyhow::Error::msg)?;
     plan.sign_agent_creation(&cause.caller_node_did, &caller.input, &signer)
         .await?;
-    gents_session::session::message::commit(node, &cause, tool, plan, false)
+    gents_session::session::message::commit(node, &NoSessionMessageGoals, &cause, tool, plan, false)
         .await
         .map_err(Into::into)
 }
@@ -1001,7 +1004,7 @@ pub async fn pending_spawn_parent(name: &str) -> (Arc<EmbeddedNode>, PathBuf, To
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
-    use crate::call::lifecycle::FailureClass;
+    use gents_loop::tool_call_lifecycle::FailureClass;
     use gents_session::session::tool_call_state::CancelCause;
 
     /// Reads the admitted row through the owning Agent's access; ACP hides it from the node.

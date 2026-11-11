@@ -8,14 +8,14 @@ mod close;
 mod publish;
 mod source;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use append::append_provider_segment_at_with_access;
 pub(super) use append::append_provider_segment_with_signer;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use close::close_provider_attempt_at_with_access;
 pub(super) use close::close_provider_attempt_with_signer;
 pub(crate) use close::request_headers_in_txn;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use publish::publish_provider_turn_at_with_access;
 pub(super) use publish::publish_provider_turn_with_signer;
 pub(super) use publish::publish_provider_turn_with_time;
@@ -52,11 +52,11 @@ pub(crate) fn session_message_call_ids(message: &gents_protocol::message::Messag
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct PublishedProviderTurn {
-    pub(crate) message_doc_id: String,
+pub struct PublishedProviderTurn {
+    pub message_doc_id: String,
     #[cfg(test)]
     pub(crate) sequence: u32,
-    pub(crate) accepted_tools: Vec<super::AcceptedToolCall>,
+    pub accepted_tools: Vec<super::AcceptedToolCall>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

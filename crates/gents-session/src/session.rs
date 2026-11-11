@@ -63,7 +63,7 @@ pub use fork::{
     fork_edit_on, fork_on, is_user_turn, publish_fork_relationships, ForkBoundary, ForkError,
     ForkOutcome, ForkParams, ForkRelationshipIntent,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use history::load_history_with_access;
 pub use history::{load_history, sequence_message_key};
 pub use history::{load_sequenced_history_for_request, load_sequenced_history_projection_on};
@@ -85,11 +85,11 @@ pub use observations::{
 pub use observations::{load_latest_request_in_txn, SessionRequestFact};
 #[cfg(test)]
 pub(crate) use output::count_capture_row_queries;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use output::count_request_output_scans;
 #[cfg(test)]
 pub(crate) use output::count_source_output_queries;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use output::reader::load_canonical_payload_from_access;
 pub(crate) use output::reader::load_canonical_payload_in_txn;
 pub(crate) use output::reader::load_canonical_payload_with_access;

@@ -118,11 +118,11 @@ pub struct ResolvedRuntimeSnapshot {
     pub tool_surfaces: RapidHashMap<String, Arc<ToolSurface>>,
     pub backend_admission_configs: RapidHashMap<String, BackendAdmissionConfig>,
     pub unavailable_agents: RapidHashMap<String, UnavailableAgent>,
-    pub(crate) active_schedules: RapidHashMap<String, ResolvedSchedule>,
-    pub(crate) unavailable_schedules: RapidHashSet<String>,
-    pub(crate) active_event_triggers: RapidHashMap<String, ResolvedEventTrigger>,
-    pub(crate) unavailable_event_triggers: RapidHashSet<String>,
-    pub(crate) active_tasks: RapidHashMap<String, ResolvedTask>,
+    pub active_schedules: RapidHashMap<String, ResolvedSchedule>,
+    pub unavailable_schedules: RapidHashSet<String>,
+    pub active_event_triggers: RapidHashMap<String, ResolvedEventTrigger>,
+    pub unavailable_event_triggers: RapidHashSet<String>,
+    pub active_tasks: RapidHashMap<String, ResolvedTask>,
 }
 
 impl ResolvedRuntimeSnapshot {
@@ -179,7 +179,7 @@ impl ResolvedRuntimeSnapshot {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn from_parts(
+    pub fn from_parts(
         default_agent_did: String,
         agents: Vec<AgentWithTools>,
         tool_surfaces: RapidHashMap<String, Arc<ToolSurface>>,
@@ -302,8 +302,8 @@ impl ResolvedRuntimeSnapshot {
         });
     }
 
-    #[cfg(test)]
-    pub(crate) fn activate(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn activate(
         self,
         generation: u64,
         dispatchers: DispatcherMap,

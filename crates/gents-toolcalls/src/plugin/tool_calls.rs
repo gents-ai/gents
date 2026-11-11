@@ -244,7 +244,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_installed_wasm_plugin_gets_only_explicitly_granted_tool_calls() {
-        use crate::plugin::tests::executor::{asking_plugin_wat, installed_plugin};
+        use crate::test_support::plugin::{asking_plugin_wat, installed_plugin};
         use gents_loop::tool::ToolDyn;
         let request =
             json!({"tool_calls":{"requests":[{"id":"table","tool_name":"query","arguments":{}}]}});

@@ -9,7 +9,7 @@ use serde::Deserialize;
 /// Reads without an actor. Output segments are Agent-owned and invisible to
 /// it, so it exists only for unowned fixtures; runtime readers use
 /// [`observe_canonical_tool_output_with_access`] with the owning Agent.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn canonical_tool_output(
     node: &defra_node::Node,
     tool_doc_id: &str,

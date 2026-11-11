@@ -622,8 +622,8 @@ impl AgentRequestAdmissionVerifier {
             .map(|(request, _)| request)
     }
 
-    #[cfg(test)]
-    pub(crate) async fn verify_fresh_for_claim(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn verify_fresh_for_claim(
         &self,
         request: &AgentRequest,
         target_agent_did: &str,
@@ -647,7 +647,7 @@ impl AgentRequestAdmissionVerifier {
         .await
     }
 
-    pub(crate) async fn verify_folded_for_claim(
+    pub async fn verify_folded_for_claim(
         &self,
         document: &str,
         agent_identity: &dyn NodeIdentity,
@@ -658,8 +658,8 @@ impl AgentRequestAdmissionVerifier {
             .await
     }
 
-    #[cfg(test)]
-    pub(crate) async fn verify_fresh_for_claim_at(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn verify_fresh_for_claim_at(
         &self,
         request: &AgentRequest,
         agent_identity: &dyn NodeIdentity,
@@ -675,8 +675,8 @@ impl AgentRequestAdmissionVerifier {
         .await
     }
 
-    #[cfg(test)]
-    pub(crate) async fn verify_fresh_at(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn verify_fresh_at(
         &self,
         request: &AgentRequest,
         target_agent_did: &str,
@@ -1621,7 +1621,7 @@ pub(crate) async fn load_request_for_admission_test(
     row_into_agent_request(row, doc_id)
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn load_request_for_admission_test_as(
     node: &Arc<EmbeddedNode>,
     doc_id: &str,

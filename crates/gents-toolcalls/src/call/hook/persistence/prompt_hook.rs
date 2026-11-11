@@ -21,7 +21,7 @@ pub enum HookOwnedTool {
 }
 
 impl HookOwnedTool {
-    pub(crate) const ROUTES: [(&'static str, Self); 16] = [
+    pub const ROUTES: [(&'static str, Self); 16] = [
         (
             gents_protocol::goal_names::GET_GOAL_TOOL_NAME,
             Self::GetGoal,

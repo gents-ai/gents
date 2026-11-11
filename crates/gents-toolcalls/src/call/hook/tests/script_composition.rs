@@ -35,7 +35,8 @@ impl ToolDyn for Probe {
 
 #[tokio::test]
 async fn background_plugin_keeps_the_selected_tool_surface() {
-    use crate::plugin::tests::executor::{host_call_plugin_wat, installed_plugin};
+    use crate::plugin::tests::executor::host_call_plugin_wat;
+    use crate::test_support::plugin::installed_plugin;
     let wat = host_call_plugin_wat(&json!({"tool_name":"probe", "arguments":{}}), 3);
     let (home, mut record) = installed_plugin(&wat, None);
     record.declaration.host_imports = vec![gents_pack::pack::HostImport::HostCall];
@@ -224,7 +225,7 @@ impl ToolDyn for Stall {
 
 /// A selected `team/plugin` tool over a `host_call` guest, with its artifact digest.
 fn host_call_tool(wat: &str) -> (tempfile::TempDir, Box<dyn ToolDyn>, String) {
-    use crate::plugin::tests::executor::installed_plugin;
+    use crate::test_support::plugin::installed_plugin;
     let (home, mut record) = installed_plugin(wat, None);
     record.declaration.host_imports = vec![gents_pack::pack::HostImport::HostCall];
     gents_pack::plugin::store::write_record(home.path(), &record).unwrap();

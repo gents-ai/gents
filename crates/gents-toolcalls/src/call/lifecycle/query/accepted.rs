@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 use defra_node::Node as EmbeddedNode;
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, OutputOutcome};
 
 use gents_protocol::output::rows::{decode_transcript_message_row, AGENT_MESSAGE_FIELDS};
 use gents_session::request::streaming::AcceptedToolCall;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 use gents_store::config_client::ConfigAccess;
 use gents_store::config_client::ConfigApplyTxn;
 
@@ -145,8 +145,8 @@ impl ToolCallLifecycle {
 
     /// The accepted dispatch binding of a direct call, read as the owning
     /// Agent, which alone sees its Agent-owned call rows.
-    #[cfg(test)]
-    pub(crate) async fn load_accepted_for_dispatch_as(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn load_accepted_for_dispatch_as(
         node: &std::sync::Arc<EmbeddedNode>,
         actor: identity::Did,
         tool_doc_id: &str,
@@ -166,8 +166,8 @@ impl ToolCallLifecycle {
         .await
     }
 
-    #[cfg(test)]
-    async fn load_direct_binding(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn load_direct_binding(
         node: &std::sync::Arc<EmbeddedNode>,
         actor: identity::Did,
         tool_doc_id: &str,

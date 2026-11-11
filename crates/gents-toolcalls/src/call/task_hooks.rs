@@ -19,14 +19,14 @@ use gents_store::graphql::escape_graphql_string;
 mod generated_policy_tests;
 #[path = "task_hooks/records.rs"]
 mod records;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 #[path = "task_hooks/test_support.rs"]
 pub mod test_support;
 #[cfg(test)]
 #[path = "task_hooks/tests.rs"]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use records::RecordedHookAttempt;
 pub use records::TaskHookRecordHandle;
 pub use records::{recover_task_hook_records, TaskHookRecord, TaskHookRecordStore};
@@ -57,7 +57,7 @@ pub enum HookCommandResult {
 }
 
 impl HookCommandResult {
-    pub(crate) fn succeeded(&self) -> bool {
+    pub fn succeeded(&self) -> bool {
         matches!(self, Self::Exited { code: Some(0) })
     }
 
@@ -74,8 +74,8 @@ impl HookCommandResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HookAttempt {
-    pub(crate) hook_id: String,
-    pub(crate) result: HookCommandResult,
+    pub hook_id: String,
+    pub result: HookCommandResult,
     pub(crate) detail: String,
 }
 
@@ -116,12 +116,12 @@ pub enum TaskAgentResult {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TaskHookRun {
-    pub(crate) outcome: TaskHookOutcome,
-    pub(crate) before_attempted: Vec<HookAttempt>,
-    pub(crate) after_success_attempted: Vec<HookAttempt>,
-    pub(crate) after_failure_attempted: Vec<HookAttempt>,
-    pub(crate) finally_attempted: Vec<HookAttempt>,
-    pub(crate) agent_result: Option<TaskAgentResult>,
+    pub outcome: TaskHookOutcome,
+    pub before_attempted: Vec<HookAttempt>,
+    pub after_success_attempted: Vec<HookAttempt>,
+    pub after_failure_attempted: Vec<HookAttempt>,
+    pub finally_attempted: Vec<HookAttempt>,
+    pub agent_result: Option<TaskAgentResult>,
 }
 
 impl TaskHookRun {
@@ -215,7 +215,7 @@ fn phase_outcome(attempts: &[HookAttempt]) -> TaskHookOutcome {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub async fn run_task_hooks<Work, Fut>(
     hooks: &[TaskHook],
     exec: &dyn TaskHookExec,
@@ -314,11 +314,11 @@ impl TaskHookCancellation {
         }
     }
 
-    pub(crate) fn interrupt(&self) {
+    pub fn interrupt(&self) {
         self.interrupt.cancel();
     }
 
-    pub(crate) fn shutdown(&self) {
+    pub fn shutdown(&self) {
         self.shutdown.cancel();
     }
 

@@ -18,8 +18,8 @@ impl ToolCallLifecycle {
         self.start_running_with_time(None, None).await
     }
 
-    #[cfg(test)]
-    pub(crate) async fn start_running_at(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn start_running_at(
         &mut self,
         now: chrono::DateTime<chrono::Utc>,
         expected_generation: &str,
@@ -84,8 +84,8 @@ impl ToolCallLifecycle {
             .await
     }
 
-    #[cfg(test)]
-    pub(crate) async fn complete_raw_with_presentation_at(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn complete_raw_with_presentation_at(
         &mut self,
         raw: &str,
         rendered: &str,
@@ -142,7 +142,7 @@ impl ToolCallLifecycle {
         Ok(updated)
     }
 
-    pub(crate) async fn complete_owned(
+    pub async fn complete_owned(
         &mut self,
         result: &str,
         presentation: Option<gents_protocol::output::PayloadPresentation>,
@@ -227,7 +227,7 @@ impl ToolCallLifecycle {
             .await
     }
 
-    pub(crate) async fn fail_owned(
+    pub async fn fail_owned(
         &mut self,
         result: &str,
         failure: super::FailureClass,

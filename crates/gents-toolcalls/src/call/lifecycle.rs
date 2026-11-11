@@ -44,10 +44,6 @@ mod session_message_call;
 mod transition;
 
 use gents_loop::tool_call_lifecycle::FailureClass;
-#[cfg(any(test, feature = "test-fixtures"))]
-#[doc(hidden)]
-#[allow(dead_code)]
-pub mod admission_fixture;
 
 #[cfg(test)]
 mod background_conformance;
@@ -158,7 +154,7 @@ pub struct ToolCallLifecycle {
     spawned_by_tool_call_doc_id: Option<String>,
     plugin_effect: Option<PluginEffectBinding>,
     doc_id: Option<String>,
-    deadline_at: chrono::DateTime<chrono::Utc>,
+    pub deadline_at: chrono::DateTime<chrono::Utc>,
     state: ToolCallState,
     started_at: Option<chrono::DateTime<chrono::Utc>>,
     failure_class: Option<FailureClass>,
@@ -182,7 +178,7 @@ pub struct SpawnedBackgroundToolAdmission {
 }
 
 impl ToolCallLifecycle {
-    pub(crate) fn access(&self) -> anyhow::Result<gents_store::config_client::ConfigAccess> {
+    pub fn access(&self) -> anyhow::Result<gents_store::config_client::ConfigAccess> {
         Ok(
             gents_store::config_client::ConfigAccess::local_with_optional_agent_signer(
                 self.node.clone(),
@@ -192,7 +188,7 @@ impl ToolCallLifecycle {
         )
     }
 
-    pub(crate) fn inherit_signer(&mut self, source: &Self) -> anyhow::Result<()> {
+    pub fn inherit_signer(&mut self, source: &Self) -> anyhow::Result<()> {
         anyhow::ensure!(
             self.actor == source.actor && self.node_did == source.node_did,
             "reloaded tool actor differs from its original binding"
@@ -201,7 +197,7 @@ impl ToolCallLifecycle {
         Ok(())
     }
 
-    pub(crate) fn bind_agent_signer(
+    pub fn bind_agent_signer(
         &mut self,
         signer: Option<gents_store::identity::ManagedAgentSigner>,
     ) -> anyhow::Result<()> {
@@ -216,7 +212,7 @@ impl ToolCallLifecycle {
         Ok(())
     }
     /// Adopt a pending row atomically published with an accepted provider header.
-    pub(crate) fn from_accepted(
+    pub fn from_accepted(
         node: Arc<EmbeddedNode>,
         node_did: String,
         requester_did: Option<String>,
@@ -459,7 +455,7 @@ impl ToolCallLifecycle {
         }
     }
 
-    pub(crate) fn actor(&self) -> &identity::Did {
+    pub fn actor(&self) -> &identity::Did {
         &self.actor
     }
 
@@ -511,7 +507,7 @@ impl ToolCallLifecycle {
         Ok(request.request_id)
     }
 
-    pub(crate) fn session_id(&self) -> &str {
+    pub fn session_id(&self) -> &str {
         &self.session_id
     }
 
@@ -574,17 +570,17 @@ impl ToolCallLifecycle {
             .map(|selected| selected.service_id.as_str())
     }
 
-    pub(crate) fn tool_call_id(&self) -> &str {
+    pub fn tool_call_id(&self) -> &str {
         &self.tool_call_id
     }
 
-    #[cfg(test)]
-    pub(crate) fn execution_generation(&self) -> Option<&str> {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn execution_generation(&self) -> Option<&str> {
         self.execution_generation.as_deref()
     }
 
-    #[cfg(test)]
-    pub(crate) fn accepted_header_doc_id(&self) -> Option<&str> {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn accepted_header_doc_id(&self) -> Option<&str> {
         self.accepted_header_doc_id.as_deref()
     }
 

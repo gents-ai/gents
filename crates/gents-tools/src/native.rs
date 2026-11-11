@@ -49,7 +49,7 @@ use session_message::{
 use crate::surface::BackgroundToolConfig;
 use gents_documents::AgentToolConfig;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn read_only_bash_for_test(
     root: &std::path::Path,
     allowlist: Vec<String>,
@@ -69,7 +69,7 @@ pub fn write_capable_bash_for_test(root: &std::path::Path) -> Box<dyn gents_loop
     ))
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub fn cli_tool_for_test(config: CliToolConfig) -> Box<dyn gents_loop::tool::ToolDyn> {
     Box::new(CliTool::new(config))
 }
@@ -99,7 +99,7 @@ pub use session_history::{
 #[cfg(test)]
 pub(crate) use shared::apply_workspace_authority;
 pub use shared::background_command_timeout;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use shared::run_command_for_test;
 pub(crate) use shared::shell_join;
 #[cfg(test)]

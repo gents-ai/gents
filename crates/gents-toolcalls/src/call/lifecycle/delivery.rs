@@ -18,7 +18,7 @@ pub(crate) use dispatch::{start_running_in_txn, DispatchStart};
 #[cfg(test)]
 pub(crate) use output_append::append_tool_output;
 pub(crate) use output_append::ToolOutputBinding;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub use output_append::{append_tool_output_at, ToolOutputAppendRejection};
 
 #[cfg(test)]
