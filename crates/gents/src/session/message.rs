@@ -3,7 +3,7 @@ use crate::store::config_client::ConfigAccess;
 #[cfg(test)]
 use crate::store::graphql::escape_graphql_string;
 #[cfg(test)]
-use crate::tools::surface::AgentToolConfig;
+use crate::documents::AgentToolConfig;
 use anyhow::Result;
 #[cfg(test)]
 use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};

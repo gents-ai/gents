@@ -9,7 +9,7 @@ use crate::store::drop_cleanup::DropCleanup;
 use crate::tools::exec::{spawn_managed_process, ManagedExecKind, SpawnManagedProcessRequest};
 use crate::tools::native::prepare_managed_command;
 
-use super::catalog::CatalogServer;
+use crate::documents::CatalogServer;
 use super::client::LspClient;
 use super::LspToolConfig;
 

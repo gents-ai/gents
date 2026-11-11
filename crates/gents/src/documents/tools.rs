@@ -940,7 +940,7 @@ impl Tools {
                     crate::documents::tool_limits::DEFAULT_ACTION_TIMEOUT_SECS as i64,
                     Some(crate::documents::tool_limits::MAX_ACTION_TIMEOUT_SECS as i64),
                 );
-                if let Err(error) = crate::tools::native::lsp::LspConfigDocument::parse_operator(
+                if let Err(error) = crate::documents::LspConfigDocument::parse_operator(
                     lsp.config.as_deref(),
                 ) {
                     errors.push(format!("invalid integrations.lsp.config: {error}"));

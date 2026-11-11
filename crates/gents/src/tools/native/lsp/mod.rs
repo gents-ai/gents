@@ -3,7 +3,6 @@ mod admit;
 mod auth;
 mod catalog;
 mod client;
-mod config;
 mod edits;
 mod encoding;
 mod pool;
@@ -16,8 +15,7 @@ pub use admit::admit_command;
 pub use auth::{
     lsp_action_authorized, lsp_advertised, lsp_apply_authorized, LspAction, LspMutationSource,
 };
-pub use catalog::{builtin_catalog, primary_for_file, CatalogServer};
-pub use config::LspConfigDocument;
+pub use catalog::primary_for_file;
 use gents_protocol::tool_names::LSP_TOOL_NAME;
 pub use pool::{LspPool, PoolKey};
 pub use writethrough::{LspWritethrough, MutationKind};
@@ -28,6 +26,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::documents::{apply_overrides, builtin_catalog, CatalogServer, LspConfigDocument};
 use crate::inference::llm::tool::{Tool, ToolDefinition};
 use crate::tools::call::lifecycle::FailureClass;
 use crate::tools::native::shared::{ToolContext, ToolError};
@@ -36,7 +35,6 @@ use crate::documents::FileToolMode;
 use crate::tools::surface::{ToolPolicyBash, ToolPolicySurface};
 
 use actions::ActionRequest;
-use config::apply_overrides;
 
 /// Below this a model-requested action cannot finish indexing retries.
 pub const MIN_REQUESTED_ACTION_TIMEOUT_SECS: u64 = 5;

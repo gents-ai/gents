@@ -46,7 +46,8 @@ use session_message::{
     ListProcessesTool, ReadProcessTool, SpawnProcessTool, WaitProcessTool,
 };
 
-use crate::tools::surface::{AgentToolConfig, BackgroundToolConfig};
+use crate::documents::AgentToolConfig;
+use crate::tools::surface::BackgroundToolConfig;
 
 #[cfg(test)]
 pub(crate) fn read_only_bash_for_test(

@@ -5,7 +5,8 @@ use crate::tools::call::lifecycle::FailureClass;
 use crate::tools::native::shared::{ToolContext, ToolError};
 
 use super::super::auth::LspAction;
-use super::super::catalog::{family_eligible, marker_matches, CatalogServer};
+use super::super::catalog::{family_eligible, marker_matches};
+use crate::documents::CatalogServer;
 use super::super::client::LspClient;
 use super::format::{format_result_with_limit, truncate_model_output};
 use super::{arg_invalid, language_id, ActionRequest, MAX_GLOB_TARGETS};

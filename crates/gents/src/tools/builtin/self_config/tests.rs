@@ -5871,7 +5871,7 @@ async fn explicit_tools_grant_preserves_lsp_settings_guard_for_preview_and_apply
     for field in ["settings", "init_options", "initOptions"] {
         let server = json!({field:{"check":{"overrideCommand":["custom-check"]}}});
         let raw = json!({"servers":{"rust-analyzer":server}}).to_string();
-        crate::tools::native::lsp::LspConfigDocument::parse_operator(Some(&raw)).unwrap();
+        crate::documents::LspConfigDocument::parse_operator(Some(&raw)).unwrap();
         let patch = json!({"integrations":{"lsp":{"config":raw}}});
         let preview = config
             .call(json!({"argv":["tools", "preview", "--set", format!("integrations={}", patch["integrations"])]}).to_string())

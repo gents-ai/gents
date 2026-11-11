@@ -70,7 +70,7 @@ pub(crate) fn validate_merged_selection(merged: &Map<String, Value>) -> Result<(
         .as_ref()
         .and_then(|group| group.lsp.as_ref())
     {
-        crate::tools::native::lsp::LspConfigDocument::parse_self_config(lsp.config.as_deref())
+        crate::documents::LspConfigDocument::parse_self_config(lsp.config.as_deref())
             .map_err(anyhow::Error::msg)?;
     }
     tools.validate()

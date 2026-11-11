@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use crate::session::TxnCanonicalReader;
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::store::graphql::escape_graphql_string;
-use crate::tools::surface::AgentToolConfig;
+use crate::documents::AgentToolConfig;
 use gents_protocol::session::SessionScope;
 
 const TEXT_CHARS: usize = 8_000;

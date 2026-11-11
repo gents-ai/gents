@@ -8,10 +8,11 @@ use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 
+use crate::documents::AgentToolConfig;
 use crate::inference::resolved::ResolvedAgent;
 use crate::runtime::agent::tool_selection_from_document;
 use crate::runtime::snapshot::UnavailableAgent;
-use crate::tools::surface::{AgentToolConfig, ResolvedToolSelection, ToolSurface};
+use crate::tools::surface::{ResolvedToolSelection, ToolSurface};
 
 type AgentContextDocuments = (
     Option<crate::documents::AgentContext>,
@@ -111,7 +112,7 @@ pub(super) fn agent_context_documents(
             selected.query_tools = merged.query_tools;
             selected.write_tools = merged.write_tools;
             selected.surface_of_tool = merged.surface_of_tool;
-            let agents = crate::tools::surface::AgentToolConfig::from_document_with_targets(
+            let agents = AgentToolConfig::from_document_with_targets(
                 tools,
                 view.agent_targets.values().map(|record| &record.value),
             )?;

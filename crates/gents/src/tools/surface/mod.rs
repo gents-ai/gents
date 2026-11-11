@@ -41,7 +41,7 @@ pub(crate) fn configured_node_operation_sources(
         selection.query_tools = merged.query_tools;
         selection.write_tools = merged.write_tools;
     }
-    let agents = selection::AgentToolConfig::from_document(tools)?;
+    let agents = AgentToolConfig::from_document(tools)?;
     let policy =
         policy::ToolPolicySurface::from_selection(&selection, &agents).meet(ceiling.policy());
     Ok(policy.covered_node_operation_sources(selection.enable_pack_install))
@@ -51,7 +51,7 @@ pub(crate) fn configured_plugin_refs(
     ceiling: &ToolCeiling,
 ) -> anyhow::Result<Vec<crate::documents::PluginToolRef>> {
     let selection = selection::ResolvedToolSelection::from_document(tools)?;
-    let agents = selection::AgentToolConfig::from_document(tools)?;
+    let agents = AgentToolConfig::from_document(tools)?;
     let policy =
         policy::ToolPolicySurface::from_selection(&selection, &agents).meet(ceiling.policy());
     Ok(selection
@@ -79,7 +79,7 @@ pub use root_publication::{
 };
 pub use runtime_context::ToolRuntimeContext;
 pub use selection::{resolve_goal_capabilities, CustomToolFactory, ResolvedToolSelection};
-pub(crate) use selection::{AgentToolConfig, BackgroundToolConfig};
+pub(crate) use selection::BackgroundToolConfig;
 pub use timeouts::{BackgroundTimeoutPolicy, BackgroundTimeouts, BoundedTimeout, ToolTimeouts};
 
 use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
@@ -89,7 +89,7 @@ use crate::documents::{BashMode, FileToolMode};
 use crate::inference::llm::tool::ToolDyn;
 use anyhow::{Context, Result};
 
-use crate::documents::{AgentTargetDocument, QueryToolDecl, WriteToolDecl};
+use crate::documents::{AgentTargetDocument, AgentToolConfig, QueryToolDecl, WriteToolDecl};
 use crate::tools::builtin::defra_query::{build_defra_query_tool, BoundedQueryTool, CollectionScope};
 use crate::tools::builtin::defra_write::BoundedWriteTool;
 use crate::tools::mcp::meta::build_meta_tools;

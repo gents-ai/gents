@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::documents::{AgentTargetDocument, QueryToolDecl, WriteToolDecl, WriteToolField};
+use crate::documents::{AgentTargetDocument, AgentToolConfig, QueryToolDecl, WriteToolDecl, WriteToolField};
 use crate::tools::builtin::defra_query::CollectionScope;
 use crate::tools::native::{CommandExecutionMode, CommandNetworkMode};
 
+use super::selection::ResolvedToolSelection;
 use crate::documents::{BashMode, FileToolMode};
-use super::selection::{AgentToolConfig, ResolvedToolSelection};
 
 pub const TOOL_POLICY_V1: &str = "tool-policy/v1";
 

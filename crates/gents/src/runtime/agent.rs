@@ -21,9 +21,8 @@ use crate::store::schema::migration;
 use crate::tools::call::hook::{BackgroundExecutionRegistry, FailurePolicy};
 use crate::tools::mcp::health::HealthCheckerOptions;
 use crate::tools::mcp::pool::McpPool;
-use crate::tools::surface::{
-    AgentToolConfig, AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling,
-};
+use crate::documents::AgentToolConfig;
+use crate::tools::surface::{AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling};
 
 mod builder;
 pub mod completion_retry;

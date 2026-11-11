@@ -14,10 +14,13 @@ mod inference_profile;
 mod inference_sampling;
 mod installation;
 mod installation_validation;
+mod lsp_catalog;
+mod lsp_config;
 pub mod mailbox_write_decl;
 mod projection_acp;
 pub use projection_acp::parse_projection_resource_map;
 mod agent_target;
+mod agent_tool_config;
 pub mod automation;
 pub(crate) mod backend_credential;
 pub(crate) mod desired_state;
@@ -80,6 +83,8 @@ pub use eval_definition::{
     EvalFixtureFile, EvalFixtures, EvalReducer, EvalSplit, EvalStage, EvalSubject, EvalSubjectKind,
     EvalTier, LLM_JUDGE_CHECK,
 };
+pub use lsp_catalog::{builtin_catalog, CatalogServer};
+pub use lsp_config::{apply_overrides, LspConfigDocument};
 pub use installation::{
     ProjectionAcpBinding, ProjectionAcpObservation, RepositoryPlacement, ToolServiceRegistry,
 };
@@ -147,6 +152,7 @@ pub use write_tool::{
 pub(crate) use write_tool::{reject_protected_collection_name, undeclared_field_refusal};
 
 pub use agent_target::AgentTargetDocument;
+pub(crate) use agent_tool_config::AgentToolConfig;
 
 pub use datastore_tool_surface::{list_datastore_tool_surfaces, DatastoreToolSurfaceDocument};
 pub use skill::SkillDocument;

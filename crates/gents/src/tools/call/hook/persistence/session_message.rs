@@ -7,7 +7,7 @@ use crate::session::message::{
 };
 use crate::store::config_client::{ConfigAccess, TransactionFailure};
 use crate::tools::call::lifecycle::ToolCallLifecycle;
-use crate::tools::surface::AgentToolConfig;
+use crate::documents::AgentToolConfig;
 use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};
 use gents_protocol::row::AgentRequest;
 
@@ -22,7 +22,7 @@ fn unreachable_session_payload(
     tool_name: &str,
     requested: &str,
     args: &AgentMessageArgs,
-    tools: &crate::tools::surface::AgentToolConfig,
+    tools: &crate::documents::AgentToolConfig,
 ) -> String {
     let named = tools.targets.iter().find(|target| {
         target.name.eq_ignore_ascii_case(requested) || target.agent_did == requested
@@ -866,8 +866,8 @@ fn hop_exceeded_payload(tool_name: &str, hop: u32, max_request_hop: u32) -> Stri
 mod unreachable_session_tests {
     use super::*;
 
-    fn tools(names: &[&str]) -> crate::tools::surface::AgentToolConfig {
-        crate::tools::surface::AgentToolConfig {
+    fn tools(names: &[&str]) -> crate::documents::AgentToolConfig {
+        crate::documents::AgentToolConfig {
             enabled: true,
             targets: names
                 .iter()
@@ -886,7 +886,7 @@ mod unreachable_session_tests {
 
     fn refusal(
         session_id: &str,
-        tools: &crate::tools::surface::AgentToolConfig,
+        tools: &crate::documents::AgentToolConfig,
     ) -> serde_json::Value {
         let args: AgentMessageArgs = serde_json::from_value(
             json!({"session_id": session_id, "message": "Reply with exactly TRAIN-111"}),

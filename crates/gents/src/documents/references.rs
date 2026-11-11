@@ -346,7 +346,7 @@ impl ConfigReferences {
                     .filter(|((collection, _), _)| *collection == Collection::AgentTarget)
                     .map(|(_, value)| decode::<AgentTargetDocument>(value))
                     .collect::<Result<Vec<_>>>()?;
-                crate::tools::surface::AgentToolConfig::from_document_with_targets(&doc, &targets)?;
+                AgentToolConfig::from_document_with_targets(&doc, &targets)?;
             }
             Collection::AgentTarget => {
                 let doc: AgentTargetDocument = decode(value)?;

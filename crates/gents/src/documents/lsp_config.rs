@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::catalog::{builtin_catalog, CatalogServer};
+use super::lsp_catalog::{builtin_catalog, CatalogServer};
 
 const OPERATOR_SERVER_KEYS: &[&str] = &[
     "disabled",
@@ -78,7 +78,7 @@ fn parse_strict(raw: Option<&str>, self_config: bool) -> Result<LspConfigDocumen
         }
     }
     if let Some(mode) = obj.get("network_mode").and_then(Value::as_str) {
-        crate::tools::native::CommandNetworkMode::parse(mode).map_err(|err| err.to_string())?;
+        gents_loop::tool_policy::CommandNetworkMode::parse(mode).map_err(|err| err.to_string())?;
     }
     if self_config {
         allow_server_keys(&value, SELF_CONFIG_SERVER_KEYS, "self-config")?;

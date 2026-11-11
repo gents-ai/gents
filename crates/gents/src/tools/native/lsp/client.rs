@@ -61,7 +61,7 @@ impl LspClient {
     pub fn start(
         mut process: ManagedProcess,
         server_name: String,
-        server: &super::catalog::CatalogServer,
+        server: &crate::documents::CatalogServer,
         workspace: std::path::PathBuf,
     ) -> Result<Self, String> {
         let stdin = process.stdin.take().ok_or("process stdin missing")?;

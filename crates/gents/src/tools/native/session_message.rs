@@ -16,8 +16,9 @@ use crate::tools::background::status::r4c_args::{ListBackgroundToolsArgs, ReadTo
 use crate::documents::tool_limits::{
     DEFAULT_WAIT_PROCESS_TIMEOUT_SECS, MAX_WAIT_PROCESS_TIMEOUT_SECS,
 };
+use crate::documents::AgentToolConfig;
 use crate::tools::background::status::{BackgroundToolArgs, CancelToolArgs, WaitToolArgs};
-use crate::tools::surface::{AgentToolConfig, BackgroundToolConfig};
+use crate::tools::surface::BackgroundToolConfig;
 
 use super::shared::ToolError;
 

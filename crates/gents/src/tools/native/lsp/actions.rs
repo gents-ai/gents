@@ -6,7 +6,8 @@ use crate::tools::call::lifecycle::FailureClass;
 use crate::tools::native::shared::{ToolContext, ToolError};
 
 use super::auth::LspAction;
-use super::catalog::{primary_for_file, CatalogServer};
+use super::catalog::primary_for_file;
+use crate::documents::CatalogServer;
 use super::client::LspClient;
 use super::edits::{
     apply_prepared_edits, prepare_rename, prepare_workspace_edit, resolve_inbound_path,
