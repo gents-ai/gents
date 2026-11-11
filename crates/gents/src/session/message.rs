@@ -42,7 +42,7 @@ pub(crate) use inspection::{agent_session_read, AgentSessionReadArgs};
 pub use interrupt::{
     agent_interrupt_allowed, interrupt_refusal, interrupt_session, interrupt_session_with_access,
 };
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 pub(crate) use plan::plan;
 pub(crate) use plan::{plan_with_delivery, Plan};
 pub(crate) use target::{

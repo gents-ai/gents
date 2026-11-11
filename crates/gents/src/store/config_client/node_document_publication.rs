@@ -44,7 +44,7 @@ pub(crate) async fn publish_secret_configuration_in_txn(
     Ok(())
 }
 
-pub(crate) async fn publish_node_child_in_txn(
+pub async fn publish_node_child_in_txn(
     txn: &ConfigApplyTxn<'_>,
     collection: &str,
     doc_id: &str,

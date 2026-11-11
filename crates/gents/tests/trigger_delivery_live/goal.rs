@@ -83,8 +83,7 @@ async fn goal_task_waits_for_claim_and_emits_only_after_model_completion() -> Re
     let lanes = delivery_lanes()?;
     let artifacts = artifact_directory("goal")?;
     let home =
-        gents::eval::runner::embedded::EmbeddedHome::create_retained(&artifacts.join("home"))
-            .await?;
+        gents::runtime::embedded::EmbeddedHome::create_retained(&artifacts.join("home")).await?;
     let db = support::test_db_from_home(home);
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let owner = identity.did().to_owned();

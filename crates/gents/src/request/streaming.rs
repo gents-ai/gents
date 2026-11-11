@@ -577,8 +577,8 @@ impl DefraStreamWriter {
         Ok(writer)
     }
 
-    #[cfg(test)]
-    pub(crate) fn new_for_lifecycle(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn new_for_lifecycle(
         node: Arc<EmbeddedNode>,
         lifecycle: &crate::request::lifecycle::RequestLifecycle,
         batch_interval: Duration,

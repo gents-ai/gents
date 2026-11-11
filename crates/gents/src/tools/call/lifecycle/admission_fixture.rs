@@ -108,7 +108,7 @@ async fn write_fixture_job_pin_with_access(
     clippy::too_many_arguments,
     reason = "shared fixture with call sites across many test modules"
 )]
-pub(crate) async fn publish_accepted_on_claimed_request(
+pub async fn publish_accepted_on_claimed_request(
     node: Arc<EmbeddedNode>,
     request: &mut RequestLifecycle,
     node_did: &str,
@@ -564,13 +564,12 @@ pub async fn published_admission_with_owner(
     let name = options.name;
     let path =
         std::env::temp_dir().join(format!("admission-fixture-{name}-{}", uuid::Uuid::new_v4()));
-    let p2p: Option<crate::eval::runner::embedded::home::P2PConfigForPath> = if options.p2p {
+    let p2p: Option<crate::runtime::embedded::P2PConfigForPath> = if options.p2p {
         Some(Arc::new(|_| test_p2p_config()))
     } else {
         None
     };
-    let home =
-        crate::eval::runner::embedded::EmbeddedHome::create_retained_with_p2p(&path, p2p).await?;
+    let home = crate::runtime::embedded::EmbeddedHome::create_retained_with_p2p(&path, p2p).await?;
     let db = crate::support::test_db_from_home(home);
     let (db, user, owner, binding) = crate::test_support::signed_test_node_from_db(db, &name).await;
     let node = db.node.clone();
@@ -769,7 +768,7 @@ pub async fn published_admission_with_owner(
     ))
 }
 
-pub(crate) async fn pending_client_fixture_request(
+pub async fn pending_client_fixture_request(
     node: &Arc<EmbeddedNode>,
     client: &crate::ConfigAccess,
     runtime: Arc<dyn NodeIdentity>,

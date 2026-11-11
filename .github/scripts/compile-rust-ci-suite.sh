@@ -26,7 +26,7 @@ fi
 
 case "${suite}" in
   runtime)
-    packages=(gents gents-loop)
+    packages=(gents gents-eval gents-loop)
     ;;
   cli)
     packages=(

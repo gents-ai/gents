@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use gents::defra_node::{Node as EmbeddedNode, P2PConfig, QueryResponse};
-use gents::eval::runner::embedded::EmbeddedHome;
+use gents::runtime::embedded::EmbeddedHome;
 use gents::store::graphql::escape_graphql_string;
 use gents::NodeIdentity;
 use gents_protocol::row::AgentRequest;
@@ -55,7 +55,7 @@ pub fn materialization_identity_for(did: &str) -> Arc<dyn NodeIdentity> {
 }
 
 pub struct TestDb {
-    pub(crate) home: EmbeddedHome,
+    pub home: EmbeddedHome,
     pub node: Arc<EmbeddedNode>,
     pub node_identity: Arc<dyn NodeIdentity>,
     pub process_generation: u64,

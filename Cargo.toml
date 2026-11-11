@@ -6,6 +6,7 @@ members = [
     "apps/gents-desktop/src-tauri",
     "crates/fixture-domain-plugin",
     "crates/gents",
+    "crates/gents-eval",
     "crates/gents-chatgpt-login",
     "crates/gents-claude",
     "crates/gents-claude-login",
@@ -36,6 +37,7 @@ default-members = [
     "apps/gents-desktop/src-tauri",
     "crates/fixture-domain-plugin",
     "crates/gents",
+    "crates/gents-eval",
     "crates/gents-chatgpt-login",
     "crates/gents-claude",
     "crates/gents-claude-login",
@@ -59,6 +61,7 @@ license = "Apache-2.0"
 repository = "https://github.com/gents-ai/gents"
 
 [workspace.dependencies]
+gents-eval = { path = "crates/gents-eval" }
 anyhow = "1"
 base64 = "0.22"
 bytes = "1"

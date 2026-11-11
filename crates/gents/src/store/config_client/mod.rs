@@ -131,7 +131,7 @@ pub use node_deferred_operation::{
     maybe_link_deferred_operation_in_txn, require_node_update_in_txn, DeferredOperationError,
 };
 pub(crate) use node_document_publication::{
-    publish_node_child_in_txn, publish_node_managers_in_txn, publish_secret_configuration_in_txn,
+    publish_node_managers_in_txn, publish_secret_configuration_in_txn,
 };
 pub use pairing_reader::{PairingObservation, PairingReadReason};
 pub(crate) use schema_contract::collection_schema_contract_digest;
@@ -144,7 +144,7 @@ pub use schema_install::{
 pub(crate) use txn::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT;
 pub use txn::{
     ConfigApplyTxn, ConfigCursor, IdempotentTransactionRetry, LocalConfigAccess,
-    NativeOperationAbandoned, ReceiptWriteError, ReentrantEmbeddedWrite,
+    NativeOperationAbandoned, ReceiptWriteError, ReentrantEmbeddedWrite, TransactionFinalityError,
 };
 
 pub use destructive_decision::{DestructiveAuthority, DestructiveRefusal, InventoryRead};
@@ -810,3 +810,5 @@ pub async fn query_graphql_with_options(
             source: Box::new(error),
         })
 }
+
+pub use node_document_publication::publish_node_child_in_txn;
