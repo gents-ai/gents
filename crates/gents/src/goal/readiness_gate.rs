@@ -249,6 +249,12 @@ pub(crate) fn goal_reconcile_settled(
         && last_result != Some(ReconcileResult::Error.as_str())
 }
 
+/// Reports whether the runtime's reconcile has settled for goal continuation.
+#[async_trait::async_trait]
+pub(crate) trait GoalReconcileSettled: Send + Sync {
+    async fn goal_reconcile_settled(&self) -> bool;
+}
+
 pub const GOAL_READINESS_WAIT_PREFIX: &str = "waiting for agent readiness: ";
 
 #[derive(Debug, Clone, PartialEq, Eq)]

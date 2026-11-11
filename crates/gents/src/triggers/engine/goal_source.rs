@@ -22,7 +22,9 @@ use crate::goal::{
     GoalDocument, GoalFailureCause, GoalGatedDecision, GoalRequestTerminal, ObservedGoalAgent,
     GOAL_READINESS_WAIT_PREFIX, MAX_INFRASTRUCTURE_RETRIES,
 };
-use crate::goal::{publish_claimed_continuation_with_identity, resume_at_reset};
+use crate::goal::{
+    publish_claimed_continuation_with_identity, resume_at_reset, GoalReconcileSettled,
+};
 use crate::runtime::snapshot::ActiveRuntimeSnapshot;
 use crate::store::config_client::ConfigAccess;
 use crate::store::graphql::escape_graphql_string;
@@ -70,7 +72,7 @@ pub struct GoalSource {
     subscription: Option<events::DocumentChangeSubscription>,
     cancel: CancellationToken,
     rescan_tick: tokio::time::Interval,
-    runtime_status: Option<crate::runtime::status::RuntimeStatusHandle>,
+    runtime_status: Option<Arc<dyn GoalReconcileSettled>>,
 }
 
 impl GoalSource {
@@ -103,9 +105,9 @@ impl GoalSource {
 
     pub(crate) fn with_runtime_status(
         mut self,
-        status: crate::runtime::status::RuntimeStatusHandle,
+        status: impl GoalReconcileSettled + 'static,
     ) -> Self {
-        self.runtime_status = Some(status);
+        self.runtime_status = Some(Arc::new(status));
         self
     }
 

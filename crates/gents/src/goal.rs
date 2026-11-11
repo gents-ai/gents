@@ -70,7 +70,7 @@ pub(crate) use observation::{
 pub use operator_resume::{
     resume_goal_on_account, resume_goal_request, GoalResumeOnReceipt, GoalResumeReceipt,
 };
-pub(crate) use readiness_gate::goal_reconcile_settled;
+pub(crate) use readiness_gate::{goal_reconcile_settled, GoalReconcileSettled};
 pub use readiness_gate::{
     gate_claimed_goal_continuation, gate_goal_continuation, goal_agent_observation,
     goal_failure_cause, goal_readiness_newer_than_terminal, next_goal_infrastructure_retries,

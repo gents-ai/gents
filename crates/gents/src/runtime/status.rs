@@ -6,6 +6,7 @@ use chrono::Utc;
 use tokio::sync::{watch, Mutex};
 use tokio::time::MissedTickBehavior;
 
+use crate::goal::GoalReconcileSettled;
 use crate::runtime::agent::ProcessLifecycleState;
 use crate::runtime::node_readiness_publisher::{
     NodeReadinessPublisherHandle, NodeReadinessPublisherOwner,
@@ -63,6 +64,18 @@ pub(crate) struct RuntimeStatusHandle {
     node: Arc<defra_node::Node>,
     state: Arc<Mutex<RuntimeStatusRow>>,
     readiness: NodeReadinessPublisherHandle,
+}
+
+#[async_trait::async_trait]
+impl GoalReconcileSettled for RuntimeStatusHandle {
+    async fn goal_reconcile_settled(&self) -> bool {
+        let row = self.state.lock().await;
+        !row.last_reconcile_result.is_empty()
+            && crate::goal::goal_reconcile_settled(
+                Some(&row.reconcile_phase),
+                Some(&row.last_reconcile_result),
+            )
+    }
 }
 
 impl RuntimeStatusHandle {
@@ -142,15 +155,6 @@ impl RuntimeStatusHandle {
                 readiness,
             },
         )
-    }
-
-    pub(crate) async fn goal_reconcile_settled(&self) -> bool {
-        let row = self.state.lock().await;
-        !row.last_reconcile_result.is_empty()
-            && crate::goal::goal_reconcile_settled(
-                Some(&row.reconcile_phase),
-                Some(&row.last_reconcile_result),
-            )
     }
 
     pub(crate) fn readiness(&self) -> &NodeReadinessPublisherHandle {
