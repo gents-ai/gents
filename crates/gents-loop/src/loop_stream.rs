@@ -82,6 +82,7 @@ pub use request_assembly::{assemble_new_messages, is_request_context_message};
 pub use request_assembly::{assemble_provider_request, replay_compaction_prefix_bound};
 use tool_dispatch::admit_tool;
 pub use tool_dispatch::dispatch_tool;
+pub use tool_dispatch::tool_effect_dispatcher;
 
 use provider_idle::{within_provider_idle, ProviderAttemptFailure};
 use request_assembly::dispatch::{context_accounting_for_request, prepare_dispatch_attempt};
@@ -271,6 +272,7 @@ where
     try_stream! {
         let model = Arc::new(model);
         let hook = hook.map(Arc::new);
+        if let Some(hook) = &hook { hook.bind_tool_surface(tools.clone()).await; }
         let provider_profile = config.provider_input_counter.profile();
         let routing_affinity = crate::provider_input::routing_affinity::RoutingAffinity::start(
             provider_profile == crate::provider_input::ProviderInputProfile::ChatGptCodexResponses,
@@ -1491,7 +1493,7 @@ where
                                 tools: tools.clone(),
                                 hook: hook.clone(),
                                 parent_internal_id: internal_call_id.clone(),
-                                fatal: tokio::sync::Mutex::new(None),
+                                fatal: tokio::sync::Mutex::new(None), composed: Default::default(),
                             })
                         });
                         let execution = if suppressed {

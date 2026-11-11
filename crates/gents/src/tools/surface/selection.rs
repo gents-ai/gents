@@ -251,6 +251,14 @@ impl ResolvedToolSelection {
         let mut allowed_mcp_service_ids = Vec::with_capacity(remote_services.len());
         let mut required_mcp_service_ids = Vec::new();
         let mut backgroundable_tool_names = Vec::new();
+        if let Some(plugins) = integrations.and_then(|integrations| integrations.plugins.as_ref()) {
+            backgroundable_tool_names.extend(
+                plugins
+                    .iter()
+                    .filter(|plugin| plugin.job.is_none())
+                    .map(|plugin| plugin.tool_name().to_owned()),
+            );
+        }
         if let Some(bash) = bash_group {
             if bash.background_enabled && !matches!(bash.mode, BashMode::Off) {
                 backgroundable_tool_names.push(match bash.mode {

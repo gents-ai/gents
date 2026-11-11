@@ -692,6 +692,9 @@ impl PluginExecutor {
                 bound.validate_invocation(&coordinate, &record.digest, &json_digest(&input))?;
             }
             let admitted = self.admit(record)?;
+            let budget = if record.declaration.imports_host_call() {
+                super::host_calls::budget_for_invocation(admitted.budget)
+            } else { admitted.budget };
             let mut input = input.clone();
             if record.declaration.service.is_some() {
                 if let Some(object) = input.as_object_mut() { object.remove("service"); }
@@ -704,13 +707,16 @@ impl PluginExecutor {
                 anyhow::ensure!(actor == data_actor, "plugin caller differs from data actor");
             }
             let (model, binding_note) = self.model_session(record, actor.as_ref().or(data_actor.as_ref())).await?;
-            let calls = HostCalls {
+            let mut calls = HostCalls {
                 model,
                 http: http_calls::Session::for_grant(&coordinate, &admitted.runner.manifold)?,
                 tools,
                 data: data::Session::for_call(record.declaration.data.as_ref(), data),
                 jobs: job_calls::Session::for_call(record.declaration.job.0, &coordinate, jobs),
             };
+            let input = if record.declaration.imports_host_call() {
+                super::host_calls::prepare_input(input, &mut calls.tools)?
+            } else { input };
             let first_input = if calls.is_empty() {
                 input.clone()
             } else {
@@ -722,10 +728,10 @@ impl PluginExecutor {
             };
             receipt.input_digest = json_digest(&effective_input);
             receipt.limits = Some(PluginExecutionLimits {
-                fuel: admitted.budget.fuel,
-                memory_bytes: admitted.budget.memory_bytes,
-                wall_ms: admitted.budget.wall_clock.as_millis().try_into().unwrap_or(u64::MAX),
-                max_output_bytes: admitted.budget.max_output_bytes as u64,
+                fuel: budget.fuel,
+                memory_bytes: budget.memory_bytes,
+                wall_ms: budget.wall_clock.as_millis().try_into().unwrap_or(u64::MAX),
+                max_output_bytes: budget.max_output_bytes as u64,
             });
             let bound_field = bound
                 .as_ref()
@@ -739,8 +745,7 @@ impl PluginExecutor {
                 calls.tools.is_some(),
             ));
             receipt.verdict = PluginExecutionVerdict::ExecutionError;
-            let round = artifact_round(admitted.runner.clone(), bound);
-            let outcome = drive_with_calls(&coordinate, round, calls, input, admitted.budget)
+            let outcome = drive_with_calls(&coordinate, admitted.runner.clone(), bound, calls, input, budget, admitted.budget.wall_clock)
             .await
             .inspect_err(|error| {
                 if error.downcast_ref::<super::GuestTrap>().is_some() {
@@ -880,14 +885,8 @@ async fn drive(
         data: None,
         jobs: None,
     };
-    drive_with_calls(
-        coordinate,
-        artifact_round(runner, bound),
-        calls,
-        input,
-        budget,
-    )
-    .await
+    let declared = budget.wall_clock;
+    drive_with_calls(coordinate, runner, bound, calls, input, budget, declared).await
 }
 
 /// The round of an artifact: the compiled `.afb` over its bound directory.
@@ -900,11 +899,26 @@ fn artifact_round(runner: Arc<PluginRunner>, bound: Option<BoundDir>) -> rounds:
 
 async fn drive_with_calls(
     coordinate: &str,
-    round: rounds::Round,
+    runner: Arc<PluginRunner>,
+    bound: Option<BoundDir>,
     calls: HostCalls,
     input: serde_json::Value,
     budget: PluginBudget,
+    declared_wall_clock: std::time::Duration,
 ) -> Result<PluginOutcome> {
+    if runner.definition().imports_host_call() {
+        return super::host_calls::run(
+            runner,
+            bound,
+            input,
+            budget,
+            declared_wall_clock,
+            calls.tools,
+        )
+        .await
+        .map_err(Into::into);
+    }
+    let round = artifact_round(runner, bound);
     if calls.is_empty() {
         tokio::task::spawn_blocking(move || round(input, budget))
             .await

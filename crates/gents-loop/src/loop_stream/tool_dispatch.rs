@@ -1,11 +1,30 @@
 use super::*;
 
+pub fn tool_effect_dispatcher<H>(
+    tools: Arc<Vec<Box<dyn ToolDyn>>>,
+    hook: Arc<H>,
+    parent_internal_id: String,
+) -> Arc<dyn crate::tool_effects::ToolEffectDispatcher>
+where
+    H: SessionHook + 'static,
+{
+    Arc::new(EffectDispatcher {
+        tools,
+        hook,
+        parent_internal_id,
+        fatal: Default::default(),
+        composed: Default::default(),
+    })
+}
+
 pub(super) struct EffectDispatcher<H> {
     pub(super) tools: Arc<Vec<Box<dyn ToolDyn>>>,
     pub(super) hook: Arc<H>,
     pub(super) parent_internal_id: String,
     // Hook termination remains fatal through guest error conversion and parent settlement.
     pub(super) fatal: tokio::sync::Mutex<Option<String>>,
+    // Set by the first child call, so an invocation that never composed owes no settlement read.
+    pub(super) composed: std::sync::atomic::AtomicBool,
 }
 
 impl<H> EffectDispatcher<H>
@@ -19,6 +38,11 @@ where
         arguments: &str,
         outcome: &ToolOutcome,
     ) -> HookAction {
+        if let Err(reason) =
+            crate::tool_effects::ToolEffectDispatcher::settle_stopped(self, outcome).await
+        {
+            self.fatal.lock().await.get_or_insert(reason);
+        }
         let action = self
             .hook
             .on_tool_result(name, call_id, &self.parent_internal_id, arguments, outcome)
@@ -44,6 +68,8 @@ where
     ) -> crate::tool::BoxFuture<'a, Result<ToolOutcome, crate::tool_effects::ToolEffectError>> {
         Box::pin(async move {
             use crate::tool_effects::ToolEffectError::{Fatal, Unavailable};
+            self.composed
+                .store(true, std::sync::atomic::Ordering::Release);
             let result = async {
                 let scope = current_tool_runtime_context().ok_or_else(|| {
                     Unavailable("tool effects require a request execution scope".to_owned())
@@ -140,6 +166,20 @@ where
                     .get_or_insert_with(|| reason.clone());
             }
             result
+        })
+    }
+
+    fn settle_stopped<'a>(
+        &'a self,
+        stop: &'a ToolOutcome,
+    ) -> crate::tool::BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            if !self.composed.load(std::sync::atomic::Ordering::Acquire) {
+                return Ok(());
+            }
+            self.hook
+                .settle_tool_effects(&self.parent_internal_id, stop)
+                .await
         })
     }
 }
@@ -629,6 +669,7 @@ mod tests {
             hook: hook.clone(),
             parent_internal_id: "parent".into(),
             fatal: tokio::sync::Mutex::new(None),
+            composed: Default::default(),
         };
         let outcome = scope_request_tool_execution(
             None,
@@ -662,6 +703,7 @@ mod tests {
             hook: hook.clone(),
             parent_internal_id: "parent".into(),
             fatal: tokio::sync::Mutex::new(None),
+            composed: Default::default(),
         };
         let outcome = scope_request_tool_execution(
             Some(Utc::now() + chrono::Duration::milliseconds(10)),
@@ -698,6 +740,7 @@ mod tests {
                 hook: hook.clone(),
                 parent_internal_id: "parent".into(),
                 fatal: tokio::sync::Mutex::new(None),
+                composed: Default::default(),
             });
             let outcome = scope_request_tool_execution(
                 None,

@@ -1,9 +1,25 @@
 use super::*;
 use anyhow::Context;
 
+/// Why a request cannot take one more background slot.
 #[derive(Debug, thiserror::Error)]
-#[error("background tool budget exceeded ({0} admitted)")]
-pub(crate) struct BackgroundCapacityExceeded(pub(crate) usize);
+pub(crate) enum BackgroundSlotRefusal {
+    #[error("background tool budget exceeded ({0} admitted)")]
+    CapacityExceeded(usize),
+    /// A slot belongs to a running request: its completion is delivered to
+    /// that request's session (Lean `admitSpawnedBackgroundCore`).
+    #[error("the request that would own the background slot is no longer running")]
+    RequestStopped,
+}
+
+impl BackgroundSlotRefusal {
+    pub(crate) fn capacity(&self) -> Option<usize> {
+        match self {
+            Self::CapacityExceeded(admitted) => Some(*admitted),
+            Self::RequestStopped => None,
+        }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct BackgroundedRow {
@@ -71,7 +87,7 @@ pub(crate) enum BackgroundSlot {
 }
 
 /// Admits one background slot on `request_doc_id` in `txn`, refusing with
-/// [`BackgroundCapacityExceeded`] at the ceiling, and returns the request row
+/// [`BackgroundSlotRefusal::CapacityExceeded`] at the ceiling, and returns the request row
 /// with `request_fields`. DefraDB transactions do not conflict on predicate
 /// reads, so every admission bumps the request's
 /// `background_admission_sequence`: concurrent admissions to one request then
@@ -95,7 +111,7 @@ pub(crate) async fn reserve_background_slot_in_txn(
             live
         };
         if admitted >= MAX_BACKGROUNDED_TOOLS_PER_PARENT {
-            return Err(BackgroundCapacityExceeded(admitted).into());
+            return Err(BackgroundSlotRefusal::CapacityExceeded(admitted).into());
         }
     }
     let escaped = crate::store::graphql::escape_graphql_string(request_doc_id);

@@ -260,8 +260,8 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
     let refusal = overflow.start_running().await.unwrap_err();
     assert_eq!(
         refusal
-            .downcast_ref::<crate::tools::call::hook::persistence::BackgroundCapacityExceeded>()
-            .map(|capacity| capacity.0),
+            .downcast_ref::<crate::tools::call::hook::persistence::BackgroundSlotRefusal>()
+            .and_then(|refusal| refusal.capacity()),
         Some(capacity)
     );
     stale_replay
@@ -587,8 +587,8 @@ async fn concurrent_background_starts_on_one_request_fill_exactly_the_ceiling() 
         .filter_map(|result| result.as_ref().err())
         .map(|error| {
             error
-                .downcast_ref::<crate::tools::call::hook::persistence::BackgroundCapacityExceeded>()
-                .map(|capacity| capacity.0)
+                .downcast_ref::<crate::tools::call::hook::persistence::BackgroundSlotRefusal>()
+                .and_then(|refusal| refusal.capacity())
                 .unwrap_or_else(|| panic!("unexpected start failure: {error:#}"))
         })
         .collect::<Vec<_>>();
@@ -696,8 +696,8 @@ async fn interrupted_foreground_with_unverified_exit_remains_background_controll
     let modeled_count: usize = recovery.result.as_deref().unwrap().parse().unwrap();
     assert_eq!(
         refusal
-            .downcast_ref::<crate::tools::call::hook::persistence::BackgroundCapacityExceeded>()
-            .map(|error| error.0),
+            .downcast_ref::<crate::tools::call::hook::persistence::BackgroundSlotRefusal>()
+            .and_then(|refusal| refusal.capacity()),
         Some(modeled_count)
     );
     assert!(hook

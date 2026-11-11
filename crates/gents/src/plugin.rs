@@ -330,6 +330,16 @@ impl PluginRunner {
         budget: &PluginBudget,
         manifold: Manifold,
     ) -> Result<PluginOutcome> {
+        self.call_with_host(arguments, budget, manifold, None)
+    }
+
+    fn call_with_host(
+        &self,
+        arguments: &serde_json::Value,
+        budget: &PluginBudget,
+        manifold: Manifold,
+        host: Option<host_calls::Bridge>,
+    ) -> Result<PluginOutcome> {
         debug_assert!(
             matches!(manifold.listen, ListenAccess::None),
             "a granted manifold must never carry a listen capability"
@@ -367,6 +377,7 @@ impl PluginRunner {
                 started,
                 stored: Vec::new(),
                 failure: None,
+                host,
             }))
         });
         let _wasi = wasi_runtime::enter()?;
@@ -379,7 +390,13 @@ impl PluginRunner {
                         self.plugin.name
                     )
                 })?;
-                host_imports::run_with_imports(&afb, request, session.clone())
+                host_imports::run_with_imports(
+                    &afb,
+                    request,
+                    session.clone(),
+                    self.plugin.imports_run_script(),
+                    self.plugin.imports_host_call(),
+                )
             }
         }
         .with_context(|| format!("plugin {:?} failed to start", self.plugin.name))?;
@@ -446,6 +463,14 @@ impl PluginRunner {
 
     pub fn definition(&self) -> &PackPlugin {
         &self.plugin
+    }
+
+    #[cfg(test)]
+    pub(crate) fn artifact_digest(&self) -> String {
+        format!(
+            "sha256:{:x}",
+            <sha2::Sha256 as sha2::Digest>::digest(&self.afb_bytes)
+        )
     }
 }
 
@@ -682,6 +707,9 @@ pub fn retry_backoff(attempts: u32) -> std::time::Duration {
 }
 pub mod data;
 pub mod executor;
+mod host_calls;
+#[cfg(test)]
+pub(crate) use host_calls::live as live_guests;
 pub mod host_imports;
 pub mod http_calls;
 pub mod install;

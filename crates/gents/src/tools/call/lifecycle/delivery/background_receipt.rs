@@ -83,6 +83,7 @@ impl ToolCallLifecycle {
             call_id: self.call_id.clone(),
             tool_name: self.tool_name.clone(),
             message_sequence: self.message_sequence,
+            effect: self.plugin_effect_terminal()?,
         })
     }
 }
@@ -160,6 +161,8 @@ pub(crate) struct BackgroundReceiptBinding {
     pub(crate) call_id: Option<String>,
     pub(crate) tool_name: String,
     pub(crate) message_sequence: u32,
+    pub(in crate::tools::call::lifecycle) effect:
+        Option<super::super::plugin_effect::PluginEffectTerminal>,
 }
 
 pub(crate) async fn publish_background_receipt_in_txn(
@@ -167,6 +170,9 @@ pub(crate) async fn publish_background_receipt_in_txn(
     binding: &BackgroundReceiptBinding,
     receipt: &str,
 ) -> Result<bool> {
+    if binding.effect.is_some() {
+        return super::super::plugin_effect::publish_receipt_in_txn(txn, binding, receipt).await;
+    }
     let BackgroundReceiptBinding {
         tool_doc_id,
         request_doc_id,
@@ -180,6 +186,7 @@ pub(crate) async fn publish_background_receipt_in_txn(
         call_id,
         tool_name,
         message_sequence,
+        effect: _,
     } = binding.clone();
     let receipt = receipt.to_owned();
     let key = format!("{session_id}:background-receipt:{tool_doc_id}");

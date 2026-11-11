@@ -14,14 +14,13 @@ pub(super) fn available(granted: bool, live_dispatcher: bool) -> bool {
     granted && live_dispatcher
 }
 
-pub fn supported(name: &str, job_tools: &BTreeSet<String>) -> bool {
-    crate::tools::call::hook::persistence::HookOwnedTool::of(name).is_none()
-        && !job_tools.contains(name)
+pub fn supported(_name: &str, _job_tools: &BTreeSet<String>) -> bool {
+    true
 }
 
 pub(super) fn composition_note() -> String {
     format!(
-        "\nThis plugin may call up to {MAX_EFFECTS} of this request's other tools in sequence, except the session's own goal, agent and process tools; call those directly."
+        "\nThis plugin may call up to {MAX_EFFECTS} of this request's tools in sequence, with their existing permissions and lifecycle behavior."
     )
 }
 
@@ -104,6 +103,22 @@ pub(super) struct Session {
 }
 
 impl Session {
+    pub(super) async fn call(
+        &mut self,
+        name: &str,
+        arguments: Map<String, Value>,
+    ) -> Result<Value, String> {
+        let Some(next) = reserve(self.used) else {
+            return Ok(json!({"error": format!("the plugin used its {MAX_EFFECTS} tool calls")}));
+        };
+        self.used = next;
+        let arguments = Value::Object(arguments).to_string();
+        settle(
+            gents_loop::tool_effects::scope(None, self.dispatcher.call(next, name, &arguments))
+                .await,
+        )
+    }
+
     pub(super) fn for_call(granted: bool) -> Option<Self> {
         let dispatcher = gents_loop::tool_effects::current();
         if !available(granted, dispatcher.is_some()) {
@@ -119,23 +134,11 @@ impl Session {
     pub(super) async fn serve(&mut self, requests: Vec<Request>) -> Map<String, Value> {
         let mut results = Map::new();
         for request in requests {
-            let result = match reserve(self.used) {
-                None => json!({"error": format!("the plugin used its {MAX_EFFECTS} tool calls")}),
-                Some(next) => {
-                    self.used = next;
-                    let arguments = Value::Object(request.arguments).to_string();
-                    let outcome = gents_loop::tool_effects::scope(
-                        None,
-                        self.dispatcher.call(next, &request.tool_name, &arguments),
-                    )
-                    .await;
-                    match settle(outcome) {
-                        Ok(result) => result,
-                        Err(reason) => {
-                            self.fatal = Some(reason);
-                            break;
-                        }
-                    }
+            let result = match self.call(&request.tool_name, request.arguments).await {
+                Ok(result) => result,
+                Err(reason) => {
+                    self.fatal = Some(reason);
+                    break;
                 }
             };
             results.insert(request.id, result);
@@ -151,16 +154,13 @@ mod tests {
     use std::sync::Mutex;
 
     #[test]
-    fn supported_refuses_names_in_the_job_tool_set() {
+    fn support_includes_lifecycle_and_job_tools() {
         let job_tools = BTreeSet::from(["workflow_run".to_owned()]);
-        assert!(!supported("workflow_run", &job_tools));
+        assert!(supported("workflow_run", &job_tools));
         assert!(supported("bash", &job_tools));
         assert!(supported("workflow_run", &BTreeSet::new()));
-        assert!(!supported(crate::goal::GET_GOAL_TOOL_NAME, &job_tools));
-        assert!(!supported(
-            crate::goal::GET_GOAL_TOOL_NAME,
-            &BTreeSet::new()
-        ));
+        assert!(supported(crate::goal::GET_GOAL_TOOL_NAME, &job_tools));
+        assert!(supported(crate::goal::GET_GOAL_TOOL_NAME, &BTreeSet::new()));
     }
 
     #[derive(Default)]
