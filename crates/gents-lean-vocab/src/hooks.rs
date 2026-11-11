@@ -139,6 +139,59 @@ pub struct LeanLifecycleHookEffectCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanLifecycleHookRef {
+    pub collection: String,
+    pub doc: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LeanLifecycleHookSubjectKind {
+    Actor,
+    Document { resource: String, collection: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanLifecycleHookGrantable {
+    pub collection: String,
+    pub relation: String,
+    pub subject: LeanLifecycleHookSubjectKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LeanLifecycleHookSubject {
+    Actor { did: String },
+    Document { collection: String, doc: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanLifecycleHookGrant {
+    pub target: LeanLifecycleHookRef,
+    pub relation: String,
+    pub subject: LeanLifecycleHookSubject,
+}
+
+/// `Hooks.grantsValid` on one result: the declared grantable relations, the
+/// transaction's actor, what the event names and what core showed, the
+/// result's effects and grants.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanLifecycleHookGrantCase {
+    pub name: String,
+    pub declared: Vec<LeanLifecycleHookGrantable>,
+    pub actor: String,
+    pub named_actors: Vec<String>,
+    pub named_docs: Vec<LeanLifecycleHookRef>,
+    pub effects: Vec<LeanLifecycleHookEffect>,
+    pub grants: Vec<LeanLifecycleHookGrant>,
+    pub valid: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LeanLifecycleHookStageResult {
     Ok {

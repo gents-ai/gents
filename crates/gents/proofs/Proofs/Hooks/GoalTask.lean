@@ -36,8 +36,9 @@ def decode (row : Row GoalDoc Goals.Status) : GoalBinding :=
     status := row.value }
 
 /-- The core operations Task Goal application needs. Both are findings: they
-are things `goal::apply_claimed_task_goal_in_txn` does to core-owned rows
-today, and each is coupling that has to move for the contract to suffice.
+were things Task Goal application did to core-owned rows, coupling that had
+to move for the contract to suffice; the plugin is now
+`goal::lifecycle_hooks::TaskGoalAssignment` at `request.claim.applied`.
 
 `assignmentApplied` is the write of `TriggerFire.goal_assignment_applied` and
 the replacement mark on earlier fires of the session. The flag is a triggers
@@ -52,7 +53,16 @@ collection, so the plugin reports the bindings it holds and core classifies
 against that report. The cleaner end state is for Goals to request an outcome
 when a Goal ends, so core never needs the view; the existing model's
 `recoverOutcomes` is a sweep over every request and does not allow that
-narrowing without changing its statement. -/
+narrowing without changing its statement.
+
+Decision 2026-11-11, maintainer-approved: both are core operations registered
+by triggers (`trigger.goal_assignment.apply`, `trigger.goal_outcomes.settle`).
+The native plugin additionally asks core to supersede the session's pending
+continuations the new assignment makes stale (`Hooks.supersedeMatching`), creates
+the first Goal with its session-child grants (`Hooks.sessionChildGrants`), and
+reads the session token-usage baseline as a named core read
+(`Hooks.Read.core`). The Durable model has no pending continuations, request
+ACP or usage, so this slice is unchanged by them. -/
 inductive TaskOp where
   | settleOutcomes (goals : List GoalBinding)
   | assignmentApplied (fire : Identity)

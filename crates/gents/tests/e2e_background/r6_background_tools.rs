@@ -1054,6 +1054,7 @@ async fn periodic_recovery_without_process_record_settles_orphan_lost() {
         turn.db.node_identity.did(),
         std::slice::from_ref(&turn.agent_identity),
         &BackgroundExecutionRegistry::default(),
+        &gents_automation::goal::session_message::SessionGoals,
     )
     .await
     .unwrap();
@@ -1557,6 +1558,7 @@ async fn wait_tool_caller_interrupt_returns_without_cancelling_background_row() 
         )
         .unwrap(),
         &turn.executions,
+        &gents_automation::goal::session_message::SessionGoals,
         &turn.session_id,
         &tool_call_id,
     )

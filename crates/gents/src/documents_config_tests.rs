@@ -397,11 +397,13 @@ async fn agent_description_round_trip_with_explicit_owner_fixture() {
         created_at: None,
     };
     let value = serde_json::to_value(&doc).unwrap();
-    let plan = gents_documents::DesiredStateApplyPlan::new(vec![gents_documents::DesiredStateApplyDocument {
-        collection: gents_store::collection::Collection::Agent,
-        add: value.clone(),
-        update: value,
-    }])
+    let plan = gents_documents::DesiredStateApplyPlan::new(vec![
+        gents_documents::DesiredStateApplyDocument {
+            collection: gents_store::collection::Collection::Agent,
+            add: value.clone(),
+            update: value,
+        },
+    ])
     .unwrap();
     access
         .transact_write("test.agent.description", |txn| {

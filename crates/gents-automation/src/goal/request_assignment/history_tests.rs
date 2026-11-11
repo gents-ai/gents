@@ -274,6 +274,7 @@ async fn persisted_history(case: &Value, identities: &[KeyIdentity]) {
         case["name"]
     );
     let handoff = gents_toolcalls::background::completion::turn_assignment_handoff(
+        &crate::goal::session_message::SessionGoals,
         &gents_store::config_client::ConfigAccess::local_as(
             node.clone(),
             ::identity::Did::new(identity.did()).unwrap(),

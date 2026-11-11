@@ -129,6 +129,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
                 plugins: Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
                 home: job_home.path().to_path_buf(),
                 tool_root: None,
+                session_goals: Arc::new(gents_session::session::message::NoSessionMessageGoals),
             },
         );
         let modeled = gents_lean_vocab::lean_session_control_cases()
@@ -406,6 +407,7 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
             plugins: Arc::new(crate::plugin::executor::PluginExecutor::new(None)),
             home: job_home.path().to_path_buf(),
             tool_root: None,
+            session_goals: Arc::new(gents_session::session::message::NoSessionMessageGoals),
         },
     );
     let blocked = gents_session::session::resume_session_with_access(

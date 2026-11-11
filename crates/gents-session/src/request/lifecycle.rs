@@ -34,6 +34,7 @@ pub mod arrival_order;
 mod claim;
 #[cfg(test)]
 pub use claim::{claim_gate_in_txn, ClaimGate};
+pub(crate) use claim::supersede_pending_in_txn;
 mod execution_lease;
 mod execution_renewal;
 #[cfg(test)]

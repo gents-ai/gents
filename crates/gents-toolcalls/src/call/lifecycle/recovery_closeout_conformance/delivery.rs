@@ -47,6 +47,7 @@ async fn caused_result_is_delivered_after_the_row_outlives_its_stored_deadline()
         crate::background::completion::settle_running_session_message_rows_with_access(
             node,
             &admission.tool.access().unwrap(),
+            &gents_session::session::message::NoSessionMessageGoals,
             &did
         )
         .await
@@ -83,6 +84,7 @@ async fn caused_result_is_delivered_after_the_row_outlives_its_stored_deadline()
         crate::background::completion::settle_running_session_message_rows_with_access(
             node,
             &admission.tool.access().unwrap(),
+            &gents_session::session::message::NoSessionMessageGoals,
             &did
         )
         .await
@@ -109,6 +111,7 @@ async fn caused_result_is_delivered_after_the_row_outlives_its_stored_deadline()
         crate::background::completion::settle_running_session_message_rows_with_access(
             node,
             &admission.tool.access().unwrap(),
+            &gents_session::session::message::NoSessionMessageGoals,
             &did
         )
         .await
@@ -255,6 +258,7 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
         crate::background::completion::settle_running_session_message_rows_with_access(
             &node,
             &message.admission.tool.access().unwrap(),
+            &gents_session::session::message::NoSessionMessageGoals,
             &did
         )
         .await
@@ -365,6 +369,7 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
         crate::background::completion::settle_running_session_message_rows_with_access(
             &node,
             &message.admission.tool.access().unwrap(),
+            &gents_session::session::message::NoSessionMessageGoals,
             &did
         )
         .await

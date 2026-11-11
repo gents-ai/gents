@@ -118,7 +118,7 @@ pub use state::{
     apply_operator_status_transition, decide_goal_continuation, next_blocked_audit, GoalAction,
     GoalAuditObservation, GoalDecision, GoalRequestTerminal, GoalState,
 };
-pub(crate) use task_fire::{apply_claimed_task_goal_in_txn, task_goal_fire_key};
+pub(crate) use task_fire::task_goal_fire_key;
 pub use task_fire::{
     decide_task_goal_fire_recovery, task_goal_fire_identity, TaskGoalFireIdentity,
     TaskGoalFireRecoveryDecision, TaskGoalFireRecoveryDisposition, TaskGoalRequestBinding,
@@ -161,6 +161,6 @@ fn optional_string_graphql_field(name: &str, value: Option<&str>) -> String {
         .unwrap_or_else(|| format!("{name}: null,"))
 }
 
-mod goal_tools;
+pub mod goal_tools;
 #[cfg(test)]
 mod tests;

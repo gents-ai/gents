@@ -700,6 +700,8 @@ pub(crate) async fn apply_claimed(
                 super::cancel_loaded_background_tool_call(
                     node.clone(),
                     executions,
+                    // A native process row never settles a session message.
+                    &gents_session::session::message::NoSessionMessageGoals,
                     lifecycle,
                     "explicit_cancel",
                 )

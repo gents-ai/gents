@@ -13,8 +13,8 @@ use crate::runtime::startup_readiness::{BuildOutcome, BuildStanding};
 use gents_automation::triggers::runtime_snapshot::ResolvedRuntimeSnapshot;
 use gents_inference::admission::BackendAdmissionConfig;
 use gents_inference::resolved::ResolvedAgent;
-use gents_tools::surface::AgentWithTools;
 use gents_protocol::row::AgentRequest;
+use gents_tools::surface::AgentWithTools;
 use gents_tools::surface::ToolSurface;
 
 use rapidhash::{HashMapExt, RapidHashMap};

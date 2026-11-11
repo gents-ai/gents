@@ -21,6 +21,7 @@ pub use gents_protocol::process_control::ProcessControlOutcome as CancelBackgrou
 pub async fn cancel_background_tool_call(
     agent: &ConfigAccess,
     background_executions: &BackgroundExecutionRegistry,
+    goals: &dyn gents_session::session::message::SessionMessageGoals,
     session_id: &str,
     tool_call_id: &str,
 ) -> Result<CancelBackgroundToolCallOutcome> {
@@ -30,8 +31,14 @@ pub async fn cancel_background_tool_call(
         return Ok(CancelBackgroundToolCallOutcome::NotFound);
     };
 
-    cancel_loaded_background_tool_call(node, background_executions, lifecycle, "explicit_cancel")
-        .await
+    cancel_loaded_background_tool_call(
+        node,
+        background_executions,
+        goals,
+        lifecycle,
+        "explicit_cancel",
+    )
+    .await
 }
 
 /// Splits the owning Agent's embedded managed access into the parts a tool
@@ -74,6 +81,7 @@ async fn load_owned_background_call(
 pub(crate) async fn cancel_loaded_background_tool_call(
     node: Arc<EmbeddedNode>,
     background_executions: &BackgroundExecutionRegistry,
+    goals: &dyn gents_session::session::message::SessionMessageGoals,
     mut lifecycle: ToolCallLifecycle,
     reason: &str,
 ) -> Result<CancelBackgroundToolCallOutcome> {
@@ -142,7 +150,7 @@ pub(crate) async fn cancel_loaded_background_tool_call(
 
     if lifecycle.kind() == crate::call::lifecycle::ToolRowKind::SessionMessage {
         return Ok(
-            match crate::background::caused::kill(&node, &mut lifecycle).await? {
+            match crate::background::caused::kill(&node, goals, &mut lifecycle).await? {
                 crate::background::caused::KillOutcome::Settled => {
                     CancelBackgroundToolCallOutcome::AlreadyTerminal {
                         state: lifecycle.state().as_str().to_string(),
@@ -388,6 +396,7 @@ mod tests {
         let denied = super::cancel_background_tool_call(
             &foreign_access,
             &registry,
+            &gents_session::session::message::NoSessionMessageGoals,
             admission.tool.session_id(),
             admission.tool.tool_call_id(),
         )
@@ -402,6 +411,7 @@ mod tests {
         let error = super::cancel_background_tool_call(
             &unsigned,
             &registry,
+            &gents_session::session::message::NoSessionMessageGoals,
             admission.tool.session_id(),
             admission.tool.tool_call_id(),
         )
@@ -532,6 +542,7 @@ mod tests {
             let outcome = cancel_loaded_background_tool_call(
                 fixture.node.clone(),
                 &registry,
+                &gents_session::session::message::NoSessionMessageGoals,
                 observed,
                 "explicit_cancel",
             )
@@ -605,6 +616,7 @@ mod tests {
         let outcome = cancel_loaded_background_tool_call(
             fixture.node.clone(),
             &registry,
+            &gents_session::session::message::NoSessionMessageGoals,
             stale,
             "explicit_cancel",
         )
@@ -885,6 +897,7 @@ mod tests {
             let outcome = cancel_background_tool_call(
                 &admission.tool.access().unwrap(),
                 &registry,
+                &gents_session::session::message::NoSessionMessageGoals,
                 admission.tool.session_id(),
                 admission.tool.tool_call_id(),
             )

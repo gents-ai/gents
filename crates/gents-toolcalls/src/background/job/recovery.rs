@@ -673,6 +673,7 @@ mod tests {
             node_did(),
             &[crate::background::job::input::tests::managed_agent().clone()],
             &registry,
+            &gents_session::session::message::NoSessionMessageGoals,
         )
         .await
         .unwrap();

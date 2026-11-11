@@ -1,4 +1,5 @@
 use super::*;
+use gents_session::session::message::RequestGoalAssignment;
 
 #[derive(Debug, Deserialize)]
 struct SessionMessageRow {
@@ -24,6 +25,7 @@ fn running_session_message_filter(local_did: &str) -> String {
 pub async fn settle_running_session_message_rows_with_access(
     node: &Arc<EmbeddedNode>,
     access: &gents_store::config_client::ConfigAccess,
+    goals: &dyn gents_session::session::message::SessionMessageGoals,
     local_did: &str,
 ) -> Result<usize> {
     let query = format!(
@@ -35,7 +37,7 @@ pub async fn settle_running_session_message_rows_with_access(
         serde_json::from_value(response["data"]["AgentToolCall"].clone())?;
     let mut settled = 0;
     for row in rows {
-        match settle_row(node, access, &row).await {
+        match settle_row(node, access, goals, &row).await {
             Ok(true) => settled += 1,
             Ok(false) => {}
             Err(error) => tracing::warn!(
@@ -51,6 +53,7 @@ pub async fn settle_running_session_message_rows_with_access(
 pub async fn settle_rows_after_request_update(
     node: &Arc<EmbeddedNode>,
     access: &gents_store::config_client::ConfigAccess,
+    goals: &dyn gents_session::session::message::SessionMessageGoals,
     local_did: &str,
     request_doc_id: &str,
 ) -> Result<usize> {
@@ -91,7 +94,7 @@ pub async fn settle_rows_after_request_update(
         serde_json::from_value(response["data"]["AgentToolCall"].clone())?;
     let mut settled = 0;
     for row in rows {
-        settled += usize::from(settle_row(node, access, &row).await?);
+        settled += usize::from(settle_row(node, access, goals, &row).await?);
     }
     Ok(settled)
 }
@@ -99,6 +102,7 @@ pub async fn settle_rows_after_request_update(
 async fn settle_row(
     node: &Arc<EmbeddedNode>,
     access: &gents_store::config_client::ConfigAccess,
+    goals: &dyn gents_session::session::message::SessionMessageGoals,
     row: &SessionMessageRow,
 ) -> Result<bool> {
     let Some(mut lifecycle) = access
@@ -128,7 +132,7 @@ async fn settle_row(
     else {
         return Ok(false);
     };
-    settle_session_message_row(node, &mut lifecycle).await
+    settle_session_message_row(node, goals, &mut lifecycle).await
 }
 
 /// Whether the caused session carries an assignment, grounded in the
@@ -195,6 +199,7 @@ fn assignment_status_reason(status: gents_protocol::goal_status::GoalStatus) -> 
 }
 
 pub async fn turn_assignment_handoff(
+    goals: &dyn gents_session::session::message::SessionMessageGoals,
     access: &gents_store::config_client::ConfigAccess,
     caused: &AgentRequestRow,
     terminal: &crate::call::lifecycle::CausedRequestTerminal,
@@ -213,17 +218,12 @@ pub async fn turn_assignment_handoff(
             (Some(node_did), Some(session_id))
                 if !node_did.trim().is_empty() && !session_id.trim().is_empty() =>
             {
-                match crate::goal::load_request_assignment(access, caused).await {
-                    Ok(crate::goal::RequestAssignmentObservation::Assigned(goal)) => goal
-                        .parsed_status()
-                        .map(AssignmentObservation::Assigned)
-                        .unwrap_or(AssignmentObservation::Unknown),
-                    Ok(crate::goal::RequestAssignmentObservation::None) => {
-                        AssignmentObservation::None
+                match goals.request_assignment(access, caused).await {
+                    Ok(RequestGoalAssignment::Assigned(status)) => {
+                        AssignmentObservation::Assigned(status)
                     }
-                    Ok(crate::goal::RequestAssignmentObservation::Unknown) => {
-                        AssignmentObservation::Unknown
-                    }
+                    Ok(RequestGoalAssignment::None) => AssignmentObservation::None,
+                    Ok(RequestGoalAssignment::Unknown) => AssignmentObservation::Unknown,
                     Err(error) => {
                         tracing::warn!(
                             caused_request_id = %caused.request_id,
@@ -252,6 +252,7 @@ pub async fn turn_assignment_handoff(
 
 pub(crate) async fn settle_session_message_row(
     node: &Arc<EmbeddedNode>,
+    goals: &dyn gents_session::session::message::SessionMessageGoals,
     lifecycle: &mut ToolCallLifecycle,
 ) -> Result<bool> {
     if !lifecycle.is_running()
@@ -309,7 +310,7 @@ pub(crate) async fn settle_session_message_row(
     // non-complete handoff. Computing it first lets the reason persist as
     // part of the row's `completionPending:<reason>` settlement record, so
     // the completion redrive can re-render the same evidence.
-    let handoff = turn_assignment_handoff(&lifecycle.access()?, &caused, &terminal).await;
+    let handoff = turn_assignment_handoff(goals, &lifecycle.access()?, &caused, &terminal).await;
     let handoff_reason = handoff.reason();
     if !lifecycle
         .settle_session_message(&terminal, handoff_reason)
@@ -624,6 +625,7 @@ mod turn_assignment_tests {
             settle_running_session_message_rows_with_access(
                 node,
                 &admission.tool.access().unwrap(),
+                &gents_session::session::message::NoSessionMessageGoals,
                 did
             )
             .await
@@ -684,6 +686,7 @@ mod turn_assignment_tests {
             settle_running_session_message_rows_with_access(
                 node,
                 &admission.tool.access().unwrap(),
+                &gents_session::session::message::NoSessionMessageGoals,
                 did
             )
             .await
@@ -746,6 +749,7 @@ mod turn_assignment_tests {
             settle_running_session_message_rows_with_access(
                 node,
                 &admission.tool.access().unwrap(),
+                &gents_session::session::message::NoSessionMessageGoals,
                 did
             )
             .await
@@ -776,6 +780,7 @@ mod turn_assignment_tests {
             settle_running_session_message_rows_with_access(
                 node,
                 &admission.tool.access().unwrap(),
+                &gents_session::session::message::NoSessionMessageGoals,
                 did
             )
             .await
@@ -794,6 +799,7 @@ mod turn_assignment_tests {
         settle_running_session_message_rows_with_access(
             node,
             &admission.tool.access().unwrap(),
+            &gents_session::session::message::NoSessionMessageGoals,
             did,
         )
         .await
@@ -867,9 +873,14 @@ mod turn_assignment_tests {
         )
         .await;
         assert_eq!(
-            settle_running_session_message_rows_with_access(node, &access, &admission.node_did)
-                .await
-                .unwrap(),
+            settle_running_session_message_rows_with_access(
+                node,
+                &access,
+                &gents_session::session::message::NoSessionMessageGoals,
+                &admission.node_did
+            )
+            .await
+            .unwrap(),
             1
         );
         let key = background_completion_notification_message_key(&tool_doc_id, "tool");
@@ -895,9 +906,14 @@ mod turn_assignment_tests {
         assert!(tool["completion_notification_delivered_at"]
             .as_str()
             .is_some());
-        settle_running_session_message_rows_with_access(node, &access, &admission.node_did)
-            .await
-            .unwrap();
+        settle_running_session_message_rows_with_access(
+            node,
+            &access,
+            &gents_session::session::message::NoSessionMessageGoals,
+            &admission.node_did,
+        )
+        .await
+        .unwrap();
         let replay = access.execute(&query).await.unwrap();
         assert_eq!(replay["data"]["AgentMessage"].as_array().unwrap().len(), 1);
         assert_eq!(replay["data"]["AgentToolCall"][0], *tool);
@@ -962,6 +978,7 @@ mod turn_assignment_tests {
         let settled = settle_running_session_message_rows_with_access(
             node,
             &admission.tool.access().unwrap(),
+            &gents_session::session::message::NoSessionMessageGoals,
             did,
         )
         .await
@@ -1047,6 +1064,7 @@ mod turn_assignment_tests {
         let settled = settle_running_session_message_rows_with_access(
             node,
             &admission.tool.access().unwrap(),
+            &gents_session::session::message::NoSessionMessageGoals,
             did,
         )
         .await
@@ -1132,6 +1150,7 @@ mod turn_assignment_tests {
         let settled = settle_running_session_message_rows_with_access(
             node,
             &admission.tool.access().unwrap(),
+            &gents_session::session::message::NoSessionMessageGoals,
             did,
         )
         .await
@@ -1281,6 +1300,7 @@ mod turn_assignment_tests {
             panic!("the completed child is a terminal observation");
         };
         let handoff = turn_assignment_handoff(
+            &gents_session::session::message::NoSessionMessageGoals,
             &gents_store::config_client::ConfigAccess::local_as(
                 node.clone(),
                 lifecycle.actor().clone(),

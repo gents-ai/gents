@@ -2,13 +2,13 @@ use std::collections::BTreeMap;
 
 use serde_json::{json, Value};
 
-use gents_pack::pack::authoring::export::{export_pack, ExportSelection};
+use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents_pack::pack::archive::{pack_dir, PackArchive};
+use gents_pack::pack::authoring::export::{export_pack, ExportSelection};
 use gents_pack::pack::{
     install_prepared_document_pack, prepare_document_pack_archive_with_runtime, remove_pack,
     DriftPolicy, InstallReport, InstalledVia,
 };
-use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 use gents_store::config_client::ConfigAccess;
 use gents_store::{collection::Collection, identity::NodeIdentity as _};
 
@@ -807,7 +807,8 @@ async fn a_plugin_built_on_the_node_exports_as_the_packs_plugin_and_runs_where_i
         live["Tools"][0]["integrations"]["plugins"][0]["plugin"], "fixture/double",
         "{live}"
     );
-    let executor = gents_toolcalls::plugin::executor::PluginExecutor::new(Some(home.path().to_owned()));
+    let executor =
+        gents_toolcalls::plugin::executor::PluginExecutor::new(Some(home.path().to_owned()));
     let installed = executor.resolve("fixture/double", None).unwrap();
     let call = executor.call(&installed, json!({"n": 2})).await.unwrap();
     assert_eq!(call.coordinate, "fixture/double");

@@ -1315,6 +1315,7 @@ pub struct DefraSessionHook {
     goal_tools_enabled: bool,
     goal_creation_enabled: bool,
     session_goals: Arc<dyn gents_session::session::message::SessionMessageGoals>,
+    goal_tools: Arc<dyn persistence::goal_tools::GoalTools>,
     job_tools: RapidHashMap<String, crate::background::job::JobBinding>,
     /// The runtime's job driver, whose handles step 0 of a job tool runs on.
     pub(crate) job_driver: Option<Arc<crate::background::job::driver::JobDriver>>,
@@ -1536,6 +1537,7 @@ impl DefraSessionHook {
             goal_tools_enabled: false,
             goal_creation_enabled: false,
             session_goals: Arc::new(gents_session::session::message::NoSessionMessageGoals),
+            goal_tools: Arc::new(persistence::goal_tools::NoGoalTools),
             job_tools: RapidHashMap::new(),
             job_driver: None,
             output_obligation_gate: None,
@@ -1632,6 +1634,7 @@ impl DefraSessionHook {
             goal_tools_enabled: false,
             goal_creation_enabled: false,
             session_goals: Arc::new(gents_session::session::message::NoSessionMessageGoals),
+            goal_tools: Arc::new(persistence::goal_tools::NoGoalTools),
             job_tools: RapidHashMap::new(),
             job_driver: None,
             output_obligation_gate: None,
@@ -1675,6 +1678,15 @@ impl DefraSessionHook {
         goals: Arc<dyn gents_session::session::message::SessionMessageGoals>,
     ) -> Self {
         self.session_goals = goals;
+        self
+    }
+
+    /// The Goals plugin that answers the Goal tools.
+    pub fn with_goal_tools(
+        mut self,
+        goal_tools: Arc<dyn persistence::goal_tools::GoalTools>,
+    ) -> Self {
+        self.goal_tools = goal_tools;
         self
     }
 

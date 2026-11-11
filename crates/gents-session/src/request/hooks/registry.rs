@@ -31,6 +31,19 @@ pub struct ClaimCandidate {
     pub at: String,
 }
 
+/// `request.claim.applied`: core's claim affected the request's row in this
+/// transaction. `fire` is the request's Task fire receipt as core read it
+/// (`_docID session_id goal_id goal_objective goal_token_budget
+/// goal_assignment_applied`), if it has one; `actor` is the transaction's
+/// actor.
+#[derive(Debug, Clone)]
+pub struct ClaimApplied {
+    pub request: AgentRequest,
+    pub fire: Option<Value>,
+    pub actor: Option<String>,
+    pub at: String,
+}
+
 /// `request.admit.verify`: what core shows a plugin that claimed a request
 /// at admission, the signed request row and the exact parent request row it
 /// names, both read as the request's agent.
@@ -98,17 +111,29 @@ pub trait CoreOperation: Send + Sync {
     ) -> anyhow::Result<()>;
 }
 
+/// A named core read a plugin may declare (Lean `Hooks.Read.core`). Core
+/// answers it in the lifecycle transaction from the arguments and its own
+/// rows; the rows it returns are data, never write targets.
+#[async_trait::async_trait]
+pub trait CoreRead: Send + Sync {
+    fn name(&self) -> &'static str;
+
+    async fn read(&self, txn: &ConfigApplyTxn<'_>, args: &Value) -> anyhow::Result<Vec<Value>>;
+}
+
 /// The bundled plugins at each point, in the fixed order the composition root
 /// registered them, and the core operations their effects may name.
 #[derive(Default)]
 pub struct Registry {
     pub request_admit_verify: Vec<Decider<AgentRequestRow, AdmitShown, ()>>,
     pub claim_gate: Vec<Plugin<ClaimCandidate, ClaimVerdict>>,
+    pub claim_applied: Vec<Plugin<ClaimApplied, ()>>,
     pub queue_scope: Vec<Plugin<QueueScopeAsk, ScopeAnswers>>,
     pub request_terminal: Vec<Plugin<RequestTerminal, ()>>,
     pub session_halt: Vec<Plugin<SessionHalt, ()>>,
     pub session_resume: Vec<Plugin<SessionResume, ()>>,
     pub operations: Vec<Arc<dyn CoreOperation>>,
+    pub reads: Vec<Arc<dyn CoreRead>>,
 }
 
 impl Registry {
@@ -116,6 +141,10 @@ impl Registry {
         self.operations
             .iter()
             .find(|operation| operation.name() == name)
+    }
+
+    pub fn read(&self, name: &str) -> Option<&Arc<dyn CoreRead>> {
+        self.reads.iter().find(|read| read.name() == name)
     }
 
     /// Hands the process its bundled plugins. The composition root calls this

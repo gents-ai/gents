@@ -34,21 +34,41 @@ pub enum Access {
     Delete,
 }
 
-/// Lean `Hooks.Write`. There is no blind write and no upsert.
+/// Lean `Hooks.Subject`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Subject {
+    Actor(String),
+    Document(DocRef),
+}
+
+/// Lean `Hooks.Grant` on the document of the create that carries it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Grant {
+    pub relation: String,
+    pub subject: Subject,
+}
+
+/// Lean `Hooks.Write`. There is no blind write and no upsert. A create's
+/// `grants` are published with the document it creates and nowhere else. An
+/// update's or delete's `conflict` is what the caller is told when its
+/// revision fence is lost; it does not change what is applied.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Write {
     Create {
         doc: DocRef,
         value: Value,
+        grants: Vec<Grant>,
     },
     Update {
         doc: DocRef,
         expected: u64,
         value: Value,
+        conflict: Option<String>,
     },
     Delete {
         doc: DocRef,
         expected: u64,
+        conflict: Option<String>,
     },
 }
 
@@ -56,6 +76,14 @@ impl Write {
     pub fn doc(&self) -> &DocRef {
         match self {
             Self::Create { doc, .. } | Self::Update { doc, .. } | Self::Delete { doc, .. } => doc,
+        }
+    }
+
+    /// The caller-facing message for a lost revision fence.
+    pub fn conflict(&self) -> Option<&str> {
+        match self {
+            Self::Create { .. } => None,
+            Self::Update { conflict, .. } | Self::Delete { conflict, .. } => conflict.as_deref(),
         }
     }
 
@@ -92,12 +120,89 @@ pub enum Effect {
     Core(CoreOp),
 }
 
+/// Lean `Hooks.SubjectKind`: an actor, or a document of `collection`, which
+/// the ACP policy calls `resource`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubjectKind {
+    Actor,
+    Document {
+        resource: &'static str,
+        collection: &'static str,
+    },
+}
+
+impl SubjectKind {
+    fn admits(&self, subject: &Subject) -> bool {
+        match (self, subject) {
+            (Self::Actor, Subject::Actor(_)) => true,
+            (Self::Document { collection, .. }, Subject::Document(doc)) => {
+                doc.collection == *collection
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Lean `Hooks.Grantable`, for the collection that declares it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Grantable {
+    pub relation: &'static str,
+    pub subject: SubjectKind,
+}
+
+/// Lean `Hooks.sessionChildGrants`: the Household `children` resource's
+/// `parent` (a session) and `working_agent` (an actor). The only grants a
+/// plugin may publish for now (decision 2026-11-11, maintainer-approved).
+pub const SESSION_CHILD_GRANTS: &[Grantable] = &[
+    Grantable {
+        relation: "parent",
+        subject: SubjectKind::Document {
+            resource: "sessions",
+            collection: "AgentSession",
+        },
+    },
+    Grantable {
+        relation: "working_agent",
+        subject: SubjectKind::Actor,
+    },
+];
+
 /// A collection a plugin owns. `schema` is the trusted SDL of a collection
-/// whose writes are signed.
+/// whose writes are signed; `grants` are the relations its creates may carry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OwnedCollection {
     pub name: &'static str,
     pub schema: Option<&'static str>,
+    pub grants: &'static [Grantable],
+}
+
+impl OwnedCollection {
+    /// The declaration that covers `grant`.
+    pub fn grantable(&self, grant: &Grant) -> Option<&Grantable> {
+        self.grants.iter().find(|declared| {
+            declared.relation == grant.relation && declared.subject.admits(&grant.subject)
+        })
+    }
+}
+
+/// Lean `Hooks.Named`, with the transaction's actor: who a create's grants
+/// may name.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Named {
+    pub actor: Option<String>,
+    pub actors: Vec<String>,
+    pub docs: Vec<DocRef>,
+}
+
+impl Named {
+    fn names(&self, subject: &Subject) -> bool {
+        match subject {
+            Subject::Actor(did) => {
+                self.actor.as_deref() == Some(did.as_str()) || self.actors.contains(did)
+            }
+            Subject::Document(doc) => self.docs.contains(doc),
+        }
+    }
 }
 
 /// Lean `Hooks.Manifest`. Whole collections are the unit of write authority;
@@ -123,15 +228,28 @@ pub enum InvalidEffects {
     ForeignCollection { collection: String },
     #[error("write to {collection} document {doc_id} is not permitted to the transaction's actor")]
     Unauthorized { collection: String, doc_id: String },
+    #[error("a create in {collection} grants {relation}, which its manifest does not declare for that subject")]
+    UndeclaredGrant {
+        collection: String,
+        relation: String,
+    },
+    #[error("a create in {collection} grants {relation} to a subject the event does not name")]
+    UnnamedGrantSubject {
+        collection: String,
+        relation: String,
+    },
 }
 
-/// Lean `Hooks.valid`: bounded, every write in a collection the plugin owns
-/// and permitted to the transaction's actor. A requested core operation is
-/// admitted here and authorized by core when it performs it.
+/// Lean `Hooks.valid` and `Hooks.grantsValid`: bounded, every write in a
+/// collection the plugin owns and permitted to the transaction's actor, every
+/// grant declared for its create's collection and naming a subject `named`
+/// admits. A requested core operation is admitted here and authorized by core
+/// when it performs it.
 pub fn validate<F>(
     manifest: &Manifest,
     effects: &[Effect],
     allowed: F,
+    named: &Named,
 ) -> Result<(), InvalidEffects>
 where
     F: Fn(Access, &DocRef) -> bool,
@@ -147,10 +265,26 @@ where
             continue;
         };
         let doc = write.doc();
-        if manifest.owned(&doc.collection).is_none() {
+        let Some(owned) = manifest.owned(&doc.collection) else {
             return Err(InvalidEffects::ForeignCollection {
                 collection: doc.collection.clone(),
             });
+        };
+        if let Write::Create { grants, .. } = write {
+            for grant in grants {
+                if owned.grantable(grant).is_none() {
+                    return Err(InvalidEffects::UndeclaredGrant {
+                        collection: doc.collection.clone(),
+                        relation: grant.relation.clone(),
+                    });
+                }
+                if !named.names(&grant.subject) {
+                    return Err(InvalidEffects::UnnamedGrantSubject {
+                        collection: doc.collection.clone(),
+                        relation: grant.relation.clone(),
+                    });
+                }
+            }
         }
         if !allowed(write.access(), doc) {
             return Err(InvalidEffects::Unauthorized {

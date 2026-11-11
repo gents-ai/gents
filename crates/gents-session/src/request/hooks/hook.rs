@@ -13,6 +13,10 @@ use super::effect::{Effect, Manifest, Row};
 /// a commit with one parent that links only those, none of them in
 /// `fields`, carries its parent's values without a reconstruction read
 /// (`inherited`). A revision row is history: it is never a write target.
+///
+/// With `core`, the read is the named core read `collection` with these
+/// arguments (Lean `Hooks.Read.core`): core answers it from its own rows, and
+/// its rows are never write targets. Decision 2026-11-11, maintainer-approved.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Query {
     pub collection: String,
@@ -21,6 +25,7 @@ pub struct Query {
     pub order: Vec<(String, Direction)>,
     pub limit: Option<u64>,
     pub revisions: Option<String>,
+    pub core: Option<Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +43,15 @@ impl Query {
             order: Vec::new(),
             limit: None,
             revisions: None,
+            core: None,
+        }
+    }
+
+    /// The named core read `name` with `args`.
+    pub fn core(name: impl Into<String>, args: Value) -> Self {
+        Self {
+            core: Some(args),
+            ..Self::select(name, "")
         }
     }
 

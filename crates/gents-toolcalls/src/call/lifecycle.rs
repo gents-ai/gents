@@ -622,7 +622,7 @@ mod tests {
         let kind_of = |tool_name: &str| {
             ToolCallLifecycle::new(
                 node.clone(),
-                identity::Did::new(crate::triggers::callback::test_agent_did()).unwrap(),
+                crate::background::job::input::tests::agent_actor(),
                 "request".into(),
                 "session".into(),
                 "did:test:owner".into(),

@@ -387,6 +387,9 @@ where
         .with_output_obligation_gate(output_obligation_gate.clone())
         .with_session_goals(Arc::new(
             gents_automation::goal::session_message::SessionGoals,
+        ))
+        .with_goal_tools(Arc::new(
+            gents_automation::goal::goal_tools::GoalToolAnswers,
         ));
         // Lean `CurrentInput.answersSelection`: a resumed retry
         // publishes no authored input, so steered messages stay
