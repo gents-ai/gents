@@ -1,12 +1,13 @@
 use std::sync::{Arc, Mutex};
 
 use gents_lean_vocab::{
-    LeanLifecycleHookAccess, LeanLifecycleHookAdmitResult, LeanLifecycleHookBinding, LeanLifecycleHookChoice, LeanLifecycleHookDecision, LeanLifecycleHookDeliveryRecord, LeanLifecycleHookDeliveryStep, LeanLifecycleHookEffect, LeanLifecycleHookGateResult, LeanLifecycleHookManifest, LeanLifecycleHookPartition, LeanLifecycleHookPreparedVerdict, LeanLifecycleHookQueueScopeResult, LeanLifecycleHookRefusal, LeanLifecycleHookRow, LeanLifecycleHookScopeAnswer, LeanLifecycleHookScopeKey, LeanLifecycleHookScript, LeanLifecycleHookStageResult, LeanLifecycleHookStale, LeanLifecycleHookState, LeanLifecycleHookVerdict, LeanLifecycleHookWorld, lean_lifecycle_hook_admit_cases, lean_lifecycle_hook_combine_cases, lean_lifecycle_hook_delivery_cases, lean_lifecycle_hook_effect_cases, lean_lifecycle_hook_gate_cases, lean_lifecycle_hook_must_commit_cases, lean_lifecycle_hook_queue_scope_cases, lean_lifecycle_hook_stage_cases,
+    LeanLifecycleHookAccess, LeanLifecycleHookAdmitResult, LeanLifecycleHookBinding, LeanLifecycleHookChoice, LeanLifecycleHookDecision, LeanLifecycleHookDeliveryRecord, LeanLifecycleHookDeliveryStep, LeanLifecycleHookEffect, LeanLifecycleHookGateResult, LeanLifecycleHookManifest, LeanLifecycleHookRef, LeanLifecycleHookSubject, LeanLifecycleHookSubjectKind, LeanLifecycleHookPartition, LeanLifecycleHookPreparedVerdict, LeanLifecycleHookQueueScopeResult, LeanLifecycleHookRefusal, LeanLifecycleHookRow, LeanLifecycleHookScopeAnswer, LeanLifecycleHookScopeKey, LeanLifecycleHookScript, LeanLifecycleHookStageResult, LeanLifecycleHookStale, LeanLifecycleHookState, LeanLifecycleHookVerdict, LeanLifecycleHookWorld, lean_lifecycle_hook_admit_cases, lean_lifecycle_hook_combine_cases, lean_lifecycle_hook_delivery_cases, lean_lifecycle_hook_effect_cases, lean_lifecycle_hook_gate_cases, lean_lifecycle_hook_grant_cases, lean_lifecycle_hook_must_commit_cases, lean_lifecycle_hook_queue_scope_cases, lean_lifecycle_hook_stage_cases,
 };
 use gents_session::request::hooks::claim::{combine, ClaimVerdict};
 use gents_session::request::hooks::delivery::DeliveryRecord;
 use gents_session::request::hooks::effect::{
-    validate, Access, CoreOp, DocRef, Effect, Manifest, OwnedCollection, Row, Write,
+    validate, Access, CoreOp, DocRef, Effect, Grant, Grantable, Manifest, Named, OwnedCollection,
+    Row, Subject, SubjectKind, Write,
 };
 use gents_session::request::hooks::hook::{Hook, Outcome, Query};
 use gents_session::request::hooks::prepared::{admit, prepare, Binding, Stale, Verdict};
@@ -36,6 +37,7 @@ fn manifest(name: &str, owns: &[String], bound: usize) -> Manifest {
             .map(|collection| OwnedCollection {
                 name: leak(collection),
                 schema: None,
+                grants: &[],
             })
             .collect(),
         bound,
@@ -63,6 +65,7 @@ fn effect(lean: &LeanLifecycleHookEffect) -> Effect {
         } => Effect::Write(Write::Create {
             doc: DocRef::new(collection, doc),
             value: Value::String(value.clone()),
+            grants: Vec::new(),
         }),
         LeanLifecycleHookEffect::Update {
             collection,
@@ -177,7 +180,7 @@ impl StoreDouble {
     /// Lean `Hooks.applyWrite`.
     fn write(rows: &mut Vec<Row>, write: &Write) -> bool {
         match write {
-            Write::Create { doc, value } => {
+            Write::Create { doc, value, .. } => {
                 if rows.iter().any(|row| &row.doc == doc) {
                     return false;
                 }
@@ -273,6 +276,10 @@ impl StoreDouble {
 
 #[async_trait::async_trait]
 impl Host for StoreDouble {
+    fn actor(&self) -> Option<String> {
+        None
+    }
+
     async fn select(&self, query: &Query) -> Result<Vec<Row>, HookError> {
         let unreadable = query.filter.iter().any(|(field, value)| {
             field == PLUGIN_FIELD
@@ -409,7 +416,12 @@ async fn generated_lifecycle_hook_effect_cases_drive_validation_and_application(
         let host = StoreDouble::of(&case.world);
         let manifest = manifest_of(&case.manifest);
         let effects = effects(&case.effects);
-        let valid = validate(&manifest, &effects, |access, doc| host.permits(access, doc));
+        let valid = validate(
+            &manifest,
+            &effects,
+            |access, doc| host.permits(access, doc),
+            &Named::default(),
+        );
         assert_eq!(valid.is_ok(), case.valid, "{}: {valid:?}", case.name);
         let committed = match valid {
             Ok(()) => host
@@ -426,6 +438,100 @@ async fn generated_lifecycle_hook_effect_cases_drive_validation_and_application(
             case.name
         );
     }
+}
+
+fn lean_ref(lean: &LeanLifecycleHookRef) -> DocRef {
+    DocRef::new(&lean.collection, &lean.doc)
+}
+
+/// Lean `Hooks.grantsValid` decided by production `validate`. A native grant
+/// rides on the create of its target, so a case granting on a document the
+/// result does not create has no native form; the model must find it invalid.
+#[test]
+fn generated_lifecycle_hook_grant_cases_drive_create_grant_validation() {
+    let cases = lean_lifecycle_hook_grant_cases();
+    assert!(!cases.is_empty());
+    let mut representable = 0;
+    for case in cases {
+        let mut effects = effects(&case.effects);
+        let mut placed = 0;
+        for effect in &mut effects {
+            let Effect::Write(Write::Create { doc, grants, .. }) = effect else {
+                continue;
+            };
+            for grant in &case.grants {
+                if lean_ref(&grant.target) != *doc {
+                    continue;
+                }
+                placed += 1;
+                grants.push(Grant {
+                    relation: grant.relation.clone(),
+                    subject: match &grant.subject {
+                        LeanLifecycleHookSubject::Actor { did } => Subject::Actor(did.clone()),
+                        LeanLifecycleHookSubject::Document { collection, doc } => {
+                            Subject::Document(DocRef::new(collection, doc))
+                        }
+                    },
+                });
+            }
+        }
+        if placed < case.grants.len() {
+            assert!(!case.valid, "{}: a grant off its create is valid", case.name);
+            continue;
+        }
+        representable += 1;
+        let mut owns: Vec<String> = case
+            .effects
+            .iter()
+            .filter_map(|effect| match effect {
+                LeanLifecycleHookEffect::Create { collection, .. }
+                | LeanLifecycleHookEffect::Update { collection, .. }
+                | LeanLifecycleHookEffect::Delete { collection, .. } => Some(collection.clone()),
+                LeanLifecycleHookEffect::Core { .. } => None,
+            })
+            .collect();
+        owns.sort();
+        owns.dedup();
+        let manifest = Manifest {
+            name: "grants",
+            owns: owns
+                .iter()
+                .map(|collection| OwnedCollection {
+                    name: leak(collection),
+                    schema: None,
+                    grants: Box::leak(
+                        case.declared
+                            .iter()
+                            .filter(|declared| &declared.collection == collection)
+                            .map(|declared| Grantable {
+                                relation: leak(&declared.relation),
+                                subject: match &declared.subject {
+                                    LeanLifecycleHookSubjectKind::Actor => SubjectKind::Actor,
+                                    LeanLifecycleHookSubjectKind::Document {
+                                        resource,
+                                        collection,
+                                    } => SubjectKind::Document {
+                                        resource: leak(resource),
+                                        collection: leak(collection),
+                                    },
+                                },
+                            })
+                            .collect::<Vec<_>>()
+                            .into_boxed_slice(),
+                    ),
+                })
+                .collect(),
+            bound: effects.len(),
+        };
+        let named = Named {
+            actor: Some(case.actor.clone()),
+            actors: case.named_actors.clone(),
+            docs: case.named_docs.iter().map(lean_ref).collect(),
+        };
+        let valid = validate(&manifest, &effects, |_, _| true, &named);
+        assert_eq!(valid.is_ok(), case.valid, "{}: {valid:?}", case.name);
+    }
+    assert!(representable > 0);
 }
 
 #[tokio::test]
