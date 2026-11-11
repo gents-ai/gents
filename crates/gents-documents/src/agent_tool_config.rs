@@ -80,7 +80,7 @@ impl AgentToolConfig {
         self.targets.iter().find(|target| target.name == name)
     }
 
-    pub(crate) fn target_names(&self) -> Vec<String> {
+    pub fn target_names(&self) -> Vec<String> {
         self.targets
             .iter()
             .map(|target| target.name.clone())

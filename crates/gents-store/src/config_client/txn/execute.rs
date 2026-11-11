@@ -115,7 +115,7 @@ impl ConfigApplyTxn<'_> {
 
     /// Delete one document, signing it on a client-signed transaction against
     /// the caller's trusted `schema` for `collection`.
-    pub(crate) async fn delete_document_with_schema(
+    pub async fn delete_document_with_schema(
         &self,
         collection: &str,
         doc_id: &str,
@@ -759,7 +759,7 @@ impl ConfigApplyTxn<'_> {
 
     /// The invocation actor must be the transaction actor. This checks context
     /// integrity only; native DefraDB policies decide document authorization.
-    pub(crate) fn validate_effect_actor(&self, actor: &identity::Did) -> Result<()> {
+    pub fn validate_effect_actor(&self, actor: &identity::Did) -> Result<()> {
         let matches = match &self.backend {
             TxnBackend::Embedded { node, identity, .. } => {
                 if node.node_identity_did() == Some(actor.as_str()) {

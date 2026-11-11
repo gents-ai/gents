@@ -158,7 +158,7 @@ impl BoundDir {
         self
     }
 
-    pub(super) fn validate_invocation(
+    pub fn validate_invocation(
         &self,
         plugin: &str,
         artifact_digest: &str,

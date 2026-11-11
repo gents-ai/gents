@@ -119,7 +119,7 @@ impl InferenceObservationRegistry {
     }
 }
 
-pub(crate) struct ToolObservationGuard {
+pub struct ToolObservationGuard {
     owner: std::sync::Weak<InferenceObservationGuard>,
     id: String,
 }
@@ -137,7 +137,7 @@ impl Drop for ToolObservationGuard {
 }
 
 impl InferenceObservationGuard {
-    pub(crate) fn begin_tool(self: &Arc<Self>, id: &str) -> ToolObservationGuard {
+    pub fn begin_tool(self: &Arc<Self>, id: &str) -> ToolObservationGuard {
         let mut entries = self.registry.0.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(entry) = entries.get_mut(&self.key) {
             entry.tools.insert(id.to_owned(), std::time::Instant::now());
@@ -148,7 +148,7 @@ impl InferenceObservationGuard {
         }
     }
 
-    pub(crate) fn observe(&self, observation: ProviderObservation) {
+    pub fn observe(&self, observation: ProviderObservation) {
         let mut entries = self.registry.0.lock().unwrap_or_else(|p| p.into_inner());
         let Some(entry) = entries.get_mut(&self.key) else {
             return;

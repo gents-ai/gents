@@ -69,7 +69,7 @@ where
     }
 
     // Sync the record and its directory entry before claiming durable ownership.
-    pub(crate) fn write(&self, record: &R) -> std::io::Result<()> {
+    pub fn write(&self, record: &R) -> std::io::Result<()> {
         let dir = match self {
             Self::Volatile(records) => {
                 Self::volatile(records).insert(record.key().to_owned(), record.clone());
@@ -91,7 +91,7 @@ where
         std::fs::File::open(dir).and_then(|dir| dir.sync_all())
     }
 
-    pub(crate) fn read(&self, key: &str) -> Option<R> {
+    pub fn read(&self, key: &str) -> Option<R> {
         let dir = match self {
             Self::Volatile(records) => return Self::volatile(records).get(key).cloned(),
             Self::Durable(dir) => dir,
@@ -106,7 +106,7 @@ where
         }
     }
 
-    pub(crate) fn remove(&self, key: &str) {
+    pub fn remove(&self, key: &str) {
         let dir = match self {
             Self::Volatile(records) => {
                 Self::volatile(records).remove(key);
@@ -123,7 +123,7 @@ where
         }
     }
 
-    pub(crate) fn list(&self) -> Vec<R> {
+    pub fn list(&self) -> Vec<R> {
         let mut records = Vec::new();
         let result = self.visit_records(|record| {
             match record {
@@ -144,7 +144,7 @@ where
         records
     }
 
-    pub(crate) fn try_list(&self) -> anyhow::Result<Vec<R>> {
+    pub fn try_list(&self) -> anyhow::Result<Vec<R>> {
         let mut records = Vec::new();
         self.visit_records(|record| {
             records.push(record?);

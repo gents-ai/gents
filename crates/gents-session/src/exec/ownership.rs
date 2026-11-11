@@ -91,10 +91,10 @@ impl LiveProcessEvidenceOwner {
     fn spawned(&self) {
         self.0.store(2, std::sync::atomic::Ordering::SeqCst);
     }
-    pub(crate) fn exited(&self) {
+    pub fn exited(&self) {
         self.0.store(3, std::sync::atomic::Ordering::SeqCst);
     }
-    pub(crate) fn mark_unverified_failure(&self) {
+    pub fn mark_unverified_failure(&self) {
         let _ = self.0.compare_exchange(
             2,
             4,
@@ -102,7 +102,7 @@ impl LiveProcessEvidenceOwner {
             std::sync::atomic::Ordering::SeqCst,
         );
     }
-    pub(crate) fn get(&self) -> LiveProcessEvidence {
+    pub fn get(&self) -> LiveProcessEvidence {
         match self.0.load(std::sync::atomic::Ordering::SeqCst) {
             1 => LiveProcessEvidence::NeverSpawned,
             3 => LiveProcessEvidence::Exited,
@@ -128,7 +128,7 @@ impl ProcessObservation {
         matches!(self, Self::Running)
     }
 
-    pub(crate) const fn retain_process_record(self) -> bool {
+    pub const fn retain_process_record(self) -> bool {
         !matches!(self, Self::Exited)
     }
 }
@@ -159,7 +159,7 @@ impl ProcessStopOutcome {
         }
     }
 
-    pub(crate) const fn from_observations(
+    pub const fn from_observations(
         before: ProcessObservation,
         after: ProcessObservation,
     ) -> Self {
@@ -202,8 +202,8 @@ impl CancelProcessReply {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProcessIdentity {
-    pub(crate) pid: i32,
-    pub(crate) pgid: i32,
+    pub pid: i32,
+    pub pgid: i32,
     pub(crate) start: String,
 }
 
@@ -228,7 +228,7 @@ impl ProcessIdentity {
         })
     }
 
-    pub(crate) fn observe(&self) -> ProcessObservation {
+    pub fn observe(&self) -> ProcessObservation {
         if self.pid <= 0 || self.pgid <= 0 {
             return ProcessObservation::Unowned;
         }
@@ -250,7 +250,7 @@ impl ProcessIdentity {
         }
     }
 
-    pub(crate) async fn await_signalled_group_exit(&self, wait: Duration) -> ProcessObservation {
+    pub async fn await_signalled_group_exit(&self, wait: Duration) -> ProcessObservation {
         let deadline = tokio::time::Instant::now() + wait;
         loop {
             let observed = self.observe_signalled_group();
@@ -261,7 +261,7 @@ impl ProcessIdentity {
         }
     }
 
-    pub(crate) async fn await_leader_exit(&self, wait: Duration) -> ProcessObservation {
+    pub async fn await_leader_exit(&self, wait: Duration) -> ProcessObservation {
         let deadline = tokio::time::Instant::now() + wait;
         loop {
             let observed = self.observe();
@@ -273,7 +273,7 @@ impl ProcessIdentity {
     }
 
     /// Nothing is signalled unless `before` admits termination.
-    pub(crate) async fn stop(&self) -> (ProcessObservation, ProcessObservation) {
+    pub async fn stop(&self) -> (ProcessObservation, ProcessObservation) {
         let before = self.observe();
         if !before.may_terminate() {
             return (before, before);
@@ -294,9 +294,9 @@ pub const KILL_GRACE: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProcessRecord {
-    pub(crate) tool_call_id: String,
-    pub(crate) tool_call_doc_id: String,
-    pub(crate) identity: ProcessIdentity,
+    pub tool_call_id: String,
+    pub tool_call_doc_id: String,
+    pub identity: ProcessIdentity,
 }
 
 mod records;
@@ -330,7 +330,7 @@ pub struct ProcessRecorder {
 }
 
 impl ProcessRecorder {
-    pub(crate) fn new(record: impl Fn(ProcessIdentity) + Send + Sync + 'static) -> Self {
+    pub fn new(record: impl Fn(ProcessIdentity) + Send + Sync + 'static) -> Self {
         Self {
             _record: Arc::new(record),
             evidence: None,
@@ -370,7 +370,7 @@ impl ProcessRecorder {
         }
     }
 
-    pub(crate) fn with_failure_decision(
+    pub fn with_failure_decision(
         mut self,
         report: impl Fn() + Send + Sync + 'static,
     ) -> Self {
@@ -378,7 +378,7 @@ impl ProcessRecorder {
         self
     }
 
-    pub(crate) fn with_evidence(mut self, evidence: Arc<LiveProcessEvidenceOwner>) -> Self {
+    pub fn with_evidence(mut self, evidence: Arc<LiveProcessEvidenceOwner>) -> Self {
         evidence.initialized();
         self.evidence = Some(evidence);
         self

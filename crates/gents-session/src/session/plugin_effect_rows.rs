@@ -9,16 +9,16 @@ use gents_protocol::plugin_tool_call_limits::{MAX_EFFECTS, MAX_PAYLOAD_BYTES};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginEffectBinding {
-    pub(crate) parent_tool_call_doc_id: String,
-    pub(crate) ordinal: u32,
+    pub parent_tool_call_doc_id: String,
+    pub ordinal: u32,
 }
 
 impl PluginEffectBinding {
-    pub(crate) fn internal_id(parent_tool_call_doc_id: &str, ordinal: u32) -> String {
+    pub fn internal_id(parent_tool_call_doc_id: &str, ordinal: u32) -> String {
         format!("plugin-effect:{parent_tool_call_doc_id}:{ordinal}")
     }
 
-    pub(crate) fn decode(
+    pub fn decode(
         parent_tool_call_doc_id: Option<&str>,
         ordinal: Option<u32>,
         spawned: bool,

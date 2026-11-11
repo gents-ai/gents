@@ -319,7 +319,7 @@ impl reqwest::dns::Resolve for Guarded {
     }
 }
 
-pub(super) struct Request {
+pub struct Request {
     id: String,
     method: Method,
     url: Url,
@@ -327,12 +327,12 @@ pub(super) struct Request {
     body: Option<Vec<u8>>,
 }
 
-pub(super) struct Batch {
-    pub(super) requests: Vec<Request>,
-    pub(super) state: Option<Value>,
+pub struct Batch {
+    pub requests: Vec<Request>,
+    pub state: Option<Value>,
 }
 
-pub(super) fn parse_batch(output: &Value) -> Result<Option<Batch>, String> {
+pub fn parse_batch(output: &Value) -> Result<Option<Batch>, String> {
     let Some(calls) = output
         .as_object()
         .and_then(|object| object.get("http_calls"))
@@ -460,7 +460,7 @@ impl Refusal {
     }
 }
 
-pub(super) struct Session {
+pub struct Session {
     coordinate: String,
     grant: NetGrant,
     client: reqwest::Client,
@@ -472,11 +472,11 @@ pub(super) struct Session {
 }
 
 impl Session {
-    pub(super) fn request_timeout_ms(&self) -> u64 {
+    pub fn request_timeout_ms(&self) -> u64 {
         self.request_timeout.as_millis() as u64
     }
 
-    pub(super) fn for_grant(coordinate: &str, manifold: &Manifold) -> Result<Option<Self>> {
+    pub fn for_grant(coordinate: &str, manifold: &Manifold) -> Result<Option<Self>> {
         Self::with_lookup(coordinate, manifold, Arc::new(SystemLookup))
     }
 
@@ -514,7 +514,7 @@ impl Session {
         }))
     }
 
-    pub(super) async fn serve(
+    pub async fn serve(
         &mut self,
         requests: Vec<Request>,
         deadline: Instant,

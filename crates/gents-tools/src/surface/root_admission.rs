@@ -54,13 +54,13 @@ pub struct WorkspaceRootPolicy {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RootExecutionGuard {
-    pub(crate) agent_did: String,
+    pub agent_did: String,
     pub(crate) selected_root: Option<PathBuf>,
     pub(crate) ceiling_root: Option<PathBuf>,
 }
 
 impl RootExecutionGuard {
-    pub(crate) async fn validate(
+    pub async fn validate(
         &self,
         node: &std::sync::Arc<defra_node::Node>,
         agent: &dyn gents_store::identity::NodeIdentity,

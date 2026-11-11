@@ -92,10 +92,10 @@ pub use submission::prepare_user_message_input;
 
 #[derive(Debug)]
 pub struct EnqueuedBackgroundCompletionInput {
-    pub(crate) request: Option<EnqueuedAgentRequest>,
+    pub request: Option<EnqueuedAgentRequest>,
     #[cfg(test)]
     pub(crate) message_sequence: u32,
-    pub(crate) created_request: bool,
+    pub created_request: bool,
 }
 
 #[cfg(test)]

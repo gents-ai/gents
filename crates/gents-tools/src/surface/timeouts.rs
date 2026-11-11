@@ -105,7 +105,7 @@ impl BoundedTimeout {
         }
     }
 
-    pub(crate) fn wait_for(&self, requested_secs: Option<u64>) -> Duration {
+    pub fn wait_for(&self, requested_secs: Option<u64>) -> Duration {
         self.requested(requested_secs, 1)
     }
 
@@ -149,7 +149,7 @@ pub struct BackgroundTimeouts {
 }
 
 impl BackgroundTimeouts {
-    pub(crate) fn for_execution(
+    pub fn for_execution(
         &self,
         tool_name: &str,
         selected_service_id: Option<&str>,

@@ -63,7 +63,7 @@ impl AgentSessionReadArgs {
         Ok(())
     }
 
-    pub(crate) fn validate_target(&self, target: &SessionScope) -> Result<()> {
+    pub fn validate_target(&self, target: &SessionScope) -> Result<()> {
         self.validate()?;
         if let Some(cursor) = &self.cursor {
             let cursor: Cursor = serde_json::from_str(cursor)?;

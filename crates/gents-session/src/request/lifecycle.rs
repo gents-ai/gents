@@ -704,7 +704,7 @@ impl RequestLifecycle {
         self.configured_max_total_tokens = limit;
     }
 
-    pub(crate) fn input_publication_before_deadline(
+    pub fn input_publication_before_deadline(
         now: chrono::DateTime<chrono::Utc>,
         deadline: Option<chrono::DateTime<chrono::Utc>>,
     ) -> bool {

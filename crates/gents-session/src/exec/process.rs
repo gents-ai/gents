@@ -441,7 +441,7 @@ pub struct ManagedProcess {
 }
 
 impl ManagedProcess {
-    pub(crate) fn has_exited(&mut self) -> std::io::Result<bool> {
+    pub fn has_exited(&mut self) -> std::io::Result<bool> {
         #[cfg(unix)]
         {
             self.child.has_exited()
