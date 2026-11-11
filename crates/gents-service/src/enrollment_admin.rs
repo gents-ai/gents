@@ -230,12 +230,14 @@ pub async fn grant_verified_client(
     }
     let candidate = identity::Did::new(&request.candidate_did)?;
     let owner = ConfigAccess::Graphql(endpoint.clone());
-    let query = format!(
-        "{{ Node(filter: {{ node_did: {{ _eq: \"{}\" }} }}) {{ _docID }} }}",
-        gents_store::graphql::escape_graphql_string(runtime.did())
-    );
+    let rendered = {
+        use gents_protocol::document_query::{fields::node as fields, Filter, Query, Selection};
+        Query::select(Selection::doc_id())
+            .filter(Filter::eq(fields::NODE_DID, runtime.did()))
+            .render()
+    };
     let response = owner
-        .execute(&query)
+        .read(&rendered)
         .await
         .context("reading Node as the client owner")?;
     let rows = response["data"]["Node"]

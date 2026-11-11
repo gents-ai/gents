@@ -242,15 +242,17 @@ async fn engineer_of(
     let Ok(agent) = crate::commands::start::default_agent(access, owner).await else {
         return Ok(None);
     };
-    let rows = crate::graphql_rows(
-        access,
+    let rendered = {
+        use gents_protocol::document_query::{fields::agent as fields, Filter, Query, Selection};
+        Query::select(Selection::new().field(fields::TAGS))
+            .filter(Filter::eq(fields::AGENT_DID, &agent))
+            .limit(1)
+            .render()
+    };
+    let rows = gents_protocol::graphql::graphql_rows_from_response(
+        &access.read(&rendered).await?,
         "Agent",
-        &format!(
-            r#"{{ Agent(filter: {{agent_did: {{_eq: "{}"}}}}, limit: 1) {{ tags }} }}"#,
-            gents_store::graphql::escape_graphql_string(&agent)
-        ),
-    )
-    .await?;
+    );
     let engineer = rows.first().is_some_and(|row| {
         row["tags"].as_array().is_some_and(|tags| {
             tags.iter().any(|tag| {

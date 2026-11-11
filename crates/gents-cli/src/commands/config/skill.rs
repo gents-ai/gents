@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use gents_documents::SkillDocument;
 use gents_store::collection::Collection;
-use gents_store::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
 use crate::cli::*;
@@ -58,12 +57,11 @@ async fn upsert_skill(access: &ConfigAccess, skill: &SkillDocument) -> Result<St
 
 /// The Skill rows with `skill_id`, any owner.
 async fn find_skills(access: &ConfigAccess, skill_id: &str) -> Result<Vec<Value>> {
-    let skill_id = escape_graphql_string(skill_id);
-    let response = access
-        .execute(&format!(
-            r#"{{ Skill(filter: {{ skill_id: {{ _eq: "{skill_id}" }} }}) {{ {SKILL_FIELDS} }} }}"#
-        ))
-        .await?;
+    use gents_protocol::document_query::{fields::skill as fields, Filter, Query, Selection};
+    let rendered = Query::select(Selection::owned(SKILL_FIELDS))
+        .filter(Filter::eq(fields::SKILL_ID, skill_id))
+        .render();
+    let response = access.read(&rendered).await?;
     Ok(skill_rows(&response))
 }
 
@@ -111,11 +109,11 @@ fn skill_rows(response: &Value) -> Vec<Value> {
 
 pub(super) async fn skill_list(args: SkillListArgs) -> Result<()> {
     let access = ConfigAccess::Graphql(gents_service::home_state::resolve_graphql_endpoint(Some(&args.graphql), None)?);
-    let node_did = escape_graphql_string(&args.node_did);
-    let query = format!(
-        r#"{{ Skill(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{ {SKILL_FIELDS} }} }}"#
-    );
-    let response = access.execute(&query).await?;
+    use gents_protocol::document_query::{fields::skill as fields, Filter, Query, Selection};
+    let rendered = Query::select(Selection::owned(SKILL_FIELDS))
+        .filter(Filter::eq(fields::NODE_DID, &args.node_did))
+        .render();
+    let response = access.read(&rendered).await?;
     let mut skills = skill_rows(&response);
     skills.sort_by(|a, b| {
         a.get("skill_id")
@@ -133,11 +131,12 @@ pub(super) async fn skill_list(args: SkillListArgs) -> Result<()> {
 
 pub(super) async fn skill_show(args: SkillShowArgs) -> Result<()> {
     let access = ConfigAccess::Graphql(gents_service::home_state::resolve_graphql_endpoint(Some(&args.graphql), None)?);
-    let skill_id = escape_graphql_string(&args.skill_id);
-    let query = format!(
-        r#"{{ Skill(filter: {{ skill_id: {{ _eq: "{skill_id}" }} }}, limit: 1) {{ {SKILL_FIELDS} }} }}"#
-    );
-    let response = access.execute(&query).await?;
+    use gents_protocol::document_query::{fields::skill as fields, Filter, Query, Selection};
+    let rendered = Query::select(Selection::owned(SKILL_FIELDS))
+        .filter(Filter::eq(fields::SKILL_ID, &args.skill_id))
+        .limit(1)
+        .render();
+    let response = access.read(&rendered).await?;
     match skill_rows(&response).into_iter().next() {
         Some(skill) => print_json(&skill)?,
         None => anyhow::bail!("no Skill document with skill_id {:?}", args.skill_id),
@@ -400,11 +399,11 @@ fn render_openai_yaml(skill: &Value) -> Result<Option<String>> {
 
 pub(super) async fn skill_export(args: SkillExportArgs) -> Result<()> {
     let access = ConfigAccess::Graphql(gents_service::home_state::resolve_graphql_endpoint(Some(&args.graphql), None)?);
-    let node_did = escape_graphql_string(&args.node_did);
-    let query = format!(
-        r#"{{ Skill(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{ {SKILL_FIELDS} }} }}"#
-    );
-    let response = access.execute(&query).await?;
+    use gents_protocol::document_query::{fields::skill as fields, Filter, Query, Selection};
+    let rendered = Query::select(Selection::owned(SKILL_FIELDS))
+        .filter(Filter::eq(fields::NODE_DID, &args.node_did))
+        .render();
+    let response = access.read(&rendered).await?;
     let skills = skill_rows(&response);
 
     let mut exported = Vec::new();

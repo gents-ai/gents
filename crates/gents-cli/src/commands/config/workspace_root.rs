@@ -1,7 +1,6 @@
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
-use gents_store::graphql::escape_graphql_string;
 use serde_json::json;
 
 use crate::cli::output_format::OutputFormat;
@@ -44,11 +43,18 @@ pub(super) async fn workspace_root_show(args: ConfigShowArgs) -> Result<()> {
     args.output
         .ensure_supported("config workspace-root show", &[OutputFormat::Json])?;
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
-    let query = format!(
-        r#"{{ WorkspaceRoot(filter: {{ root_path: {{ _eq: "{}" }} }}) {{ _docID root_path display_name enabled updated_at }} }}"#,
-        escape_graphql_string(&id)
+    use gents_protocol::document_query::{
+        fields::workspace_root as fields, Filter, Query, Selection,
+    };
+    let rendered = Query::select(Selection::owned(
+        "_docID root_path display_name enabled updated_at",
+    ))
+    .filter(Filter::eq(fields::ROOT_PATH, &id))
+    .render();
+    let mut rows = gents_protocol::graphql::graphql_rows_from_response(
+        &access.read(&rendered).await?,
+        "WorkspaceRoot",
     );
-    let mut rows = crate::graphql_rows(&access, "WorkspaceRoot", &query).await?;
     anyhow::ensure!(
         rows.len() == 1,
         "expected one WorkspaceRoot for {id:?}, found {}",
