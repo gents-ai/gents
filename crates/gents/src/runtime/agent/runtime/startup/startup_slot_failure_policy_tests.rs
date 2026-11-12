@@ -104,7 +104,13 @@ async fn generated_startup_demotions_release_only_durable_current_obligations() 
             pending: barrier.is_pending("general", 1).await,
             gate_open: gate.is_open().await,
             cancelled: runtime_cancel.is_cancelled(),
-            fatal: fatal_errors.try_recv().is_ok(),
+            fatal: fatal_errors.try_recv().ok().map(|error| {
+                if error.to_string() == FatalNodeReadinessWrite.to_string() {
+                    "readinessWrite".to_owned()
+                } else {
+                    format!("{error:#}")
+                }
+            }),
             committed: runtime_status
                 .readiness()
                 .observation()

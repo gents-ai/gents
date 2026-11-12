@@ -1060,7 +1060,7 @@ mod candidate_conformance {
                 let mut candidate = state.clone();
                 candidate.process_state =
                     serde_json::from_value(serde_json::json!(update.process)).unwrap();
-                let accepted = commit_candidate(
+                let committed = commit_candidate(
                     &erased,
                     &mut state,
                     candidate,
@@ -1068,11 +1068,14 @@ mod candidate_conformance {
                     Duration::ZERO,
                     &cancel,
                 )
-                .await
-                .is_ok();
+                .await;
                 let current = observed.borrow().clone();
                 result.push(family::Observation {
-                    accepted,
+                    accepted: committed.is_ok(),
+                    storage_full: committed
+                        .as_ref()
+                        .err()
+                        .is_some_and(|error| gents_store::graphql::is_storage_full(error.as_ref())),
                     process: serde_json::to_value(current.process_state)
                         .unwrap()
                         .as_str()

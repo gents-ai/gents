@@ -326,7 +326,25 @@ mod startup_barrier_tests {
         agent
     }
 
-    async fn observation(barrier: &StartupBarrier, released: Option<bool>) -> family::Observation {
+    /// Readiness as seen by a waiter that was already waiting when the last
+    /// operation ran; a completed waiter is replaced by a fresh one.
+    fn waiter_ready<'a>(
+        barrier: &'a StartupBarrier,
+        waiter: &mut Option<futures::future::LocalBoxFuture<'a, ()>>,
+    ) -> bool {
+        let pending = waiter.get_or_insert_with(|| Box::pin(barrier.wait_ready()));
+        let ready = futures::FutureExt::now_or_never(pending.as_mut()).is_some();
+        if ready {
+            *waiter = None;
+        }
+        ready
+    }
+
+    async fn observation<'a>(
+        barrier: &'a StartupBarrier,
+        waiter: &mut Option<futures::future::LocalBoxFuture<'a, ()>>,
+        released: Option<bool>,
+    ) -> family::Observation {
         family::Observation {
             pending: barrier
                 .pending_standings
@@ -338,7 +356,7 @@ mod startup_barrier_tests {
                     generation: *generation,
                 })
                 .collect(),
-            ready: futures::FutureExt::now_or_never(barrier.wait_ready()).is_some(),
+            ready: waiter_ready(barrier, waiter),
             released,
         }
     }
@@ -353,7 +371,8 @@ mod startup_barrier_tests {
                 .map(|agent| agent_config(agent))
                 .collect::<Vec<_>>();
             let barrier = StartupBarrier::new(&agents);
-            let mut observed = vec![observation(&barrier, None).await];
+            let mut waiter = None;
+            let mut observed = vec![observation(&barrier, &mut waiter, None).await];
             for action in &case.input.actions {
                 let slot = &action.slot;
                 let released = match action.operation.as_str() {
@@ -374,7 +393,7 @@ mod startup_barrier_tests {
                     ),
                     other => panic!("unknown modeled startup operation {other}"),
                 };
-                observed.push(observation(&barrier, released).await);
+                observed.push(observation(&barrier, &mut waiter, released).await);
             }
             case.check(observed);
         }

@@ -179,9 +179,14 @@ pub async fn write_pending_agent_request_with_identity(
     let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
     let mutation = &mutation;
 
+    let (node_did_ref, request_id_ref) = (node_did, request_id.as_str());
     let response = access
         .transact_write("lifecycle.materialize_pending", |txn| {
-            Box::pin(async move { txn.execute_local_response(mutation).await })
+            Box::pin(async move {
+                let response = txn.execute_local_response(mutation).await?;
+                publish_request_session_in_txn(txn, node_did_ref, request_id_ref).await?;
+                Ok::<_, anyhow::Error>(response)
+            })
         })
         .await?;
 
@@ -1118,6 +1123,53 @@ fn task_for_opening<'a>(
     let [fire] = fires else { return None };
     (fire.valid && fire.node == node && fire.session == session && fire.request == request)
         .then_some(fire.task)
+}
+
+/// Publish the session of the request just written in `txn`, owned by the
+/// transaction's Agent, in the request's own transaction (Lean
+/// `RuntimeState.materializedSessionVisible`): the router selects only a
+/// session its Agent can read and waits on an absent one, so a request
+/// published without its session would never be claimed. Returns whether the
+/// session was created.
+pub async fn publish_request_session_in_txn(
+    txn: &gents_store::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    request_id: &str,
+) -> Result<bool> {
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::owned(gents_protocol::row::AGENT_REQUEST_FIELDS))
+            .filter(Filter::eq(fields::NODE_DID, node_did))
+            .filter(Filter::eq(fields::REQUEST_ID, request_id))
+            .limit(2)
+            .render()
+    };
+    let response = txn.run(&query).await?;
+    let rows = response
+        .pointer("/data/AgentRequest")
+        .and_then(serde_json::Value::as_array)
+        .context("published request query omitted rows")?;
+    anyhow::ensure!(
+        rows.len() == 1,
+        "a published request must be uniquely visible to its Agent"
+    );
+    let request = AgentRequest::try_from(serde_json::from_value::<
+        gents_protocol::row::AgentRequestRow,
+    >(rows[0].clone())?)?;
+    let provenance = created_session_provenance_in_txn(txn, &request).await?;
+    session::ensure_session_in_txn(
+        txn,
+        &request.session_id,
+        &request.node_did,
+        &request.agent_did,
+        request.requester_did.as_deref(),
+        request.input.initial_title.clone(),
+        provenance,
+        &request.created_at,
+    )
+    .await
 }
 
 pub async fn created_session_provenance_in_txn(

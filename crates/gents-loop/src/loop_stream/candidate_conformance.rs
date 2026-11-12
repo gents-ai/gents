@@ -34,7 +34,7 @@ impl rig::completion::GetTokenUsage for Response {
 #[derive(Clone)]
 struct Model {
     calls: Arc<Mutex<VecDeque<family::Call>>>,
-    observations: Arc<Mutex<Vec<(bool, bool)>>>,
+    observations: Arc<Mutex<Vec<(bool, bool, bool)>>>,
     requests: Arc<Mutex<Vec<String>>>,
 }
 
@@ -64,6 +64,7 @@ fn error(kind: &str) -> CompletionError {
         "permanent" => "status code 400: duplicate field max_tokens",
         "rate_limit" => "status code 429: overloaded",
         "connection" => "connection refused before response",
+        "overflow" => r#"Claude Messages HTTP 400 Bad Request (request-id -) body={"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 1001685 tokens > 1000000 maximum"}}"#,
         _ => "status code 503: unavailable",
     }.into())
 }
@@ -104,7 +105,11 @@ impl CompletionModel for Model {
             _ => false,
         });
         let context = messages.iter().any(is_request_context_message);
-        self.observations.lock().unwrap().push((dirty, context));
+        let offered = request.tools.iter().any(|tool| tool.name == "echo");
+        self.observations
+            .lock()
+            .unwrap()
+            .push((dirty, context, offered));
         let call = self
             .calls
             .lock()
@@ -353,6 +358,7 @@ enum Failure {
     CaptureMissing,
     RetryExhausted,
     Refused,
+    ContextOverflow,
 }
 
 /// Requests persist a failure as its rendered reason, and readers classify it by
@@ -376,6 +382,7 @@ fn failure(error: &crate::error::LoopStreamError) -> Failure {
         _ if says("aggregate_token_usage_missing: ") => Failure::UsageMissing,
         _ if says("missing its capturing transport") => Failure::CaptureMissing,
         _ if says("retry budget exhausted") => Failure::RetryExhausted,
+        _ if says("has no per-turn compactor") => Failure::ContextOverflow,
         _ => Failure::Refused,
     }
 }
@@ -401,7 +408,7 @@ async fn observe(input: &family::Input) -> family::Observation<Failure> {
                 let input: family::Input = serde_json::from_value(serde_json::json!({
                     "calls": [], "transport": 0, "resample": 0, "repair": false,
                     "deadline_fits": true, "max_turns": 0, "context": false,
-                    "initial_dirty": false, "missing_capture": false, "limit": null, "nested_usage": null, "structured": false, "recovered_pair": false,
+                    "initial_dirty": false, "missing_capture": false, "limit": null, "nested_usage": null, "structured": false, "recovered_pair": false, "compactor": false,
                 })).unwrap();
                 let mut child_config = self::config(&input, Default::default(), Default::default());
                 child_config.aggregate_token_budget = Some(budget);
@@ -419,6 +426,21 @@ async fn observe(input: &family::Input) -> family::Observation<Failure> {
                         "compacted prompt",
                     ))],
                     reduction_key: "reduction-1".into(),
+                    commit: TurnReductionCommit::new(|| async { Ok(()) }),
+                })
+            })
+        }));
+    }
+    if input.compactor {
+        let reductions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        config.turn_compactor = Some(Arc::new(move |_| {
+            let key = reductions.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async move {
+                Ok(TurnCompactionOutcome::Reduced {
+                    messages: vec![TaggedMessage::unassociated(Message::user(
+                        "compacted prompt",
+                    ))],
+                    reduction_key: format!("overflow-reduction-{key}"),
                     commit: TurnReductionCommit::new(|| async { Ok(()) }),
                 })
             })
@@ -460,6 +482,7 @@ async fn observe(input: &family::Input) -> family::Observation<Failure> {
         captures: Vec::new(),
         allowances: Vec::new(),
         ledger_used: None,
+        offered: Vec::new(),
     };
     while let Some(item) = stream.next().await {
         match item {
@@ -503,6 +526,7 @@ async fn observe(input: &family::Input) -> family::Observation<Failure> {
     let inputs = model.observations.lock().unwrap();
     observed.dirty_inputs = inputs.iter().map(|i| i.0).collect();
     observed.context_inputs = inputs.iter().map(|i| i.1).collect();
+    observed.offered = inputs.iter().map(|i| i.2).collect();
     let requests = model.requests.lock().unwrap();
     observed.captures = captures
         .lock()
