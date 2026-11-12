@@ -2532,8 +2532,8 @@ def caseCoverage : List CoverageEntry :=
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage "session_document_archive_cases" "SessionDocumentCases")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "session_document_retry_cases" "SessionDocumentCases"
-      "Canonical session DB/lifecycle and fork tests specify target behavior; the generated interned-ID selection/projection/retry/fork rows still need real-owner adapters, including exact physical references and transactional freshness. No fixture-local state machine may substitute.")
+  , tagged (followUpCoverage "family" "session_documents_retry_unreached"
+      "model-production-gap: the model selects the retry parent from the session document's observation and the exact physical request rows in one transaction; production retry eligibility reads persisted rows without that observation, so no production path takes these inputs. No fixture-local state machine may substitute.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (followUpCoverage "background_wake_row_cases" "BackgroundWakeRowCases"
       "Consume exact physical-parent and cross-requester authoritative rows through background publication after its owner migrates. Existing DB wake tests do not establish every generated row verdict.")

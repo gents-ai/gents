@@ -166,21 +166,6 @@ private def clearTitleJson : Json := Json.mkObj
    ("before", documentJson renameBefore), ("now", toJson (4 : Nat)),
    ("title", Json.null),
    ("after", documentJson (AgentSession.rename renameBefore none 4))]
-private def retryStateJson (s : SessionState) : Json := Json.mkObj
-  [("session_id", toJson s.sessionId), ("agent", toJson s.agentDid),
-   ("latest", toJson s.latest), ("requests", toJson ([1, 3].filter
-     (fun id => decide (id ∈ s.requestIds)) |>.map (fun id => Json.mkObj
-       [("request_id", toJson id), ("state", toJson (s.ctx id).state.toDefraDB),
-        ("origin", toJson (s.ctx id).origin.toDefraDB),
-        ("admission", toJson (Conformance.ContractCases.admissionName (s.ctx id).admission)),
-        ("deadline", toJson (s.ctx id).deadline), ("current_time", toJson (s.ctx id).currentTime),
-        ("retry_count", toJson (s.ctx id).retryCount), ("max_retries", toJson (s.ctx id).maxRetries)])))]
-private def retryJson (name : String) (rows : List AgentSession.RequestFact) (parentDoc : Nat) : Json :=
-  Json.mkObj [("name", toJson name), ("session", documentJson indexed),
-    ("before", retryStateJson retryState), ("rows", toJson (rows.map requestJson)),
-    ("parent_doc", toJson parentDoc), ("failed_id", toJson (1 : Nat)), ("new_id", toJson (3 : Nat)),
-    ("after", (SessionState.retryFromRows? retryState indexed rows parentDoc 1 3).map
-      retryStateJson |>.getD Json.null)]
 private def roleName : CanonicalOutput.MessageRole → String
   | .system => "system"
   | .user => "user"
@@ -350,13 +335,6 @@ def sessionDocumentStarterVerificationCasesJson : String :=
 
 def sessionDocumentArchiveCasesJson : String :=
   (toJson archiveCases).compress
-
-def sessionDocumentRetryCasesJson : String :=
-  (toJson [
-      retryJson "exact_parent" [old] 101,
-      retryJson "newer_authoritative_row" [old, newerRequest] 101,
-      retryJson "wrong_physical_parent" [old] 999,
-      retryJson "existing_candidate_missing_from_auxiliary_projection" [old, olderExistingCandidate] 101]).compress
 
 def sessionDocumentProjectionCasesJson : String :=
   (toJson (Conformance.TaskLineage.cases ++ taskOpeningCases ++ forkAuthorityCases ++ pendingTimelineCases ++

@@ -639,7 +639,6 @@ def snapshotSessionCasesJson : String :=
     ++ "\"budget_rehydration_cases\":" ++ budgetRehydrationCasesJson ++ ","
     ++ "\"session_document_starter_verification_cases\":" ++ sessionDocumentStarterVerificationCasesJson ++ ","
     ++ "\"session_document_archive_cases\":" ++ sessionDocumentArchiveCasesJson ++ ","
-    ++ "\"session_document_retry_cases\":" ++ sessionDocumentRetryCasesJson ++ ","
     ++ "\"session_document_projection_cases\":" ++ sessionDocumentProjectionCasesJson ++ ","
     ++ "\"session_document_selection_cases\":" ++ sessionDocumentSelectionCasesJson ++ ","
     ++ "\"session_document_edit_anchor_cases\":" ++ sessionDocumentEditAnchorCasesJson ++ ","

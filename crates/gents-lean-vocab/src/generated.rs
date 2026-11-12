@@ -3088,7 +3088,6 @@ pub struct LeanContractSnapshot {
     pub session_document_archive_cases: Vec<serde_json::Value>,
     pub session_document_selection_cases: Vec<serde_json::Value>,
     pub session_document_projection_cases: Vec<serde_json::Value>,
-    pub session_document_retry_cases: Vec<serde_json::Value>,
     pub session_document_fork_cases: Vec<serde_json::Value>,
     pub session_document_edit_anchor_cases: Vec<serde_json::Value>,
     pub session_document_edit_fork_binding_cases: Vec<serde_json::Value>,
