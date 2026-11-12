@@ -4,6 +4,7 @@ use gents_store::config_client::ConfigAccess;
 use std::sync::Arc;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "select GENTS_LIVE_TARGET and run make live-enrollment"]
 async fn paired_user_observes_two_live_agent_sessions_with_native_isolation() -> Result<()> {
     let _guard = enrollment_e2e_lock().lock().await;
     let (model_endpoint, model_name) = resolve_live_inference().await?;

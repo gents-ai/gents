@@ -38,6 +38,7 @@ async fn publish(access: &ConfigAccess, documents: Vec<(Collection, Value)>) -> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "select GENTS_LIVE_TARGET and run make live-enrollment"]
 async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
     let _guard = enrollment_e2e_lock().lock().await;
     let (model_endpoint, model_name) = resolve_live_inference().await?;

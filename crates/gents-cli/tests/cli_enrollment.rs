@@ -145,6 +145,7 @@ async fn grant_configured_workspace_root_readers(
 
 #[cfg(feature = "live-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "select GENTS_LIVE_TARGET and run make live-enrollment"]
 async fn status_enrollment_from_fresh_desktop_observes_chat_without_client_node() -> Result<()> {
     let _guard = enrollment_e2e_lock().lock().await;
 
