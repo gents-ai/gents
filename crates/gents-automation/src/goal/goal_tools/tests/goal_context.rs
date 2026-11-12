@@ -67,8 +67,7 @@ async fn versions(access: &ConfigAccess) -> Value {
 
 #[tokio::test]
 async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
-    let contract = gents_lean_contract::load_contract_snapshot::<Value>().unwrap();
-    let cases = contract["goal_tool_context_cases"].as_array().unwrap();
+    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_tool_context_cases;
     assert_eq!(cases.len(), 11);
     for case in cases {
         for tool in [
@@ -76,7 +75,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
             gents_protocol::goal_names::UPDATE_GOAL_TOOL_NAME,
             gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME,
         ] {
-            let name = case["name"].as_str().unwrap();
+            let name = case.name.as_str();
             let directory = tempfile::tempdir().unwrap();
             let identity =
                 KeyIdentity::load_or_create(directory.path().join("owner.key"), None).unwrap();
@@ -120,24 +119,22 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 .as_str()
                 .unwrap()
                 .to_owned();
-            let entry = &case["entry"];
-            let entry_id = entry["doc"].as_u64().unwrap();
+            let entry = &case.entry;
+            let entry_id = entry.doc;
             let mut root_goals = BTreeMap::new();
-            for version in case["versions"].as_array().unwrap() {
-                if let Some(root) = version["assignment"]["root"].as_u64() {
-                    root_goals
-                        .entry(root)
-                        .or_insert(version["assignment"]["goal"].as_u64().unwrap());
+            for version in &case.versions {
+                if let Some(root) = version.assignment.root {
+                    root_goals.entry(root).or_insert(version.assignment.goal);
                 }
             }
-            if let Some(root) = entry["reference"]["root"].as_u64() {
+            if let Some(root) = entry.reference.as_ref().map(|reference| reference.root) {
                 root_goals
                     .entry(root)
-                    .or_insert(entry["reference"]["goal"].as_u64().unwrap());
+                    .or_insert(entry.reference.as_ref().unwrap().goal);
             }
             let mut roots = BTreeMap::new();
             for (root, goal) in root_goals {
-                let reference = if root == entry_id && entry["reference"].is_null() {
+                let reference = if root == entry_id && entry.reference.is_none() {
                     None
                 } else {
                     Some(GoalAssignmentInput {
@@ -153,31 +150,29 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
             let caller = if let Some(doc) = roots.get(&entry_id) {
                 doc.clone()
             } else {
-                let reference = entry["reference"].as_object().map(|_| GoalAssignmentInput {
-                    goal_id: goal_id(
-                        identity.did(),
-                        &session,
-                        entry["reference"]["goal"].as_u64().unwrap(),
-                    ),
-                    root_request_doc_id: entry["reference"]["root"]
-                        .as_u64()
-                        .map(|root| roots[&root].clone()),
-                });
+                let reference =
+                    entry
+                        .reference
+                        .as_ref()
+                        .map(|reference| GoalAssignmentInput {
+                            goal_id: goal_id(identity.did(), &session, reference.goal),
+                            root_request_doc_id: Some(roots[&reference.root].clone()),
+                        });
                 request(
                     &access,
                     &identity,
                     &session,
                     entry_id,
                     reference,
-                    entry["signature_valid"].as_bool().unwrap(),
+                    entry.signature_valid,
                 )
                 .await
             };
             let mut documents = BTreeMap::<u64, String>::new();
-            for version in case["versions"].as_array().unwrap() {
-                let id = version["document"].as_u64().unwrap();
-                let assignment = &version["assignment"];
-                let goal_identity = assignment["goal"].as_u64().unwrap();
+            for version in &case.versions {
+                let id = version.document;
+                let assignment = &version.assignment;
+                let goal_identity = assignment.goal;
                 let creation_key = if goal_identity == 1 {
                     gents_protocol::goal::deterministic_goal_creation_key(identity.did(), &session)
                 } else {
@@ -192,7 +187,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     "node_did":identity.did(), "session_id":session, "session_doc_id":session_doc_id,
                     "agent_did":identity.did(), "creator_did":identity.did(), "requester_did":identity.did(),
                     "parent_linked":true, "objective":"Original caller goal",
-                    "status":version["status"], "assignment_root_request_doc_id":assignment["root"].as_u64().map(|root| &roots[&root]),
+                    "status":version.status.as_str(), "assignment_root_request_doc_id":assignment.root.map(|root| &roots[&root]),
                     "tokens_used":317, "token_usage_baseline":0, "active_time_seconds":23,
                     "continuation_sequence":0, "updated_at":"2026-10-21T00:00:00Z"});
                 let doc = documents.get(&id).cloned();
@@ -211,8 +206,8 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 documents.insert(id, created);
             }
             let mut claims = BTreeMap::new();
-            for version in case["versions"].as_array().unwrap() {
-                claims.insert(version["assignment"]["goal"].as_u64().unwrap(), ());
+            for version in &case.versions {
+                claims.insert(version.assignment.goal, ());
             }
             for (id, ()) in claims {
                 let creation_key = if id == 1 {
@@ -230,15 +225,13 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     gents_store::graphql::escape_graphql_string(&goal_id(identity.did(), &session, id)),
                     gents_store::graphql::escape_graphql_string(identity.did()),gents_store::graphql::escape_graphql_string(&session))).await.unwrap();
             }
-            for id in case["retire_documents"].as_array().unwrap() {
+            for id in &case.retire_documents {
                 agent_access
                     .write(
                         "test.goal_tool_retire",
                         &format!(
                             r#"mutation {{delete_Goal(docID: "{}") {{_docID}}}}"#,
-                            gents_store::graphql::escape_graphql_string(
-                                &documents[&id.as_u64().unwrap()]
-                            )
+                            gents_store::graphql::escape_graphql_string(&documents[id])
                         ),
                     )
                     .await
@@ -252,7 +245,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 &hook,
                 &request_id,
                 &session,
-                entry["signature_valid"].as_bool().unwrap(),
+                entry.signature_valid,
             )
             .await;
             let args = match tool {
@@ -264,7 +257,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
             };
             accept_hook_tool_call(&hook, "goal-context-call", tool, args, None).await;
             let before = versions(&access).await;
-            if tool == gents_protocol::goal_names::GET_GOAL_TOOL_NAME && case["read_only"] == true {
+            if tool == gents_protocol::goal_names::GET_GOAL_TOOL_NAME && case.read_only {
                 let context = crate::goal::load_goal_tool_context(
                     &access,
                     identity.did(),
@@ -333,7 +326,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 action => panic!("{name}/{tool}: control escaped its accepted hook: {action:?}"),
             };
             let result: Value = serde_json::from_str(&reason).unwrap();
-            if case["observation"]["kind"] == "unknown" {
+            if case.observation.kind == "unknown" {
                 assert!(
                     terminated,
                     "unavailable attribution must stop the current provider loop"
@@ -346,7 +339,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                 assert_eq!(rows[0]["tool_failure_class"], "serviceUnavailable");
             }
             if tool == gents_protocol::goal_names::GET_GOAL_TOOL_NAME {
-                match case["observation"]["kind"].as_str().unwrap() {
+                match case.observation.kind.as_str() {
                     "unknown" => {
                         assert!(result["error"].is_string(), "{name}/{tool}: {result}");
                     }
@@ -355,7 +348,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                         assert!(!result["error"].is_string(), "{name}/{tool}: {result}");
                     }
                     _ => {
-                        let expected = case["observation"]["identity"]["goal"].as_u64().unwrap();
+                        let expected = case.observation.identity.as_ref().unwrap().goal;
                         assert_eq!(
                             result["goal_id"],
                             goal_id(identity.did(), &session, expected),
@@ -363,10 +356,10 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                         );
                         assert_eq!(
                             result["read_only"].as_bool().unwrap_or(false),
-                            case["read_only"].as_bool().unwrap(),
+                            case.read_only,
                             "{name}/{tool}: {result}"
                         );
-                        if case["read_only"] == true {
+                        if case.read_only {
                             assert!(
                                 result["assignment_context"].is_string(),
                                 "{name}/{tool}: {result}"
@@ -382,7 +375,7 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                         }
                     }
                 }
-                if case["can_update"] != true {
+                if !case.can_update {
                     assert_eq!(
                         versions(&access).await,
                         before,
@@ -390,13 +383,11 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                     );
                 }
             } else {
-                let allowed = case[if tool == gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME {
-                    "can_create"
+                let allowed = if tool == gents_protocol::goal_names::CREATE_GOAL_TOOL_NAME {
+                    case.can_create
                 } else {
-                    "can_update"
-                }]
-                .as_bool()
-                .unwrap();
+                    case.can_update
+                };
                 assert_eq!(
                     result["accepted"].as_bool().unwrap_or(false),
                     allowed,
@@ -414,8 +405,11 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
                         .await
                         .unwrap()
                         .unwrap();
-                    let expected_root = case["observation"]["identity"]["root"]
-                        .as_u64()
+                    let expected_root = case
+                        .observation
+                        .identity
+                        .as_ref()
+                        .map(|identity| identity.root)
                         .map(|root| roots[&root].clone())
                         .unwrap_or(caller.clone());
                     assert_eq!(
