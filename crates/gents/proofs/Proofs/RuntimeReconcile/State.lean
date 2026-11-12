@@ -186,7 +186,8 @@ structure RuntimeState where
 namespace RuntimeState
 
 /-- Router observations are actor-scoped. No visible session may mean absent,
-unavailable or unauthorized; the router waits rather than inferring a new binding. -/
+unavailable or unauthorized; the router waits within the bound of
+`sessionSelectionDisposition` rather than inferring a new binding. -/
 inductive SessionSelection where
   | unavailable | matched | mismatched
   deriving DecidableEq, Repr
@@ -203,6 +204,46 @@ theorem visible_foreign_session_is_rejected (requested bound : AgentDid)
     (different : bound ≠ requested) :
     sessionSelection requested (some bound) = .mismatched := by
   simp [sessionSelection, different]
+
+/-- What the router does with one session-selection observation, given how many
+consecutive unavailable observations it has made for the same request, this one
+included.
+
+External premises that justify terminalizing rather than waiting forever:
+DefraDB document ACP filters unreadable rows without an error, so an
+unavailable observation cannot be distinguished from an absent session;
+sessions are node-local documents (P2P carries discovery and enrollment only),
+so repeated local invisibility is not a replication race; and a request left
+pending is re-served at every request-watcher cooldown, so an unbounded wait is
+an unbounded retry that never progresses.
+
+Only `unavailable` is bounded. A failed read is not an observation and must not
+advance the count: `Enrollment.AgentRequestAdmissionDisposition` allows only an
+authoritative negative to terminalize a durable request. -/
+inductive SessionSelectionDisposition where
+  | claim | wait | reject
+  deriving DecidableEq, Repr
+
+def sessionSelectionDisposition
+    (selection : SessionSelection) (attempts bound : Nat) : SessionSelectionDisposition :=
+  match selection with
+  | .matched => .claim
+  | .mismatched => .reject
+  | .unavailable => if bound ≤ attempts then .reject else .wait
+
+theorem unavailable_waits_below_bound {attempts bound : Nat} (below : attempts < bound) :
+    sessionSelectionDisposition .unavailable attempts bound = .wait := by
+  simp [sessionSelectionDisposition, Nat.not_le.mpr below]
+
+theorem unavailable_rejects_at_bound {attempts bound : Nat} (reached : bound ≤ attempts) :
+    sessionSelectionDisposition .unavailable attempts bound = .reject := by
+  simp [sessionSelectionDisposition, reached]
+
+theorem matched_never_rejects (attempts bound : Nat) :
+    sessionSelectionDisposition .matched attempts bound = .claim := rfl
+
+theorem mismatched_rejects_immediately (attempts bound : Nat) :
+    sessionSelectionDisposition .mismatched attempts bound = .reject := rfl
 
 /-- Before claiming, the router reads the routed generation's selected
 configuration as its Agent (`Identity.Configuration.providerConfigurationVisible`).

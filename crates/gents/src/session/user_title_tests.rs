@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::model_test_support::{model_session, model_time};
-use super::observations::apply_title_in_txn;
+use super::observations::{apply_title_in_txn, GeneratedTitleNeed};
 use super::query::load_agent_session;
 use gents_protocol::session::{SessionTitle, SessionTitleSource};
 
@@ -589,30 +589,39 @@ async fn title_observation_uses_selected_agent_session_access() {
             .await
             .unwrap();
     }
-    assert!(super::observations::session_needs_generated_title(
-        &first_access,
-        node_did,
-        Some(user_did.as_str()),
-        "title-target"
-    )
-    .await
-    .unwrap());
-    assert!(!super::observations::session_needs_generated_title(
-        &runtime_access,
-        node_did,
-        Some(user_did.as_str()),
-        "title-target"
-    )
-    .await
-    .unwrap());
-    assert!(!super::observations::session_needs_generated_title(
-        &second_access,
-        node_did,
-        Some(user_did.as_str()),
-        "title-target"
-    )
-    .await
-    .unwrap());
+    assert_eq!(
+        super::observations::session_needs_generated_title(
+            &first_access,
+            node_did,
+            Some(user_did.as_str()),
+            "title-target"
+        )
+        .await
+        .unwrap(),
+        GeneratedTitleNeed::Needed
+    );
+    assert_eq!(
+        super::observations::session_needs_generated_title(
+            &runtime_access,
+            node_did,
+            Some(user_did.as_str()),
+            "title-target"
+        )
+        .await
+        .unwrap(),
+        GeneratedTitleNeed::SessionUnreadable
+    );
+    assert_eq!(
+        super::observations::session_needs_generated_title(
+            &second_access,
+            node_did,
+            Some(user_did.as_str()),
+            "title-target"
+        )
+        .await
+        .unwrap(),
+        GeneratedTitleNeed::SessionUnreadable
+    );
     assert_eq!(
         super::observations::load_recent_titles_for_agent(
             &first_access,
@@ -642,13 +651,28 @@ async fn title_observation_uses_selected_agent_session_access() {
         })
         .await
         .unwrap();
-    assert!(!super::observations::session_needs_generated_title(
-        &first_access,
-        node_did,
-        Some(user_did.as_str()),
-        "title-target"
-    )
-    .await
-    .unwrap());
+    assert_eq!(
+        super::observations::session_needs_generated_title(
+            &first_access,
+            node_did,
+            Some(user_did.as_str()),
+            "title-target"
+        )
+        .await
+        .unwrap(),
+        GeneratedTitleNeed::AlreadyTitled
+    );
+    assert_eq!(
+        super::observations::session_needs_generated_title(
+            &first_access,
+            node_did,
+            Some(user_did.as_str()),
+            "title-absent"
+        )
+        .await
+        .unwrap(),
+        GeneratedTitleNeed::SessionUnreadable,
+        "a session with no readable row is its own state, not an existing title"
+    );
     db.node.shutdown().await.expect("node shutdown");
 }

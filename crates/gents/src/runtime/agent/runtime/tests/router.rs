@@ -1,6 +1,7 @@
 use super::support::*;
 use super::*;
 use crate::lean_vocab_test::lean_runtime_reconcile_case;
+use crate::runtime::agent::runtime::router::session_selection::UNRESOLVED_SESSION_ATTEMPT_BOUND;
 use crate::runtime::agent::runtime::router::{RouterInputs, RouterWaitState, RuntimeAdmissionGate};
 use crate::runtime::node_readiness_publisher::{FatalNodeReadinessWrite, NodeReadinessWriter};
 use rapidhash::{HashMapExt, RapidHashMap};
@@ -127,6 +128,154 @@ async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_
     node.shutdown().await.expect("node shutdown");
 }
 
+fn routed_snapshot_with_agent(
+    generation: u64,
+    agent: Arc<crate::inference::resolved::ResolvedAgent>,
+    dispatcher: mpsc::Sender<AgentRequest>,
+) -> Arc<crate::runtime::snapshot::ActiveRuntimeSnapshot> {
+    let agent_did = agent.agent_did.clone();
+    let Ok(mut snapshot) = Arc::try_unwrap(routed_snapshot(generation, &agent_did, dispatcher))
+    else {
+        panic!("the snapshot has a sole reference");
+    };
+    snapshot.agents = RapidHashMap::from_iter([(agent_did, agent)]);
+    Arc::new(snapshot)
+}
+
+/// Lean `RuntimeState.sessionSelectionDisposition`: an unavailable selection
+/// is terminalized once the router reaches the attempt bound, instead of
+/// leaving the request for the watcher to re-serve forever.
+#[tokio::test]
+async fn unresolvable_session_terminalizes_the_request_at_the_attempt_bound() {
+    let (db, _user, _access, binding) =
+        crate::test_support::signed_test_node("unresolved-session").await;
+    let node = db.node.clone();
+    let root = db.node_identity.clone();
+    let agent = crate::store::identity::resolve_agent_identity(root.as_ref(), &binding).unwrap();
+    grant_held_agent_operations(&node, root.as_ref(), agent.as_ref()).await;
+    let node_did = root.did().to_owned();
+    let agent_did = agent.did().to_owned();
+    let doc_id = create_held_agent_request(
+        &node,
+        &node_did,
+        agent.as_ref(),
+        "unresolved-session-request",
+        "unresolved-session",
+        "hello",
+    )
+    .await;
+    let resolved = Arc::new(
+        crate::runtime::agent::PendingAgent::new("unresolved-session")
+            .with_identity_binding_for_test(binding)
+            .build_with_identity_arc_for_test(root.clone()),
+    );
+
+    let (dispatcher, mut executor_rx) = mpsc::channel(1);
+    let snapshot = routed_snapshot_with_agent(1, resolved, dispatcher);
+    let (_active_tx, active_rx) = watch::channel(snapshot.clone());
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (request_tx, request_rx) = mpsc::channel(1);
+    let (status_owner, status) =
+        RuntimeStatusHandle::start_with_unbounded_test_clock(node.clone(), node_did.clone());
+    status.initialize_startup(&agent_did).await.unwrap();
+    status
+        .readiness()
+        .register_slot(&agent_did, 1)
+        .await
+        .unwrap();
+    status
+        .readiness()
+        .publish_snapshot(snapshot.as_ref())
+        .await
+        .unwrap();
+    status
+        .set_process_state_durable(crate::runtime::agent::ProcessLifecycleState::Ready)
+        .await
+        .unwrap();
+    let gate = RuntimeAdmissionGate::closed();
+    gate.open().await;
+
+    let mut routed = request(Some(&agent_did), "unresolved-session");
+    routed.node_did = node_did.clone();
+    routed.doc_id = doc_id;
+    routed.request_id = "unresolved-session-request".to_owned();
+    routed.requester_did = Some(agent_did.clone());
+    routed.execution_origin = Some("interactive".to_owned());
+    request_tx.send(Ok(routed)).await.unwrap();
+
+    let router_node = node.clone();
+    let router_node_did = node_did.clone();
+    let router = tokio::spawn(async move {
+        super::super::router::run_router_with_watcher(RouterInputs {
+            node: router_node,
+            node_did: router_node_did,
+            watcher: ScriptedWatcher { rx: request_rx },
+            active_snapshot_rx: active_rx,
+            shutdown: shutdown_rx,
+            admission_gate: gate,
+            runtime_status: status,
+            runtime_snapshot_observer: None,
+            unresolved_session_bound: 1,
+        })
+        .await
+    });
+
+    let access = crate::ConfigAccess::local_managed_agent(
+        node.clone(),
+        agent_did.parse().unwrap(),
+        agent.as_ref(),
+    )
+    .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let reason = loop {
+        let response = access
+            .execute(
+                r#"{
+                    AgentRequest(
+                        filter: { request_id: { _eq: "unresolved-session-request" } }
+                        limit: 1
+                    ) { lifecycle_state failure_reason }
+                }"#,
+            )
+            .await
+            .expect("reload routed row");
+        let row = response["data"]["AgentRequest"]
+            .as_array()
+            .and_then(|rows| rows.first())
+            .cloned()
+            .expect("routed request row");
+        if row.get("lifecycle_state").and_then(Value::as_str) == Some("failed") {
+            break row
+                .get("failure_reason")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "router left an unresolvable request pending"
+        );
+        tokio::task::yield_now().await;
+    };
+    assert!(
+        reason.contains("unresolved-session") && reason.contains("routing attempts"),
+        "failure reason must name the session: {reason}"
+    );
+    assert!(
+        executor_rx.try_recv().is_err(),
+        "an unresolvable request must not dispatch"
+    );
+
+    shutdown_tx.send(true).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), router)
+        .await
+        .expect("router must stop")
+        .unwrap()
+        .unwrap();
+    status_owner.close().await.unwrap();
+    node.shutdown().await.expect("node shutdown");
+}
+
 #[tokio::test]
 async fn closing_admission_cancels_a_send_to_a_full_executor_queue() {
     let (db, _user, _user_access, binding) =
@@ -179,6 +328,7 @@ async fn closing_admission_cancels_a_send_to_a_full_executor_queue() {
             admission_gate: gate_for_router,
             runtime_status: status,
             runtime_snapshot_observer: None,
+            unresolved_session_bound: UNRESOLVED_SESSION_ATTEMPT_BOUND,
         })
         .await
     });
@@ -270,6 +420,7 @@ async fn snapshot_change_reroutes_request_blocked_on_old_executor_queue() {
             admission_gate: gate_for_router,
             runtime_status: status_for_router,
             runtime_snapshot_observer: None,
+            unresolved_session_bound: UNRESOLVED_SESSION_ATTEMPT_BOUND,
         })
         .await
     });
@@ -353,6 +504,7 @@ async fn router_generation_write_failure_closes_admission_before_dequeue_or_disp
         admission_gate: gate.clone(),
         runtime_status: status,
         runtime_snapshot_observer: None,
+        unresolved_session_bound: UNRESOLVED_SESSION_ATTEMPT_BOUND,
     })
     .await
     .expect_err("router generation persistence failure must stop the router");

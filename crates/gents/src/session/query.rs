@@ -187,26 +187,45 @@ pub(crate) async fn require_session(
     Ok(())
 }
 
+/// `requester` is the modeled session scope of `AgentSession.latest`: `None`
+/// queries every requester, `Some(scope)` the exact scope (`Some(None)` the
+/// absent one). An auxiliary request carries the selected Agent as its
+/// requester (`Enrollment.runtimeRequesterScope`), never the client that
+/// opened the session, so its session is selected by node and session id
+/// alone, as `request::admission`'s RuntimeInternal branch already does for
+/// the same purposes. The read stays actor-scoped, so document ACP remains the
+/// only authorization.
 pub(crate) async fn load_session_agent_selection(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: &::identity::Did,
     node_did: &str,
     session_id: &str,
-    requester_did: Option<&str>,
+    requester: Option<Option<&str>>,
 ) -> Result<Option<String>> {
     Ok(crate::ConfigAccess::transact_local_readonly(
         node,
         Some(actor.clone()),
         "session.agent_selection",
         |txn| {
-            Box::pin(
-                crate::store::config_client::agent_session::load_agent_session_row_in_txn(
-                    txn,
-                    node_did,
-                    session_id,
-                    requester_did,
-                ),
-            )
+            Box::pin(async move {
+                match requester {
+                    Some(requester_did) => {
+                        crate::store::config_client::agent_session::load_agent_session_row_in_txn(
+                            txn,
+                            node_did,
+                            session_id,
+                            requester_did,
+                        )
+                        .await
+                    }
+                    None => {
+                        crate::store::config_client::agent_session::load_agent_session_owner_in_txn(
+                            txn, node_did, session_id,
+                        )
+                        .await
+                    }
+                }
+            })
         },
     )
     .await?

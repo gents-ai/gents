@@ -34,6 +34,7 @@ use crate::runtime::agent::completion_retry::CompletionRetryProfileFields;
 use crate::runtime::agent::daemon::AgentDaemonInit;
 use crate::runtime::agent::runtime::{
     run_router_with_watcher, RouterInputs, RuntimeAdmissionGate, StartupBarrier,
+    UNRESOLVED_SESSION_ATTEMPT_BOUND,
 };
 use crate::runtime::snapshot::ActiveRuntimeSnapshot;
 use crate::runtime::status::RuntimeStatusHandle;
@@ -2263,6 +2264,7 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
                 admission_gate: router_gate,
                 runtime_status: status,
                 runtime_snapshot_observer: None,
+                unresolved_session_bound: UNRESOLVED_SESSION_ATTEMPT_BOUND,
             })
             .await
         });

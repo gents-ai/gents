@@ -1254,7 +1254,7 @@ pub(super) mod tests {
             wake.max_total_tokens, None,
             "fixture allows the daemon to create an auxiliary title request"
         );
-        assert!(
+        assert_eq!(
             crate::session::session_needs_generated_title(
                 &admission.client,
                 &admission.node_did,
@@ -1263,6 +1263,7 @@ pub(super) mod tests {
             )
             .await
             .expect("read fixture session title"),
+            crate::session::GeneratedTitleNeed::Needed,
             "fixture starts with a placeholder title so title work is created"
         );
 
@@ -1354,7 +1355,7 @@ pub(super) mod tests {
         })
         .await
         .expect("daemon must persist pending title work before test shutdown");
-        assert!(
+        assert_eq!(
             crate::session::session_needs_generated_title(
                 &admission.client,
                 &admission.node_did,
@@ -1363,6 +1364,7 @@ pub(super) mod tests {
             )
             .await
             .expect("read title pending session"),
+            crate::session::GeneratedTitleNeed::Needed,
             "creator cannot update the title without watcher dispatch"
         );
 

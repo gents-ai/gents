@@ -101,7 +101,7 @@ where
                     identity::Did::new(&parent.agent_did)?,
                     agent_identity.as_ref(),
                 )?;
-                if !session::session_needs_generated_title(
+                match session::session_needs_generated_title(
                     &access,
                     &parent.node_did,
                     parent.requester_did.as_deref(),
@@ -109,7 +109,19 @@ where
                 )
                 .await?
                 {
-                    return Ok(());
+                    session::GeneratedTitleNeed::Needed => {}
+                    session::GeneratedTitleNeed::AlreadyTitled => return Ok(()),
+                    session::GeneratedTitleNeed::SessionUnreadable => {
+                        tracing::warn!(
+                            target: TRACING_TARGET,
+                            node_did = %parent.node_did,
+                            session_id = %parent.session_id,
+                            agent_did = %parent.agent_did,
+                            requester_did = ?parent.requester_did,
+                            "session row not readable for the title audit; skipping generated title"
+                        );
+                        return Ok(());
+                    }
                 }
                 let signer = agent_identity
                     .managed_agent_signer()
@@ -438,7 +450,7 @@ where
                         identity::Did::new(&request.agent_did)?,
                         self.agent_config.agent_identity.as_ref(),
                     )?;
-                    if !session::session_needs_generated_title(
+                    match session::session_needs_generated_title(
                         &access,
                         &request.node_did,
                         parent.requester_did.as_deref(),
@@ -446,7 +458,19 @@ where
                     )
                     .await?
                     {
-                        return Ok(None);
+                        session::GeneratedTitleNeed::Needed => {}
+                        session::GeneratedTitleNeed::AlreadyTitled => return Ok(None),
+                        session::GeneratedTitleNeed::SessionUnreadable => {
+                            tracing::warn!(
+                                target: TRACING_TARGET,
+                                node_did = %request.node_did,
+                                session_id = %request.session_id,
+                                agent_did = %request.agent_did,
+                                requester_did = ?parent.requester_did,
+                                "session row not readable for the title audit; skipping generated title"
+                            );
+                            return Ok(None);
+                        }
                     }
                     let recent = session::load_recent_titles_for_agent(
                         &access,

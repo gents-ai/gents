@@ -268,17 +268,30 @@ def clientAgentReadinessCases : List ClientAgentReadinessCase :=
   ]
 
 def sessionSelectionCasesJson : String :=
-  let cases : List (String × Nat × Option Nat) :=
-    [("invisible", 10, none), ("matching", 10, some 10), ("mismatched", 10, some 20)]
+  let cases : List (String × Nat × Option Nat × Nat × Nat) :=
+    [("invisible", 10, none, 0, 1), ("matching", 10, some 10, 0, 1),
+     ("mismatched", 10, some 20, 0, 1),
+     ("invisible-under-bound", 10, none, 0, 3), ("invisible-at-bound", 10, none, 3, 3)]
   let result (selection : RuntimeState.SessionSelection) : String :=
     match selection with
     | .unavailable => "unavailable"
     | .matched => "matched"
     | .mismatched => "mismatched"
-  (Lean.toJson (cases.map fun (name, requested, visible) => Lean.Json.mkObj
+  let disposition (value : RuntimeState.SessionSelectionDisposition) : String :=
+    match value with
+    | .claim => "claim"
+    | .wait => "wait"
+    | .reject => "reject"
+  (Lean.toJson (cases.map fun (name, requested, visible, attempts, bound) =>
+    let selection := RuntimeState.sessionSelection requested visible
+    Lean.Json.mkObj
     [("name", Lean.toJson name), ("requested", Lean.toJson requested),
      ("visible", Lean.toJson visible),
-     ("expected", Lean.toJson (result (RuntimeState.sessionSelection requested visible)))] )).compress
+     ("attempts", Lean.toJson attempts), ("bound", Lean.toJson bound),
+     ("expected", Lean.toJson (result selection)),
+     ("expected_disposition",
+       Lean.toJson (disposition
+         (RuntimeState.sessionSelectionDisposition selection attempts bound)))] )).compress
 
 def configurationAdmissionCasesJson : String :=
   let cases : List (String × Bool × Nat × Nat) :=

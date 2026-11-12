@@ -782,12 +782,23 @@ pub(crate) async fn load_recent_titles_for_agent(
         .collect())
 }
 
+/// What a title-need read observed. Document ACP filters unreadable rows
+/// without an error, so no row is not the positive fact "already titled": it
+/// is its own state, as Lean `GoalAutomation.SessionObservation` models with
+/// `noReadableSession`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GeneratedTitleNeed {
+    Needed,
+    AlreadyTitled,
+    SessionUnreadable,
+}
+
 pub(crate) async fn session_needs_generated_title(
     access: &crate::ConfigAccess,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
-) -> Result<bool> {
+) -> Result<GeneratedTitleNeed> {
     let Some(row) = access
         .transact_readonly("session.needs_generated_title", |txn| {
             Box::pin(load_agent_session_row_in_txn(
@@ -799,16 +810,21 @@ pub(crate) async fn session_needs_generated_title(
         })
         .await?
     else {
-        return Ok(false);
+        return Ok(GeneratedTitleNeed::SessionUnreadable);
     };
     let session = row.session;
     validate_agent_session(&session)?;
 
     Ok(match session.title.as_ref() {
-        None => true,
+        None => GeneratedTitleNeed::Needed,
         Some(title) => {
-            title.source == gents_protocol::session::SessionTitleSource::Placeholder
+            if title.source == gents_protocol::session::SessionTitleSource::Placeholder
                 || title.text.trim().is_empty()
+            {
+                GeneratedTitleNeed::Needed
+            } else {
+                GeneratedTitleNeed::AlreadyTitled
+            }
         }
     })
 }
