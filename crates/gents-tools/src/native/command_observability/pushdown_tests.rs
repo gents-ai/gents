@@ -1,7 +1,42 @@
-use gents_tools::native::command_observability::*;
+use crate::native::command_observability::*;
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+
+const CAPTURED_EVENT_TARGETS: &[&str] = &[
+    gents_store::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET,
+    gents_session::session::REFUSAL_PROJECTION_EVENT_TARGET,
+];
+
+fn enable_scoped_event_capture() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        tracing::subscriber::set_global_default(CapturedTargetSubscriber)
+            .expect("no other global tracing default in this test binary");
+    });
+}
+
+struct CapturedTargetSubscriber;
+
+impl tracing::Subscriber for CapturedTargetSubscriber {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        CAPTURED_EVENT_TARGETS.contains(&metadata.target())
+    }
+
+    fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::Id {
+        tracing::Id::from_u64(1)
+    }
+
+    fn record(&self, _span: &tracing::Id, _values: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _span: &tracing::Id, _follows: &tracing::Id) {}
+
+    fn event(&self, _event: &tracing::Event<'_>) {}
+
+    fn enter(&self, _span: &tracing::Id) {}
+
+    fn exit(&self, _span: &tracing::Id) {}
+}
 
 #[derive(Clone, Default)]
 struct Capture(Arc<Mutex<Vec<u8>>>);
@@ -25,7 +60,7 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Capture {
 
 #[test]
 fn credential_failure_is_visible_at_error_level_and_rate_limited() {
-    crate::test_support::root::enable_scoped_event_capture();
+    enable_scoped_event_capture();
     let counter = AtomicU64::new(0);
     let output = Capture::default();
     let subscriber = tracing_subscriber::fmt()
@@ -53,7 +88,7 @@ fn credential_failure_is_visible_at_error_level_and_rate_limited() {
 
 #[test]
 fn refused_command_updates_policy_counter_without_logging_its_arguments() {
-    crate::test_support::root::enable_scoped_event_capture();
+    enable_scoped_event_capture();
     let output = Capture::default();
     let subscriber = tracing_subscriber::fmt()
         .with_ansi(false)
@@ -63,8 +98,8 @@ fn refused_command_updates_policy_counter_without_logging_its_arguments() {
         .finish();
     let before = snapshot().policy_rejections;
     tracing::subscriber::with_default(subscriber, || {
-        let policy = gents_tools::native::CommandExecutionPolicy::read_only(vec!["ls".into()]);
-        assert!(gents_tools::native::shared::validate_command_policy(
+        let policy = crate::native::CommandExecutionPolicy::read_only(vec!["ls".into()]);
+        assert!(crate::native::shared::validate_command_policy(
             "private-command",
             &["sensitive-argument".into()],
             &policy,
