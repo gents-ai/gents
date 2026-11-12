@@ -137,11 +137,14 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
     let mut lines = BufReader::new(runtime.stdout.take().context("runtime stdout")?).lines();
     let mut log = tokio::fs::File::create(root.join("runtime.log")).await?;
     let ready = tokio::time::timeout(WAIT, async {
+        let mut output = String::new();
         while let Some(line) = lines.next_line().await? {
             log.write_all(line.as_bytes()).await?;
             log.write_all(b"\n").await?;
-            if let Some(start) = line.find('{') {
-                if let Some(Ok(value)) = serde_json::Deserializer::from_str(&line[start..])
+            output.push_str(&line);
+            output.push('\n');
+            if let Some(start) = output.find('{') {
+                if let Some(Ok(value)) = serde_json::Deserializer::from_str(&output[start..])
                     .into_iter::<Value>()
                     .next()
                 {
