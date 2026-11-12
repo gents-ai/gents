@@ -1836,16 +1836,26 @@ def caseCoverage : List CoverageEntry :=
       "PluginJobCommitKillCases")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "client_process_claim_cases"
-      "ClientProcessClaimCases")
+      "family"
+      "native_refinement_claim_scenario")
+      "process-lifecycle" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "native_refinement_claim_unreached"
+      "model-production-gap: no production path reaches these emitted cases yet (the served claim scenario builds only the agent's own client-owned intent at its observed revision; claims as another agent, for another owner or invocation, or after a revision change are not driven)")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "client_process_receipt_cases"
       "ClientProcessReceiptCases")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "client_control_grant_cases"
-      "ClientControlGrantCases")
+      "family"
+      "native_refinement_grant_scenario")
+      "process-lifecycle" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "native_refinement_grant_unreached"
+      "model-production-gap: no production path reaches these emitted cases yet (production publishes a control outcome only inside the claim's fenced transaction; unfenced publication is unreachable)")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "client_signed_control_cases"
@@ -2110,6 +2120,10 @@ def caseCoverage : List CoverageEntry :=
       "terminal_diagnostic_replay_cases"
       "TerminalDiagnosticReplayCases")
       "canonical-output" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contract_cases_compaction_projection_join_staged_turn_reduction")
+      "compaction" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "family"
       "contract_cases_compaction_projection_join_projection_join"
@@ -2120,10 +2134,6 @@ def caseCoverage : List CoverageEntry :=
       "CompactionCanonicalProjectionCases"
       "Concrete canonical records and selected identities exercise the composed reconstruction/projection/reduction entry. Compare full native messages at initial and checkpoint-rebuild callbacks, and reject missing or loading dependencies without shortened history. The native serializer and ACP-authorized snapshot remain external premises.")
       "compaction" [Surface.agentFacing]
-  , tagged (consumerCoverage
-      "family"
-      "contract_cases_compaction_projection_join_staged_turn_reduction")
-      "compaction" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "repaired_projection_admission_cases"
       "RepairedProjectionAdmissionCases"
