@@ -2,8 +2,8 @@ use super::*;
 
 #[test]
 fn generated_title_text_cases_reach_history_and_transcript_without_rewriting_user_titles() {
-    let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-    for case in contract["title_text_cases"]["cases"].as_array().unwrap() {
+    let contract = gents_lean_vocab::lean_contract_snapshot();
+    for case in &contract.title_text_cases.cases {
         let session = AgentSession {
             session_id: "session".into(),
             node_did: "owner".into(),
@@ -15,8 +15,8 @@ fn generated_title_text_cases_reach_history_and_transcript_without_rewriting_use
             archive_revision: 0,
             stopped_at: None,
             title: Some(SessionTitle {
-                text: case["raw"].as_str().unwrap().to_owned(),
-                source: if case["generated_source"].as_bool().unwrap() {
+                text: case.raw.clone(),
+                source: if case.generated_source {
                     SessionTitleSource::Generated
                 } else {
                     SessionTitleSource::User
@@ -28,12 +28,12 @@ fn generated_title_text_cases_reach_history_and_transcript_without_rewriting_use
         };
         let before = session.clone();
         let summaries = session_summaries(std::slice::from_ref(&session), &[], "owner", &[], &[]);
-        let expected = case["expected_display"].as_str().unwrap();
+        let expected = case.expected_display.as_str();
         assert_eq!(
             summaries[0].title.as_deref(),
             Some(expected),
             "{}",
-            case["name"]
+            case.name
         );
         let store = ClientStore::from_rows(ClientStoreRows {
             sessions: vec![session],
@@ -44,7 +44,7 @@ fn generated_title_text_cases_reach_history_and_transcript_without_rewriting_use
             snapshot.title,
             crate::types::normalize_optional(Some(expected)),
             "{}",
-            case["name"]
+            case.name
         );
         assert_eq!(store.sessions[0], before);
     }

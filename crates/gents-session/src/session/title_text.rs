@@ -111,32 +111,46 @@ pub fn generation_input(prose: &str, contexts: &[CapturedContext]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn decode<T: serde::de::DeserializeOwned>(value: serde_json::Value) -> T {
+        serde_json::from_value(value).unwrap()
+    }
+
     #[test]
     fn generated_title_text_cases_bind_native_presentation() {
         let contract = &gents_lean_vocab::lean_contract_snapshot().title_text_cases;
-        assert_eq!(GENERATION_PREAMBLE, contract["preamble"].as_str().unwrap());
-        for case in contract["cases"].as_array().unwrap() {
-            let raw = case["raw"].as_str().unwrap();
-            let fallback = case["fallback"].as_str().unwrap();
-            let captures: Vec<CapturedContext> =
-                serde_json::from_value(case["captures"].clone()).unwrap();
+        assert_eq!(GENERATION_PREAMBLE, contract.preamble.as_str());
+        for case in &contract.cases {
+            let raw = case.raw.as_str();
+            let fallback = case.fallback.as_str();
+            let captures: Vec<CapturedContext> = case
+                .captures
+                .iter()
+                .map(|capture| CapturedContext {
+                    kind: decode(serde_json::Value::String(capture.kind.clone())),
+                    source: decode(serde_json::Value::String(capture.source.clone())),
+                    captured_at: capture.captured_at.clone(),
+                    uri: capture.uri.clone().map(decode),
+                    terminal_name: capture.terminal_name.clone().map(decode),
+                    workspace_uri: capture.workspace_uri.clone().map(decode),
+                    version: capture.version.clone().map(decode),
+                    unsaved: capture.unsaved,
+                    range: capture.range.clone().map(decode),
+                    content: capture.content.clone(),
+                })
+                .collect();
             let input = generation_input(fallback, &captures);
-            assert_eq!(
-                input,
-                case["expected_input"].as_str().unwrap(),
-                "{}",
-                case["name"]
-            );
+            assert_eq!(input, case.expected_input.as_str(), "{}", case.name);
             let generated = generated_title(raw, &input);
             assert_eq!(
                 generated,
-                case["expected_generated"].as_str().unwrap(),
+                case.expected_generated.as_str(),
                 "{}",
-                case["name"]
+                case.name
             );
             assert!(generated.chars().count() <= MAX_CHARACTERS);
             assert!(generated.split_whitespace().count() <= MAX_WORDS);
-            let source = if case["generated_source"].as_bool().unwrap() {
+            let source = if case.generated_source {
                 SessionTitleSource::Generated
             } else {
                 SessionTitleSource::User
@@ -146,21 +160,16 @@ mod tests {
                     text: raw.to_owned(),
                     source
                 }),
-                case["expected_display"].as_str().unwrap(),
+                case.expected_display.as_str(),
                 "{}",
-                case["name"]
+                case.name
             );
-            let recent = case["recent"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|title| title.as_str().unwrap().to_owned())
-                .collect::<Vec<_>>();
+            let recent = case.recent.clone();
             assert_eq!(
                 generation_prompt(&input, &recent),
-                case["expected_prompt"].as_str().unwrap(),
+                case.expected_prompt.as_str(),
                 "{}",
-                case["name"]
+                case.name
             );
         }
     }
