@@ -342,8 +342,6 @@ mod pairing_invariant_tests;
 mod pairing_reconcile;
 #[path = "conformance/prompt_assembly.rs"]
 mod prompt_assembly;
-#[path = "conformance/rendered_capture.rs"]
-mod rendered_capture;
 #[path = "conformance/root_admission.rs"]
 mod root_admission;
 #[path = "conformance/scope_templates.rs"]

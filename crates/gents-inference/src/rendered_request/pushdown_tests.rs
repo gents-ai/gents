@@ -1,4 +1,4 @@
-use gents_inference::rendered_request::{
+use crate::rendered_request::{
     capture_key as derive_capture_key, AssemblyBuildPath, AssemblyTrace, ProvenanceManifest,
     RenderedCompletionRequest, RenderedRequestSource, CAPTURE_VERSION,
 };
@@ -302,7 +302,7 @@ fn generated_rendered_capture_cases_never_permit_an_uncaptured_send() {
 
 #[test]
 fn generated_capture_scope_cases_pin_the_shared_parser_and_order() {
-    use gents_inference::rendered_request::{CaptureOrderKey, CaptureScope};
+    use crate::rendered_request::{CaptureOrderKey, CaptureScope};
 
     let scope_cases = gents_lean_vocab::lean_capture_scope_cases();
     assert!(
