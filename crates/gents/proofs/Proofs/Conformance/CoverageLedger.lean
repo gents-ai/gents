@@ -732,8 +732,16 @@ def caseCoverage : List CoverageEntry :=
       "Binds client signer, exact create and update graphs, and relationship scope to an embedded transaction. Full plan validation, deletion and native denial remain to be exercised.")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "pack_wire_lock_cases"
-      "PackWireLockCases")
+      "family"
+      "contracts_pack_installation_wire_lock_resolution")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_pack_installation_wire_lock_install_during_wire")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_pack_installation_wire_lock_wire_during_removal")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"

@@ -12,18 +12,14 @@ use gents_pack::plugin::test_fixtures::{build_plugin_pack, ECHO_WAT};
 
 #[test]
 fn staged_plugin_resolution_conforms_to_lean() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().pack_wire_lock_cases;
     let (home, _) = installed_echo();
     let executor = PluginExecutor::new(Some(home.path().to_owned()));
-    for case in cases {
-        let held = case["held"].as_bool().unwrap();
-        let _stage = held.then(|| store::try_lock_store(home.path()).unwrap());
-        assert_eq!(
-            executor.resolve("team/plugin", None).is_ok(),
-            case["resolve_allowed"].as_bool().unwrap(),
-            "{case}"
-        );
-    }
+    gents_lean_vocab::families::contracts_pack_installation_wire_lock_resolution::replay(|i| {
+        let _stage = i.held.then(|| store::try_lock_store(home.path()).unwrap());
+        gents_lean_vocab::families::contracts_pack_installation_wire_lock_resolution::WireLockResolution {
+            resolve_allowed: executor.resolve("team/plugin", None).is_ok(),
+        }
+    });
 }
 
 fn tool_ref(digest: Option<&str>) -> PluginToolRef {
@@ -1849,13 +1845,7 @@ mod job_calls {
             .await
             .unwrap();
         let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_job_opening_cases;
-        let expected = |name: &str| {
-            cases
-                .iter()
-                .find(|case| case.name == name)
-                .unwrap()
-                .commits
-        };
+        let expected = |name: &str| cases.iter().find(|case| case.name == name).unwrap().commits;
         let mut wrong_pin = create.clone();
         wrong_pin.retry_key = Some(job_spawn_key("wrong-root", "slot-a", 0));
         let wrong_plan =
