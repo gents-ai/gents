@@ -4,3 +4,6 @@ pub mod claude_subscription;
 pub mod inference_http;
 pub mod provider_http;
 pub mod xai_grok;
+
+#[cfg(test)]
+mod pushdown_tests;
