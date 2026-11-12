@@ -478,17 +478,18 @@ async fn persisted_outcome_requests(
 async fn generated_terminal_outcome_action_traces_use_native_owners() {
     for trace in contract()["outcome_traces"].as_array().unwrap() {
         // The Task's Agent admits, claims, terminalizes and recovers its fires.
-        let node = std::sync::Arc::new(
-            crate::triggers::callback::test_node_builder()
-                .build()
-                .await
-                .unwrap(),
-        );
-        ensure_runtime_schemas(&node).await.unwrap();
-        crate::triggers::callback::seed_test_agent(&node, gents_store::test_support::PIN_FIXED_DID)
-            .await;
-        let agent = crate::triggers::callback::test_agent_identity();
-        let access = crate::triggers::callback::test_agent_access(&node);
+        let (db, _user, _access, binding) =
+            crate::test_support::signed_test_node(trace["name"].as_str().unwrap()).await;
+        let node = db.node.clone();
+        let agent =
+            gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+                .unwrap();
+        let access = gents_store::config_client::ConfigAccess::local_managed_agent(
+            node.clone(),
+            ::identity::Did::new(agent.did()).unwrap(),
+            agent.as_ref(),
+        )
+        .unwrap();
         let mut published = std::collections::BTreeMap::new();
         let mut terminal_states = std::collections::BTreeMap::new();
         for (index, step) in trace["steps"].as_array().unwrap().iter().enumerate() {

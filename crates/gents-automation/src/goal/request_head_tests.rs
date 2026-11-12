@@ -597,20 +597,11 @@ async fn generated_goal_request_head_cases_drive_signed_row_selector() {
 #[tokio::test]
 async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() {
     use gents_store::config_client::ConfigAccess;
-    let temp = tempfile::tempdir().unwrap();
-    let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
-    let binding = gents_store::identity::provision_agent_identity(&identity).unwrap();
-    let agent = gents_store::identity::resolve_agent_identity(&identity, &binding).unwrap();
-    let node = std::sync::Arc::new(
-        defra_node::Node::builder()
-            .with_node_identity_did(identity.did())
-            .build()
-            .await
-            .unwrap(),
-    );
-    gents_store::schema::ensure_runtime_schemas(&node)
-        .await
-        .unwrap();
+    let (db, _user, _access, binding) =
+        crate::test_support::signed_test_node("task-assignment-root-fence").await;
+    let node = db.node.clone();
+    let identity = db.node_identity.clone();
+    let agent = gents_store::identity::resolve_agent_identity(identity.as_ref(), &binding).unwrap();
     let access = ConfigAccess::local_managed_agent(
         node.clone(),
         identity::Did::new(agent.did()).unwrap(),
