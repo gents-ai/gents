@@ -118,23 +118,6 @@ def messageInputCases : List MessageInputCase :=
   , ⟨"legacy_target_has_no_physical_binding", ⟨1, 10, true, true, some ⟨1, 10, 2, none⟩, some ⟨9, some 900⟩⟩⟩
   ]
 
-def messageInputCaseJson (c : MessageInputCase) : Json :=
-  let expected := match prepareMessageInput c.facts with
-    | .pending => Json.mkObj [("kind", toJson "pending")]
-    | .prepared reference => Json.mkObj [("kind", toJson "prepared"),
-        ("reference", reference.map referenceJson |>.getD Json.null)]
-  let observed := c.facts.observed.map fun a => Json.mkObj [
-    ("owner", toJson a.owner), ("session", toJson a.session),
-    ("goal", toJson a.goal), ("root", toJson a.root)]
-  Json.mkObj [("name", toJson c.name), ("owner", toJson c.facts.owner),
-    ("session", toJson c.facts.session), ("session_readable", toJson c.facts.sessionReadable),
-    ("observation_verified", toJson c.facts.observationVerified),
-    ("observed", observed.getD Json.null),
-    ("caller_reference", c.facts.callerReference.map referenceJson |>.getD Json.null),
-    ("expected", expected)]
-
-def messageInputCasesJson : String := (toJson (messageInputCases.map messageInputCaseJson)).compress
-
 example : messageInputCases.length = 5 := by decide
 
 def assignmentJson (a : Assignment) : Json :=
@@ -281,6 +264,39 @@ def persistedHistory : Family HistoryCase PersistedObservation where
   model := fun c =>
     { observation := ObservationWire.ofModel (observeHistory c.versions c.entry)
       handoffReason := historyHandoffReason (observeHistory c.versions c.entry) }
+
+structure MessageInputWire where
+  name : String
+  owner : Nat
+  session : Nat
+  sessionReadable : Bool
+  observationVerified : Bool
+  observed : Option Assignment
+  callerReference : Option Reference
+  deriving ToJson
+
+structure PreparedWire where
+  kind : String
+  reference : Option Reference
+  deriving ToJson
+
+def PreparedWire.ofModel : PreparedInput → PreparedWire
+  | .pending => ⟨"pending", none⟩
+  | .prepared reference => ⟨"prepared", reference⟩
+
+/-- The goal assignment `target_goal_assignment` selects for a session message,
+which planning signs and staging persists, over every message input case. -/
+@[conformance_family]
+def messageInput : Family MessageInputWire PreparedWire where
+  inputs := messageInputCases.map fun c =>
+    { name := c.name, owner := c.facts.owner, session := c.facts.session
+      sessionReadable := c.facts.sessionReadable
+      observationVerified := c.facts.observationVerified
+      observed := c.facts.observed, callerReference := c.facts.callerReference }
+  model := fun i => PreparedWire.ofModel (prepareMessageInput
+    ⟨i.owner, i.session, i.sessionReadable, i.observationVerified, i.observed, i.callerReference⟩)
+
+example : messageInputCases.all (·.facts.owner == 1) := by decide
 
 example : historyCases.length = 21 := by decide
 example : (historyCases.map fun c => observeHistory c.versions c.entry).take 2 =

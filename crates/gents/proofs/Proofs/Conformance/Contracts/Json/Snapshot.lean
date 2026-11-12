@@ -424,8 +424,6 @@ def snapshotGoalCasesJson : String :=
     ++ "\"state_machines\":"
       ++ jsonArray (stateMachines.map StateMachineContract.toJson) ++ ","
     ++ "\"pairing_reconcile_cases\":" ++ pairingReconcileCasesJson ++ ","
-    ++ "\"session_message_goal_input_cases\":"
-      ++ Conformance.GoalRequestAssignmentContracts.messageInputCasesJson ++ ","
     ++ "\"goal_delivery_input_cases\":"
       ++ Conformance.GoalDeliveryInput.json ++ ","
     ++ "\"goal_first_request_binding_cases\":"
