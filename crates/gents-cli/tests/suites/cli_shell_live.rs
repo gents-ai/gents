@@ -96,7 +96,7 @@ fn expect_text(session: &Session, text: &str, not: bool, within: Duration) -> Re
 
 /// The rows of the conversation as this binary lays them out on a `COLS` by `ROWS` terminal.
 fn conversation_rows(session: &Session) -> Result<Vec<String>> {
-    let wanted = App::connected(KeySet::Vim, COLS, ROWS, std::sync::mpsc::channel().0).wanted();
+    let wanted = App::connected(KeySet::Regular, COLS, ROWS, std::sync::mpsc::channel().0).wanted();
     let Screen::Shell(panes) = layout(COLS, ROWS, wanted) else {
         bail!("{COLS}x{ROWS} is too small for the shell");
     };
@@ -230,13 +230,11 @@ async fn request_reply(live: &Live, prompt: &str) -> Result<String> {
 
 fn quit_cleanly(shell: &Session) -> Result<()> {
     shell.execute(Operation::Write {
-        data: "\x1b".to_string(),
+        data: "\x11".to_string(),
     })?;
-    wait_for(shell, "NORMAL", KEYS)?;
-    shell.execute(Operation::Write {
-        data: ":q\r".to_string(),
+    shell.execute(Operation::WaitExit {
+        timeout_ms: Some(KEYS.as_millis() as u64),
     })?;
-    shell.execute(Operation::WaitExit { timeout_ms: None })?;
     let state = match shell.execute(Operation::State)? {
         OperationResult::State(state) => state,
         other => bail!("State returned {other:?}"),
