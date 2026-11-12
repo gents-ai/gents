@@ -67,6 +67,5 @@ def callbackRecoveryCasesJson : String :=
         ++ jsonStringArray (c.denied.journal.map fun e => e.state.toDefraDB)
       ++ ",\"retry_allowed_after_deny\":" ++ boolString c.retryAllowedAfterDeny ++ "}")
 
-def callbackTransitionCaseCount : Nat := Callback.Conformance.transitionCases.length
 
 end Conformance.Contracts

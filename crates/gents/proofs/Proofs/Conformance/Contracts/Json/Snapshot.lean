@@ -1125,7 +1125,6 @@ def snapshotFileCasesJson : String :=
       ++ workspaceCasesJson ++ ","
     ++ "\"workspace_binding_cases\":"
       ++ workspaceBindingCasesJson ++ ","
-    ++ "\"callback_transition_case_count\":" ++ toString callbackTransitionCaseCount ++ ","
     ++ "\"callback_transition_cases\":" ++ callbackTransitionCasesJson ++ ","
     ++ "\"callback_retry_cases\":" ++ callbackRetryCasesJson ++ ","
     ++ "\"callback_recovery_cases\":" ++ callbackRecoveryCasesJson ++ ","

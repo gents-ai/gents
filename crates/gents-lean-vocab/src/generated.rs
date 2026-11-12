@@ -3123,7 +3123,6 @@ pub struct LeanContractSnapshot {
     pub event_group_clock_cases: Vec<serde_json::Value>,
     pub event_group_capture_case_count: usize,
     pub event_group_capture_cases: Vec<serde_json::Value>,
-    pub callback_transition_case_count: usize,
     pub callback_transition_cases: Vec<LeanCallbackTransitionCase>,
     pub session_document_starter_verification_cases: Vec<serde_json::Value>,
     pub session_document_archive_cases: Vec<serde_json::Value>,
