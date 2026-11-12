@@ -820,6 +820,7 @@ mod tests {
             control_targets: Vec::new(),
             resume_targets: Vec::new(),
             resume_facts: facts(),
+            caller_node_did: None,
         }
     }
 

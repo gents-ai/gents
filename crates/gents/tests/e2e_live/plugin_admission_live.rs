@@ -335,7 +335,7 @@ async fn spawn_cwd_with_dotdot_symlink_or_outside_caller_cwd_fails_closed_with_n
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn job_plan_addressed_to_a_peer_agent_is_refused_before_any_child() {
+async fn job_plan_addressed_to_a_peer_agent_is_refused_and_the_turn_completes() {
     let h = LiveJobs::boot("live-job-peer-policy").await;
     let peer = test_db("live-job-peer-target").await;
     h.live
@@ -354,15 +354,19 @@ async fn job_plan_addressed_to_a_peer_agent_is_refused_before_any_child() {
         )
         .await;
     let name = "live-job-peer-refusal";
-    h.submit_job(
-        name,
-        name,
-        holding_plan("peer", vec![spawn("a", "Acknowledge briefly.")]).await,
-    )
-    .await;
-    assert_eq!(
-        wait_for_request_terminal(&h.live.access, name, Duration::from_secs(120)).await,
-        "failed"
+    let row = h
+        .invoke(
+            name,
+            holding_plan("peer", vec![spawn("a", "Acknowledge briefly.")]).await,
+        )
+        .await;
+    h.refusal(&row, "plugin_job_policy_denied").await;
+    let refusal = h.result(&row).await;
+    assert!(
+        refusal["next"]
+            .as_str()
+            .is_some_and(|next| next.contains("agent_new")),
+        "the refusal names the call for work on a peer: {refusal}"
     );
     let calls = h.live.access.execute(&format!(
         r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{}"}}, tool_name: {{_eq: "job_fixture"}}}}) {{_docID}} }}"#,
