@@ -1092,98 +1092,6 @@ pub struct LeanAuxiliaryOutputExpected {
     pub public_view: LeanCanonicalOutputView,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanAuxiliarySessionChildBindingCase {
-    pub allowed: bool,
-    pub authenticated: String,
-    pub binding: LeanAuxiliarySessionChildBindingCaseBinding,
-    pub committed: bool,
-    pub creator: String,
-    pub grant_ok: bool,
-    pub initial_parent_granted: bool,
-    pub initial_parent_linked: bool,
-    pub mark_ok: bool,
-    pub name: String,
-    pub native_owner: Option<String>,
-    pub parent_granted: bool,
-    pub parent_linked: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanAuxiliarySessionChildBindingCaseBinding {
-    pub actor: String,
-    #[serde(rename = "auxiliaryAgent")]
-    pub auxiliary_agent: String,
-    #[serde(rename = "auxiliaryDoc")]
-    pub auxiliary_doc: String,
-    #[serde(rename = "auxiliaryId")]
-    pub auxiliary_id: String,
-    #[serde(rename = "auxiliaryNode")]
-    pub auxiliary_node: String,
-    #[serde(rename = "auxiliaryPresent")]
-    pub auxiliary_present: bool,
-    #[serde(rename = "auxiliaryPurpose")]
-    pub auxiliary_purpose: String,
-    #[serde(rename = "auxiliaryRequester")]
-    pub auxiliary_requester: String,
-    #[serde(rename = "auxiliarySession")]
-    pub auxiliary_session: String,
-    #[serde(rename = "auxiliaryShapeValid")]
-    pub auxiliary_shape_valid: bool,
-    #[serde(rename = "auxiliarySignatureValid")]
-    pub auxiliary_signature_valid: bool,
-    #[serde(rename = "childAgent")]
-    pub child_agent: String,
-    #[serde(rename = "childNode")]
-    pub child_node: String,
-    #[serde(rename = "childRequestDoc")]
-    pub child_request_doc: String,
-    #[serde(rename = "childRequester")]
-    pub child_requester: Option<String>,
-    #[serde(rename = "childSession")]
-    pub child_session: String,
-    #[serde(rename = "childSessionDoc")]
-    pub child_session_doc: String,
-    pub collection: String,
-    #[serde(rename = "linkedParentDoc")]
-    pub linked_parent_doc: String,
-    #[serde(rename = "linkedParentId")]
-    pub linked_parent_id: String,
-    #[serde(rename = "parentAgent")]
-    pub parent_agent: String,
-    #[serde(rename = "parentDoc")]
-    pub parent_doc: String,
-    #[serde(rename = "parentId")]
-    pub parent_id: String,
-    #[serde(rename = "parentNode")]
-    pub parent_node: String,
-    #[serde(rename = "parentPresent")]
-    pub parent_present: bool,
-    #[serde(rename = "parentPurpose")]
-    pub parent_purpose: String,
-    #[serde(rename = "parentRequester")]
-    pub parent_requester: Option<String>,
-    #[serde(rename = "parentSession")]
-    pub parent_session: String,
-    #[serde(rename = "parentSignatureValid")]
-    pub parent_signature_valid: bool,
-    #[serde(rename = "sessionAgent")]
-    pub session_agent: String,
-    #[serde(rename = "sessionDoc")]
-    pub session_doc: String,
-    #[serde(rename = "sessionId")]
-    pub session_id: String,
-    #[serde(rename = "sessionNode")]
-    pub session_node: String,
-    #[serde(rename = "sessionRequester")]
-    pub session_requester: Option<String>,
-    pub source: String,
-    #[serde(rename = "sourceParentId")]
-    pub source_parent_id: String,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct LeanBackendCaptureScopeCase {
     pub persisted: Vec<u64>,
@@ -3013,10 +2921,8 @@ pub struct LeanContractSnapshot {
     pub identity_readiness_settled_cases: Vec<LeanIdentityReadinessSettledCase>,
     pub identity_startup_readiness_cases: Vec<LeanIdentityStartupReadinessCase>,
     pub goal_link_cases: Vec<LeanGoalLinkCase>,
-    pub remote_agent_delivery_cases: Vec<LeanRemoteAgentDeliveryCase>,
     pub remote_agent_delivery_recovery_cases: Vec<serde_json::Value>,
     pub remote_agent_delivery_response_cases: Vec<serde_json::Value>,
-    pub remote_agent_delivery_claim_cases: Vec<LeanRemoteAgentDeliveryClaimCase>,
     pub cross_actor_authorization_cases: Vec<LeanCrossActorAuthorizationCase>,
     pub client_telemetry_cases: Vec<serde_json::Value>,
     pub client_settings_cases: LeanClientSettingsCases,
@@ -3312,8 +3218,6 @@ pub struct LeanContractSnapshot {
     pub compaction_canonical_projection_cases: Vec<LeanCanonicalCompactionCase>,
     pub repaired_projection_admission_cases: Vec<LeanRepairedProjectionCase>,
     pub rendered_capture_key_cases: Vec<LeanRenderedCaptureKeyCase>,
-    pub auxiliary_session_child_binding_cases: Vec<LeanAuxiliarySessionChildBindingCase>,
-    pub client_request_publication_cases: Vec<serde_json::Value>,
     pub capture_scope_cases: Vec<LeanCaptureScopeCase>,
     pub capture_order_cases: Vec<LeanCaptureOrderCase>,
     pub aggregate_token_budget_cases: Vec<LeanAggregateTokenBudgetCase>,
@@ -9967,109 +9871,6 @@ pub struct LeanReductionAdmission {
 pub struct LeanRehydratedBudget {
     pub limit: u64,
     pub used: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRemoteAgentDeliveryCase {
-    pub confirmed: bool,
-    pub create_succeeded: bool,
-    pub existing: Option<LeanRemoteAgentDeliveryCaseExisting>,
-    pub intent: LeanRemoteAgentDeliveryCaseIntent,
-    pub name: String,
-    pub persisted: bool,
-    pub response_verified: bool,
-    pub result: String,
-    pub working_grant: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRemoteAgentDeliveryCaseExisting {
-    pub intent: LeanRemoteAgentDeliveryCaseExistingIntent,
-    pub owner: String,
-    pub request_doc_id: String,
-    pub working_agent: String,
-    pub working_grant: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRemoteAgentDeliveryCaseExistingIntent {
-    pub digest: String,
-    pub key: String,
-    pub sender: String,
-    pub target: String,
-    pub target_agent_doc_id: String,
-    pub target_session_doc_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRemoteAgentDeliveryCaseIntent {
-    pub digest: String,
-    pub key: String,
-    pub sender: String,
-    pub target: String,
-    pub target_agent_doc_id: String,
-    pub target_session_doc_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRemoteAgentDeliveryClaimCase {
-    pub atomic_requester_authorization: bool,
-    pub claim: bool,
-    pub commit_agent_invoke: bool,
-    pub commit_node_permission: bool,
-    pub commit_session_permission: bool,
-    pub decision: LeanCrossActorDecision,
-    pub document_visible: bool,
-    pub name: String,
-    pub native_committed: bool,
-    pub observation: LeanRemoteAgentDeliveryClaimCaseObservation,
-    pub record: LeanRemoteAgentDeliveryClaimCaseRecord,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRemoteAgentDeliveryClaimCaseObservation {
-    pub agent_document: String,
-    pub agent_invoke: bool,
-    pub authenticated_author: String,
-    pub document: String,
-    pub executing_agent: String,
-    pub node_permission_enforced: bool,
-    pub owner: String,
-    pub requester_node_permission: bool,
-    pub session: String,
-    pub session_permission: bool,
-    pub signature_valid: bool,
-    pub supported: bool,
-    pub targets_visible: bool,
-    pub transient_failure: bool,
-    pub visible: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRemoteAgentDeliveryClaimCaseRecord {
-    pub intent: LeanRemoteAgentDeliveryClaimCaseRecordIntent,
-    pub owner: String,
-    pub request_doc_id: String,
-    pub working_agent: String,
-    pub working_grant: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRemoteAgentDeliveryClaimCaseRecordIntent {
-    pub digest: String,
-    pub key: String,
-    pub sender: String,
-    pub target: String,
-    pub target_agent_doc_id: String,
-    pub target_session_doc_id: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]

@@ -2562,6 +2562,21 @@ def caseCoverage : List CoverageEntry :=
 
   , tagged (consumerCoverage "discovery_guidance_cases" "DiscoveryGuidanceCases")
       "prompt-assembly" [Surface.agentFacing]
+  , tagged (followUpCoverage "family" "remote_delivery_delivery_unreached"
+      "model-production-gap: no production path reaches these emitted cases yet (every case: production refuses delivery to another runtime until the authenticated HTTP delivery path exists (plan_with_delivery), so remote creation, the working-agent grant and response confirmation have no production owner)")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "remote_delivery_claim_unreached"
+      "model-production-gap: no production path reaches these emitted cases yet (every case: production never creates a request from another runtime, so no claim transaction observes the remote sender's session, invoke or node permission)")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "session_child_child_scope_binding_unreached"
+      "model-production-gap: no production path reaches these emitted cases yet (absent_session_requester, foreign_collection, foreign_physical_session, empty_physical_session, foreign_child_agent, invalid_auxiliary_signature, invalid_auxiliary_shape, foreign_auxiliary_requester, foreign_auxiliary_node, foreign_auxiliary_session, foreign_auxiliary_agent, missing_parent, invalid_parent_signature, parent_not_normal, foreign_parent_document, foreign_parent_id, foreign_runtime_source, foreign_parent_node, foreign_parent_session, foreign_parent_agent, foreign_parent_requester, absent_parent_requester, missing_native_owner, foreign_native_owner, foreign_creator, foreign_authenticated_creator, failed_grant, failed_marker, uncommitted, completed_then_revoked: the served binding fixture writes the session, signed parent and auxiliary request through their production writers and cannot forge their signed contents, owners or collection)")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "session_child_child_scope_repair_unreached"
+      "model-production-gap: no production path reaches these emitted cases yet (every case except paired_title_segment, missing_parent, invalid_parent_signature, foreign_native_owner and completed_then_revoked: the served repair fixture cannot fail a native grant or marker write, leave the child uncommitted, or forge binding fields of signed rows)")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "session_child_client_request_recovery_unreached"
+      "model-production-gap: no production path reaches these emitted cases yet (grant_failed, wrong_signature, already_completed_revoked: the served retry fixture cannot fail the working Agent grant or marker, sign a mismatched request, or start from a completed publication whose grant was revoked)")
+      "identity-permission" [Surface.runtimeInternal]
   ]
 
 def followUpHookCoverage : List CoverageEntry :=

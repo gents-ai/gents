@@ -1,3 +1,5 @@
+import Proofs.Conformance.Identity.SessionChild
+import Proofs.Conformance.RemoteDelivery
 import Proofs.Conformance.Views
 import Proofs.Conformance.AgentViews
 import Proofs.Conformance.InferenceViews
@@ -310,12 +312,8 @@ def snapshotCaptureTailJson : String :=
       ++ repairedProjectionAdmissionCasesJson ++ ","
     ++ "\"rendered_capture_key_cases\":"
       ++ renderedCaptureKeyCasesJson ++ ","
-    ++ "\"auxiliary_session_child_binding_cases\":"
-      ++ Identity.SessionChild.childScopeCasesJson ++ ","
     ++ "\"goal_link_cases\":"
       ++ Identity.SessionChild.goalLinkCasesJson ++ ","
-    ++ "\"client_request_publication_cases\":"
-      ++ Identity.SessionChild.clientRequestPublicationCasesJson ++ ","
     ++ "\"capture_scope_cases\":"
       ++ captureScopeCasesJson ++ ","
     ++ "\"capture_order_cases\":"
@@ -929,9 +927,7 @@ def snapshotRuntimeCasesJson : String :=
       ++ jsonArray (QueuedSteering.guardObservations.map queuedSteeringGuardJson) ++ ","
     ++ "\"agent_delivery_cases\":"
       ++ jsonArray (QueuedSteering.agentDeliveryCases.map agentDeliveryCaseJson) ++ ","
-    ++ "\"remote_agent_delivery_cases\":" ++ Request.RemoteDelivery.casesJson ++ ","
     ++ "\"remote_agent_delivery_recovery_cases\":" ++ Request.RemoteDelivery.recoveryCasesJson ++ ","
-    ++ "\"remote_agent_delivery_claim_cases\":" ++ Request.RemoteDelivery.claimCasesJson ++ ","
     ++ "\"cross_actor_authorization_cases\":" ++ Request.CrossActorAuthorization.casesJson ++ ","
     ++ "\"remote_agent_delivery_response_cases\":" ++ Request.RemoteDelivery.responseCasesJson ++ ","
     ++ "\"interrupt_delivery_cases\":"
