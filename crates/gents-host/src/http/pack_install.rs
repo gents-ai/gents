@@ -419,11 +419,10 @@ async fn install_owned(
         dependency_variables: request.dependency_variables,
         preview: request.preview,
         force_rebind_concrete_did: request.force_rebind,
-        edited: match (request.overwrite, request.keep) {
-            (true, _) => gents_protocol::operations::pack::EditedDocuments::Overwrite,
-            (false, true) => gents_protocol::operations::pack::EditedDocuments::Keep,
-            (false, false) => gents_protocol::operations::pack::EditedDocuments::Refuse,
-        },
+        edited: gents_protocol::operations::pack::EditedDocuments::of_switches(
+            request.overwrite,
+            request.keep,
+        ),
         grant_authority: request.grant_authority,
         wire: request.wire,
     };

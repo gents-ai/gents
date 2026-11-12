@@ -61,6 +61,16 @@ impl EditedDocuments {
             Some(other) => Err(PackOperationError::EditedWord(other.to_owned())),
         }
     }
+
+    /// The decision of a caller's overwrite and keep switches. A caller
+    /// refuses both together before it asks; overwrite wins here.
+    pub fn of_switches(overwrite: bool, keep: bool) -> Self {
+        match (overwrite, keep) {
+            (true, _) => Self::Overwrite,
+            (false, true) => Self::Keep,
+            (false, false) => Self::Refuse,
+        }
+    }
 }
 
 /// Lean `Pack.Operations.Digest`.
@@ -167,39 +177,6 @@ impl PackChangeInput {
     }
 }
 
-/// Which admission check refused a pack operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PackRefusal {
-    PreviewRequired,
-    DigestChanged,
-    EditedUndecided,
-    InvalidInput,
-}
-
-impl PackRefusal {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::PreviewRequired => "preview_required",
-            Self::DigestChanged => "digest_changed",
-            Self::EditedUndecided => "edited_undecided",
-            Self::InvalidInput => "invalid_input",
-        }
-    }
-}
-
-/// A preview's answer: the receipt the commit would return, or the refusal it
-/// would raise with that error's message and next call.
-#[derive(Debug, Clone, PartialEq)]
-pub enum PackOutcome<R> {
-    Admitted(R),
-    Refused {
-        refusal: PackRefusal,
-        message: String,
-        next_call: NextCall,
-    },
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum PackOperationError {
     #[error("pack name must not be blank")]
@@ -271,39 +248,6 @@ impl PackOperationError {
                 resource: "pack",
                 verb: operation.as_str(),
             },
-        }
-    }
-
-    pub fn refusal(&self) -> Option<PackRefusal> {
-        match self {
-            Self::PreviewRequired(_) => Some(PackRefusal::PreviewRequired),
-            Self::DigestChanged { .. } => Some(PackRefusal::DigestChanged),
-            Self::EditedUndecided { .. } => Some(PackRefusal::EditedUndecided),
-            Self::PackageBlank
-            | Self::EditedWord(_)
-            | Self::VariableMalformed(_)
-            | Self::VariableName(_)
-            | Self::VariableInference(_)
-            | Self::VariableTooLarge(_)
-            | Self::VariableDuplicate(_)
-            | Self::TooManyVariables
-            | Self::TooManySlots
-            | Self::SlotMalformed(_)
-            | Self::SlotDuplicate(_) => Some(PackRefusal::InvalidInput),
-            Self::Passthrough(_) => None,
-        }
-    }
-
-    /// An admission refusal becomes the successful refused answer of a
-    /// preview; any other failure stays an error.
-    pub fn preview_outcome<R>(self, operation: PackOperation) -> Result<PackOutcome<R>, Self> {
-        match self.refusal() {
-            Some(refusal) => Ok(PackOutcome::Refused {
-                refusal,
-                next_call: self.recovery(operation),
-                message: crate::error_chain::ErrorChain(&self).to_string(),
-            }),
-            None => Err(self),
         }
     }
 
