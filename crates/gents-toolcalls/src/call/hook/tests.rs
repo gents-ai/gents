@@ -2704,3 +2704,83 @@ async fn generated_background_process_identity_cases_cancel_only_the_physical_in
         drop(sibling_reservation);
     }
 }
+
+#[tokio::test]
+async fn owned_input_handoff_publishes_context_and_prompt_once_before_provider_output() {
+    use gents_session::test_support::{fixture, fixture_access, fixture_query};
+    use gents_loop::loop_stream::LoopStreamItem;
+    use gents_loop::stream_processor::StreamProcessor;
+    use gents_protocol::message::Message;
+    let (node, path, mut lifecycle, writer) = fixture("owned-input").await;
+    let request_doc_id = lifecycle.request().doc_id.clone();
+    let hook = crate::call::hook::DefraSessionHook::with_identity(
+        node.clone(),
+        &lifecycle.request().node_did,
+        crate::call::hook::FailurePolicy::default(),
+    );
+    assert!(gents_session::session::load_history_with_access(
+        &fixture_access(&node, &lifecycle),
+        "session-owned-input",
+        &lifecycle.request().node_did,
+        lifecycle.request().requester_did.as_deref()
+    )
+    .await
+    .unwrap()
+    .is_empty());
+    let context = Message::user("request context");
+    let prompt = Message::user("queued prompt ✓");
+    {
+        let mut processor = StreamProcessor::new(
+            &hook,
+            &writer,
+            &mut lifecycle,
+            &request_doc_id,
+            gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+        );
+        for _ in 0..2 {
+            processor
+                .process_item(Ok(LoopStreamItem::AuthoredInputReady {
+                    context: Some(context.clone()),
+                    prompt: prompt.clone(),
+                    folded: Vec::new(),
+                    reply: tokio::sync::oneshot::channel().0,
+                }))
+                .await
+                .unwrap();
+        }
+    }
+    assert_eq!(
+        gents_session::session::load_history_with_access(
+            &fixture_access(&node, &lifecycle),
+            "session-owned-input",
+            &lifecycle.request().node_did,
+            lifecycle.request().requester_did.as_deref()
+        )
+        .await
+        .unwrap(),
+        vec![context, prompt]
+    );
+    let response = fixture_query(
+        &fixture_access(&node, &lifecycle),
+        "{AgentMessage(order:{sequence: ASC}){message_key request_doc_id sequence}}",
+    )
+    .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let rows = response.data.unwrap()["AgentMessage"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["request_doc_id"], request_doc_id);
+    assert_eq!(rows[1]["request_doc_id"], request_doc_id);
+    assert_eq!(
+        rows[0]["message_key"],
+        format!("authored:{request_doc_id}:context")
+    );
+    assert_eq!(
+        rows[1]["message_key"],
+        format!("authored:{request_doc_id}:prompt")
+    );
+    node.shutdown().await.expect("shut down test node");
+    drop(path);
+}

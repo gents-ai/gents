@@ -1,86 +1,4 @@
-use gents_session::request::lifecycle::{ClaimOutcome, RequestLifecycle};
-use gents_session::request::streaming::*;
 use gents_session::test_support::{fixture, fixture_access, fixture_query};
-use std::{sync::Arc, time::Duration};
-
-#[tokio::test]
-async fn owned_input_handoff_publishes_context_and_prompt_once_before_provider_output() {
-    use gents_loop::loop_stream::LoopStreamItem;
-    use gents_loop::stream_processor::StreamProcessor;
-    use gents_protocol::message::Message;
-    let (node, path, mut lifecycle, writer) = fixture("owned-input").await;
-    let request_doc_id = lifecycle.request().doc_id.clone();
-    let hook = gents_toolcalls::call::hook::DefraSessionHook::with_identity(
-        node.clone(),
-        &lifecycle.request().node_did,
-        gents_toolcalls::call::hook::FailurePolicy::default(),
-    );
-    assert!(gents_session::session::load_history_with_access(
-        &fixture_access(&node, &lifecycle),
-        "session-owned-input",
-        &lifecycle.request().node_did,
-        lifecycle.request().requester_did.as_deref()
-    )
-    .await
-    .unwrap()
-    .is_empty());
-    let context = Message::user("request context");
-    let prompt = Message::user("queued prompt ✓");
-    {
-        let mut processor = StreamProcessor::new(
-            &hook,
-            &writer,
-            &mut lifecycle,
-            &request_doc_id,
-            gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
-        );
-        for _ in 0..2 {
-            processor
-                .process_item(Ok(LoopStreamItem::AuthoredInputReady {
-                    context: Some(context.clone()),
-                    prompt: prompt.clone(),
-                    folded: Vec::new(),
-                    reply: tokio::sync::oneshot::channel().0,
-                }))
-                .await
-                .unwrap();
-        }
-    }
-    assert_eq!(
-        gents_session::session::load_history_with_access(
-            &fixture_access(&node, &lifecycle),
-            "session-owned-input",
-            &lifecycle.request().node_did,
-            lifecycle.request().requester_did.as_deref()
-        )
-        .await
-        .unwrap(),
-        vec![context, prompt]
-    );
-    let response = fixture_query(
-        &fixture_access(&node, &lifecycle),
-        "{AgentMessage(order:{sequence: ASC}){message_key request_doc_id sequence}}",
-    )
-    .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    let rows = response.data.unwrap()["AgentMessage"]
-        .as_array()
-        .unwrap()
-        .clone();
-    assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0]["request_doc_id"], request_doc_id);
-    assert_eq!(rows[1]["request_doc_id"], request_doc_id);
-    assert_eq!(
-        rows[0]["message_key"],
-        format!("authored:{request_doc_id}:context")
-    );
-    assert_eq!(
-        rows[1]["message_key"],
-        format!("authored:{request_doc_id}:prompt")
-    );
-    node.shutdown().await.expect("shut down test node");
-    drop(path);
-}
 
 #[tokio::test]
 async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
@@ -161,7 +79,7 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
     assert_eq!(a.accepted_header_doc_id, first.message_doc_id);
 
     let deadline = lifecycle.claimed_deadline_at().unwrap();
-    let mut first_dispatch = gents_toolcalls::call::lifecycle::ToolCallLifecycle::from_accepted(
+    let mut first_dispatch = crate::call::lifecycle::ToolCallLifecycle::from_accepted(
         node.clone(),
         lifecycle.request().node_did.clone(),
         lifecycle.request().requester_did.clone(),
@@ -170,7 +88,7 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
         gents_protocol::tool_call::AwaitMode::Foreground,
     )
     .unwrap();
-    let mut replay_dispatch = gents_toolcalls::call::lifecycle::ToolCallLifecycle::from_accepted(
+    let mut replay_dispatch = crate::call::lifecycle::ToolCallLifecycle::from_accepted(
         node.clone(),
         lifecycle.request().node_did.clone(),
         lifecycle.request().requester_did.clone(),
