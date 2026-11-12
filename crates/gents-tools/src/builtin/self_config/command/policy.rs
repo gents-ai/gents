@@ -663,29 +663,20 @@ mod tests {
     #[test]
     fn modeled_policy_exposure_controls_the_resource() {
         for case in &gents_lean_vocab::lean_contract_snapshot().policy_resource_exposure_cases {
-            let categories = case["categories"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|value| value.as_str().unwrap().to_owned())
-                .collect::<BTreeSet<_>>();
+            let categories = case.categories.iter().cloned().collect::<BTreeSet<_>>();
             let exposed = model_resources(&categories, false).contains(&"policy");
-            assert_eq!(
-                exposed,
-                case["exposed"].as_bool().unwrap(),
-                "{categories:?}"
-            );
+            assert_eq!(exposed, case.exposed, "{categories:?}");
         }
     }
 
     #[test]
     fn modeled_lockout_guard_matches_the_grant_owner() {
         let lean = gents_lean_vocab::lean_contract_snapshot();
-        let protected = lean.policy_lockout_cases["protected"]
-            .as_array()
-            .unwrap()
+        let protected = lean
+            .policy_lockout_cases
+            .protected
             .iter()
-            .map(|value| value.as_str().unwrap().to_owned())
+            .cloned()
             .collect::<BTreeSet<_>>();
         let owned = GrantSet::AgentBaseline
             .permissions()
@@ -694,18 +685,18 @@ mod tests {
             .map(|permission| permission.as_str().to_owned())
             .collect::<BTreeSet<_>>();
         assert_eq!(owned, protected);
-        for row in lean.policy_lockout_cases["rows"].as_array().unwrap() {
-            let permission = NodePermission::parse(row["permission"].as_str().unwrap())
-                .expect("modeled permission");
+        for row in &lean.policy_lockout_cases.rows {
+            let permission =
+                NodePermission::parse(row.permission.as_str()).expect("modeled permission");
             assert_eq!(
                 keeps_lockout(
-                    row["no_lockout"].as_bool().unwrap(),
-                    row["is_self"].as_bool().unwrap(),
-                    row["delete"].as_bool().unwrap(),
+                    row.no_lockout,
+                    row.is_self,
+                    row.delete,
                     &PolicyTarget::Node(permission),
                 ),
-                row["kept"].as_bool().unwrap(),
-                "{row}"
+                row.kept,
+                "{row:?}"
             );
         }
     }
