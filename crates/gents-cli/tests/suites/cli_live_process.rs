@@ -214,20 +214,28 @@ pub async fn spawn_server_with_ready_json(
     ))
 }
 
-pub fn release_fifo(path: &Path) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        std::fs::OpenOptions::new()
-            .write(true)
-            .custom_flags(libc::O_NONBLOCK)
-            .open(path)?
-            .write_all(b"released\n")?;
-        Ok(())
-    }
-    #[cfg(not(unix))]
-    anyhow::bail!("live steering requires Unix FIFOs: {}", path.display())
+pub async fn fifo_writer(path: &Path) -> Result<std::fs::File> {
+    let path = path.to_owned();
+    tokio::task::spawn_blocking(move || {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            Ok(std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(path)?)
+        }
+        #[cfg(not(unix))]
+        anyhow::bail!("live steering requires Unix FIFOs: {}", path.display())
+    })
+    .await?
+}
+
+pub fn release_fifo(mut writer: std::fs::File) -> Result<()> {
+    use std::io::Write;
+    writer.write_all(b"released\n")?;
+    Ok(())
 }
 
 pub async fn run_desktop_init_json(home: &Path, desktop_home: &Path, label: &str) -> Result<Value> {

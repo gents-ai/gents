@@ -1032,11 +1032,12 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
     use tokio::process::Child;
 
     struct ChildGuard(Option<Child>);
-    struct Release(std::path::PathBuf);
+    struct Release(Option<std::fs::File>);
     impl Drop for Release {
         fn drop(&mut self) {
-            let release = self.0.clone();
-            tokio::task::spawn_blocking(move || live_process::release_fifo(&release));
+            if let Some(writer) = self.0.take() {
+                tokio::task::spawn_blocking(move || live_process::release_fifo(writer));
+            }
         }
     }
     fn entries(snapshot: &Value) -> impl Iterator<Item = &Value> {
@@ -1088,7 +1089,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         .status()
         .await?;
     anyhow::ensure!(fifo_status.success(), "creating steering release FIFO");
-    let _release_on_failure = Release(release.clone());
+    let mut release_on_failure = Release(Some(live_process::fifo_writer(&release).await?));
 
     let token = |label: &str| format!("{label}-{}", Uuid::new_v4().simple());
     let marker = |token: &str| format!("Include the exact token {token} in your final answer.");
@@ -1437,8 +1438,11 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         "submit --wait exited before the held tool was released"
     );
 
-    let release_path = release.clone();
-    tokio::task::spawn_blocking(move || live_process::release_fifo(&release_path)).await??;
+    let writer = release_on_failure
+        .0
+        .take()
+        .context("steering FIFO writer")?;
+    tokio::task::spawn_blocking(move || live_process::release_fifo(writer)).await??;
     let first_result = wait_child(first.0.take().unwrap(), "first request submit --wait").await?;
     let waited = wait_child(waiter.0.take().unwrap(), "edited message's submit --wait").await?;
     assert_eq!(
