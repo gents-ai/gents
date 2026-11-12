@@ -102,6 +102,27 @@ where
         .is_some_and(|grant| grant.scope == input.current && grant.action == input.action)
 }
 
+/// A stored selection is addressed by its host consent key. That key names the
+/// agent and workspace default entry, or one session's own entry. A request
+/// resolves to its own session's entry when one is stored and otherwise to the
+/// default entry: an absent entry leaves the workspace consent layer
+/// disengaged under the configured ceiling, so a session that has made no
+/// selection must not lose the gate its default configured. A sibling
+/// session's key is never looked up, so its selection cannot be inherited.
+pub fn resolve<'a, E, K, F>(
+    entries: &'a [E],
+    session: Option<&K>,
+    default: &K,
+    key: F,
+) -> Option<&'a E>
+where
+    K: PartialEq,
+    F: for<'b> Fn(&'b E) -> &'b K,
+{
+    let find = |wanted: &K| entries.iter().find(|entry| key(entry) == wanted);
+    session.and_then(find).or_else(|| find(default))
+}
+
 pub fn approval_scope_matches<W>(available: &[Scope<W>], expected: &Scope<W>) -> bool
 where
     W: PartialEq,
@@ -319,6 +340,59 @@ mod tests {
                     assert!(!case.changed);
                 }
             }
+        }
+    }
+
+    #[derive(Debug, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct ResolutionKey {
+        workspace: u64,
+        session: Option<u64>,
+    }
+
+    #[derive(Debug, Deserialize, PartialEq, Eq)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct ResolutionEntry {
+        key: ResolutionKey,
+        preference: Preference<u64>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase", deny_unknown_fields)]
+    struct ResolutionCase {
+        entries: Vec<ResolutionEntry>,
+        workspace: u64,
+        session: Option<u64>,
+        bound: ResolutionKey,
+        resolved: Option<ResolutionEntry>,
+        admits: bool,
+    }
+
+    #[test]
+    fn generated_workspace_permission_resolution_cases() {
+        #[derive(Deserialize)]
+        struct Resolutions {
+            workspace_permission_resolution_cases: Vec<ResolutionCase>,
+        }
+        let snapshot: Resolutions = gents_lean_contract::load_contract_snapshot().unwrap();
+        assert_eq!(snapshot.workspace_permission_resolution_cases.len(), 1024);
+        for case in snapshot.workspace_permission_resolution_cases {
+            let session = case.session.map(|session| ResolutionKey {
+                workspace: case.workspace,
+                session: Some(session),
+            });
+            let default = ResolutionKey {
+                workspace: case.workspace,
+                session: None,
+            };
+            let resolved = resolve(&case.entries, session.as_ref(), &default, |entry| {
+                &entry.key
+            });
+            assert_eq!(resolved, case.resolved.as_ref());
+            assert_eq!(
+                resolved.map(|entry| &entry.key) == Some(&case.bound),
+                case.admits
+            );
         }
     }
 

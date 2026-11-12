@@ -433,6 +433,7 @@ def snapshotGoalMutationCasesJson : String :=
     ++ "\"goal_session_fold_cases\":" ++ Conformance.GoalSessionObservationContracts.foldCasesJson ++ ","
     ++ "\"workspace_permission_write_cases\":" ++ workspacePermissionWriteCasesJson ++ ","
     ++ "\"workspace_permission_cases\":" ++ workspacePermissionCasesJson ++ ","
+    ++ "\"workspace_permission_resolution_cases\":" ++ workspacePermissionResolutionCasesJson ++ ","
     ++ "\"workspace_command_root_cases\":" ++ Conformance.WorkspaceCommandRoot.casesJson.compress ++ ","
     ++ "\"operator_path_cases\":" ++ Conformance.OperatorPaths.casesJson.compress ++ ","
     ++ "\"access_review_cases\":" ++ Conformance.AccessReview.casesJson.compress ++ ","

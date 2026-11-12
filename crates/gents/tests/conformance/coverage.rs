@@ -780,6 +780,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             !snapshot.workspace_permission_cases.is_empty(),
         ),
         (
+            "workspace_permission_resolution_cases",
+            "WorkspacePermissionResolutionCases",
+            !snapshot.workspace_permission_resolution_cases.is_empty(),
+        ),
+        (
             "access_review_cases",
             "AccessReviewCases",
             !snapshot.access_review_cases.is_empty(),

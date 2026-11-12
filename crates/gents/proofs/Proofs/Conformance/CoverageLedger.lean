@@ -2494,6 +2494,12 @@ def caseCoverage : List CoverageEntry :=
       "Generated decisions drive the shared path guard with real files, hard links, nested approval queues, missing targets and failed filesystem inspection. File-tool regressions verify that both reads and writes reject operator aliases before touching contents. Filesystem handle identity and concurrent external namespace changes remain native premises.")
       "tool-policy" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "workspace_permission_resolution_cases"
+      "WorkspacePermissionResolutionCases"
+      "tool_policy::workspace_permissions::tests::generated_workspace_permission_resolution_cases"
+      "Generated stores bind which selection governs a request: the session's own entry, otherwise the agent and workspace default, never a sibling session's, and never nothing while a default is stored. Readmission of a bound key is bound too. The host premises are outside the model: the file lock and duplicate-key guard over the preference store, canonical node, requester, agent and folder identity in the key, and the ACP-authorized AgentSession the editor's session label is resolved against.")
+      "tool-policy" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "workspace_permission_cases"
       "WorkspacePermissionCases"
       "tool_policy::workspace_permissions::tests::generated_workspace_permission_cases"

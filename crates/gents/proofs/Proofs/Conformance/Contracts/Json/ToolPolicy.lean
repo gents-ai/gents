@@ -29,6 +29,34 @@ def workspacePermissionWriteCasesJson : String :=
     ++ ",\"changed\":" ++ (if result.changed then "true" else "false")
     ++ ",\"next\":" ++ permissionOptionalPreferenceJson result.next ++ "}")
 
+private def permissionKeyJson (key : ToolPolicy.WorkspacePermissions.Key) : Lean.Json :=
+  Lean.Json.mkObj [
+    ("workspace", Lean.toJson key.workspace),
+    ("session", match key.session with | none => Lean.Json.null | some value => Lean.toJson value)]
+
+private def permissionEntryJson (entry : ToolPolicy.WorkspacePermissions.Entry) : Lean.Json :=
+  Lean.Json.mkObj [
+    ("key", permissionKeyJson entry.key),
+    ("preference", Lean.Json.mkObj [
+      ("revision", Lean.toJson entry.preference.revision),
+      ("mode", Lean.toJson entry.preference.mode.wireName),
+      ("reviewTask", match entry.preference.reviewTask with
+        | none => Lean.Json.null
+        | some task => Lean.toJson task)])]
+
+def workspacePermissionResolutionCasesJson : String :=
+  jsonArray (ToolPolicy.WorkspacePermissions.resolutionCases.map fun witness =>
+    let resolved := ToolPolicy.WorkspacePermissions.resolve witness.entries witness.workspace witness.session
+    let admits := ToolPolicy.WorkspacePermissions.resolutionAdmits witness.entries witness.workspace
+      witness.session witness.bound
+    (Lean.Json.mkObj [
+      ("entries", Lean.Json.arr (witness.entries.map permissionEntryJson).toArray),
+      ("workspace", Lean.toJson witness.workspace),
+      ("session", match witness.session with | none => Lean.Json.null | some value => Lean.toJson value),
+      ("bound", permissionKeyJson witness.bound),
+      ("resolved", match resolved with | none => Lean.Json.null | some entry => permissionEntryJson entry),
+      ("admits", Lean.toJson admits)]).compress)
+
 def permissionScopeJson (scope : ToolPolicy.WorkspacePermissions.Scope) : Lean.Json :=
   Lean.Json.mkObj [("workspace", Lean.toJson scope.workspace), ("revision", Lean.toJson scope.revision)]
 
