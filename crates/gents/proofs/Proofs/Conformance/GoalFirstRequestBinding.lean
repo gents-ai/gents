@@ -35,30 +35,68 @@ def cases : List Case :=
   , { name := "task-selected-replacement-removed", currentTaskGoal := some "replacement-goal", taskChanged := true }
   ]
 
-private def optional (value : Option String) : String :=
-  value.map jsonString |>.getD "null"
+structure BindingInput where
+  name : String
+  goal : String
+  current : Option String
+  requestDoc : String
+  reference : Option Enrollment.GoalAssignmentInput
+  commit : Bool
+  deriving ToJson
 
-private def encode (value : Case) : String :=
-  let selected := root? value.goal value.current value.requestDoc value.reference
-  let taskSelected := taskGoalId value.currentTaskGoal "initial-goal"
-  let taskObserved := if value.taskChanged then value.taskNow else value.currentTaskGoal
-  "{\"name\":" ++ jsonString value.name ++
-  ",\"goal\":" ++ jsonString value.goal ++
-  ",\"current\":" ++ optional value.current ++
-  ",\"request_doc\":" ++ jsonString value.requestDoc ++
-  ",\"reference\":" ++ (match value.reference with
-    | none => "null"
-    | some reference => "{\"goal_id\":" ++ jsonString reference.goalId ++
-        ",\"root_request_doc_id\":" ++ optional reference.rootRequestDocId ++ "}") ++
-  ",\"accepted\":" ++ toString selected.isSome ++
-  ",\"commit\":" ++ toString value.commit ++
-  ",\"expected_root\":" ++ optional (if value.commit && selected.isSome then selected else value.current) ++
-  ",\"current_task_goal\":" ++ optional value.currentTaskGoal ++
-  ",\"initial_task_goal\":\"initial-goal\",\"expected_task_goal\":" ++
-    jsonString taskSelected ++ ",\"observed_task_goal\":" ++ optional taskObserved ++
-    ",\"task_binding_valid\":" ++ toString (taskBindingValid taskSelected taskObserved "initial-goal") ++ "}"
+structure BindingOutput where
+  accepted : Bool
+  root : Option String
+  deriving ToJson
 
-def json : String := jsonArray (cases.map encode)
+/-- Whether `bind_goal_first_request_in_txn` accepts the first request and the
+assignment root the Goal holds after its transaction commits or is discarded. -/
+@[conformance_family]
+def binding : Family BindingInput BindingOutput where
+  inputs := cases.map fun c =>
+    { name := c.name, goal := c.goal, current := c.current, requestDoc := c.requestDoc
+      reference := c.reference, commit := c.commit }
+  model := fun i =>
+    let selected := root? i.goal i.current i.requestDoc i.reference
+    { accepted := selected.isSome
+      root := if i.commit && selected.isSome then selected else i.current }
+
+structure TaskInput where
+  name : String
+  currentTaskGoal : Option String
+  initialTaskGoal : String
+  observedTaskGoal : Option String
+  deriving ToJson
+
+structure TaskOutput where
+  taskGoal : String
+  taskBindingValid : Bool
+  deriving ToJson
+
+def taskInputs : List TaskInput :=
+  cases.map fun c =>
+    { name := c.name, currentTaskGoal := c.currentTaskGoal, initialTaskGoal := "initial-goal"
+      observedTaskGoal := if c.taskChanged then c.taskNow else c.currentTaskGoal }
+
+def taskOutput (i : TaskInput) : TaskOutput :=
+  let selected := taskGoalId i.currentTaskGoal i.initialTaskGoal
+  { taskGoal := selected
+    taskBindingValid := taskBindingValid selected i.observedTaskGoal i.initialTaskGoal }
+
+/-- The Task Goal `task_assignment_goal_id` selects, and whether
+`validate_task_goal_identity_in_txn` and `write_task_delivery` admit it once
+the observed Goal is in place. -/
+@[conformance_family]
+def task : Family TaskInput TaskOutput where
+  inputs := taskInputs
+  model := taskOutput
+
+/-- The Task Goal `prepare_task_run_goal_id` freezes for a manual Task run, and
+whether `write_task_delivery` admits it once the observed Goal is in place. -/
+@[conformance_family]
+def manualTask : Family TaskInput TaskOutput where
+  inputs := taskInputs
+  model := taskOutput
 
 structure ContinuationCase where
   name : String

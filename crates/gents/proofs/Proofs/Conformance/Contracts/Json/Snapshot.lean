@@ -426,8 +426,6 @@ def snapshotGoalCasesJson : String :=
     ++ "\"pairing_reconcile_cases\":" ++ pairingReconcileCasesJson ++ ","
     ++ "\"goal_delivery_input_cases\":"
       ++ Conformance.GoalDeliveryInput.json ++ ","
-    ++ "\"goal_first_request_binding_cases\":"
-      ++ Conformance.GoalFirstRequestBinding.json ++ ","
     ++ "\"goal_input_binding_cases\":"
       ++ Conformance.GoalRequestAssignmentContracts.inputCasesJson ++ ","
     ++ "\"goal_fresh_session_input_cases\":"

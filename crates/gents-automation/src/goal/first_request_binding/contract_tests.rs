@@ -75,9 +75,13 @@ fn generated_continuation_edges_accept_only_the_parent_assignment() {
 
 #[tokio::test]
 async fn generated_first_request_bindings_commit_exact_physical_roots() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_first_request_binding_cases;
-    assert_eq!(cases.len(), 14);
-    for case in cases {
+    let tasks = gents_lean_vocab::families::goal_first_request_binding_task::cases();
+    let bindings = gents_lean_vocab::families::goal_first_request_binding_binding::cases();
+    assert_eq!(bindings.len(), tasks.len());
+    for (binding_case, task_case) in bindings.into_iter().zip(tasks) {
+        let case = &binding_case.input;
+        let task = &task_case.input;
+        assert_eq!(case.name, task.name);
         let db = gents_inference::test_support::test_db(
             "first-request-binding",
             crate::lifecycle_hooks::composition(),
@@ -189,13 +193,10 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
             }).await.unwrap();
             goal = fixture_goal(&access, signer.did(), "session").await;
         }
-        let mut reference: Option<GoalAssignmentInput> =
-            case.reference
-                .as_ref()
-                .map(|reference| GoalAssignmentInput {
-                    goal_id: reference.goal_id.clone(),
-                    root_request_doc_id: reference.root_request_doc_id.clone(),
-                });
+        let mut reference: Option<GoalAssignmentInput> = case
+            .reference
+            .as_ref()
+            .map(gents_lean_vocab::family::recode);
         if let Some(reference) = reference.as_mut() {
             if reference.goal_id == "goal" {
                 reference.goal_id = goal.goal_id.clone();
@@ -205,30 +206,42 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
             goal.goal_id.clear();
         }
         let request_doc = root(case.request_doc.as_str());
+        let accepted = std::sync::atomic::AtomicBool::new(false);
         let result = access
             .transact_write("test.first_binding.transaction", |txn| {
                 let goal = &goal;
                 let request_doc = &request_doc;
                 let reference = reference.as_ref();
+                let accepted = &accepted;
                 Box::pin(async move {
-                    bind_goal_first_request_in_txn(txn, goal, request_doc, reference).await?;
+                    let bound =
+                        bind_goal_first_request_in_txn(txn, goal, request_doc, reference).await;
+                    accepted.store(bound.is_ok(), std::sync::atomic::Ordering::SeqCst);
+                    bound?;
                     anyhow::ensure!(case.commit, "injected publication discard");
                     Ok(())
                 })
             })
             .await;
+        let accepted = accepted.load(std::sync::atomic::Ordering::SeqCst);
         assert_eq!(
             result.is_ok(),
-            case.accepted && case.commit,
+            accepted && case.commit,
             "{}: {result:?}",
             case.name
         );
         let after = fixture_goal(&access, signer.did(), "session").await;
-        assert_eq!(
-            after.assignment_root_request_doc_id,
-            case.expected_root.as_deref().map(root),
-            "{}",
-            case.name
+        binding_case.check(
+            gents_lean_vocab::families::goal_first_request_binding_binding::BindingOutput {
+                accepted,
+                root: after.assignment_root_request_doc_id.map(|value| {
+                    if value == physical {
+                        "request".to_owned()
+                    } else {
+                        value
+                    }
+                }),
+            },
         );
 
         let task_session = "task-session";
@@ -250,12 +263,11 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
             }
         };
         let selected = task_assignment_goal_id(
-            case.current_task_goal.as_deref().map(task_id).as_deref(),
+            task.current_task_goal.as_deref().map(task_id).as_deref(),
             signer.did(),
             task_session,
         );
-        assert_eq!(selected, task_id(&case.expected_task_goal));
-        if let Some(observed) = case.observed_task_goal.as_deref() {
+        if let Some(observed) = task.observed_task_goal.as_deref() {
             let identity = GoalCreationIdentity {
                 goal_id: task_id(observed),
                 creation_key: format!("task-create:{}", case.name),
@@ -309,12 +321,6 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
                 })
             })
             .await;
-        assert_eq!(
-            checked.is_ok(),
-            case.task_binding_valid,
-            "{}: {checked:?}",
-            case.name
-        );
         let agent_access = ConfigAccess::local_managed_agent(
             node.clone(),
             identity::Did::new(agent.did()).unwrap(),
@@ -367,10 +373,20 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
             crate::triggers::write_task_delivery(&agent_access, &fire, true, &request).await;
         assert_eq!(
             admitted.is_ok(),
-            case.task_binding_valid,
-            "{}: admission error {:?}",
+            checked.is_ok(),
+            "{}: admission error {:?} after identity check {checked:?}",
             case.name,
             admitted.as_ref().err()
+        );
+        task_case.check(
+            gents_lean_vocab::families::goal_first_request_binding_task::TaskOutput {
+                task_goal: if selected == initial {
+                    "initial-goal".to_owned()
+                } else {
+                    selected.clone()
+                },
+                task_binding_valid: checked.is_ok(),
+            },
         );
         if let Ok(admitted) = admitted {
             let persisted =

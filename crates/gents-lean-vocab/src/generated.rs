@@ -2910,7 +2910,6 @@ pub struct LeanContractSnapshot {
     pub goal_request_scope_cases: Vec<serde_json::Value>,
     pub goal_request_ancestry_cases: Vec<LeanGoalRequestAncestryCase>,
     pub goal_queue_assignment_cases: Vec<LeanGoalQueueAssignmentCase>,
-    pub goal_first_request_binding_cases: Vec<LeanGoalFirstRequestBindingCase>,
     pub plugin_job_commit_kill_cases: Vec<LeanPluginJobCommitKillCase>,
     pub client_process_claim_cases: Vec<serde_json::Value>,
     pub client_process_receipt_cases: Vec<LeanClientProcessReceiptCase>,
@@ -5000,31 +4999,6 @@ pub struct LeanGoalDecisionCase {
     pub wrapup_requested: bool,
     pub wrapup_completed: bool,
     pub expected_decision: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalFirstRequestBindingCase {
-    pub accepted: bool,
-    pub commit: bool,
-    pub current: Option<String>,
-    pub current_task_goal: Option<String>,
-    pub expected_root: Option<String>,
-    pub expected_task_goal: String,
-    pub goal: String,
-    pub initial_task_goal: String,
-    pub name: String,
-    pub observed_task_goal: Option<String>,
-    pub reference: Option<LeanGoalFirstRequestBindingCaseReference>,
-    pub request_doc: String,
-    pub task_binding_valid: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalFirstRequestBindingCaseReference {
-    pub goal_id: String,
-    pub root_request_doc_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
