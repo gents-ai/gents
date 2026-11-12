@@ -392,11 +392,7 @@ theorem entry_wire_round_trips :
       (entries.map EntryWire.ofModel).map EntryWire.toModel == entries) = true := by
   native_decide
 
-deriving instance Lean.ToJson for FileInventory.Request
-deriving instance Lean.ToJson for CanonicalOutput.PayloadRef
-deriving instance Lean.ToJson for CanonicalOutput.ToolIdentity
 deriving instance Lean.ToJson for CanonicalOutput.DependencyDenial
-deriving instance Lean.ToJson for CanonicalOutput.Hydration.EffectRow
 
 structure DocumentKeyWire where
   collection : String

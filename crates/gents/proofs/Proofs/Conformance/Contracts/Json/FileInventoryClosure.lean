@@ -1,6 +1,7 @@
 import Proofs.Observe.FileInventory.Source
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases.Types
+import Proofs.Conformance.Family
 
 namespace Conformance.Contracts
 
@@ -45,16 +46,6 @@ def payloadRefJson (reference : CanonicalOutput.PayloadRef) : String :=
   "{" ++ "\"close_id\":" ++ toString reference.closeId ++ "," ++
     "\"stream\":" ++ toString reference.stream ++ "}"
 
-def hydrationMessageJson (message : CanonicalOutput.MessageEnvelope) : String :=
-  "{" ++ "\"id\":" ++ toString message.header.id ++ "," ++
-    "\"session\":" ++ toString message.header.session ++ "," ++
-    "\"request\":" ++ optionalNatJson message.header.request ++ "," ++
-    "\"origin\":" ++ optionalNatJson message.header.origin ++ "," ++
-    "\"tool_delivery\":" ++ optionalNatJson (match message.header.publication with
-      | .toolDelivery call => some call
-      | _ => none) ++ "," ++
-    "\"refs\":" ++ jsonArray (message.header.refs.map payloadRefJson) ++ "}"
-
 def sourceJson : CanonicalOutput.Source → String
   | .provider scope turn attempt =>
       "{\"kind\":\"provider\",\"scope\":" ++ toString scope ++
@@ -76,8 +67,6 @@ def writerJson : CanonicalOutput.Writer → String
   | .request generation => "{\"kind\":\"request\",\"owner\":" ++ toString generation ++ "}"
   | .tool call => "{\"kind\":\"tool\",\"owner\":" ++ toString call ++ "}"
 
-def byteListJson (bytes : List UInt8) : String := jsonArray (bytes.map (toString ·.toNat))
-
 def payloadKindJson : CanonicalOutput.PayloadKind → String
   | .text => "text" | .reasoning => "reasoning" | .signature => "signature"
   | .reasoningStop => "reasoning_stop"
@@ -87,20 +76,6 @@ def payloadKindJson : CanonicalOutput.PayloadKind → String
 def segmentDeclaration (segment : CanonicalOutput.Segment) :
     Option CanonicalOutput.Declaration :=
   (segment.flush.bind fun flush => flush.runs.head?).bind (·.declaration)
-
-def toolIdentityJson : Option CanonicalOutput.ToolIdentity → String
-  | none => "null"
-  | some tool => "{\"id\":" ++ jsonString tool.id ++ ",\"name\":" ++ jsonString tool.name ++ "}"
-
-def hydrationSegmentJson (segment : CanonicalOutput.Segment) : String :=
-  "{" ++ "\"id\":" ++ toString segment.id ++ "," ++
-    "\"kind\":" ++ jsonString ((segmentDeclaration segment).map (payloadKindJson ·.kind)
-      |>.getD "text") ++ "," ++
-    "\"tool\":" ++ toolIdentityJson ((segmentDeclaration segment).bind (·.tool)) ++ "," ++
-    "\"request\":" ++ toString segment.coordinate.request ++ "," ++
-    "\"source\":" ++ sourceJson segment.coordinate.source ++ "," ++
-    "\"writer\":" ++ writerJson segment.writer ++ "," ++
-    "\"payload\":" ++ byteListJson (segment.flush.map (·.payload) |>.getD []) ++ "}"
 
 def accessStateName : CanonicalOutput.Hydration.AccessState → String
   | .authorized => "authorized" | .missing => "missing" | .denied => "denied"
@@ -132,32 +107,130 @@ def hydrationEffectJson (row : CanonicalOutput.Hydration.EffectRow) : String :=
     "\"tool_call_id\":" ++ jsonString row.toolCallId ++ "," ++
     "\"terminal\":" ++ optionalPayloadRefJson row.terminal ++ "}"
 
-def hydrationClosureInputJson (input : FileInventory.ClosureInput) : String :=
-  "{" ++
-    "\"request\":" ++ hydrationRequestJson input.request ++ "," ++
-    "\"roots\":" ++ jsonArray (input.roots.map toString) ++ "," ++
-    "\"messages\":" ++ jsonArray (input.messages.map hydrationMessageJson) ++ "," ++
-    "\"segments\":" ++ jsonArray (input.segments.map hydrationSegmentJson) ++ "," ++
-    "\"access\":" ++ jsonArray (input.access.map hydrationAccessJson) ++ "," ++
-    "\"denied_headers\":" ++ jsonArray (input.deniedHeaders.map toString) ++ "," ++
-    "\"denied_segments\":" ++ jsonArray (input.deniedSegments.map toString) ++ "," ++
-    "\"bases\":" ++ jsonArray (input.bases.map (hydrationDocumentKeyJson ·.key)) ++ "," ++
-    "\"observed_effects\":" ++ jsonArray ((CanonicalOutput.Hydration.observedEffects
-      input.request.authorizationScope input.access input.effects).map hydrationEffectJson) ++ "}"
+deriving instance Lean.ToJson for FileInventory.Request
+deriving instance Lean.ToJson for CanonicalOutput.PayloadRef
+deriving instance Lean.ToJson for CanonicalOutput.ToolIdentity
+deriving instance Lean.ToJson for CanonicalOutput.Hydration.EffectRow
 
-def closureDocumentsJson (input : FileInventory.ClosureInput) : String :=
+structure ClosureDocumentKeyWire where
+  collection : String
+  id : Nat
+  deriving Lean.ToJson
+
+def ClosureDocumentKeyWire.ofModel (key : CanonicalOutput.Hydration.DocumentKey) :
+    ClosureDocumentKeyWire :=
+  ⟨hydrationCollectionName key.collection, key.id⟩
+
+structure ClosureMessageWire where
+  id : Nat
+  session : Nat
+  request : Option Nat
+  origin : Option Nat
+  toolDelivery : Option Nat
+  refs : List CanonicalOutput.PayloadRef
+  deriving Lean.ToJson
+
+def ClosureMessageWire.ofModel (message : CanonicalOutput.MessageEnvelope) : ClosureMessageWire :=
+  ⟨message.header.id, message.header.session, message.header.request, message.header.origin,
+    (match message.header.publication with
+      | .toolDelivery call => some call
+      | _ => none),
+    message.header.refs⟩
+
+structure ClosureOwnerWire where
+  kind : String
+  auxiliaryKind : Option String
+  scope : Option Nat
+  turn : Option Nat
+  attempt : Option Nat
+  owner : Option Nat
+  deriving Lean.ToJson
+
+def ClosureOwnerWire.ofSource : CanonicalOutput.Source → ClosureOwnerWire
+  | .provider scope turn attempt => ⟨"provider", none, some scope, some turn, some attempt, none⟩
+  | .auxiliary kind scope turn attempt =>
+      ⟨"auxiliary", some (match kind with
+        | .compaction => "compaction"
+        | .compactionFallback => "compaction_fallback"
+        | .title => "title"
+        | .accessReview => "access_review"), some scope, some turn, some attempt, none⟩
+  | .toolEffectArguments call => ⟨"tool_effect_arguments", none, none, none, none, some call⟩
+  | .tool call => ⟨"tool", none, none, none, none, some call⟩
+  | .authored key => ⟨"authored", none, none, none, none, some key⟩
+
+def ClosureOwnerWire.ofWriter : CanonicalOutput.Writer → ClosureOwnerWire
+  | .request generation => ⟨"request", none, none, none, none, some generation⟩
+  | .tool call => ⟨"tool", none, none, none, none, some call⟩
+
+structure ClosureSegmentWire where
+  id : Nat
+  kind : String
+  tool : Option CanonicalOutput.ToolIdentity
+  request : Nat
+  source : ClosureOwnerWire
+  writer : ClosureOwnerWire
+  payload : List Nat
+  deriving Lean.ToJson
+
+def ClosureSegmentWire.ofModel (segment : CanonicalOutput.Segment) : ClosureSegmentWire :=
+  ⟨segment.id, (segmentDeclaration segment).map (payloadKindJson ·.kind) |>.getD "text",
+    (segmentDeclaration segment).bind (·.tool), segment.coordinate.request,
+    .ofSource segment.coordinate.source, .ofWriter segment.writer,
+    (segment.flush.map (·.payload) |>.getD []).map (·.toNat)⟩
+
+structure ClosureAccessWire where
+  key : ClosureDocumentKeyWire
+  state : String
+  requester : String
+  node : String
+  session : String
+  nativeSession : Nat
+  deriving Lean.ToJson
+
+def ClosureAccessWire.ofModel (access : CanonicalOutput.Hydration.ProvenanceAccess) :
+    ClosureAccessWire :=
+  ⟨.ofModel access.key, accessStateName access.state, access.scope.requester, access.scope.node,
+    access.scope.session, access.scope.nativeSession⟩
+
+structure HydrationClosureWire where
+  request : FileInventory.Request
+  roots : List Nat
+  messages : List ClosureMessageWire
+  segments : List ClosureSegmentWire
+  access : List ClosureAccessWire
+  deniedHeaders : List Nat
+  deniedSegments : List Nat
+  bases : List ClosureDocumentKeyWire
+  observedEffects : List CanonicalOutput.Hydration.EffectRow
+  deriving Lean.ToJson
+
+/-- The closure owner is handed the effects ACP observed, not the raw effect
+rows; the wire carries exactly those. -/
+def HydrationClosureWire.ofModel (input : FileInventory.ClosureInput) : HydrationClosureWire :=
+  ⟨input.request, input.roots, input.messages.map ClosureMessageWire.ofModel,
+    input.segments.map ClosureSegmentWire.ofModel, input.access.map ClosureAccessWire.ofModel,
+    input.deniedHeaders, input.deniedSegments,
+    input.bases.map (ClosureDocumentKeyWire.ofModel ·.key),
+    CanonicalOutput.Hydration.observedEffects input.request.authorizationScope input.access
+      input.effects⟩
+
+structure ClosureCaseInput where
+  name : String
+  closureInput : HydrationClosureWire
+  deriving Lean.ToJson
+
+private def documentKeyBefore (left right : ClosureDocumentKeyWire) : Bool :=
+  left.collection < right.collection || (left.collection == right.collection && left.id ≤ right.id)
+
+/-- The closure's documents as a set, ordered by collection name and id;
+`none` when the closure owner rejects the input. -/
+def closureDocuments (input : FileInventory.ClosureInput) : Option (List ClosureDocumentKeyWire) :=
   match CanonicalOutput.Hydration.buildManifest input.request.authorizationScope
       input.request.nativeSession input.bases input.roots input.requirements input.messages
       input.segments input.access input.deniedHeaders input.deniedSegments input.dependencyDenials
       input.effects with
-  | .error _ => "null"
-  | .ok manifest => jsonArray (manifest.map hydrationDocumentKeyJson)
-
-
-def closureCaseJson (name : String) (input : FileInventory.ClosureInput) : String :=
-  "{" ++ "\"name\":" ++ jsonString name ++ "," ++
-    "\"closure_input\":" ++ hydrationClosureInputJson input ++ "," ++
-    "\"expected_closure_documents\":" ++ closureDocumentsJson input ++ "}"
+  | .error _ => none
+  | .ok manifest => some ((manifest.dedup.map ClosureDocumentKeyWire.ofModel).mergeSort documentKeyBefore)
 
 def deniedClosureInput (key : CanonicalOutput.Hydration.DocumentKey) :
     FileInventory.ClosureInput :=
@@ -190,43 +263,56 @@ def hydrationBaseParentInput : FileInventory.ClosureInput :=
     segments := [CanonicalOutput.Hydration.Examples.childArguments,
       CanonicalOutput.Hydration.Examples.childOutput] }
 
-def fileInventoryClosureCasesJson : String := jsonArray
-  [ closureCaseJson "exact_request_closure" hydrationClosureInput
-  , closureCaseJson "wrong_root_session_rejected"
-      { hydrationClosureInput with request := { hydrationRequest with nativeSession := 1 } }
-  , closureCaseJson "message_acp_denied"
-      (deniedClosureInput ⟨.agentMessage, 201⟩)
-  , closureCaseJson "segment_acp_denied"
-      (deniedClosureInput ⟨.agentOutputSegment, 100⟩)
-  , closureCaseJson "foreign_scope_evidence_rejected"
+def fileInventoryClosureCases : List (String × FileInventory.ClosureInput) :=
+  [ ("exact_request_closure", hydrationClosureInput)
+  , ("wrong_root_session_rejected",
+      { hydrationClosureInput with request := { hydrationRequest with nativeSession := 1 } })
+  , ("message_acp_denied",
+      deniedClosureInput ⟨.agentMessage, 201⟩)
+  , ("segment_acp_denied",
+      deniedClosureInput ⟨.agentOutputSegment, 100⟩)
+  , ("foreign_scope_evidence_rejected",
       { hydrationClosureInput with access := hydrationClosureInput.access.map fun observation =>
-          { observation with scope := { observation.scope with requester := "did:key:requester-foreign" } } }
-  , closureCaseJson "fork_copy_without_origin" hydrationForkCopyInput
-  , closureCaseJson "fork_copy_preferred_over_visible_origin"
+          { observation with scope := { observation.scope with requester := "did:key:requester-foreign" } } })
+  , ("fork_copy_without_origin", hydrationForkCopyInput)
+  , ("fork_copy_preferred_over_visible_origin",
       { hydrationForkCopyInput with
         messages := hydrationClosureInput.messages
         segments := hydrationClosureInput.segments ++ hydrationForkCopyInput.segments
-        access := hydrationClosureInput.access ++ hydrationForkCopyInput.access }
-  , closureCaseJson "fork_copy_acp_denied"
+        access := hydrationClosureInput.access ++ hydrationForkCopyInput.access })
+  , ("fork_copy_acp_denied",
       { hydrationForkCopyInput with access := hydrationForkCopyInput.access.map fun observation =>
           if observation.key = ⟨.agentOutputSegment, 300⟩
-          then { observation with state := .denied } else observation }
-  , closureCaseJson "plugin_effect_children" hydrationEffectInput
-  , closureCaseJson "plugin_effect_slot_conflict"
+          then { observation with state := .denied } else observation })
+  , ("plugin_effect_children", hydrationEffectInput)
+  , ("plugin_effect_slot_conflict",
       { hydrationEffectInput with
         effects := hydrationEffectInput.effects ++
           [{ CanonicalOutput.Hydration.Examples.child with id := 403, terminal := none }]
         access := hydrationEffectInput.access ++
-          [⟨hydrationRequest.authorizationScope, ⟨.agentToolCall, 403⟩, .authorized⟩] }
-  , closureCaseJson "plugin_effect_parent_base_only" hydrationBaseParentInput
-  , closureCaseJson "plugin_effect_child_denied"
+          [⟨hydrationRequest.authorizationScope, ⟨.agentToolCall, 403⟩, .authorized⟩] })
+  , ("plugin_effect_parent_base_only", hydrationBaseParentInput)
+  , ("plugin_effect_child_denied",
       { hydrationBaseParentInput with
         access := hydrationBaseParentInput.access.map (fun observation =>
           if observation.key = ⟨.agentToolCall, 400⟩
-          then { observation with state := .denied } else observation) }
-  , closureCaseJson "plugin_effect_arguments_missing"
+          then { observation with state := .denied } else observation) })
+  , ("plugin_effect_arguments_missing",
       { hydrationEffectInput with segments := [CanonicalOutput.Hydration.Examples.parentOutput,
-          CanonicalOutput.Hydration.Examples.childOutput] } ]
+          CanonicalOutput.Hydration.Examples.childOutput] }) ]
+
+example : ["fork_copy_without_origin", "fork_copy_preferred_over_visible_origin",
+    "fork_copy_acp_denied"].all (fun name => (fileInventoryClosureCases.map (·.1)).contains name) =
+    true := by native_decide
+
+/-- The wire carries each case to the native closure owner; the model evaluates
+the case its name selects. -/
+@[conformance_family]
+def fileInventoryClosure : Family ClosureCaseInput (Option (List ClosureDocumentKeyWire)) where
+  inputs := fileInventoryClosureCases.map fun (name, input) =>
+    { name, closureInput := .ofModel input }
+  model := fun i => ((fileInventoryClosureCases.find? (·.1 == i.name)).map (·.2)).bind
+    closureDocuments
 
 def terminalWriteString : FileInventory.TerminalWriteResult → String
   | .committed => "committed"

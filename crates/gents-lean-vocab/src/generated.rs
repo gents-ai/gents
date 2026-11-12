@@ -189,10 +189,6 @@ pub fn lean_feature_surface_requirements() -> &'static [LeanFeatureSurfaceRequir
     &lean_contract_snapshot().feature_surface_requirements
 }
 
-pub fn lean_file_inventory_closure_cases() -> &'static [LeanSessionClosureCase] {
-    &lean_contract_snapshot().file_inventory_closure_cases
-}
-
 pub fn lean_fold_publication_cases() -> &'static [LeanFoldPublicationCase] {
     &lean_contract_snapshot().fold_publication_cases
 }
@@ -3132,7 +3128,6 @@ pub struct LeanContractSnapshot {
     pub goal_continuation_materialization_cases: Vec<
         LeanGoalContinuationMaterializationCase,
     >,
-    pub file_inventory_closure_cases: Vec<LeanSessionClosureCase>,
     pub enrollment_cases: Vec<LeanEnrollmentCase>,
     pub enrollment_durable_projection_cases: Vec<LeanEnrollmentDurableProjectionCase>,
     pub enrollment_pending_request_cases: Vec<LeanEnrollmentPendingRequestCase>,
@@ -10801,108 +10796,6 @@ pub struct LeanSelfConfigScopeOfCase {
 pub struct LeanSelfConfigSelectionCases {
     pub tool_flag_cases: Vec<LeanToolFlagCase>,
     pub job_guard_cases: Vec<LeanJobGuardCase>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanSessionClosureAccess {
-    pub key: LeanSessionClosureDocumentKey,
-    pub state: String,
-    pub requester: String,
-    pub node: String,
-    pub session: String,
-    pub native_session: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSessionClosureCase {
-    pub name: String,
-    pub closure_input: LeanSessionClosureInput,
-    pub expected_closure_documents: Option<Vec<LeanSessionClosureDocumentKey>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanSessionClosureDocumentKey {
-    pub collection: String,
-    pub id: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanSessionClosureEffect {
-    pub id: u64,
-    pub parent: Option<u64>,
-    pub ordinal: Option<u32>,
-    pub spawned: bool,
-    pub tool_call_id: String,
-    pub terminal: Option<LeanSessionClosurePayloadRef>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanSessionClosureInput {
-    pub request: LeanSessionClosureRequest,
-    pub roots: Vec<u64>,
-    pub messages: Vec<LeanSessionClosureMessage>,
-    pub segments: Vec<LeanSessionClosureSegment>,
-    pub access: Vec<LeanSessionClosureAccess>,
-    pub denied_headers: Vec<u64>,
-    pub denied_segments: Vec<u64>,
-    pub bases: Vec<LeanSessionClosureDocumentKey>,
-    pub observed_effects: Vec<LeanSessionClosureEffect>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanSessionClosureMessage {
-    pub id: u64,
-    pub session: u64,
-    pub request: Option<u64>,
-    pub origin: Option<u64>,
-    pub tool_delivery: Option<u64>,
-    pub refs: Vec<LeanSessionClosurePayloadRef>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanSessionClosureOwner {
-    pub kind: String,
-    #[serde(default)]
-    pub owner: Option<u64>,
-    #[serde(default)]
-    pub scope: Option<u64>,
-    #[serde(default)]
-    pub turn: Option<u64>,
-    #[serde(default)]
-    pub attempt: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanSessionClosurePayloadRef {
-    pub close_id: u64,
-    pub stream: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanSessionClosureRequest {
-    pub key: String,
-    pub requester: String,
-    pub node: String,
-    pub session: String,
-    pub native_session: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanSessionClosureSegment {
-    pub id: u64,
-    pub kind: String,
-    pub tool: Option<LeanSessionClosureTool>,
-    pub request: u64,
-    pub source: LeanSessionClosureOwner,
-    pub writer: LeanSessionClosureOwner,
-    pub payload: Vec<u8>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanSessionClosureTool {
-    pub id: String,
-    pub name: String,
 }
 
 #[derive(Debug, Deserialize)]

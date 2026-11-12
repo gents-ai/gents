@@ -669,8 +669,8 @@ def caseCoverage : List CoverageEntry :=
       "GoalContinuationMaterializationCases")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "file_inventory_closure_cases"
-      "FileInventoryClosureCases"
+      "family"
+      "contracts_file_inventory_closure"
       "The native consumer checks closure construction against modeled rows, but supplies access and denial observations as fixture input. It does not verify live ACP decisions.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerCoverage

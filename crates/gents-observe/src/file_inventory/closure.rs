@@ -574,10 +574,9 @@ mod tests {
 
     #[test]
     fn generated_modeled_closure_input_selects_exact_native_manifest() {
-        fn assert_input(
-            input: &gents_lean_vocab::LeanSessionClosureInput,
-            expected_documents: Option<&Vec<gents_lean_vocab::LeanSessionClosureDocumentKey>>,
-        ) {
+        fn closure_documents(
+            input: &gents_lean_vocab::families::contracts_file_inventory_closure::HydrationClosureWire,
+        ) -> Option<Vec<gents_lean_vocab::families::contracts_file_inventory_closure::ClosureDocumentKeyWire>> {
             let request = &input.request;
             let target_session = request.session.as_str();
             let agent = request.node.as_str();
@@ -644,7 +643,7 @@ mod tests {
                     },
                 })
                 .collect::<Vec<_>>();
-            let owner = |modeled: &gents_lean_vocab::LeanSessionClosureOwner| {
+            let owner = |modeled: &gents_lean_vocab::families::contracts_file_inventory_closure::ClosureOwnerWire| {
                 modeled.owner.unwrap().to_string()
             };
             let segments = input
@@ -677,6 +676,11 @@ mod tests {
                         },
                         other => panic!("unmodeled hydration writer {other}"),
                     };
+                    let bytes = modeled
+                        .payload
+                        .iter()
+                        .map(|byte| u8::try_from(*byte).unwrap())
+                        .collect::<Vec<u8>>();
                     let payload = match (modeled.kind.as_str(), &modeled.tool) {
                         ("text", None) => StreamPayload::Text,
                         ("tool_output", None) => StreamPayload::ToolOutput,
@@ -709,18 +713,18 @@ mod tests {
                             ordinal: Some(0),
                             runs: vec![SegmentRun {
                                 stream: 0,
-                                bytes: modeled.payload.len().try_into().unwrap(),
+                                bytes: bytes.len().try_into().unwrap(),
                                 declaration: Some(StreamDeclaration {
                                     block_index: 0,
                                     part_index: 0,
                                     payload,
                                 }),
                             }],
-                            payload: String::from_utf8(modeled.payload.clone()).unwrap(),
+                            payload: String::from_utf8(bytes.clone()).unwrap(),
                             close: Some(SourceClose::Closed {
                                 outcome: OutputOutcome::Complete,
                                 segments: 1,
-                                stream_bytes: vec![modeled.payload.len() as u64],
+                                stream_bytes: vec![bytes.len() as u64],
                             }),
                             created_at: "2026-09-21T00:00:00Z".into(),
                         },
@@ -739,7 +743,7 @@ mod tests {
                         session_id: target_session.into(),
                     },
                     plugin_parent_tool_call_doc_id: effect.parent.map(|id| id.to_string()),
-                    plugin_effect_ordinal: effect.ordinal,
+                    plugin_effect_ordinal: effect.ordinal.map(|ordinal| ordinal.try_into().unwrap()),
                     spawned: effect.spawned,
                     tool_call_id: effect.tool_call_id.clone(),
                     request_doc_id: String::new(),
@@ -847,46 +851,27 @@ mod tests {
                 requester_did: Some(requester),
                 session_id: target_session,
             });
-            let Some(expected_documents) = expected_documents else {
-                assert!(
-                    result.is_err(),
-                    "modeled rejected closure passed native owner"
-                );
-                return;
-            };
-            let closure = result.expect("modeled closure must pass native owner");
+            let closure = result.ok()?;
             let selected = closure
-                .iter()
-                .map(|document| (document.collection, document.doc_id.clone()))
-                .collect::<BTreeSet<_>>();
-            let expected = expected_documents
                 .iter()
                 .map(|document| {
                     (
-                        modeled_collection(&document.collection),
-                        document.id.to_string(),
+                        crate::file_inventory::session_collection_name(document.collection),
+                        document.doc_id.parse::<u64>().unwrap(),
                     )
                 })
                 .collect::<BTreeSet<_>>();
-            assert_eq!(selected, expected);
+            Some(
+                selected
+                    .into_iter()
+                    .map(|(collection, id)| gents_lean_vocab::families::contracts_file_inventory_closure::ClosureDocumentKeyWire {
+                        collection: collection.to_owned(),
+                        id,
+                    })
+                    .collect(),
+            )
         }
 
-        let cases = gents_lean_vocab::lean_file_inventory_closure_cases();
-        for name in [
-            "fork_copy_without_origin",
-            "fork_copy_preferred_over_visible_origin",
-            "fork_copy_acp_denied",
-        ] {
-            assert!(
-                cases.iter().any(|case| case.name == name),
-                "modeled closure case {name} is missing"
-            );
-        }
-        for case in cases {
-            assert_input(
-                &case.closure_input,
-                case.expected_closure_documents.as_ref(),
-            );
-        }
+        gents_lean_vocab::families::contracts_file_inventory_closure::replay(|case| closure_documents(&case.closure_input));
     }
 }
