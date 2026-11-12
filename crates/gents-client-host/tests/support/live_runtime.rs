@@ -18,6 +18,15 @@ use support::Attachment;
 const WAIT: Duration = Duration::from_secs(30);
 
 pub async fn exercise(root: &Path, goal: bool) -> Result<()> {
+    run(root, goal, false).await
+}
+
+#[cfg(feature = "editor-e2e")]
+pub async fn exercise_editor(root: &Path) -> Result<()> {
+    run(root, false, true).await
+}
+
+async fn run(root: &Path, goal: bool, editor: bool) -> Result<()> {
     let target = live_target().await;
     let root_owned = root.to_owned();
     let (binary, homes) = tokio::task::spawn_blocking(move || {
@@ -177,7 +186,7 @@ pub async fn exercise(root: &Path, goal: bool) -> Result<()> {
         ensure!(live["sessionId"] == session, "live output crossed the selected session");
         }
         ensure!(wait_for_request_terminal(&access, request, WAIT).await == "completed");
-        let projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({
+        let mut projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({
             "nodeDid":node,"sessionId":session,"timelineLimit":40,
         }), |projection| projection["turnState"] == "completed" && projection["timelineItems"].as_array().is_some_and(|items|
             items.iter().any(|item| item["kind"] == "assistantMessage" && item["content"].as_str().is_some_and(|text| !text.trim().is_empty())))).await?;
@@ -191,7 +200,23 @@ pub async fn exercise(root: &Path, goal: bool) -> Result<()> {
         gents_store::identity::request_receipt::verify_request_receipt_signature(&row)?;
         ensure!(row.admission_signer_did.as_deref() == Some(client_did.as_str()));
         let wrong = client.try_call(id, "desktop_request_output", json!({"nodeDid":node,"sessionId":"another-session","requestId":request})).await;
+        id += 1;
         ensure!(wrong.is_err() || wrong.is_ok_and(|value| value["output"]["kind"] == "loading"), "request output escaped its session");
+        if editor {
+            super::super::run_editor_journey(root, &paths, &binary, session, target.endpoint(), "live").await?;
+            let evidence: Value = serde_json::from_slice(&tokio::fs::read(root.join("editor-live-canonical.json")).await?)?;
+            ensure!(evidence["sessionId"] == session);
+            let prompt = evidence["prompt"].as_str().context("editor submitted prompt")?;
+            let query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{{}}} }}", gents_store::graphql::escape_graphql_string(node), gents_store::graphql::escape_graphql_string(session), gents::SIGNED_REQUEST_FIELDS);
+            let observed = access.execute(&query).await?;
+            let rows: Vec<gents_protocol::row::AgentRequestRow> = serde_json::from_value(observed["data"]["AgentRequest"].clone())?;
+            let submitted = rows.iter().find(|row| row.content.as_deref() == Some(prompt)).context("editor's signed submitted input")?;
+            gents_store::identity::request_receipt::verify_request_receipt_signature(submitted)?;
+            ensure!(submitted.admission_signer_did.as_deref() == Some(client_did.as_str()));
+            ensure!(rows.iter().all(|row| row.content.as_deref() != evidence["draft"].as_str()), "the retained editor draft was submitted");
+            ensure!(wait_for_request_terminal(&access, &submitted.request_id, WAIT).await == "completed");
+            projection = wait_client(&mut client, &mut updates, &mut id, "desktop_session_snapshot", json!({"nodeDid":node,"sessionId":session,"timelineLimit":40}), |value| value["latestRequestId"] == submitted.request_id && value["turnState"] == "completed").await?;
+        }
         Ok::<_, anyhow::Error>((session.to_owned(), projection))
     }.await;
     updates.close().await;

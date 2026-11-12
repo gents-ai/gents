@@ -690,6 +690,10 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     if matches!(journey, Journey::Goal) {
         return live_runtime::exercise(root, true).await;
     }
+    #[cfg(feature = "editor-e2e")]
+    if matches!(journey, Journey::Editor) {
+        return live_runtime::exercise_editor(root).await;
+    }
     let history = matches!(journey, Journey::EditorHistory)
         .then(editor_history::Options::from_env)
         .transpose()?;
