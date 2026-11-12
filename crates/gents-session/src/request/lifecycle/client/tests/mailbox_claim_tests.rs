@@ -137,11 +137,11 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
     let modeled_claim = &gents_lean_vocab::lean_contract_snapshot().mailbox_claimed_recipient_cases;
     let before = modeled_claim
         .iter()
-        .find(|case| case["present"] == true && case["committed"] == false)
+        .find(|case| case.present && !case.committed)
         .unwrap();
     assert_eq!(
         lifecycle.claimed_tool_context().is_ok(),
-        !before["signer"].is_null()
+        before.signer.is_some()
     );
     assert_eq!(
         lifecycle.claim_with_identity().await?,
@@ -150,11 +150,11 @@ async fn delegated_http_claim_routes_mailbox_to_immediate_signer() -> anyhow::Re
     let context = lifecycle.claimed_tool_context()?;
     let after = modeled_claim
         .iter()
-        .find(|case| case["present"] == true && case["committed"] == true)
+        .find(|case| case.present && case.committed)
         .unwrap();
     assert_eq!(
         context.admitted_client.is_some(),
-        !after["signer"].is_null()
+        after.signer.is_some()
     );
     assert_eq!(
         context.admitted_client.as_ref().unwrap().signer_did,

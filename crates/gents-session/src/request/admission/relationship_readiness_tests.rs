@@ -256,11 +256,11 @@ async fn exercise_readiness(same_agent: bool) {
     let cases = &snapshot.mailbox_claimed_recipient_cases;
     let before = cases
         .iter()
-        .find(|case| case["present"] == true && case["committed"] == false)
+        .find(|case| case.present && !case.committed)
         .unwrap();
     assert_eq!(
         lifecycle.claimed_client_provenance().is_some(),
-        !before["signer"].is_null()
+        before.signer.is_some()
     );
     assert!(matches!(
         lifecycle.claim_with_identity().await.unwrap(),
@@ -307,15 +307,15 @@ async fn exercise_readiness(same_agent: bool) {
     ));
     let after = cases
         .iter()
-        .find(|case| case["present"] == true && case["committed"] == true)
+        .find(|case| case.present && case.committed)
         .unwrap();
     let retained = lifecycle
         .claimed_client_provenance()
         .expect("committed client claim retains provenance");
-    assert_eq!(after["signer"], "delegate");
-    assert_eq!(after["request_doc"], "request");
-    assert_eq!(after["session_doc"], "session");
-    assert_eq!(after["agent_doc"], "agent");
+    assert_eq!(after.signer.as_deref(), Some("delegate"));
+    assert_eq!(after.request_doc.as_deref(), Some("request"));
+    assert_eq!(after.session_doc.as_deref(), Some("session"));
+    assert_eq!(after.agent_doc.as_deref(), Some("agent"));
     assert_eq!(retained.signer_did, signer.did());
     assert_eq!(retained.request_doc_id, request_doc);
     assert_eq!(retained.session_doc_id, session_doc);
