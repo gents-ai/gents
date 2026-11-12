@@ -60,10 +60,6 @@ def sweepVisible (held target : String) : Bool := held == target
 theorem runtime_node_is_not_mailbox_target :
     sweepVisible "node" "agent" = false ∧ sweepVisible "agent" "agent" = true := by decide
 
-def sweepActorCasesJson : String :=
-  (Lean.toJson (["agent", "other", "node"].map fun actor => Lean.Json.mkObj
-    [("actor", Lean.toJson actor), ("visible", Lean.toJson (sweepVisible actor "agent"))])).compress
-
 /-- Interactive recipient provenance is retained from the verified signed
 request when its native claim commits. Physical targets belong to that same
 signed record; a session owner or a logical request label cannot substitute

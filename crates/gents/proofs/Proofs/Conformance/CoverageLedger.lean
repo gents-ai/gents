@@ -1509,8 +1509,8 @@ def caseCoverage : List CoverageEntry :=
       "Connects a native User-authored client claim to the mailbox tool and recipient relationship, and after restart to the runtime notice; unattended provenance remains unavailable.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "mailbox_sweep_actor_cases"
-      "MailboxSweepActorCases"
+      "family"
+      "mailbox_access_sweep_actors"
       "Exercises held-Agent reconciliation; newly configured recipients need authenticated source provenance.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp

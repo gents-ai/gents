@@ -448,8 +448,8 @@ async fn mailbox_sweep_uses_held_targets() -> anyhow::Result<()> {
         "{{ MailboxItem(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
         escape_graphql_string(&ids[0])
     );
-    for case in &gents_lean_vocab::lean_contract_snapshot().mailbox_sweep_actor_cases {
-        let access = match case["actor"].as_str().unwrap() {
+    for case in &gents_lean_vocab::families::mailbox_access_sweep_actors::cases() {
+        let access = match case.input.actor.as_str() {
             "agent" => ConfigAccess::local_managed_agent(
                 node.clone(),
                 first.did().parse()?,
@@ -464,11 +464,7 @@ async fn mailbox_sweep_uses_held_targets() -> anyhow::Result<()> {
             actor => anyhow::bail!("unknown modeled actor {actor}"),
         };
         let rows = access.execute(&query).await?;
-        assert_eq!(
-            !rows["data"]["MailboxItem"].as_array().unwrap().is_empty(),
-            case["visible"].as_bool().unwrap(),
-            "{case}"
-        );
+        case.check(!rows["data"]["MailboxItem"].as_array().unwrap().is_empty());
     }
     let mut cursor = None;
     let mut scanned = 0;
