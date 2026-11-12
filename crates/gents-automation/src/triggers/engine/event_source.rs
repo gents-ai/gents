@@ -2186,7 +2186,7 @@ mod native_route_tests {
             reply_session_id: route.reply_session_id.clone(),
             attempt: route.attempt,
         };
-        family::replay(|case: &family::DeliveryInput| {
+        gents_lean_vocab::families::native_route_delivery::replay(|case: &family::DeliveryInput| {
             let input = serde_json::json!({
                 "handoff_id": &case.input.handoff_id,
                 "reply_session_id": &case.input.reply_session_id,
