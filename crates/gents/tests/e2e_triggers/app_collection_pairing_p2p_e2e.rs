@@ -12,11 +12,13 @@ use gents_store::identity::NodeIdentity;
 use gents_tools::surface::ToolCeiling;
 use serde_json::Value;
 
-use crate::support::enrollment::{authorize_enrollment_peer, wait_for_peer_identity};
 use crate::support::fixtures::bind_default_agent_backend;
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::snapshots::SnapshotReader;
 use crate::support::test_p2p_db;
+use gents_p2p::test_support::enrollment::{
+    authorize_enrollment_peer, wait_for_peer_identity,
+};
 
 const EXTERNAL_ID: &str = "change-app-1";
 const NETWORK_ID: &str = "net-app-collection-pairing";

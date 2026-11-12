@@ -441,6 +441,16 @@ pub trait Collection {
     const NAME: &'static str;
 }
 
+pub trait FieldSelection<C>: Sized {
+    fn field<K>(self, field: Field<C, K>) -> Self;
+}
+
+pub trait SelectFields: Collection + Sized {
+    fn select_fields<S>(selection: S) -> S
+    where
+        S: FieldSelection<Self>;
+}
+
 /// A collection keyed by the node, session and requester that own a session.
 /// Implemented by the generator for every type that declares all three.
 pub trait SessionScoped: Collection + Sized {
@@ -453,6 +463,8 @@ pub trait SessionScoped: Collection + Sized {
 /// field accepts in filters and inputs, and the GraphQL variable type that
 /// carries them.
 pub mod kind {
+    pub struct Relation<C>(std::marker::PhantomData<fn() -> C>);
+
     pub trait Kind {
         const GRAPHQL: &'static str;
     }
@@ -478,6 +490,7 @@ pub mod kind {
         Json => "JSON",
         Blob => "Blob",
         StrList => "[String!]",
+        IntList => "[Int!]",
         DocId => "String",
     }
 }

@@ -347,9 +347,24 @@ pub(crate) async fn goal_request(
     let actor = gents_store::identity::NodeIdentity::did(&signer).to_owned();
     let requester =
         gents_session::session::client_requester_scope(access, node, session, &actor).await?;
+    let input = gents_session::request::lifecycle::prepare_user_message_input(
+        access,
+        node,
+        session,
+        gents_protocol::request_input::RequestInput {
+            goal_assignment: Some(gents_protocol::request_input::GoalAssignmentInput {
+                goal_id: gents_protocol::goal::deterministic_goal_id(node, session),
+                root_request_doc_id: None,
+            }),
+            ..Default::default()
+        },
+        gents_protocol::request_input::QueueDelivery::Queue,
+    )
+    .await?;
     let request_id = uuid::Uuid::new_v4().to_string();
     let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let spec = RequestSpec {
+        input,
         retry_key: Some(format!("goal-request:{request_id}")),
         retry: Some(RetryLink {
             parent_request_id: None,

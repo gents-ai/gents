@@ -141,7 +141,7 @@ pub async fn send_chat_message(
 pub async fn retry_request(
     core: &ClientCore,
     request_id: &str,
-    node_did: Option<&str>,
+    node_did: &str,
 ) -> Result<ChatSendResult> {
     let parent = core.request_in_scope(request_id, node_did)?;
     Ok(core.retry_request(&parent).await?.into())

@@ -8,7 +8,7 @@ use crate::support::interrupt::BootedAgent;
 use crate::support::live_inference::{
     bind_target, boot_live_agent, live_target, wait_for_request_terminal,
 };
-use crate::support::{test_p2p_db_with_admission, TestDb, TestP2pAdmission};
+use crate::support::{test_p2p_db_with_admission, TestDb};
 
 const CONCURRENT_WAVES: usize = 4;
 
@@ -210,3 +210,5 @@ async fn concurrent_multiwave_single_push_worker_converges_with_live_inference()
     tracing::info!("[p2p-admission-live] PASS concurrent multi-wave under single push worker with discovery peers");
     Ok(())
 }
+
+use gents_p2p::test_support::transport::TestP2pAdmission;

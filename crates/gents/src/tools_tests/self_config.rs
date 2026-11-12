@@ -1,19 +1,18 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::{json, Value};
 
-use gents_documents::patch::{SelfConfigPatch, SelfConfigTarget};
-use gents_loop::tool::{Tool, ToolDyn};
 use gents_protocol::operations::StringUpdate;
 use gents_store::graphql::escape_graphql_string;
 use gents_tools::builtin::self_config::*;
 
-use gents_tools::builtin::self_config::{agent_management, command};
+use gents_tools::builtin::self_config::agent_management;
 
 mod agent_creation_native_tests;
-mod agent_operation_text_tests;
-mod fixture;
+
 mod tests;
 mod text_tests;
+
+mod fixture;

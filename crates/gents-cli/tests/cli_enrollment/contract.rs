@@ -162,7 +162,6 @@ async fn run_contract_with_streaming_cadence(
         let core = Arc::new(ClientCore::start_with_paths_and_options(
             DesktopPaths::from_root(&client_home), ClientCoreOptions::local_only(),
         ).await?);
-        core.set_selected_node_did(Some(node_did.clone()));
         let enroll_budget = if readiness_timestamp.is_some() {
             ENROLL_BUDGET + AGED_HISTORY_RECOVERY
         } else {
@@ -279,7 +278,6 @@ async fn run_contract_with_streaming_cadence(
             DesktopPaths::from_root(&client_home), ClientCoreOptions::local_only(),
         ).await?);
         let client_core_ready = reconnect_started.elapsed();
-        core.set_selected_node_did(Some(node_did.clone()));
         let recovered = timeout(RECONNECT_BUDGET.saturating_sub(reconnect_started.elapsed()), async {
             wait_for_chat_ready_enrollment(&core, &node_did).await?;
             let route_ready = reconnect_started.elapsed();
@@ -611,9 +609,9 @@ async fn wait_for_runtime_reply(
         }
     };
     let observer_visibility = async {
-        let mut store_updates = core.store_change_updates();
+        let mut store_updates = core.store_updates();
         loop {
-            if core.store().snapshot().requests.iter().any(|row| {
+            if core.stores().snapshot(agent).requests.iter().any(|row| {
                 row.request_id == request
                     && row
                         .lifecycle_state
@@ -664,7 +662,7 @@ async fn wait_for_runtime_reply(
 struct ReadinessProbe {
     node: Arc<gents::defra_node::Node>,
     p2p: Arc<dyn defra_p2p_adapter::P2POperations>,
-    store: Arc<gents_desktop_core::client::ObservedStore>,
+    stores: Arc<gents_desktop_core::client::ObservedStores>,
     graphql: String,
     agent: String,
 }
@@ -674,7 +672,7 @@ impl ReadinessProbe {
         Self {
             node: core.node_arc(),
             p2p: core.p2p().clone(),
-            store: core.store().clone(),
+            stores: core.stores().clone(),
             graphql: graphql.to_owned(),
             agent: agent.to_owned(),
         }
@@ -684,7 +682,7 @@ impl ReadinessProbe {
         let Self {
             node,
             p2p,
-            store,
+            stores,
             graphql,
             agent,
         } = self;
@@ -725,8 +723,8 @@ impl ReadinessProbe {
                 .ok()
                 .and_then(|response| response.data.as_ref())
                 .and_then(|data| highest_commit(data.get("_commits")));
-            let client_rows = store
-                .snapshot()
+            let client_rows = stores
+                .snapshot(agent)
                 .node_readiness
                 .iter()
                 .filter(|row| &row.node_did == agent)
@@ -1004,9 +1002,9 @@ async fn seed_readiness_history(
 /// database never holds the runtime's NodeReadiness history.
 async fn wait_for_readiness_revision(core: &ClientCore, agent: &str, expected: &str) -> Result<()> {
     let expected = chrono::DateTime::parse_from_rfc3339(expected)?;
-    let mut updates = core.store_change_updates();
+    let mut updates = core.store_updates();
     loop {
-        let snapshot = core.store().snapshot();
+        let snapshot = core.stores().snapshot(agent);
         if let Some(row) = snapshot
             .node_readiness
             .iter()
@@ -1092,7 +1090,6 @@ async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Re
                 let core = Arc::new(ClientCore::start_with_paths_and_options(
                     DesktopPaths::from_root(path), ClientCoreOptions::local_only(),
                 ).await?);
-                core.set_selected_node_did(Some(node_did.clone()));
                 let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}"), &graphql).await?;
                 let pending = core.request_status_enrollment_with_label(&status, Some("activity test")).await?;
                 wait_for_runtime_enrollment_request(&graphql, &pending.request_id).await.context("publishing activity enrollment request")?;
@@ -1226,7 +1223,6 @@ async fn run_live_contract(readiness_revisions: usize) -> Result<()> {
                 )
                 .await?,
             );
-            core.set_selected_node_did(Some(node_did.clone()));
             let enrolled = timeout(
                 ENROLL_BUDGET
                     + if revision.is_some() {
@@ -1334,7 +1330,6 @@ async fn run_live_contract(readiness_revisions: usize) -> Result<()> {
                 )
                 .await?,
             );
-            core.set_selected_node_did(Some(node_did.clone()));
             timeout(RECONNECT_BUDGET, async {
                 wait_for_chat_ready_enrollment(&core, &node_did).await?;
                 wait_for_client_node_readiness(&core, &node_did).await?;

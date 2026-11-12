@@ -758,9 +758,10 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         "expected build metadata in /version body: {version}"
     );
 
-    let bootstrap = gents_desktop_core::local_runtime::fetch_runtime_connection_payload(&format!(
-        "http://127.0.0.1:{port}"
-    ))
+    let bootstrap = gents_desktop_core::local_runtime::fetch_runtime_connection_payload(
+        &format!("http://127.0.0.1:{port}"),
+        None,
+    )
     .await?;
     assert_eq!(bootstrap["node_did"], node_did);
     assert!(bootstrap.get("enrollment").is_some());

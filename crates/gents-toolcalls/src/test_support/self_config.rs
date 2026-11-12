@@ -119,11 +119,17 @@ pub struct SelfConfigFixture {
 
 impl SelfConfigFixture {
     pub async fn new(name: &str) -> Self {
-        let (db, _user, user_access, binding) = gents_inference::test_support::signed_test_node(
+        let db = gents_inference::test_support::test_db(
             name,
             gents_session::test_support::no_lifecycle_plugins(),
         )
         .await;
+        Self::from_db(db, name).await
+    }
+
+    pub async fn from_db(db: gents_inference::test_support::TestDb, name: &str) -> Self {
+        let (db, _user, user_access, binding) =
+            gents_inference::test_support::signed_test_node_from_db(db, name).await;
         let agent =
             gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
                 .expect("fixture Agent is derived from the held runtime");

@@ -1,7 +1,7 @@
 use gents_store::config_client::GraphqlEndpoint;
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use gents_documents::inference_backend::UNKNOWN_PROBE_STATUS;
 use gents_inference::admission::call_state_holds_backend_slot;
@@ -11,9 +11,8 @@ use gents_protocol::row::{
 };
 use gents_toolcalls::call::lifecycle::deadline_is_expired;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-use gents_store::config_client::post_graphql;
+use gents_store::config_client::ConfigAccess;
 
 const SNAPSHOT_SOURCE: &str = "graphql.derived_admission_state";
 
@@ -196,111 +195,80 @@ struct SlotCounts {
 
 pub async fn load_fleet_slot_snapshot(graphql: &GraphqlEndpoint) -> Result<FleetSlotSnapshot> {
     let generated_at = Utc::now();
-    let response = post_graphql(graphql, fleet_slot_snapshot_query()).await?;
-    let envelope = decode_fleet_slot_query_response(response)?;
+    let access = ConfigAccess::Graphql(graphql.clone());
+    let envelope = access
+        .transact_readonly("views.http.fleet_slots", |txn| {
+            Box::pin(async move {
+                let nodes = txn
+                    .read_view(&gents_documents::views::config::VisibleNodes::new())
+                    .await?;
+                let mut data = FleetSlotQueryEnvelope {
+                    agents: Vec::new(),
+                    profiles: Vec::new(),
+                    backends: Vec::new(),
+                    calls: Vec::new(),
+                    requests: Vec::new(),
+                    node_readiness: Vec::new(),
+                };
+                for node in nodes {
+                    let node_did = node.document.node_did;
+                    let (agents, profiles, readiness, requests, calls) = txn
+                        .read_views(&(
+                            gents_documents::views::agents::AgentList::new(&node_did),
+                            gents_inference::views::profiles::ProfileList::new(&node_did),
+                            gents_store::views::runtime::NodeReadinessList::new(&node_did),
+                            gents_session::views::requests::RequestRows::new(
+                                gents_session::views::transcript::Scope::Node(node_did.clone()),
+                            )
+                            .processing(),
+                            gents_inference::views::activity::InferenceCalls::new(&node_did)
+                                .active(),
+                        ))
+                        .await?;
+                    data.agents.extend(agents.into_iter().map(|row| AgentRow {
+                        agent_did: row.agent.agent_did,
+                        node_did: row.agent.node_did,
+                        inference_profile_id: Some(row.agent.inference_profile_id),
+                        enabled: Some(row.agent.enabled),
+                    }));
+                    data.profiles
+                        .extend(profiles.into_iter().map(|row| InferenceProfileRow {
+                            profile_id: row.profile.profile_id,
+                            node_did: row.profile.node_did,
+                            backend_id: row.profile.backend_id,
+                        }));
+                    data.calls
+                        .extend(calls.into_iter().map(|row| InferenceCallRow {
+                            backend_id: row.backend_id,
+                            agent_did: row.agent_did,
+                            node_did: Some(row.node_did),
+                            call_state: row.call_state,
+                        }));
+                    data.requests.extend(requests);
+                    data.node_readiness.extend(readiness);
+                    let backends = gents_inference::views::backends::read_inventory_in_txn(
+                        txn,
+                        &gents_inference::views::backends::BackendList::new(&node_did),
+                    )
+                    .await?;
+                    data.backends.extend(backends.into_iter().map(|row| {
+                        BackendRow {
+                            backend_id: row.metadata.backend_id,
+                            node_did: row.metadata.node_did,
+                            enabled: Some(row.metadata.enabled),
+                            max_concurrent: row.metadata.max_concurrent,
+                            max_queue_depth: row.metadata.max_queue_depth,
+                            probe_status: row
+                                .observation
+                                .and_then(|observation| observation.probe_status),
+                        }
+                    }));
+                }
+                Ok::<_, anyhow::Error>(data)
+            })
+        })
+        .await?;
     Ok(build_fleet_slot_snapshot(generated_at, envelope))
-}
-
-fn decode_fleet_slot_query_response(response: Value) -> Result<FleetSlotQueryEnvelope> {
-    let mut data = response
-        .get("data")
-        .filter(|data| data.is_object())
-        .cloned()
-        .with_context(|| {
-            format!("fleet slot snapshot query response missing object data: {response}")
-        })?;
-    attach_backend_observations(&mut data);
-    serde_json::from_value(data).context("decoding fleet slot snapshot query response")
-}
-
-/// Status comes only from the observation the inference owner binds to this
-/// metadata.
-pub(super) fn attach_backend_observations(data: &mut Value) {
-    let observations = data
-        .get("InferenceBackendObservation")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let Some(backends) = data
-        .get_mut("InferenceBackendMetadata")
-        .and_then(Value::as_array_mut)
-    else {
-        return;
-    };
-    for backend in backends {
-        let observation = match (
-            backend["node_did"].as_str(),
-            backend["backend_id"].as_str(),
-            backend["_docID"].as_str(),
-        ) {
-            (Some(node), Some(id), Some(doc)) => {
-                gents_documents::inference_backend::observation_binding::bind_rows(
-                    node,
-                    id,
-                    doc,
-                    &observations,
-                )
-                .ok()
-                .flatten()
-                .cloned()
-            }
-            _ => None,
-        };
-        if let Some(object) = backend.as_object_mut() {
-            for field in ["probe_status", "last_probe"] {
-                let value = observation
-                    .as_ref()
-                    .and_then(|observation| observation.get(field))
-                    .cloned()
-                    .unwrap_or(Value::Null);
-                object.insert(field.to_owned(), value);
-            }
-        }
-    }
-}
-
-fn fleet_slot_snapshot_query() -> &'static str {
-    r#"{
-        Agent(order: { agent_did: ASC }) {
-            agent_did
-            node_did
-            inference_profile_id
-            enabled
-        }
-        InferenceProfile(order: { profile_id: ASC }) {
-            profile_id
-            node_did
-            backend_id
-        }
-        InferenceBackendMetadata(order: { backend_id: ASC }) {
-            _docID
-            backend_id
-            node_did
-            enabled
-            max_concurrent
-            max_queue_depth
-        }
-        InferenceBackendObservation { node_did backend_id metadata_doc_id probe_status }
-        InferenceCall(filter: { call_state: { _in: ["queued", "running"] } }) {
-            backend_id
-            agent_did
-            node_did
-            call_state
-        }
-        AgentRequest(filter: {
-            lifecycle_state: { _eq: "processing" }
-        }) {
-            request_id
-            node_did
-            agent_did
-            deadline
-        }
-        NodeReadiness(order: { node_did: ASC }) {
-            node_did
-            snapshot_json
-            updated_at
-        }
-    }"#
 }
 
 fn build_fleet_slot_snapshot(
@@ -569,41 +537,6 @@ fn clean_string(value: &str) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn observation_status_is_scoped_to_one_physical_backend_owner() {
-        let mut data = serde_json::json!({
-            "InferenceBackendMetadata": [
-                {"_docID":"a1", "node_did":"a", "backend_id":"shared"},
-                {"_docID":"b1", "node_did":"b", "backend_id":"shared"}],
-            "InferenceBackendObservation": [
-                {"node_did":"a", "backend_id":"shared", "metadata_doc_id":"a1", "probe_status":"healthy"},
-                {"node_did":"b", "backend_id":"shared", "metadata_doc_id":"b1", "probe_status":"unhealthy"}]
-        });
-        attach_backend_observations(&mut data);
-        assert_eq!(
-            data["InferenceBackendMetadata"][0]["probe_status"],
-            "healthy"
-        );
-        assert_eq!(
-            data["InferenceBackendMetadata"][1]["probe_status"],
-            "unhealthy"
-        );
-        data["InferenceBackendMetadata"][0]["_docID"] = "a2".into();
-        attach_backend_observations(&mut data);
-        assert!(data["InferenceBackendMetadata"][0]["probe_status"].is_null());
-        data["InferenceBackendObservation"]
-            .as_array_mut()
-            .unwrap()
-            .push(
-                serde_json::json!({"node_did":"a", "backend_id":"shared", "metadata_doc_id":"a1", "probe_status":"other"}),
-            );
-        attach_backend_observations(&mut data);
-        assert!(data["InferenceBackendMetadata"][0]["probe_status"].is_null());
-        assert_eq!(
-            data["InferenceBackendMetadata"][1]["probe_status"],
-            "unhealthy"
-        );
-    }
     use gents_protocol::row::{
         AgentReadinessEntry, NodeReadinessProcessState, NodeReadinessSnapshot,
         NODE_READINESS_FORMAT_VERSION,

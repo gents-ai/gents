@@ -16,83 +16,80 @@ where
     Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum RegistryReadError {
+    #[error("MCP registry owner is required")]
+    MissingNode,
+    #[error("MCP service identity is required")]
+    MissingService,
+    #[error("MCP registry returned an invalid scoped identity")]
+    InvalidIdentity,
+    #[error("duplicate MCP service {service_id} for node {node_did}")]
+    Duplicate {
+        service_id: String,
+        node_did: String,
+    },
+    #[error(transparent)]
+    View(#[from] gents_store::views::ViewError),
+}
+
 pub async fn configured_mcp_services_on(
     access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
-) -> anyhow::Result<Vec<gents_documents::ToolServiceRegistry>> {
-    let response = access.execute(&services_query(node_did)?).await?;
-    parse_services(response.get("data"), node_did)
+) -> Result<Vec<gents_documents::ToolServiceRegistry>, RegistryReadError> {
+    if node_did.trim().is_empty() {
+        return Err(RegistryReadError::MissingNode);
+    }
+    let services = access
+        .read_view(&super::views::Services {
+            node_did,
+            service_id: None,
+            enabled_only: false,
+        })
+        .await?;
+    validate_services(&services, node_did)?;
+    Ok(services)
 }
 
 pub(crate) async fn configured_mcp_service_on(
     access: &gents_store::config_client::ConfigAccess,
     node_did: &str,
     service_id: &str,
-) -> anyhow::Result<Option<gents_documents::ToolServiceRegistry>> {
-    anyhow::ensure!(
-        !service_id.trim().is_empty(),
-        "MCP service identity is required"
-    );
-    let query = services_query_for(node_did, Some(service_id))?;
-    let response = access.execute(&query).await?;
-    Ok(parse_services(response.get("data"), node_did)?
-        .into_iter()
-        .next())
-}
-
-pub(crate) fn services_query(node_did: &str) -> anyhow::Result<String> {
-    services_query_for(node_did, None)
-}
-
-fn services_query_for(node_did: &str, service_id: Option<&str>) -> anyhow::Result<String> {
-    anyhow::ensure!(
-        !node_did.trim().is_empty(),
-        "MCP registry owner is required"
-    );
-    let (fields, _) = gents_documents::config_projection(
-        gents_store::collection::Collection::ToolServiceRegistry,
-        None,
-    )?;
-    let owner = gents_store::graphql::escape_graphql_string(node_did);
-    let service_filter = service_id
-        .map(|id| {
-            format!(
-                ", service_id: {{ _eq: \"{}\" }}",
-                gents_store::graphql::escape_graphql_string(id)
-            )
-        })
-        .unwrap_or_default();
-    let query = format!(
-        "{{ ToolServiceRegistry(filter: {{ node_did: {{ _eq: \"{owner}\" }}{service_filter} }}) {{ {} }} }}",
-        fields.join(" ")
-    );
-    Ok(query)
-}
-
-pub(crate) fn parse_services(
-    data: Option<&serde_json::Value>,
-    node_did: &str,
-) -> anyhow::Result<Vec<gents_documents::ToolServiceRegistry>> {
-    let rows = data
-        .and_then(|data| data.get("ToolServiceRegistry"))
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| anyhow::anyhow!("MCP registry query returned no rows array"))?;
-    let mut names = rapidhash::RapidHashSet::default();
-    let mut services = Vec::with_capacity(rows.len());
-    for row in rows {
-        let service: gents_documents::ToolServiceRegistry = serde_json::from_value(row.clone())?;
-        anyhow::ensure!(
-            service.node_did == node_did && !service.service_id.trim().is_empty(),
-            "MCP registry returned an invalid scoped identity"
-        );
-        anyhow::ensure!(
-            names.insert(service.service_id.clone()),
-            "duplicate MCP service {} for node {node_did}",
-            service.service_id
-        );
-        services.push(service);
+) -> Result<Option<gents_documents::ToolServiceRegistry>, RegistryReadError> {
+    if node_did.trim().is_empty() {
+        return Err(RegistryReadError::MissingNode);
     }
-    Ok(services)
+    if service_id.trim().is_empty() {
+        return Err(RegistryReadError::MissingService);
+    }
+    let services = access
+        .read_view(&super::views::Services {
+            node_did,
+            service_id: Some(service_id),
+            enabled_only: false,
+        })
+        .await?;
+    validate_services(&services, node_did)?;
+    Ok(services.into_iter().next())
+}
+
+pub(crate) fn validate_services(
+    services: &[gents_documents::ToolServiceRegistry],
+    node_did: &str,
+) -> Result<(), RegistryReadError> {
+    let mut names = rapidhash::RapidHashSet::default();
+    for service in services {
+        if service.node_did != node_did || service.service_id.trim().is_empty() {
+            return Err(RegistryReadError::InvalidIdentity);
+        }
+        if !names.insert(service.service_id.as_str()) {
+            return Err(RegistryReadError::Duplicate {
+                service_id: service.service_id.clone(),
+                node_did: node_did.to_owned(),
+            });
+        }
+    }
+    Ok(())
 }
 
 #[derive(PartialEq, Eq)]

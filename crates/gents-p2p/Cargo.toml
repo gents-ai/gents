@@ -44,6 +44,7 @@ tokio-util = "0.7"
 tempfile = "3"
 
 [dev-dependencies]
+gents-p2p = { path = ".", features = ["test-fixtures"] }
 gents-store = { workspace = true, features = ["test-fixtures"] }
 gents-documents = { workspace = true, features = ["test-fixtures"] }
 gents-lean-contract.workspace = true

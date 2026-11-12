@@ -14,10 +14,7 @@ use super::super::super::graphql::normalize_required;
 use super::super::binding::resolve_agent_binding;
 use super::{SubmitRequestOptions, SubmittedRequest};
 
-fn normalize_authored_content<'a>(
-    input: &RequestInput,
-    content: &'a str,
-) -> Result<&'a str> {
+fn normalize_authored_content<'a>(input: &RequestInput, content: &'a str) -> Result<&'a str> {
     anyhow::ensure!(
         input.has_authored_input(content),
         "content must not be empty"

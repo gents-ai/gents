@@ -50,6 +50,21 @@ pub async fn submit_goal_backed_request(
             normalize_required("session_id", session_id)?
         ));
     }
+    options
+        .input
+        .goal_assignment
+        .get_or_insert(gents_protocol::request_input::GoalAssignmentInput {
+            goal_id: gents_protocol::goal::deterministic_goal_id(node_did, session_id),
+            root_request_doc_id: None,
+        });
+    options.input = gents_session::request::lifecycle::prepare_user_message_input(
+        access,
+        node_did,
+        session_id,
+        options.input,
+        gents_protocol::request_input::QueueDelivery::Queue,
+    )
+    .await?;
     let (result, create) = prepare_request_submission(
         access,
         store,

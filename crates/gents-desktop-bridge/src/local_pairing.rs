@@ -156,7 +156,7 @@ pub(crate) async fn fetch_managed_runtime_status(
     let deadline = tokio::time::Instant::now() + MANAGED_STATUS_READY_WINDOW;
     loop {
         let fetched = tokio::select! {
-            fetched = fetch_runtime_connection_payload(status_url.as_str()) => {
+            fetched = fetch_runtime_connection_payload(status_url.as_str(), None) => {
                 fetched.map_err(|error| PairingFailure::Transient(format!(
                     "loading managed runtime enrollment offer: {error:#}"
                 )))

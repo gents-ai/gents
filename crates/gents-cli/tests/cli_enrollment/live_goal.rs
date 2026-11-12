@@ -102,7 +102,7 @@ async fn paired_user_resumes_goal_and_observes_real_agent_turn() -> Result<()> {
             let runtime = identity_from_init(&init)?;
             anyhow::ensure!(runtime.did() == node_did && user_did != node_did, "User and runtime identities differ from the initialized Node");
 
-            let snapshot = core.store().snapshot();
+            let snapshot = core.stores().snapshot(&node_did);
             let template = snapshot.agents.iter().find(|row| row.node_did == node_did && row.agent_did == default_agent)
                 .cloned().context("default Agent unavailable")?;
             let mut context = snapshot.contexts.iter().find(|row| row.node_did == node_did && Some(&row.context_id) == template.context_id.as_ref())

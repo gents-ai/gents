@@ -16,6 +16,7 @@ pub mod metrics_scrape;
 pub mod pack_install;
 pub mod pack_install_client;
 mod pack_watch;
+pub mod pack_wire;
 pub mod private_reader;
 pub mod prometheus;
 pub mod router;

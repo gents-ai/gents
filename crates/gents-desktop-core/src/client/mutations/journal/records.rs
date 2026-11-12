@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;
 use gents_store::config_client::ConfigApplyTxn;
-use gents_store::graphql::escape_graphql_string;
+use gents_store::views::journals::{PendingSubmission, PendingSubmissionRow};
 
 pub(crate) mod goal;
 pub(crate) mod publication;
@@ -51,29 +51,11 @@ fn decode(payload: &str, request_id: &str) -> Result<Entry> {
     }
 }
 
-fn query(request_id: &str) -> String {
-    let id = escape_graphql_string(request_id);
-    format!("{{ PendingChatSubmission(filter: {{request_id: {{_eq: \"{id}\"}}}}, limit: 2) {{_docID payload}} }}")
-}
-
-fn row(data: &serde_json::Value, request_id: &str) -> Result<Option<(String, Entry)>> {
-    let rows = data
-        .get("PendingChatSubmission")
-        .and_then(serde_json::Value::as_array)
-        .context("pending submission query omitted rows")?;
+fn row(rows: Vec<PendingSubmissionRow>, request_id: &str) -> Result<Option<(String, Entry)>> {
     anyhow::ensure!(rows.len() <= 1, "retained submission identity is ambiguous");
-    rows.first()
-        .map(|row| {
-            let doc_id = row
-                .get("_docID")
-                .and_then(serde_json::Value::as_str)
-                .context("pending submission has no document identity")?;
-            let payload = row
-                .get("payload")
-                .and_then(serde_json::Value::as_str)
-                .context("pending submission has no payload")?;
-            Ok((doc_id.to_owned(), decode(payload, request_id)?))
-        })
+    rows.into_iter()
+        .next()
+        .map(|row| Ok((row.doc_id, decode(&row.payload, request_id)?)))
         .transpose()
 }
 
@@ -81,11 +63,8 @@ async fn read_in_txn(
     txn: &ConfigApplyTxn<'_>,
     request_id: &str,
 ) -> Result<Option<(String, Entry)>> {
-    let response = txn.execute(&query(request_id)).await?;
     row(
-        response
-            .get("data")
-            .context("pending submission query omitted data")?,
+        txn.read_view(&PendingSubmission { request_id }).await?,
         request_id,
     )
 }

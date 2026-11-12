@@ -1,21 +1,17 @@
 ---- MODULE WindowIndependence ----
 (***************************************************************************)
 (* Several desktop windows, each on its own node (Lean `ClientWindowScope`). *)
-(* One client core serves them all: one node-scoped observer source per     *)
-(* runtime publishes into one ObservedStore, and its change notice is       *)
-(* broadcast to every window (`desktop://client-updated`). Each window owns *)
-(* its node selection (`selected_nodes_by_window`), its pack watches        *)
-(* (`UxWatchRegistry`, PackUxWatch) and its store view: on a notice it      *)
-(* reads its own node's slice through a bridge command and publishes the    *)
+(* One client core serves them all: one observer source per runtime        *)
+(* publishes into that node's own ObservedStore, and a store's change      *)
+(* notice is broadcast to every window (`desktop://client-updated`). Each   *)
+(* window owns its node selection (`selected_nodes_by_window`), its pack    *)
+(* watches (`UxWatchRegistry`, PackUxWatch) and its store view: on a notice *)
+(* it reads its own node's store through a bridge command and publishes the *)
 (* result only if the view's epoch is unchanged (a selection bumps it).     *)
 (*                                                                         *)
 (* A command names its node or falls back to the calling window's own       *)
-(* selection. `SharedFallback` is the code before this model: the fallback *)
-(* is the client core's one `selected_node_did`, which names a node only    *)
-(* while exactly one window is open, so a second window leaves every        *)
-(* window's node-scoped views (MCP services, backend health) without a      *)
-(* node. `CancelOnSwitch = FALSE` keeps a window's pack watch on its old    *)
-(* node.                                                                    *)
+(* selection; no selection is shared between windows.                      *)
+(* `CancelOnSwitch = FALSE` keeps a window's pack watch on its old node.    *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets
 
@@ -24,7 +20,6 @@ CONSTANTS
   Nodes,
   MaxWrites,       \* runtime writes per node
   MaxSwitch,       \* selection changes in a behavior
-  SharedFallback,  \* RED: a window's read resolves the core's one shared selection
   CancelOnSwitch   \* FALSE: a selection change keeps the old node's watch
 
 None == "none"
@@ -33,7 +28,7 @@ NoVer == MaxWrites + 1
 VARIABLES
   sel,        \* window -> selected node
   latest,     \* node -> runtime document version
-  observed,   \* node -> version the shared ObservedStore shows (node scoped)
+  observed,   \* node -> version the node's own ObservedStore shows
   dirty,      \* window -> a change notice arrived since its last read began
   epoch,      \* window -> view epoch
   reading,    \* window -> in-flight read [node, epoch]
@@ -67,14 +62,14 @@ Init ==
   /\ watch = [w \in Windows |-> None]
   /\ switches = 0 /\ crossed = FALSE
 
-(* The runtime and the shared observer. *)
+(* The runtime and the observer. *)
 
 Write(n) ==
   /\ latest[n] < MaxWrites /\ latest' = [latest EXCEPT ![n] = @ + 1]
   /\ UNCHANGED <<sel, observed, dirty, epoch, reading, view, watch, switches, crossed>>
 
-\* The node's source delivers the change and the store publishes it; the
-\* notice reaches every window.
+\* The node's source delivers the change and the node's store publishes it;
+\* the notice reaches every window.
 Observe(n) ==
   /\ observed[n] < latest[n] /\ observed' = [observed EXCEPT ![n] = latest[n]]
   /\ dirty' = [w \in Windows |-> TRUE]
@@ -106,14 +101,9 @@ WatchDeliver(w) ==
   /\ crossed' = (crossed \/ watch[w] # sel[w])
   /\ UNCHANGED <<sel, latest, observed, dirty, epoch, reading, view, watch, switches>>
 
-\* The core's shared selection names a node only while one window is open.
-Shared == IF Cardinality(Windows) = 1 THEN sel[CHOOSE w \in Windows : TRUE] ELSE None
-
-Scope(w) == IF SharedFallback THEN Shared ELSE sel[w]
-
 StartRead(w) ==
-  /\ dirty[w] /\ reading[w].node = None /\ Scope(w) # None
-  /\ reading' = [reading EXCEPT ![w] = [node |-> Scope(w), epoch |-> epoch[w]]]
+  /\ dirty[w] /\ reading[w].node = None /\ sel[w] # None
+  /\ reading' = [reading EXCEPT ![w] = [node |-> sel[w], epoch |-> epoch[w]]]
   /\ dirty' = [dirty EXCEPT ![w] = FALSE]
   /\ UNCHANGED <<sel, latest, observed, epoch, view, watch, switches, crossed>>
 

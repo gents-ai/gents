@@ -1,8 +1,8 @@
 use anyhow::{anyhow, bail, Result};
 use gents_desktop_core::client::ClientCore;
 use gents_documents::{Schedule, Task};
-use gents_protocol::row::AgentRequestRow;
 use gents_protocol::operations::request::RequestRef;
+use gents_protocol::row::AgentRequestRow;
 
 use super::super::types::{
     EventSourceDeleteRequest, EventSourceSaveRequest, ScheduleRunRequest, ScheduleSaveRequest,
@@ -10,14 +10,10 @@ use super::super::types::{
 };
 use super::util::require_trimmed;
 
-fn schedule_for_run<'a>(
-    rows: &'a [Schedule],
-    id: &str,
-    node_did: Option<&str>,
-) -> Result<&'a Schedule> {
+fn schedule_for_run<'a>(rows: &'a [Schedule], id: &str, node_did: &str) -> Result<&'a Schedule> {
     let mut matches = rows
         .iter()
-        .filter(|row| row.schedule_id == id && node_did.is_none_or(|did| row.node_did == did));
+        .filter(|row| row.schedule_id == id && row.node_did == node_did);
     let row = matches
         .next()
         .ok_or_else(|| anyhow!("schedule {id} was not found"))?;
@@ -27,10 +23,10 @@ fn schedule_for_run<'a>(
     Ok(row)
 }
 
-fn task_for_run<'a>(rows: &'a [Task], id: &str, node_did: Option<&str>) -> Result<&'a Task> {
+fn task_for_run<'a>(rows: &'a [Task], id: &str, node_did: &str) -> Result<&'a Task> {
     let mut matches = rows
         .iter()
-        .filter(|row| row.task_id == id && node_did.is_none_or(|did| row.node_did == did));
+        .filter(|row| row.task_id == id && row.node_did == node_did);
     let row = matches
         .next()
         .ok_or_else(|| anyhow!("task {id} was not found"))?;
@@ -38,6 +34,14 @@ fn task_for_run<'a>(rows: &'a [Task], id: &str, node_did: Option<&str>) -> Resul
         bail!("task {id} is ambiguous across agent scopes");
     }
     Ok(row)
+}
+
+/// The node a run names; a run is resolved only in that node's own store.
+fn run_node(node_did: Option<String>) -> Result<String> {
+    require_trimmed(
+        "node_did",
+        node_did.ok_or_else(|| anyhow!("a run names its node"))?,
+    )
 }
 
 async fn load_agent_request_by_request_id(
@@ -70,12 +74,9 @@ pub async fn run_schedule_config(
     request: ScheduleRunRequest,
 ) -> Result<TaskRunResult> {
     let schedule_id = require_trimmed("schedule_id", request.schedule_id)?;
-    let store = core.store().snapshot();
-    let selected_node_did = request
-        .node_did
-        .map(|did| require_trimmed("node_did", did))
-        .transpose()?;
-    let schedule = schedule_for_run(&store.schedules, &schedule_id, selected_node_did.as_deref())?;
+    let node_did = run_node(request.node_did)?;
+    let store = core.stores().snapshot(&node_did);
+    let schedule = schedule_for_run(&store.schedules, &schedule_id, &node_did)?;
     let submitted = core
         .fire_schedule_now_for_node(&schedule.node_did, &schedule_id)
         .await?;
@@ -103,12 +104,9 @@ pub async fn save_trigger_config(core: &ClientCore, request: TriggerSaveRequest)
 pub async fn run_task_config(core: &ClientCore, request: TaskRunRequest) -> Result<TaskRunResult> {
     let task_id = require_trimmed("task_id", request.task_id)?;
     let args = request.args.unwrap_or_else(|| serde_json::json!({}));
-    let store = core.store().snapshot();
-    let selected_node_did = request
-        .node_did
-        .map(|did| require_trimmed("node_did", did))
-        .transpose()?;
-    let task = task_for_run(&store.tasks, &task_id, selected_node_did.as_deref())?;
+    let node_did = run_node(request.node_did)?;
+    let store = core.stores().snapshot(&node_did);
+    let task = task_for_run(&store.tasks, &task_id, &node_did)?;
     let submitted = core
         .fire_task_now_for_node(&task.node_did, &task_id, args)
         .await?;

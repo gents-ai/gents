@@ -1,3 +1,6 @@
+import Proofs.Conformance.Views
+import Proofs.Conformance.AgentViews
+import Proofs.Conformance.InferenceViews
 import Proofs.Conformance.PluginGrantDeclaration
 import Proofs.Conformance.EnrollmentRenewalNotices
 import Proofs.Conformance.ToolDispatch
@@ -66,7 +69,6 @@ import Proofs.Conformance.CommandIsolation
 import Proofs.Conformance.CompactionCheckpoint
 import Proofs.Conformance.ClientDataPublicationCases
 import Proofs.Conformance.ClientTelemetry
-import Proofs.Conformance.ClientObservationScope
 import Proofs.Conformance.InferenceObservation
 import Proofs.Store.Identity.PublicationConformance
 import Proofs.Session.Identity.DelegatedPublicationCases
@@ -678,8 +680,6 @@ def snapshotSessionCasesJson : String :=
     ++ "\"desktop_client_shell_cases\":"
       ++ Conformance.ClientShellContracts.desktopClientShellCasesJson ++ ","
     ++ "\"client_telemetry_cases\":" ++ Conformance.ClientTelemetry.casesJson ++ ","
-    ++ "\"client_observation_scope_cases\":"
-      ++ Conformance.ClientObservationScope.casesJson ++ ","
     ++ "\"inference_observation_cases\":"
       ++ Conformance.InferenceObservation.casesJson ++ ","
     ++ "\"inference_visibility_cases\":"
@@ -801,6 +801,7 @@ def snapshotClientCasesJson : String :=
     ++ "\"plugin_pin_cases\":" ++ PackInstallation.pinCasesJson ++ ","
     ++ "\"pack_wire_lock_cases\":" ++ PackInstallation.wireLockCasesJson ++ ","
     ++ "\"pack_wire_target_cases\":" ++ PackInstallation.wireTargetCasesJson ++ ","
+    ++ "\"pack_operator_wire_cases\":" ++ PackInstallation.operatorWireCasesJson ++ ","
     ++ "\"pack_finality_cases\":" ++ PackInstallation.finalityCasesJson ++ ","
     ++ "\"hosted_plugin_cases\":" ++ PackInstallation.hostedPluginCasesJson ++ ","
     ++ "\"pack_eval_subject_cases\":" ++ PackInstallation.evalSubjectCasesJson ++ ","
@@ -962,6 +963,8 @@ def snapshotRecoveryCasesJson : String :=
     ++ "\"recovery_sweep_cases\":"
       ++ jsonArray
         (Recovery.recoverySweepCases.map recoverySweepCaseJson) ++ ","
+    ++ "\"recovery_sweep_ids\":"
+      ++ jsonArray (Recovery.registeredRecoverySweepIds.map jsonString) ++ ","
     ++ "\"session_message_kill_cases\":"
       ++ jsonArray (Recovery.killCases.map fun (observation, action) =>
         "{\"observation\":" ++ jsonString observation.toContract

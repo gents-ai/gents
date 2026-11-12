@@ -399,3 +399,18 @@ pub async fn grant_modeled_direct_sets(
         set.grant(&admin, &subject).await.unwrap();
     }
 }
+
+pub fn caller_agent_did(
+    message: &crate::call::lifecycle::admission_fixture::PublishedSessionMessage,
+) -> String {
+    message.admission.tool.actor().to_string()
+}
+
+pub mod stream_processor;
+
+pub mod queue;
+pub mod workspace_rejection;
+
+pub mod background_hook;
+
+pub mod script_composition;

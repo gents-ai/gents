@@ -5,7 +5,6 @@ mod file_inventory;
 mod file_review;
 mod goal;
 mod inference_observation;
-mod observation_scope;
 mod p2p_ops;
 mod route_manager;
 mod supervisor;
@@ -30,20 +29,17 @@ use p2p::iroh::{IrohDiscoveryConfig, IrohRelayModeConfig};
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
 
-use super::observe::{ObservedStore, ObserverHandle};
+use super::observe::{ObservedStores, ObserverHandle};
 use super::paths::DesktopPaths;
 use super::peer_directory::{EndedAccess, PeerRecord};
 use super::principal_identity::PrincipalIdentity;
-use super::query::{
-    load_full_snapshot_with_peer_records, load_node_scoped_snapshot_with_peer_records,
-};
+use super::query::load_node_scoped_snapshot_with_peer_records;
 use crate::remote_admin::PairingErrorClass;
 
 pub use enrollment::EnrollmentRequestResult;
 pub use file_review::tool_file_changes_on;
 pub use goal::{GoalSubmissionReference, RetainedGoalSubmission};
 pub use inference_observation::{InferenceActivity, InferenceObservation, InferenceTarget};
-pub use observation_scope::ClientObservationAttachment;
 pub use writes::{ChatRouteRefusal, LocalHomeAccessError, RefreshedRequestProjection};
 
 /// Peer bootstrap retries need a deadline so an unreachable peer does not hold
@@ -241,13 +237,13 @@ impl PairingCollectionStatus {
 }
 
 /// How a direct refresh read settled (`ObserverResync.Settlement`). Both
-/// carry the store version after the refresh.
+/// carry the node's store version after the refresh.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StoreRefresh {
-    /// The read replaced its scope.
+    /// The read replaced the node's store.
     Published { version: u64 },
-    /// A newer publication into the scope rejected the read; the observer was
-    /// asked to read the scope again and owns its catch-up.
+    /// A newer publication into the node's store rejected the read; the
+    /// observer was asked to read the node again and owns its catch-up.
     Superseded { version: u64 },
 }
 
@@ -374,11 +370,10 @@ pub struct ClientCore {
     node: Arc<EmbeddedNode>,
     p2p: Arc<dyn P2POps>,
     route_manager: Arc<route_manager::ClientRouteManager>,
-    store: Arc<ObservedStore>,
+    stores: Arc<ObservedStores>,
     observer: Mutex<Option<ObserverHandle>>,
     sync_state: sync_state::ClientSyncStateOwner,
     p2p_supervisor: Mutex<Option<JoinHandle<()>>>,
-    observation_scope: observation_scope::ObservationScope,
     inference_observation_epoch: std::sync::atomic::AtomicU64,
     inference_observations: std::sync::Mutex<
         RapidHashMap<(String, String), inference_observation::InferenceObservationOwner>,
@@ -551,22 +546,6 @@ impl ClientCore {
             .context("queueing desktop P2P supervisor command")
     }
 
-    pub fn set_selected_node_did(&self, node_did: Option<String>) {
-        self.observation_scope.select(node_did);
-    }
-
-    pub fn selected_node_did(&self) -> Option<String> {
-        self.observation_scope.current()
-    }
-
-    pub fn selected_node_did_rx(&self) -> watch::Receiver<Option<String>> {
-        self.observation_scope.subscribe()
-    }
-
-    pub fn observe_all_nodes(&self) -> Result<ClientObservationAttachment> {
-        self.observation_scope.attach()
-    }
-
     pub async fn peer_records(&self) -> Vec<PeerRecord> {
         self.sync_state.records()
     }
@@ -579,16 +558,16 @@ impl ClientCore {
         self.sync_state.dismiss_ended_access(node_did).await
     }
 
-    pub fn store(&self) -> &Arc<ObservedStore> {
-        &self.store
+    /// Every node's own store; each is published only through its node's
+    /// connection.
+    pub fn stores(&self) -> &Arc<ObservedStores> {
+        &self.stores
     }
 
+    /// Advances on every publication into any node's store and every change
+    /// of the observed nodes or their connection status.
     pub fn store_updates(&self) -> watch::Receiver<u64> {
-        self.store.subscribe()
-    }
-
-    pub fn store_change_updates(&self) -> watch::Receiver<super::StoreUpdateNotice> {
-        self.store.subscribe_changes()
+        self.stores.subscribe()
     }
 
     pub fn bootstrap_errors(&self) -> &[String] {
@@ -606,70 +585,14 @@ impl ClientCore {
         self.send_p2p_command(P2PSupervisorCommand::RepairNow).await
     }
 
-    /// Reads the selected node, or every routed node, and publishes the read
-    /// through the store fence. A read superseded by a newer publication is
-    /// handed to the observer, which reads the node again.
-    pub async fn refresh_store(&self) -> Result<StoreRefresh> {
-        let scoped = self.selected_node_did();
-        let captured = self.store.capture_read();
-        let records = self.sync_state.records();
-        let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
-            self.node_identity.private_key_bytes(),
-        )?;
-        let (snapshot, refused) = match scoped.as_deref() {
-            Some(did) => {
-                match load_node_scoped_snapshot_with_peer_records(did, &records, &capability).await
-                {
-                    Ok(snapshot) => (snapshot, Vec::new()),
-                    Err(error) => {
-                        self.observe_refresh_failure(did, &error);
-                        return Err(error);
-                    }
-                }
-            }
-            None => {
-                let snapshots = load_full_snapshot_with_peer_records(&records, &capability).await;
-                (snapshots.store, snapshots.refused)
-            }
-        };
-        let rows = snapshot.row_count();
-        let published =
-            self.store
-                .replace_reloaded_snapshot_at_read(&captured, scoped.as_deref(), snapshot);
-        if !published {
-            self.store.request_resync(scoped.as_deref());
-        }
-        for node_did in &refused {
-            self.store.clear_node_after_refused_read(node_did);
-        }
-        let refresh = StoreRefresh::at(published, self.store.projection_revision().store_version);
-        tracing::debug!(
-            target: "gents_desktop_core::replication",
-            ?refresh,
-            rows,
-            scoped = scoped.is_some(),
-            "desktop runtime snapshot refreshed"
-        );
-        Ok(refresh)
-    }
-
-    /// Reads the node a write landed on. A write names its node, so it never
-    /// reads every routed node, which `refresh_store` does while no single
-    /// window selection names one.
-    pub(crate) async fn refresh_written_node(&self, node_did: &str) -> Result<StoreRefresh> {
-        match self.refresh_node(node_did).await? {
-            Some(refresh) => Ok(refresh),
-            None => self.refresh_store().await,
-        }
-    }
-
-    /// [`Self::refresh_store`] for one node; `None` when `node_did` is blank.
-    pub async fn refresh_node(&self, node_did: &str) -> Result<Option<StoreRefresh>> {
+    /// Reads `node_did` through its own connection and publishes the read
+    /// into its own store through the store fence. A read superseded by a
+    /// newer publication is handed to the observer, which reads the node again.
+    pub async fn refresh_node(&self, node_did: &str) -> Result<StoreRefresh> {
         let node_did = node_did.trim();
-        if node_did.is_empty() {
-            return Ok(None);
-        }
-        let captured = self.store.capture_read();
+        anyhow::ensure!(!node_did.is_empty(), "a refresh names its node");
+        let store = self.stores.ensure(node_did);
+        let captured = store.capture_read();
         let records = self.sync_state.records();
         let capability = gents_store::config_client::ClientSigningCapability::from_ed25519_key(
             self.node_identity.private_key_bytes(),
@@ -688,13 +611,11 @@ impl ClientCore {
             }
         };
         let rows = snapshot.row_count();
-        let published =
-            self.store
-                .replace_reloaded_snapshot_at_read(&captured, Some(node_did), snapshot);
+        let published = store.replace_reloaded_snapshot_at_read(&captured, snapshot);
         if !published {
-            self.store.request_resync(Some(node_did));
+            store.request_resync();
         }
-        let refresh = StoreRefresh::at(published, self.store.projection_revision().store_version);
+        let refresh = StoreRefresh::at(published, store.projection_revision().store_version);
         tracing::debug!(
             target: "gents_desktop_core::replication",
             node_did,
@@ -702,16 +623,17 @@ impl ClientCore {
             rows,
             "desktop refreshed node projection from its runtime"
         );
-        Ok(Some(refresh))
+        Ok(refresh)
     }
 
     /// The observer owns runtime connection state: a refusal clears the
     /// node's rows and asks it to confirm with its own authenticated read.
     fn observe_refresh_failure(&self, node_did: &str, error: &anyhow::Error) {
+        let store = self.stores.ensure(node_did);
         if gents_store::config_client::TransactionFailure::permission_denied(error) {
-            self.store.clear_node_after_refused_read(node_did);
+            store.clear_after_refused_read();
         } else {
-            self.store.request_resync(Some(node_did));
+            store.request_resync();
         }
     }
 

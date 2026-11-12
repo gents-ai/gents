@@ -1,5 +1,4 @@
 use super::request_patch_cache_reusable;
-use crate::client::observe::ObservedStore;
 use crate::client::store::{ClientStore, ClientStoreRows};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
@@ -28,7 +27,8 @@ fn request_patch(row: AgentRequestRow) -> ClientStore {
 
 #[test]
 fn cached_rows_must_match_physical_rows_at_the_current_fence() {
-    let (store, _) = ObservedStore::new(request_patch(request_row("pending")));
+    let store = crate::client::observe::ObservedStores::new()
+        .insert_for_test("did:test:node", request_patch(request_row("pending")));
     let patch = request_patch(request_row("pending"));
     let captured = store.capture_read();
     assert_eq!(
@@ -63,7 +63,10 @@ fn generated_publication_cases_drive_request_patch_cache_admission() {
         );
     }
     for case in &fixture.fresh_read {
-        let (store, _) = ObservedStore::new(ClientStore::from_rows(ClientStoreRows::default()));
+        let store = crate::client::observe::ObservedStores::new().insert_for_test(
+            "did:test:node",
+            ClientStore::from_rows(ClientStoreRows::default()),
+        );
         let captured = store.capture_read();
         if !case.fence_accepted {
             store.merge_chat_patch(request_patch(request_row("processing")));

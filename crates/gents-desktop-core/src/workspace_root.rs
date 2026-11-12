@@ -7,15 +7,15 @@
 //! this returns: `gents serve` refuses a configured root that is not published.
 
 use anyhow::{Context, Result};
+use gents_documents::views::config::ContextsUsingTools;
 use gents_documents::write_tools_document;
 use gents_documents::{load_agent_context_and_tools_in_txn, Tools};
-use gents_protocol::operations::NextCall;
 use gents_protocol::operations::workspace_root::{
     EnabledUpdate, WorkspaceRootError, WorkspaceRootPublish, WorkspaceRootVerb,
 };
+use gents_protocol::operations::NextCall;
 use gents_protocol::operations::StringUpdate;
 use gents_store::config_client::ConfigAccess;
-use gents_store::graphql::escape_graphql_string;
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -101,15 +101,13 @@ async fn read_unshared_agent_tools(
                     load_agent_context_and_tools_in_txn(txn, node_did, agent_did).await?;
                 context.context("the agent has no Context document")?;
                 let tools = tools.context("the agent has no Tools document")?;
-                let response = txn
-                    .execute(&format!(
-                        "{{ AgentContext(filter: {{tools_id: {{_eq: \"{}\"}}}}) {{ context_id }} }}",
-                        escape_graphql_string(&tools.tools_id)
-                    ))
-                    .await?;
-                let selecting = response["data"]["AgentContext"]
-                    .as_array()
-                    .map_or(0, Vec::len);
+                let selecting = txn
+                    .read_view(&ContextsUsingTools {
+                        node_did: node_did.to_owned(),
+                        tools_id: tools.tools_id.clone(),
+                    })
+                    .await?
+                    .len();
                 ensure_unshared(&tools.tools_id, selecting)?;
                 Ok::<Tools, anyhow::Error>(tools)
             })

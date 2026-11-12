@@ -28,7 +28,20 @@ async fn session_list(args: SessionListArgs) -> Result<()> {
         resolve_config_access(args.list.home.as_deref(), args.list.graphql.as_deref())
             .await
             .context("resolving access for session list")?;
+    let node_did = super::config::binding::resolve_target_node_did(
+        None,
+        args.list
+            .graphql
+            .as_ref()
+            .map(|_| crate::cli::ManifestNodeDidBindingArg::Live),
+        args.list.home.as_deref(),
+        args.list.graphql.as_deref(),
+        Some(&access),
+    )
+    .await
+    .context("resolving session list node")?;
     let input = SessionListInput {
+        node_did: Some(node_did),
         include_archived: args.include_archived,
         ..Default::default()
     };

@@ -134,7 +134,7 @@ where
         },
     )
     .await?;
-    super::notify_config_changed(app, &core).await;
+    super::notify_config_changed(app, &core, node_did).await;
     Ok(signed)
 }
 

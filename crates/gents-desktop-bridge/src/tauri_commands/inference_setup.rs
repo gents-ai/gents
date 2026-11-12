@@ -42,11 +42,11 @@ const LOG_TARGET: &str = "gents_desktop_bridge::inference_setup";
 mod sign_in;
 mod sign_in_platform;
 
-async fn notify_config_changed<R>(app: &AppHandle<R>, core: &ClientCore)
+async fn notify_config_changed<R>(app: &AppHandle<R>, core: &ClientCore, node_did: &str)
 where
     R: Runtime,
 {
-    if let Err(error) = core.refresh_store().await {
+    if let Err(error) = core.refresh_node(node_did).await {
         tracing::warn!(
             target: LOG_TARGET,
             error = %format!("{error:#}"),
@@ -320,7 +320,7 @@ where
     )
     .await
     .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    notify_config_changed(&app, &core).await;
+    notify_config_changed(&app, &core, request.node_did.trim()).await;
     Ok(())
 }
 
@@ -347,7 +347,7 @@ where
     )
     .await
     .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    notify_config_changed(&app, &core).await;
+    notify_config_changed(&app, &core, node_did).await;
     Ok(())
 }
 
@@ -369,7 +369,7 @@ where
     gents_server::accounts::remove_account(&access, node_did, &request.credential_id, None, true)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    notify_config_changed(&app, &core).await;
+    notify_config_changed(&app, &core, node_did).await;
     Ok(())
 }
 
@@ -407,7 +407,7 @@ where
         provider,
     )
     .await?;
-    notify_config_changed(&app, &core).await;
+    notify_config_changed(&app, &core, node_did).await;
     Ok(ProviderAccountView::from(&credential))
 }
 
@@ -1067,7 +1067,6 @@ mod provider_account_tests {
         runtime.publish_node(serde_json::json!({})).await;
         runtime.connect(&core).await;
         let node_did = runtime.node_did();
-        core.set_selected_node_did(Some(node_did.to_string()));
         assert!(matches!(
             core.operator_access(node_did),
             Ok(gents_store::config_client::ConfigAccess::Graphql(_))
@@ -1087,9 +1086,9 @@ mod provider_account_tests {
         let app = tauri::test::mock_builder()
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
             .expect("mock app");
-        notify_config_changed(app.handle(), &core).await;
+        notify_config_changed(app.handle(), &core, node_did).await;
 
-        let snapshot = core.store().snapshot();
+        let snapshot = core.stores().snapshot(node_did);
         let backends: Vec<_> = snapshot
             .inference_backends
             .iter()
@@ -1881,7 +1880,7 @@ where
         &result,
         crate::provider_recovery::ProviderRecoveryResult::Applied { .. }
     ) {
-        notify_config_changed(&app, &core).await;
+        notify_config_changed(&app, &core, &request.scope.node_did).await;
     }
     Ok(result)
 }

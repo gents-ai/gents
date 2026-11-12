@@ -347,6 +347,7 @@ async fn recovered_queued_call_cannot_acquire_provider_permit() {
             node.clone(),
             seeded_pending_call(&node, &signer, "holder-call").await,
             "recovery-cas",
+            gents_store::drop_cleanup::DropCleanup::current(),
             None,
             None,
         )
@@ -358,7 +359,14 @@ async fn recovered_queued_call_cannot_acquire_provider_permit() {
     let waiting = tokio::spawn(async move {
         let pending = seeded_pending_call(&waiting_node, &waiting_signer, "waiting-call").await;
         waiting_controller
-            .acquire(waiting_node, pending, "recovery-cas", None, None)
+            .acquire(
+                waiting_node,
+                pending,
+                "recovery-cas",
+                gents_store::drop_cleanup::DropCleanup::current(),
+                None,
+                None,
+            )
             .await
     });
     let queued = tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -478,6 +486,7 @@ async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once()
             node.clone(),
             seeded_pending_call(&node, &signer, "aborted-finalizer-call").await,
             "recovery-cas",
+            gents_store::drop_cleanup::DropCleanup::current(),
             None,
             None,
         )

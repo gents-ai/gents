@@ -52,8 +52,13 @@ fn mailbox_observation(
     })
 }
 
-pub fn start_mailbox_request(core: &ClientCore, item_id: &str) -> Result<MailboxItemView> {
-    let snapshot = core.store().snapshot();
+/// The open item `item_id` as `node_did`'s own store lists it.
+pub fn start_mailbox_request(
+    core: &ClientCore,
+    node_did: &str,
+    item_id: &str,
+) -> Result<MailboxItemView> {
+    let snapshot = core.stores().snapshot(node_did);
     let row = snapshot
         .mailbox_items
         .iter()
@@ -81,7 +86,7 @@ pub(crate) fn question_reply_content(
         .map(str::trim)
         .filter(|id| !id.is_empty())
         .context("an answer requires causedBySourceDocId")?;
-    let snapshot = core.store().snapshot();
+    let snapshot = core.stores().snapshot(node_did);
     let row = snapshot
         .mailbox_items
         .iter()
@@ -102,8 +107,10 @@ pub(crate) fn question_reply_content(
     .map_err(gents_desktop_core::error::mailbox_operation_failure)
 }
 
-pub async fn dismiss_mailbox(core: &ClientCore, item_id: &str) -> Result<()> {
-    core.dismiss_mailbox_item(item_id).await.map(|_| ())
+pub async fn dismiss_mailbox(core: &ClientCore, node_did: &str, item_id: &str) -> Result<()> {
+    core.dismiss_mailbox_item(node_did, item_id)
+        .await
+        .map(|_| ())
 }
 
 #[cfg(test)]

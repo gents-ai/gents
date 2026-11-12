@@ -10,6 +10,7 @@ export type { PackInstallRequest } from "../generated/PackInstallRequest.js";
 export type { PackInstallView as PackInstallReport } from "../generated/PackInstallView.js";
 export type { PackReviewDocumentView as PackReviewDocument } from "../generated/PackReviewDocumentView.js";
 export type { PackAuthorityAskView as PackAuthorityAsk } from "../generated/PackAuthorityAskView.js";
+export type { PackHostToolRootReviewView as PackFolderAccess } from "../generated/PackHostToolRootReviewView.js";
 export type { PackInferenceNeedsView as PackInferenceNeeds } from "../generated/PackInferenceNeedsView.js";
 export type { PackInferenceSlotNeedView as PackInferenceSlotNeed } from "../generated/PackInferenceSlotNeedView.js";
 export type { PackWireRequest } from "../generated/PackWireRequest.js";

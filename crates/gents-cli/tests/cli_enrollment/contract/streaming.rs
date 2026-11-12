@@ -90,12 +90,14 @@ async fn canonical_live_content(
     use gents_protocol::output::reconstruction::ObservedSegment;
     use gents_protocol::output::StreamPayload;
 
-    let snapshot = core.store().snapshot();
-    let Some(request) = snapshot
-        .requests
-        .iter()
-        .find(|row| row.request_id == request_id)
-    else {
+    let Some(request) = core.stores().node_dids().into_iter().find_map(|node_did| {
+        core.stores()
+            .snapshot(&node_did)
+            .requests
+            .iter()
+            .find(|row| row.request_id == request_id)
+            .cloned()
+    }) else {
         return Ok(None);
     };
     let (Some(request_doc_id), Some(session_id), Some(node_did), Some(generation)) = (
@@ -159,7 +161,7 @@ async fn canonical_live_content(
         &[],
         &[],
         OwnerLiveness {
-            current_request: observed_request_execution_owner(request),
+            current_request: observed_request_execution_owner(&request),
             live_tools: Vec::new(),
         },
         terminal,

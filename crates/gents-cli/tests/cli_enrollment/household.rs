@@ -64,13 +64,13 @@ async fn fresh_enrolled_client_receives_node_administration_and_creates_agent() 
         wait_for_chat_ready_enrollment(&core, &node_did).await?;
         wait_for_client_node_readiness(&core, &node_did).await?;
 
-        let mut node = core.store().snapshot().nodes.iter()
+        let mut node = core.stores().snapshot(&node_did).nodes.iter()
             .find(|row| row.node_did == node_did).cloned()
             .context("enrolled client did not observe Node")?;
         node.display_name = Some("household administrator update".into());
         core.save_node(&node).await.context("updating Node as delegated administrator")?;
 
-        let mut agent = core.store().snapshot().agents.iter()
+        let mut agent = core.stores().snapshot(&node_did).agents.iter()
             .find(|row| row.node_did == node_did && row.agent_did == default_agent)
             .cloned().context("enrolled client did not observe default Agent")?;
         let binding = core.provision_agent_identity(&node_did).await
@@ -275,8 +275,8 @@ async fn desktop_approve_admits_the_member_and_deny_grants_nothing() -> Result<(
             wait_for_client_node_readiness(approved_core, &node_did).await?;
             /* what an admitted client does: read and update the Node it administers */
             let mut node = approved_core
-                .store()
-                .snapshot()
+                .stores()
+                .snapshot(&node_did)
                 .nodes
                 .iter()
                 .find(|row| row.node_did == node_did)

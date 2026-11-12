@@ -1,4 +1,5 @@
 import Proofs.Store.StorageFailure
+import Proofs.Store.Views
 import Proofs.Store.Identity.RelationshipReplay
 import Proofs.Shared.Basic
 import Proofs.Automation.Process
@@ -51,7 +52,6 @@ import Proofs.Automation.Triggers
 import Proofs.Automation.Goals
 import Proofs.Automation.GoalAutomation
 import Proofs.Automation.GoalAutomation.Edit
-import Proofs.Automation.GoalAutomation.UpdateGoal
 import Proofs.Automation.GoalAutomation.Operations
 import Proofs.Automation.GoalAutomation.OperatorResume
 import Proofs.Automation.GoalAutomation.ClaimedPublication

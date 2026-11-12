@@ -946,9 +946,7 @@ async fn install_failure_inbox_triggers(cycle: &Cycle) -> String {
 
 fn create_repository(repo: &Path) -> (String, String) {
     std::fs::create_dir_all(repo.join("src")).unwrap();
-    git(repo, &["init", "-b", "main"]);
-    git(repo, &["config", "user.email", "cycle@example.invalid"]);
-    git(repo, &["config", "user.name", "Workspace Cycle Test"]);
+    gents_session::workspace::init_test_repo(repo, &["-b", "main"]);
     std::fs::write(
         repo.join("src/lib.rs"),
         "pub fn cycle_result() -> u8 { 0 }\n",

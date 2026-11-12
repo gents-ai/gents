@@ -1,5 +1,3 @@
-type AssemblyCapture = (usize, u32, AssemblyBuildPath, AssemblyTrace);
-
 #[tokio::test]
 async fn rendered_request_sink_runs_before_provider_stream() {
     let model = ScriptedModel::new(vec![
@@ -126,9 +124,6 @@ async fn generated_rendered_capture_cases_fence_persist_before_send() {
     }
 }
 
-/// `attempt` is part of the capture key and `AssemblyBuildPath` must flip to
-/// `Repair` exactly on the attempt the repair branch rebuilt; both repair
-/// injection branches (`FailStream` and first-poll failure) run here.
 #[tokio::test(start_paused = true)]
 async fn capture_seam_reports_distinct_attempts_and_the_repair_build_path() {
     let poison = format!("bad{}value", '\u{0007}');
@@ -284,9 +279,6 @@ async fn capture_seam_reports_distinct_attempts_and_the_repair_build_path() {
     );
 }
 
-/// After a repair, `repair_provider_input` rewrites the message vectors in
-/// place, so later turns are assembled from lists no `AgentMessage` row
-/// reproduces; `effective_messages` must carry them.
 #[tokio::test(start_paused = true)]
 async fn a_turn_after_a_repair_still_carries_the_effective_message_list() {
     let poison = format!("bad{}value", '\u{0007}');
@@ -404,10 +396,6 @@ async fn capture_trace_retains_ephemeral_request_context() {
     assert!(effective.iter().any(is_request_context_message));
 }
 
-/// The mis-wired-transport backstop, which nothing else exercises: a provider
-/// stack without `RenderedRequestCapturingHttpClient` still streams, so an
-/// armed capture left pending when the first stream item arrives (or at EOF)
-/// must fail the turn. `ScriptedModel` stands in for exactly that mis-wiring.
 #[tokio::test(start_paused = true)]
 async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
     use gents_inference::rendered_request::scope::{scope_request, test_scope, CaptureScopeKind};
@@ -668,8 +656,6 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
     }
 }
 
-const CAPTURE_SCOPE_SINK: &str = "inference.1";
-
 #[tokio::test]
 async fn codex_affinity_survives_retry_tool_continuation_and_nested_compaction() {
     use gents_loop::provider_input::routing_affinity::current;
@@ -811,7 +797,7 @@ async fn other_provider_loop_has_no_codex_affinity() {
         &hook,
         &writer,
         &mut lifecycle,
-        crate::turn::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
     )
     .await;
     assert_eq!(collected.error, None, "{collected:?}");

@@ -1,5 +1,5 @@
 use gents_protocol::goal_control::{GoalControlOutcome, GoalOperation, SessionGoalControl};
-use gents_protocol::request_admission::{AgentRequestCreate, RequestPurpose};
+use gents_protocol::request_admission::AgentRequestCreate;
 
 use super::*;
 #[cfg(test)]
@@ -255,49 +255,21 @@ pub(crate) async fn prepare_goal_control(
                 "the new goal's first request has already been used".into()
             ));
         }
-        if let Err(error) = request.graphql_input_fields() {
-            return Ok(Err(error.into()));
-        }
         let expected_goal_id = replacement
             .as_ref()
             .map(|(_, identity)| identity.goal_id.clone())
             .unwrap_or_else(|| deterministic_goal_id(&command.node_did, &command.session_id));
-        let first_assignment = gents_protocol::request_input::GoalAssignmentInput {
-            goal_id: expected_goal_id,
-            root_request_doc_id: None,
-        };
-        if request.node_did != command.node_did
-            || request.session_id != command.session_id
-            || request.requester_did
-                != session
-                    .session
-                    .requester_did
-                    .as_deref()
-                    .unwrap_or(&command.requester_did)
-            || request.admission.signer_did != command.requester_did
-            || request.purpose != RequestPurpose::Normal
-            || request.execution_origin != "interactive"
-            || request.input.goal_continuation.is_some()
-            || request.input.goal_assignment.as_ref() != Some(&first_assignment)
-            || !request.input.queue.as_ref().is_some_and(|queue| {
-                queue.source == gents_protocol::request_input::QueueSource::User
-                    && queue.policy == gents_protocol::request_input::QueuePolicy::Append
-                    && queue.position.is_none()
-                    && queue.key.is_none()
-                    && queue.interrupted_request_id.is_none()
-                    && queue.background_completion_wake_version.is_none()
-            })
-            || request.retry_parent_request.is_some()
-            || request.caused_by_trigger_id.is_some()
-            || request.caused_by_source_doc_id.is_some()
-            || request.caused_by_parent_tool_call_doc_id.is_some()
-            || request.retry_key.as_deref()
-                != Some(format!("session-goal:{}", command.command_id).as_str())
-            || session.session.agent_did != request.agent_did
-        {
-            return Ok(Err(
-                "initial goal request does not match its session and author".into(),
-            ));
+        if let Err(refusal) = crate::operations::goal::check_first_request(
+            request,
+            &command.node_did,
+            &command.session_id,
+            &session.session.agent_did,
+            session.session.requester_did.as_deref(),
+            &command.requester_did,
+            &expected_goal_id,
+            Some(&format!("session-goal:{}", command.command_id)),
+        ) {
+            return Ok(Err(refusal.to_string()));
         }
         return Ok(Ok(PreparedGoalControl::Create {
             objective: objective.clone(),

@@ -47,12 +47,12 @@ pub(crate) fn to_sync_health_view(health: &SyncHealth) -> SyncHealthView {
 /// connection, read from the runtime connection observer.
 pub(crate) fn project_client_sync_health(core: &ClientCore) -> SyncHealthView {
     let sync = core.sync_state();
-    let store = core.store();
+    let stores = core.stores();
     let health = project_sync_health(
         &sync,
         sync.directory
             .iter()
-            .map(|record| store.runtime_connection(&record.node_did)),
+            .map(|record| stores.runtime_connection(&record.node_did)),
     );
     to_sync_health_view(&health)
 }
@@ -199,9 +199,9 @@ fn read_init_ceiling(node_home: &std::path::Path) -> Option<InitCeilingView> {
 mod runtime_tasks;
 #[path = "snapshot/task_lineage.rs"]
 mod task_lineage;
+use runtime_tasks::request_matches_node;
 #[cfg(test)]
 use runtime_tasks::{recent_runs_for_task_views, task_run_histories};
-use runtime_tasks::{request_matches_node, source_matches_node};
 pub(crate) use runtime_tasks::{session_summaries, session_summary_order_key};
 
 #[path = "snapshot/runtime.rs"]

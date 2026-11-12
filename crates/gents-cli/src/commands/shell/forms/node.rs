@@ -9,7 +9,6 @@ use serde_json::{json, Value};
 use super::{
     choice, field, helped, merged, problem, refused, shown, switch, tags, tags_field, value,
 };
-use crate::commands::config::crud::{query_collection, NODE_SPEC};
 use crate::commands::shell::sections;
 
 /// The node page's form, read as the node.
@@ -41,30 +40,24 @@ pub(super) async fn save(
 /// The Node row with its `DefaultAgentSelection` shown as `default_agent_did`, which the page
 /// edits as one field though the selection is its own document.
 async fn stored(access: &ConfigAccess, node_did: &str) -> anyhow::Result<Value> {
-    use gents_protocol::document_query::{
-        fields::default_agent_selection as fields, Filter, Query, Selection,
-    };
-    let nodes = query_collection(access, NODE_SPEC, node_did, None).await?;
-    let mut node = nodes
+    let row = access
+        .read_view(&gents_documents::views::config::NodeList::new(node_did).limit(1))
+        .await?
         .into_iter()
         .next()
         .with_context(|| format!("not found: Node {node_did:?}"))?;
-    let rendered = Query::select(Selection::new().field(fields::DEFAULT_AGENT_DID))
-        .filter(Filter::eq(fields::NODE_DID, node_did))
-        .limit(1)
-        .render();
-    let selection = gents_protocol::graphql::graphql_rows_from_response(
-        &access.read(&rendered).await?,
-        "DefaultAgentSelection",
-    );
-    if let (Some(object), Some(default)) = (
-        node.as_object_mut(),
-        selection
-            .first()
-            .and_then(|row| row.get("default_agent_did"))
-            .filter(|did| did.as_str().is_some_and(|did| !did.trim().is_empty())),
-    ) {
-        object.insert("default_agent_did".to_owned(), default.clone());
+    let mut node = serde_json::to_value(row)?;
+    let selection = access
+        .read_view(
+            &gents_documents::views::config::DefaultAgentSelectionList::new(node_did).limit(1),
+        )
+        .await?
+        .into_iter()
+        .next()
+        .and_then(|row| row.document.default_agent_did)
+        .filter(|did| !did.trim().is_empty());
+    if let Some(default) = selection {
+        node["default_agent_did"] = json!(default);
     }
     Ok(node)
 }

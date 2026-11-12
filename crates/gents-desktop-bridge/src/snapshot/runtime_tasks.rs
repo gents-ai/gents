@@ -31,8 +31,6 @@ fn recent_runs_view(runs: &TaskRecentRuns) -> TaskRecentRunsView {
     }
 }
 
-pub(super) use gents_desktop_core::client::source_matches_node;
-
 pub(super) fn request_matches_node(request: &AgentRequestRow, node_did: &str) -> bool {
     request.node_did.as_deref() == Some(node_did)
 }

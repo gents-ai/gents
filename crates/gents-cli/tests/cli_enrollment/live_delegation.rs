@@ -97,7 +97,7 @@ async fn paired_user_sees_and_controls_live_delegated_child() -> Result<()> {
         wait_for_client_node_readiness(&core, &node_did).await?;
         let user = core.node_identity().did().to_owned();
         assert_ne!(user, node_did);
-        let snapshot = core.store().snapshot();
+        let snapshot = core.stores().snapshot(&node_did);
         let template = snapshot.agents.iter().find(|row| row.node_did == node_did && row.agent_did == default_agent)
             .cloned().context("default Agent unavailable")?;
         let context = snapshot.contexts.iter().find(|row| Some(&row.context_id) == template.context_id.as_ref() && row.node_did == node_did)

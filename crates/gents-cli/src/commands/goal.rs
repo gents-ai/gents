@@ -1,11 +1,10 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
-use gents_automation::goal::GoalDocument;
-use gents_protocol::goal::GOAL_FIELDS;
 use gents_protocol::goal_status::GoalStatus;
-use gents_protocol::operations::goal::{GoalOperationError, GoalSetInput, GoalStartInput};
+use gents_protocol::operations::goal::{
+    GoalExpected, GoalOperationError, GoalSetInput, GoalStartInput,
+};
 use gents_store::config_client::ConfigAccess;
-use gents_store::graphql::escape_graphql_string;
 
 use crate::cli::args::{
     GoalCommand, GoalResumeArgs, GoalResumeOnArgs, GoalScopeArgs, GoalSetArgs, GoalShowArgs,
@@ -39,7 +38,7 @@ async fn goal_show_value(
     session_id: &str,
     now: chrono::DateTime<Utc>,
 ) -> Result<serde_json::Value> {
-    let goal = load_goal(access, node_did, session_id)
+    let goal = gents_automation::views::canonical_goal(access, node_did, session_id)
         .await?
         .with_context(|| format!("no durable goal for session {session_id}"))?;
     let mut value = serde_json::to_value(gents_automation::goal::snapshot(&goal, now))?;
@@ -68,6 +67,11 @@ async fn goal_set_value(
     node_did: &str,
     args: &GoalSetArgs,
 ) -> Result<serde_json::Value> {
+    let session_id = args.scope.session.as_str();
+    let observed =
+        gents_automation::operations::goal::observe_revision(access, node_did, session_id)
+            .await?
+            .ok_or_else(|| failure(GoalOperationError::NoGoal(session_id.to_owned()), session_id))?;
     let input = GoalSetInput {
         objective: args.objective.clone(),
         token_budget: if args.clear_token_budget {
@@ -77,6 +81,7 @@ async fn goal_set_value(
         },
         status: args.status.map(GoalStatus::from),
         auto_resume: args.auto_resume,
+        expected: Some(GoalExpected::Revision(observed)),
         ..Default::default()
     };
     let goal =
@@ -129,7 +134,7 @@ async fn goal_start(args: GoalStartArgs) -> Result<()> {
         gents_automation::operations::goal::start(&access, &node_did, &input, &request)
             .await
             .map_err(|error| failure(error, session_id))?;
-    let goal = load_goal(&access, &node_did, session_id)
+    let goal = gents_automation::views::canonical_goal(&access, &node_did, session_id)
         .await?
         .with_context(|| format!("no durable goal for session {session_id}"))?;
     let mut value = serde_json::to_value(gents_automation::goal::snapshot(&goal, Utc::now()))?;
@@ -202,7 +207,7 @@ async fn goal_clear(args: GoalShowArgs) -> Result<()> {
     args.output
         .ensure_supported("automation goal clear", &[OutputFormat::Json])?;
     let (access, node_did) = access_and_did(&args.scope).await?;
-    let goal = load_goal(&access, &node_did, &args.scope.session)
+    let goal = gents_automation::views::canonical_goal(&access, &node_did, &args.scope.session)
         .await?
         .with_context(|| format!("no durable goal for session {}", args.scope.session))?;
     let deleted = gents_automation::goal::delete_goals_for_session_from_access(
@@ -230,50 +235,12 @@ async fn access_and_did(
     Ok((access, node_did))
 }
 
-async fn load_goal(
-    access: &ConfigAccess,
-    node_did: &str,
-    session_id: &str,
-) -> Result<Option<GoalDocument>> {
-    let node_did = escape_graphql_string(node_did);
-    let session_id = escape_graphql_string(session_id);
-    let response = access
-        .execute(&format!(
-            r#"{{
-                Goal(
-                    filter: {{
-                        node_did: {{ _eq: "{node_did}" }},
-                        session_id: {{ _eq: "{session_id}" }}
-                    }},
-                    order: [{{ created_at: ASC }}, {{ goal_id: ASC }}]
-                ) {{ {GOAL_FIELDS} }}
-            }}"#
-        ))
-        .await?;
-    let mut goals: Vec<GoalDocument> = serde_json::from_value(
-        response
-            .pointer("/data/Goal")
-            .cloned()
-            .unwrap_or_else(|| serde_json::Value::Array(Vec::new())),
-    )
-    .context("decoding durable Goal rows")?;
-    goals.sort_by(|left, right| {
-        left.created_at
-            .cmp(&right.created_at)
-            .then_with(|| left.goal_id.cmp(&right.goal_id))
-            .then_with(|| left.doc_id.cmp(&right.doc_id))
-    });
-    Ok(goals.into_iter().next())
-}
-
 impl From<GoalStatusArg> for GoalStatus {
     fn from(value: GoalStatusArg) -> Self {
         match value {
             GoalStatusArg::Active => Self::Active,
             GoalStatusArg::Paused => Self::Paused,
             GoalStatusArg::Blocked => Self::Blocked,
-            GoalStatusArg::UsageLimited => Self::UsageLimited,
-            GoalStatusArg::BudgetLimited => Self::BudgetLimited,
             GoalStatusArg::Complete => Self::Complete,
         }
     }

@@ -2,7 +2,8 @@ use gents_store::config_client::GraphqlEndpoint;
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
-use gents_protocol::row::AgentRequestRow;
+use gents_protocol::session::SessionScope;
+use gents_session::views::transcript::ToolCallRows;
 use gents_store::config_client::ConfigAccess;
 use serde_json::Value;
 
@@ -64,11 +65,29 @@ async fn load_request_show_snapshot(
         gents_session::session::observe_request_output(&access, &canonical_request).await?;
     let envelope = request_output_envelope(&canonical_request, output)?;
 
-    let tool_response = access
-        .read(&request_show_tool_calls_query(&canonical_request)?)
+    let tool_rows = access
+        .read_view(&ToolCallRows::for_request(
+            SessionScope {
+                node_did: canonical_request
+                    .node_did
+                    .clone()
+                    .context("debug request show missing node")?,
+                session_id: canonical_request
+                    .session_id
+                    .clone()
+                    .context("debug request show missing session")?,
+                requester_did: canonical_request.requester_did.clone(),
+            },
+            canonical_request
+                .doc_id
+                .as_deref()
+                .context("debug request show missing physical identity")?,
+        ))
         .await
-        .with_context(|| format!("loading AgentToolCall rows for {request_id}"))?;
-    let tool_rows = gents_protocol::document_query::rows(&tool_response, "AgentToolCall").to_vec();
+        .with_context(|| format!("loading AgentToolCall rows for {request_id}"))?
+        .into_iter()
+        .map(serde_json::to_value)
+        .collect::<Result<Vec<_>, _>>()?;
 
     let child_requests =
         gents_session::session::caused::started_by_request(&access, &canonical_request)
@@ -162,34 +181,4 @@ async fn load_request_show_snapshot(
         child_requests,
         blocked,
     })
-}
-
-fn request_show_tool_calls_query(
-    request: &AgentRequestRow,
-) -> Result<gents_protocol::document_query::Rendered> {
-    use gents_protocol::document_query::{
-        fields::agent_tool_call as fields, session_scope, Direction, Filter, Query, Selection,
-    };
-    let request_doc_id = request
-        .doc_id
-        .as_deref()
-        .context("debug request show missing physical identity")?;
-    let scope = session_scope(
-        request
-            .node_did
-            .as_deref()
-            .context("debug request show missing node")?,
-        request
-            .session_id
-            .as_deref()
-            .context("debug request show missing session")?,
-        request.requester_did.as_deref(),
-    );
-    Ok(Query::select(Selection::owned(
-        "tool_call_key request_id session_id message_sequence tool_name tool_call_id status \
-         lifecycle_state started_at deadline_at completed_at await_mode cancel_cause",
-    ))
-    .filter(scope.and(Filter::eq(fields::REQUEST_DOC_ID, request_doc_id)))
-    .order_by(fields::STARTED_AT, Direction::Asc)
-    .render())
 }

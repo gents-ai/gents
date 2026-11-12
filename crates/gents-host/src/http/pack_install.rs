@@ -72,6 +72,10 @@ struct InstallRequest {
     dependency_sources: Vec<gents_pack::pack::PackSource>,
     inference_slots: Vec<String>,
     dependency_variables: Vec<String>,
+    /// `SLOT=AGENT_DID`: the agent slots this install binds to existing
+    /// agents. The serving runtime's environment never binds one.
+    #[serde(default)]
+    bind_agents: Vec<String>,
     overwrite: bool,
     keep: bool,
     preview: bool,
@@ -188,6 +192,7 @@ pub async fn encode_install_request(
     let node_did = owner.to_owned();
     let inference_slots = args.inference_slots.clone();
     let dependency_variables = args.dependency_variables.clone();
+    let bind_agents = args.bind_agents.clone();
     let wire = args.wire.clone();
     let (overwrite, keep, preview, force_rebind, grant_authority) = (
         args.edited == gents_protocol::operations::pack::EditedDocuments::Overwrite,
@@ -205,6 +210,7 @@ pub async fn encode_install_request(
             dependency_sources,
             inference_slots,
             dependency_variables,
+            bind_agents,
             overwrite,
             keep,
             preview,
@@ -417,6 +423,7 @@ async fn install_owned(
         remote: false,
         inference_slots: request.inference_slots,
         dependency_variables: request.dependency_variables,
+        bind_agents: request.bind_agents,
         preview: request.preview,
         force_rebind_concrete_did: request.force_rebind,
         edited: gents_protocol::operations::pack::EditedDocuments::of_switches(
@@ -433,6 +440,7 @@ async fn install_owned(
         &args,
         explicit,
         dependencies,
+        &gents_tools::surface::PackRoots,
     )
     .await
     .map_err(gents_pack::pack::PackChangeError::into_anyhow)?;

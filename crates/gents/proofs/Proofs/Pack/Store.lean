@@ -249,4 +249,60 @@ theorem lost_archive_release_cleans_index (state : State) (pack : Pack)
   simp only [step]
   exact fun hmem => (List.Nodup.mem_erase_iff hindex).mp hmem |>.1 rfl
 
+/-! ## Removing a pack
+
+Removing a pack forgets its record, then hands the store the archives it used
+(its own and its dependencies') as candidates. The store deletes a candidate
+only when no remaining home record and no installation on the node still
+references it: an archive another pack or a retained history entry names stays,
+so a later reinstall or rollback finds it without the registry. -/
+
+/-- Whether removal deletes this archive: it was a candidate and nothing that
+remains references it. -/
+def unreferenced (candidates referenced : List Pack) (pack : Pack) : Bool :=
+  decide (pack ∈ candidates) && !decide (pack ∈ referenced)
+
+/-- The store after removing a pack whose archives were `candidates`, while
+`referenced` lists the archives the remaining records and installations name;
+and the archives it released. Each released archive goes as `release` takes it:
+with its unpacked copy and its index entry. -/
+def State.removePack (state : State) (candidates referenced : List Pack) :
+    State × List Pack :=
+  let gone := unreferenced candidates referenced
+  let keep := fun pack => !gone pack
+  ({ archives := state.archives.filter keep
+     damaged := state.damaged.filter keep
+     unpacked := state.unpacked.filter keep
+     index := state.index.filter keep },
+    (state.archives ++ state.unpacked).dedup.filter gone)
+
+/-- Removal deletes exactly the candidate archives nothing remaining
+references, and leaves every other archive as it was. -/
+theorem removal_deletes_exactly_the_unreferenced (state : State)
+    (candidates referenced : List Pack) (pack : Pack) :
+    (state.removePack candidates referenced).1.contains pack
+      = (state.contains pack && !unreferenced candidates referenced pack) := by
+  simp [State.removePack, State.contains, List.mem_filter]
+
+/-- An archive a remaining record references survives the removal. -/
+theorem removal_keeps_a_referenced_archive (state : State)
+    (candidates referenced : List Pack) (pack : Pack) (h : pack ∈ referenced) :
+    (state.removePack candidates referenced).1.contains pack = state.contains pack := by
+  simp [removal_deletes_exactly_the_unreferenced, unreferenced, h]
+
+/-- A released archive leaves no index entry behind. -/
+theorem removal_unindexes_what_it_releases (state : State)
+    (candidates referenced : List Pack) (pack : Pack)
+    (h : unreferenced candidates referenced pack = true) :
+    pack ∉ (state.removePack candidates referenced).1.index := by
+  simp [State.removePack, List.mem_filter, h]
+
+/-- The released list names exactly the present candidates nothing references. -/
+theorem removal_reports_what_it_released (state : State)
+    (candidates referenced : List Pack) (pack : Pack) :
+    pack ∈ (state.removePack candidates referenced).2
+      ↔ (pack ∈ state.archives ∨ pack ∈ state.unpacked)
+        ∧ unreferenced candidates referenced pack = true := by
+  simp [State.removePack, List.mem_filter, List.mem_dedup]
+
 end Pack.Store

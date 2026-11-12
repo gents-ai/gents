@@ -625,9 +625,7 @@ async fn interrupt_while_hashing_a_sealed_workspace_kills_git_and_keeps_its_inde
     let repo = tempfile::tempdir().unwrap();
     let probe = tempfile::tempdir().unwrap();
     let dir = repo.path();
-    git(dir, &["init", "-q"]);
-    git(dir, &["config", "user.email", "test@example.com"]);
-    git(dir, &["config", "user.name", "test"]);
+    gents_session::workspace::init_test_repo(dir, &["-q"]);
     std::fs::write(dir.join("tracked.txt"), "sealed\n").unwrap();
     git(dir, &["add", "tracked.txt"]);
     git(dir, &["commit", "-q", "-m", "base"]);

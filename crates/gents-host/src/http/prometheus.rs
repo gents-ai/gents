@@ -16,7 +16,7 @@ use crate::http::liveness::{
     compute_request_liveness_summary, owns_liveness_row, with_active_native_executors,
     LivenessActivityRow, LivenessRequestRow, LivenessToolCallRow, RuntimeLivenessSnapshot,
 };
-use gents_store::config_client::post_graphql;
+use gents_store::config_client::{post_graphql, ConfigAccess};
 use gents_store::graphql::escape_graphql_string;
 
 mod p2p_sync;
@@ -186,7 +186,14 @@ pub async fn render_prometheus_metrics(
     p2p: Option<&P2pMetricsSnapshot>,
     process: Option<&ProcessMetricsSnapshot>,
 ) -> Result<String> {
-    let data = load_metrics_query_data(graphql, local_node_did).await?;
+    let data = load_scrape_metrics_core_data(graphql, local_node_did)
+        .await?
+        .with_activity_reader(
+            graphql,
+            tokio::time::Instant::now() + LIVENESS_ACTIVITY_BUDGET,
+            ActivityReader::Scrape,
+        )
+        .await;
     let data = with_local_native_executors(data);
     let inference_metrics = load_inference_metrics_query_data(graphql).await?;
     let background_completion =
@@ -1343,7 +1350,7 @@ pub async fn load_metrics_query_data(
         .await)
 }
 
-pub async fn load_metrics_core_data(
+async fn load_scrape_metrics_core_data(
     graphql: &GraphqlEndpoint,
     local_node_did: &str,
 ) -> Result<MetricsCoreData> {
@@ -1400,7 +1407,7 @@ pub async fn load_metrics_core_data(
         .get("data")
         .cloned()
         .unwrap_or_else(|| Value::Object(Default::default()));
-    super::fleet_slots::attach_backend_observations(&mut data);
+    attach_scrape_backend_observations(&mut data);
     let envelope: MetricsQueryEnvelope =
         serde_json::from_value(data).context("decoding runtime HTTP query response")?;
     Ok(MetricsCoreData {
@@ -1409,19 +1416,166 @@ pub async fn load_metrics_core_data(
     })
 }
 
+fn attach_scrape_backend_observations(data: &mut Value) {
+    let observations = data
+        .get("InferenceBackendObservation")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let Some(backends) = data
+        .get_mut("InferenceBackendMetadata")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    for backend in backends {
+        let observation = match (
+            backend["node_did"].as_str(),
+            backend["backend_id"].as_str(),
+            backend["_docID"].as_str(),
+        ) {
+            (Some(node), Some(id), Some(doc)) => {
+                gents_documents::inference_backend::observation_binding::bind_rows(
+                    node,
+                    id,
+                    doc,
+                    &observations,
+                )
+                .ok()
+                .flatten()
+                .cloned()
+            }
+            _ => None,
+        };
+        if let Some(object) = backend.as_object_mut() {
+            for field in ["probe_status", "last_probe"] {
+                let value = observation
+                    .as_ref()
+                    .and_then(|observation| observation.get(field))
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                object.insert(field.to_owned(), value);
+            }
+        }
+    }
+}
+
+pub async fn load_metrics_core_data(
+    graphql: &GraphqlEndpoint,
+    local_node_did: &str,
+) -> Result<MetricsCoreData> {
+    let access = ConfigAccess::Graphql(graphql.clone());
+    let envelope = access
+        .transact_readonly("views.http.metrics_core", |txn| {
+            Box::pin(async move {
+                let (runtimes, readiness, requests, tools) = txn
+                    .read_views(&(
+                        gents_store::views::runtime::NodeRuntimeList::new(local_node_did),
+                        gents_store::views::runtime::NodeReadinessList::new(local_node_did),
+                        gents_session::views::requests::RequestRows::new(
+                            gents_session::views::transcript::Scope::Node(
+                                local_node_did.to_owned(),
+                            ),
+                        )
+                        .processing(),
+                        gents_session::views::transcript::ToolCallRows::running(
+                            gents_session::views::transcript::Scope::Node(
+                                local_node_did.to_owned(),
+                            ),
+                        ),
+                    ))
+                    .await?;
+                let backends = gents_inference::views::backends::read_inventory_in_txn(
+                    txn,
+                    &gents_inference::views::backends::BackendList::new(local_node_did),
+                )
+                .await?;
+                Ok::<_, anyhow::Error>(MetricsQueryEnvelope {
+                    node_runtimes: runtimes
+                        .into_iter()
+                        .map(|row| MetricsRuntimeRow {
+                            node_did: row.node_did,
+                            reconcile_phase: row.reconcile_phase.unwrap_or_default(),
+                            last_reconcile_result: row.last_reconcile_result.unwrap_or_default(),
+                            last_reconcile_completed_at: row
+                                .last_reconcile_completed_at
+                                .unwrap_or_default(),
+                        })
+                        .collect(),
+                    node_readiness: readiness,
+                    inference_backends: backends
+                        .into_iter()
+                        .map(|row| MetricsBackendRow {
+                            backend_id: row.metadata.backend_id,
+                            enabled: row.metadata.enabled,
+                            max_concurrent: row.metadata.max_concurrent,
+                            max_queue_depth: row.metadata.max_queue_depth,
+                            probe_status: row
+                                .observation
+                                .as_ref()
+                                .and_then(|row| row.probe_status.clone())
+                                .unwrap_or_else(|| "unknown".to_owned()),
+                            last_probe: row.observation.and_then(|row| row.last_probe),
+                        })
+                        .collect(),
+                    requests,
+                    tool_calls: tools
+                        .into_iter()
+                        .map(|row| LivenessToolCallRow {
+                            request_id: row.request_id.unwrap_or_default(),
+                            node_did: row.node_did.unwrap_or_default(),
+                            tool_call_id: row.tool_call_id.unwrap_or_default(),
+                            tool_name: row.tool_name.unwrap_or_default(),
+                            started_at: row.started_at,
+                            deadline_at: row.deadline_at,
+                            await_mode: row.await_mode,
+                        })
+                        .collect(),
+                })
+            })
+        })
+        .await?;
+    Ok(MetricsCoreData {
+        envelope,
+        local_node_did: local_node_did.to_owned(),
+    })
+}
+
+#[derive(Clone, Copy)]
+enum ActivityReader {
+    Client,
+    Scrape,
+}
+
 impl MetricsCoreData {
     pub async fn with_liveness_activity(
         self,
         graphql: &GraphqlEndpoint,
         deadline: tokio::time::Instant,
     ) -> MetricsQueryData {
+        self.with_activity_reader(graphql, deadline, ActivityReader::Client)
+            .await
+    }
+
+    async fn with_activity_reader(
+        self,
+        graphql: &GraphqlEndpoint,
+        deadline: tokio::time::Instant,
+        reader: ActivityReader,
+    ) -> MetricsQueryData {
         let Self {
             envelope,
             local_node_did,
         } = self;
         let deadline = deadline.min(tokio::time::Instant::now() + LIVENESS_ACTIVITY_BUDGET);
-        let activity =
-            load_liveness_activity(graphql, &local_node_did, &envelope.requests, deadline).await;
+        let activity = load_liveness_activity(
+            graphql,
+            &local_node_did,
+            &envelope.requests,
+            deadline,
+            reader,
+        )
+        .await;
         let liveness = compute_request_liveness_summary(
             Utc::now(),
             &local_node_did,
@@ -1443,6 +1597,7 @@ async fn load_liveness_activity(
     local_node_did: &str,
     requests: &[LivenessRequestRow],
     deadline: tokio::time::Instant,
+    reader: ActivityReader,
 ) -> Vec<LivenessActivityRow> {
     let request_doc_ids = requests
         .iter()
@@ -1461,8 +1616,13 @@ async fn load_liveness_activity(
     let mut activity = Vec::new();
     let mut chunks = request_doc_ids.chunks(LIVENESS_ACTIVITY_CHUNK);
     while let Some(chunk) = chunks.next() {
-        match tokio::time::timeout_at(deadline, load_liveness_activity_chunk(graphql, chunk)).await
-        {
+        let read = async {
+            match reader {
+                ActivityReader::Client => load_liveness_activity_chunk(graphql, chunk).await,
+                ActivityReader::Scrape => load_scrape_liveness_activity_chunk(graphql, chunk).await,
+            }
+        };
+        match tokio::time::timeout_at(deadline, read).await {
             Ok(Ok(rows)) => activity.extend(rows),
             Ok(Err(error)) => tracing::warn!(
                 request_count = chunk.len(),
@@ -1487,7 +1647,72 @@ async fn load_liveness_activity_chunk(
     graphql: &GraphqlEndpoint,
     requests: &[(&str, &str)],
 ) -> Result<Vec<LivenessActivityRow>> {
-    let response = post_graphql(graphql, &liveness_activity_query(requests)).await?;
+    let mut tools = Vec::with_capacity(requests.len() * 2);
+    let mut calls = Vec::with_capacity(requests.len() * 2);
+    for (request_doc_id, node_did) in requests {
+        for completed in [false, true] {
+            let mut view = gents_session::views::transcript::ToolCallRows::new(
+                gents_session::views::transcript::Scope::Node((*node_did).to_owned()),
+            );
+            view.request_doc_ids = Some(vec![(*request_doc_id).to_owned()]);
+            view.started_only = !completed;
+            view.completed_only = completed;
+            view.order = if completed {
+                gents_session::views::transcript::ToolOrder::Completed
+            } else {
+                gents_session::views::transcript::ToolOrder::Started
+            };
+            view.direction = gents_protocol::document_query::Direction::Desc;
+            view.limit = Some(1);
+            tools.push(view);
+        }
+        for edge in [
+            gents_inference::views::activity::ActivityEdge::Started,
+            gents_inference::views::activity::ActivityEdge::Ended,
+        ] {
+            calls.push(
+                gents_inference::views::activity::InferenceCalls::new(*node_did)
+                    .latest_activity(*request_doc_id, edge),
+            );
+        }
+    }
+    let access = ConfigAccess::Graphql(graphql.clone());
+    access
+        .transact_readonly("views.http.liveness_activity", |txn| {
+            let tools = &tools;
+            let calls = &calls;
+            Box::pin(async move {
+                let tools = txn.read_views(tools).await?;
+                let calls = txn.read_views(calls).await?;
+                let mut activity = tools
+                    .into_iter()
+                    .flatten()
+                    .map(|row| LivenessActivityRow {
+                        request_doc_id: row.request_doc_id,
+                        node_did: row.node_did,
+                        started_at: row.started_at,
+                        completed_at: row.completed_at,
+                        ended_at: None,
+                    })
+                    .collect::<Vec<_>>();
+                activity.extend(calls.into_iter().flatten().map(|row| LivenessActivityRow {
+                    request_doc_id: row.request_doc_id,
+                    node_did: Some(row.node_did),
+                    started_at: row.started_at,
+                    completed_at: None,
+                    ended_at: row.ended_at,
+                }));
+                Ok::<_, anyhow::Error>(activity)
+            })
+        })
+        .await
+}
+
+async fn load_scrape_liveness_activity_chunk(
+    graphql: &GraphqlEndpoint,
+    requests: &[(&str, &str)],
+) -> Result<Vec<LivenessActivityRow>> {
+    let response = post_graphql(graphql, &scrape_liveness_activity_query(requests)).await?;
     let data = response
         .get("data")
         .cloned()
@@ -1497,7 +1722,7 @@ async fn load_liveness_activity_chunk(
     Ok(pages.into_values().flatten().collect())
 }
 
-fn liveness_activity_query(requests: &[(&str, &str)]) -> String {
+fn scrape_liveness_activity_query(requests: &[(&str, &str)]) -> String {
     let mut selections = String::new();
     for (index, (request_doc_id, node_did)) in requests.iter().enumerate() {
         let request_doc_id = escape_graphql_string(request_doc_id);

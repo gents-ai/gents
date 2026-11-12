@@ -5,7 +5,10 @@ async fn captured_context_details_require_exact_owner_and_admission_identity() {
     let db = seeded_node().await;
     let node = db.node.clone();
     let mut context = load_session_investigation(
-        &gents_store::config_client::ConfigAccess::local(node.clone()),
+        &gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            db.node_identity.did().parse().unwrap(),
+        ),
         PIN_FIXED_DID,
         "session-a",
     )
@@ -40,7 +43,10 @@ async fn captured_context_details_require_exact_owner_and_admission_identity() {
     let inserted = node.execute(&mutation).await;
     assert!(!inserted.has_errors(), "{:?}", inserted.errors);
     let details = load_session_context_details(
-        &gents_store::config_client::ConfigAccess::local(node.clone()),
+        &gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            db.node_identity.did().parse().unwrap(),
+        ),
         PIN_FIXED_DID,
         Some(PIN_FIXED_DID),
         "session-a",
@@ -62,7 +68,10 @@ async fn captured_context_details_require_exact_owner_and_admission_identity() {
         (PIN_FIXED_DID, Some(PIN_FIXED_DID), "session-b"),
     ] {
         assert!(load_session_context_details(
-            &gents_store::config_client::ConfigAccess::local(node.clone()),
+            &gents_store::config_client::ConfigAccess::local_as(
+                node.clone(),
+                db.node_identity.did().parse().unwrap(),
+            ),
             agent,
             requester,
             session,
@@ -115,7 +124,10 @@ async fn captured_context_details_require_exact_owner_and_admission_identity() {
     let inserted = node.execute(&mutation).await;
     assert!(!inserted.has_errors(), "{:?}", inserted.errors);
     assert!(load_session_context_details(
-        &gents_store::config_client::ConfigAccess::local(node.clone()),
+        &gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            db.node_identity.did().parse().unwrap(),
+        ),
         "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
         Some(PIN_FIXED_DID),
         "session-a",
@@ -157,7 +169,10 @@ async fn captured_context_details_require_exact_owner_and_admission_identity() {
         let inserted = node.execute(&mutation).await;
         assert!(!inserted.has_errors(), "{:?}", inserted.errors);
         assert!(load_session_context_details(
-            &gents_store::config_client::ConfigAccess::local(node.clone()),
+            &gents_store::config_client::ConfigAccess::local_as(
+                node.clone(),
+                db.node_identity.did().parse().unwrap(),
+            ),
             "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
             Some(PIN_FIXED_DID),
             "session-a",
@@ -169,7 +184,10 @@ async fn captured_context_details_require_exact_owner_and_admission_identity() {
     }
     context.call_id = "foreign-call".into();
     assert!(load_session_context_details(
-        &gents_store::config_client::ConfigAccess::local(node.clone()),
+        &gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            db.node_identity.did().parse().unwrap(),
+        ),
         "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7",
         Some(PIN_FIXED_DID),
         "session-a",
@@ -185,7 +203,10 @@ async fn ui_accounting_separates_compaction_usage_from_current_context() {
     let db = seeded_node().await;
     let node = db.node.clone();
     let before = load_session_investigation(
-        &gents_store::config_client::ConfigAccess::local(node.clone()),
+        &gents_store::config_client::ConfigAccess::local_as(
+            node.clone(),
+            db.node_identity.did().parse().unwrap(),
+        ),
         PIN_FIXED_DID,
         "session-a",
     )
@@ -211,7 +232,10 @@ async fn ui_accounting_separates_compaction_usage_from_current_context() {
             }}) {{_docID}} }}"#, escape_graphql_string(doc))).await;
         gents_store::graphql::ensure_no_errors(&response, "context generation fixture").unwrap();
         let observed = load_session_investigation(
-            &gents_store::config_client::ConfigAccess::local(node.clone()),
+            &gents_store::config_client::ConfigAccess::local_as(
+                node.clone(),
+                db.node_identity.did().parse().unwrap(),
+            ),
             PIN_FIXED_DID,
             "session-a",
         )

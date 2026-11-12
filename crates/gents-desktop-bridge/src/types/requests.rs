@@ -135,6 +135,10 @@ pub struct ChatSendRequest {
 #[serde(rename_all = "camelCase")]
 pub struct MailboxItemRequest {
     pub item_id: String,
+    /// The node whose store lists the item; a window's own node when absent.
+    #[ts(optional)]
+    #[ts(optional = nullable)]
+    pub node_did: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]

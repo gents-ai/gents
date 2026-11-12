@@ -1,4 +1,0 @@
----- MODULE MCObserverResyncRefreshFallback ----
-EXTENDS ObserverResync
-
-====

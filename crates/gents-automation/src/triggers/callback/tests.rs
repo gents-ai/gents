@@ -763,9 +763,7 @@ impl GitFixture {
         let root = TempDir::new().expect("tempdir");
         let repo = root.path().join("repo");
         fs::create_dir_all(&repo).unwrap();
-        git(&repo, &["init", "-b", "main"]);
-        git(&repo, &["config", "user.email", "cb@example.com"]);
-        git(&repo, &["config", "user.name", "Callback Test"]);
+        gents_session::workspace::init_test_repo(&repo, &["-b", "main"]);
         fs::write(repo.join("README.md"), "hello\n").unwrap();
         git(&repo, &["add", "README.md"]);
         git(&repo, &["commit", "-m", "init"]);

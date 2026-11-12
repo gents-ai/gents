@@ -1,4 +1,5 @@
 import type {
+  PackFolderAccess,
   PackInstallReport,
   PackReviewDocument,
 } from "@source-inc/gents-desktop-client";
@@ -101,6 +102,16 @@ export function previewPlugins(report: PackInstallReport): {
           .filter((n): n is string => typeof n === "string")
       : [];
   return { plugins: names(report.installed_plugins), pages: names(report.ux_plugins) };
+}
+
+/** The folder on this node a pack's agents would work in, from its preview.
+    An install reports one step per agent under the same name instead, which
+    is not a review. */
+export function folderAccessOf(
+  report: PackInstallReport | null,
+): PackFolderAccess | null {
+  const roots = report?.host_tool_roots;
+  return roots && !Array.isArray(roots) ? roots : null;
 }
 
 /** Why a pack couldn't be read, in words: a pack built for an older Gents

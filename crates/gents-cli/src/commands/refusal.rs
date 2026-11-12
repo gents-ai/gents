@@ -19,7 +19,12 @@ where
     E: std::fmt::Display,
 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(formatter, "{}\nNext: {}", self.error, crate::next_call::command(self.next, None))
+        write!(
+            formatter,
+            "{}\nNext: {}",
+            self.error,
+            crate::next_call::command(self.next, None)
+        )
     }
 }
 

@@ -84,7 +84,9 @@ pub use documents::workspace_integrate_docs_mutation;
 #[cfg(any(test, feature = "test-fixtures"))]
 mod fixture;
 #[cfg(any(test, feature = "test-fixtures"))]
-pub use fixture::{bind_integrate, git, git_worktree_caps, integrate_writer, seal_writer, Fixture};
+pub use fixture::{
+    bind_integrate, git, git_worktree_caps, init_test_repo, integrate_writer, seal_writer, Fixture,
+};
 
 #[cfg(test)]
 mod tests;

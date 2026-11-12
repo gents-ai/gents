@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use gents_protocol::row::AgentRequestRow;
+use gents_protocol::session::SessionScope;
+use gents_session::views::requests::RequestRows;
+use gents_session::views::transcript::Scope;
 use gents_store::config_client::ConfigAccess;
-use gents_store::graphql::escape_graphql_string;
 
 use crate::error::{BridgeError, BridgeErrorCode};
 
@@ -27,26 +29,15 @@ pub(super) async fn load_request_scope(
                     BridgeErrorCode::ProjectionPending,
                     "This chat's file-review scope is not available yet. Open its changes again after it syncs.",
                 ))?;
-                let scope = gents_session::session::public_request_filter(
-                    &gents_protocol::session::session_scope_filter(
-                        node_did,
-                        session_id,
-                        session.session.requester_did.as_deref(),
-                    ),
-                );
-                let response = txn
-                    .execute(&format!(
-                        r#"{{ AgentRequest(filter: {{ {scope}, request_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_id node_did session_id requester_did }} }}"#,
-                        escape_graphql_string(request_id),
-                    ))
-                    .await?;
-                let rows = response["data"]["AgentRequest"]
-                    .as_array()
-                    .context("file-review scope lookup omitted request rows")?
-                    .iter()
-                    .cloned()
-                    .map(serde_json::from_value)
-                    .collect::<std::result::Result<Vec<AgentRequestRow>, _>>()?;
+                let view = RequestRows::new(Scope::Session(SessionScope {
+                    node_did: node_did.to_owned(),
+                    session_id: session_id.to_owned(),
+                    requester_did: session.session.requester_did.clone(),
+                }))
+                .public()
+                .request_ids(vec![request_id.to_owned()])
+                .limit(2);
+                let rows = txn.read_view(&view).await?;
                 let row = find_request_in_scope(&rows, request_id, Some(node_did))?
                     .context(BridgeError::new(
                         BridgeErrorCode::ProjectionPending,

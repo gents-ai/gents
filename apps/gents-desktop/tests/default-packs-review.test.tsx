@@ -182,13 +182,38 @@ describe("the starter packs card", () => {
     expect(restarting()).toBeNull();
   });
 
+  it("says a pack that installed without finishing is installed", async () => {
+    const { api } = harness(ALL, (asked) => ({
+      packs: installed(
+        ALL,
+        asked.filter((p) => p !== "gents/web"),
+      ),
+      failed: [
+        {
+          pack: "gents/web",
+          error: "gents/web is installed, but it was not wired into the Engineer",
+          installed: true,
+        },
+      ],
+    }));
+    renderIn(local(api), <StarterPacksCard />);
+    const dialog = await card();
+    await click(within(dialog).getByRole("button", { name: "Approve all" }));
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert).toHaveTextContent("web is installed with its permissions granted");
+    expect(alert).toHaveTextContent("Approve it again to finish");
+    expect(alert).not.toHaveTextContent("Nothing changed");
+  });
+
   it("shows what could not be installed and keeps the pack", async () => {
     const { api } = harness(ALL, (asked) => ({
       packs: installed(
         ALL,
         asked.filter((p) => p !== "gents/web"),
       ),
-      failed: [{ pack: "gents/web", error: "digest mismatch for gents/web" }],
+      failed: [
+        { pack: "gents/web", error: "digest mismatch for gents/web", installed: false },
+      ],
     }));
     renderIn(local(api), <StarterPacksCard />);
     const dialog = await card();

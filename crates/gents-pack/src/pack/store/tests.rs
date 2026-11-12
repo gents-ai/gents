@@ -171,6 +171,46 @@ fn modelled_pack(pack: &family::Pack) -> (Vec<u8>, PackHeader) {
     test_pack_named(&pack.name, &pack.version.text)
 }
 
+/// Applies one modelled store step to the real store.
+fn apply_step(store: &PackStore, action: Action, pack: &family::Pack, name: &str) -> StepResult {
+    let (bytes, header) = modelled_pack(pack);
+    let archive = store.path(&header.digest).unwrap();
+    match action {
+        Action::Receive => {
+            store.import(bytes.as_slice(), None).expect(name);
+            StepResult::Stored
+        }
+        Action::ReceiveExpectingAnother => {
+            let other = format!("sha256:{}", "0".repeat(64));
+            match store.import(bytes.as_slice(), Some(&other)) {
+                Ok(_) => StepResult::Stored,
+                Err(_) => StepResult::Refused,
+            }
+        }
+        Action::OpenPack => match store.open(&header.digest) {
+            Ok(_) => StepResult::Opened,
+            Err(_) => StepResult::Refused,
+        },
+        Action::Release => {
+            if store.release(&header.digest).expect(name) {
+                StepResult::Released
+            } else {
+                StepResult::NothingToRelease
+            }
+        }
+        Action::LoseArchive => {
+            std::fs::remove_file(&archive).ok();
+            StepResult::Done
+        }
+        Action::Damage => {
+            if archive.exists() {
+                std::fs::write(&archive, b"not a pack").unwrap();
+            }
+            StepResult::Done
+        }
+    }
+}
+
 #[test]
 fn the_store_conforms_to_the_model() {
     family::replay::<Action, StepResult>(|script| {
@@ -179,44 +219,7 @@ fn the_store_conforms_to_the_model() {
         let results = script
             .steps
             .iter()
-            .map(|step| {
-                let (bytes, header) = modelled_pack(&step.pack);
-                let archive = store.path(&header.digest).unwrap();
-                match step.action {
-                    Action::Receive => {
-                        store.import(bytes.as_slice(), None).expect(&script.name);
-                        StepResult::Stored
-                    }
-                    Action::ReceiveExpectingAnother => {
-                        let other = format!("sha256:{}", "0".repeat(64));
-                        match store.import(bytes.as_slice(), Some(&other)) {
-                            Ok(_) => StepResult::Stored,
-                            Err(_) => StepResult::Refused,
-                        }
-                    }
-                    Action::OpenPack => match store.open(&header.digest) {
-                        Ok(_) => StepResult::Opened,
-                        Err(_) => StepResult::Refused,
-                    },
-                    Action::Release => {
-                        if store.release(&header.digest).expect(&script.name) {
-                            StepResult::Released
-                        } else {
-                            StepResult::NothingToRelease
-                        }
-                    }
-                    Action::LoseArchive => {
-                        std::fs::remove_file(&archive).ok();
-                        StepResult::Done
-                    }
-                    Action::Damage => {
-                        if archive.exists() {
-                            std::fs::write(&archive, b"not a pack").unwrap();
-                        }
-                        StepResult::Done
-                    }
-                }
-            })
+            .map(|step| apply_step(&store, step.action, &step.pack, &script.name))
             .collect();
 
         let mut watched: Vec<&family::Pack> = Vec::new();
@@ -292,4 +295,81 @@ fn the_store_conforms_to_the_model() {
                 .collect(),
         }
     });
+}
+
+/// Removal releases exactly the candidate archives no remaining home record
+/// references (Lean `Pack.Store.removal_deletes_exactly_the_unreferenced`),
+/// replayed through `home_removal::release_archives` on a real store.
+#[tokio::test]
+async fn pack_removal_releases_the_archives_the_model_releases() {
+    use gents_lean_vocab::families::pack_store_removal as removal;
+    let as_pack = |pack: &removal::Pack| -> family::Pack {
+        serde_json::from_value(serde_json::to_value(pack).unwrap()).unwrap()
+    };
+    for case in removal::cases::<Action>() {
+        let script = &case.input;
+        let home = tempfile::tempdir().unwrap();
+        let store = PackStore::new(home.path());
+        for step in &script.steps {
+            apply_step(&store, step.action, &as_pack(&step.pack), &script.name);
+        }
+        for (ordinal, pack) in script.referenced.iter().enumerate() {
+            let (_, header) = modelled_pack(&as_pack(pack));
+            let record: crate::pack::HomePackInstall = serde_json::from_value(serde_json::json!({
+                "coordinate": format!("gents/referencing_{ordinal}"),
+                "version": pack.version.text,
+                "digest": header.digest,
+                "kind": "assets",
+                "assets": "",
+                "plugins": [],
+                "installed_at": "2026-01-01T00:00:00Z",
+            }))
+            .unwrap();
+            crate::pack::write_home_install(home.path(), &record).unwrap();
+        }
+        let digests = script
+            .candidates
+            .iter()
+            .map(|pack| modelled_pack(&as_pack(pack)).1.digest)
+            .collect();
+        let released = crate::pack::home_removal::release_archives(home.path(), None, &digests)
+            .await
+            .expect(&script.name);
+        let mut packs: Vec<&removal::Pack> = Vec::new();
+        for pack in script
+            .steps
+            .iter()
+            .map(|step| &step.pack)
+            .chain(&script.candidates)
+            .chain(&script.referenced)
+        {
+            if !packs
+                .iter()
+                .any(|seen| seen.name == pack.name && seen.version.text == pack.version.text)
+            {
+                packs.push(pack);
+            }
+        }
+        case.check(
+            packs
+                .into_iter()
+                .map(|pack| {
+                    let (_, header) = modelled_pack(&as_pack(pack));
+                    removal::RemovalView {
+                        pack: pack.clone(),
+                        released: released.contains(&header.digest),
+                        contains: store.contains(&header.digest).unwrap(),
+                        indexed: store.index_entry_path(&header).is_some_and(|entry| {
+                            std::fs::read_to_string(entry)
+                                .is_ok_and(|recorded| recorded.trim() == header.digest)
+                        }),
+                        unpacked: store
+                            .unpacked_root()
+                            .join(digest_hex(&header.digest).unwrap())
+                            .is_dir(),
+                    }
+                })
+                .collect(),
+        );
+    }
 }

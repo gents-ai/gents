@@ -180,7 +180,13 @@ impl ConfigCommandTool {
                 if operation == "wire" {
                     let (package, agent, remove) = self.parse_pack_wire(&argv[2..])?;
                     return installer
-                        .wire(&package, agent.as_deref(), remove, false)
+                        .wire(
+                            &package,
+                            agent.as_deref(),
+                            remove,
+                            false,
+                            self.holds_catalog_grant(),
+                        )
                         .await;
                 }
                 let operation = PackOperation::for_verb(operation)
@@ -225,7 +231,13 @@ impl ConfigCommandTool {
                 let (package, agent, remove) = self.parse_pack_wire(&argv[1..])?;
                 self.execution.enter_mutation();
                 installer
-                    .wire(&package, agent.as_deref(), remove, true)
+                    .wire(
+                        &package,
+                        agent.as_deref(),
+                        remove,
+                        true,
+                        self.holds_catalog_grant(),
+                    )
                     .await
             }
             other => bail!("unknown pack command {other:?}; see [\"help\",\"pack\"]"),

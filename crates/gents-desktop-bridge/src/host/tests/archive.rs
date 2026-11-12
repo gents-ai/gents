@@ -14,9 +14,13 @@ async fn archive(host: &ClientHost, node: &str, archived: bool, revision: &str) 
     }))
     .unwrap();
     assert!(!command.is_cancellable());
-    host.execute(command, CancellationToken::new())
-        .await
-        .unwrap()
+    host.execute(
+        command,
+        &crate::host::approvals::AttachmentApprovals::default(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap()
 }
 
 fn check_receipt(
@@ -77,10 +81,10 @@ async fn archive_receipts_and_shared_window_state_survive_client_reopen() {
     let node = runtime.node_did().to_owned();
     crate::tests::support::submit_request(&core, &runtime, &agent, "shared-archive", "opening")
         .await;
-    core.refresh_store().await.unwrap();
+    core.refresh_node(&node).await.unwrap();
     let before = core
-        .store()
-        .snapshot()
+        .stores()
+        .snapshot(&node)
         .sessions
         .iter()
         .find(|session| session.session_id == "shared-archive")
@@ -136,7 +140,11 @@ async fn archive_receipts_and_shared_window_state_survive_client_reopen() {
     }))
     .unwrap();
     assert!(second
-        .execute(invalid, CancellationToken::new())
+        .execute(
+            invalid,
+            &crate::host::approvals::AttachmentApprovals::default(),
+            CancellationToken::new()
+        )
         .await
         .is_err());
     let history: protocol::ClientCommand = serde_json::from_value(json!({
@@ -149,8 +157,8 @@ async fn archive_receipts_and_shared_window_state_survive_client_reopen() {
     let mut expected = before;
     expected.archive_revision = restored_revision;
     assert_eq!(
-        core.store()
-            .snapshot()
+        core.stores()
+            .snapshot(&node)
             .sessions
             .iter()
             .find(|session| session.session_id == "shared-archive"),
@@ -167,11 +175,11 @@ async fn archive_receipts_and_shared_window_state_survive_client_reopen() {
     .await
     .unwrap();
     runtime.connect(&reopened).await;
-    reopened.refresh_store().await.unwrap();
+    reopened.refresh_node(&node).await.unwrap();
     assert_eq!(
         reopened
-            .store()
-            .snapshot()
+            .stores()
+            .snapshot(&node)
             .sessions
             .iter()
             .find(|session| session.session_id == "shared-archive"),

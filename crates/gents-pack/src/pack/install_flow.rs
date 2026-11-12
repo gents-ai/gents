@@ -14,6 +14,7 @@ use crate::operations::pack::{
     variable_source,
 };
 use crate::pack::install_review;
+use crate::pack::installation_roots::{self, InstallerRoots};
 use crate::pack::resolved_pack::ResolvedPack;
 use crate::pack::{PackChangeError, PackKind, PackManifest};
 
@@ -31,6 +32,10 @@ pub struct DocumentsInstallRequest {
     /// Install variables: `NAME=VALUE` for every pack of the install,
     /// `NAMESPACE/PACK:NAME=VALUE` for one of them.
     pub dependency_variables: Vec<String>,
+    /// `SLOT=AGENT_DID`: the agent slots this install binds to existing
+    /// agents of the node instead of making new ones
+    /// ([`parse_agent_bindings`]).
+    pub bind_agents: Vec<String>,
     /// Report what the install would write, writing nothing.
     pub preview: bool,
     pub force_rebind_concrete_did: bool,
@@ -258,7 +263,9 @@ fn install_variable_preview_with(
 
 /// Installs `pack` with its already resolved `dependencies` through `access`.
 /// `explicit` is false only when the pack is installed as another pack's
-/// dependency.
+/// dependency. `roots` reads the installer's root the pack's agents take;
+/// the result carries the rows of that plan for the grant that follows
+/// ([`installation_roots::take_planned_root_agents`]).
 pub async fn install_documents_pack_resolved(
     access: &gents_store::config_client::ConfigAccess,
     owner: &str,
@@ -266,13 +273,31 @@ pub async fn install_documents_pack_resolved(
     args: &DocumentsInstallRequest,
     explicit: bool,
     dependencies: Vec<ResolvedPack>,
+    roots: &dyn InstallerRoots,
 ) -> Result<serde_json::Value, PackChangeError> {
-    install_documents_pack_resolved_inner(access, owner, pack, args, explicit, dependencies, None)
-        .await
+    install_documents_pack_resolved_inner(
+        access,
+        owner,
+        pack,
+        args,
+        explicit,
+        dependencies,
+        None,
+        roots,
+        false,
+    )
+    .await
 }
 
 /// [`install_documents_pack_resolved`], writing through `local`'s stores
-/// when the install holds the node's own Node.
+/// when the install holds the node's own Node. With
+/// `refuse_unapproved_root`, a first install whose agents would be granted
+/// reader on the installer's published root is refused, writing nothing,
+/// unless it was given `grant_authority`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the install inputs each entry point supplies, and whether it asks approval for a root grant"
+)]
 pub async fn install_documents_pack_resolved_inner(
     access: &gents_store::config_client::ConfigAccess,
     owner: &str,
@@ -281,10 +306,12 @@ pub async fn install_documents_pack_resolved_inner(
     explicit: bool,
     dependencies: Vec<ResolvedPack>,
     local: Option<&LocalPackAccess>,
+    roots: &dyn InstallerRoots,
+    refuse_unapproved_root: bool,
 ) -> Result<serde_json::Value, PackChangeError> {
     let home = args.home.clone();
     let requested = parse_inference_slots(&args.inference_slots)?;
-    let supplied = parse_variables(&args.dependency_variables)?;
+    let supplied = supplied_variables(&args.dependency_variables, &args.bind_agents)?;
     let environment = |name: &str| install_value(PackActor::User, &supplied, name);
     let temp = tempfile::tempdir().map_err(anyhow::Error::from)?;
     crate::pack::materialize::materialize(pack.archive(), temp.path())?;
@@ -319,6 +346,9 @@ pub async fn install_documents_pack_resolved_inner(
             "inference_needs": needs,
             "would_write": false,
         });
+        if !args.bind_agents.is_empty() {
+            preview["bind_agents"] = agent_binding_preview(&args.bind_agents).into();
+        }
         let dependency_manifests: Vec<_> =
             dependencies.iter().map(ResolvedPack::manifest).collect();
         merge(
@@ -400,6 +430,51 @@ pub async fn install_documents_pack_resolved_inner(
     ResolvedPack::record_graph_sources(&mut prepared, pack, &dependencies);
     let inference = prepared.inference.clone();
     let dependency_inference = prepared.dependency_inference.clone();
+    // The agents this install runs under its installer's root, from its own
+    // plan: what the preview shows, what a first install asks approval for,
+    // and what the receipt lists for the grant that follows.
+    let planned = roots
+        .planned_root_agents(access, owner, pack.manifest(), &prepared)
+        .await?;
+    let root_review = roots.root_review(access, owner, None, &planned).await?;
+    if let Some(published) = root_review
+        .as_ref()
+        .and_then(|review| review["reader_on"].as_str())
+        .filter(|_| refuse_unapproved_root && !args.preview && !args.grant_authority)
+    {
+        let coordinate = format!(
+            "{}/{}",
+            pack.manifest().metadata.namespace,
+            pack.manifest().name
+        );
+        // A reader grant has no recorded consent a reinstall could keep, so
+        // only a first install is refused; a reinstall lists the step.
+        let first = crate::pack::installed_pack_documents(access, owner, &coordinate)
+            .await?
+            .is_empty();
+        if first {
+            let names = |field: &str| {
+                root_review
+                    .as_ref()
+                    .and_then(|review| review[field].as_array())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let root = root_review
+                .as_ref()
+                .and_then(|review| review["root"].as_str())
+                .unwrap_or_default();
+            return Err(anyhow::anyhow!(
+                "{coordinate} installs Tools ({}) whose agents ({}) run host tools under this node's tool root {root}, and installing it grants them reader on the published WorkspaceRoot {published}. Nothing was installed. Install it with --grant-authority to allow that",
+                names("tools"),
+                names("agents")
+            )
+            .into());
+        }
+    }
     if args.preview {
         let variables = std::iter::once(pack)
             .chain(dependencies.iter())
@@ -438,6 +513,12 @@ pub async fn install_documents_pack_resolved_inner(
         preview["inference"] = json!(inference);
         preview["dependency_inference"] = json!(dependency_inference);
         preview["install_variables"] = json!(variables);
+        if let Some(mut review) = root_review {
+            if review.get("reader_on").is_some() {
+                review["granted_with"] = "--grant-authority".into();
+            }
+            preview["host_tool_roots"] = review;
+        }
         return Ok(preview);
     }
     // A dependency installed on its own behalf (`explicit` false) writes no
@@ -546,7 +627,7 @@ pub async fn install_documents_pack_resolved_inner(
         )
         .context("the pack documents were written, but the home install record was not")?;
     }
-    Ok(json!({
+    let mut result = json!({
         "pack": pack.manifest().name,
         "source": pack.label(),
         "digest": pack.digest(),
@@ -557,7 +638,58 @@ pub async fn install_documents_pack_resolved_inner(
         "dependencies": pack.manifest().metadata.dependencies,
         "schemas": schemas,
         "apply": apply,
-    }))
+    });
+    installation_roots::attach_planned_root_agents(&mut result, &planned);
+    Ok(result)
+}
+
+/// The variables one install was given: `NAME=VALUE` and
+/// `NAMESPACE/PACK:NAME=VALUE` ([`parse_variables`]), and the agent slots it
+/// binds ([`parse_agent_bindings`]) as shared variables of that install.
+pub fn supplied_variables(variables: &[String], bind_agents: &[String]) -> Result<PackVariables> {
+    let mut supplied = parse_variables(variables)?;
+    for (name, agent) in parse_agent_bindings(bind_agents)? {
+        anyhow::ensure!(
+            supplied.shared.insert(name.clone(), agent).is_none(),
+            "{name} is given both as a variable and by --bind-agent"
+        );
+    }
+    Ok(supplied)
+}
+
+/// `--bind-agent SLOT=AGENT_DID` as the install variables that bind those
+/// slots: the only source an agent binding is read from, never the
+/// environment ([`crate::operations::pack::install_value`]).
+pub fn parse_agent_bindings(
+    values: &[String],
+) -> Result<std::collections::BTreeMap<String, String>> {
+    let mut provided = std::collections::BTreeMap::new();
+    for item in values {
+        let (slot, agent) = item
+            .split_once('=')
+            .filter(|(slot, agent)| !slot.trim().is_empty() && !agent.trim().is_empty())
+            .with_context(|| format!("--bind-agent {item:?} must be SLOT=AGENT_DID"))?;
+        anyhow::ensure!(
+            provided
+                .insert(
+                    crate::pack::agent_binding_variable(slot.trim()),
+                    agent.trim().to_owned()
+                )
+                .is_none(),
+            "--bind-agent names slot {slot:?} more than once"
+        );
+    }
+    Ok(provided)
+}
+
+/// What a preview lists for `--bind-agent`: each slot the installer binds
+/// and the agent it takes.
+fn agent_binding_preview(values: &[String]) -> Vec<serde_json::Value> {
+    values
+        .iter()
+        .filter_map(|item| item.split_once('='))
+        .map(|(slot, agent)| json!({"slot": slot.trim(), "agent_did": agent.trim(), "source": "provided"}))
+        .collect()
 }
 
 /// Adds `from`'s fields to the object `into`.

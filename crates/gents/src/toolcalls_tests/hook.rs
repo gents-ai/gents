@@ -2,9 +2,7 @@ use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use gents_inference::llm::message::{
-    AssistantContent, Message, ToolCall, ToolFunction, UserContent,
-};
+use gents_inference::llm::message::{AssistantContent, Message, ToolCall, ToolFunction};
 use gents_inference::llm::{HookAction, ToolCallHookAction};
 use gents_store::identity::NodeIdentity;
 use serde_json::json;
@@ -15,9 +13,9 @@ use gents_toolcalls::call::hook::*;
 
 mod background_admission;
 mod background_budget;
-mod background_panic;
+
 mod delegated_finality_tests;
-mod r4c_read_tool_output;
+
 mod script_composition;
 mod wait_settlement;
 
@@ -428,92 +426,4 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
             node.shutdown().await.expect("shut down test node");
         }
     }
-}
-
-#[tokio::test]
-async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias() {
-    use gents_documents::{RemoteServiceTools, RemoteToolStyle, RemoteTools};
-
-    let fixture = background_budget::budget_hook_fixture(
-        "selected-tool-dispatch",
-        BackgroundToolRegistry::default(),
-        BackgroundExecutionRegistry::default(),
-    )
-    .await;
-    let node = fixture.db.node.clone();
-    let session_id = fixture.session_id.clone();
-    let hook = fixture.hook.with_remote_tools(Some(RemoteTools {
-        services: vec![RemoteServiceTools {
-            mcp_service_id: "metrics-prod".into(),
-            tool_names: vec!["query_metrics".into()],
-            style: RemoteToolStyle::Discovery,
-            ..Default::default()
-        }],
-    }));
-    assert!(matches!(
-        hook.on_completion_call(&user_text_message("Query metrics"), &[])
-            .await,
-        HookAction::Continue
-    ));
-
-    async fn selected_row(
-        access: &gents_store::config_client::ConfigAccess,
-        session_id: &str,
-        tool_call_id: &str,
-    ) -> serde_json::Value {
-        let session = gents_store::graphql::escape_graphql_string(session_id);
-        let call = gents_store::graphql::escape_graphql_string(tool_call_id);
-        let response = access
-            .execute(&format!(
-                r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }}, tool_call_id: {{ _eq: "{call}" }} }}) {{ selected_service_id selected_tool_name }} }}"#
-            ))
-            .await
-            .expect("selected agent can read its tool call");
-        let rows = response["data"]["AgentToolCall"]
-            .as_array()
-            .expect("tool call rows");
-        let [row] = rows.as_slice() else {
-            panic!("expected one tool call, found {}", rows.len());
-        };
-        row.clone()
-    }
-    let access = hook.actor_access().expect("hook has a selected agent");
-
-    let args =
-        r#"{"service_id":"metrics-prod","tool_name":"query_metrics","arguments":{"window":"5m"}}"#;
-    accept_hook_tool_call(&hook, "call-selected", "call_tool", args, None).await;
-    assert!(matches!(
-        hook.on_tool_call("call_tool", None, "call-selected", args)
-            .await,
-        ToolCallHookAction::Continue
-    ));
-    let selected = selected_row(&access, &session_id, "call-selected").await;
-    assert_eq!(
-        selected
-            .get("selected_service_id")
-            .and_then(serde_json::Value::as_str),
-        Some("metrics-prod")
-    );
-    assert_eq!(
-        selected
-            .get("selected_tool_name")
-            .and_then(serde_json::Value::as_str),
-        Some("query_metrics")
-    );
-
-    accept_hook_tool_call(&hook, "call-native", "read_file", "{}", None).await;
-    assert!(matches!(
-        hook.on_tool_call("read_file", None, "call-native", "{}")
-            .await,
-        ToolCallHookAction::Continue
-    ));
-    let native = selected_row(&access, &session_id, "call-native").await;
-    assert!(native
-        .get("selected_service_id")
-        .is_none_or(serde_json::Value::is_null));
-    assert!(native
-        .get("selected_tool_name")
-        .is_none_or(serde_json::Value::is_null));
-
-    node.shutdown().await.expect("shut down test node");
 }

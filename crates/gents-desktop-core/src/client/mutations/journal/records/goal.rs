@@ -14,15 +14,12 @@ pub(crate) async fn lookup(
     node_did: &str,
     command_id: &str,
 ) -> Result<Option<Record>> {
-    let response = ConfigAccess::local_as(node.clone(), identity::Did::new(client_did)?)
-        .execute(&super::query(command_id))
+    let rows = ConfigAccess::local_as(node.clone(), identity::Did::new(client_did)?)
+        .read_view(&gents_store::views::journals::PendingSubmission {
+            request_id: command_id,
+        })
         .await?;
-    match super::row(
-        response
-            .get("data")
-            .context("Goal caller query omitted data")?,
-        command_id,
-    )? {
+    match super::row(rows, command_id)? {
         None => Ok(None),
         Some((_, Entry::Goal(record))) => {
             anyhow::ensure!(
