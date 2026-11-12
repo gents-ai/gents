@@ -1,4 +1,3 @@
-use gents_lean_vocab::families::{mcp_views_health, mcp_views_inventory, mcp_views_page};
 use gents_protocol::document_query::{
     fields::{
         node as node_fields, tool_service_health_state as health, tool_service_registry as service,
@@ -119,7 +118,7 @@ async fn mcp_views_inventory_replays_on_served_node() -> anyhow::Result<()> {
         }
     }
     let guest_access = db.client_access(&guest);
-    let cases = mcp_views_inventory::cases::<Node, Reader, Selection>();
+    let cases = gents_lean_vocab::families::mcp_views_inventory::cases::<Node, Reader, Selection>();
     assert!(!cases.is_empty());
     for case in cases {
         let input = &case.input;
@@ -153,7 +152,7 @@ async fn mcp_views_inventory_replays_on_served_node() -> anyhow::Result<()> {
             .await?;
         case.check(rows.into_iter().map(|row| row.config.service_id).collect());
     }
-    let pages = mcp_views_page::cases::<Cursor, Node, PageSize, Reader>();
+    let pages = gents_lean_vocab::families::mcp_views_page::cases::<Cursor, Node, PageSize, Reader>();
     assert!(!pages.is_empty());
     for case in pages {
         let input = &case.input;
@@ -183,7 +182,7 @@ async fn mcp_views_inventory_replays_on_served_node() -> anyhow::Result<()> {
             .await?;
         case.check(rows.into_iter().map(|row| row.service_id).collect());
     }
-    let health_cases = mcp_views_health::cases::<Node, Reader>();
+    let health_cases = gents_lean_vocab::families::mcp_views_health::cases::<Node, Reader>();
     assert!(!health_cases.is_empty());
     for case in health_cases {
         let access = match case.input.reader {
