@@ -768,10 +768,14 @@ mod tests {
             let error = create_agent(&access, owner, provision().await?, &input)
                 .await
                 .expect_err(label);
-            printed.push_str(&format!(
-                "## {label}\n{}\n",
-                named(format!("Error: {error:?}"))
-            ));
+            // anyhow appends its captured backtrace to the Debug form when
+            // RUST_BACKTRACE is set, as CI does; the pinned text is the report
+            // without one.
+            let report = format!("Error: {error:?}");
+            let report = report
+                .split_once("\n\nStack backtrace:")
+                .map_or(report.as_str(), |(report, _)| report);
+            printed.push_str(&format!("## {label}\n{}\n", named(report.to_owned())));
         }
         assert!(
             printed == PINNED_OUTPUT,
