@@ -279,10 +279,9 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
     let reader_expected = |name: &str| -> bool {
         reader_cases
             .iter()
-            .find(|case| case["name"] == name)
-            .unwrap()["expected_granted"]
-            .as_bool()
+            .find(|case| case.name == name)
             .unwrap()
+            .expected_granted
     };
     let policy_cases = &lean_contract_snapshot().identity_pairing_reader_policy_cases;
     let policy_expected = |name: &str, permission: &str| -> bool {
