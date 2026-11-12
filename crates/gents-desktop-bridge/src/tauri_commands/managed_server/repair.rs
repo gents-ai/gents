@@ -165,7 +165,7 @@ where
     let peers_path = paths.peer_directory_path();
     let mut local_node_lost = stale_node;
     let late = async {
-        let client = repair_client_state(state, &mut repaired).await?;
+        let client = repair_client_state(state, &mut repaired, None).await?;
         local_node_lost |= client.local_node_lost;
         gents_desktop_core::client::load_peer_records(peers_path)
             .await
@@ -218,7 +218,7 @@ pub(super) async fn archive_client_store(
     state: &DesktopAppState,
     kind: IncompatibleStoreKind,
 ) -> Result<PathBuf, BridgeError> {
-    let client = repair_client_state(state, &mut Vec::new()).await?;
+    let client = repair_client_state(state, &mut Vec::new(), Some(kind)).await?;
     client
         .findings
         .into_iter()
@@ -250,8 +250,10 @@ impl gents_service::repair::ClientExclusion for ClientLifecycle<'_> {
 pub(super) async fn repair_client_state(
     state: &DesktopAppState,
     notes: &mut Vec<String>,
+    store_refusal: Option<IncompatibleStoreKind>,
 ) -> Result<gents_protocol::operations::install_repair::RepairClientReceipt, BridgeError> {
     let input = gents_protocol::operations::install_repair::RepairClientInput {
+        store_refusal,
         root: state.policy.desktop_paths.root().to_path_buf(),
         user_home: resolve_user_home(dirs::home_dir())?,
         node_home: state

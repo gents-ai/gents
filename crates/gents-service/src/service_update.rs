@@ -638,12 +638,15 @@ pub(crate) async fn restore_repair_service(
         Ok(pid)
     })
     .await??;
+    #[cfg(unix)]
     if let Some(pid) = pid {
         anyhow::ensure!(
             crate::native_service::wait_for_process_exit(pid, Duration::from_secs(20)).await,
             "replacement process did not stop; prior service was not overwritten"
         );
     }
+    #[cfg(not(unix))]
+    let _ = pid;
     let restored = backup.clone();
     let config = tokio::task::spawn_blocking(move || -> Result<_> {
         NativeServiceManager::new(cleanup)?.uninstall()?;

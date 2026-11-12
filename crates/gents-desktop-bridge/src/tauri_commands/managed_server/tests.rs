@@ -13,6 +13,7 @@ use crate::types::{ManagedServerState, ManagedServerToolCeiling};
 use gents_desktop_core::client::{ClientCore, EnrollmentRequestResult};
 use gents_desktop_core::home_reset::*;
 use gents_desktop_core::preference::MANAGED_SERVER_CONFIG;
+use gents_service::repair::crash_loop::{CrashLoopWatch, JobSample};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;

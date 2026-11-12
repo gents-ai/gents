@@ -33,13 +33,6 @@ async fn read_tail(path: &Path) -> Option<String> {
     Some(String::from_utf8_lossy(&tail).into_owned())
 }
 
-pub fn no_service_manager_message(home: &Path) -> String {
-    format!(
-        "run `gents runtime server --home {}` in another terminal, then `gents`",
-        format!("{}", home.display())
-    )
-}
-
 pub fn blocker_for_exit(exit: &ServiceExit, last_error: Option<String>) -> Blocker {
     match exit.refusal() {
         Some(ServiceRefusal::StoreKeyUnavailable) => Blocker::KeychainUnavailable,

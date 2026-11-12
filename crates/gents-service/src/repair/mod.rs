@@ -1055,15 +1055,6 @@ pub enum RepairFailure {
     },
 }
 
-impl RepairFailure {
-    pub fn next_call(&self) -> gents_protocol::operations::NextCall {
-        gents_protocol::operations::NextCall::VerbHelp {
-            resource: "service",
-            verb: "status",
-        }
-    }
-}
-
 #[async_trait::async_trait]
 pub trait ClientExclusion: Send + Sync {
     async fn exclude(&self)
@@ -1081,7 +1072,7 @@ pub async fn execute(
     program: &ServiceProgram,
     progress: &mut dyn Progress,
     client_lifecycle: Option<&dyn ClientExclusion>,
-) -> std::result::Result<RepairReceipt, RepairFailure> {
+) -> std::result::Result<RepairReceipt, Blocker> {
     use gents_protocol::operations::install_repair::RepairInput;
     let result = match input {
         RepairInput::Prepare {
@@ -1104,18 +1095,13 @@ pub async fn execute(
         RepairInput::Restore { choice } => restore(&choice, progress).await,
         RepairInput::Refused { choice } => set_aside_refused(&choice, progress).await,
         RepairInput::Client { input } => {
-            let lifecycle = client_lifecycle.ok_or_else(|| {
-                RepairFailure::from(anyhow::anyhow!(
-                    "client repair requires its lifecycle owner"
-                ))
+            let lifecycle = client_lifecycle.ok_or_else(|| Blocker::ServiceUpdateFailed {
+                reason: "client repair requires its lifecycle owner".to_owned(),
             })?;
             let mut client = Default::default();
             let outcome = match client::execute(&input, lifecycle, &mut client).await {
                 Ok(()) => RepairOutcome::Ready,
-                Err(error) => RepairOutcome::Blocked(Blocker::HomeUnreadable {
-                    home: input.root.clone(),
-                    reason: error.to_string(),
-                }),
+                Err(blocker) => RepairOutcome::Blocked(blocker),
             };
             return Ok(RepairReceipt {
                 client: Some(client),
@@ -1126,10 +1112,15 @@ pub async fn execute(
             });
         }
     };
-    result.map_err(RepairFailure::from)
+    Ok(match result {
+        Ok(receipt) => receipt,
+        Err(error) => blocked(Blocker::ServiceUpdateFailed {
+            reason: gents_protocol::error_chain::ErrorChain(error.as_ref()).to_string(),
+        }),
+    })
 }
 
 #[cfg(test)]
 mod conformance;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod filesystem_tests;

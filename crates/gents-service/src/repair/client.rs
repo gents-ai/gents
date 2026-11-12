@@ -11,11 +11,11 @@ use gents_desktop_core::preference::{
     read_home_identity, StoredManagedServer, MANAGED_SERVER_CONFIG,
 };
 use gents_protocol::operations::install_repair::{
-    ClientObservation, Finding, IncompatibleStore, IncompatibleStoreKind, RepairClientInput,
-    RepairClientReceipt,
+    Blocker, ClientObservation, Finding, IncompatibleStore, IncompatibleStoreKind, RefusalAction,
+    RefusalObservation, RepairClientInput, RepairClientReceipt,
 };
 
-use super::{ClientExclusion, RepairFailure};
+use super::ClientExclusion;
 
 pub fn classify_binding(o: &ClientObservation) -> ClientBinding {
     if !o.reviewed {
@@ -141,10 +141,44 @@ pub async fn execute(
     input: &RepairClientInput,
     lifecycle: &dyn ClientExclusion,
     receipt: &mut RepairClientReceipt,
-) -> Result<(), RepairFailure> {
-    execute_inner(input, lifecycle, receipt)
+) -> Result<(), Blocker> {
+    let result = if let Some(kind) = input.store_refusal {
+        let action = super::planning::refusal_action(&RefusalObservation {
+            fresh: true,
+            missing_key: kind == IncompatibleStoreKind::MissingStoreKey,
+            explicit_home: false,
+            older_store: kind.is_older(),
+            newer_store: !kind.is_older(),
+        });
+        if action != RefusalAction::Archive {
+            return Err(Blocker::StoreRefused {
+                kind,
+                message: IncompatibleStore {
+                    kind,
+                    data_path: DesktopPaths::from_root(input.root.clone())
+                        .node_data_dir()
+                        .to_path_buf(),
+                }
+                .to_string(),
+            });
+        }
+        async {
+            let _excluded = lifecycle.exclude().await?;
+            let paths = DesktopPaths::from_root(input.root.clone());
+            let kept_at = archive_store(input, &paths, Some(kind)).await?;
+            receipt
+                .findings
+                .push(Finding::ClientStoreSetAside { kept_at });
+            Ok::<_, anyhow::Error>(())
+        }
         .await
-        .map_err(RepairFailure::from)
+    } else {
+        execute_inner(input, lifecycle, receipt).await
+    };
+    result.map_err(|error| Blocker::HomeUnreadable {
+        home: input.root.clone(),
+        reason: gents_protocol::error_chain::ErrorChain(error.as_ref()).to_string(),
+    })
 }
 
 async fn execute_inner(

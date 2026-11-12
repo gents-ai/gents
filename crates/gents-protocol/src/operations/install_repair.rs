@@ -511,6 +511,8 @@ pub struct ClientObservation {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepairClientInput {
+    #[serde(default)]
+    pub store_refusal: Option<IncompatibleStoreKind>,
     pub root: PathBuf,
     pub user_home: PathBuf,
     pub node_home: Option<PathBuf>,

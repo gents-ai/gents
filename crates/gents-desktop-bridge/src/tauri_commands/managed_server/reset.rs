@@ -2,7 +2,7 @@ use super::native::service_action;
 use super::native::{native_service, run_native};
 use super::pairing::drain_managed_runtime_pairing;
 use super::port::{matching_external_server, user_status_signer};
-use super::status::{emit_status, CrashLoopWatch};
+use super::status::emit_status;
 use crate::config::ManagedServerPolicy;
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
@@ -10,6 +10,7 @@ use crate::tauri_commands::service_executable::resolve_service_executable;
 use crate::types::{HomeResetDisposition, ManagedServerResetResult};
 use gents_desktop_core::home_reset::*;
 use gents_service::args::ServiceAction;
+use gents_service::repair::crash_loop::CrashLoopWatch;
 use std::path::Path;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Runtime};
@@ -79,7 +80,7 @@ pub(in crate::tauri_commands) async fn retire_orphaned_client_state(
         return Ok(Default::default());
     }
     let _lifecycle = state.managed_server_lifecycle.lock().await;
-    super::repair::repair_client_state(state, &mut Vec::new()).await
+    super::repair::repair_client_state(state, &mut Vec::new(), None).await
 }
 
 pub(super) async fn retire_incompatible_home<R>(

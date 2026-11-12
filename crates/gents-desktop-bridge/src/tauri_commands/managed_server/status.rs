@@ -16,7 +16,7 @@ use gents_desktop_core::preference::StoredManagedServer;
 use gents_protocol::operations::install_repair::IncompatibleStoreKind;
 use gents_protocol::serve_lifecycle::outdated_runtime_message;
 use gents_service::repair::crash_loop;
-pub(super) use gents_service::repair::crash_loop::{CrashLoopWatch, JobSample};
+use gents_service::repair::crash_loop::JobSample;
 use gents_service::repair::reason::{blocker_for_exit, read_last_error};
 use tauri::{AppHandle, Emitter, Runtime};
 
