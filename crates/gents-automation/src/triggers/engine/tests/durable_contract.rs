@@ -186,23 +186,20 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
             case["name"]
         );
     }
-    for case in cases["trigger_delivery_queue_cases"].as_array().unwrap() {
-        let identity: FireIdentity = decode(&case["identity"]);
+    gents_lean_vocab::families::trigger_delivery_queue_claims::replay(|input| {
+        let identity: FireIdentity = gents_lean_vocab::family::recode(&input.identity);
         let rows: Vec<gents_session::request::lifecycle::arrival_order::ClaimObservation> =
-            decode(&case["observations"]);
+            gents_lean_vocab::family::recode(&input.observations);
         let candidate = rows
             .iter()
             .find(|row| row.document == identity.fire_key())
             .unwrap();
-        assert_eq!(
-            gents_session::request::lifecycle::arrival_order::observed_claim_allowed(
-                candidate, &rows
+        gents_lean_vocab::families::trigger_delivery_queue_claims::QueueClaimOutput {
+            can_claim: gents_session::request::lifecycle::arrival_order::observed_claim_allowed(
+                candidate, &rows,
             ),
-            case["can_claim"].as_bool().unwrap(),
-            "{}",
-            case["name"]
-        );
-    }
+        }
+    });
     for case in cases["trigger_delivery_self_session_cases"]
         .as_array()
         .unwrap()

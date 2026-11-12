@@ -591,8 +591,16 @@ def caseCoverage : List CoverageEntry :=
       "Triggers.FireBudget")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery_queue_cases"
-      "Triggers.Queue")
+      "family"
+      "trigger_delivery_queue_claims")
+      "triggers" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "trigger_delivery_queue_paged_claims")
+      "triggers" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "trigger_delivery_queue_dispatch_claims")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "trigger_delivery_option_cases"

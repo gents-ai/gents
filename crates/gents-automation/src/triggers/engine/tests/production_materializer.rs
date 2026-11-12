@@ -2609,12 +2609,13 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
                 .unwrap();
             let rows: Vec<gents_protocol::row::AgentRequestRow> =
                 serde_json::from_value(response["data"]["AgentRequest"].clone()).unwrap();
-            let cases = gents_lean_contract::load_contract_snapshot::<serde_json::Value>().unwrap();
             let mut claim_owners = Vec::new();
-            for (request_id, case_name) in [
-                (identity.request_id(), "serial_first_claims"),
-                (queued_id, "serial_second_waits"),
-            ] {
+            for case in gents_lean_vocab::families::trigger_delivery_queue_dispatch_claims::cases() {
+                let request_id = match case.input.identity.source_doc_id.as_str() {
+                    "a" => identity.request_id(),
+                    "b" => queued_id.clone(),
+                    other => panic!("the dispatched pair has no fire for modeled document {other}"),
+                };
                 let row = rows
                     .iter()
                     .find(|row| row.request_id == request_id)
@@ -2641,17 +2642,10 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
                     .await
                     .unwrap()
                     .was_claimed();
-                let expected = cases["trigger_delivery_queue_cases"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .find(|case| case["name"] == case_name)
-                    .unwrap()["can_claim"]
-                    .as_bool()
-                    .unwrap();
-                assert_eq!(
-                    claimed, expected,
-                    "scheduled delivery uses the canonical claim queue: {case_name}"
+                case.check(
+                    gents_lean_vocab::families::trigger_delivery_queue_dispatch_claims::QueueClaimOutput {
+                        can_claim: claimed,
+                    },
                 );
                 if claimed {
                     claim_owners.push(lifecycle);

@@ -158,25 +158,77 @@ def claimObservationJson (row : ClaimObservation) : String := object [
   ("arrival", row.arrival.map toString |>.getD "null"),
   ("running", toString row.running), ("terminal", toString row.terminal)]
 
-def queueCase (name : String) (pre : State) (id : Identity) : String :=
-  object [("name", jsonString name), ("pre", stateJson pre),
-    ("identity", identityJson id),
-    ("observations", jsonArray ((requestObservations pre).map claimObservationJson)),
-    ("can_claim", toString (canClaim pre id))]
+structure ClaimObservationWire where
+  document : String
+  owner : String
+  session : String
+  trigger : String
+  serial : Bool
+  receipt : Bool
+  arrival : Option Nat
+  running : Bool
+  terminal : Bool
+  deriving Lean.ToJson
 
-def queueCases : List String :=
+def ClaimObservationWire.ofModel (row : ClaimObservation) : ClaimObservationWire :=
+  { document := row.document, owner := row.owner, session := row.session, trigger := row.trigger,
+    serial := row.serial, receipt := row.receipt, arrival := row.arrival, running := row.running,
+    terminal := row.terminal }
+
+structure QueueInput where
+  name : String
+  pre : StateWire
+  identity : IdentityWire
+  /-- The claim observations production reads for the requests of `pre`
+  (`requestObservations`). -/
+  observations : List ClaimObservationWire
+  deriving Lean.ToJson
+
+def queueInput (name : String) (pre : State) (id : Identity) : QueueInput :=
+  { name, pre := .ofModel pre, identity := .ofModel id,
+    observations := (requestObservations pre).map .ofModel }
+
+def queueInputs : List QueueInput :=
   let a := fire "a"
   let b := { fire "b" with session := "other-session" }
   let queued := admit (admit {} a) b
   let busy := claim queued a.identity
   let sameSession := { b with identity := { b.identity with trigger := "other-trigger" }, session := a.session, serial := false }
-  [queueCase "serial_first_claims" queued a.identity,
-   queueCase "serial_second_waits" queued b.identity,
-   queueCase "serial_running_blocks_next_session" busy b.identity,
-   queueCase "serial_terminal_releases_next" (terminalize busy a.identity) b.identity,
-   queueCase "busy_session_queues_another_trigger" (admit busy sameSession) sameSession.identity,
-   queueCase "owner_is_part_of_queue_scope"
+  [queueInput "serial_first_claims" queued a.identity,
+   queueInput "serial_second_waits" queued b.identity,
+   queueInput "serial_running_blocks_next_session" busy b.identity,
+   queueInput "serial_terminal_releases_next" (terminalize busy a.identity) b.identity,
+   queueInput "busy_session_queues_another_trigger" (admit busy sameSession) sameSession.identity,
+   queueInput "owner_is_part_of_queue_scope"
      (admit busy { b with identity := identity "owner-b" "b" }) (identity "owner-b" "b")]
+
+structure QueueClaimOutput where
+  canClaim : Bool
+  deriving Lean.ToJson
+
+def queueClaim (i : QueueInput) : QueueClaimOutput :=
+  { canClaim := canClaim i.pre.toModel i.identity.toModel }
+
+@[conformance_family]
+def queueClaims : Family QueueInput QueueClaimOutput where
+  inputs := queueInputs
+  model := queueClaim
+
+/-- A served node stages one serial Trigger's first two fires in order, before
+either runs, so its claim queue builds only the first fire and the second one
+waiting behind it. -/
+def serialPairInputs : List QueueInput :=
+  queueInputs.filter fun i => i.name ∈ ["serial_first_claims", "serial_second_waits"]
+
+@[conformance_family]
+def queuePagedClaims : Family QueueInput QueueClaimOutput where
+  inputs := serialPairInputs
+  model := queueClaim
+
+@[conformance_family]
+def queueDispatchClaims : Family QueueInput QueueClaimOutput where
+  inputs := serialPairInputs
+  model := queueClaim
 
 def reasonString : OutcomeReason → String
   | .requestTerminal => "request_terminal"
@@ -666,9 +718,6 @@ def latestAdmissionCases : List String :=
 
 def triggerDeliveryAdmissionCasesJson : String :=
   jsonArray admissionCases
-
-def triggerDeliveryQueueCasesJson : String :=
-  jsonArray queueCases
 
 def triggerDeliveryObservedClaimCasesJson : String :=
   jsonArray observedClaimCases
