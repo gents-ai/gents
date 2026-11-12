@@ -1846,6 +1846,20 @@ async fn signed_goal_backed_request(
         admission,
     );
     create.retry_key = Some(format!("goal-submit:{SESSION}"));
+    create.input.goal_assignment = Some(gents_protocol::request_input::GoalAssignmentInput {
+        goal_id: gents_protocol::goal::deterministic_goal_id(did, SESSION),
+        root_request_doc_id: None,
+    });
+    create.input.queue = Some(gents_protocol::request_input::RequestQueue {
+        source: gents_protocol::request_input::QueueSource::User,
+        policy: gents_protocol::request_input::QueuePolicy::Append,
+        delivery: gents_protocol::request_input::QueueDelivery::Queue,
+        position: None,
+        key: None,
+        queued_after_request_id: None,
+        interrupted_request_id: None,
+        background_completion_wake_version: None,
+    });
     // A goal-backed submission binds the Agent's existing session and its
     // Agent document; the Agent reserves its own local-self session first.
     let access = agent_access(db, agent);

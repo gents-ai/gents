@@ -255,6 +255,67 @@ pub async fn admit_start_in_txn(
     })
 }
 
+/// The first request a person's start commits with its Goal: an ordinary,
+/// interactive user message to the session's Agent, signed by the person who
+/// starts, that opens the Goal `goal_id` with no lineage of its own. Every
+/// start that carries a first request is held to it. `retry_key` is the key
+/// the caller's command binds; without one the request must still carry a
+/// key, which makes its replay idempotent.
+#[allow(clippy::too_many_arguments)]
+pub fn check_first_request(
+    request: &AgentRequestCreate,
+    node_did: &str,
+    session_id: &str,
+    session_agent: &str,
+    session_requester: Option<&str>,
+    signer_did: &str,
+    goal_id: &str,
+    retry_key: Option<&str>,
+) -> Refusal<()> {
+    use gents_protocol::request_admission::RequestPurpose;
+    use gents_protocol::request_input::{GoalAssignmentInput, QueuePolicy, QueueSource};
+    request
+        .graphql_input_fields()
+        .map_err(GoalOperationError::FirstRequestInvalid)?;
+    let assignment = GoalAssignmentInput {
+        goal_id: goal_id.to_owned(),
+        root_request_doc_id: None,
+    };
+    let retry_key_matches = match (retry_key, request.retry_key.as_deref()) {
+        (Some(expected), Some(actual)) => expected == actual,
+        (None, Some(actual)) => !actual.trim().is_empty(),
+        (_, None) => false,
+    };
+    let ordinary_queue = request.input.queue.as_ref().is_some_and(|queue| {
+        queue.source == QueueSource::User
+            && queue.policy == QueuePolicy::Append
+            && queue.position.is_none()
+            && queue.key.is_none()
+            && queue.interrupted_request_id.is_none()
+            && queue.background_completion_wake_version.is_none()
+    });
+    let shaped = request.node_did == node_did
+        && request.session_id == session_id
+        && request.agent_did == session_agent
+        && request.requester_did == session_requester.unwrap_or(signer_did)
+        && request.admission.signer_did == signer_did
+        && request.purpose == RequestPurpose::Normal
+        && request.execution_origin == "interactive"
+        && request.input.goal_continuation.is_none()
+        && request.input.goal_assignment.as_ref() == Some(&assignment)
+        && ordinary_queue
+        && request.retry_parent_request.is_none()
+        && request.caused_by_trigger_id.is_none()
+        && request.caused_by_source_doc_id.is_none()
+        && request.caused_by_parent_tool_call_doc_id.is_none()
+        && retry_key_matches;
+    if shaped {
+        Ok(())
+    } else {
+        Err(GoalOperationError::FirstRequestMismatch)
+    }
+}
+
 /// Starts the session's Goal with its first request, which the client signed,
 /// as whoever `access` acts for. The Goal and the request commit together.
 pub async fn start(

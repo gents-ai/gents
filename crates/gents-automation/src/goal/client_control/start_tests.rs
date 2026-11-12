@@ -1,4 +1,5 @@
 use super::contract_tests::{persist_command, receipt, try_persist_command};
+use gents_protocol::request_admission::RequestPurpose;
 use super::*;
 use crate::goal::session_goal_control::process_command;
 use gents_protocol::goal_control::{GoalRevision, SESSION_GOAL_CONTROL_VERSION};

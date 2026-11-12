@@ -203,6 +203,10 @@ pub enum GoalOperationError {
     ResumeRequired(GoalStatus),
     #[error("{0}")]
     ObligationsUnmet(String),
+    #[error("the goal's first request is not valid: {0}")]
+    FirstRequestInvalid(&'static str),
+    #[error("the goal's first request does not match its session and author")]
+    FirstRequestMismatch,
     #[error("reason is only accepted with status complete or blocked")]
     ReasonNotAccepted,
     #[error("blocked requires a non-empty reason identifying the repeated condition")]
@@ -240,6 +244,10 @@ impl GoalOperationError {
                 resource: "session",
             },
             Self::NoGoal(_) => NextCall::Verb {
+                resource: "goal",
+                verb: "start",
+            },
+            Self::FirstRequestInvalid(_) | Self::FirstRequestMismatch => NextCall::VerbHelp {
                 resource: "goal",
                 verb: "start",
             },
