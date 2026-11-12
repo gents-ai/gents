@@ -1004,9 +1004,13 @@ def caseCoverage : List CoverageEntry :=
       "InferenceCallSlotAccounting")
       "inference-call" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "mailbox_notification_cases"
-      "MailboxNotificationCases")
-      "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
+      "family"
+      "mailbox_notification_decide_write")
+      "mailbox" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "mailbox_notification_contracts_stamp")
+      "mailbox" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "mailbox_reply_cases"
       "MailboxReplyCases"

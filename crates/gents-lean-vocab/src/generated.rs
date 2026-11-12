@@ -2999,7 +2999,6 @@ pub struct LeanContractSnapshot {
     pub plugin_job_lineage_cases: Vec<LeanPluginJobLineageCase>,
     pub plugin_job_recovery_cases: Vec<LeanPluginJobRecoveryCase>,
     pub plugin_job_wake_cases: Vec<LeanPluginJobWakeCase>,
-    pub mailbox_notification_cases: Vec<LeanMailboxNotificationCase>,
     pub mailbox_reply_cases: Vec<LeanMailboxReplyCase>,
     pub mailbox_question_cases: Vec<LeanMailboxQuestionCase>,
     pub mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
@@ -7389,15 +7388,6 @@ pub struct LeanMailboxHandoffCase {
     pub handoff_accepted: bool,
     pub stored_open_receipt: bool,
     pub linked_reply_accepted: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanMailboxNotificationCase {
-    pub mode: String,
-    pub open_exists: bool,
-    pub outcome: String,
-    pub same_content: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

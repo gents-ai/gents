@@ -1,21 +1,36 @@
 import Proofs.Automation.Mailbox.Notification
-import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
+
+namespace Mailbox.Notification
+
+deriving instance Lean.ToJson for Mode, WriteOutcome
+
+attribute [conformance_function] decideWrite
+
+end Mailbox.Notification
 
 namespace Conformance.MailboxNotificationContracts
-open Mailbox.Notification Conformance.Contracts
+open Lean Mailbox.Notification
 
-def outcomeName : WriteOutcome → String
-  | .created => "created"
-  | .reused => "reused"
-  | .updated => "updated"
+structure StampInput where
+  mode : Mode
+  openExists : Bool
+  sameContent : Bool
+  deriving ToJson
 
-def casesJson : String := jsonArray <|
-  [Mode.event, Mode.condition].flatMap fun mode =>
-    [false, true].flatMap fun hasOpen =>
-      [false, true].map fun same =>
-        "{\"mode\":" ++ jsonString (if mode = .event then "event" else "condition") ++
-        ",\"open_exists\":" ++ (if hasOpen then "true" else "false") ++
-        ",\"same_content\":" ++ (if same then "true" else "false") ++
-        ",\"outcome\":" ++ jsonString (outcomeName (decideWrite mode hasOpen same)) ++ "}"
+structure StampOutput where
+  outcome : WriteOutcome
+  afterDismiss : WriteOutcome
+  deriving ToJson
+
+@[conformance_family]
+def stamp : Family StampInput StampOutput where
+  inputs :=
+    [Mode.event, Mode.condition].flatMap fun mode =>
+      [false, true].flatMap fun openExists =>
+        [false, true].map fun sameContent => { mode, openExists, sameContent }
+  model := fun i =>
+    { outcome := decideWrite i.mode i.openExists i.sameContent
+      afterDismiss := decideWrite i.mode false i.sameContent }
 
 end Conformance.MailboxNotificationContracts
