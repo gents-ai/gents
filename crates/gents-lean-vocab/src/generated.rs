@@ -3066,7 +3066,6 @@ pub struct LeanContractSnapshot {
     pub session_document_fork_cases: Vec<serde_json::Value>,
     pub session_document_edit_anchor_cases: Vec<serde_json::Value>,
     pub session_document_edit_fork_binding_cases: Vec<serde_json::Value>,
-    pub plugin_job_opening_cases: Vec<LeanPluginJobOpeningCase>,
     pub session_reply_preview_cases: Vec<LeanSessionReplyPreviewCase>,
     pub request_input_cases: Vec<serde_json::Value>,
     pub background_wake_row_cases: Vec<serde_json::Value>,
@@ -8749,13 +8748,6 @@ pub struct LeanPluginJobModeExpected {
 pub struct LeanPluginJobObservation {
     pub retry_key: String,
     pub observation: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobOpeningCase {
-    pub commits: bool,
-    pub name: String,
 }
 
 #[derive(Debug, Deserialize)]

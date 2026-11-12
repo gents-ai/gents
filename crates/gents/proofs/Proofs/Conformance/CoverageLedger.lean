@@ -1772,6 +1772,10 @@ def caseCoverage : List CoverageEntry :=
       "SelfConfigCases")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
+      "family"
+      "contracts_plugin_job_opening")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
       "tool_timeout_cases"
       "ToolTimeoutCases")
       "tool-policy" [Surface.agentFacing]
