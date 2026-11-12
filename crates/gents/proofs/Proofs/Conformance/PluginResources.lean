@@ -7,6 +7,7 @@ import Proofs.Conformance.PluginReceipt
 import Proofs.Tools.ToolPolicy.PluginCalls
 import Proofs.Tools.ToolPolicy.PluginData
 import Proofs.Conformance.PluginEffects
+import Proofs.Conformance.Family
 import Lean
 
 namespace Conformance.PluginResources
@@ -187,11 +188,9 @@ private def toolCallsJson : Json := Json.mkObj [
       ("expected", toJson (match PluginCalls.consentRoute interactive composed with
         | .ask => "ask" | .deny => "deny"))])]
 
-private def childAdmissionJson : Json := toJson <| [false, true].flatMap fun selected =>
-  [("ordinary", PluginCalls.DispatchRoute.ordinary), ("hook_owned", .hookOwned)].flatMap
-    fun (name, route) => [false, true].map fun admitted => Json.mkObj [
-      ("selected", toJson selected), ("route", toJson name), ("admitted", toJson admitted),
-      ("expected", toJson (PluginCalls.childAdmissible selected route admitted))]
+deriving instance ToJson for PluginCalls.DispatchRoute
+
+attribute [conformance_function] PluginCalls.childAdmissible
 
 private def publicationJson : Json := toJson <| [false, true].flatMap fun previous =>
   [("local_failure", [PluginPublication.Event.localFailure]),
@@ -447,9 +446,6 @@ def pluginResourcePublicationCasesJson : String :=
 
 def pluginResourceToolCallCasesJson : String :=
   toolCallsJson.compress
-
-def pluginResourceChildAdmissionCasesJson : String :=
-  childAdmissionJson.compress
 
 def pluginResourceToolEffectCasesJson : String :=
   PluginEffects.casesJson.compress

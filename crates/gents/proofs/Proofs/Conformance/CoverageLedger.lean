@@ -1651,8 +1651,8 @@ def caseCoverage : List CoverageEntry :=
       "PluginReceiptCases")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "plugin_resource_child_admission_cases"
-      "PluginChildAdmissionCases")
+      "family"
+      "tool_policy_plugin_calls_child_admissible")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_resource_tool_effect_cases"

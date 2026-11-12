@@ -559,10 +559,8 @@ async fn background_output_query_work_is_independent_of_principal_history() {
 
 #[tokio::test]
 async fn generated_child_admission_cases_drive_real_dispatcher() {
-    let cases = gents_lean_vocab::lean_contract_snapshot()
-        .plugin_resource_child_admission_cases
-        .as_array()
-        .unwrap();
+    let cases =
+        gents_lean_vocab::families::tool_policy_plugin_calls_child_admissible::cases::<String>();
     let hook_owned = hook_owned_children();
     let mut driven: Vec<&str> = hook_owned.iter().map(|(name, ..)| *name).collect();
     let mut routes: Vec<&str> = gents_toolcalls::call::hook::persistence::HookOwnedTool::ROUTES
@@ -575,20 +573,26 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
         driven, routes,
         "every hook-owned route is driven exactly once"
     );
-    for selected in [false, true] {
+    let mut scenarios: [Vec<usize>; 2] = [Vec::new(), Vec::new()];
+    for (index, case) in cases.iter().enumerate() {
+        scenarios[usize::from(case.input.selected)].push(index);
+    }
+    let mut dispatched: Vec<Vec<bool>> = vec![Vec::new(); cases.len()];
+    for (selected, members) in [false, true].into_iter().zip(scenarios) {
         let mut children = Vec::new();
-        let mut expected = std::collections::BTreeMap::new();
-        for case in cases.iter().filter(|case| case["selected"] == selected) {
-            let admitted = case["admitted"] == true;
+        let mut owners = std::collections::BTreeMap::new();
+        for index in members {
+            let case = &cases[index];
+            let admitted = case.input.admitted;
             let refused = |ordinal: u32| serde_json::json!({"admit": false, "ordinal": ordinal});
-            let calls: Vec<(&'static str, serde_json::Value, &'static str)> = match case["route"]
-                .as_str()
-                .unwrap()
-            {
-                "ordinary" => vec![("child", serde_json::json!({"admit": admitted}), "completed")],
-                "hook_owned" => hook_owned.clone(),
-                route => panic!("unknown route {route}"),
-            };
+            let calls: Vec<(&'static str, serde_json::Value, &'static str)> =
+                match case.input.route.as_str() {
+                    "ordinary" => {
+                        vec![("child", serde_json::json!({"admit": admitted}), "completed")]
+                    }
+                    "hook_owned" => hook_owned.clone(),
+                    route => panic!("unknown route {route}"),
+                };
             for (name, mut arguments, settled) in calls {
                 let ordinal = children.len() as u32 + 1;
                 if !admitted {
@@ -597,10 +601,7 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
                     arguments["ordinal"] = ordinal.into();
                 }
                 children.push((ordinal, name, arguments.to_string()));
-                expected.insert(
-                    ordinal,
-                    (case.clone(), name, case["expected"] == true, settled),
-                );
+                owners.insert(ordinal, (index, name, settled));
             }
         }
         let completed = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -657,7 +658,7 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
         assert!(collected.error.is_none(), "{:?}", collected.error);
         let completed = completed.lock().unwrap().clone();
         let invoked = invoked.lock().unwrap().clone();
-        assert_eq!(completed.len(), expected.len());
+        assert_eq!(completed.len(), owners.len());
         let rows = lifecycle
             .access()
             .unwrap()
@@ -677,17 +678,16 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
             .collect();
         let mut mismatches = Vec::new();
         for (ordinal, observed) in completed {
-            let (case, name, admissible, settled) = &expected[&ordinal];
-            if observed != *admissible {
-                mismatches.push(format!("dispatcher result {observed} for {name} {case}"));
-            }
-            if invoked.contains(&u64::from(ordinal)) != (*admissible && case["route"] == "ordinary")
+            let (index, name, settled) = &owners[&ordinal];
+            let case = &cases[*index];
+            dispatched[*index].push(observed);
+            if invoked.contains(&u64::from(ordinal)) != (observed && case.input.route == "ordinary")
             {
-                mismatches.push(format!("invocation of {name} {case}"));
+                mismatches.push(format!("invocation of {name} {:?}", case.input));
             }
             let state = &states[&u64::from(ordinal)];
-            if state != if *admissible { *settled } else { "failed" } {
-                mismatches.push(format!("durable child {name} is {state} {case}"));
+            if state != if observed { *settled } else { "failed" } {
+                mismatches.push(format!("durable child {name} is {state} {:?}", case.input));
             }
         }
         assert!(mismatches.is_empty(), "{mismatches:#?}");
@@ -698,6 +698,17 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
             );
         }
         node.shutdown().await.expect("node shutdown");
+    }
+    for (case, results) in cases.iter().zip(dispatched) {
+        let admissible = *results
+            .first()
+            .unwrap_or_else(|| panic!("no child of {:?} was dispatched", case.input));
+        assert!(
+            results.iter().all(|result| *result == admissible),
+            "the children of {:?} were dispatched differently: {results:?}",
+            case.input
+        );
+        case.check(admissible);
     }
 }
 
