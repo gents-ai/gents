@@ -1,6 +1,7 @@
 use crate::surface::{
     measured_mcp_services_for_access, AgentToolSurfaceConfig, RuntimeToolAvailability, ToolCeiling,
 };
+use gents_protocol::document_query::{fields::tool_service_health_state as health, Create, Input};
 use gents_store::config_client::ConfigAccess;
 use rapidhash::{HashSetExt, RapidHashSet};
 use serde_json::json;
@@ -52,7 +53,10 @@ async fn measured_explanation_uses_scoped_endpoint_health_not_registry_presence(
     node.add_collection(gents_protocol::schemas::TOOL_SERVICE_HEALTH_STATE)
         .await
         .unwrap();
-    let access = ConfigAccess::local(node.clone());
+    let access = ConfigAccess::local_as(
+        node.clone(),
+        identity::Did::new(node.node_identity_did().unwrap()).unwrap(),
+    );
     let service = serde_json::from_value(json!({"service_id":"service","node_did":"owner",
         "hostname":"server.invalid","mcp_port":8000,"mcp_path":"/mcp"}))
     .unwrap();
@@ -67,8 +71,19 @@ async fn measured_explanation_uses_scoped_endpoint_health_not_registry_presence(
         ("foreign", "http://server.invalid:8000/mcp"),
         ("owner", "http://127.0.0.1:8000/mcp"),
     ] {
-        let response = node.execute(&format!(r#"mutation {{ create_ToolServiceHealthState(input: {{node_did:"{owner}",service_id:"service",endpoint:"{endpoint}",status:"healthy"}}) {{_docID}} }}"#)).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
+        let mutation = Create::new(
+            Input::new()
+                .set(health::NODE_DID, owner)
+                .set(health::SERVICE_ID, "service")
+                .set(health::ENDPOINT, endpoint)
+                .set(health::STATUS, "healthy")
+                .set(health::UPDATED_AT, "2026-01-01T00:00:00Z"),
+        )
+        .render();
+        access
+            .write_rendered("test.mcp.measured_health", &mutation)
+            .await
+            .unwrap();
     }
     assert!(
         measured_mcp_services_for_access(&access, "owner", &selected)
@@ -76,8 +91,19 @@ async fn measured_explanation_uses_scoped_endpoint_health_not_registry_presence(
             .unwrap()
             .is_empty()
     );
-    let response = node.execute(r#"mutation { create_ToolServiceHealthState(input: {node_did:"owner",service_id:"service",endpoint:"http://server.invalid:8000/mcp",status:"healthy"}) {_docID} }"#).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
+    let mutation = Create::new(
+        Input::new()
+            .set(health::NODE_DID, "owner")
+            .set(health::SERVICE_ID, "service")
+            .set(health::ENDPOINT, "http://server.invalid:8000/mcp")
+            .set(health::STATUS, "healthy")
+            .set(health::UPDATED_AT, "2026-01-02T00:00:00Z"),
+    )
+    .render();
+    access
+        .write_rendered("test.mcp.current_health", &mutation)
+        .await
+        .unwrap();
     assert_eq!(
         measured_mcp_services_for_access(&access, "owner", &selected)
             .await
