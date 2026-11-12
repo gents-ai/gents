@@ -429,3 +429,48 @@ impl std::fmt::Debug for CustomToolFactory {
 
 #[cfg(test)]
 mod pushdown_tests;
+
+#[cfg(test)]
+mod candidate_conformance {
+    use super::*;
+
+    #[test]
+    fn generated_bash_documents_select_the_complete_command_policy() {
+        use gents_lean_vocab::families::tools_bash_selection_document_selection as family;
+        family::replay(|input| {
+            let mode = match input.mode.as_str() {
+                "off" => "Off",
+                "read_only" => "ReadOnly",
+                "unrestricted" => "Unrestricted",
+                other => panic!("unknown modeled bash mode {other}"),
+            };
+            let tools: gents_documents::Tools = serde_json::from_value(serde_json::json!({
+                "tools_id": "tools", "node_did": "did:key:zAgent",
+                "host": {"bash": {
+                    "mode": mode, "execution_mode": input.execution,
+                    "read_only_commands": input.allowlist, "background_enabled": input.background,
+                }}
+            }))
+            .unwrap();
+            let selection = ResolvedToolSelection::from_document(&tools).unwrap();
+            family::Observation {
+                policy: selection.command_policy.map(|policy| {
+                    let wire = serde_json::to_value(&policy).unwrap();
+                    family::Policy {
+                        mode: policy.mode.as_str().to_owned(),
+                        allowed_argv_prefixes: policy.allowed_argv_prefixes,
+                        forbidden_argv_prefixes: policy.forbidden_argv_prefixes,
+                        network_mode: policy.network_mode.as_str().to_owned(),
+                        read_only_allowlist: serde_json::from_value(
+                            wire["readOnlyAllowlist"].clone(),
+                        )
+                        .unwrap(),
+                        deny_all_argv: wire["denyAllArgv"].as_bool().unwrap(),
+                        deny_git_metadata_writes: wire["denyGitMetadataWrites"].as_bool().unwrap(),
+                    }
+                }),
+                background: selection.backgroundable_tool_names,
+            }
+        });
+    }
+}
