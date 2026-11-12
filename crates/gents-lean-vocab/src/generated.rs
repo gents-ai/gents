@@ -2907,7 +2907,6 @@ pub struct LeanContractSnapshot {
     pub goal_backed_runtime_cases: Vec<LeanGoalBackedRuntimeCase>,
     pub goal_wake_coalescing_cases: Vec<serde_json::Value>,
     pub goal_wake_ancestry_cases: Vec<LeanGoalWakeAncestryCase>,
-    pub goal_request_scope_cases: Vec<serde_json::Value>,
     pub goal_request_ancestry_cases: Vec<LeanGoalRequestAncestryCase>,
     pub goal_queue_assignment_cases: Vec<LeanGoalQueueAssignmentCase>,
     pub plugin_job_commit_kill_cases: Vec<LeanPluginJobCommitKillCase>,

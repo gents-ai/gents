@@ -1,6 +1,7 @@
 import Proofs.Automation.GoalAutomation.RequestAncestry
 import Proofs.Conformance.GoalRequestHead
 import Proofs.Conformance.GoalRequestAssignment
+import Proofs.Conformance.Family
 import Lean
 
 namespace Conformance.GoalRequestAncestryContracts
@@ -59,6 +60,7 @@ structure ScopeCase where
   childOpenings : List Nat := []
   childValid : Bool := true
   missingParent : Bool := false
+  deriving ToJson
 
 def scopeCases : List ScopeCase :=
   [ {name := "signed_continuation"}
@@ -88,13 +90,12 @@ def scopeAssignments (c : ScopeCase) : List Assignment :=
 def scopeResult (c : ScopeCase) : Option QueueScope :=
   queueScopeWithAncestry 1 1 (scopeRows c) (scopeEntries c) (scopeAssignments c) 20
 
-def scopeCaseJson (c : ScopeCase) : Json := Json.mkObj
-  [("name", toJson c.name), ("root_tagged", toJson c.rootTagged),
-   ("root_openings", toJson c.rootOpenings), ("child_openings", toJson c.childOpenings),
-   ("child_valid", toJson c.childValid), ("missing_parent", toJson c.missingParent),
-   ("expected", (scopeResult c).map GoalRequestAssignmentContracts.queueScopeJson |>.getD Json.null)]
-
-def scopeCasesJson : String := (toJson (scopeCases.map scopeCaseJson)).compress
+/-- The queue scope `RequestAssignmentScopes::scope` composes for a signed
+continuation from its authenticated ancestry and retained openings. -/
+@[conformance_family]
+def scope : Family ScopeCase (Option GoalRequestAssignmentContracts.QueueScopeWire) where
+  inputs := scopeCases
+  model := fun c => (scopeResult c).map GoalRequestAssignmentContracts.QueueScopeWire.ofModel
 
 example : scopeResult {name := "conflicting", rootOpenings := [2]} =
     some (.referenced 1 10) := by native_decide
