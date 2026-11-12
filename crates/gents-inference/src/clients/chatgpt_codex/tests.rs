@@ -7,15 +7,11 @@ async fn routing_affinity_matches_lean_owner() {
     use crate::auth::http::OAuthHttpPolicy;
     use gents_loop::provider_input::routing_affinity::{scope, RoutingAffinity};
     for case in &gents_lean_vocab::lean_contract_snapshot().routing_affinity_cases {
-        let state = RoutingAffinity::start(
-            case["codex"].as_bool().unwrap(),
-            case["main"].as_bool().unwrap(),
-            case["session"].as_str().map(str::to_owned),
-        );
+        let state = RoutingAffinity::start(case.codex, case.main, case.session.clone());
         scope(state.clone(), async {
-            for response in case["responses"].as_array().unwrap() {
+            for response in &case.responses {
                 let mut headers = HeaderMap::new();
-                if let Some(token) = response.as_str() {
+                if let Some(token) = response.as_deref() {
                     headers.insert("x-codex-turn-state", HeaderValue::from_str(token).unwrap());
                 }
                 retain_turn_state(&headers);
@@ -32,22 +28,22 @@ async fn routing_affinity_matches_lean_owner() {
                 req.headers()
                     .get("session_id")
                     .and_then(|h| h.to_str().ok()),
-                case["expected_session"].as_str(),
-                "{case}"
+                case.expected_session.as_deref(),
+                "{case:?}"
             );
             assert_eq!(
                 req.headers()
                     .get("x-client-request-id")
                     .and_then(|h| h.to_str().ok()),
-                case["expected_session"].as_str(),
-                "{case}"
+                case.expected_session.as_deref(),
+                "{case:?}"
             );
             assert_eq!(
                 req.headers()
                     .get("x-codex-turn-state")
                     .and_then(|h| h.to_str().ok()),
-                case["expected_token"].as_str(),
-                "{case}"
+                case.expected_token.as_deref(),
+                "{case:?}"
             );
         })
         .await;

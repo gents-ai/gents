@@ -777,10 +777,10 @@ async fn codex_affinity_survives_retry_tool_continuation_and_nested_compaction()
         gents_lean_vocab::lean_contract_snapshot()
             .routing_affinity_cases
             .iter()
-            .find(|case| case["name"].as_str() == Some(name))
-            .unwrap()["expected_token"]
-            .as_str()
-            .map(str::to_owned)
+            .find(|case| case.name == name)
+            .unwrap()
+            .expected_token
+            .clone()
     };
     assert_eq!(
         *seen.lock().unwrap(),
