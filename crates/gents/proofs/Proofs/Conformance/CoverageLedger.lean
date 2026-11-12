@@ -489,6 +489,11 @@ def caseCoverage : List CoverageEntry :=
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "network_protocol_resource")
       "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "eval_records_published")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "family" "eval_records_published_unreached"
+      "model-production-gap: no production path lets the Node parent relationship fail or the commit fail after an eval record create is staged.")
+      "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "optimization_promotion_held_transition")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (followUpCoverage "family" "optimization_promotion_held_transition_unreached"

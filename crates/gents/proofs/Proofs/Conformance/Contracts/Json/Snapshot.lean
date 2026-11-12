@@ -75,7 +75,7 @@ import Proofs.Session.Identity.DelegatedPublicationCases
 import Proofs.Store.Identity.DelegatedFinality
 import Proofs.Store.Identity.AutomationConformance
 import Proofs.Store.Identity.OperationsConformance
-import Proofs.Store.Identity.EvalRecords
+import Proofs.Conformance.Identity.EvalRecords
 import Proofs.Conformance.Identity.OptimizationPromotion
 import Proofs.Store.Identity.DirectoryPublication
 import Proofs.Store.Identity.StartupReadiness
@@ -735,8 +735,6 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.NodeProvisioningConformance.runtimeNacCasesJson ++ ","
     ++ "\"identity_parent_publication_cases\":"
       ++ Identity.PublicationConformance.parentCasesJson ++ ","
-    ++ "\"identity_eval_record_cases\":"
-      ++ Identity.EvalRecords.casesJson ++ ","
     ++ "\"identity_readiness_preflight_cases\":"
       ++ Identity.OperationsConformance.preflightCasesJson ++ ","
     ++ "\"identity_secret_publication_cases\":"

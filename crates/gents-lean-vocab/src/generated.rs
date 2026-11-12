@@ -3040,7 +3040,6 @@ pub struct LeanContractSnapshot {
     pub identity_runtime_nac_cases: Vec<LeanIdentityRuntimeNacCase>,
     pub identity_parent_publication_cases: Vec<LeanIdentityParentPublicationCase>,
     pub identity_callback_parent_actor_cases: Vec<serde_json::Value>,
-    pub identity_eval_record_cases: Vec<LeanIdentityEvalRecordCase>,
     pub identity_readiness_preflight_cases: Vec<serde_json::Value>,
     pub identity_secret_publication_cases: Vec<serde_json::Value>,
     pub identity_deferred_operation_cases: Vec<serde_json::Value>,
@@ -6098,21 +6097,6 @@ pub struct LeanIdentityEnrollmentPolicyCase {
     pub document: String,
     pub name: String,
     pub permission: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanIdentityEvalRecordCase {
-    pub commit_succeeded: bool,
-    pub creator: String,
-    pub expected_created: bool,
-    pub expected_creator_update: bool,
-    pub expected_stranger_read: bool,
-    pub expected_user_read: bool,
-    pub name: String,
-    pub node_visible: bool,
-    pub relationship_succeeded: bool,
-    pub resource: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
