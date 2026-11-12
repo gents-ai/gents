@@ -2,7 +2,7 @@ use std::error::Error;
 
 use serde::Serialize;
 
-use super::agent::NextCall;
+use super::NextCall;
 
 /// A named grouping of ACP grants an operator gives one Agent. DefraDB
 /// decides whether the caller may write the relation behind it.

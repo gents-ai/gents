@@ -3,7 +3,7 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::agent::NextCall;
+use super::NextCall;
 use super::StringUpdate;
 
 pub const RESOURCE: &str = "workspace-root";

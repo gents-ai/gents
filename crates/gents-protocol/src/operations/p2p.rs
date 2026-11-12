@@ -2,7 +2,7 @@ use std::error::Error;
 
 use serde::{Deserialize, Serialize};
 
-use super::agent::NextCall;
+use super::NextCall;
 use crate::enrollment::AuthorizationLeaseState;
 
 /// Lean `PeerOperations.peerOnline`.
