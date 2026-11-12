@@ -6,7 +6,6 @@ use crypto::keys::PrivateKey;
 use defra_core::signing::{RemoteSigner, SigningAuthorization, SigningConfig, SigningKeyType};
 use defra_node::Node as EmbeddedNode;
 use identity::{Identity as _, RawIdentity};
-use serde::Deserialize;
 use tokio::sync::Notify;
 
 use super::{mutation_write_gate, ConfigAccess};
@@ -55,40 +54,24 @@ impl Drop for ReleaseSignerOnDrop {
     }
 }
 
-#[derive(Deserialize)]
-struct Observation {
-    claim_held: bool,
-    transaction_owner_alive: bool,
-    cleanup_pending: bool,
-    rollback_returned: bool,
-    mutation_gate_held: bool,
-}
-
-#[derive(Deserialize)]
-struct Case {
-    name: String,
-    events: Vec<String>,
-    observations: Vec<Observation>,
-}
-
-async fn model_case(name: &str) -> Case {
-    let cases: Vec<Case> = serde_json::from_value(serde_json::Value::from(
-        tokio::task::spawn_blocking(|| {
-            gents_lean_vocab::lean_contract_snapshot()
-                .native_claim_lifetime_cases
-                .clone()
-        })
-        .await
-        .expect("Lean snapshot load"),
-    ))
-    .expect("Lean native claim-lifetime fixture");
+async fn model_case(name: &str) -> gents_lean_vocab::LeanNativeClaimLifetimeCase {
+    let cases = tokio::task::spawn_blocking(|| {
+        &gents_lean_vocab::lean_contract_snapshot().native_claim_lifetime_cases
+    })
+    .await
+    .expect("Lean snapshot load");
     cases
-        .into_iter()
+        .iter()
         .find(|case| case.name == name)
+        .cloned()
         .unwrap_or_else(|| panic!("generated native claim-lifetime case {name}"))
 }
 
-fn model_observation<'a>(case: &'a Case, event: &str, occurrence: usize) -> &'a Observation {
+fn model_observation<'a>(
+    case: &'a gents_lean_vocab::LeanNativeClaimLifetimeCase,
+    event: &str,
+    occurrence: usize,
+) -> &'a gents_lean_vocab::LeanNativeClaimLifetimeCaseObservationsItem {
     let index = case
         .events
         .iter()
@@ -101,8 +84,8 @@ fn model_observation<'a>(case: &'a Case, event: &str, occurrence: usize) -> &'a 
 }
 
 fn assert_observation(
-    case: &Case,
-    expected: &Observation,
+    case: &gents_lean_vocab::LeanNativeClaimLifetimeCase,
+    expected: &gents_lean_vocab::LeanNativeClaimLifetimeCaseObservationsItem,
     home: &std::path::Path,
     data: &std::path::Path,
     node: &EmbeddedNode,

@@ -129,23 +129,15 @@ fn test_state() -> (tempfile::TempDir, DesktopAppState) {
 
 #[tokio::test]
 async fn cancelled_exclusion_waiter_keeps_lifecycle_guard_until_shutdown_owner_returns() {
-    let fixture: serde_json::Value = serde_json::from_value(serde_json::Value::from(
-        tokio::task::spawn_blocking(|| {
-            gents_lean_vocab::lean_contract_snapshot()
-                .native_claim_lifetime_cases
-                .clone()
-        })
-        .await
-        .expect("Lean snapshot load"),
-    ))
-    .expect("generated native claim lifetime fixture");
-    let case = fixture
-        .as_array()
-        .unwrap()
+    let cases = tokio::task::spawn_blocking(|| {
+        &gents_lean_vocab::lean_contract_snapshot().native_claim_lifetime_cases
+    })
+    .await
+    .expect("Lean snapshot load");
+    let case = cases
         .iter()
-        .find(|case| case["name"] == "client_shutdown_cancel_retains_claim_until_return")
+        .find(|case| case.name == "client_shutdown_cancel_retains_claim_until_return")
         .expect("Lean client shutdown cancellation case");
-    let events = case["events"].as_array().unwrap();
     let expected_events = [
         "native_started",
         "caller_cancelled",
@@ -153,26 +145,18 @@ async fn cancelled_exclusion_waiter_keeps_lifecycle_guard_until_shutdown_owner_r
         "access_released",
         "lifecycle_guard_released",
         "gate_release_requested",
-    ]
-    .map(|event| serde_json::Value::String(event.to_owned()));
-    assert_eq!(events, expected_events.as_slice());
+    ];
+    assert_eq!(case.events, expected_events);
     let observation_for = |event: &str| {
-        let index = events
+        let index = case
+            .events
             .iter()
             .position(|candidate| candidate == event)
             .expect("event in generated trace");
-        &case["observations"][index]
+        &case.observations[index]
     };
-    let lifecycle_guard_held_for = |event: &str| {
-        observation_for(event)["lifecycle_guard_held"]
-            .as_bool()
-            .expect("lifecycle guard observation in generated trace")
-    };
-    let claim_held_for = |event: &str| {
-        observation_for(event)["claim_held"]
-            .as_bool()
-            .expect("claim observation in generated trace")
-    };
+    let lifecycle_guard_held_for = |event: &str| observation_for(event).lifecycle_guard_held;
+    let claim_held_for = |event: &str| observation_for(event).claim_held;
 
     let (_temp, state) = test_state();
     let state = Arc::new(state);
