@@ -1,5 +1,6 @@
 import Proofs.Session.RequestExecutionLease
 import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Family
 
 namespace Conformance.RequestExecutionLeaseContracts
 
@@ -562,10 +563,18 @@ theorem providerEofCases_hold :
       providerEofIsFailure c.sawExplicitFinal == c.expectedFailure) = true := by
   native_decide
 
-def providerEofCasesJson : String :=
-  jsonArray (providerEofCases.map (fun c =>
-    "{\"saw_explicit_final\":" ++ boolJson c.sawExplicitFinal ++
-      ",\"expected_failure\":" ++ boolJson c.expectedFailure ++ "}"))
+structure ProviderEofInput where
+  sawExplicitFinal : Bool
+  deriving Lean.ToJson
+
+structure ProviderEofOutput where
+  failure : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def providerEof : Family ProviderEofInput ProviderEofOutput where
+  inputs := providerEofCases.map fun c => { sawExplicitFinal := c.sawExplicitFinal }
+  model := fun i => { failure := providerEofIsFailure i.sawExplicitFinal }
 
 
 structure ObservedLeaseCase where

@@ -1,6 +1,6 @@
 use super::*;
 use crate::request::lifecycle::RequestTerminalOutcome;
-use gents_lean_vocab::{LeanFoldQueueCase, LeanFoldQueueEntry, LeanFoldQueueInput};
+use gents_lean_vocab::LeanFoldQueueEntry;
 use rapidhash::{HashMapExt, RapidHashMap};
 use serde::Deserialize;
 use serde_json::json;
@@ -275,14 +275,43 @@ async fn claim_request(
 
 #[tokio::test]
 async fn generated_fold_queue_cases_bind_to_native_claims() {
-    let cases = gents_lean_vocab::lean_fold_queue_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        drive(case).await;
+    for case in gents_lean_vocab::families::fold_queue_contracts_fold_script::cases::<
+        String,
+        String,
+        String,
+        String,
+        String,
+    >() {
+        let observed = drive(&case.input).await;
+        case.check(Some(observed));
     }
 }
 
-async fn drive(case: &LeanFoldQueueCase) {
+fn modeled_entry<T>(entry: &T) -> LeanFoldQueueEntry
+where
+    T: serde::Serialize,
+{
+    let mut value = serde_json::to_value(entry).unwrap();
+    let object = value.as_object_mut().unwrap();
+    for absent in ["queue_key", "execution_directory", "goal_assignment"] {
+        assert!(
+            object.remove(absent).unwrap().is_null(),
+            "the fixture builds no {absent}"
+        );
+    }
+    object.remove("created_at");
+    serde_json::from_value(value).unwrap()
+}
+
+async fn drive(
+    case: &gents_lean_vocab::families::fold_queue_contracts_fold_script::FoldInput<
+        String,
+        String,
+        String,
+        String,
+        String,
+    >,
+) -> gents_lean_vocab::families::fold_queue_contracts_fold_script::FoldObservation {
     assert_eq!(case.node_id, 1, "fixture maps modeled node 1 to its DID");
     let db = test_db(&case.name).await;
     let session_id = case.session_id.to_string();
@@ -294,13 +323,16 @@ async fn drive(case: &LeanFoldQueueCase) {
         DefraStreamWriter::new_managed(db.node.clone(), db.agent_identity.as_ref(), Duration::ZERO)
             .unwrap();
     for event in &case.inputs {
-        match event {
-            LeanFoldQueueInput::Enqueue { entry } => {
+        match event.kind.as_str() {
+            "enqueue" => {
+                let entry = modeled_entry(event.entry.as_ref().expect("an enqueued entry"));
+                let entry = &entry;
                 let doc = enqueue(&db, &session_id, entry, bound.len()).await;
                 bound.insert(entry.request_id, doc);
                 arrivals.push(entry.request_id);
             }
-            LeanFoldQueueInput::Claim { admitted } => {
+            "claim" => {
+                let admitted = &event.admitted;
                 assert!(active.is_none(), "{}: claim while active", case.name);
                 let rows = fold_rows(&db, &session_id).await;
                 let head = *arrivals
@@ -316,7 +348,7 @@ async fn drive(case: &LeanFoldQueueCase) {
                 claims.push((head, turn.selected.clone()));
                 active = Some(turn);
             }
-            LeanFoldQueueInput::Consume => {
+            "consume" => {
                 let turn = active.as_mut().expect("consume requires an active turn");
                 turn.begin(&writer).await;
                 let folded = turn.selected[turn.consumed];
@@ -330,7 +362,7 @@ async fn drive(case: &LeanFoldQueueCase) {
                     .unwrap();
                 turn.consumed += 1;
             }
-            LeanFoldQueueInput::Finish => {
+            "finish" => {
                 let mut turn = active.take().expect("finish requires an active turn");
                 turn.begin(&writer).await;
                 turn.lifecycle
@@ -342,6 +374,7 @@ async fn drive(case: &LeanFoldQueueCase) {
                     .await
                     .unwrap();
             }
+            kind => panic!("{}: no fixture step for {kind}", case.name),
         }
     }
 
@@ -367,43 +400,30 @@ async fn drive(case: &LeanFoldQueueCase) {
         })
         .map(modeled_id)
         .collect::<Vec<_>>();
-    assert_eq!(
-        native_active,
-        case.expected.active.into_iter().collect::<Vec<_>>(),
-        "{}: active request",
+    assert!(
+        native_active.len() <= 1,
+        "{}: one active request",
         case.name
     );
     let native_folding = active
         .as_ref()
         .map(|turn| turn.selected[turn.consumed..].to_vec())
         .unwrap_or_default();
-    assert_eq!(
-        native_folding, case.expected.folding,
-        "{}: selected run",
-        case.name
-    );
+
     let native_pending = arrivals
         .iter()
         .copied()
         .filter(|id| by_id[id].lifecycle_state == RequestLifecycleState::Pending)
         .filter(|id| !native_folding.contains(id))
         .collect::<Vec<_>>();
-    assert_eq!(
-        native_pending, case.expected.pending,
-        "{}: pending queue",
-        case.name
-    );
+
     let mut native_terminal = rows
         .iter()
         .filter(|row| row.lifecycle_state.is_terminal())
         .map(modeled_id)
         .collect::<Vec<_>>();
     native_terminal.sort_unstable();
-    assert_eq!(
-        native_terminal, case.expected.terminal,
-        "{}: terminal requests",
-        case.name
-    );
+
     for row in rows
         .iter()
         .filter(|row| row.lifecycle_state == RequestLifecycleState::Superseded)
@@ -426,54 +446,71 @@ async fn drive(case: &LeanFoldQueueCase) {
             case.name
         );
     }
-    let expected_claims = case
-        .expected
-        .claims
-        .iter()
-        .map(|claim| (claim.head, claim.folded.clone()))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        claims, expected_claims,
-        "{}: per-claim selections",
-        case.name
-    );
+    gents_lean_vocab::families::fold_queue_contracts_fold_script::FoldObservation {
+        active: native_active.first().copied(),
+        pending: native_pending,
+        folding: native_folding,
+        terminal: native_terminal,
+        claims: claims
+            .into_iter()
+            .map(|(head, folded)| {
+                gents_lean_vocab::families::fold_queue_contracts_fold_script::ClaimWire {
+                    head,
+                    folded,
+                }
+            })
+            .collect(),
+    }
 }
 
 #[tokio::test]
 async fn generated_handover_fold_claims_bind_to_native_claims() {
-    let cases = gents_lean_vocab::lean_handover_fold_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let db = test_db(&case.name).await;
-        let session_id = format!("handover-{}", case.name);
+    for case in gents_lean_vocab::families::fold_queue_contracts_handover_claim::cases::<
+        String,
+        String,
+        String,
+        String,
+    >() {
+        let db = test_db(&case.input.name).await;
+        let session_id = format!("handover-{}", case.input.name);
         let mut bound = RapidHashMap::new();
-        for (arrival, entry) in case.pending.iter().enumerate() {
+        for (arrival, entry) in case.input.pending.iter().enumerate() {
             bound.insert(
                 entry.request_id,
-                enqueue(&db, &session_id, entry, arrival).await,
+                enqueue(&db, &session_id, &modeled_entry(entry), arrival).await,
             );
         }
-        let head = case.pending[0].request_id;
-        let turn = claim_head(&db, &bound, head, &case.admitted).await;
-        assert_eq!(Some(head), case.expected.active, "{}: active", case.name);
-        assert_eq!(
-            turn.selected, case.expected.folding,
-            "{}: selection",
-            case.name
-        );
+        let head = case.input.pending[0].request_id;
+        let turn = claim_head(&db, &bound, head, &case.input.admitted).await;
         let rows = fold_rows(&db, &session_id).await;
-        let pending = case
-            .pending
-            .iter()
-            .map(|entry| entry.request_id)
+        let state = |id: u64| {
+            rows.iter()
+                .find(|row| modeled_id(row) == id)
+                .unwrap()
+                .lifecycle_state
+        };
+        let ids = case.input.pending.iter().map(|entry| entry.request_id);
+        let active = ids
+            .clone()
             .filter(|id| {
-                rows.iter().any(|row| {
-                    modeled_id(row) == *id && row.lifecycle_state == RequestLifecycleState::Pending
-                })
+                matches!(
+                    state(*id),
+                    RequestLifecycleState::Claimed | RequestLifecycleState::Processing
+                )
             })
+            .collect::<Vec<_>>();
+        assert!(active.len() <= 1, "{}: one active request", case.input.name);
+        let pending = ids
+            .filter(|id| state(*id) == RequestLifecycleState::Pending)
             .filter(|id| !turn.selected.contains(id))
             .collect::<Vec<_>>();
-        assert_eq!(pending, case.expected.pending, "{}: pending", case.name);
+        case.check(Some(
+            gents_lean_vocab::families::fold_queue_contracts_handover_claim::HandoverQueue {
+                active: active.first().copied(),
+                folding: turn.selected.clone(),
+                pending,
+            },
+        ));
     }
 }
 

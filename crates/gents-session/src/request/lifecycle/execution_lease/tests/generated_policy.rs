@@ -41,17 +41,13 @@ fn generated_request_execution_lease_contract_decodes_current_inventory() {
 
 #[test]
 fn generated_provider_eof_cases_fence_production_policy() {
-    let cases = gents_lean_vocab::lean_provider_eof_cases();
-    assert_eq!(cases.len(), 2);
-    for case in cases {
-        assert_eq!(
-            crate::request::lifecycle::execution_policy::provider_eof_is_failure(
-                case.saw_explicit_final
+    gents_lean_vocab::families::request_execution_lease_contracts_provider_eof::replay(|case| {
+        gents_lean_vocab::families::request_execution_lease_contracts_provider_eof::ProviderEofOutput {
+            failure: crate::request::lifecycle::execution_policy::provider_eof_is_failure(
+                case.saw_explicit_final,
             ),
-            case.expected_failure,
-            "{case:?}",
-        );
-    }
+        }
+    });
 }
 
 #[test]

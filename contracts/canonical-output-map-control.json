@@ -315,8 +315,6 @@
       "SessionQueue.Action.consumeFolded"
     ],
     "generated_groups": [
-      "fold_queue_cases",
-      "handover_fold_cases",
       "fold_turn_input_cases",
       "fold_publication_cases",
       "retry_selection_cases"

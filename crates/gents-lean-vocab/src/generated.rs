@@ -197,10 +197,6 @@ pub fn lean_fold_publication_cases() -> &'static [LeanFoldPublicationCase] {
     &lean_contract_snapshot().fold_publication_cases
 }
 
-pub fn lean_fold_queue_cases() -> &'static [LeanFoldQueueCase] {
-    &lean_contract_snapshot().fold_queue_cases
-}
-
 pub fn lean_fold_turn_input_cases() -> &'static [LeanFoldTurnInputCase] {
     &lean_contract_snapshot().fold_turn_input_cases
 }
@@ -231,10 +227,6 @@ pub fn lean_goal_submission_cases() -> &'static [LeanGoalSubmissionCase] {
 
 pub fn lean_goal_transition_cases() -> &'static [LeanGoalTransitionCase] {
     &lean_contract_snapshot().goal_transition_cases
-}
-
-pub fn lean_handover_fold_cases() -> &'static [LeanHandoverFoldCase] {
-    &lean_contract_snapshot().handover_fold_cases
 }
 
 pub fn lean_identity_contracts() -> &'static [LeanIdentityContract] {
@@ -519,10 +511,6 @@ pub fn lean_prompt_assembly_turn_budget_cases() -> &'static [LeanPromptAssemblyT
 
 pub fn lean_protected_replay_compaction_cases() -> &'static [LeanProtectedReplayCompactionCase] {
     &lean_contract_snapshot().protected_replay_compaction_cases
-}
-
-pub fn lean_provider_eof_cases() -> &'static [LeanProviderEofCase] {
-    &lean_contract_snapshot().provider_eof_cases
 }
 
 pub fn lean_queue_deadline_cases() -> &'static [LeanQueueDeadlineConformanceCase] {
@@ -3053,7 +3041,6 @@ pub struct LeanContractSnapshot {
     pub client_session_queue_order_cases: Vec<serde_json::Value>,
     pub request_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub process_transition_cases: Vec<LeanLifecycleTransitionCase>,
-    pub provider_eof_cases: Vec<LeanProviderEofCase>,
     pub request_execution_lease_cases: Vec<LeanRequestExecutionLeaseCase>,
     pub request_execution_lease_observed_cases: Vec<LeanRequestExecutionObservedCase>,
     pub request_execution_lease_trace_cases: Vec<LeanRequestExecutionLeaseTraceCase>,
@@ -3269,9 +3256,7 @@ pub struct LeanContractSnapshot {
     pub canonical_spawned_target_rejection_cases: Vec<LeanSpawnedTargetRejectionCase>,
     pub interrupt_queue_cases: Vec<LeanInterruptQueueCase>,
     pub session_control_cases: Vec<serde_json::Value>,
-    pub fold_queue_cases: Vec<LeanFoldQueueCase>,
     pub fold_turn_input_cases: Vec<LeanFoldTurnInputCase>,
-    pub handover_fold_cases: Vec<LeanHandoverFoldCase>,
     pub fold_publication_cases: Vec<LeanFoldPublicationCase>,
     pub steering_publication_cases: Vec<LeanFoldPublicationCase>,
     pub queue_management_cases: Vec<LeanQueueManagementCase>,
@@ -4189,23 +4174,6 @@ pub enum LeanFoldPublicationStep {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanFoldQueueCase {
-    pub name: String,
-    pub node_id: u64,
-    pub session_id: u64,
-    pub inputs: Vec<LeanFoldQueueInput>,
-    pub expected: LeanFoldQueueObservation,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanFoldQueueClaim {
-    pub head: u64,
-    pub folded: Vec<u64>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanFoldQueueEntry {
     pub request_id: u64,
     pub execution_origin: String,
@@ -4217,25 +4185,6 @@ pub struct LeanFoldQueueEntry {
     pub requester_id: Option<u64>,
     pub turn_context: u64,
     pub fresh: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanFoldQueueInput {
-    Enqueue { entry: LeanFoldQueueEntry },
-    Claim { admitted: Vec<u64> },
-    Consume,
-    Finish,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanFoldQueueObservation {
-    pub active: Option<u64>,
-    pub pending: Vec<u64>,
-    pub folding: Vec<u64>,
-    pub terminal: Vec<u64>,
-    pub claims: Vec<LeanFoldQueueClaim>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -5891,23 +5840,6 @@ pub struct LeanGrantRecipientCase {
     pub recipient: String,
     pub direct: Vec<String>,
     pub projected: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanHandoverFoldCase {
-    pub name: String,
-    pub pending: Vec<LeanFoldQueueEntry>,
-    pub admitted: Vec<u64>,
-    pub expected: LeanHandoverFoldObservation,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanHandoverFoldObservation {
-    pub active: Option<u64>,
-    pub folding: Vec<u64>,
-    pub pending: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -9622,13 +9554,6 @@ pub struct LeanProtectedReplayCompactionCase {
     #[serde(deserialize_with = "required_nullable")]
     pub selected_split: Option<usize>,
     pub outcome: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanProviderEofCase {
-    pub saw_explicit_final: bool,
-    pub expected_failure: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

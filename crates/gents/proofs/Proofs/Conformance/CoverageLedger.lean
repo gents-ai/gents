@@ -541,8 +541,8 @@ def caseCoverage : List CoverageEntry :=
       "RequestTransitions")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "provider_eof_cases"
-      "ProviderEofCases")
+      "family"
+      "request_execution_lease_contracts_provider_eof")
       "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "request_execution_lease_observed_cases"
@@ -1337,13 +1337,13 @@ def caseCoverage : List CoverageEntry :=
       "Production history_permitted decides every case. The DefraDB host's refusal of an out-of-bound revision read before answering it is not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "fold_queue_cases"
-      "FoldQueueCases"
+      "family"
+      "fold_queue_contracts_fold_script"
       "Generated scripts drive the native claim transaction with an explicit verified-admission set, publish selected messages through the authored publication owner and finish turns, binding active, pending, selected and terminal rows and supersession pointers. The daemon's admission verification that produces that set is exercised natively, not generated.")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "handover_fold_cases"
-      "HandoverFoldCases")
+      "family"
+      "fold_queue_contracts_handover_claim")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "fold_publication_cases"

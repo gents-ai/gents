@@ -3,6 +3,7 @@ import Proofs.Session.SessionQueue.ManagementCases
 import Proofs.Session.SessionQueue.InputEditCases
 import Proofs.Runtime.CanonicalOutput.Execution.FoldPublicationCases
 import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
 
 namespace Conformance.FoldQueueContracts
 
@@ -27,24 +28,6 @@ def eventJson : Event → String
   | .consume => "{\"kind\":\"consume\"}"
   | .finish => "{\"kind\":\"finish\"}"
 
-def caseJson (entry : String × List Event) : String :=
-  "{\"name\":" ++ jsonString entry.1 ++
-  ",\"node_id\":" ++ toString queue.scope.node ++
-  ",\"session_id\":" ++ toString queue.scope.session ++
-  ",\"inputs\":" ++ jsonArray (entry.2.map eventJson) ++
-  ",\"expected\":" ++ (match observation entry.2 with
-    | none => "null"
-    | some observed =>
-        "{\"active\":" ++ jsonOptionalNat observed.active ++
-        ",\"pending\":" ++ jsonArray (observed.pending.map toString) ++
-        ",\"folding\":" ++ jsonArray (observed.folding.map toString) ++
-        ",\"terminal\":" ++ jsonArray (observed.terminal.map toString) ++
-        ",\"claims\":" ++ jsonArray (observed.claims.map fun (head, folded) =>
-          "{\"head\":" ++ toString head ++
-          ",\"folded\":" ++ jsonArray (folded.map toString) ++ "}") ++ "}") ++ "}"
-
-def casesJson : String := jsonArray (cases.map caseJson)
-
 def authoredKeyJson : AuthoredKey → String
   | .context => "{\"kind\":\"context\"}"
   | .prompt => "{\"kind\":\"prompt\"}"
@@ -62,21 +45,6 @@ def turnInputCaseJson (entry : String × TurnInput String) : String :=
   ",\"provider_input\":" ++ jsonArray (input.providerInput.map jsonString) ++ "}"
 
 def turnInputCasesJson : String := jsonArray (turnInputCases.map turnInputCaseJson)
-
-open CanonicalOutput.Execution.Handover.Cases in
-def handoverCaseJson (value : FoldClaimCase) : String :=
-  "{\"name\":" ++ jsonString value.name ++
-  ",\"pending\":" ++ jsonArray (value.pending.map entryJson) ++
-  ",\"admitted\":" ++ jsonArray (value.admitted.map toString) ++
-  ",\"expected\":" ++ (match foldClaim value with
-    | none => "null"
-    | some queue =>
-        "{\"active\":" ++ jsonOptionalNat queue.active ++
-        ",\"folding\":" ++ jsonArray (queue.folding.map (toString ·.requestId)) ++
-        ",\"pending\":" ++ jsonArray (queue.pending.map (toString ·.requestId)) ++ "}") ++ "}"
-
-def handoverCasesJson : String :=
-  jsonArray (CanonicalOutput.Execution.Handover.Cases.foldClaimCases.map handoverCaseJson)
 
 def publicationStepJson : CanonicalOutput.Execution.FoldPublication.Step → String
   | .observeDeadline now deadline =>
@@ -221,5 +189,131 @@ def inputEditClientObservationCasesJson : String :=
     ",\"command_outcome\":" ++ jsonString (match observation.commandOutcome with
       | .applied => "applied" | .rejected => "rejected") ++
     ",\"projection_fresh\":" ++ jsonOptionalBool (some observation.projectionFresh) ++ "}")
+
+section Families
+
+open Lean
+
+deriving instance ToJson for QueueDelivery, QueueSource, QueuePolicy, ExecutionOrigin
+
+structure GoalAssignmentWire where
+  goal : String
+  opening : String
+  deriving ToJson
+
+structure EntryWire where
+  requestId : Nat
+  createdAt : Nat
+  orderKey : Nat
+  executionOrigin : ExecutionOrigin
+  delivery : QueueDelivery
+  source : QueueSource
+  policy : QueuePolicy
+  queueKey : Option Nat
+  queuedAfter : Option Nat
+  requesterId : Option Nat
+  turnContext : Nat
+  executionDirectory : Option Nat
+  goalAssignment : Option GoalAssignmentWire
+  fresh : Bool
+  deriving ToJson
+
+def EntryWire.ofModel (entry : QueueEntry) : EntryWire :=
+  { requestId := entry.requestId, createdAt := entry.createdAt, orderKey := entry.orderKey
+    executionOrigin := entry.origin, delivery := entry.delivery, source := entry.source
+    policy := entry.policy, queueKey := entry.queueKey, queuedAfter := entry.queuedAfter
+    requesterId := entry.requester, turnContext := entry.turnContext
+    executionDirectory := entry.executionDirectory
+    goalAssignment := entry.goalAssignment.map fun (goal, opening) => { goal, opening }
+    fresh := entry.fresh }
+
+def EntryWire.toModel (entry : EntryWire) : QueueEntry :=
+  { requestId := entry.requestId, createdAt := entry.createdAt, orderKey := entry.orderKey
+    origin := entry.executionOrigin, delivery := entry.delivery, source := entry.source
+    policy := entry.policy, queueKey := entry.queueKey, queuedAfter := entry.queuedAfter
+    requester := entry.requesterId, turnContext := entry.turnContext
+    executionDirectory := entry.executionDirectory
+    goalAssignment := entry.goalAssignment.map fun g => (g.goal, g.opening)
+    fresh := entry.fresh }
+
+inductive EventKind where
+  | enqueue | claim | consume | finish
+  deriving ToJson
+
+structure EventWire where
+  kind : EventKind
+  entry : Option EntryWire
+  admitted : List Nat
+  deriving ToJson
+
+def EventWire.ofModel : Event → EventWire
+  | .enqueue entry => { kind := .enqueue, entry := some (EntryWire.ofModel entry), admitted := [] }
+  | .claim admitted => { kind := .claim, entry := none, admitted }
+  | .consume => { kind := .consume, entry := none, admitted := [] }
+  | .finish => { kind := .finish, entry := none, admitted := [] }
+
+def EventWire.toModel (event : EventWire) : Option Event :=
+  match event.kind with
+  | .enqueue => event.entry.map fun entry => .enqueue entry.toModel
+  | .claim => some (.claim event.admitted)
+  | .consume => some .consume
+  | .finish => some .finish
+
+structure FoldInput where
+  name : String
+  nodeId : Nat
+  sessionId : Nat
+  inputs : List EventWire
+  deriving ToJson
+
+structure ClaimWire where
+  head : Nat
+  folded : List Nat
+  deriving ToJson
+
+structure FoldObservation where
+  active : Option Nat
+  pending : List Nat
+  folding : List Nat
+  terminal : List Nat
+  claims : List ClaimWire
+  deriving ToJson
+
+@[conformance_family]
+def foldScript : Family FoldInput (Option FoldObservation) where
+  inputs := cases.map fun (name, events) =>
+    { name, nodeId := queue.scope.node, sessionId := queue.scope.session
+      inputs := events.map EventWire.ofModel }
+  model := fun i => do
+    let events ← i.inputs.mapM EventWire.toModel
+    let observed ← observation events
+    pure { active := observed.active, pending := observed.pending, folding := observed.folding
+           terminal := observed.terminal
+           claims := observed.claims.map fun (head, folded) => { head, folded } }
+
+structure HandoverInput where
+  name : String
+  pending : List EntryWire
+  admitted : List Nat
+  deriving ToJson
+
+structure HandoverQueue where
+  active : Option Nat
+  folding : List Nat
+  pending : List Nat
+  deriving ToJson
+
+open CanonicalOutput.Execution.Handover.Cases in
+@[conformance_family]
+def handoverClaim : Family HandoverInput (Option HandoverQueue) where
+  inputs := foldClaimCases.map fun value =>
+    { name := value.name, pending := value.pending.map EntryWire.ofModel, admitted := value.admitted }
+  model := fun i => do
+    let claimed ← foldClaim
+      { name := i.name, pending := i.pending.map EntryWire.toModel, admitted := i.admitted }
+    pure { active := claimed.active, folding := claimed.folding.map (·.requestId)
+           pending := claimed.pending.map (·.requestId) }
+
+end Families
 
 end Conformance.FoldQueueContracts
