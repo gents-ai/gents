@@ -703,8 +703,8 @@ def caseCoverage : List CoverageEntry :=
       "ClientSyncHealthCases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "pending_user_turn_cases"
-      "PendingUserTurnCases")
+      "family"
+      "contracts_pending_user_turn")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerWithFollowUp
       "queued_steering_trace_cases"
@@ -771,9 +771,13 @@ def caseCoverage : List CoverageEntry :=
       "AgentSteerTargetCases")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "agent_steering_boundary_cases"
-      "AgentSteeringBoundaryCases"
+      "family"
+      "contracts_steering_boundary_selection"
       "Binds ordered boundary selection; held-tool delivery and exact replay need native flow coverage.")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_steering_boundary_publication")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "agent_steer_reachability_cases"
@@ -781,8 +785,8 @@ def caseCoverage : List CoverageEntry :=
       "Binds admission against the ordered boundary owner, including compatible earlier steers.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "agent_delivery_cases"
-      "AgentDeliveryCases"
+      "family"
+      "contracts_agent_delivery"
       "Binds delivery resolution; transaction admission and owned-loop delivery need native flow coverage.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp

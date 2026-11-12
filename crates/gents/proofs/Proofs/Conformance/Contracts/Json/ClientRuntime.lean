@@ -7,21 +7,29 @@ import Proofs.Runtime.CanonicalOutput.Execution.AuxiliaryCases
 import Proofs.Session.Compaction.Executable
 import Proofs.Conformance.Recovery.ContractCases
 import Proofs.Clients.QueuedSteering
+import Proofs.Conformance.Family
 
 namespace Conformance.Contracts
 
 open Conformance.ContractCases
 
-private def agentDeliveryJson : Option QueuedSteering.AgentDelivery → String
-  | none => "null"
-  | some .queue => jsonString "queue"
-  | some .steer => jsonString "steer"
-  | some .interrupt => jsonString "interrupt"
+namespace AgentDelivery
 
-def agentDeliveryCaseJson (input : Option QueuedSteering.AgentDelivery × Option Bool) : String :=
-  "{\"delivery\":" ++ agentDeliveryJson input.1 ++
-    ",\"interrupt\":" ++ (match input.2 with | none => "null" | some b => boolString b) ++
-    ",\"expected\":" ++ agentDeliveryJson (QueuedSteering.resolveAgentDelivery input.1 input.2) ++ "}"
+open Lean
+
+deriving instance ToJson for QueuedSteering.AgentDelivery
+
+structure Input where
+  delivery : Option QueuedSteering.AgentDelivery
+  interrupt : Option Bool
+  deriving ToJson
+
+end AgentDelivery
+
+@[conformance_family]
+def agentDelivery : Family AgentDelivery.Input (Option QueuedSteering.AgentDelivery) where
+  inputs := QueuedSteering.agentDeliveryCases.map fun (delivery, interrupt) => { delivery, interrupt }
+  model := fun i => QueuedSteering.resolveAgentDelivery i.delivery i.interrupt
 
 def interruptDeliveryCaseJson (input : Option Nat × Option Nat) : String :=
   let number := fun value : Option Nat => match value with | none => "null" | some n => toString n
@@ -76,13 +84,54 @@ def agentSteerReachabilityCaseJson (input : List (Nat × QueuedSteering.Boundary
   "{\"inputs\":" ++ jsonArray (input.1.map entryJson) ++ ",\"target\":" ++ toString input.2 ++
     ",\"expected\":" ++ boolString (QueuedSteering.agentSteerReachable input.2 input.1) ++ "}"
 
-def boundaryCaseJson (inputs : List (Nat × QueuedSteering.BoundaryInputKind)) : String :=
-  let entryJson := fun entry => "{\"id\":" ++ toString entry.1 ++
-    ",\"kind\":" ++ boundaryKindJson entry.2 ++ "}"
-  let expected := match QueuedSteering.boundaryCandidate inputs with
-    | none => "null"
-    | some id => toString id
-  "{\"inputs\":" ++ jsonArray (inputs.map entryJson) ++ ",\"expected\":" ++ expected ++ "}"
+namespace SteeringBoundary
+
+open Lean
+
+deriving instance ToJson for QueuedSteering.BoundaryInputKind
+
+structure Entry where
+  id : Nat
+  kind : QueuedSteering.BoundaryInputKind
+  deriving ToJson
+
+structure Input where
+  inputs : List Entry
+  deriving ToJson
+
+def ofCase (inputs : List (Nat × QueuedSteering.BoundaryInputKind)) : Input :=
+  { inputs := inputs.map fun (id, kind) => { id, kind } }
+
+def candidate (i : Input) : Option Nat :=
+  QueuedSteering.boundaryCandidate (i.inputs.map fun e => (e.id, e.kind))
+
+structure Publication where
+  steered : List Nat
+  pending : List Nat
+  superseded : List Nat
+  deriving ToJson
+
+/-- A served fixture enqueues signed user turns behind an active head; an
+agent steer needs a parent tool call and a blocked input a background
+completion, which that fixture does not build. -/
+def publicationCases : List (List (Nat × QueuedSteering.BoundaryInputKind)) :=
+  QueuedSteering.boundaryCases.filter (· == [(1, .queued), (2, .userSteer), (3, .queued)])
+
+end SteeringBoundary
+
+@[conformance_family]
+def steeringBoundarySelection : Family SteeringBoundary.Input (Option Nat) where
+  inputs := QueuedSteering.boundaryCases.map SteeringBoundary.ofCase
+  model := SteeringBoundary.candidate
+
+@[conformance_family]
+def steeringBoundaryPublication : Family SteeringBoundary.Input SteeringBoundary.Publication where
+  inputs := SteeringBoundary.publicationCases.map SteeringBoundary.ofCase
+  model := fun i =>
+    let selected := SteeringBoundary.candidate i
+    { steered := selected.toList
+      pending := (i.inputs.filter fun e => some e.id != selected).map (·.id)
+      superseded := selected.toList }
 
 def liveOverlayCaseJson (witness : LiveOverlayCase) : String :=
   "{"
@@ -105,15 +154,29 @@ def requestProgressCaseJson (witness : RequestProgressCase) : String :=
     ++ "\"animated\":" ++ boolString witness.animated
     ++ "}"
 
-def pendingUserTurnCaseJson (witness : PendingUserTurnCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"hasDurableUserOwner\":"
-      ++ boolString witness.hasDurableUserOwner ++ ","
-    ++ "\"retiredByAuthor\":" ++ boolString witness.retiredByAuthor ++ ","
-    ++ "\"unrelatedUserTurns\":" ++ toString witness.unrelatedUserTurns ++ ","
-    ++ "\"expectPendingTurn\":" ++ boolString witness.expectPendingTurn
-    ++ "}"
+namespace PendingUserTurn
+
+open Lean
+
+structure Input where
+  name : String
+  hasDurableUserOwner : Bool
+  retiredByAuthor : Bool
+  unrelatedUserTurns : Nat
+  deriving ToJson
+
+structure Output where
+  pendingTurn : Bool
+  deriving ToJson
+
+end PendingUserTurn
+
+@[conformance_family]
+def pendingUserTurn : Family PendingUserTurn.Input PendingUserTurn.Output where
+  inputs := pendingUserTurnCases.map fun c =>
+    { name := c.name, hasDurableUserOwner := c.hasDurableUserOwner
+      retiredByAuthor := c.retiredByAuthor, unrelatedUserTurns := c.unrelatedUserTurns }
+  model := fun i => { pendingTurn := projectPendingUserTurn i.hasDurableUserOwner i.retiredByAuthor }
 
 def queuedSteeringGuardJson (witness : QueuedSteering.GuardObservation) : String :=
   "{"

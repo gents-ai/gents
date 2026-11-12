@@ -962,110 +962,122 @@ async fn claim_selected_publication_keeps_later_incompatible_pending_row() {
 
 #[tokio::test]
 async fn direct_user_steer_passes_ordinary_queue_without_consuming_it() {
-    let case = gents_lean_vocab::lean_contract_snapshot()
-        .agent_steering_boundary_cases
-        .iter()
-        .find(|case| {
-            case.inputs
-                .iter()
-                .map(|item| item.kind.as_str())
-                .collect::<Vec<_>>()
-                == ["queued", "user_steer", "queued"]
-        })
-        .expect("modeled user steer behind queued messages");
-    let db = test_db("direct-steer-queued-followups").await;
-    let session_id = "direct-steer-queued-followups";
-    let entry = |id, delivery: &str| LeanFoldQueueEntry {
-        request_id: id,
-        execution_origin: "interactive".into(),
-        delivery: delivery.into(),
-        order_key: id,
-        source: "user".into(),
-        policy: "append".into(),
-        queued_after: Some(99),
-        requester_id: Some(1),
-        turn_context: 0,
-        fresh: true,
-    };
-    let mut bound = RapidHashMap::new();
-    let head = LeanFoldQueueEntry {
-        queued_after: None,
-        ..entry(99, "queue")
-    };
-    bound.insert(99, enqueue_signed(&db, session_id, &head, 0).await);
-    let mut active = claim_head(&db, &bound, 99, &[]).await;
-    let writer =
-        DefraStreamWriter::new_managed(db.node.clone(), db.agent_identity.as_ref(), Duration::ZERO)
-            .unwrap();
-    active.begin(&writer).await;
-    for (index, item) in case.inputs.iter().enumerate() {
-        let delivery = if item.kind == "user_steer" {
-            "steer"
-        } else {
-            "queue"
+    for case in
+        gents_lean_vocab::families::contracts_steering_boundary_publication::cases::<String>()
+    {
+        let db = test_db("direct-steer-queued-followups").await;
+        let session_id = "direct-steer-queued-followups";
+        let entry = |id, delivery: &str| LeanFoldQueueEntry {
+            request_id: id,
+            execution_origin: "interactive".into(),
+            delivery: delivery.into(),
+            order_key: id,
+            source: "user".into(),
+            policy: "append".into(),
+            queued_after: Some(99),
+            requester_id: Some(1),
+            turn_context: 0,
+            fresh: true,
         };
-        bound.insert(
-            item.id,
-            enqueue_signed(&db, session_id, &entry(item.id, delivery), index + 1).await,
+        let mut bound = RapidHashMap::new();
+        let head = LeanFoldQueueEntry {
+            queued_after: None,
+            ..entry(99, "queue")
+        };
+        bound.insert(99, enqueue_signed(&db, session_id, &head, 0).await);
+        let mut active = claim_head(&db, &bound, 99, &[]).await;
+        let writer = DefraStreamWriter::new_managed(
+            db.node.clone(),
+            db.agent_identity.as_ref(),
+            Duration::ZERO,
+        )
+        .unwrap();
+        active.begin(&writer).await;
+        for (index, item) in case.input.inputs.iter().enumerate() {
+            let delivery = match item.kind.as_str() {
+                "user_steer" => "steer",
+                "queued" => "queue",
+                other => panic!("the served fixture cannot enqueue a {other} input"),
+            };
+            bound.insert(
+                item.id,
+                enqueue_signed(&db, session_id, &entry(item.id, delivery), index + 1).await,
+            );
+        }
+        let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
+        let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+            db.node.clone(),
+            db.identity.clone(),
+            authority,
         );
-    }
-    let (_owner, authority) = gents_p2p::p2p_reconcile::enrollment_authority_channel();
-    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
-        db.node.clone(),
-        db.identity.clone(),
-        authority,
-    );
-    let snapshot = super::super::intake::steering_snapshot(
-        &db.node,
-        active.lifecycle.request(),
-        &verifier,
-        None,
-    )
-    .await
-    .unwrap();
-    let selected = case.expected.expect("modeled steer selection");
-    assert_eq!(snapshot.inputs.len(), 1);
-    assert_eq!(snapshot.inputs[0].key, folded_input_key(&bound[&selected]));
-    writer
-        .publish_authored_message(
-            &active.lifecycle,
-            &folded_input_key(&bound[&selected]),
-            &gents_protocol::message::Message::user(format!("message {selected}")),
+        let snapshot = super::super::intake::steering_snapshot(
+            &db.node,
+            active.lifecycle.request(),
+            &verifier,
+            None,
         )
         .await
         .unwrap();
-    let rows = fold_rows(&db, session_id).await;
-    let access = &db.agent_access;
-    let queue = pending_user_queue(access, db.node_did(), session_id, db.node_did())
-        .await
-        .unwrap();
-    assert_eq!(
-        queue
+        let steered = snapshot
+            .inputs
+            .iter()
+            .map(|input| {
+                case.input
+                    .inputs
+                    .iter()
+                    .map(|item| item.id)
+                    .find(|id| folded_input_key(&bound[id]) == input.key)
+                    .expect("steering input is one of the enqueued turns")
+            })
+            .collect::<Vec<_>>();
+        for id in &steered {
+            writer
+                .publish_authored_message(
+                    &active.lifecycle,
+                    &folded_input_key(&bound[id]),
+                    &gents_protocol::message::Message::user(format!("message {id}")),
+                )
+                .await
+                .unwrap();
+        }
+        let rows = fold_rows(&db, session_id).await;
+        let queue = pending_user_queue(&db.agent_access, db.node_did(), session_id, db.node_did())
+            .await
+            .unwrap();
+        let state_of = |id: u64| {
+            rows.iter()
+                .find(|row| row.request_id == id.to_string())
+                .unwrap()
+        };
+        let ids = case.input.inputs.iter().map(|item| item.id);
+        let pending_rows = ids
+            .clone()
+            .filter(|id| {
+                let row = state_of(*id);
+                row.lifecycle_state == RequestLifecycleState::Pending
+                    && row.superseded_by_request_doc_id.is_none()
+            })
+            .collect::<Vec<_>>();
+        let superseded = ids
+            .filter(|id| {
+                let row = state_of(*id);
+                row.lifecycle_state == RequestLifecycleState::Superseded
+                    && row.superseded_by_request_doc_id.as_deref() == Some(bound[&99].as_str())
+            })
+            .collect::<Vec<_>>();
+        let pending = queue
             .entries
             .iter()
-            .map(|item| item.request_id.clone())
-            .collect::<Vec<_>>(),
-        case.inputs
-            .iter()
-            .filter(|item| Some(item.id) != case.expected)
-            .map(|item| item.id.to_string())
-            .collect::<Vec<_>>()
-    );
-    for item in &case.inputs {
-        let row = rows
-            .iter()
-            .find(|row| row.request_id == item.id.to_string())
-            .unwrap();
-        if Some(item.id) == case.expected {
-            assert_eq!(row.lifecycle_state, RequestLifecycleState::Superseded);
-            assert_eq!(
-                row.superseded_by_request_doc_id.as_deref(),
-                Some(bound[&99].as_str())
-            );
-        } else {
-            assert_eq!(row.lifecycle_state, RequestLifecycleState::Pending);
-            assert!(row.superseded_by_request_doc_id.is_none());
-        }
+            .map(|item| item.request_id.parse::<u64>().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(pending, pending_rows, "{:?}", case.input);
+        case.check(
+            gents_lean_vocab::families::contracts_steering_boundary_publication::Publication {
+                steered,
+                pending,
+                superseded,
+            },
+        );
     }
 }
 

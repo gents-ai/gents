@@ -373,10 +373,6 @@ pub fn lean_pairing_reconcile_sweep_scheduling_cases() -> &'static [LeanPairingR
     &lean_contract_snapshot().pairing_reconcile_sweep_scheduling_cases
 }
 
-pub fn lean_pending_user_turn_cases() -> &'static [LeanPendingUserTurnCase] {
-    &lean_contract_snapshot().pending_user_turn_cases
-}
-
 pub fn lean_persistence_failure_policy_cases() -> &'static [LeanPersistenceFailurePolicyCase] {
     &lean_contract_snapshot().persistence_failure_policy_cases
 }
@@ -874,13 +870,6 @@ pub struct LeanAgentDecisionInputs {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct LeanAgentDeliveryCase {
-    pub delivery: Option<String>,
-    pub interrupt: Option<bool>,
-    pub expected: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct LeanAgentFoldedBindingCase {
     pub caused_requester: u64,
     pub head_requester: u64,
@@ -986,18 +975,6 @@ pub struct LeanAgentSteerTargetCase {
     pub active_head: u64,
     pub expected: bool,
     pub planned_head: u64,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanAgentSteeringBoundaryCase {
-    pub inputs: Vec<LeanAgentSteeringBoundaryInput>,
-    pub expected: Option<u64>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LeanAgentSteeringBoundaryInput {
-    pub id: u64,
-    pub kind: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -2479,37 +2456,6 @@ pub struct LeanClientLiveDeltaCase {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCase {
-    pub actions: Vec<LeanClientObservationScopeCaseActionsItem>,
-    pub expected: Vec<LeanClientObservationScopeCaseExpectedItem>,
-    pub initial: LeanClientObservationScopeCaseInitial,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseActionsItem {
-    pub kind: String,
-    pub node: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseExpectedItem {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanClientObservationScopeCaseInitial {
-    pub attachments: u64,
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanClientProcessReceiptCase {
     pub agent: String,
     pub author: String,
@@ -3035,7 +2981,6 @@ pub struct LeanContractSnapshot {
     pub mailbox_question_cases: Vec<LeanMailboxQuestionCase>,
     pub mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
     pub mailbox_sweep_cases: Vec<LeanMailboxSweepCase>,
-    pub client_observation_scope_cases: Option<Vec<LeanClientObservationScopeCase>>,
     pub inference_observation_cases: Vec<LeanInferenceObservationCase>,
     pub inference_visibility_cases: Vec<LeanInferenceVisibilityCase>,
     pub inference_route_cases: Vec<LeanInferenceRouteCase>,
@@ -3297,14 +3242,11 @@ pub struct LeanContractSnapshot {
     pub command_env_cases: Vec<LeanCommandEnvCase>,
     pub live_overlay_cases: Vec<LeanLiveOverlayCase>,
     pub request_progress_cases: Vec<LeanRequestProgressCase>,
-    pub pending_user_turn_cases: Vec<LeanPendingUserTurnCase>,
     pub queued_steering_trace_cases: Vec<LeanQueuedSteeringTraceCase>,
     pub queued_steering_guard_cases: Vec<LeanQueuedSteeringGuardCase>,
-    pub agent_delivery_cases: Vec<LeanAgentDeliveryCase>,
     pub interrupt_delivery_cases: Vec<LeanInterruptDeliveryCase>,
     pub agent_steer_disposition_cases: Vec<LeanAgentSteerDispositionCase>,
     pub agent_steer_target_cases: Vec<LeanAgentSteerTargetCase>,
-    pub agent_steering_boundary_cases: Vec<LeanAgentSteeringBoundaryCase>,
     pub agent_steer_reachability_cases: Vec<LeanAgentSteerReachabilityCase>,
     pub agent_message_outcome_cases: Vec<LeanAgentMessageOutcomeCase>,
     pub agent_folded_binding_cases: Vec<LeanAgentFoldedBindingCase>,
@@ -7948,19 +7890,6 @@ pub struct LeanPayloadRef {
 pub struct LeanPayloadSpec {
     pub reference: LeanPayloadRef,
     pub presentation: LeanPresentation,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanPendingUserTurnCase {
-    pub name: String,
-    #[serde(rename = "hasDurableUserOwner")]
-    pub has_durable_user_owner: bool,
-    #[serde(rename = "retiredByAuthor")]
-    pub retired_by_author: bool,
-    #[serde(rename = "unrelatedUserTurns")]
-    pub unrelated_user_turns: u64,
-    #[serde(rename = "expectPendingTurn")]
-    pub expect_pending_turn: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
