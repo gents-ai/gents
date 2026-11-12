@@ -328,8 +328,6 @@ def snapshotCaptureTailJson : String :=
     ++ "\"family_vocabularies\":" ++ (conformance_vocabularies%).compress ++ ","
     ++ "\"task_hook_run_cases\":"
       ++ Conformance.TaskHooksContracts.runCasesJson ++ ","
-    ++ "\"task_hook_recovery_cases\":"
-      ++ Conformance.TaskHooksContracts.recoveryCasesJson ++ ","
     ++ "\"compaction_reducer_cases\":"
       ++ jsonArray
         (Compaction.compactionReducerCases.map compactionReducerCaseJson) ++ ","

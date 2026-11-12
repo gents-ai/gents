@@ -2,10 +2,8 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents_documents::TaskHook;
-use gents_lean_vocab::{
-    lean_recovery_sweep_cases, lean_task_hook_recovery_cases, LeanCommandResult, LeanTaskHook,
-};
+use gents_documents::{TaskHook, TaskHookPhase};
+use gents_lean_vocab::lean_recovery_sweep_cases;
 use gents_session::request::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
 use gents_store::identity::{KeyIdentity, NodeIdentity};
 use gents_toolcalls::call::hook::BackgroundExecutionRegistry;
@@ -197,10 +195,10 @@ impl Fixture {
     }
 }
 
-fn logging_hook(generated: &LeanTaskHook, log: &Path, code: i64) -> TaskHook {
+fn logging_hook(generated: &TaskHook, log: &Path, code: i64) -> TaskHook {
     TaskHook {
         hook_id: generated.hook_id.clone(),
-        phase: gents_toolcalls::call::task_hooks::test_support::lean_hook_phase(&generated.phase),
+        phase: generated.phase,
         command: vec![
             "sh".into(),
             "-c".into(),
@@ -215,9 +213,47 @@ fn logging_hook(generated: &LeanTaskHook, log: &Path, code: i64) -> TaskHook {
     }
 }
 
-fn recorded(result: &LeanCommandResult) -> Option<HookCommandResult> {
-    (*result != LeanCommandResult::Interrupted)
-        .then(|| gents_toolcalls::call::task_hooks::test_support::native_command_result(result))
+fn recorded(result: &gents_lean_vocab::families::task_hooks_contracts_recovery::CommandResultWire) -> Option<HookCommandResult> {
+    match result.kind.as_str() {
+        "exited" => Some(HookCommandResult::Exited { code: result.code }),
+        "launch_failed" => Some(HookCommandResult::LaunchFailed),
+        "timed_out" => Some(HookCommandResult::TimedOut),
+        "interrupted" => None,
+        other => panic!("unmodeled command result {other:?}"),
+    }
+}
+
+fn hooks_admitted(task_id: &str, hooks: &[TaskHook]) -> bool {
+    gents_documents::Task {
+        emit_outcome: false,
+        outcome_readers: Vec::new(),
+        node_did: "did:key:z6MkTaskHookRecovery".to_string(),
+        task_id: task_id.to_string(),
+        display_name: None,
+        description: None,
+        agent_did: "agent-1".to_string(),
+        prompt_template: "run the task".to_string(),
+        goal_objective_template: None,
+        goal_token_budget: None,
+        hooks: hooks.to_vec(),
+        enabled: true,
+        output_schema_ref: None,
+        created_at: None,
+        updated_at: None,
+        tags: Vec::new(),
+    }
+    .validate()
+    .is_ok()
+}
+
+fn modeled_hook(hook: &gents_lean_vocab::families::task_hooks_contracts_recovery::TaskHook<TaskHookPhase>) -> TaskHook {
+    TaskHook {
+        hook_id: hook.hook_id.clone(),
+        phase: hook.phase,
+        command: hook.command.clone(),
+        timeout_secs: hook.timeout_secs,
+        skip_exit_codes: hook.skip_exit_codes.clone(),
+    }
 }
 
 async fn persist_crashed(store: &TaskHookRecordStore, record: TaskHookRecord) {
@@ -259,32 +295,35 @@ fn log_lines(log: &Path) -> Vec<String> {
 
 #[tokio::test]
 async fn generated_task_hook_recovery_cases_drive_startup_recovery_and_host_records() {
-    let cases = lean_task_hook_recovery_cases();
-    assert!(!cases.is_empty());
     let fixture = Fixture::new().await;
-    for case in cases {
+    for case in gents_lean_vocab::families::task_hooks_contracts_recovery::cases::<
+        TaskHookPhase,
+        String,
+    >() {
+        let input = &case.input;
         let dir = tempfile::tempdir().expect("case directory");
         let log = dir.path().join("cleanup.log");
-        let doc_id = fixture.abandoned_request(case.interrupt_requested).await;
+        let doc_id = fixture.abandoned_request(input.interrupt_requested).await;
         let store = TaskHookRecordStore::durable(dir.path().join("task-hooks"));
-        if case.started {
-            let hooks = case
-                .hooks
+        let hooks: Vec<TaskHook> = input.hooks.iter().map(modeled_hook).collect();
+        let admitted = hooks_admitted(&input.name, &hooks);
+        if input.started {
+            let logged = hooks
                 .iter()
-                .map(|generated| {
-                    let code = case
+                .map(|hook| {
+                    let code = input
                         .script
                         .iter()
-                        .find(|entry| entry.hook_id == generated.hook_id)
-                        .map(|entry| match entry.result {
-                            LeanCommandResult::Exited { code } => code,
-                            ref other => panic!("{}: unsupported script {other:?}", case.name),
+                        .find(|entry| entry.hook_id == hook.hook_id)
+                        .map(|entry| match (entry.result.kind.as_str(), entry.result.code) {
+                            ("exited", Some(code)) => code,
+                            other => panic!("{}: unsupported script {other:?}", input.name),
                         })
                         .unwrap_or(0);
-                    logging_hook(generated, &log, code)
+                    logging_hook(hook, &log, code)
                 })
                 .collect();
-            let attempts = case
+            let attempts = input
                 .observed
                 .iter()
                 .map(|observed| RecordedHookAttempt {
@@ -297,11 +336,11 @@ async fn generated_task_hook_recovery_cases_drive_startup_recovery_and_host_reco
                 &store,
                 record(
                     &doc_id,
-                    &case.name,
+                    &input.name,
                     fixture.did(),
                     fixture.agent_identity.did(),
                     dir.path(),
-                    hooks,
+                    logged,
                     attempts,
                 ),
             )
@@ -319,32 +358,13 @@ async fn generated_task_hook_recovery_cases_drive_startup_recovery_and_host_reco
             .await;
         let report = outcome.task_hooks.expect("task hook recovery");
         restarted.task_hook_records().wait_for_recoveries().await;
-        assert_eq!(report, usize::from(case.started));
-        assert_eq!(
-            fixture.request_state(&doc_id).await,
-            case.expected_request_state,
-            "{}: request recovery decided a different terminal than the model",
-            case.name
-        );
-        assert_eq!(
-            log_lines(&log),
-            case.expected_remaining,
-            "{}: recovery ran different cleanup than the model selected",
-            case.name
-        );
-        assert_eq!(
-            case.attempted
-                .iter()
-                .map(|attempt| attempt.hook_id.clone())
-                .collect::<Vec<_>>(),
-            case.expected_remaining,
-            "{}",
-            case.name
-        );
+        assert_eq!(report, usize::from(input.started), "{}", input.name);
+        let request_state = fixture.request_state(&doc_id).await;
+        let remaining = log_lines(&log);
         assert!(
             restarted.task_hook_records().list().is_empty(),
             "{}: a recovered record must be forgotten",
-            case.name
+            input.name
         );
 
         let again =
@@ -357,12 +377,12 @@ async fn generated_task_hook_recovery_cases_drive_startup_recovery_and_host_reco
             .await;
         assert!(again.task_hooks.expect("second pass") == 0);
         restarted.task_hook_records().wait_for_recoveries().await;
-        assert_eq!(
-            log_lines(&log),
-            case.expected_remaining,
-            "{}: cleanup ran twice",
-            case.name
-        );
+        assert_eq!(log_lines(&log), remaining, "{}: cleanup ran twice", input.name);
+        case.check(gents_lean_vocab::families::task_hooks_contracts_recovery::RecoveryOutput {
+            admitted,
+            remaining,
+            request_state,
+        });
     }
 }
 
@@ -437,7 +457,7 @@ async fn generated_task_hook_sweep_cases_drive_the_record_sweep() {
                 fixture.did(),
                 selected_agent.did(),
                 dir.path(),
-                vec![logging_hook(&generated("sweep", "finally"), &log, 0)],
+                vec![logging_hook(&generated("sweep", TaskHookPhase::Finally), &log, 0)],
                 Vec::new(),
             ))
             .unwrap();
@@ -475,14 +495,13 @@ async fn generated_task_hook_sweep_cases_drive_the_record_sweep() {
     }
 }
 
-fn generated(hook_id: &str, phase: &str) -> LeanTaskHook {
-    LeanTaskHook {
+fn generated(hook_id: &str, phase: TaskHookPhase) -> TaskHook {
+    TaskHook {
         hook_id: hook_id.into(),
-        phase: phase.into(),
+        phase,
         command: Vec::new(),
         timeout_secs: Some(30),
         skip_exit_codes: Vec::new(),
-        effective_timeout_secs: 30,
     }
 }
 
@@ -507,8 +526,8 @@ async fn recovery_stops_a_surviving_hook_command_before_cleanup() {
             fixture.agent_identity.did(),
             dir.path(),
             vec![
-                logging_hook(&generated("prepare", "before"), &log, 0),
-                logging_hook(&generated("sweep", "finally"), &log, 0),
+                logging_hook(&generated("prepare", TaskHookPhase::Before), &log, 0),
+                logging_hook(&generated("sweep", TaskHookPhase::Finally), &log, 0),
             ],
             vec![RecordedHookAttempt {
                 hook_id: "prepare".into(),
@@ -544,7 +563,7 @@ async fn shutdown_during_recovered_cleanup_keeps_only_the_unlaunched_cleanup() {
     let started = dir.path().join("first-started");
     let doc_id = fixture.abandoned_request(false).await;
     let records = dir.path().join("task-hooks");
-    let mut held = logging_hook(&generated("first", "finally"), &log, 0);
+    let mut held = logging_hook(&generated("first", TaskHookPhase::Finally), &log, 0);
     held.command = vec![
         "sh".into(),
         "-c".into(),
@@ -562,7 +581,7 @@ async fn shutdown_during_recovered_cleanup_keeps_only_the_unlaunched_cleanup() {
             fixture.did(),
             fixture.agent_identity.did(),
             dir.path(),
-            vec![held, logging_hook(&generated("second", "finally"), &log, 0)],
+            vec![held, logging_hook(&generated("second", TaskHookPhase::Finally), &log, 0)],
             Vec::new(),
         ),
     )
@@ -656,7 +675,7 @@ async fn recovered_cleanup_outside_an_admitted_root_is_refused() {
                     fixture.did(),
                     fixture.agent_identity.did(),
                     &cwd,
-                    vec![logging_hook(&generated("sweep", "finally"), &log, 0)],
+                    vec![logging_hook(&generated("sweep", TaskHookPhase::Finally), &log, 0)],
                     Vec::new(),
                 )
             },

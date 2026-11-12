@@ -669,10 +669,6 @@ pub fn lean_task_goal_recovery_cases() -> &'static [LeanTaskGoalRecoveryCase] {
     &lean_contract_snapshot().task_goal_recovery_cases
 }
 
-pub fn lean_task_hook_recovery_cases() -> &'static [LeanTaskHookRecoveryCase] {
-    &lean_contract_snapshot().task_hook_recovery_cases
-}
-
 pub fn lean_task_hook_run_cases() -> &'static [LeanTaskHookRunCase] {
     &lean_contract_snapshot().task_hook_run_cases
 }
@@ -3308,7 +3304,6 @@ pub struct LeanContractSnapshot {
     pub families: BTreeMap<String, LeanFamily>,
     pub family_vocabularies: BTreeMap<String, serde_json::Value>,
     pub task_hook_run_cases: Vec<LeanTaskHookRunCase>,
-    pub task_hook_recovery_cases: Vec<LeanTaskHookRecoveryCase>,
     pub lifecycle_hook_effect_cases: Vec<LeanLifecycleHookEffectCase>,
     pub lifecycle_hook_stage_cases: Vec<LeanLifecycleHookStageCase>,
     pub lifecycle_hook_must_commit_cases: Vec<LeanLifecycleHookMustCommitCase>,
@@ -11305,20 +11300,6 @@ pub struct LeanTaskHook {
     pub timeout_secs: Option<i64>,
     pub skip_exit_codes: Vec<i64>,
     pub effective_timeout_secs: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTaskHookRecoveryCase {
-    pub name: String,
-    pub interrupt_requested: bool,
-    pub started: bool,
-    pub hooks: Vec<LeanTaskHook>,
-    pub observed: Vec<LeanHookAttempt>,
-    pub script: Vec<LeanScriptedHookResult>,
-    pub expected_remaining: Vec<String>,
-    pub attempted: Vec<LeanHookAttempt>,
-    pub expected_request_state: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

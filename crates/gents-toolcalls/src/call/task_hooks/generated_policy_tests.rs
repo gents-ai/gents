@@ -1,7 +1,7 @@
 use crate::call::task_hooks::effective_timeout_secs;
 use crate::call::task_hooks::test_support::lean_hook_phase;
 use gents_documents::{Task, TaskHook, TaskHookPhase};
-use gents_lean_vocab::{lean_task_hook_recovery_cases, lean_task_hook_run_cases};
+use gents_lean_vocab::lean_task_hook_run_cases;
 
 fn task_with_hooks(task_id: &str, hooks: Vec<TaskHook>) -> Task {
     Task {
@@ -70,20 +70,14 @@ fn generated_task_hook_admission_cases_fence_production_validation() {
 #[test]
 fn generated_task_hook_cases_fence_the_modeled_phase_vocabulary() {
     let run_cases = lean_task_hook_run_cases();
-    let recovery_cases = lean_task_hook_recovery_cases();
     assert!(
         !run_cases.is_empty(),
         "task hook run cases must not be empty"
-    );
-    assert!(
-        !recovery_cases.is_empty(),
-        "task hook recovery cases must not be empty"
     );
 
     let emitted: std::collections::BTreeSet<&str> = run_cases
         .iter()
         .flat_map(|case| case.hooks.iter())
-        .chain(recovery_cases.iter().flat_map(|case| case.hooks.iter()))
         .map(|generated| generated.phase.as_str())
         .collect();
     assert_eq!(
@@ -100,7 +94,6 @@ fn generated_task_hook_cases_fence_the_modeled_phase_vocabulary() {
     for (name, hooks) in run_cases
         .iter()
         .map(|case| (&case.name, &case.hooks))
-        .chain(recovery_cases.iter().map(|case| (&case.name, &case.hooks)))
     {
         let task = task_with_hooks(
             name,
