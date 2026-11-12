@@ -262,7 +262,17 @@ pub(crate) async fn install_documents_pack(
     explicit: bool,
 ) -> Result<serde_json::Value, PackChangeError> {
     let dependencies = resolve_dependencies(pack, args).await?;
-    install_documents_pack_inner(access, owner, pack, args, explicit, dependencies, None).await
+    install_documents_pack_inner(
+        access,
+        owner,
+        pack,
+        args,
+        explicit,
+        dependencies,
+        None,
+        false,
+    )
+    .await
 }
 
 /// The archives of the packs `pack` declares as dependencies.
@@ -280,6 +290,10 @@ async fn resolve_dependencies(
         .collect()
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the install inputs each entry point supplies, and whether it asks approval for a root grant"
+)]
 async fn install_documents_pack_inner(
     access: &gents::store::config_client::ConfigAccess,
     owner: &str,
@@ -288,6 +302,7 @@ async fn install_documents_pack_inner(
     explicit: bool,
     dependencies: Vec<PackSource>,
     local: Option<&LocalPackAccess>,
+    refuse_unapproved_root: bool,
 ) -> Result<serde_json::Value, PackChangeError> {
     if let gents::store::config_client::ConfigAccess::Graphql(endpoint) = access {
         let mut needs_runtime_store = false;
@@ -339,8 +354,17 @@ async fn install_documents_pack_inner(
             .map_err(Into::into);
         }
     }
-    install_documents_pack_resolved_inner(access, owner, pack, args, explicit, dependencies, local)
-        .await
+    install_documents_pack_resolved_inner(
+        access,
+        owner,
+        pack,
+        args,
+        explicit,
+        dependencies,
+        local,
+        refuse_unapproved_root,
+    )
+    .await
 }
 
 pub(crate) async fn install_documents_pack_resolved(
@@ -351,10 +375,23 @@ pub(crate) async fn install_documents_pack_resolved(
     explicit: bool,
     dependencies: Vec<PackSource>,
 ) -> Result<serde_json::Value, PackChangeError> {
-    install_documents_pack_resolved_inner(access, owner, pack, args, explicit, dependencies, None)
-        .await
+    install_documents_pack_resolved_inner(
+        access,
+        owner,
+        pack,
+        args,
+        explicit,
+        dependencies,
+        None,
+        false,
+    )
+    .await
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the install inputs each entry point supplies, and whether it asks approval for a root grant"
+)]
 async fn install_documents_pack_resolved_inner(
     access: &gents::store::config_client::ConfigAccess,
     owner: &str,
@@ -363,6 +400,7 @@ async fn install_documents_pack_resolved_inner(
     explicit: bool,
     dependencies: Vec<PackSource>,
     local: Option<&LocalPackAccess>,
+    refuse_unapproved_root: bool,
 ) -> Result<serde_json::Value, PackChangeError> {
     let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
     let requested = parse_inference_slot_bindings(&args.inference_slots)?;
@@ -484,6 +522,49 @@ async fn install_documents_pack_resolved_inner(
     PackSource::record_graph_sources(&mut prepared, pack, &dependencies);
     let inference = prepared.inference.clone();
     let dependency_inference = prepared.dependency_inference.clone();
+    // The agents this install runs under its installer's root, from its own
+    // plan: what the preview shows, what a first install asks approval for,
+    // and what the receipt lists for the grant that follows.
+    let planned = wire::planned_root_agents(access, owner, pack.manifest(), &prepared).await?;
+    let root_review = wire::root_review(access, owner, None, &planned).await?;
+    if let Some(published) = root_review
+        .as_ref()
+        .and_then(|review| review["reader_on"].as_str())
+        .filter(|_| refuse_unapproved_root && !args.preview && !args.grant_authority)
+    {
+        let coordinate = format!(
+            "{}/{}",
+            pack.manifest().metadata.namespace,
+            pack.manifest().name
+        );
+        // A reader grant has no recorded consent a reinstall could keep, so
+        // only a first install is refused; a reinstall lists the step.
+        let first = gents::pack::installed_pack_documents(access, owner, &coordinate)
+            .await?
+            .is_empty();
+        if first {
+            let names = |field: &str| {
+                root_review
+                    .as_ref()
+                    .and_then(|review| review[field].as_array())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let root = root_review
+                .as_ref()
+                .and_then(|review| review["root"].as_str())
+                .unwrap_or_default();
+            return Err(anyhow::anyhow!(
+                "{coordinate} installs Tools ({}) whose agents ({}) run host tools under this node's tool root {root}, and installing it grants them reader on the published WorkspaceRoot {published}. Nothing was installed. Install it with --grant-authority to allow that",
+                names("tools"),
+                names("agents")
+            )
+            .into());
+        }
+    }
     if args.preview {
         let variables = std::iter::once(pack)
             .chain(dependencies.iter())
@@ -527,6 +608,12 @@ async fn install_documents_pack_resolved_inner(
         preview["inference"] = json!(inference);
         preview["dependency_inference"] = json!(dependency_inference);
         preview["install_variables"] = json!(variables);
+        if let Some(mut review) = root_review {
+            if review.get("reader_on").is_some() {
+                review["granted_with"] = "--grant-authority".into();
+            }
+            preview["host_tool_roots"] = review;
+        }
         return Ok(preview);
     }
     // A dependency installed on its own behalf (`explicit` false) writes no
@@ -644,6 +731,7 @@ async fn install_documents_pack_resolved_inner(
         "dependencies": pack.manifest().metadata.dependencies,
         "schemas": schemas,
         "apply": apply,
+        "installer_root_agents": wire::root_agent_rows(&planned),
     }))
 }
 
@@ -835,56 +923,19 @@ pub(super) async fn install_documents_report(
             anyhow::Ok((home, owner, local))
         }
         .await?;
-        let coordinate = format!(
-            "{}/{}",
-            pack.manifest().metadata.namespace,
-            pack.manifest().name
-        );
         let dependencies = resolve_dependencies(pack, args).await?;
-        // The root pack and its dependencies: the agents an approved install
-        // grants its root, whichever install first put them on the node. One
-        // listing serves the preview and the grant.
-        let listed: Vec<wire::InstallerRootTools> = std::iter::once(pack)
+        // The root pack and its dependencies: the packs whose records the
+        // grant reads, whichever install first put them on the node.
+        let coordinates: Vec<String> = std::iter::once(pack)
             .chain(&dependencies)
-            .map(|source| wire::tools_taking_installer_root(source, &owner))
-            .collect();
-        for unread in listed.iter().filter_map(|pack| pack.unread.as_deref()) {
-            // An install variable this load cannot see may be what the
-            // install itself resolves, so the install goes on; the pack's
-            // Tools are not listed and its agents are not granted.
-            tracing::warn!(reason = unread, "no host tool root is listed or granted for this pack");
-        }
-        let supplied = wire::supplied_tool_root(&access, &owner, None, &listed).await?;
-        if let Some(published) = supplied
-            .as_ref()
-            .and_then(|supplied| supplied["reader_on"].as_str())
-            .filter(|_| !args.preview && !args.grant_authority)
-        {
-            // A reader grant has no recorded consent a reinstall could keep,
-            // so only a first install is refused; a reinstall lists the step.
-            let first = gents::pack::installed_pack_documents(&access, &owner, &coordinate)
-                .await?
-                .is_empty();
-            if first {
-                let tools = supplied.as_ref().map_or_else(String::new, |supplied| {
-                    supplied["tools"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(serde_json::Value::as_str)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                });
-                let root = supplied
-                    .as_ref()
-                    .and_then(|supplied| supplied["root"].as_str())
-                    .unwrap_or_default();
-                return Err(anyhow::anyhow!(
-                    "{coordinate} installs Tools ({tools}) whose agents run host tools under this node's tool root {root}, and installing it grants them reader on the published WorkspaceRoot {published}. Nothing was installed. Install it with --grant-authority to allow that"
+            .map(|source| {
+                format!(
+                    "{}/{}",
+                    source.manifest().metadata.namespace,
+                    source.manifest().name
                 )
-                .into());
-            }
-        }
+            })
+            .collect();
         let mut output = install_documents_pack_inner(
             &access,
             &owner,
@@ -893,26 +944,41 @@ pub(super) async fn install_documents_report(
             args.explicit,
             dependencies,
             local.as_ref(),
+            true,
         )
         .await?;
-        if args.preview {
-            if let Some(mut supplied) = supplied {
-                if supplied.get("reader_on").is_some() {
-                    supplied["granted_with"] = "--grant-authority".into();
+        if !args.preview {
+            // What the approver was shown: the rows a separate review named
+            // back, or with none given the rows of this install's own plan,
+            // which its receipt lists and `--grant-authority` approves.
+            let planned = output
+                .as_object_mut()
+                .and_then(|output| output.remove("installer_root_agents"))
+                .unwrap_or_default();
+            let shown = match &args.root_agents {
+                Some(reviewed) => reviewed
+                    .iter()
+                    .filter_map(|pair| pair.split_once('='))
+                    .map(|(pack, agent)| (pack.to_owned(), agent.to_owned()))
+                    .collect(),
+                None => wire::shown_root_agents(&planned),
+            };
+            let supplied = gents::pack::installer_tool_root(&access, &owner, None).await;
+            let readers = match supplied {
+                Ok(supplied) => {
+                    wire::grant_pack_root_readers(
+                        &access,
+                        &owner,
+                        &coordinates,
+                        &shown,
+                        supplied.as_deref(),
+                        args.grant_authority,
+                    )
+                    .await
                 }
-                output["host_tool_roots"] = supplied;
-            }
-        } else {
-            match wire::grant_pack_root_readers(
-                &access,
-                &owner,
-                &listed,
-                supplied
-                    .as_ref()
-                    .and_then(|supplied| supplied["root"].as_str()),
-                args.grant_authority,
-            )
-            .await
+                Err(error) => Err(error),
+            };
+            match readers
             {
                 Ok(readers) => {
                     if readers.iter().any(|reader| reader.get("failed").is_some()) {

@@ -214,47 +214,26 @@ fn grant_reader_command(root: &str, agent: &str) -> String {
     )
 }
 
-/// The Tools one pack of an install ships that select host tools and name no
-/// root: the ones the install runs under its installer's own root, and whose
-/// agents an approved install grants reader there. This is what a review
-/// lists, and the grant is made from the same value, so the two cannot name
-/// different Tools.
-pub(crate) struct InstallerRootTools {
-    /// The pack, as `namespace/name`.
-    pub(crate) coordinate: String,
-    /// By `tools_id`, as the install writes them on this node.
-    pub(crate) tools: Vec<String>,
-    /// The agents whose Context selects one of them, by the name the pack
-    /// gives each: who a review says will read the folder.
-    pub(crate) agents: Vec<String>,
-    /// Why the pack's config did not load for the review, when it did not:
-    /// nothing of it is listed, so nothing of it is granted.
-    pub(crate) unread: Option<String>,
-}
-
-/// [`InstallerRootTools`] of `pack` on the node `node_did`. The config is
-/// rendered with that node's DID, as its install renders it, so a Tools id
-/// that depends on the node is the id the installed document has. A config
-/// that does not load is reported `unread`, never as shipping no such Tools.
-pub(crate) fn tools_taking_installer_root(
+/// The agents `pack` would run under its installer's root on the node
+/// `node_did`, read from its archive alone: what a starter pack's status
+/// shows before any node plan exists. It is a display, not the grant's
+/// source: an approval carries these rows and the grant is their
+/// intersection with what the install recorded
+/// ([`grant_pack_root_readers`]). A config that does not load is an error,
+/// never "no such agents": what was not read was not shown.
+pub(crate) fn listed_root_agents(
     pack: &super::PackSource,
     node_did: &str,
-) -> InstallerRootTools {
+) -> Result<Vec<gents::pack::InstallerRootAgent>> {
     let coordinate = format!(
         "{}/{}",
         pack.manifest().metadata.namespace,
         pack.manifest().name
     );
-    let mut listed = InstallerRootTools {
-        coordinate,
-        tools: Vec::new(),
-        agents: Vec::new(),
-        unread: None,
-    };
     if pack.manifest().config.is_none() {
-        return listed;
+        return Ok(Vec::new());
     }
-    let loaded = gents::pack::load_pack_authoring_config(
+    gents::pack::load_pack_authoring_config(
         pack.manifest(),
         &gents::pack::PackInstallOptions {
             node_did: node_did.to_owned(),
@@ -266,184 +245,260 @@ pub(crate) fn tools_taking_installer_root(
         let tools = gents::pack::tools_taking_installer_root(&authored.documents.tools)?;
         // An authored agent names a slot, not a DID, so it is read as written.
         let rows = |key: &str| authored.value[key].as_array().into_iter().flatten();
-        let agents = rows("agents")
-            .filter(|agent| {
-                rows("contexts").any(|context| {
-                    context["context_id"].is_string()
-                        && context["context_id"] == agent["context_id"]
-                        && context["tools_id"]
-                            .as_str()
-                            .is_some_and(|selected| tools.iter().any(|id| id == selected))
+        Ok(rows("agents")
+            .filter_map(|agent| {
+                let selected = rows("contexts")
+                    .find(|context| {
+                        context["context_id"].is_string()
+                            && context["context_id"] == agent["context_id"]
+                    })
+                    .and_then(|context| context["tools_id"].as_str())
+                    .filter(|selected| tools.iter().any(|id| id == selected))?;
+                Some(gents::pack::InstallerRootAgent {
+                    coordinate: coordinate.clone(),
+                    agent: agent["agent_slot"]
+                        .as_str()
+                        .or(agent["agent_did"].as_str())?
+                        .to_owned(),
+                    name: agent["display_name"].as_str().map(ToOwned::to_owned),
+                    tools: selected.to_owned(),
                 })
             })
-            .filter_map(|agent| {
-                ["display_name", "agent_slot", "agent_did"]
-                    .iter()
-                    .find_map(|field| agent[*field].as_str())
-                    .map(ToOwned::to_owned)
-            })
-            .collect();
-        Ok((tools, agents))
-    });
-    match loaded {
-        Ok((tools, agents)) => {
-            listed.tools = tools;
-            listed.agents = agents;
-        }
-        Err(error) => {
-            listed.unread = Some(format!(
-                "{} did not load for its host tool review, so the folder its agents would read is unknown: {error:#}",
-                listed.coordinate
-            ));
-        }
-    }
-    listed
+            .collect())
+    })
+    .with_context(|| {
+        format!(
+            "{coordinate} did not load for its host tool review, so the folder its agents would read is unknown"
+        )
+    })
 }
 
-/// The root an install by `installer` (the node's User when `None`) supplies
-/// to the Tools `listed` (of the root pack and its dependencies), and the
-/// reader their agents need there: what a preview lists and an approval
-/// covers. `None` when no such Tools are listed, the installer has no root,
-/// or no reader is needed.
-pub(crate) async fn supplied_tool_root(
+/// The agents an install runs under its installer's root, from the install's
+/// own plan: those of the packs it renders, as its prepare step gave them
+/// the root, and those of each dependency it keeps, as that dependency's
+/// installation record has them. Nothing is rendered a second time.
+pub(crate) async fn planned_root_agents(
+    access: &ConfigAccess,
+    owner: &str,
+    root: &gents::pack::PackManifest,
+    prepared: &gents::pack::PreparedDocumentPackInstall,
+) -> Result<Vec<gents::pack::InstallerRootAgent>> {
+    let mut planned = prepared.installer_root_agents(root);
+    for coordinate in prepared.kept_dependencies() {
+        for agent in pack_root_agents(access, owner, coordinate).await? {
+            if agent.standing == gents::pack::PackAgentRoot::Installer {
+                planned.push(gents::pack::InstallerRootAgent {
+                    coordinate: coordinate.to_owned(),
+                    agent: agent.key,
+                    name: None,
+                    tools: agent.tools,
+                });
+            }
+        }
+    }
+    Ok(planned)
+}
+
+/// One agent of an installed pack that runs host tools under a published
+/// root: who it is, where its Tools run now, and how the pack's record says
+/// it came by that root.
+struct PackRootAgent {
+    agent_did: String,
+    /// The agent as a review names it: its slot, or its DID.
+    key: String,
+    tools: String,
+    root: String,
+    reader: gents::tools::surface::ToolRootReader,
+    standing: gents::pack::PackAgentRoot,
+}
+
+/// The agents the installed pack `coordinate` ships that run host tools:
+/// the pack's record ([`gents::pack::pack_root_record`]) names them and how
+/// each Tools document came by its root, and the root admission owner reads
+/// where each runs now. The record's reading stays with its owner; this only
+/// joins the two.
+async fn pack_root_agents(
+    access: &ConfigAccess,
+    owner: &str,
+    coordinate: &str,
+) -> Result<Vec<PackRootAgent>> {
+    let record = gents::pack::pack_root_record(access, owner, coordinate).await?;
+    Ok(
+        gents::tools::surface::agents_tool_root_readers(access, owner, record.agents())
+            .await?
+            .into_iter()
+            .map(|(agent_did, tools, root, reader)| PackRootAgent {
+                key: record.agent_key(&agent_did),
+                standing: record.standing(&tools),
+                agent_did,
+                tools,
+                root,
+                reader,
+            })
+            .collect(),
+    )
+}
+
+/// What a review shows of `agents`, the ones an install by `installer` (the
+/// node's User when `None`) runs under its root: the root, the reader they
+/// need there, and each (pack, agent) row, which an approval names back.
+/// `None` when there are none, the installer has no root, or no reader is
+/// needed.
+pub(crate) async fn root_review(
     access: &ConfigAccess,
     owner: &str,
     installer: Option<&str>,
-    listed: &[InstallerRootTools],
+    agents: &[gents::pack::InstallerRootAgent],
 ) -> Result<Option<Value>> {
     use gents::tools::surface::ToolRootReader;
-    let tools: Vec<&String> = listed.iter().flat_map(|pack| &pack.tools).collect();
-    let agents: Vec<&String> = listed.iter().flat_map(|pack| &pack.agents).collect();
-    if tools.is_empty() {
+    if agents.is_empty() {
         return Ok(None);
     }
     let Some(root) = gents::pack::installer_tool_root(access, owner, installer).await? else {
         return Ok(None);
     };
-    Ok(
-        match gents::tools::surface::tool_root_reader(access, owner, &root).await? {
-            ToolRootReader::NotNeeded => None,
-            ToolRootReader::Published(published) => Some(
-                json!({"tools": tools, "agents": agents, "root": root, "reader_on": published}),
-            ),
-            ToolRootReader::Unpublished(_) => Some(
-                json!({"tools": tools, "agents": agents, "root": root, "unpublished_root": root}),
-            ),
-        },
-    )
+    let mut tools: Vec<&String> = agents.iter().map(|agent| &agent.tools).collect();
+    tools.dedup();
+    let mut review = json!({
+        "tools": tools,
+        "agents": agents.iter().map(|agent| agent.name.as_ref().unwrap_or(&agent.agent)).collect::<Vec<_>>(),
+        "rows": root_agent_rows(agents),
+        "root": root,
+    });
+    match gents::tools::surface::tool_root_reader(access, owner, &root).await? {
+        ToolRootReader::NotNeeded => return Ok(None),
+        ToolRootReader::Published(published) => review["reader_on"] = published.into(),
+        ToolRootReader::Unpublished(_) => review["unpublished_root"] = root.into(),
+    }
+    Ok(Some(review))
+}
+
+/// `agents` as a report lists them: `[{pack, agent, name, tools}]`.
+pub(crate) fn root_agent_rows(agents: &[gents::pack::InstallerRootAgent]) -> Value {
+    agents
+        .iter()
+        .map(|agent| {
+            json!({"pack": agent.coordinate, "agent": agent.agent, "name": agent.name, "tools": agent.tools})
+        })
+        .collect()
+}
+
+/// The `(pack, agent)` pairs of report rows ([`root_agent_rows`]).
+pub(crate) fn shown_root_agents(rows: &Value) -> Vec<(String, String)> {
+    rows.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            Some((
+                row["pack"].as_str()?.to_owned(),
+                row["agent"].as_str()?.to_owned(),
+            ))
+        })
+        .collect()
 }
 
 /// The pack coordinate whose reader grants a test makes fail.
 #[cfg(test)]
 pub(crate) static FAIL_GRANTS_FOR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
-/// Grants each agent the installed packs `listed` (a pack and its
-/// dependencies) ship with host tools reader on the published WorkspaceRoot
-/// covering its tool root, as the User holding `access`: a new agent lacks
-/// that grant, only a User makes it, and without it the runtime reports the
-/// agent unavailable. Every dependency is covered, installed by this install
-/// or before it, so repeating an install whose grant failed makes the grant
-/// its first attempt missed; granting a reader that is already held changes
-/// nothing.
+/// Grants the agents of the installed packs `coordinates` (a pack and its
+/// dependencies) that run under their installer's root reader on the
+/// published WorkspaceRoot covering it, as the User holding `access`: a new
+/// agent lacks that grant, only a User makes it, and without it the runtime
+/// reports the agent unavailable.
 ///
-/// The grant is the installer's consent to its own root and nothing else: it
-/// is made only when the install was `approved`, and only for an agent whose
-/// Tools document the review listed for the pack that installed it (the
-/// rootless Tools the install gave its root `supplied`,
-/// [`gents::pack::installer_tool_root`]). A listed id counts only as a
-/// Tools document of its own pack, so another pack's Tools with the same id
-/// are not it. Tools that name their own root are never granted here, even
-/// when that root renders equal to the installer's: the review did not list
-/// them. An agent under any other root, one an install variable set or a
-/// later edit wrote, is listed with the User command that grants it.
-/// Returns one entry per agent.
+/// What is granted is decided by two facts and no rendering. The pack's own
+/// installation record says which of its agents select Tools of that pack
+/// whose root its install supplied ([`gents::pack::pack_root_record`]); and
+/// `shown` holds the `(pack, agent)` pairs the approver's review listed. An
+/// agent is granted only when it is both, the install was `approved`, and
+/// its Tools still run under `supplied`, the root this install gives
+/// ([`gents::pack::installer_tool_root`]). A dependency installed before
+/// keeps its record, so repeating an install whose grant failed makes the
+/// grant its first attempt missed; granting a reader already held changes
+/// nothing. Every other agent with host tools is listed with why and the
+/// User command that grants it. Returns one entry per agent.
 pub(crate) async fn grant_pack_root_readers(
     access: &ConfigAccess,
     owner: &str,
-    listed: &[InstallerRootTools],
+    coordinates: &[String],
+    shown: &[(String, String)],
     supplied: Option<&str>,
     approved: bool,
 ) -> Result<Vec<Value>> {
+    use gents::pack::PackAgentRoot;
     use gents::tools::surface::ToolRootReader;
     let mut granted = Vec::new();
-    let mut agents = Vec::new();
-    // The Tools documents the review listed that their own pack installed.
-    let mut inherited = Vec::new();
-    // Each agent's pack, when that pack did not load for the review.
-    let mut unread = Vec::new();
-    for pack in listed {
-        for (collection, id) in installed_pack_documents(access, owner, &pack.coordinate).await? {
-            match collection {
-                Collection::Agent => {
-                    if pack.unread.is_some() {
-                        unread.push(id.clone());
-                    }
-                    agents.push(id);
-                }
-                Collection::Tools if pack.tools.contains(&id) => inherited.push(id),
-                _ => {}
-            }
-        }
-    }
+    let mut seen = Vec::new();
     #[cfg(test)]
     let failing = FAIL_GRANTS_FOR
         .lock()
         .unwrap()
         .as_ref()
-        .is_some_and(|failing| listed.iter().any(|pack| pack.coordinate == *failing));
-    for (agent, tools, root, reader) in
-        gents::tools::surface::agents_tool_root_readers(access, owner, &agents).await?
-    {
-        let listed = supplied == Some(root.as_str()) && inherited.contains(&tools);
-        granted.push(match reader {
-            ToolRootReader::Published(published) if approved && listed => {
-                let grant =
-                    gents::tools::surface::grant_workspace_root_reader(access, &published, &agent)
-                        .await
-                        .map_err(anyhow::Error::from);
-                #[cfg(test)]
-                let grant = if failing {
-                    Err(anyhow::anyhow!("simulated reader grant failure"))
-                } else {
-                    grant
-                };
-                // One agent's failed grant does not hide the others': each is
-                // reported with the command that makes it.
-                match grant {
-                    Ok(()) => json!({"agent": agent, "root": root, "reader_on": published}),
-                    Err(error) => json!({
-                        "agent": agent,
-                        "root": root,
-                        "failed": format!("granting {agent} reader on {published}: {error:#}"),
-                        "next": grant_reader_command(&published, &agent),
-                    }),
+        .is_some_and(|failing| coordinates.contains(failing));
+    for coordinate in coordinates {
+        for row in pack_root_agents(access, owner, coordinate).await? {
+            if seen.contains(&row.agent_did) {
+                continue;
+            }
+            seen.push(row.agent_did.clone());
+            let (agent, root) = (row.agent_did, row.root);
+            let published = match row.reader {
+                ToolRootReader::Published(published) => published,
+                ToolRootReader::Unpublished(root) => {
+                    let next = publish_root_command(owner, &root, &agent);
+                    granted.push(json!({"agent": agent, "unpublished_root": root, "next": next}));
+                    continue;
                 }
-            }
-            ToolRootReader::Published(published) => {
-                let reason = if listed {
-                    "the install was not approved to grant it"
-                } else if unread.contains(&agent) {
-                    "its pack's configuration did not load for the install's review, so its Tools were not listed"
-                } else if supplied.is_none() {
-                    "this install supplied no tool root"
-                } else if supplied == Some(root.as_str()) {
-                    "its Tools name that root themselves, so the install's review did not list it"
-                } else {
-                    "its tool root is not the one this install supplied"
-                };
-                json!({
-                    "agent": agent,
-                    "root": root,
-                    "not_granted": format!("{agent} was not granted reader on {published}: {reason}. It is unavailable until a User grants it."),
-                    "next": grant_reader_command(&published, &agent),
-                })
-            }
-            ToolRootReader::Unpublished(root) => {
-                let next = publish_root_command(owner, &root, &agent);
-                json!({"agent": agent, "unpublished_root": root, "next": next})
-            }
-            ToolRootReader::NotNeeded => continue,
-        });
+                ToolRootReader::NotNeeded => continue,
+            };
+            let listed = shown
+                .iter()
+                .any(|(pack, shown)| pack == coordinate && *shown == row.key);
+            let reason = match row.standing {
+                PackAgentRoot::Own => "its Tools name their own root",
+                PackAgentRoot::OtherPack => "it uses another pack's Tools",
+                PackAgentRoot::Installer if supplied.is_none() => {
+                    "this install supplies no tool root"
+                }
+                PackAgentRoot::Installer if supplied != Some(root.as_str()) => {
+                    "its tool root changed since its install supplied it"
+                }
+                PackAgentRoot::Installer if !listed => "the install's review did not list it",
+                PackAgentRoot::Installer if !approved => "the install was not approved to grant it",
+                PackAgentRoot::Installer => {
+                    let grant = gents::tools::surface::grant_workspace_root_reader(
+                        access, &published, &agent,
+                    )
+                    .await
+                    .map_err(anyhow::Error::from);
+                    #[cfg(test)]
+                    let grant = if failing {
+                        Err(anyhow::anyhow!("simulated reader grant failure"))
+                    } else {
+                        grant
+                    };
+                    // One agent's failed grant does not hide the others':
+                    // each is reported with the command that makes it.
+                    granted.push(match grant {
+                        Ok(()) => json!({"agent": agent, "root": root, "reader_on": published}),
+                        Err(error) => json!({
+                            "agent": agent,
+                            "root": root,
+                            "failed": format!("granting {agent} reader on {published}: {error:#}"),
+                            "next": grant_reader_command(&published, &agent),
+                        }),
+                    });
+                    continue;
+                }
+            };
+            granted.push(json!({
+                "agent": agent,
+                "root": root,
+                "not_granted": format!("{agent} was not granted reader on {published}: {reason}. It is unavailable until a User grants it."),
+                "next": grant_reader_command(&published, &agent),
+            }));
+        }
     }
     Ok(granted)
 }

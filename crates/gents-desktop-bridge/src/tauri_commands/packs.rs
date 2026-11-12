@@ -140,6 +140,12 @@ pub struct PackInstallRequest {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub expect_digest: Option<String>,
+    /// The folder access the review showed, as `PACK=AGENT` for each of its
+    /// rows: an allowed install lets only these agents into the folder. An
+    /// install from a review always sends it, empty when none was shown.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub root_agents: Option<Vec<String>>,
 }
 
 #[tauri::command]
@@ -159,6 +165,7 @@ pub async fn desktop_pack_install(
                 request.grant_authority,
                 request.preview,
                 request.expect_digest,
+                request.root_agents,
             )
             .map_err(PackChangeError::into_anyhow)
         })
@@ -444,6 +451,8 @@ mod tests {
             "pack":"hands", "digest":"sha256:digest", "source":"local", "would_write": false,
             "host_tool_roots": {
                 "tools": ["hands-tools"], "agents": ["Hands worker"],
+                "rows": [{"pack": "acme/hands", "agent": "hands-worker",
+                    "name": "Hands worker", "tools": "hands-tools"}],
                 "root": "/home/me/work", "reader_on": "/home/me",
                 "granted_with": "--grant-authority",
             },
@@ -453,6 +462,8 @@ mod tests {
             panic!("the preview's folder access was not typed: {view:?}")
         };
         assert_eq!(review.agents, ["Hands worker"]);
+        assert_eq!(review.rows[0].pack, "acme/hands");
+        assert_eq!(review.rows[0].agent, "hands-worker");
         assert_eq!(review.reader_on.as_deref(), Some("/home/me"));
         assert_eq!(serde_json::to_value(view).unwrap(), report);
 

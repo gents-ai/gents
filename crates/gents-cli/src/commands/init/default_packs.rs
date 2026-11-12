@@ -537,9 +537,10 @@ struct Resolved {
     requested: Value,
     /// The archives of the packs it depends on.
     dependencies: Vec<command::PackSource>,
-    /// The Tools it and each dependency ship that run under the Engineer's
-    /// tool root, pack by pack: what an approval lists and its grant follows.
-    host_tools: Vec<command::wire::InstallerRootTools>,
+    /// The agents it and its dependencies ship that would run under the
+    /// Engineer's tool root, as their archives say: what an approval shows.
+    /// The grant is these intersected with what the install recorded.
+    host_tools: Vec<gents::pack::InstallerRootAgent>,
 }
 
 impl Resolved {
@@ -574,7 +575,7 @@ impl Resolved {
 
     /// Whether it or a dependency ships Tools that take the Engineer's root.
     fn reads_root(&self) -> bool {
-        self.host_tools.iter().any(|pack| !pack.tools.is_empty())
+        !self.host_tools.is_empty()
     }
 
     fn asks(&self) -> bool {
@@ -661,14 +662,11 @@ async fn resolve(
     let node_did = on_node.node_did.as_deref().map_err(|error| {
         anyhow::anyhow!("this home's node could not be read, so what its install would write is unknown: {error}")
     })?;
-    let host_tools: Vec<_> = std::iter::once(&source)
-        .chain(&dependencies)
-        .map(|pack| command::wire::tools_taking_installer_root(pack, node_did))
-        .collect();
     // What was not read was not shown, and an approval covers only what it
     // showed, so a starter pack that does not load is not offered.
-    if let Some(unread) = host_tools.iter().find_map(|pack| pack.unread.as_deref()) {
-        anyhow::bail!("{unread}");
+    let mut host_tools = Vec::new();
+    for pack in std::iter::once(&source).chain(&dependencies) {
+        host_tools.extend(command::wire::listed_root_agents(pack, node_did)?);
     }
     Ok(Resolved {
         source,
@@ -701,7 +699,7 @@ async fn install_one(
     let asks = requested.as_array().is_some_and(|asks| !asks.is_empty());
     let tool_calls = TOOL_CALLS_ON_APPROVAL.contains(&pack);
     let dynamic = DYNAMIC_RUN_ON_APPROVAL.contains(&pack);
-    let reads_root = host_tools.iter().any(|pack| !pack.tools.is_empty());
+    let reads_root = !host_tools.is_empty();
     let approved = (asks || tool_calls || dynamic || reads_root)
         && match approval {
             Approval::Approved => true,
@@ -754,6 +752,20 @@ async fn install_one(
     let (access, owner) = command::resolve_scope_owner(&scope(home)).await?;
     let already = gents::pack::read_home_install(home, &coordinate)?
         .is_some_and(|record| record.digest == source.digest());
+    // The pack and its dependencies: the records the grant reads.
+    let installing: Vec<String> = std::iter::once(coordinate.clone())
+        .chain(dependencies.iter().map(|dependency| {
+            format!(
+                "{}/{}",
+                dependency.manifest().metadata.namespace,
+                dependency.manifest().name
+            )
+        }))
+        .collect();
+    let shown: Vec<(String, String)> = host_tools
+        .iter()
+        .map(|agent| (agent.coordinate.clone(), agent.agent.clone()))
+        .collect();
     let installed = if already {
         Ok(())
     } else {
@@ -792,16 +804,17 @@ async fn install_one(
             );
         }
         // The Engineer installed the pack, so its rootless Tools took the
-        // Engineer's root: the one root this approval grants reader on, and
-        // only to the agents of those Tools (`host_tools`), which the
-        // approval listed.
+        // Engineer's root and its record says which. The approval grants
+        // reader there to the agents it showed (`host_tools`) that the
+        // record confirms, and no others.
         let host_tool_roots = async {
             let supplied =
                 gents::pack::installer_tool_root(&access, &owner, Some(engineer)).await?;
             let readers = command::wire::grant_pack_root_readers(
                 &access,
                 &owner,
-                &host_tools,
+                &installing,
+                &shown,
                 supplied.as_deref(),
                 approved,
             )

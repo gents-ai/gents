@@ -439,6 +439,7 @@ async fn install_owned(
         grant_authority: request.grant_authority,
         wire: request.wire,
         expect_digest: None,
+        root_agents: None,
         explicit: request.explicit,
     };
     let mut result = crate::commands::pack::install_documents_pack_resolved(

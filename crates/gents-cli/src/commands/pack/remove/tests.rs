@@ -36,6 +36,7 @@ async fn install(home: &Path, package: String) -> anyhow::Result<Value> {
         grant_authority: false,
         wire: Vec::new(),
         expect_digest: None,
+        root_agents: None,
         explicit: true,
     }))
     .await
