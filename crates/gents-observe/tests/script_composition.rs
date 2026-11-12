@@ -4,6 +4,7 @@ use std::sync::Arc;
 use gents_store::identity::NodeIdentity;
 use serde_json::json;
 
+use gents_toolcalls::call::hook::fixtures::accept_hook_tool_call;
 use gents_toolcalls::call::hook::*;
 
 use gents_loop::SessionHook;
