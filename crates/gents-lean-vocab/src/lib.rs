@@ -99,17 +99,6 @@ impl LeanPluginJobAuthorityCase {
     }
 }
 
-/// `plugin_resource_host_import_cases`: whether the `gents` imports are
-/// linked for a plugin and what `run_script` answers.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginHostImportCase {
-    pub declared: bool,
-    pub call_has_script: bool,
-    pub linked: bool,
-    pub answer: Option<String>,
-}
-
 /// `plugin_resource_scratch_cases`: `scratchAdmitted`. `handle` is not an
 /// owner input; rows that differ only in it share a path.
 #[derive(Debug, Deserialize)]
@@ -198,16 +187,6 @@ where
     T: serde::de::DeserializeOwned,
 {
     serde_json::from_value(cases.clone()).unwrap_or_else(|error| panic!("{key}: {error}"))
-}
-
-pub fn lean_plugin_host_import_cases() -> &'static [LeanPluginHostImportCase] {
-    static CASES: OnceLock<Vec<LeanPluginHostImportCase>> = OnceLock::new();
-    CASES.get_or_init(|| {
-        lean_plugin_resource_group(
-            "plugin_resource_host_import_cases",
-            &lean_contract_snapshot().plugin_resource_host_import_cases,
-        )
-    })
 }
 
 pub fn lean_plugin_scratch_cases() -> &'static [LeanPluginScratchCase] {

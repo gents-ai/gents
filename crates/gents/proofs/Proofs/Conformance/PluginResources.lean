@@ -272,21 +272,33 @@ def publication : Family PublicationInput (Option VisibleInstallation) where
     if PluginPublication.installedNew (publicationEvents i.outcome) then some .new
     else if i.previous then some .previous else none
 
+inductive ImportAnswer where
+  | result | noScript
+  deriving ToJson
+
+structure HostImportInput where
+  declared : Bool
+  callHasScript : Bool
+  deriving ToJson
+
+structure HostImportObservation where
+  linked : Bool
+  answer : Option ImportAnswer
+  deriving ToJson
+
 /-- `PackPlugin.host_imports`: a plugin that declares `run_script` gets the
 `gents` imports linked on every call; one that does not gets none, so a guest
 importing them fails to instantiate. The import answers `result` when the call
-carries a script and `no_script` when it does not. (declared, callHasScript) -/
-def hostImportCases : List (Bool × Bool) :=
-  [(false, false), (false, true), (true, false), (true, true)]
+carries a script and `no_script` when it does not. -/
+def hostImportVerdict (i : HostImportInput) : HostImportObservation :=
+  { linked := i.declared
+    answer := if i.declared then some (if i.callHasScript then .result else .noScript) else none }
 
-/-- (linked, answer). -/
-def hostImportVerdict (c : Bool × Bool) : Bool × Option String :=
-  (c.1, if c.1 then some (if c.2 then "result" else "no_script") else none)
-
-private def hostImportJson : Json := toJson <| hostImportCases.map fun c =>
-  let (linked, answer) := hostImportVerdict c
-  Json.mkObj [("declared", toJson c.1), ("call_has_script", toJson c.2),
-    ("linked", toJson linked), ("answer", toJson answer)]
+@[conformance_family]
+def hostImport : Family HostImportInput HostImportObservation where
+  inputs := [false, true].flatMap fun declared => [false, true].map fun callHasScript =>
+    { declared, callHasScript }
+  model := hostImportVerdict
 
 section Scratch
 
@@ -536,6 +548,4 @@ def pluginResourceReceiptCasesJson : String :=
 def pluginResourceScratchCasesJson : String :=
   scratchJson.compress
 
-def pluginResourceHostImportCasesJson : String :=
-  hostImportJson.compress
 end Conformance.PluginResources

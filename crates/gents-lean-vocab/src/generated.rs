@@ -2982,7 +2982,6 @@ pub struct LeanContractSnapshot {
     pub plugin_resource_invocation_cases: serde_json::Value,
     pub plugin_resource_receipt_cases: serde_json::Value,
     pub plugin_resource_scratch_cases: serde_json::Value,
-    pub plugin_resource_host_import_cases: serde_json::Value,
     pub plugin_data_cases: LeanPluginDataCases,
     pub plugin_calls_route_cases: Vec<LeanPluginCallsRouteCase>,
     pub plugin_job_admission_cases: Vec<LeanPluginJobAdmissionCase>,

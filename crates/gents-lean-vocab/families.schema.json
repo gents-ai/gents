@@ -156,6 +156,7 @@
   "plugin_job_consented_dynamic": {"input":{"fields":[["consent","bool"],["mode",{"enum":"DynamicMode","values":["off","check","run"]}]],"struct":"Input"},"output":{"enum":"DynamicMode","values":["off","check","run"]}},
   "plugin_job_document_ux_allowed": {"input":{"fields":[["has_ux","bool"],["has_local_home","bool"]],"struct":"Input"},"output":"bool"},
   "plugin_resources_address_public": {"input":{"fields":[["addresses",{"list":"string"}]],"struct":"AddressInput"},"output":{"list":"bool"}},
+  "plugin_resources_host_import": {"input":{"fields":[["declared","bool"],["call_has_script","bool"]],"struct":"HostImportInput"},"output":{"fields":[["linked","bool"],["answer",{"option":{"enum":"ImportAnswer","values":["result","no_script"]}}]],"struct":"HostImportObservation"}},
   "plugin_resources_limit_budget": {"input":{"fields":[["baseline","nat"],["requested","nat"],["ceiling","nat"]],"struct":"LimitBudgetInput"},"output":"nat"},
   "plugin_resources_limit_consent": {"input":{"fields":[["requested","nat"],["previous","nat"],["consent","bool"]],"struct":"LimitConsentInput"},"output":"bool"},
   "plugin_resources_network_admission": {"input":{"fields":[["grant",{"option":{"fields":[["scope",{"option":{"enum":"GrantScope","values":["any"]}}],["hosts",{"list":"string"}]],"struct":"HttpGrant"}}],["url","string"],["addresses",{"list":"string"}]],"struct":"NetworkInput"},"output":"bool"},
