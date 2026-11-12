@@ -66,6 +66,24 @@ pub fn git(cwd: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_string()
 }
 
+/// Creates a Git repository at `repo` with `git init <init_args>` whose own
+/// configuration names a test author and never signs: a fixture must not
+/// inherit the host's commit or tag signing, which fails where no signing
+/// program is installed.
+pub fn init_test_repo(repo: &Path, init_args: &[&str]) {
+    let mut init = vec!["init"];
+    init.extend_from_slice(init_args);
+    git(repo, &init);
+    for (key, value) in [
+        ("user.email", "test@example.invalid"),
+        ("user.name", "Gents Test"),
+        ("commit.gpgsign", "false"),
+        ("tag.gpgsign", "false"),
+    ] {
+        git(repo, &["config", key, value]);
+    }
+}
+
 pub struct Fixture {
     pub _root: TempDir,
     pub repo: PathBuf,
@@ -77,9 +95,7 @@ impl Fixture {
         let root = TempDir::new().expect("tempdir");
         let repo = root.path().join("repo");
         fs::create_dir_all(&repo).unwrap();
-        git(&repo, &["init", "-b", "main"]);
-        git(&repo, &["config", "user.email", "ws@example.com"]);
-        git(&repo, &["config", "user.name", "Workspace Test"]);
+        init_test_repo(&repo, &["-b", "main"]);
         fs::write(repo.join("README.md"), "hello\n").unwrap();
         git(&repo, &["add", "README.md"]);
         git(&repo, &["commit", "-m", "init"]);
