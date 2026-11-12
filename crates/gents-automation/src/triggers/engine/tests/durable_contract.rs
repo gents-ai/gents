@@ -112,18 +112,19 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
         assert_eq!(id.session_id(), case["session_id"]);
         assert_eq!(id.outcome_id(), case["outcome_id"]);
     }
-    for case in cases["trigger_delivery_session_cases"].as_array().unwrap() {
-        let id: FireIdentity = decode(&case["identity"]);
-        assert_eq!(
-            durable::resolve_session_id(
-                &id,
-                case["target"].as_str(),
-                case["owned"].as_bool().unwrap(),
-                case["create_missing"].as_bool().unwrap()
-            ),
-            decode::<Option<String>>(&case["resolved"])
-        );
-    }
+    gents_lean_vocab::families::trigger_delivery_session_resolution::replay(|i| {
+        durable::resolve_session_id(
+            &FireIdentity {
+                owner_did: i.identity.owner_did.clone(),
+                trigger_id: i.identity.trigger_id.clone(),
+                source_collection: i.identity.source_collection.clone(),
+                source_doc_id: i.identity.source_doc_id.clone(),
+            },
+            i.target.as_deref(),
+            i.owned,
+            i.create_missing,
+        )
+    });
     for case in cases["trigger_delivery_outcome_cases"].as_array().unwrap() {
         let state: State = decode(&case["pre"]);
         let request = &state.requests[0];

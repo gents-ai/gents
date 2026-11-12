@@ -582,8 +582,8 @@ def caseCoverage : List CoverageEntry :=
       "Triggers.Durable")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery_session_cases"
-      "Triggers.SessionKey")
+      "family"
+      "trigger_delivery_session_resolution")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "trigger_fire_budget_cases"

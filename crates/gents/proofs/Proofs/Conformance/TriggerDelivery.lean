@@ -414,16 +414,6 @@ def identityCases : List String :=
     ("request_id", jsonString id.requestId), ("session_id", jsonString id.sessionId),
     ("outcome_id", jsonString id.outcomeId)]
 
-def sessionCases : List String :=
-  let id := identity "owner-a" "a"
-  [(none, true, false), (some "lead-one", true, false), (some "lead-two", true, false),
-   (some "", true, false), (some "foreign", false, false),
-   (some "game:a:red", false, true), (some "game:a:red", true, true),
-   (some "", false, true)].map fun (target, owned, create) => object [
-     ("identity", identityJson id), ("target", jsonOptionalString target),
-     ("owned", toString owned), ("create_missing", toString create),
-     ("resolved", jsonOptionalString (resolveSession id target owned create))]
-
 structure SessionConfigInput where
   template : Option String
   createSession : Bool
@@ -597,9 +587,6 @@ def triggerDeliveryCallbackVisibilityCasesJson : String :=
 def triggerDeliveryIdentityCasesJson : String :=
   jsonArray identityCases
 
-def triggerDeliverySessionCasesJson : String :=
-  jsonArray sessionCases
-
 def triggerFireBudgetCasesJson : String :=
   jsonArray budgetCases
 
@@ -618,5 +605,39 @@ def triggerDeliveryLatestAdmissionCasesJson : String :=
 example : (admit (admit {} (fire "a")) (fire "a")).requests.length = 1 := by native_decide
 example : outcomeDue {} { fire := { fire "a" with goalBacked := true }, terminal := false } = false := by
   native_decide
+
+structure SessionIdentity where
+  ownerDid : String
+  triggerId : String
+  sourceCollection : String
+  sourceDocId : String
+  deriving Lean.ToJson
+
+def SessionIdentity.toModel (id : SessionIdentity) : Identity :=
+  { owner := id.ownerDid, trigger := id.triggerId,
+    collection := id.sourceCollection, document := id.sourceDocId }
+
+structure SessionInput where
+  identity : SessionIdentity
+  target : Option String
+  owned : Bool
+  createMissing : Bool
+  deriving Lean.ToJson
+
+def sessionOwnerA : SessionIdentity :=
+  { ownerDid := "owner-a", triggerId := "handoff", sourceCollection := "Work", sourceDocId := "a" }
+
+@[conformance_family]
+def sessionResolution : Family SessionInput (Option String) where
+  inputs :=
+    [ { identity := sessionOwnerA, target := none, owned := true, createMissing := false }
+    , { identity := sessionOwnerA, target := some "lead-one", owned := true, createMissing := false }
+    , { identity := sessionOwnerA, target := some "lead-two", owned := true, createMissing := false }
+    , { identity := sessionOwnerA, target := some "", owned := true, createMissing := false }
+    , { identity := sessionOwnerA, target := some "foreign", owned := false, createMissing := false }
+    , { identity := sessionOwnerA, target := some "game:a:red", owned := false, createMissing := true }
+    , { identity := sessionOwnerA, target := some "game:a:red", owned := true, createMissing := true }
+    , { identity := sessionOwnerA, target := some "", owned := false, createMissing := true } ]
+  model := fun i => resolveSession i.identity.toModel i.target i.owned i.createMissing
 
 end Conformance.TriggerDelivery
