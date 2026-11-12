@@ -721,9 +721,8 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
             .bind_managed_agent(agent.agent_identity.as_ref())
             .unwrap();
         lifecycle.set_client_claim_admission(admission);
-        lifecycle.set_configured_max_total_tokens(
-            case.input.pinned_limit.filter(|limit| *limit != 0),
-        );
+        lifecycle
+            .set_configured_max_total_tokens(case.input.pinned_limit.filter(|limit| *limit != 0));
         assert_eq!(
             lifecycle.claim_with_identity().await.unwrap(),
             gents_session::request::lifecycle::ClaimOutcome::Claimed
@@ -751,11 +750,12 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
         }
         let did = escape_graphql_string(agent.node_did());
         for (index, row) in case.input.rows.iter().enumerate() {
-            let doc_id = escape_graphql_string(if row.request_doc_id == case.input.request_doc_id {
-                &request.doc_id
-            } else {
-                &row.request_doc_id
-            });
+            let doc_id =
+                escape_graphql_string(if row.request_doc_id == case.input.request_doc_id {
+                    &request.doc_id
+                } else {
+                    &row.request_doc_id
+                });
             let call_id = escape_graphql_string(&format!("rehydrate-{index}"));
             let call_kind = escape_graphql_string(&row.kind);
             let prompt = row.prompt_tokens;

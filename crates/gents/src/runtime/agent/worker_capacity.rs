@@ -262,7 +262,12 @@ mod tests {
                 active.insert(key, guard);
             }
             let before = observe(&capacity);
-            assert_eq!(wire(&before), wire(&case.input.pre), "{}: fixture", case.input.name);
+            assert_eq!(
+                wire(&before),
+                wire(&case.input.pre),
+                "{}: fixture",
+                case.input.name
+            );
             let key = ticket(&case.input.operation.ticket);
             let observed = match case.input.operation.kind.as_str() {
                 "acquire" => match admit(&capacity, key.clone()) {
