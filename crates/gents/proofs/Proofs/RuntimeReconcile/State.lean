@@ -361,6 +361,7 @@ inductive ClientAgentReadiness where
   | unknownProcess
   | unknownStale
   | unknownAbsent
+  | unknownStorageUnavailable
   deriving DecidableEq, Repr
 
 namespace ClientAgentReadiness
@@ -369,7 +370,8 @@ def stateString : ClientAgentReadiness → String
   | .ready => "ready"
   | .unavailableRuntime _ | .unavailableStartup => "unavailable"
   | .unknownMissing | .unknownMalformed | .unknownVersion
-  | .unknownProcess | .unknownStale | .unknownAbsent => "unknown"
+  | .unknownProcess | .unknownStale | .unknownAbsent
+  | .unknownStorageUnavailable => "unknown"
 
 def reasonCode : ClientAgentReadiness → Option String
   | .ready => none
@@ -381,12 +383,27 @@ def reasonCode : ClientAgentReadiness → Option String
   | .unknownProcess => some "process_not_ready"
   | .unknownStale => some "router_generation_stale"
   | .unknownAbsent => some "agent_not_assigned"
+  | .unknownStorageUnavailable => some "storage_unavailable"
 
+/-- External premise (Regolith `WriteLatch`, a `OnceCell` with no clear path):
+once a write-ahead log append fails, every later write of this storage engine
+fails with the retained error kind until the process reopens the store. The
+durable readiness row is itself such a write, so the fault it reports cannot be
+recorded in that row; `storageUnavailable` is a process-local observation the
+reader joins with whatever the (now frozen) row still says. -/
 inductive ClientNodeObservation where
   | missing
   | malformed
   | unsupportedVersion
+  | storageUnavailable
   | observed (process : ProcessState) (state : RuntimeState)
+
+/-- The reader joins the process-local storage fault with the durable row: a
+fault dominates every row observation, including a row that still reads ready. -/
+def ClientNodeObservation.joinStorageFault
+    (storageUnavailable : Bool) (observation : ClientNodeObservation) :
+    ClientNodeObservation :=
+  if storageUnavailable then .storageUnavailable else observation
 
 def project
     (observation : ClientNodeObservation)
@@ -396,6 +413,7 @@ def project
   | .missing => .unknownMissing
   | .malformed => .unknownMalformed
   | .unsupportedVersion => .unknownVersion
+  | .storageUnavailable => .unknownStorageUnavailable
   | .observed process s =>
       if !decide process.acceptsWork then
         .unknownProcess
@@ -410,6 +428,29 @@ def project
         .ready
       else
         .unknownAbsent
+
+/-- A storage fault never projects ready: the runtime that cannot write its
+readiness row must not keep reporting readiness from the stale row. -/
+theorem storage_unavailable_never_ready
+    {agentDid : AgentDid}
+    {reason : AgentUnavailableReason} :
+    project .storageUnavailable agentDid reason ≠ .ready := by
+  simp [project]
+
+/-- The fault is not derivable from the durable row: joining it closes every
+observation, including one whose row would otherwise project ready. -/
+theorem joined_storage_fault_never_ready
+    {observation : ClientNodeObservation}
+    {agentDid : AgentDid}
+    {reason : AgentUnavailableReason} :
+    project (observation.joinStorageFault true) agentDid reason ≠ .ready := by
+  simp [ClientNodeObservation.joinStorageFault, project]
+
+/-- Without a process-local fault the reader projects the durable row unchanged. -/
+theorem join_without_storage_fault
+    {observation : ClientNodeObservation} :
+    observation.joinStorageFault false = observation := by
+  simp [ClientNodeObservation.joinStorageFault]
 
 theorem ready_sound
     {process : ProcessState}
