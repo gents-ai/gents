@@ -10,6 +10,8 @@ use gents_store::identity::{KeyIdentity, NodeIdentity};
 
 use super::*;
 
+pub mod r4c_private_support;
+
 pub struct HookExecutionFixture {
     pub lifecycle: gents_session::request::lifecycle::RequestLifecycle,
     pub writer: gents_session::request::streaming::DefraStreamWriter,
