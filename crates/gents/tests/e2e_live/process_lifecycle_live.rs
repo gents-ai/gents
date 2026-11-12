@@ -169,7 +169,16 @@ impl Processes {
         session: &str,
         background: bool,
     ) -> (String, Value) {
-        let args = json!({"command":"sh", "args":["-c", "printf READY; while [ ! -f \"$1\" ]; do sleep 0.05; done; printf FINISHED", "gents-live-process", self.root.path().join(id).display().to_string()]});
+        let fifo = self.root.path().join(id);
+        assert!(tokio::time::timeout(
+            WAIT,
+            tokio::process::Command::new("mkfifo").arg(&fifo).status()
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .success());
+        let args = json!({"command":"sh", "args":["-c", "printf READY; IFS= read -r release < \"$1\"; printf FINISHED", "gents-live-process", fifo.display().to_string()]});
         let request = if background {
             self.request(
                 agent,
@@ -194,7 +203,7 @@ impl Processes {
     }
 
     async fn release(&self, id: &str) {
-        tokio::fs::write(self.root.path().join(id), "release")
+        tokio::fs::write(self.root.path().join(id), "release\n")
             .await
             .unwrap();
     }
