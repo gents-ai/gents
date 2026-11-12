@@ -43,8 +43,12 @@ pub async fn discover_backend(
         );
     };
     let access = ConfigAccess::local_as(runtime.observation_node().clone(), actor.clone());
-    match gents_inference::operations::discover(&access, &request.node_did, &request.backend_id)
-        .await
+    match gents_inference::operations::discover_for_authenticated_request(
+        &access,
+        &request.node_did,
+        &request.backend_id,
+    )
+    .await
     {
         Ok(discovery) => {
             let catalog_written = discovery.answer == DiscoveryAnswer::ContactsProvider;

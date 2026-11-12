@@ -11,13 +11,15 @@ pub use account::{
     admit_account_operation, admit_account_operation_on, remove_account, AccountRemoval,
 };
 pub use decision::{
-    account_operation_admitted, acting, acting_on, backend_create_decision,
-    backend_update_decision, discovery_answer, keeps_auth, profile_choice_decision, AuthClass,
-    CurrentBackend,
+    account_operation_admitted, acting, acting_for_authenticated_request, acting_on, actor_kind,
+    backend_create_decision, backend_update_decision, discovery_answer, keeps_auth,
+    profile_choice_decision, ActingDid, AuthClass, CurrentBackend, Signer,
 };
-pub use discovery::{discover, discovery_target, Discovery, DiscoveryTarget};
+pub use discovery::{
+    discover, discover_for_authenticated_request, discovery_target, Discovery, DiscoveryTarget,
+};
 pub use document::{
-    admit_backend_choice_in_txn, merge_in_txn, plan_in_txn, preview, remove, remove_in_txn,
+    admit_backend_choice_in_txn, merge_in_txn, plan_in_txn, remove, remove_in_txn,
     whole_document_write, write, write_in_txn, MergedWrite, PlannedWrite, WriteReceipt,
 };
 

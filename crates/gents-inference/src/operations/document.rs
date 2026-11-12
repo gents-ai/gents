@@ -9,8 +9,7 @@ use gents_documents::{
     InferenceProfile,
 };
 use gents_protocol::operations::inference::{
-    DocumentWrite, InferenceDocument, InferenceOperationError, InferenceOutcome, RemoveReceipt,
-    WriteMode,
+    DocumentWrite, InferenceDocument, InferenceOperationError, RemoveReceipt, WriteMode,
 };
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 use serde_json::{json, Map, Value};
@@ -111,7 +110,7 @@ impl MergedWrite {
         self,
         txn: &ConfigApplyTxn<'_>,
     ) -> Result<PlannedWrite, OperationFailure> {
-        let actor = acting(txn);
+        let actor = acting(txn, &self.node_did).await?;
         let decode_auth = |doc: &Map<String, Value>| {
             serde_json::from_value::<BackendAuth>(doc.get("auth").cloned().unwrap_or(Value::Null))
                 .context("backend auth is not valid")
@@ -275,7 +274,7 @@ pub async fn admit_backend_choice_in_txn(
         _ => None,
     };
     profile_choice_decision(
-        acting(txn),
+        acting(txn, node_did).await?,
         current.as_ref(),
         &next,
         default_account.as_deref(),
@@ -371,33 +370,6 @@ pub async fn write(
         })
         .await
         .map_err(Into::into)
-}
-
-/// The receipt the write would return, or the refusal it would raise.
-pub async fn preview(
-    access: &ConfigAccess,
-    node_did: &str,
-    write: &DocumentWrite,
-    verb: &'static str,
-) -> Result<InferenceOutcome<WriteReceipt>, InferenceOperationError> {
-    let planned: Result<WriteReceipt, OperationFailure> = access
-        .transact_readonly("inference.document.preview", |txn| {
-            Box::pin(async move {
-                plan_in_txn(txn, node_did, write)
-                    .await?
-                    .validate_in_txn(txn)
-                    .await
-            })
-        })
-        .await;
-    match planned {
-        Ok(receipt) => Ok(InferenceOutcome::Admitted(receipt)),
-        Err(failure) => {
-            let error = InferenceOperationError::from(failure);
-            let next = error.recovery(write.document, verb);
-            error.preview_outcome(next)
-        }
-    }
 }
 
 /// Removes one backend or profile. The shared apply refuses a document
