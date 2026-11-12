@@ -314,12 +314,20 @@ mod no_model {
 
     /// Bare `gents --home <home>` over a broken `home`: names the finding, sets the folder
     /// aside, sets it up again and opens the shell.
+    fn remember_home(live: &LiveBox, home: &Path) -> Result<()> {
+        let remembered = live.remembered_home();
+        fs::create_dir_all(remembered.parent().context("remembered home directory")?)?;
+        fs::write(remembered, format!("{}\n", home.display()))?;
+        Ok(())
+    }
+
     async fn is_set_aside_and_set_up_again(
         live: &LiveBox,
         backend: &MockChatEndpoint,
         home: &Path,
         why: &str,
     ) -> Result<()> {
+        remember_home(live, home)?;
         let mut terminal = setup_of(live, home, "repair")?;
         terminal.expect("Repairing: ", RUNTIME_UP).await?;
         terminal.expect(why, PROMPT).await?;
@@ -362,6 +370,7 @@ mod no_model {
         let old_pid = live.service_pid().context("the service runs")?;
         let old_did = node_did_of(&home.home)?;
         fs::remove_dir_all(&home.home)?;
+        remember_home(&live, &home.home)?;
 
         let mut terminal = setup_of(&live, &home.home, "deleted-home")?;
         terminal
