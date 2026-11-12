@@ -1,22 +1,17 @@
 use super::*;
 
 pub(super) async fn event_group_eligibility_matches_lean_generated_contract_cases() {
-    let cases = lean_event_group_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        assert_eq!(
-            crate::triggers::engine::event_source::group_candidate_eligible(
-                case.actual_count,
-                case.expected_count,
-                case.minimum_count,
+    gents_lean_vocab::families::event_group_contracts_eligibility::replay(|case| {
+        gents_lean_vocab::families::event_group_contracts_eligibility::EligibilityOutput {
+            eligible: crate::triggers::engine::event_source::group_candidate_eligible(
+                case.actual_count as usize,
+                case.expected_count.map(|count| count as usize),
+                case.minimum_count as usize,
                 case.timed_out,
                 case.well_formed,
             ),
-            case.eligible,
-            "Lean case {} eligibility drifted",
-            case.name,
-        );
-    }
+        }
+    });
 }
 
 pub(super) async fn trigger_engine_dispatch_matches_lean_generated_contract_cases() {

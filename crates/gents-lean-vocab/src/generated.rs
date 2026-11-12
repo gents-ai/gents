@@ -173,10 +173,6 @@ pub fn lean_event_delivery_transition_cases() -> &'static [LeanEventDeliveryTran
     &lean_contract_snapshot().event_delivery_transition_cases
 }
 
-pub fn lean_event_group_cases() -> &'static [LeanEventGroupCase] {
-    &lean_contract_snapshot().event_group_cases
-}
-
 pub fn lean_feature_matrix() -> &'static LeanFeatureMatrix {
     &lean_contract_snapshot().feature_matrix
 }
@@ -3061,7 +3057,6 @@ pub struct LeanContractSnapshot {
     pub request_execution_lease_trace_cases: Vec<LeanRequestExecutionLeaseTraceCase>,
     pub trigger_dispatch_case_count: usize,
     pub trigger_dispatch_cases: Vec<LeanTriggerDispatchCase>,
-    pub event_group_cases: Vec<LeanEventGroupCase>,
     pub event_group_clock_case_count: usize,
     pub event_group_clock_cases: Vec<serde_json::Value>,
     pub event_group_capture_case_count: usize,
@@ -4022,29 +4017,6 @@ pub struct LeanEventDeliveryWorld {
     pub subscription_queue: Vec<String>,
     pub processed_set: Vec<String>,
     pub handled: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanEventGroupCase {
-    pub name: String,
-    pub candidate: LeanEventGroupKeyContract,
-    pub actual_count: usize,
-    pub expected_count: Option<usize>,
-    pub minimum_count: usize,
-    pub timed_out: bool,
-    pub well_formed: bool,
-    pub prior_markers: Vec<LeanEventGroupKeyContract>,
-    pub eligible: bool,
-    pub materialized: bool,
-    pub marker_count_after: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanEventGroupKeyContract {
-    pub node_did: String,
-    pub consumer: serde_json::Value,
-    pub consumer_config_key: String,
-    pub correlation: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -6133,6 +6105,16 @@ pub struct LeanIdentityHouseholdCase {
     pub callback_checkpoint_claim_cases: Vec<serde_json::Value>,
     #[serde(default)]
     pub ordinary_receipt_visibility_cases: Vec<serde_json::Value>,
+    pub event_group_state_cases: Option<
+        Vec<LeanIdentityHouseholdCaseEventGroupStateCase>,
+    >,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanIdentityHouseholdCaseEventGroupStateCase {
+    pub actor: String,
+    pub expected: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

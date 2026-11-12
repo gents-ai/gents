@@ -686,8 +686,8 @@ def caseCoverage : List CoverageEntry :=
       "EnrollmentDigestCases")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "event_group_cases"
-      "EventGroupCases"
+      "family"
+      "event_group_contracts_eligibility"
       "Exercises the production count/timeout eligibility owner for trigger and callback cases. Typed consumer/config/owner identity, durable marker suppression and atomic materialization require the migrated event-group owner; the old trigger-only spy cannot establish these guarantees.")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
