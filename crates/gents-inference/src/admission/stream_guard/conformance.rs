@@ -26,7 +26,7 @@ impl StreamGuardLifecycle for Finalizer {
     }
 }
 
-async fn stream_guard_gate_held(case: &family::Input) -> bool {
+async fn stream_guard_gate_held(case: &family::FinalizationInput) -> bool {
     let gate = Arc::new(Mutex::new(()));
     let (entered_tx, mut entered_rx) = oneshot::channel();
     let (return_tx, return_rx) = oneshot::channel();
