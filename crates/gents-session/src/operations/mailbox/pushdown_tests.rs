@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use gents::defra_node::Node as EmbeddedNode;
 use gents_documents::mailbox_write_decl::{MailboxAction, MailboxKind};
-use gents_session::session::mailbox::{
+use crate::session::mailbox::{
     stamp_create_with_access, FileMailboxItemArgs, MailboxSourceKind,
     MailboxStampContext, MailboxStatus, MAILBOX_CLOSE_COLLECTIONS,
 };
@@ -76,7 +75,7 @@ async fn rust_mailbox_dismiss_owner_drives_only_lean_legal_transitions() {
     let agent_binding = gents_store::identity::provision_agent_identity(&identity).unwrap();
     let agent = gents_store::identity::resolve_agent_identity(&identity, &agent_binding).unwrap();
     let node = Arc::new(
-        EmbeddedNode::builder()
+        defra_node::Node::builder()
             .enable_signing()
             .with_node_identity_did(gents_store::identity::NodeIdentity::did(&identity))
             .with_node_acp_enabled()
@@ -151,10 +150,10 @@ async fn rust_mailbox_dismiss_owner_drives_only_lean_legal_transitions() {
     .expect("stamped open mailbox item");
     assert_eq!(item.status, "open");
 
-    assert!(gents_session::operations::mailbox::dismiss(&outsider, &item.doc_id)
+    assert!(crate::operations::mailbox::dismiss(&outsider, &item.doc_id)
         .await
         .is_err());
-    let dismissed = gents_session::operations::mailbox::dismiss(&creator, &item.doc_id)
+    let dismissed = crate::operations::mailbox::dismiss(&creator, &item.doc_id)
         .await
         .expect("native-authorized dismissal is independent of session requester provenance");
     assert_eq!(dismissed.status, "dismissed");
@@ -163,7 +162,7 @@ async fn rust_mailbox_dismiss_owner_drives_only_lean_legal_transitions() {
         "the open -> dismissed transition must stamp resolved_at"
     );
 
-    let repeated = gents_session::operations::mailbox::dismiss(&creator, &item.doc_id)
+    let repeated = crate::operations::mailbox::dismiss(&creator, &item.doc_id)
         .await
         .expect("re-dismiss of a terminal item is an idempotent no-op");
     assert_eq!(repeated.status, "dismissed");

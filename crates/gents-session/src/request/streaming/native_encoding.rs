@@ -734,3 +734,6 @@ mod tests {
         assert!(row.get("native_request_id").is_none(), "{row}");
     }
 }
+
+#[cfg(test)]
+mod pushdown_tests;

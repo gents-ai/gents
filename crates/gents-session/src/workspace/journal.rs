@@ -104,3 +104,6 @@ pub fn advance(journal: &mut Vec<ActionJournalEntry>, index: u32, state: ActionJ
     journal.retain(|entry| entry.index != index);
     journal.push(ActionJournalEntry::new(index, state));
 }
+
+#[cfg(test)]
+mod pushdown_tests;
