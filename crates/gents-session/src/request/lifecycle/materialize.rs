@@ -41,7 +41,18 @@ fn validate_trigger_lineage(
     Ok(())
 }
 
-fn validate_trigger_provenance(trigger_lineage: &TriggerLineage) -> Result<()> {
+/// Why a fire's provenance is refused before its request is written.
+#[derive(Debug, thiserror::Error)]
+pub enum TriggerProvenanceRefusal {
+    #[error("Event trigger lineage requires source_doc_id")]
+    EventWithoutSource,
+    #[error("Only Event trigger lineage may carry source_doc_id")]
+    SourceWithoutEvent,
+}
+
+fn validate_trigger_provenance(
+    trigger_lineage: &TriggerLineage,
+) -> Result<(), TriggerProvenanceRefusal> {
     let trigger_kind = trigger_lineage
         .trigger_kind
         .as_deref()
@@ -50,8 +61,8 @@ fn validate_trigger_provenance(trigger_lineage: &TriggerLineage) -> Result<()> {
     let source_doc_id = trigger_lineage.source_doc_id.as_deref().map(str::trim);
     match (trigger_kind, source_doc_id) {
         (Some("event"), Some(value)) if !value.is_empty() => {}
-        (Some("event"), _) => anyhow::bail!("Event trigger lineage requires source_doc_id"),
-        (_, Some(_)) => anyhow::bail!("Only Event trigger lineage may carry source_doc_id"),
+        (Some("event"), _) => return Err(TriggerProvenanceRefusal::EventWithoutSource),
+        (_, Some(_)) => return Err(TriggerProvenanceRefusal::SourceWithoutEvent),
         _ => {}
     }
     Ok(())
