@@ -17,27 +17,34 @@ def routingAffinityCasesJson : String := jsonArray (routingAffinityCases.map fun
   ",\"expected_session\":" ++ jsonOptionalString row.expected.session ++
   ",\"expected_token\":" ++ jsonOptionalString row.expected.token ++ "}")
 
-def retryFrontierCasesJson : String := jsonArray (
-  [("before-input", true, true, true, false, false, false),
-   ("ready", true, true, true, false, false, true),
-   ("live-parent", false, true, true, false, false, true),
-   ("foreign-requester", true, true, false, false, false, true),
-   ("unsettled", true, true, true, true, false, true),
-   ("background", true, true, true, true, true, true),
-   ("resend", true, false, true, false, false, true),
-   ("resend-other-requester", true, false, false, false, false, true)].map
-    fun (name, scopedTerminal, sameSession, sameRequester, running, background, published) =>
-      "{\"name\":" ++ jsonString name ++
-      ",\"scoped_terminal\":" ++ toString scopedTerminal ++
-      ",\"same_session\":" ++ toString sameSession ++
-      ",\"same_requester\":" ++ toString sameRequester ++
-      ",\"running\":" ++ toString running ++
-      ",\"background\":" ++ toString background ++
-      ",\"published\":" ++ toString published ++ ",\"expected\":" ++
-      (match PromptAssembly.CurrentInput.admitResume scopedTerminal sameSession sameRequester
-        (PromptAssembly.CurrentInput.settledForResume running background) published with
-       | some result => toString result
-       | none => "null") ++ "}")
+structure RetryFrontierInput where
+  name : String
+  scopedTerminal : Bool
+  sameSession : Bool
+  sameRequester : Bool
+  running : Bool
+  background : Bool
+  published : Bool
+  deriving Lean.ToJson
+
+/-- Whether a retry successor resumes from its parent's published input:
+production `retry_has_published_input` on a served node. -/
+@[conformance_family]
+def retryFrontierAdmission : Family RetryFrontierInput (Option Bool) where
+  inputs :=
+    [("before-input", true, true, true, false, false, false),
+     ("ready", true, true, true, false, false, true),
+     ("live-parent", false, true, true, false, false, true),
+     ("foreign-requester", true, true, false, false, false, true),
+     ("unsettled", true, true, true, true, false, true),
+     ("background", true, true, true, true, true, true),
+     ("resend", true, false, true, false, false, true),
+     ("resend-other-requester", true, false, false, false, false, true)].map
+      fun (name, scopedTerminal, sameSession, sameRequester, running, background, published) =>
+        { name, scopedTerminal, sameSession, sameRequester, running, background, published }
+  model := fun i =>
+    PromptAssembly.CurrentInput.admitResume i.scopedTerminal i.sameSession i.sameRequester
+      (PromptAssembly.CurrentInput.settledForResume i.running i.background) i.published
 
 def retryEntryCasesJson : String := jsonArray (
   [ (false, ([] : List Nat), (none : Option Nat)), (false, [1, 2, 3], none),

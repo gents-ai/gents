@@ -3321,7 +3321,6 @@ pub struct LeanContractSnapshot {
     pub provider_tool_identity_cases: Vec<serde_json::Value>,
     pub prompt_assembly_mode_sanitize_cases: Vec<LeanPromptAssemblyModeSanitizeCase>,
     pub routing_affinity_cases: Vec<LeanRoutingAffinityCase>,
-    pub retry_frontier_cases: Vec<LeanRetryFrontierCase>,
     pub retry_entry_cases: Vec<LeanRetryEntryCase>,
     pub current_input_cases: Vec<LeanCurrentInputCase>,
     pub wake_input_cases: Vec<LeanWakeInputCase>,
@@ -10416,19 +10415,6 @@ pub struct LeanRetryEntryCase {
     pub history: Vec<u64>,
     pub publish: bool,
     pub resume: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRetryFrontierCase {
-    pub background: bool,
-    pub expected: Option<bool>,
-    pub name: String,
-    pub published: bool,
-    pub running: bool,
-    pub same_requester: bool,
-    pub same_session: bool,
-    pub scoped_terminal: bool,
 }
 
 #[derive(Debug, Deserialize)]
