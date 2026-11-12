@@ -137,7 +137,7 @@ fn scope_wire(
 
 #[tokio::test]
 async fn generated_goal_wake_scopes_preserve_atomic_notification_bindings() {
-    for case in wakes::cases() {
+    for case in gents_lean_vocab::families::goal_wake_coalescing_contracts_assignment_wakes::cases() {
         let name = case.input.name.as_str();
         let db = test_db_with(name, crate::lifecycle_hooks::composition()).await;
         let mut documents = RapidHashMap::new();
