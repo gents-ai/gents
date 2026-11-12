@@ -23,6 +23,45 @@ structure ResetFacts where
   accountPresent : Bool
   deriving DecidableEq, Repr
 
+inductive CallKind where
+  | inference | compaction
+  deriving DecidableEq, Repr
+
+/-- The account facts `ResetFacts.profileNamesAccount` stands for. The profile
+that served the limited call is the one its kind selects: the Agent's
+inference profile for an inference call, its compaction profile for a
+compaction call. Moving the other profile to another account does not stop the
+resume. The selected sign-in must have connected no later than the limited
+call started; a later sign-in of the account waits for the operator. -/
+structure AccountFacts where
+  kind : CallKind
+  inferenceNamesAccount : Bool
+  compactionNamesAccount : Bool
+  connectedAt : Int
+  deriving DecidableEq, Repr
+
+def AccountFacts.profileNamesAccount (a : AccountFacts) (limitStartedAt : Nat) : Bool :=
+  (match a.kind with
+    | .inference => a.inferenceNamesAccount
+    | .compaction => a.compactionNamesAccount) &&
+  decide (a.connectedAt ≤ (limitStartedAt : Int))
+
+theorem resumes_after_a_compaction_limit (inference : Bool) (connectedAt : Int) (started : Nat)
+    (h : connectedAt ≤ (started : Int)) :
+    (AccountFacts.mk .compaction inference true connectedAt).profileNamesAccount started = true := by
+  simp [AccountFacts.profileNamesAccount, h]
+
+theorem waits_after_the_compaction_profile_moved (inference : Bool) (connectedAt : Int)
+    (started : Nat) :
+    (AccountFacts.mk .compaction inference false connectedAt).profileNamesAccount started =
+      false := by
+  simp [AccountFacts.profileNamesAccount]
+
+theorem waits_for_a_sign_in_after_the_limited_call (a : AccountFacts) (started : Nat)
+    (h : (started : Int) < a.connectedAt) : a.profileNamesAccount started = false := by
+  have late : ¬ a.connectedAt ≤ (started : Int) := by omega
+  simp [AccountFacts.profileNamesAccount, late]
+
 /-- A reset no later than the limited call's start is stale and never due;
 there is no cap on how far away the reset may be. -/
 def ResetFacts.due (f : ResetFacts) : Bool :=

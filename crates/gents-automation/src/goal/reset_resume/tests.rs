@@ -136,27 +136,39 @@ async fn a_held_row_waits_for_the_latest_reset() {
 }
 
 #[tokio::test]
-async fn resumes_after_a_compaction_limit() {
-    let reset = Reset::new("compaction", Some(T)).await;
-    reset.move_to_b(PROFILE).await;
-    assert!(reset.resume(T - 1).await.is_none());
-    let receipt = reset.resume(T).await.expect("resumed at the reset");
-    assert!(receipt.created);
-    assert_eq!(reset.f.children().await, [receipt.request_id]);
-}
-
-#[tokio::test]
-async fn waits_after_the_compaction_profile_moved() {
-    let reset = Reset::new("compaction", Some(T)).await;
-    reset.move_to_b("summ").await;
-    reset.waits().await;
-}
-
-#[tokio::test]
-async fn waits_for_a_sign_in_after_the_limited_call() {
-    let reset = Reset::new("inference", Some(T)).await;
-    connect_accounts_at(&reset.f, 1).await;
-    reset.waits().await;
+async fn reset_account_facts_drive_resume_at_reset() {
+    for case in gents_lean_vocab::families::goal_reset_account_trace::cases::<String, GoalStatus>() {
+        let input = &case.input;
+        let reset = Reset::new(&input.kind, Some(T)).await;
+        if input.kind != "compaction" {
+            reset
+                .f
+                .compacts_on(&reset.accounts.access, &reset.accounts.a)
+                .await;
+        }
+        connect_accounts_at(&reset.f, input.connected_at).await;
+        if !input.inference_names_account {
+            reset.move_to_b(PROFILE).await;
+        }
+        if !input.compaction_names_account {
+            reset.move_to_b("summ").await;
+        }
+        let mut steps = Vec::new();
+        for now in &input.resume_at {
+            let receipt = reset.resume(i64::try_from(*now).unwrap()).await;
+            let children = reset.f.children().await;
+            if let Some(receipt) = &receipt {
+                assert!(children.contains(&receipt.request_id), "{input:?}");
+            }
+            steps.push(gents_lean_vocab::families::goal_reset_account_trace::Step {
+                resumed: receipt.is_some_and(|receipt| receipt.created),
+                status: reset.goal().await.parsed_status().unwrap(),
+                continuations: children.len() as u64,
+            });
+        }
+        case.check(steps);
+        reset.f.node.shutdown().await.expect("node shutdown");
+    }
 }
 
 #[tokio::test]
