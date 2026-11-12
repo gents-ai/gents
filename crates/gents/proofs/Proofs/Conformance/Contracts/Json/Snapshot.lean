@@ -1,3 +1,4 @@
+import Proofs.Conformance.PendingRejection
 import Proofs.Conformance.ManagedExecSpawn
 import Proofs.Conformance.PluginBind
 import Proofs.Conformance.OperatorProtection
