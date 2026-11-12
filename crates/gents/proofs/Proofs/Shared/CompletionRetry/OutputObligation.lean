@@ -136,4 +136,55 @@ theorem trigger_obligation_active_for_automated_trigger :
       { executionScheduled := true, hasAutomatedTriggerLineage := true } = true := by
   rfl
 
+structure ConfiguredObligation where
+  tool : String
+  minimumWrites : Nat
+  deriving DecidableEq, Repr
+
+inductive TerminalHandling where
+  | release
+  | remind
+  deriving DecidableEq, Repr
+
+structure TerminalAnswer where
+  handling : TerminalHandling
+  remindedTools : List String
+  deriving DecidableEq, Repr
+
+def unmetBeforeWrites (obligations : List ConfiguredObligation) : List String :=
+  (obligations.filter fun o =>
+    decideTerminal { minimumWrites := o.minimumWrites, completedWrites := 0 } == .continue).map
+      ConfiguredObligation.tool
+
+/-- The owned loop asks the gate before it releases a provider's final answer.
+An unmet obligation withholds the answer: the provider is asked again with one
+reminder naming exactly the unmet obligations. -/
+def terminalAnswer (obligations : List ConfiguredObligation) : TerminalAnswer :=
+  match unmetBeforeWrites obligations with
+  | [] => { handling := .release, remindedTools := [] }
+  | unmet => { handling := .remind, remindedTools := unmet }
+
+theorem terminalAnswer_remindedTools (obligations : List ConfiguredObligation) :
+    (terminalAnswer obligations).remindedTools = unmetBeforeWrites obligations := by
+  unfold terminalAnswer
+  split <;> simp_all
+
+theorem reminded_tools_are_configured (obligations : List ConfiguredObligation) (t : String)
+    (h : t ∈ (terminalAnswer obligations).remindedTools) :
+    t ∈ obligations.map ConfiguredObligation.tool := by
+  rw [terminalAnswer_remindedTools, unmetBeforeWrites] at h
+  obtain ⟨o, ho, rfl⟩ := List.mem_map.mp h
+  exact List.mem_map.mpr ⟨o, (List.mem_filter.mp ho).1, rfl⟩
+
+def terminalAnswerCases : List (List ConfiguredObligation) :=
+  [ []
+  , [{ tool := "write_result", minimumWrites := 0 }]
+  , [{ tool := "write_result", minimumWrites := 1 }]
+  , [{ tool := "write_result", minimumWrites := 1 }, { tool := "write_summary", minimumWrites := 0 }]
+  , [{ tool := "write_result", minimumWrites := 1 }, { tool := "write_summary", minimumWrites := 2 }] ]
+
+theorem unmet_output_obligation_blocks_terminal_and_continues_with_runtime_reminder :
+    terminalAnswer [{ tool := "write_result", minimumWrites := 1 }] =
+      { handling := .remind, remindedTools := ["write_result"] } := by decide
+
 end CompletionRetry.OutputObligation

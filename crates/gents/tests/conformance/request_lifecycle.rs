@@ -1269,8 +1269,9 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
 }
 
 #[tokio::test]
-async fn scheduled_materialization_persists_trigger_lineage() {
-    let db = support::test_db("scheduled-materialize-lineage").await;
+async fn materialized_lineage_follows_the_lean_model() {
+    use gents_session::request::lifecycle::materialize::TriggerProvenanceRefusal;
+    let db = support::test_db("materialized-lineage").await;
     let fixture = support::managed_agent_fixture(&db).await;
     let agent = &fixture.agent;
     let access = gents_store::config_client::ConfigAccess::local_managed_agent(
@@ -1279,66 +1280,118 @@ async fn scheduled_materialization_persists_trigger_lineage() {
         agent.as_ref(),
     )
     .unwrap();
-    let lineage = TriggerLineage {
-        trigger_id: Some("sched-1".into()),
-        trigger_kind: Some("schedule".into()),
-        source_doc_id: None,
-        correlation: None,
-        trigger_context: None,
-    };
-
-    let lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
-        db.node.clone(),
-        agent.did(),
-        db.node_identity.clone(),
-        agent.clone(),
-        "scheduled prompt body with lineage",
-        DEADLINE_SECS,
-        ExecutionOrigin::Scheduled,
-        BACKEND_ID,
-        lineage,
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(
-        fetch_request_lineage_with_access(
-            &access,
-            &format!(
-                "_docID: {{_eq: \"{}\"}}",
-                escape_graphql_string(&lifecycle.request().doc_id)
-            )
+    for (index, case) in gents_lean_vocab::families::materialized_lineage_materialization::cases::<
+        String,
+        String,
+        String,
+    >()
+    .iter()
+    .enumerate()
+    {
+        let trigger_id = case
+            .input
+            .kind
+            .as_ref()
+            .filter(|kind| kind.as_str() != "manual")
+            .map(|kind| format!("{kind}-{index}"));
+        let lineage = TriggerLineage {
+            trigger_id: trigger_id.clone(),
+            trigger_kind: case.input.kind.clone(),
+            source_doc_id: case
+                .input
+                .source_document
+                .then(|| format!("source-{index}")),
+            correlation: None,
+            trigger_context: None,
+        };
+        let origin = if case.input.kind.as_deref() == Some("manual") {
+            ExecutionOrigin::Interactive
+        } else {
+            ExecutionOrigin::Scheduled
+        };
+        let materialized = RequestLifecycle::materialize_claimed_with_execution_binding(
+            db.node.clone(),
+            agent.did(),
+            db.node_identity.clone(),
+            agent.clone(),
+            "materialized prompt body with lineage",
+            DEADLINE_SECS,
+            origin,
+            BACKEND_ID,
+            lineage,
         )
-        .await,
-        RequestLineageSnapshot {
-            caused_by_trigger_id: Some("sched-1".into()),
-            caused_by_trigger_kind: Some("schedule".into()),
-        }
-    );
-
-    assert_eq!(
-        Some(fetch_request_lineage_with_access(&access,
-            "caused_by_trigger_id: {_eq: \"sched-1\"}, caused_by_trigger_kind: {_eq: \"schedule\"}"
-        ).await),
-        Some(RequestLineageSnapshot {
-            caused_by_trigger_id: Some("sched-1".into()),
-            caused_by_trigger_kind: Some("schedule".into()),
-        })
-    );
-
-    let response = access
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ admission_kind admission_signer_did admission_signature }} }}"#,
-            escape_graphql_string(&lifecycle.request().doc_id),
-        ))
         .await;
-    let response = response.unwrap();
-    let row = &response["data"]["AgentRequest"][0];
-    assert_eq!(row["admission_kind"], "local-self");
-    assert_eq!(row["admission_signer_did"], agent.did());
-    assert!(row["admission_signature"]
-        .as_str()
-        .is_some_and(|signature| !signature.is_empty()));
+        let observed = match materialized {
+            Err(error) => {
+                let refusal = [
+                    (
+                        "event_without_source",
+                        TriggerProvenanceRefusal::EventWithoutSource,
+                    ),
+                    (
+                        "source_without_event",
+                        TriggerProvenanceRefusal::SourceWithoutEvent,
+                    ),
+                ]
+                .iter()
+                .filter(|(_, refusal)| format!("{error:#}").contains(&refusal.to_string()))
+                .map(|(name, _)| (*name).to_owned())
+                .next();
+                assert!(refusal.is_some(), "{:?}: {error:#}", case.input);
+                gents_lean_vocab::families::materialized_lineage_materialization::Materialized {
+                    refusal,
+                    caused_by_trigger_kind: None,
+                    admission: None,
+                }
+            }
+            Ok(lifecycle) => {
+                let doc_id = lifecycle.request().doc_id.clone();
+                let response = access
+                    .execute(&format!(
+                        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ caused_by_trigger_id caused_by_trigger_kind admission_kind admission_signer_did admission_signature }} }}"#,
+                        escape_graphql_string(&doc_id),
+                    ))
+                    .await
+                    .unwrap();
+                let row = &response["data"]["AgentRequest"][0];
+                assert_eq!(row["caused_by_trigger_id"].as_str(), trigger_id.as_deref());
+                if let Some(trigger_id) = &trigger_id {
+                    let found = access
+                        .execute(&format!(
+                            r#"{{ AgentRequest(filter: {{ caused_by_trigger_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                            escape_graphql_string(trigger_id),
+                        ))
+                        .await
+                        .unwrap();
+                    assert_eq!(found["data"]["AgentRequest"][0]["_docID"], doc_id.as_str());
+                }
+                let signed_by_agent = row["admission_signer_did"] == agent.did()
+                    && row["admission_signature"]
+                        .as_str()
+                        .is_some_and(|signature| !signature.is_empty());
+                let admission = match serde_json::from_value::<
+                    gents_protocol::request_admission::AgentRequestAdmissionKind,
+                >(row["admission_kind"].clone())
+                .unwrap()
+                {
+                    _ if !signed_by_agent => "signed_by_another".to_owned(),
+                    gents_protocol::request_admission::AgentRequestAdmissionKind::Enrollment => "enrollment".to_owned(),
+                    gents_protocol::request_admission::AgentRequestAdmissionKind::Client => "client".to_owned(),
+                    gents_protocol::request_admission::AgentRequestAdmissionKind::LocalSelf => "local_self".to_owned(),
+                    gents_protocol::request_admission::AgentRequestAdmissionKind::RuntimeInternal => "runtime_internal".to_owned(),
+                    gents_protocol::request_admission::AgentRequestAdmissionKind::Peer => "peer".to_owned(),
+                };
+                gents_lean_vocab::families::materialized_lineage_materialization::Materialized {
+                    refusal: None,
+                    caused_by_trigger_kind: row["caused_by_trigger_kind"]
+                        .as_str()
+                        .map(str::to_owned),
+                    admission: Some(admission),
+                }
+            }
+        };
+        case.check(observed);
+    }
 }
 
 pub(super) async fn generated_queue_deadline_cases_pin_r4a_contract_rows() {
@@ -2093,16 +2146,6 @@ async fn fetch_request_snapshot_with_access(
     let row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
     row.into()
-}
-
-async fn fetch_request_lineage_with_access(
-    access: &gents_store::config_client::ConfigAccess,
-    filter: &str,
-) -> RequestLineageSnapshot {
-    let response = access.execute(&format!(
-        "{{ AgentRequest(filter: {{{filter}}}, limit: 1) {{ caused_by_trigger_id caused_by_trigger_kind }} }}"
-    )).await.unwrap();
-    serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap()
 }
 
 async fn assert_session_observes_request_with_access(
