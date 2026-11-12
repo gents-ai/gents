@@ -176,6 +176,7 @@ async fn run(root: &Path, goal: bool, editor: Option<&str>, replacement: bool) -
     );
     let client_did = seed.node_identity().did().to_owned();
     seed.shutdown().await?;
+    drop(seed);
     let operator_paths = homes.cli_identity();
     let operator = tokio::task::spawn_blocking(move || {
         gents_desktop_core::client::PrincipalIdentity::load_existing(&operator_paths)
