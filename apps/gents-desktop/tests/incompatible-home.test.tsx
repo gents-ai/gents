@@ -75,6 +75,8 @@ function preview(
     browserPaths: [],
     clearedBrowserPaths: [],
     retainedPaths: [`${HOME}/grok-port-home`],
+    reason: "incompatibleStore",
+    retiredPairings: 0,
     ...overrides,
   };
 }

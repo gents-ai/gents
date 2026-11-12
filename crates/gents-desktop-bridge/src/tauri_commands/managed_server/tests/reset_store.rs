@@ -48,6 +48,7 @@ fn reset_file_store_keys_allow_fresh_setup_and_archives_remain_readable() {
             &desktop,
             not_the_user_home(),
             ClientBinding::Unbound,
+            false,
         )
         .unwrap();
         assert!(plan
@@ -124,6 +125,7 @@ fn reset_keychain_custody_keeps_archives_and_retryable_deletion_records() {
             &desktop,
             not_the_user_home(),
             ClientBinding::Unbound,
+            false,
         )
         .unwrap();
         let backup = plan.backup_path("keychain").unwrap();
@@ -154,6 +156,7 @@ fn reset_keychain_custody_keeps_archives_and_retryable_deletion_records() {
             &desktop,
             not_the_user_home(),
             ClientBinding::Unbound,
+            false,
         )
         .unwrap();
         let mut deleted = Vec::new();
@@ -210,6 +213,7 @@ fn reset_pending_upgrade_retires_its_artifacts_and_recorded_custody_together() {
                 &desktop,
                 not_the_user_home(),
                 ClientBinding::Unbound,
+                false,
             )
             .unwrap();
             let preview = plan.preview();
@@ -286,6 +290,7 @@ fn a_foreign_store_is_never_deleted_by_the_bridge() {
         &desktop,
         not_the_user_home(),
         ClientBinding::Unbound,
+        false,
     )
     .unwrap();
     let preview = plan.preview();
@@ -323,6 +328,7 @@ fn an_insecure_old_key_scopes_the_home_like_a_refused_store() {
         &desktop,
         not_the_user_home(),
         ClientBinding::Unbound,
+        false,
     )
     .unwrap()
     .preview();
@@ -369,6 +375,7 @@ fn the_store_lock_neither_moves_nor_changes_the_confirmation() {
         &desktop,
         not_the_user_home(),
         ClientBinding::Unbound,
+        false,
     )
     .unwrap()
     .preview();
@@ -381,6 +388,7 @@ fn the_store_lock_neither_moves_nor_changes_the_confirmation() {
         &desktop,
         not_the_user_home(),
         ClientBinding::Unbound,
+        false,
     )
     .unwrap();
     locked
@@ -420,6 +428,7 @@ async fn an_opener_cannot_create_the_store_while_a_storeless_home_is_retired() {
         &desktop,
         not_the_user_home(),
         ClientBinding::Unbound,
+        false,
     )
     .unwrap();
     let preview = plan.preview();
@@ -477,7 +486,8 @@ fn broad_roots_are_never_retired() {
                 None,
                 &desktop,
                 &user_home,
-                ClientBinding::Unbound
+                ClientBinding::Unbound,
+                false
             )
             .unwrap_err()
             .code,
@@ -492,7 +502,8 @@ fn broad_roots_are_never_retired() {
             None,
             &desktop,
             &user_home,
-            ClientBinding::Unbound
+            ClientBinding::Unbound,
+            false
         )
         .unwrap_err()
         .code,
@@ -510,7 +521,8 @@ fn broad_roots_are_never_retired() {
                 None,
                 &desktop,
                 &aliased,
-                ClientBinding::Unbound
+                ClientBinding::Unbound,
+                false
             )
             .unwrap_err()
             .code,
@@ -539,6 +551,7 @@ fn a_store_from_another_build_is_not_reported_as_older() {
         &desktop,
         not_the_user_home(),
         ClientBinding::Unbound,
+        false,
     )
     .unwrap()
     .preview();
@@ -561,7 +574,8 @@ fn reset_rejects_healthy_store_wrong_confirmation_and_unknown_endpoint() {
             None,
             &desktop,
             not_the_user_home(),
-            ClientBinding::Unbound
+            ClientBinding::Unbound,
+            false
         )
         .unwrap_err()
         .code,
@@ -576,6 +590,7 @@ fn reset_rejects_healthy_store_wrong_confirmation_and_unknown_endpoint() {
         &desktop,
         not_the_user_home(),
         ClientBinding::Unbound,
+        false,
     )
     .unwrap();
     assert_eq!(
@@ -634,7 +649,8 @@ fn reset_rejects_symlinked_homes_and_stores() {
             None,
             &desktop,
             not_the_user_home(),
-            ClientBinding::Unbound
+            ClientBinding::Unbound,
+            false
         )
         .unwrap_err()
         .code,
@@ -649,7 +665,8 @@ fn reset_rejects_symlinked_homes_and_stores() {
             None,
             &desktop,
             not_the_user_home(),
-            ClientBinding::Unbound
+            ClientBinding::Unbound,
+            false
         )
         .unwrap_err()
         .code,

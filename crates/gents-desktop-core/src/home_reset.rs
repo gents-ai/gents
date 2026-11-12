@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
 use crate::preference::{StoredManagedServer, MANAGED_SERVER_CONFIG};
-const ARCHIVE_CONSEQUENCE: &str = "The selected local state is moved into a timestamped backup. The desktop User identity, key custody, and saved peers are retained.";
+const ARCHIVE_CONSEQUENCE: &str = "The selected local state is moved into a timestamped backup. The desktop User identity, key custody, and saved peers other than the pairing with this node are retained.";
 const DELETE_CONSEQUENCE: &str =
-    "The selected local state is permanently deleted. The desktop User identity, key custody, and saved peers are retained.";
+    "The selected local state is permanently deleted. The desktop User identity, key custody, and saved peers other than the pairing with this node are retained.";
 const FULL_ARCHIVE_CONSEQUENCE: &str = "The managed home, client state and service definition are backed up. Browser storage and caches are permanently cleared and are not included in the backup.";
 const FULL_DELETE_CONSEQUENCE: &str = "The managed home, client state and service definition are permanently deleted. Browser storage and caches are permanently cleared.";
 
@@ -57,6 +57,45 @@ pub struct ManagedServerResetResult {
     pub browser_paths: Vec<String>,
     /// Browser data whose native clearing completed during this reset.
     pub cleared_browser_paths: Vec<String>,
+    /// Why this home is in scope, so the screen explains the right thing.
+    pub reason: HomeResetReason,
+    /// Pairings this desktop dropped because the node they name was retired.
+    pub retired_pairings: u32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub enum HomeResetReason {
+    /// A store this version refuses to open.
+    IncompatibleStore,
+    /// A home whose provisioning committed a node name but never served or
+    /// paired, so there is nothing of the person's in it yet.
+    UnfinishedSetup,
+    /// An explicit reset of everything Gents keeps on this computer.
+    FullReset,
+}
+
+/// A home whose provisioning committed a node name but never served or paired.
+/// `runtime.json` is written only by a serving runtime and removed only by an
+/// explicit reset, so its absence, with `init.json` present and no peer record
+/// naming the node, is evidence that no start ever completed.
+pub fn local_setup_unfinished<'a, I>(
+    node_home: &Path,
+    node_did: Option<&str>,
+    peer_node_dids: I,
+) -> bool
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let Some(node_did) = node_did.map(str::trim).filter(|did| !did.is_empty()) else {
+        return false;
+    };
+    gents_store::local::home::init_config_path(node_home).is_file()
+        && !node_home
+            .join(gents_store::local::home::RUNTIME_STATE_FILE_NAME)
+            .exists()
+        && !peer_node_dids.into_iter().any(|peer| peer == node_did)
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, TS)]
@@ -176,6 +215,8 @@ pub struct HomeResetPlan {
     browser_entries: Vec<PathBuf>,
     /// The decoded records that prove each root is Gents'; retired last.
     ownership_records: Vec<PathBuf>,
+    /// The home is in scope because its provisioning never finished.
+    unfinished_setup: bool,
 }
 
 /// Keychain custody outlives filesystem retirement. Its record stays until
@@ -354,6 +395,7 @@ pub fn plan_home_reset(
     desktop_paths: &crate::client::DesktopPaths,
     user_home: &Path,
     binding: ClientBinding,
+    unfinished_setup: bool,
 ) -> Result<HomeResetPlan, BridgeError> {
     plan_reset(
         runtime_home,
@@ -362,7 +404,10 @@ pub fn plan_home_reset(
         desktop_paths,
         user_home,
         binding,
-        false,
+        ResetScope {
+            full_reset: false,
+            unfinished_setup,
+        },
     )
 }
 
@@ -383,7 +428,10 @@ pub fn plan_full_reset(
         desktop_paths,
         user_home,
         ClientBinding::Unbound,
-        true,
+        ResetScope {
+            full_reset: true,
+            unfinished_setup: false,
+        },
     )?;
     let mut paths = vec![("service", service_definition.to_path_buf())];
     if cfg!(target_os = "macos") {
@@ -459,6 +507,13 @@ pub fn plan_full_reset(
     Ok(plan)
 }
 
+/// Why a home is in scope beyond a store this version refuses.
+#[derive(Debug, Clone, Copy)]
+struct ResetScope {
+    full_reset: bool,
+    unfinished_setup: bool,
+}
+
 fn plan_reset(
     runtime_home: Option<&Path>,
     runtime_store: Option<gents_store::local::storage_backend::IncompatibleStore>,
@@ -466,8 +521,12 @@ fn plan_reset(
     desktop_paths: &crate::client::DesktopPaths,
     user_home: &Path,
     binding: ClientBinding,
-    full_reset: bool,
+    scope: ResetScope,
 ) -> Result<HomeResetPlan, BridgeError> {
+    let ResetScope {
+        full_reset,
+        unfinished_setup,
+    } = scope;
     let inspect = |path: &Path| {
         gents_store::local::storage_backend::incompatible_store_kind(path).map_err(|error| {
             BridgeError::new(
@@ -525,6 +584,7 @@ fn plan_reset(
         // runtime on a store that may not open.
         full_reset
             || store.is_some()
+            || (unfinished_setup && gents_store::local::home::init_config_path(home).is_file())
             || (client.is_some()
                 && binding == ClientBinding::BoundToHome
                 && gents_store::local::home::init_config_path(home).is_file())
@@ -715,7 +775,13 @@ fn plan_reset(
     delete_home_entries.sort();
     delete_home_entries.dedup();
     if let Some((home, _)) = runtime.as_ref().filter(|_| full_reset && !initialized) {
-        if let Some(entry) = delete_home_entries.first() {
+        // Unlike the other owned entries, the reservation's name never occurs
+        // in a user project, so it needs no init.json to be shown to belong to
+        // Gents and never stands as the evidence this refusal reports.
+        if let Some(entry) = delete_home_entries.iter().find(|entry| {
+            entry.file_name().and_then(std::ffi::OsStr::to_str)
+                != Some(gents_store::local::home::NODE_BOOTSTRAP_CONSUMED_FILE_NAME)
+        }) {
             return Err(BridgeError::new(
                 BridgeErrorCode::InvalidArgument,
                 format!(
@@ -773,6 +839,7 @@ fn plan_reset(
         host_entries: Vec::new(),
         browser_entries: Vec::new(),
         ownership_records: home_record.into_iter().chain(ownership_records).collect(),
+        unfinished_setup,
     })
 }
 
@@ -956,6 +1023,14 @@ impl HomeResetPlan {
                 ARCHIVE_CONSEQUENCE
             }
             .into(),
+            reason: if self.full_reset {
+                HomeResetReason::FullReset
+            } else if self.unfinished_setup && self.refused_stores().next().is_none() {
+                HomeResetReason::UnfinishedSetup
+            } else {
+                HomeResetReason::IncompatibleStore
+            },
+            retired_pairings: 0,
             completed: false,
             disposition: None,
             backup_path: None,
@@ -1467,7 +1542,16 @@ mod tests {
             let plan = if full {
                 plan_full_reset(Some(&home), &desktop, &user, &service).unwrap()
             } else {
-                plan_home_reset(None, None, None, &desktop, &user, ClientBinding::Orphaned).unwrap()
+                plan_home_reset(
+                    None,
+                    None,
+                    None,
+                    &desktop,
+                    &user,
+                    ClientBinding::Orphaned,
+                    false,
+                )
+                .unwrap()
             };
             let binding = desktop.root().join(MANAGED_SERVER_CONFIG);
             let path = match case["asset"].as_str().unwrap() {
@@ -1974,6 +2058,7 @@ mod tests {
                 &desktop,
                 &user,
                 ClientBinding::Unbound,
+                false,
             )
             .is_err());
             assert!(home.join("plugins/work/mine.txt").is_file());

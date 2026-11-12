@@ -57,7 +57,12 @@ where
         request.tool_root.as_deref(),
         stored.as_ref(),
     )?;
-    refuse_renaming_home(&node_home, node_name).await?;
+    refuse_renaming_home(
+        &node_home,
+        node_name,
+        super::reset::unfinished_local_setup(state, Some(&node_home)).await,
+    )
+    .await?;
     gents_store::local::home::ensure_home_identity_can_serve(&node_home).map_err(|error| {
         BridgeError::untyped(gents_protocol::error_chain::ErrorChain(&error).to_string())
     })?;

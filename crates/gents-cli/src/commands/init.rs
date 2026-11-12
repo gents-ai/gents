@@ -519,9 +519,11 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
 }
 
 /// A consumed marker is never removed by ordinary initialization; an
-/// ambiguous or interrupted grant attempt cannot become a fresh attempt.
+/// ambiguous or interrupted grant attempt cannot become a fresh attempt. Only a
+/// locked retirement that moves the store retires the reservation with it, so a
+/// home that was backed up or deleted can be provisioned again.
 async fn reserve_fresh_bootstrap(home: &Path) -> Result<()> {
-    let marker = home.join(".node-bootstrap-consumed");
+    let marker = home.join(gents_store::local::home::NODE_BOOTSTRAP_CONSUMED_FILE_NAME);
     let file = tokio::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -1950,7 +1952,8 @@ mod tests {
             "the init User administers the identity-only node"
         );
         assert!(
-            home.join(".node-bootstrap-consumed").exists(),
+            home.join(gents_store::local::home::NODE_BOOTSTRAP_CONSUMED_FILE_NAME)
+                .exists(),
             "the bootstrap reservation is consumed"
         );
     }
@@ -2891,10 +2894,44 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");
         fs::create_dir_all(&home).unwrap();
-        fs::write(home.join(".node-bootstrap-consumed"), b"").unwrap();
+        fs::write(
+            home.join(gents_store::local::home::NODE_BOOTSTRAP_CONSUMED_FILE_NAME),
+            b"",
+        )
+        .unwrap();
         let error = initialize_disposable_home(&home, false).await.unwrap_err();
         assert!(format!("{error:#}").contains("bootstrap was already attempted"));
         assert!(!default_data_dir(&home).join("MANIFEST").exists());
+    }
+
+    #[tokio::test]
+    async fn provisioning_succeeds_after_a_home_was_archived() {
+        use gents_store::local::home::{
+            home_entries, retire_entries, RetireDisposition, RetireGroup,
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let temp = fs::canonicalize(temp.path()).unwrap();
+        let home = temp.join("home");
+        fs::create_dir_all(&home).unwrap();
+        initialize_disposable_home(&home, false).await.unwrap();
+        let owned = home_entries(&home, &[]).unwrap().owned;
+        let backup = temp.join("backup");
+        retire_entries(
+            &[RetireGroup {
+                name: "home",
+                entries: &owned,
+            }],
+            RetireDisposition::Archive { backup: &backup },
+        )
+        .unwrap();
+        let again = initialize_disposable_home(&home, false)
+            .await
+            .expect("a retired home reserves a fresh bootstrap again");
+        assert_eq!(again["status"], "initialized");
+        assert!(backup
+            .join("home")
+            .join(gents_store::local::home::NODE_BOOTSTRAP_CONSUMED_FILE_NAME)
+            .exists());
     }
 
     #[tokio::test]

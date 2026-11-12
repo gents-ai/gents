@@ -32,6 +32,9 @@ pub enum BridgeErrorCode {
     PathEscapesRoot,
     Backend,
     IncompatibleLocalStore,
+    /// A local home this computer provisioned but never finished starting, so
+    /// the requested name was not created. Continue with it or start over.
+    UnfinishedLocalSetup,
     Pairing,
     CredentialNotSaved,
     RuntimeStillBooting,
@@ -61,6 +64,7 @@ impl BridgeErrorCode {
             Self::PathEscapesRoot => "pathEscapesRoot",
             Self::Backend => "backend",
             Self::IncompatibleLocalStore => "incompatibleLocalStore",
+            Self::UnfinishedLocalSetup => "unfinishedLocalSetup",
             Self::Pairing => "pairing",
             Self::CredentialNotSaved => "credentialNotSaved",
             Self::RuntimeStillBooting => "runtimeStillBooting",

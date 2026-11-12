@@ -1050,3 +1050,40 @@ fn dropping_the_store_lock_releases_it_even_before_a_forked_child_execs() {
     drop(reacquired);
     lock_store(temp.path(), &data).expect("the new owner released its lock");
 }
+
+#[test]
+fn archive_moves_the_bootstrap_reservation_with_the_store() {
+    let temp = tempfile::tempdir().unwrap();
+    let home = temp.path().join("home");
+    write(&home.join("data/MANIFEST"), "store");
+    write(&home.join("init.json"), "{}");
+    write(&home.join(NODE_BOOTSTRAP_CONSUMED_FILE_NAME), "");
+    write(&home.join(SERVICE_UPDATES_DIR_NAME).join("receipt"), "kept");
+    write(&home.join("data.lock"), "");
+    let entries = home_entries(&home, &[]).unwrap();
+    assert!(
+        entries
+            .owned
+            .contains(&home.join(NODE_BOOTSTRAP_CONSUMED_FILE_NAME)),
+        "{:#?}",
+        entries
+    );
+
+    let backup = temp.path().join("home-backup");
+    retire_entries(
+        &[RetireGroup {
+            name: "home",
+            entries: &entries.owned,
+        }],
+        RetireDisposition::Archive { backup: &backup },
+    )
+    .unwrap();
+
+    assert!(backup
+        .join("home")
+        .join(NODE_BOOTSTRAP_CONSUMED_FILE_NAME)
+        .exists());
+    assert!(!home.join(NODE_BOOTSTRAP_CONSUMED_FILE_NAME).exists());
+    assert!(home.join(SERVICE_UPDATES_DIR_NAME).join("receipt").exists());
+    assert!(home.join("data.lock").exists());
+}

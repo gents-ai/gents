@@ -232,6 +232,7 @@ mod tests {
                 diagnostics_hint: "native logging".into(),
                 node_home_exists: true,
                 client_state_exists: true,
+                local_setup_unfinished: false,
                 saved_peers: vec![SavedPeerView {
                     peer_id: "peer_1".into(),
                     label: "Remote".into(),

@@ -381,11 +381,21 @@ pub const UX_PREVIEW_DIR_NAME: &str = "ux-preview";
 /// that window has `init.json` but no default agent, and a service started on it exits at once
 /// and is restarted forever.
 pub const INIT_PENDING_FILE_NAME: &str = "init-pending";
+/// The one-shot bootstrap reservation the CLI writes before a fresh home may
+/// grant itself authority. Ordinary initialization never clears it, so an
+/// ambiguous or interrupted grant cannot become a fresh attempt; only a locked
+/// retirement that moves the store itself retires the reservation with it, so a
+/// bootstrap after retirement observes a genuinely fresh store. A retirement
+/// interrupted after the reservation moves but before the data directory does
+/// leaves a home whose initialization fails on the non-empty store it finds
+/// rather than bootstrapping again.
+pub const NODE_BOOTSTRAP_CONSUMED_FILE_NAME: &str = ".node-bootstrap-consumed";
 
 pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
     DATA_DIR_NAME,
     INIT_CONFIG_FILE_NAME,
     INIT_PENDING_FILE_NAME,
+    NODE_BOOTSTRAP_CONSUMED_FILE_NAME,
     KEYS_DIR_NAME,
     RUNTIME_STATE_FILE_NAME,
     NETWORK_CONFIG_FILE_NAME,
@@ -423,10 +433,7 @@ pub const RUNTIME_HOME_LOCK_FILES: &[&str] = &[
 /// cold backups across retirement of live node state. Moving these paths on
 /// reset would strand a running helper; it authenticates the node/build again
 /// before retirement, so retained receipts confer no authority on a fresh node.
-/// The node bootstrap marker stays across retirement, so a retired home cannot
-/// become a fresh bootstrap attempt; the CLI writes it outside this owner.
-pub const RUNTIME_HOME_RETAINED_ENTRIES: &[&str] =
-    &[SERVICE_UPDATES_DIR_NAME, ".node-bootstrap-consumed"];
+pub const RUNTIME_HOME_RETAINED_ENTRIES: &[&str] = &[SERVICE_UPDATES_DIR_NAME];
 
 pub fn default_data_dir(home_dir: &Path) -> PathBuf {
     home_dir.join(DATA_DIR_NAME)

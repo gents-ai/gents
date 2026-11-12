@@ -24,6 +24,7 @@ export type IncompatibleHome = {
   fullReset: boolean;
   canReset: boolean;
   previewReset: () => Promise<void>;
+  startOver: () => Promise<void>;
   cancel: () => void;
   generation: number;
   adopt: (error: unknown) => Promise<boolean>;
@@ -86,6 +87,19 @@ export function createIncompatibleHomeOps({
     try {
       const report = await api.resetManagedServer(undefined, undefined, true);
       setHome({ report, fullReset: true });
+    } catch (error) {
+      setError(errorText(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function startOver() {
+    if (!api.resetManagedServer || home().busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setHome({ report: await api.resetManagedServer(), fullReset: false });
     } catch (error) {
       setError(errorText(error));
     } finally {
@@ -158,6 +172,7 @@ export function createIncompatibleHomeOps({
     adopt,
     canReset: Boolean(api.resetManagedServer),
     previewReset,
+    startOver,
     cancel,
     backUp: () => retire("archive"),
     remove: () => retire("delete"),

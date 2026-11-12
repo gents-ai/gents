@@ -56,6 +56,7 @@ const BRIDGE_ERROR_CODES: Record<BridgeErrorCode, true> = {
   pathEscapesRoot: true,
   backend: true,
   incompatibleLocalStore: true,
+  unfinishedLocalSetup: true,
   pairing: true,
   credentialNotSaved: true,
   runtimeStillBooting: true,

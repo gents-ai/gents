@@ -195,6 +195,8 @@ export function OnboardingWizard({
     bootstrap?.initNodeName?.trim() || DEFAULT_NODE_NAME,
   );
   const existingName = existingHome ? bootstrap?.initNodeName?.trim() || null : null;
+  /* a home whose provisioning committed this name but never started it */
+  const unfinishedName = bootstrap?.localSetupUnfinished ? existingName : null;
   const nodeName = existingName ?? name;
   const [avatar, setAvatar] = useState<string | null>(null);
   /* until one is picked, the portrait rolls to the name's once typing pauses */
@@ -537,6 +539,30 @@ export function OnboardingWizard({
               }
               icon={Server}
             >
+              {unfinishedName ? (
+                <div className="grid gap-2" data-testid="setup-unfinished-home">
+                  <p className="text-sm font-medium text-heading">
+                    An earlier setup on this computer didn’t finish.
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    A node home named {unfinishedName} was created at{" "}
+                    <span className="font-mono break-all">{root}</span>, but it never
+                    started.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button disabled={busy} onClick={() => void createNode()}>
+                      Continue with {unfinishedName}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      disabled={busy || !incompatibleHome?.canReset}
+                      onClick={() => void incompatibleHome?.startOver()}
+                    >
+                      Start over with a new name
+                    </Button>
+                  </div>
+                </div>
+              ) : (
               <div className="flex items-center gap-4">
                 <AvatarRoll
                   rollId={NAMING}
@@ -570,6 +596,7 @@ export function OnboardingWizard({
                   </Field>
                 </div>
               </div>
+              )}
               <p className="text-xs text-muted-foreground">
                 Continuing connects this desktop and grants it access to the local node.
               </p>

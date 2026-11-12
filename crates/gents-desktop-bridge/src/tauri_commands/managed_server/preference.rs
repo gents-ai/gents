@@ -30,9 +30,13 @@ pub(super) async fn read_initialized_name(node_home: &std::path::Path) -> Option
         })
 }
 
+/// `unfinished` is the home_reset owner's judgement that this home never
+/// served or paired; the name it holds is then this computer's own abandoned
+/// attempt, not another Node.
 pub(super) async fn refuse_renaming_home(
     node_home: &std::path::Path,
     requested: &str,
+    unfinished: bool,
 ) -> Result<(), BridgeError> {
     if !gents_service::server_host::initialized_home(node_home) {
         return Ok(());
@@ -42,18 +46,27 @@ pub(super) async fn refuse_renaming_home(
         return Ok(());
     }
     let requested = requested.trim();
-    Err(BridgeError::new(
-        BridgeErrorCode::InvalidArgument,
-        match initialized {
-            Some(name) => format!(
+    Err(match (initialized, unfinished) {
+        (Some(name), true) => BridgeError::new(
+            BridgeErrorCode::UnfinishedLocalSetup,
+            format!(
+                "The setup that created {name} here never finished, so {requested} was not created. Continue with {name}, or start over and back {name}'s home up."
+            ),
+        ),
+        (Some(name), false) => BridgeError::new(
+            BridgeErrorCode::InvalidArgument,
+            format!(
                 "This computer already has a local Node named {name}, so {requested} was not created. Go back to continue with {name}."
             ),
-            None => format!(
+        ),
+        (None, _) => BridgeError::new(
+            BridgeErrorCode::InvalidArgument,
+            format!(
                 "The local node home at {} has no readable node name; it was left unchanged.",
                 node_home.display()
             ),
-        },
-    ))
+        ),
+    })
 }
 
 fn name_confirmed_by_home(requested: &str, initialized: Option<&str>) -> bool {

@@ -502,7 +502,12 @@ where
             "managed server requires a local node home",
         )
     })?;
-    refuse_renaming_home(&node_home, &request.node_name).await?;
+    refuse_renaming_home(
+        &node_home,
+        &request.node_name,
+        reset::unfinished_local_setup(state, Some(&node_home)).await,
+    )
+    .await?;
     let lifecycle = lock_lifecycle_superseding_start(state).await;
     ensure_app_not_quitting(state)?;
     let managed_selection = run_native(native_service(app, state)?, |service| {
