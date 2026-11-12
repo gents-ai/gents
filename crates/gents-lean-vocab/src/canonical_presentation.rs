@@ -1,68 +1,8 @@
-use serde::Deserialize;
-
 use super::canonical_execution::ExecutionFuture;
-use super::canonical_output::{
-    LeanCanonicalMessage, LeanCanonicalSegment, LeanPayloadSpec, LeanPresentation,
-};
+use super::canonical_output::LeanCanonicalMessage;
+use crate::generated::*;
 
 pub mod native_adapter;
-
-/// Payload presentation before provider-specific projection. These byte counts
-/// exclude metadata, escaping, media URLs and request structure; they are neither
-/// serialized request sizes nor token estimates. The existing provider_input
-/// owner must still project and estimate the complete request.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPayloadPresentationCase {
-    pub name: String,
-    pub segments: Vec<LeanCanonicalSegment>,
-    pub message: LeanCanonicalMessage<LeanPayloadSpec>,
-    /// `None` when the message cannot be reconstructed.
-    pub expected: Option<LeanPayloadLengths>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPayloadLengths {
-    pub stored_payload_bytes: u64,
-    pub presented_payload_bytes: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTerminalDiagnosticPresentationCase {
-    pub name: String,
-    pub raw: Vec<u8>,
-    pub cause: Vec<u8>,
-    pub tail_budget: u64,
-    pub expected: LeanTerminalDiagnosticPresentationExpected,
-}
-
-/// `Conformance.TerminalDiagnosticReplayContracts`: whether a stored
-/// interrupted-call diagnostic replays under a (possibly changed) budget.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanTerminalDiagnosticReplayCase {
-    pub name: String,
-    pub raw: Vec<u8>,
-    pub cause: Vec<u8>,
-    pub configured_budget: u64,
-    pub stored: LeanPresentation,
-    pub accepted: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanTerminalDiagnosticPresentationExpected {
-    Ok {
-        presentation: LeanPresentation,
-        rendered: Vec<u8>,
-    },
-    InvalidUtf8,
-    UnexpectedError {
-        error: String,
-    },
-}
 
 /// Deliberately not an adapter for provider_input::estimate_request.
 pub trait PayloadPresentationAdapter {

@@ -1,35 +1,5 @@
-use serde::Deserialize;
-
 use super::ExecutionFuture;
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRebuiltProjectionInput {
-    pub checkpoint: usize,
-    pub retained_suffix: Vec<usize>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanCompactionProjectionJoinCase {
-    pub name: String,
-    pub source: Vec<usize>,
-    pub context_window: usize,
-    pub threshold_basis_points: usize,
-    pub configured_max_output_tokens: usize,
-    pub can_fit: bool,
-    pub prefix_length: usize,
-    pub checkpoint: usize,
-    pub initial_projection_succeeds: bool,
-    pub initial_estimate_tokens: Option<usize>,
-    pub rebuild_succeeds: bool,
-    pub rebuilt_estimate_tokens: Option<usize>,
-    pub initial_projection_input: Vec<usize>,
-    pub rebuilt_projection_input: Option<LeanRebuiltProjectionInput>,
-    pub result: String,
-    pub output_tokens: Option<usize>,
-    pub committed_reductions: usize,
-}
+use crate::generated::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompactionProjectionJoinInput<'a> {

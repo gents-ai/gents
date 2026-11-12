@@ -1,48 +1,6 @@
-use super::*;
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSessionDocumentCases {
-    pub starter_verification: Vec<serde_json::Value>,
-    pub archive: Vec<serde_json::Value>,
-    pub document_reference_encoding: String,
-    pub selection: Vec<serde_json::Value>,
-    pub projection: Vec<serde_json::Value>,
-    pub retry: Vec<serde_json::Value>,
-    pub fork: Vec<serde_json::Value>,
-    pub edit_anchors: Vec<serde_json::Value>,
-    pub edit_fork_bindings: Vec<serde_json::Value>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanBudgetRehydrationCase {
-    pub name: String,
-    pub request_doc_id: String,
-    pub pinned_limit: Option<u64>,
-    pub rows: Vec<LeanDurableUsageRow>,
-    pub ledger: Option<LeanRehydratedBudget>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanDurableUsageRow {
-    pub request_doc_id: String,
-    pub kind: String,
-    pub prompt_tokens: u64,
-    pub completion_tokens: u64,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRehydratedBudget {
-    pub limit: u64,
-    pub used: u64,
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::*;
     use gents_protocol::timeline::{
         build_timeline_order, OverlayInput, OverlayPlacement, PendingInput, PendingPlacement,
         TimelineMessageInput, TimelineRole, TimelineSlot,

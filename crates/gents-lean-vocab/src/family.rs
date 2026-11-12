@@ -1,25 +1,10 @@
 use std::collections::BTreeMap;
 
 use serde::de::DeserializeOwned;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 
 const CHECKED_IN_SCHEMA: &str = include_str!("../families.schema.json");
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanFamily {
-    pub input: Value,
-    pub output: Value,
-    pub cases: Vec<LeanFamilyCase>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanFamilyCase {
-    pub input: Value,
-    pub expected: Value,
-}
 
 fn live_schema() -> BTreeMap<&'static str, BTreeMap<&'static str, Value>> {
     let snapshot = crate::lean_contract_snapshot();
