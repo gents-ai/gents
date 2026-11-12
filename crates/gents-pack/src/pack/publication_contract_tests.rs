@@ -4,7 +4,8 @@ use super::plugin_lifecycle::{install, tests::fixture};
 
 #[tokio::test]
 async fn generated_local_publication_survives_notification_outcomes() {
-    for case in gents_lean_vocab::families::plugin_resources_publication::cases::<String, String>() {
+    for case in gents_lean_vocab::families::plugin_resources_publication::cases::<String, String>()
+    {
         let home = tempfile::tempdir().unwrap();
         let (_previous_dir, _, previous) = fixture("1.0.0", false);
         if case.input.previous {

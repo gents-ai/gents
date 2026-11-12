@@ -3119,7 +3119,6 @@ pub struct LeanContractSnapshot {
     pub workspace_command_grant_revocations: Vec<serde_json::Value>,
     pub workspace_permission_write_cases: Vec<LeanWorkspacePermissionWriteCase>,
     pub workspace_permission_cases: Vec<serde_json::Value>,
-    pub operator_path_cases: Vec<serde_json::Value>,
     pub access_review_task_cases: Vec<LeanAccessReviewTaskCase>,
     pub plugin_approval_cases: Vec<LeanPluginApprovalCase>,
     pub goal_objective_whitespace_codepoints: Vec<u32>,

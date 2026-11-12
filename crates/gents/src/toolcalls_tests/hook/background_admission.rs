@@ -190,18 +190,10 @@ async fn background_commands_keep_workspace_consent_after_dispatch() {
             &case["expectedRoute"]
         };
         let supported = gents_session::workspace::sandbox::workspace_write_sandbox_enforced();
-        let guard_case = gents_lean_vocab::lean_contract_snapshot()
-            .operator_path_cases
-            .iter()
-            .find(|case| {
-                case["kind"] == "commandGuard"
-                    && case["command"]["required"] == true
-                    && case["command"]["supported"] == supported
-                    && case["command"]["inspected"] == true
-                    && case["command"]["singleLinked"] == true
-            })
-            .expect("missing command isolation case");
-        let allowed = expected == "allow" && guard_case["expected"] == true;
+        let allowed = expected == "allow"
+            && gents_loop::tool_policy::operator_paths::command_guard_allows(
+                true, supported, true, true,
+            );
         let mut harness = admission_harness(|_, root, _, _| {
             BackgroundToolRegistry::from_tools(
                 vec![gents_tools::native::write_capable_bash_for_test(root)],

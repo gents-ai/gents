@@ -68,7 +68,11 @@ fn network_admission_follows_the_lean_model() {
         };
         let grant = net_grant(&net).unwrap();
         let url = Url::parse(&i.url).unwrap();
-        let addrs: Vec<IpAddr> = i.addresses.iter().map(|addr| addr.parse().unwrap()).collect();
+        let addrs: Vec<IpAddr> = i
+            .addresses
+            .iter()
+            .map(|addr| addr.parse().unwrap())
+            .collect();
         let admitted = admit(&grant, &url, PLUGIN);
         if let Ok(admission) = &admitted {
             if let Some(literal) = admission.literal {
