@@ -46,6 +46,12 @@ pub struct RegistryClient {
     http: reqwest::Client,
 }
 
+/// One download request at a time per process. The registry throttles
+/// downloads per client address by rewriting one record on each request and
+/// answers 500 to requests from one address that overlap on it; the record is
+/// settled by the time the response headers arrive.
+static DOWNLOAD_TURN: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 impl RegistryClient {
     pub fn new(base_url: String) -> Self {
         Self {
@@ -160,12 +166,14 @@ impl RegistryClient {
     ) -> Result<String> {
         use sha2::{Digest, Sha256};
         let url = self.api_url(&["packs", namespace, name, version, "download"])?;
-        let mut response = self
-            .http
-            .get(url.clone())
-            .send()
-            .await
-            .map_err(|source| self.unreachable(source))?;
+        let mut response = {
+            let _turn = DOWNLOAD_TURN.lock().await;
+            self.http
+                .get(url.clone())
+                .send()
+                .await
+                .map_err(|source| self.unreachable(source))?
+        };
         let status = response.status();
         anyhow::ensure!(
             status.is_success(),
