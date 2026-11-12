@@ -292,13 +292,12 @@ async fn observed(fixture: &Fixture) -> (String, Vec<serde_json::Value>) {
     )
 }
 
-fn model(name: &str) -> serde_json::Value {
+fn model(name: &str) -> &'static gents_lean_vocab::LeanDelegatedFinalityCase {
     gents_lean_vocab::lean_contract_snapshot()
         .delegated_finality_cases
         .iter()
-        .find(|case| case["name"] == name)
+        .find(|case| case.name == name)
         .unwrap()
-        .clone()
 }
 
 #[tokio::test]
@@ -350,7 +349,7 @@ async fn competing_failure_and_child_commit_obey_the_native_compare() {
             release.notify_one();
             assert!(child.await.is_err());
             let (state, children) = observed(&fixture).await;
-            assert_eq!(expected["expected_native"], "failure_committed");
+            assert_eq!(expected.expected_native, "failure_committed");
             assert_eq!(state, "failed");
             assert!(children.is_empty());
         } else {
@@ -361,7 +360,7 @@ async fn competing_failure_and_child_commit_obey_the_native_compare() {
                 .await
                 .is_err());
             let (state, children) = observed(&fixture).await;
-            assert_eq!(expected["expected_native"], "child_committed");
+            assert_eq!(expected.expected_native, "child_committed");
             assert_eq!(state, "running");
             assert_eq!(children.len(), 1);
             assert_eq!(children[0]["_docID"], receipt.request_doc_id);
@@ -392,7 +391,7 @@ async fn lost_commit_ack_recovers_the_exact_child_receipt() {
     );
     let receipt = result.unwrap();
     let (state, children) = observed(&fixture).await;
-    assert_eq!(expected["expected_knowledge"], "confirmed");
+    assert_eq!(expected.expected_knowledge, "confirmed");
     assert_eq!(state, "running");
     assert_eq!(children.len(), 1);
     assert_eq!(children[0]["_docID"], receipt.request_doc_id);
