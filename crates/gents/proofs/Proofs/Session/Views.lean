@@ -20,7 +20,7 @@ def callerVisible (readable sameRequester : Bool) : Bool :=
 theorem caller_visible_requires_reader_scope (readable sameRequester : Bool)
     (included : callerVisible readable sameRequester = true) :
     readable = true ∧ sameRequester = true := by
-  exact Bool.and_eq_true.mp included
+  simpa only [callerVisible, Bool.and_eq_true] using included
 
 def rows (source : List Row) (includeArchived : Bool) : List Row :=
   source.filter fun row =>
