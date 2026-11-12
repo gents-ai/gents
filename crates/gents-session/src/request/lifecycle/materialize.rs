@@ -1494,9 +1494,7 @@ mod session_provenance_tests {
 
     #[test]
     fn task_provenance_matches_generated_opening_cases() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot()
-            .session_document_cases
-            .projection;
+        let cases = &gents_lean_vocab::lean_contract_snapshot().session_document_projection_cases;
         let cases: Vec<_> = cases
             .iter()
             .filter(|case| case["operation"] == "task_opening")

@@ -1205,7 +1205,7 @@ mod paging_coverage_tests {
     #[test]
     fn paged_pending_prompt_uses_lean_read_coverage() {
         let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases = contract["session_document_cases"]["projection"]
+        let cases = contract["session_document_projection_cases"]
             .as_array()
             .unwrap();
         let mut count = 0;

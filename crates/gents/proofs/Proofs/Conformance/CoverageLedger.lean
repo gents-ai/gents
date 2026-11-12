@@ -2518,16 +2518,16 @@ def caseCoverage : List CoverageEntry :=
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage "session_reply_preview_cases" "SessionReplyPreviewCases")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp "session_document_cases" "SessionDocumentCases"
+  , tagged (consumerWithFollowUp "session_document_projection_cases" "SessionDocumentCases"
       "Generated pending timeline cases bind physical identity, admission order, same or following request anchors, hidden or missing anchor fallback, tool-first replication, orphan groups and overlay ownership to the shared protocol ordering owner. Durable request lookup and authored-message suppression remain bridge-owner obligations.")
       "client-shell" [Surface.runtimeInternal]
-  , tagged (consumerCoverage "session_document_cases" "SessionDocumentCases")
+  , tagged (consumerCoverage "session_document_selection_cases" "SessionDocumentCases")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (consumerCoverage "session_document_cases" "SessionDocumentCases")
+  , tagged (consumerCoverage "session_document_fork_cases" "SessionDocumentCases")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (consumerCoverage "session_document_cases" "SessionDocumentCases")
+  , tagged (consumerCoverage "session_document_archive_cases" "SessionDocumentCases")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "session_document_cases" "SessionDocumentCases"
+  , tagged (followUpCoverage "session_document_retry_cases" "SessionDocumentCases"
       "Canonical session DB/lifecycle and fork tests specify target behavior; the generated interned-ID selection/projection/retry/fork rows still need real-owner adapters, including exact physical references and transactional freshness. No fixture-local state machine may substitute.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (followUpCoverage "background_wake_row_cases" "BackgroundWakeRowCases"

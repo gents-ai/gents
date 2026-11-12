@@ -27,7 +27,7 @@ fn check_receipt(
     expected_revision: u64,
     archived: bool,
 ) -> u64 {
-    let case = contract["session_document_cases"]["archive"]
+    let case = contract["session_document_archive_cases"]
         .as_array()
         .unwrap()
         .iter()
