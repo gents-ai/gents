@@ -904,8 +904,8 @@ def caseCoverage : List CoverageEntry :=
       "contracts_snapshot_demotion")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "startup_readiness_cases"
-      "StartupReadinessCases")
+      "family"
+      "contracts_startup_readiness")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"

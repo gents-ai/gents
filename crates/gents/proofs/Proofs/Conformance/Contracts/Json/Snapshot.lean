@@ -805,8 +805,6 @@ def snapshotClientCasesJson : String :=
     ++ "\"pack_finality_cases\":" ++ PackInstallation.finalityCasesJson ++ ","
     ++ "\"hosted_plugin_cases\":" ++ PackInstallation.hostedPluginCasesJson ++ ","
     ++ "\"pack_eval_subject_cases\":" ++ PackInstallation.evalSubjectCasesJson ++ ","
-    ++ "\"startup_readiness_cases\":"
-      ++ startupReadinessCasesJson ++ ","
     ++ "\"runtime_session_selection_cases\":" ++ sessionSelectionCasesJson ++ ","
     ++ "\"runtime_configuration_admission_cases\":" ++ configurationAdmissionCasesJson ++ ","
     ++ "\"runtime_reconcile_cases\":"

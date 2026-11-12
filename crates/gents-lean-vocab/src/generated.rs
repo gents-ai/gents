@@ -645,10 +645,6 @@ pub fn lean_sibling_tools_cases() -> &'static [LeanSiblingToolsCase] {
     &lean_contract_snapshot().sibling_tools_cases
 }
 
-pub fn lean_startup_readiness_cases() -> &'static [LeanStartupReadinessCase] {
-    &lean_contract_snapshot().startup_readiness_cases
-}
-
 pub fn lean_steering_publication_cases() -> &'static [LeanFoldPublicationCase] {
     &lean_contract_snapshot().steering_publication_cases
 }
@@ -3182,7 +3178,6 @@ pub struct LeanContractSnapshot {
     >,
     pub runtime_reconcile_cases: Vec<LeanRuntimeReconcileCase>,
     pub client_agent_readiness_cases: Vec<LeanClientAgentReadinessCase>,
-    pub startup_readiness_cases: Vec<LeanStartupReadinessCase>,
     pub plugin_reference_cases: Vec<serde_json::Value>,
     pub plugin_pin_cases: Vec<serde_json::Value>,
     pub pack_wire_lock_cases: Vec<serde_json::Value>,
@@ -11203,18 +11198,6 @@ pub struct LeanSpawnedTargetRejectionCase {
     pub parent_tool: String,
     pub completion_probe_outcome: String,
     pub expected: LeanSpawnedTargetRejection,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct LeanStartupReadinessCase {
-    pub witness: String,
-    pub lean_theorems: Vec<String>,
-    pub budget: u64,
-    pub outcomes: Vec<String>,
-    pub retired_after: bool,
-    pub post_standing: String,
-    pub blocks_ready: bool,
-    pub requires_restart: bool,
 }
 
 #[derive(Debug, Deserialize)]

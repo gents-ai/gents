@@ -214,104 +214,50 @@ def queueDeadlineConformanceCaseJson
       ++ boolString witness.explicitDeadlinePreserved
     ++ "}"
 
-structure StartupReadinessCase where
+deriving instance Lean.ToJson for RuntimeReconcile.StartupReadiness.BuildOutcome
+
+structure StartupReadinessInput where
   witness : String
-  leanTheorems : List String
   budget : Nat
-  outcomes : List String
+  outcomes : List RuntimeReconcile.StartupReadiness.BuildOutcome
   retiredAfter : Bool
+  deriving Lean.ToJson
+
+structure StartupReadinessOutput where
   postStanding : String
   blocksReady : Bool
-  requiresRestart : Bool
+  deriving Lean.ToJson
 
-def startupReadinessCaseJson (witness : StartupReadinessCase) : String :=
-  "{"
-    ++ "\"witness\":" ++ jsonString witness.witness ++ ","
-    ++ "\"lean_theorems\":" ++ jsonStringArray witness.leanTheorems ++ ","
-    ++ "\"budget\":" ++ toString witness.budget ++ ","
-    ++ "\"outcomes\":" ++ jsonStringArray witness.outcomes ++ ","
-    ++ "\"retired_after\":" ++ boolString witness.retiredAfter ++ ","
-    ++ "\"post_standing\":" ++ jsonString witness.postStanding ++ ","
-    ++ "\"blocks_ready\":" ++ boolString witness.blocksReady ++ ","
-    ++ "\"requires_restart\":" ++ boolString witness.requiresRestart
-    ++ "}"
+def startupStandingName : RuntimeReconcile.StartupReadiness.AgentStanding → String
+  | .pending _ => "pending"
+  | .ready => "ready"
+  | .demoted => "demoted"
+  | .superseded => "superseded"
 
-def startupReadinessCases : List StartupReadinessCase :=
-  [
-    { witness := "startup_readiness.persistent_build_failure_demotes"
-    , leanTheorems :=
-        [ "RuntimeReconcile.StartupReadiness.budgeted_attempts_release"
-        , "RuntimeReconcile.StartupReadiness.seeded_release"
-        , "RuntimeReconcile.StartupReadiness.demoted_consumed_the_budget"
-        ]
-    , budget := 3
-    , outcomes := ["failed", "failed", "failed"]
-    , retiredAfter := false
-    , postStanding := "demoted"
-    , blocksReady := false
-    , requiresRestart := false
-    }
-  , { witness := "startup_readiness.transient_failure_then_start_is_ready"
-    , leanTheorems :=
-        [ "RuntimeReconcile.StartupReadiness.start_within_budget_is_ready"
-        , "RuntimeReconcile.StartupReadiness.ready_requires_a_start"
-        ]
-    , budget := 3
-    , outcomes := ["failed", "started"]
-    , retiredAfter := false
-    , postStanding := "ready"
-    , blocksReady := false
-    , requiresRestart := false
-    }
-  , { witness := "startup_readiness.demotion_is_not_readiness"
-    , leanTheorems :=
-        [ "RuntimeReconcile.StartupReadiness.ready_requires_a_start"
-        ]
-    , budget := 1
-    , outcomes := ["failed"]
-    , retiredAfter := false
-    , postStanding := "demoted"
-    , blocksReady := false
-    , requiresRestart := false
-    }
-  , { witness := "startup_readiness.within_budget_still_pending"
-    , leanTheorems :=
-        [ "RuntimeReconcile.StartupReadiness.budgeted_attempts_release"
-        ]
-    , budget := 3
-    , outcomes := ["failed"]
-    , retiredAfter := false
-    , postStanding := "pending"
-    , blocksReady := true
-    , requiresRestart := false
-    }
-  , { witness := "startup_readiness.ready_is_absorbing"
-    , leanTheorems :=
-        [ "RuntimeReconcile.StartupReadiness.released_absorbing"
-        ]
-    , budget := 3
-    , outcomes := ["started", "failed", "failed", "failed", "failed"]
-    , retiredAfter := false
-    , postStanding := "ready"
-    , blocksReady := false
-    , requiresRestart := false
-    }
-  , { witness := "startup_readiness.retirement_releases_a_pending_agent"
-    , leanTheorems :=
-        [ "RuntimeReconcile.StartupReadiness.retire_releases"
-        , "RuntimeReconcile.StartupReadiness.retire_never_claims_ready"
-        ]
-    , budget := 3
-    , outcomes := ["failed"]
-    , retiredAfter := true
-    , postStanding := "superseded"
-    , blocksReady := false
-    , requiresRestart := false
-    }
-  ]
-
-def startupReadinessCasesJson : String :=
-  jsonArray (startupReadinessCases.map startupReadinessCaseJson)
+/-- Each case releases from its build outcomes and retirement alone: no case
+restarts the runtime to leave `pending`. -/
+@[conformance_family]
+def startupReadiness : Family StartupReadinessInput StartupReadinessOutput where
+  inputs :=
+    [ { witness := "startup_readiness.persistent_build_failure_demotes"
+        budget := 3, outcomes := [.failed, .failed, .failed], retiredAfter := false }
+    , { witness := "startup_readiness.transient_failure_then_start_is_ready"
+        budget := 3, outcomes := [.failed, .started], retiredAfter := false }
+    , { witness := "startup_readiness.demotion_is_not_readiness"
+        budget := 1, outcomes := [.failed], retiredAfter := false }
+    , { witness := "startup_readiness.within_budget_still_pending"
+        budget := 3, outcomes := [.failed], retiredAfter := false }
+    , { witness := "startup_readiness.ready_is_absorbing"
+        budget := 3, outcomes := [.started, .failed, .failed, .failed, .failed]
+        retiredAfter := false }
+    , { witness := "startup_readiness.retirement_releases_a_pending_agent"
+        budget := 3, outcomes := [.failed], retiredAfter := true } ]
+  model := fun i =>
+    let built := RuntimeReconcile.StartupReadiness.run i.budget
+      RuntimeReconcile.StartupReadiness.seeded i.outcomes
+    let standing := if i.retiredAfter then RuntimeReconcile.StartupReadiness.retire built else built
+    { postStanding := startupStandingName standing
+      blocksReady := !standing.released }
 
 structure SnapshotDemotionInput where
   name : String
