@@ -259,7 +259,7 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
         .as_str()
         .unwrap();
     for case in &gents_lean_vocab::lean_contract_snapshot().workspace_quickstart_cases {
-        let actor = match case["actor"].as_str().unwrap() {
+        let actor = match case.actor.as_str() {
             "user" => &operator,
             "agent" => &access,
             "other" => &outsider_access,
@@ -274,8 +274,8 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
                 .as_array()
                 .unwrap()
                 .is_empty(),
-            case["before"].as_bool().unwrap(),
-            "{case}"
+            case.before,
+            "{case:?}"
         );
     }
     // Commit history is read as the signing User; the node has no fallback.
@@ -365,7 +365,7 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
         "quickstart replay restored the revoked repository reader"
     );
     for case in &gents_lean_vocab::lean_contract_snapshot().workspace_quickstart_cases {
-        let actor = match case["actor"].as_str().unwrap() {
+        let actor = match case.actor.as_str() {
             "user" => &operator,
             "agent" => &access,
             "other" => &outsider_access,
@@ -380,8 +380,8 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
                 .as_array()
                 .unwrap()
                 .is_empty(),
-            case["after_revoke"].as_bool().unwrap(),
-            "{case}"
+            case.after_revoke,
+            "{case:?}"
         );
     }
     let unpublished = fx._root.path().join("unpublished-repository");
@@ -412,9 +412,7 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
     assert_eq!(
         created_after_abort,
         gents_lean_vocab::lean_contract_snapshot().workspace_quickstart_cases[0]
-            ["aborted_document_visible"]
-            .as_bool()
-            .unwrap()
+            .aborted_document_visible
     );
     for collection in [
         "AgentRequest",
