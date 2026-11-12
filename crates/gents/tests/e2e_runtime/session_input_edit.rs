@@ -1,4 +1,5 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::Instant;
 
 use gents::runtime::agent::session_commands::run_session_command_reconciler;
 use gents_protocol::request_admission::{
@@ -17,6 +18,7 @@ use gents_store::identity::NodeIdentity as _;
 use rapidhash::RapidHashMap;
 use tokio_util::sync::CancellationToken;
 
+use crate::support::snapshots::SnapshotReader;
 use crate::support::{self, TestDb};
 
 struct Stop(CancellationToken);
@@ -52,6 +54,7 @@ async fn wait_row_as(
     required: &str,
 ) -> serde_json::Value {
     let deadline = Instant::now() + Duration::from_secs(30);
+    let mut changes = access.subscribe_changes(collection).await;
     loop {
         let found = rows_as(
             access,
@@ -69,11 +72,11 @@ async fn wait_row_as(
         {
             return row;
         }
-        assert!(
-            Instant::now() < deadline,
-            "{collection}.{field}={value} did not appear with {required}"
-        );
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        tokio::time::timeout_at(deadline, changes.recv())
+            .await
+            .unwrap_or_else(|_| {
+                panic!("{collection}.{field}={value} did not appear with {required}")
+            });
     }
 }
 
