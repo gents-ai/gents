@@ -1,8 +1,11 @@
 import Proofs.Automation.GoalAutomation.FirstRequestBinding
 import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
 
 namespace Conformance.GoalFirstRequestBinding
-open GoalAutomation.FirstRequestBinding Conformance.Contracts
+open GoalAutomation.FirstRequestBinding Conformance.Contracts Lean
+
+deriving instance ToJson for Enrollment.GoalAssignmentInput
 
 structure Case where
   name : String
@@ -64,6 +67,7 @@ structure ContinuationCase where
   parentDoc : String := "parent"
   parent : Option Enrollment.GoalAssignmentInput := none
   receiptDoc : Option String := none
+  deriving ToJson
 
 def continuationCases : List ContinuationCase :=
   [ { name := "fresh-continuation-opens-assignment" }
@@ -85,26 +89,35 @@ def continuationCases : List ContinuationCase :=
   , { name := "parent-is-not-its-own-child", current := some "parent", receiptDoc := some "parent" }
   ]
 
-private def referenceJson (reference : Option Enrollment.GoalAssignmentInput) : String :=
-  match reference with
-  | none => "null"
-  | some reference => "{\"goal_id\":" ++ jsonString reference.goalId ++
-      ",\"root_request_doc_id\":" ++ optional reference.rootRequestDocId ++ "}"
+/-- The continuation assignment `continuation_reference` derives, over every
+continuation case. -/
+@[conformance_family]
+def continuation : Family ContinuationCase (Option Enrollment.GoalAssignmentInput) where
+  inputs := continuationCases
+  model := fun c => continuationReference? c.goal c.current c.parentDoc c.parent c.receiptDoc
 
-private def encodeContinuation (value : ContinuationCase) : String :=
-  let edges : List (Option Enrollment.GoalAssignmentInput) :=
-    [none, some ⟨"goal", none⟩, some ⟨"goal", some "root"⟩,
-      some ⟨"goal", some "parent"⟩, some ⟨"other", none⟩, some ⟨"goal", some "other"⟩]
-  "{\"name\":" ++ jsonString value.name ++ ",\"goal\":" ++ jsonString value.goal ++
-    ",\"current\":" ++ optional value.current ++ ",\"parent_doc\":" ++ jsonString value.parentDoc ++
-    ",\"parent\":" ++ referenceJson value.parent ++ ",\"receipt_doc\":" ++ optional value.receiptDoc ++
-    ",\"expected\":" ++ referenceJson (continuationReference? value.goal value.current
-      value.parentDoc value.parent value.receiptDoc) ++
-    ",\"edges\":" ++ jsonArray (edges.map fun child =>
-      "{\"child\":" ++ referenceJson child ++ ",\"accepted\":" ++
-        toString (continuationEdge value.goal value.parentDoc value.parent child) ++ "}") ++ "}"
+structure EdgeInput where
+  name : String
+  goal : String
+  parentDoc : String
+  parent : Option Enrollment.GoalAssignmentInput
+  child : Option Enrollment.GoalAssignmentInput
+  deriving ToJson
 
-def continuationsJson : String := jsonArray (continuationCases.map encodeContinuation)
+structure EdgeOutput where
+  accepted : Bool
+  deriving ToJson
+
+/-- Whether `continuation_reference_matches` accepts each candidate child
+reference after each continuation case's parent. -/
+@[conformance_family]
+def edge : Family EdgeInput EdgeOutput where
+  inputs := continuationCases.flatMap fun c =>
+    ([none, some ⟨"goal", none⟩, some ⟨"goal", some "root"⟩,
+      some ⟨"goal", some "parent"⟩, some ⟨"other", none⟩, some ⟨"goal", some "other"⟩] :
+        List (Option Enrollment.GoalAssignmentInput)).map fun child =>
+      { name := c.name, goal := c.goal, parentDoc := c.parentDoc, parent := c.parent, child }
+  model := fun i => { accepted := continuationEdge i.goal i.parentDoc i.parent i.child }
 
 example : (continuationCases.take 4).map (fun value => continuationReference? value.goal
     value.current value.parentDoc value.parent value.receiptDoc) =

@@ -1764,8 +1764,12 @@ def caseCoverage : List CoverageEntry :=
       "GoalFirstRequestBindingCases")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_continuation_assignment_cases"
-      "GoalContinuationAssignmentCases")
+      "family"
+      "goal_first_request_binding_continuation")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "goal_first_request_binding_edge")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"

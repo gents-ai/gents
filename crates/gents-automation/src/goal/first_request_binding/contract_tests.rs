@@ -42,51 +42,35 @@ async fn fixture_goal(access: &ConfigAccess, node_did: &str, session_id: &str) -
 
 #[test]
 fn generated_continuation_assignments_preserve_physical_bindings() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_continuation_assignment_cases;
-    assert_eq!(cases.len(), 17);
-    let assignment = |goal_id: &str, root_request_doc_id: &Option<String>| GoalAssignmentInput {
-        goal_id: goal_id.to_owned(),
-        root_request_doc_id: root_request_doc_id.clone(),
-    };
-    for case in cases {
-        let parent = case
-            .parent
-            .as_ref()
-            .map(|parent| assignment(&parent.goal_id, &parent.root_request_doc_id));
-        let expected = case
-            .expected
-            .as_ref()
-            .map(|expected| assignment(&expected.goal_id, &expected.root_request_doc_id));
-        assert_eq!(
-            continuation_reference(
+    gents_lean_vocab::families::goal_first_request_binding_continuation::replay(|case| {
+        let parent: Option<GoalAssignmentInput> =
+            case.parent.as_ref().map(gents_lean_vocab::family::recode);
+        gents_lean_vocab::family::recode(&continuation_reference(
+            &case.goal,
+            case.current.as_deref(),
+            &case.parent_doc,
+            parent.as_ref(),
+            case.receipt_doc.as_deref(),
+        ))
+    });
+}
+
+#[test]
+fn generated_continuation_edges_accept_only_the_parent_assignment() {
+    gents_lean_vocab::families::goal_first_request_binding_edge::replay(|case| {
+        let parent: Option<GoalAssignmentInput> =
+            case.parent.as_ref().map(gents_lean_vocab::family::recode);
+        let child: Option<GoalAssignmentInput> =
+            case.child.as_ref().map(gents_lean_vocab::family::recode);
+        gents_lean_vocab::families::goal_first_request_binding_edge::EdgeOutput {
+            accepted: continuation_reference_matches(
                 &case.goal,
-                case.current.as_deref(),
                 &case.parent_doc,
                 parent.as_ref(),
-                case.receipt_doc.as_deref(),
+                child.as_ref(),
             ),
-            expected,
-            "{}",
-            case.name
-        );
-        for edge in &case.edges {
-            let child = edge
-                .child
-                .as_ref()
-                .map(|child| assignment(&child.goal_id, &child.root_request_doc_id));
-            assert_eq!(
-                continuation_reference_matches(
-                    &case.goal,
-                    &case.parent_doc,
-                    parent.as_ref(),
-                    child.as_ref(),
-                ),
-                edge.accepted,
-                "{}: {edge:?}",
-                case.name
-            );
         }
-    }
+    });
 }
 
 #[tokio::test]

@@ -2911,7 +2911,6 @@ pub struct LeanContractSnapshot {
     pub goal_request_ancestry_cases: Vec<LeanGoalRequestAncestryCase>,
     pub goal_queue_assignment_cases: Vec<LeanGoalQueueAssignmentCase>,
     pub goal_first_request_binding_cases: Vec<LeanGoalFirstRequestBindingCase>,
-    pub goal_continuation_assignment_cases: Vec<LeanGoalContinuationAssignmentCase>,
     pub plugin_job_commit_kill_cases: Vec<LeanPluginJobCommitKillCase>,
     pub client_process_claim_cases: Vec<serde_json::Value>,
     pub client_process_receipt_cases: Vec<LeanClientProcessReceiptCase>,
@@ -4960,47 +4959,6 @@ pub struct LeanGoalConfigReactivationCase {
     pub allowed: bool,
     pub current: String,
     pub target: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalContinuationAssignmentCase {
-    pub current: Option<String>,
-    pub edges: Vec<LeanGoalContinuationAssignmentCaseEdgesItem>,
-    pub expected: Option<LeanGoalContinuationAssignmentCaseExpected>,
-    pub goal: String,
-    pub name: String,
-    pub parent: Option<LeanGoalContinuationAssignmentCaseParent>,
-    pub parent_doc: String,
-    pub receipt_doc: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalContinuationAssignmentCaseEdgesItem {
-    pub accepted: bool,
-    pub child: Option<LeanGoalContinuationAssignmentCaseEdgesItemChild>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalContinuationAssignmentCaseEdgesItemChild {
-    pub goal_id: String,
-    pub root_request_doc_id: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalContinuationAssignmentCaseExpected {
-    pub goal_id: String,
-    pub root_request_doc_id: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalContinuationAssignmentCaseParent {
-    pub goal_id: String,
-    pub root_request_doc_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
