@@ -631,40 +631,95 @@ fn plant_remembered(config_dir: &std::path::Path, contents: &str) -> std::path::
     remembered
 }
 
-#[test]
-fn gents_home_env_wins_over_the_remembered_file() {
-    let config = tempfile::tempdir().unwrap();
-    let user = tempfile::tempdir().unwrap();
-    plant_remembered(config.path(), "/srv/remembered\n");
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Env {
+    Absent,
+    Empty,
+    Set,
+}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Remembered {
+    Absent,
+    Unreadable,
+    NewlineOnly,
+    Empty,
+    Relative,
+    MultiLine,
+    CarriageReturn,
+    Absolute,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Resolution {
+    FromEnv,
+    FromRemembered,
+    DotGents,
+    Unreadable,
+    Invalid,
+    Unresolved,
+}
+
+const ENV_HOME: &str = "/srv/env";
+const REMEMBERED_HOME: &str = "/srv/remembered";
+
+fn resolve_in_temp(
+    env: Env,
+    remembered: Remembered,
+    config_dir: bool,
+    user_home: bool,
+) -> Resolution {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("config");
+    let user = temp.path().join("user");
+    fs::create_dir_all(&config).unwrap();
+    fs::create_dir_all(&user).unwrap();
+    let contents = match remembered {
+        Remembered::Absent => None,
+        Remembered::Unreadable => {
+            fs::create_dir_all(config.join("gents/home")).unwrap();
+            None
+        }
+        Remembered::NewlineOnly => Some("\n"),
+        Remembered::Empty => Some(""),
+        Remembered::Relative => Some("relative/home\n"),
+        Remembered::MultiLine => Some("/a\n/b\n"),
+        Remembered::CarriageReturn => Some("/a\r\n"),
+        Remembered::Absolute => Some("/srv/remembered\n"),
+    };
+    if let Some(contents) = contents {
+        plant_remembered(&config, contents);
+    }
+    let env_home = match env {
+        Env::Absent => None,
+        Env::Empty => Some(std::ffi::OsString::new()),
+        Env::Set => Some(std::ffi::OsString::from(ENV_HOME)),
+    };
     let resolved = super::default_home_from(
-        Some("/srv/env".into()),
-        Some(config.path()),
-        Some(user.path()),
+        env_home,
+        config_dir.then_some(config.as_path()),
+        user_home.then_some(user.as_path()),
     );
-
-    assert_eq!(resolved.unwrap(), std::path::Path::new("/srv/env"));
+    match resolved {
+        Ok(home) if home.as_path() == Path::new(ENV_HOME) => Resolution::FromEnv,
+        Ok(home) if home.as_path() == Path::new(REMEMBERED_HOME) => Resolution::FromRemembered,
+        Ok(home) if home == user.join(".gents") => Resolution::DotGents,
+        Ok(home) => panic!("unexpected home {}", home.display()),
+        Err(super::HomeError::RememberedHomeRead { .. }) => Resolution::Unreadable,
+        Err(super::HomeError::RememberedHomeInvalid { .. }) => Resolution::Invalid,
+        Err(super::HomeError::HomeDirUnresolved) => Resolution::Unresolved,
+        Err(error) => panic!("{}", ErrorChain(&error)),
+    }
 }
 
 #[test]
-fn remembered_home_wins_over_dot_gents() {
-    let config = tempfile::tempdir().unwrap();
-    let user = tempfile::tempdir().unwrap();
-    plant_remembered(config.path(), "/srv/remembered\n");
-
-    let resolved = super::default_home_from(None, Some(config.path()), Some(user.path()));
-
-    assert_eq!(resolved.unwrap(), std::path::Path::new("/srv/remembered"));
-}
-
-#[test]
-fn no_file_means_dot_gents() {
-    let config = tempfile::tempdir().unwrap();
-    let user = tempfile::tempdir().unwrap();
-
-    let resolved = super::default_home_from(None, Some(config.path()), Some(user.path()));
-
-    assert_eq!(resolved.unwrap(), user.path().join(".gents"));
+fn home_resolution_matches_the_lean_model() {
+    gents_lean_vocab::families::home_resolution_resolve::replay::<Env, Remembered, Resolution>(
+        |i| resolve_in_temp(i.env, i.remembered, i.config_dir, i.user_home),
+    );
 }
 
 #[test]

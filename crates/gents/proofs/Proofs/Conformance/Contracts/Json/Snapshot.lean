@@ -1,3 +1,4 @@
+import Proofs.Conformance.HomeResolution
 import Proofs.Conformance.GraphqlName
 import Proofs.Conformance.ClaudeRefresh
 import Proofs.Conformance.Identity.BlockScope
