@@ -23,51 +23,6 @@ fn binding(root: &Path, value: &policy::Grant<u64, u64>) -> workspace::Binding {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct QuestionState {
-    present: bool,
-    decision: Option<bool>,
-}
-#[derive(Debug, Deserialize)]
-struct State {
-    question: QuestionState,
-    grants: Vec<policy::Grant<u64, u64>>,
-}
-#[derive(Debug, Deserialize)]
-struct Reuse {
-    candidate: policy::Grant<u64, u64>,
-    allowed: bool,
-}
-#[derive(Debug, Deserialize)]
-struct AnswerCase {
-    available: Vec<policy::Scope<u64>>,
-    binding: policy::Grant<u64, u64>,
-    initial: State,
-    id: String,
-    now: u64,
-    choice: Answer,
-    kind: policy::ApprovalKind,
-    supported: bool,
-    accepted: bool,
-    expected: State,
-    reuse: Vec<Reuse>,
-}
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RevokeCase {
-    previous: policy::Preference<u64>,
-    expected_revision: u64,
-    grants: Vec<policy::Grant<u64, u64>>,
-    result: RevokeResult,
-    remaining: Vec<policy::Grant<u64, u64>>,
-}
-#[derive(Deserialize)]
-struct RevokeResult {
-    accepted: bool,
-    changed: bool,
-    next: Option<policy::Preference<u64>>,
-}
-
 fn store(home: &Path, entries: &[workspace::Settings]) {
     std::fs::write(
         workspace::preferences_file(home),
@@ -77,20 +32,28 @@ fn store(home: &Path, entries: &[workspace::Settings]) {
 }
 
 #[test]
-fn generated_command_answers_preserve_scope_and_one_time_delivery() {
-    let snapshot = gents_lean_vocab::lean_contract_snapshot();
-    assert_eq!(snapshot.workspace_command_grant_answers.len(), 962);
-    assert_eq!(snapshot.workspace_command_grant_lookups.len(), 24);
-    for (index, value) in snapshot.workspace_command_grant_answers.iter().enumerate() {
-        let case: AnswerCase = serde_json::from_value(value.clone()).unwrap();
+fn workspace_command_grants_answers_match_lean() {
+    use gents_lean_vocab::families::workspace_command_grants_answers::{
+        AnswerOutput, QuestionWire, Reuse, StateWire,
+    };
+    for case in gents_lean_vocab::families::workspace_command_grants_answers::cases() {
+        let input = &case.input;
+        let binding_grant: policy::Grant<u64, u64> =
+            gents_lean_vocab::family::recode(&input.binding);
+        let available: Vec<policy::Scope<u64>> = gents_lean_vocab::family::recode(&input.available);
+        let candidates: Vec<policy::Grant<u64, u64>> =
+            gents_lean_vocab::family::recode(&input.candidates);
+        let choice: Answer =
+            serde_json::from_value(serde_json::Value::String(input.choice.clone())).unwrap();
+        let kind: policy::ApprovalKind =
+            serde_json::from_value(serde_json::Value::String(input.kind.clone())).unwrap();
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().canonicalize().unwrap();
         let home = root.join("home");
         std::fs::create_dir_all(&home).unwrap();
-        assert!(case.initial.grants.is_empty());
-        let bound = binding(&root, &case.binding);
-        let entries: Vec<_> = case
-            .available
+        assert!(input.initial.grants.is_empty(), "{input:?}");
+        let bound = binding(&root, &binding_grant);
+        let entries: Vec<_> = available
             .iter()
             .map(|scope| workspace::Settings {
                 workspace: key(&root, scope.workspace),
@@ -109,22 +72,22 @@ fn generated_command_answers_preserve_scope_and_one_time_delivery() {
         request.created_at_ms = 10;
         request.expires_at_ms = 20;
         let mut wire = serde_json::to_value(&request).unwrap();
-        wire["command_grant"] = case.supported.into();
-        if case.kind != policy::ApprovalKind::Command {
+        wire["command_grant"] = input.supported.into();
+        if kind != policy::ApprovalKind::Command {
             wire["binding"]["action"] = serde_json::json!({
                 "kind": "fileMutation", "tool": "write_file", "inputDigest": "fixture",
                 "path": root.join("document.txt"), "root": root, "existed": false,
             });
         }
         let request: Request = serde_json::from_value(wire).unwrap();
-        if case.initial.question.present {
+        if input.initial.question.present {
             write_atomic(
                 &Queue::Workspace.request_file(&home, "q1"),
                 &serde_json::to_vec(&request).unwrap(),
             )
             .unwrap();
         }
-        if let Some(allow) = case.initial.question.decision {
+        if let Some(allow) = input.initial.question.decision {
             write_atomic(
                 &Queue::Workspace.decision_file(&home, "q1"),
                 &serde_json::to_vec(&Decision {
@@ -135,91 +98,123 @@ fn generated_command_answers_preserve_scope_and_one_time_delivery() {
             )
             .unwrap();
         }
-        assert_eq!(
-            decide_with_clock(&home, &case.id, case.choice, || case.now).is_ok(),
-            case.accepted,
-            "answer case {index}: {case:?}"
-        );
-        let observed = std::fs::read(Queue::Workspace.decision_file(&home, "q1"))
+        let accepted = decide_with_clock(&home, &input.id, choice, || input.now).is_ok();
+        let decision = std::fs::read(Queue::Workspace.decision_file(&home, "q1"))
             .ok()
             .map(|bytes| serde_json::from_slice::<Decision>(&bytes).unwrap().allow);
-        assert_eq!(
-            observed, case.expected.question.decision,
-            "answer case {index}"
-        );
-        assert_eq!(
-            Queue::Workspace.request_file(&home, "q1").exists(),
-            case.expected.question.present
-        );
+        let present = Queue::Workspace.request_file(&home, "q1").exists();
         let settings = workspace::get(&home, &bound.scope.workspace).unwrap();
+        let granted = |candidate: &policy::Grant<u64, u64>| {
+            settings.as_ref().is_some_and(|entry| {
+                workspace::has_command_grant(entry, &binding(&root, candidate)).unwrap()
+            })
+        };
+        let grants: Vec<policy::Grant<u64, u64>> = [binding_grant.clone()]
+            .into_iter()
+            .filter(|grant| granted(grant))
+            .collect();
         assert_eq!(
             settings
                 .as_ref()
                 .map_or(0, |entry| entry.command_grants.len()),
-            case.expected.grants.len(),
-            "answer case {index}"
+            grants.len(),
+            "{input:?}"
         );
-        for query in case.reuse {
-            let candidate = binding(&root, &query.candidate);
-            assert_eq!(
-                settings
-                    .as_ref()
-                    .is_some_and(|entry| workspace::has_command_grant(entry, &candidate).unwrap()),
-                query.allowed,
-                "reuse case {index}"
-            );
-        }
+        let reuse = candidates
+            .iter()
+            .map(|candidate| Reuse {
+                candidate: gents_lean_vocab::family::recode(candidate),
+                allowed: granted(candidate),
+            })
+            .collect();
         let stored = std::fs::read_to_string(workspace::preferences_file(&home)).unwrap();
         assert!(
             !stored.contains("fixture-"),
             "command arguments must not be persisted"
         );
         assert!(allowed::list(&home).unwrap().is_empty());
+        case.check(AnswerOutput {
+            accepted,
+            expected: StateWire {
+                question: QuestionWire { present, decision },
+                grants: gents_lean_vocab::family::recode(&grants),
+            },
+            reuse,
+        });
     }
 }
 
 #[test]
-fn generated_command_revocation_preserves_the_selected_mode() {
-    let snapshot = gents_lean_vocab::lean_contract_snapshot();
-    assert_eq!(snapshot.workspace_command_grant_revocations.len(), 54);
-    for value in &snapshot.workspace_command_grant_revocations {
-        let case: RevokeCase = serde_json::from_value(value.clone()).unwrap();
+fn workspace_command_grants_revocations_match_lean() {
+    use gents_lean_vocab::families::workspace_command_grants_revocations::{
+        PreferenceWire, RevokeOutput, RevokeResult,
+    };
+    for case in gents_lean_vocab::families::workspace_command_grants_revocations::cases() {
+        let input = &case.input;
+        let mode: policy::Mode =
+            serde_json::from_value(serde_json::Value::String(input.previous.mode.clone())).unwrap();
+        let grants: Vec<policy::Grant<u64, u64>> = gents_lean_vocab::family::recode(&input.grants);
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().canonicalize().unwrap();
         let workspace = key(&root, 1);
-        let review_task = case.previous.review_task.map(|_| {
+        let review_task = input.previous.review_task.map(|_| {
             workspace::ReviewTaskSelection::for_task(&workspace::default_review_task(
                 "node", "agent",
             ))
         });
+        let stored_grants: Vec<_> = grants
+            .iter()
+            .map(|value| workspace::command_grant(&binding(&root, value)).unwrap())
+            .collect();
         let settings = workspace::Settings {
             workspace: workspace.clone(),
             selection: policy::Preference {
-                revision: case.previous.revision,
-                mode: case.previous.mode,
+                revision: input.previous.revision,
+                mode,
                 review_task: review_task.clone(),
             },
             dirs: vec![allowed::AllowedDir {
                 path: root.clone(),
                 access: BindAccess::Read,
             }],
-            command_grants: case
-                .grants
-                .iter()
-                .map(|value| workspace::command_grant(&binding(&root, value)).unwrap())
-                .collect(),
+            command_grants: stored_grants.clone(),
         };
         store(&root, &[settings]);
-        let result = workspace::revoke_commands(&root, &workspace, case.expected_revision);
-        assert_eq!(result.is_ok(), case.result.accepted);
-        assert_eq!(case.result.changed, case.result.accepted);
+        let accepted =
+            workspace::revoke_commands(&root, &workspace, input.expected_revision).is_ok();
         let observed = workspace::get(&root, &workspace).unwrap().unwrap();
-        let expected = case.result.next.unwrap();
-        assert_eq!(observed.selection.revision, expected.revision);
-        assert_eq!(observed.selection.mode, expected.mode);
-        assert_eq!(observed.selection.review_task, review_task);
-        assert_eq!(observed.command_grants.len(), case.remaining.len());
-        assert_eq!(observed.dirs.len(), 1);
+        assert_eq!(observed.dirs.len(), 1, "{input:?}");
+        let observed_grants: Vec<_> = observed
+            .command_grants
+            .iter()
+            .map(|grant| serde_json::to_value(grant).unwrap())
+            .collect();
+        let remaining: Vec<policy::Grant<u64, u64>> = grants
+            .iter()
+            .zip(&stored_grants)
+            .filter(|(_, stored)| observed_grants.contains(&serde_json::to_value(stored).unwrap()))
+            .map(|(grant, _)| grant.clone())
+            .collect();
+        assert_eq!(observed.command_grants.len(), remaining.len(), "{input:?}");
+        let review_task_observed = match (&observed.selection.review_task, &review_task) {
+            (None, _) => None,
+            (Some(observed), Some(selected)) if observed == selected => input.previous.review_task,
+            (Some(observed), _) => panic!("{input:?}: unexpected review task {observed:?}"),
+        };
+        let mode = serde_json::to_value(observed.selection.mode).unwrap();
+        let next = PreferenceWire {
+            revision: observed.selection.revision,
+            mode: mode.as_str().unwrap().to_owned(),
+            review_task: review_task_observed,
+        };
+        case.check(RevokeOutput {
+            result: RevokeResult {
+                accepted,
+                changed: observed.selection.revision != input.previous.revision,
+                next: Some(next),
+            },
+            remaining: gents_lean_vocab::family::recode(&remaining),
+        });
     }
 }
 

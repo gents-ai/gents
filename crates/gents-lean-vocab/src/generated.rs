@@ -629,10 +629,6 @@ pub fn lean_self_config_cases() -> &'static [LeanSelfConfigCase] {
     &lean_contract_snapshot().self_config_cases
 }
 
-pub fn lean_self_config_field_tables() -> &'static [LeanSelfConfigFieldTable] {
-    &lean_contract_snapshot().self_config_field_tables
-}
-
 pub fn lean_self_config_selection_cases() -> &'static LeanSelfConfigSelectionCases {
     &lean_contract_snapshot().self_config_selection_cases
 }
@@ -739,44 +735,6 @@ pub fn lean_workspace_cases() -> &'static [LeanWorkspaceCase] {
 
 pub fn lean_write_input_cases() -> &'static [serde_json::Value] {
     &lean_contract_snapshot().write_input_cases
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanAccessReviewTaskCase {
-    pub agent: String,
-    #[serde(rename = "approvedPrompt")]
-    pub approved_prompt: String,
-    pub document: LeanAccessReviewTaskCaseDocument,
-    pub eligible: bool,
-    pub node: String,
-    #[serde(rename = "selectedEligible")]
-    pub selected_eligible: bool,
-    #[serde(rename = "taskId")]
-    pub task_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanAccessReviewTaskCaseDocument {
-    pub agent_did: String,
-    pub emit_outcome: bool,
-    pub enabled: bool,
-    pub goal_objective_template: Option<String>,
-    pub goal_token_budget: Option<u64>,
-    pub hooks: Vec<LeanAccessReviewTaskCaseDocumentHooksItem>,
-    pub node_did: String,
-    pub output_schema_ref: Option<String>,
-    pub prompt_template: String,
-    pub task_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanAccessReviewTaskCaseDocumentHooksItem {
-    pub command: Vec<String>,
-    pub hook_id: String,
-    pub phase: String,
 }
 
 /// The acting actor of an agent decision row (Lean `SelfConfig.Actor`) with
@@ -2885,7 +2843,6 @@ pub struct LeanContractSnapshot {
     pub delegated_publication_cases: Vec<serde_json::Value>,
     pub delegated_finality_cases: Vec<LeanDelegatedFinalityCase>,
     pub generated_by: String,
-    pub schema_publication_cases: Vec<LeanSchemaPublicationCase>,
     pub root_admission_cases: Vec<LeanRootAdmissionCase>,
     pub vocabularies: Vec<LeanVocabularyContract>,
     pub state_machines: Vec<LeanStateMachineContract>,
@@ -3110,13 +3067,10 @@ pub struct LeanContractSnapshot {
     pub goal_observation_cases: Vec<serde_json::Value>,
     pub goal_session_observation_cases: Vec<serde_json::Value>,
     pub goal_session_fold_cases: Vec<serde_json::Value>,
-    pub workspace_command_grant_answers: Vec<serde_json::Value>,
     pub workspace_command_grant_lookups: Vec<serde_json::Value>,
-    pub workspace_command_grant_revocations: Vec<serde_json::Value>,
     pub workspace_permission_write_cases: Vec<LeanWorkspacePermissionWriteCase>,
     pub workspace_permission_cases: Vec<serde_json::Value>,
     pub operator_path_cases: Vec<serde_json::Value>,
-    pub access_review_task_cases: Vec<LeanAccessReviewTaskCase>,
     pub plugin_approval_cases: Vec<LeanPluginApprovalCase>,
     pub goal_objective_whitespace_codepoints: Vec<u32>,
     pub task_goal_publication_cases: Vec<LeanTaskGoalPublicationCase>,
@@ -3198,13 +3152,10 @@ pub struct LeanContractSnapshot {
     pub invocation_correlation_cases: Vec<LeanInvocationCorrelationCase>,
     pub goal_capability_resolution_cases: Vec<LeanGoalCapabilityResolutionCase>,
     pub lsp_action_cases: Vec<LeanLspActionCase>,
-    pub self_config_field_tables: Vec<LeanSelfConfigFieldTable>,
     pub self_config_resource_read_exposure_cases: Vec<
         LeanSelfConfigResourceReadExposureCase,
     >,
     pub self_config_scope_cases: LeanSelfConfigScopeCases,
-    pub policy_resource_exposure_cases: Vec<LeanPolicyResourceExposureCase>,
-    pub policy_grant_bound_cases: Vec<LeanPolicyGrantBoundCase>,
     pub policy_lockout_cases: LeanPolicyLockoutCases,
     pub self_config_cases: Vec<LeanSelfConfigCase>,
     pub agent_decision_cases: Vec<LeanAgentDecisionCase>,
@@ -9214,15 +9165,6 @@ pub struct LeanPluginTargetResolutionCaseBindingsItem {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanPolicyGrantBoundCase {
-    pub accepted: bool,
-    pub candidate_policy: bool,
-    pub held_policy: bool,
-    pub stored_policy: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanPolicyLockoutCases {
     pub protected: Vec<String>,
     pub rows: Vec<LeanPolicyLockoutCasesRowsItem>,
@@ -9236,13 +9178,6 @@ pub struct LeanPolicyLockoutCasesRowsItem {
     pub kept: bool,
     pub no_lockout: bool,
     pub permission: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPolicyResourceExposureCase {
-    pub categories: Vec<String>,
-    pub exposed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -10569,16 +10504,6 @@ pub struct LeanSchemaArgumentRepairCaseParsesItem {
     pub raw: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSchemaPublicationCase {
-    pub accepted: bool,
-    pub artifact: bool,
-    pub compatible: bool,
-    pub grant: bool,
-    pub native_allowed: bool,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanScopeCollectionRule {
@@ -10701,16 +10626,6 @@ pub struct LeanSelfConfigCase {
     pub control_kept_after_accept: bool,
     #[serde(default)]
     pub backends: Vec<LeanSelfConfigBackend>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct LeanSelfConfigFieldTable {
-    pub collection: String,
-    pub unique_field: String,
-    pub category: String,
-    pub all_fields: Vec<String>,
-    pub writable_fields: Vec<String>,
-    pub protected_fields: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
