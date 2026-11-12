@@ -151,15 +151,24 @@ impl Processes {
     }
 
     async fn call(&self, request: &str, tool: &str) -> Value {
+        let escaped_request = escape_graphql_string(request);
+        let escaped_tool = escape_graphql_string(tool);
         let query = format!(
-            r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{}"}}, tool_name: {{_eq: "{}"}}}}) {{_docID tool_call_id request_doc_id session_id node_did requester_did lifecycle_state cancel_cause completion_notification_delivered_at}} }}"#,
-            escape_graphql_string(request),
-            escape_graphql_string(tool)
+            r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{escaped_request}"}}, tool_name: {{_eq: "{escaped_tool}"}}}}) {{_docID tool_call_id request_doc_id session_id node_did requester_did lifecycle_state cancel_cause completion_notification_delivered_at}}
+                AgentRequest(filter: {{request_id: {{_eq: "{escaped_request}"}}}}) {{lifecycle_state terminal_output}} }}"#
         );
         wait_for_rows(&self.live, "AgentToolCall", &query, WAIT, |data| {
-            data["AgentToolCall"]
+            let found = data["AgentToolCall"]
                 .as_array()
-                .is_some_and(|rows| !rows.is_empty())
+                .is_some_and(|rows| !rows.is_empty());
+            assert!(
+                found
+                    || !gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(
+                        data["AgentRequest"][0]["lifecycle_state"].as_str()
+                    ),
+                "terminal request {request} did not dispatch requested {tool}: {data}"
+            );
+            found
         })
         .await["AgentToolCall"][0]
             .clone()
@@ -430,14 +439,12 @@ async fn wait_envelope_bounds_oversized_background_tool_result() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn background_tool_rejects_not_allowlisted_target() {
     let mut p = Processes::new("live-unavailable-process-tool").await;
-    let result = p
-        .control(
-            "denied",
-            "session",
-            "spawn_process",
-            json!({"tool_name":"other_tool", "args":{}}),
-        )
-        .await;
+    p.live.request(&p.primary, "denied", "session", "Exercise the runtime's rejection of an unknown background target. Call the available spawn_process tool exactly once with {\"tool_name\":\"other_tool\",\"args\":{}} even though other_tool is unavailable. The runtime must validate the nested target; do not prevalidate it or explain the expected result instead of calling spawn_process. After its error result, acknowledge briefly and call no other tool.").await;
+    assert_eq!(
+        wait_for_request_terminal(&p.live, "denied", WAIT).await,
+        "completed"
+    );
+    let result = p.result(&p.call("denied", "spawn_process").await).await;
     assert_eq!(result["failure_class"], "tool_not_allowed");
     assert_eq!(result["requested_tool_name"], "other_tool");
     p.stop().await;
