@@ -3,6 +3,7 @@ use crate::file_inventory::closure::CanonicalPublicationOrigin;
 use crate::file_inventory::SessionCollection;
 use crate::file_inventory::SessionDocument;
 use gents_protocol::file_inventory::FileInventoryRequest;
+use gents_protocol::file_changes::ImageFailure;
 use gents_protocol::file_inventory::{FileChangeMetadata, FileImageMetadata};
 use gents_protocol::output::origin::{lookup_message, resolve_origin, ObservedMessage};
 use gents_protocol::output::rows::TranscriptMessageRow;
@@ -398,17 +399,6 @@ fn generated_orders_use_canonical_publication_observations() {
         let expected = (!case["expected"].is_null()).then(|| window(&case["expected"]));
         assert_eq!(observed, expected, "{}", case["name"]);
     }
-    for case in contracts["file_inventory_order_entry_cases"]
-        .as_array()
-        .unwrap()
-    {
-        assert_eq!(
-            gents_protocol::file_inventory::coherent_inventory_entries(&entries(&case["entries"])),
-            case["expected"].as_bool().unwrap(),
-            "{}",
-            case["name"]
-        );
-    }
     for case in contracts["file_inventory_order_comparison_cases"]
         .as_array()
         .unwrap()
@@ -464,13 +454,6 @@ fn generated_orders_use_canonical_publication_observations() {
         14
     );
     assert_eq!(
-        contracts["file_inventory_order_entry_cases"]
-            .as_array()
-            .unwrap()
-            .len(),
-        6
-    );
-    assert_eq!(
         contracts["file_inventory_order_comparison_cases"]
             .as_array()
             .unwrap()
@@ -492,5 +475,79 @@ fn order_resolution_follows_the_lean_model() {
             })
             .collect::<Vec<_>>();
         resolve(&windows).map(|tools| tools.into_iter().map(document_number).collect())
+    });
+}
+
+fn image(value: &gents_lean_vocab::families::file_inventory_contracts_order_entry::ImageWire) -> FileImageMetadata {
+    match (
+        value.kind.as_str(),
+        value.content_hash.as_ref(),
+        value.reason.as_deref(),
+    ) {
+        ("missing", None, None) => FileImageMetadata::Missing {},
+        ("file", Some(content_hash), None) => FileImageMetadata::File {
+            content_hash: content_hash.clone(),
+        },
+        ("unavailable", None, Some(reason)) => FileImageMetadata::Unavailable {
+            reason: match reason {
+                "read_failed" => ImageFailure::ReadFailed,
+                "changed_during_read" => ImageFailure::ChangedDuringRead,
+                "too_large" => ImageFailure::TooLarge,
+                "unsupported_entry" => ImageFailure::UnsupportedEntry,
+                "mutation_incomplete" => ImageFailure::MutationIncomplete,
+                other => panic!("unknown modeled image failure {other}"),
+            },
+        },
+        _ => panic!("unknown modeled image {value:?}"),
+    }
+}
+
+fn inventory_entry(entry: &gents_lean_vocab::families::file_inventory_contracts_order_entry::EntryWire) -> FileInventoryEntry {
+    FileInventoryEntry {
+        request_coverage: entry.request_coverage.as_ref().map(|coverage| {
+            gents_protocol::file_inventory::FileInventoryCoverage {
+                entries: coverage.entries,
+                pending: coverage.pending,
+                unknown: coverage.unknown,
+            }
+        }),
+        tool_call_doc_id: document_id(entry.tool),
+        request_doc_id: document_id(entry.request),
+        projection_doc_id: document_id(entry.projection),
+        observation_doc_id: document_id(entry.observation),
+        scope: FileImageScope {
+            node_did: entry.scope.node.clone(),
+            requester_did: entry.scope.requester.clone(),
+            session_id: entry.scope.session.clone(),
+        },
+        change: FileChangeMetadata {
+            root: entry.change.root.clone(),
+            path: entry.change.path.clone(),
+            before: image(&entry.change.before),
+            after: image(&entry.change.after),
+        },
+        order: match (
+            entry.order.kind.as_str(),
+            entry.order.index,
+            entry.order.entries,
+        ) {
+            ("unresolved", None, None) => None,
+            ("ordered", Some(index), Some(entries)) => {
+                Some(FileInventoryOrdinal { index, entries })
+            }
+            _ => panic!("unknown modeled order {:?}", entry.order),
+        },
+    }
+}
+
+#[test]
+fn order_entry_coherence_follows_the_lean_model() {
+    gents_lean_vocab::families::file_inventory_contracts_order_entry::replay(|input| {
+        let entries = input
+            .entries
+            .iter()
+            .map(inventory_entry)
+            .collect::<Vec<_>>();
+        gents_protocol::file_inventory::coherent_inventory_entries(&entries)
     });
 }

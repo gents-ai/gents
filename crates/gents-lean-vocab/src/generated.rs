@@ -2961,7 +2961,6 @@ pub struct LeanContractSnapshot {
     pub file_inventory_source_projection_cases: Vec<serde_json::Value>,
     pub file_inventory_order_window_cases: Vec<serde_json::Value>,
     pub file_inventory_order_comparison_cases: Vec<serde_json::Value>,
-    pub file_inventory_order_entry_cases: Vec<serde_json::Value>,
     pub file_review_route_cases: Vec<LeanFileReviewRouteCase>,
     pub file_review_subscription_cases: Vec<LeanFileReviewSubscriptionCase>,
     pub workspace_path_alias_cases: Vec<LeanWorkspacePathAliasCase>,

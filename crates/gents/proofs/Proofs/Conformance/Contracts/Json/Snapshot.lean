@@ -1108,8 +1108,6 @@ def snapshotPluginCasesJson : String :=
       ++ Conformance.FileInventoryContracts.orderingWindowCasesJson ++ ","
     ++ "\"file_inventory_order_comparison_cases\":"
       ++ Conformance.FileInventoryContracts.orderingComparisonCasesJson ++ ","
-    ++ "\"file_inventory_order_entry_cases\":"
-      ++ Conformance.FileInventoryContracts.orderingEntryCasesJson ++ ","
     ++ "\"file_review_route_cases\":"
       ++ Conformance.FileReviewRouteContracts.routeCasesJson ++ ","
     ++ "\"file_review_subscription_cases\":"

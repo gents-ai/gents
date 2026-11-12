@@ -318,10 +318,96 @@ def orderingComparisonCasesJson : String := jsonArray (Order.Examples.comparison
        [("tool", toString fact.tool.id),
         ("coverage", coverageJson (selected.requestCoverage fact.tool.scope fact.tool.request))]))])
 
-def orderingEntryCasesJson : String := jsonArray (Order.Examples.entryCases.map
-  fun (name, entries) => object
-    [("name", jsonString name), ("entries", jsonArray (entries.map entryJson)),
-     ("expected", boolString (coherentEntries entries))])
+deriving instance Lean.ToJson for FileImages.Scope
+deriving instance Lean.ToJson for Coverage
+
+private def failureOfName (name : String) : ImageFailure :=
+  match name with
+  | "read_failed" => .readFailed
+  | "changed_during_read" => .changedDuringRead
+  | "too_large" => .tooLarge
+  | "unsupported_entry" => .unsupportedEntry
+  | _ => .mutationIncomplete
+
+structure ImageWire where
+  kind : String
+  contentHash : Option String
+  reason : Option String
+  deriving Lean.ToJson
+
+def ImageWire.ofModel : ImageMetadata → ImageWire
+  | .missing => ⟨"missing", none, none⟩
+  | .file hash => ⟨"file", some hash, none⟩
+  | .unavailable reason => ⟨"unavailable", none, some (failureName reason)⟩
+
+def ImageWire.toModel (value : ImageWire) : ImageMetadata :=
+  match value.kind, value.contentHash, value.reason with
+  | "file", some hash, _ => .file hash
+  | "unavailable", _, some reason => .unavailable (failureOfName reason)
+  | _, _, _ => .missing
+
+structure ChangeWire where
+  root : String
+  path : String
+  before : ImageWire
+  after : ImageWire
+  deriving Lean.ToJson
+
+def ChangeWire.ofModel (value : Change) : ChangeWire :=
+  ⟨value.root, value.path, .ofModel value.before, .ofModel value.after⟩
+
+def ChangeWire.toModel (value : ChangeWire) : Change :=
+  ⟨value.root, value.path, value.before.toModel, value.after.toModel⟩
+
+structure PositionWire where
+  kind : String
+  index : Option Nat
+  entries : Option Nat
+  deriving Lean.ToJson
+
+def PositionWire.ofModel : Order.Position → PositionWire
+  | .unresolved => ⟨"unresolved", none, none⟩
+  | .ordered index entries => ⟨"ordered", some index, some entries⟩
+
+def PositionWire.toModel (value : PositionWire) : Order.Position :=
+  match value.index, value.entries with
+  | some index, some entries => .ordered index entries
+  | _, _ => .unresolved
+
+structure EntryWire where
+  tool : Nat
+  request : Nat
+  scope : FileImages.Scope
+  projection : Nat
+  observation : Nat
+  change : ChangeWire
+  requestCoverage : Option Coverage
+  order : PositionWire
+  deriving Lean.ToJson
+
+def EntryWire.ofModel (value : Entry) : EntryWire :=
+  ⟨value.tool, value.request, value.scope, value.projection, value.observation,
+    .ofModel value.change, value.requestCoverage, .ofModel value.order⟩
+
+def EntryWire.toModel (value : EntryWire) : Entry :=
+  ⟨value.tool, value.request, value.scope, value.projection, value.observation,
+    value.change.toModel, value.order.toModel, value.requestCoverage⟩
+
+structure OrderEntryInput where
+  name : String
+  entries : List EntryWire
+  deriving Lean.ToJson
+
+@[conformance_family]
+def orderEntry : Family OrderEntryInput Bool where
+  inputs := Order.Examples.entryCases.map fun (name, entries) =>
+    { name, entries := entries.map EntryWire.ofModel }
+  model := fun i => coherentEntries (i.entries.map EntryWire.toModel)
+
+theorem entry_wire_round_trips :
+    Order.Examples.entryCases.all (fun (_, entries) =>
+      (entries.map EntryWire.ofModel).map EntryWire.toModel == entries) = true := by
+  native_decide
 
 /-- IDs, DIDs and image hashes are the existing models' abstract names. Native
 adapters bind them to actual Defra-created physical IDs, authenticated key

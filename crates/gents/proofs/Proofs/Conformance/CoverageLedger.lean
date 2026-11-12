@@ -1582,8 +1582,8 @@ def caseCoverage : List CoverageEntry :=
       "Binds canonical metadata observations and resource ordinals to native projection. Database-backed snapshot/signature binding and installed review remain separate obligations.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "file_inventory_order_entry_cases"
-      "FileInventoryOrderEntryCases"
+      "family"
+      "file_inventory_contracts_order_entry"
       "Binds canonical metadata observations and resource ordinals to native projection. Database-backed snapshot/signature binding and installed review remain separate obligations.")
       "file-inventory" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
