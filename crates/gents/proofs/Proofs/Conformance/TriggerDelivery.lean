@@ -3,10 +3,26 @@ import Proofs.Automation.EventDelivery.Durable
 import Proofs.Conformance.ContractTypes
 import Proofs.Automation.Triggers.SessionKey
 import Proofs.Automation.Triggers.FireBudget
+import Proofs.Conformance.Family
 
 namespace Conformance.TriggerDelivery
 
 open Triggers.Durable Conformance.Contracts
+
+structure IdentityWire where
+  ownerDid : String
+  triggerId : String
+  sourceCollection : String
+  sourceDocId : String
+  deriving Lean.ToJson
+
+def IdentityWire.ofModel (id : Identity) : IdentityWire :=
+  { ownerDid := id.owner, triggerId := id.trigger, sourceCollection := id.collection,
+    sourceDocId := id.document }
+
+def IdentityWire.toModel (id : IdentityWire) : Identity :=
+  { owner := id.ownerDid, trigger := id.triggerId, collection := id.sourceCollection,
+    document := id.sourceDocId }
 
 def callbackVisibilityCases : List String := do
   let visible ← [false, true]
@@ -403,12 +419,26 @@ def callbackCursorCases : List String :=
    { name := "callback_disabled_callback_holds_match", callbackEnabled := false, checkpointCommit := some true },
    { name := "callback_disabled_passes_receipts", bindingEnabled := false, committed := ["b"], checkpointCommit := some true }].map callbackCursorCase
 
-def identityCases : List String :=
-  [identity "owner-a" "a", identity "owner-b" "a", identity "a:b" "é",
-   { identity "a" "b:é" with trigger := "b:handoff" }].map fun id => object [
-    ("identity", identityJson id), ("key", jsonString id.key),
-    ("request_id", jsonString id.requestId), ("session_id", jsonString id.sessionId),
-    ("outcome_id", jsonString id.outcomeId)]
+structure FireIdentityInput where
+  identity : IdentityWire
+  deriving Lean.ToJson
+
+structure FireIdentityKeys where
+  key : String
+  requestId : String
+  sessionId : String
+  outcomeId : String
+  deriving Lean.ToJson
+
+@[conformance_family]
+def fireIdentity : Family FireIdentityInput FireIdentityKeys where
+  inputs := [identity "owner-a" "a", identity "owner-b" "a", identity "a:b" "é",
+    { identity "a" "b:é" with trigger := "b:handoff" }].map fun id =>
+      { identity := IdentityWire.ofModel id }
+  model := fun i =>
+    let id := i.identity.toModel
+    { key := id.key, requestId := id.requestId, sessionId := id.sessionId,
+      outcomeId := id.outcomeId }
 
 def sessionCases : List String :=
   let id := identity "owner-a" "a"
@@ -561,9 +591,6 @@ def triggerDeliveryCallbackCursorCasesJson : String :=
 
 def triggerDeliveryCallbackVisibilityCasesJson : String :=
   jsonArray callbackVisibilityCases
-
-def triggerDeliveryIdentityCasesJson : String :=
-  jsonArray identityCases
 
 def triggerDeliverySessionCasesJson : String :=
   jsonArray sessionCases

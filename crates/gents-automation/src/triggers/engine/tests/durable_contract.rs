@@ -123,14 +123,15 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
             "{case}"
         );
     }
-    for case in cases["trigger_delivery_identity_cases"].as_array().unwrap() {
-        let id: FireIdentity = decode(&case["identity"]);
-        let key = durable::fire_key(&id);
-        assert_eq!(key, case["key"].as_str().unwrap());
-        assert_eq!(id.request_id(), case["request_id"]);
-        assert_eq!(id.session_id(), case["session_id"]);
-        assert_eq!(id.outcome_id(), case["outcome_id"]);
-    }
+    gents_lean_vocab::families::trigger_delivery_fire_identity::replay(|input| {
+        let id: FireIdentity = gents_lean_vocab::family::recode(&input.identity);
+        gents_lean_vocab::families::trigger_delivery_fire_identity::FireIdentityKeys {
+            key: durable::fire_key(&id),
+            request_id: id.request_id(),
+            session_id: id.session_id(),
+            outcome_id: id.outcome_id(),
+        }
+    });
     for case in cases["trigger_delivery_session_cases"].as_array().unwrap() {
         let id: FireIdentity = decode(&case["identity"]);
         assert_eq!(
