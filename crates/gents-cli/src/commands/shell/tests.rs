@@ -29,8 +29,7 @@ use super::source::{self, Opening};
 use super::testing::{question, shown_rows, text_message, At};
 use super::work::{self, Work};
 use crate::commands::config::crud::{
-    load_one, query_collection, query_collection_sorted, MCP_SPEC, SCHEDULE_SPEC, SKILL_SPEC,
-    TRIGGER_SPEC,
+    load_one, query_collection_sorted, MCP_SPEC, SCHEDULE_SPEC, SKILL_SPEC, TRIGGER_SPEC,
 };
 use crate::commands::eval::testing::test_runtime_handle;
 
