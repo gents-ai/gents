@@ -18,4 +18,12 @@ serde_json.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+prettyplease = "0.2"
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1"
+syn = { version = "2", features = ["full"] }
 tokio.workspace = true
+
+[[example]]
+name = "decoders_from_snapshot"
+path = "examples/decoders_from_snapshot/main.rs"
