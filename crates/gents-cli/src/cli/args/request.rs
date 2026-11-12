@@ -107,6 +107,8 @@ pub(crate) struct RequestSubmitArgs {
         help = "TTL for this request (e.g. 30s, 5m, 2h, 1d). Default: 5m. Use \"none\" or 0 to disable."
     )]
     pub(crate) valid_until: Option<String>,
+    #[arg(long, help = "Steer the running turn instead of queueing after it")]
+    pub(crate) steer: bool,
     #[arg(long = "output-file")]
     pub(crate) output_file: Option<PathBuf>,
     #[arg(long, default_value_t = false)]
@@ -123,6 +125,8 @@ pub(crate) struct RequestInterruptArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
+    #[arg(long)]
+    pub(crate) node_did: Option<String>,
     #[arg(long, default_value_t = false)]
     pub(crate) wait: bool,
     #[arg(
@@ -151,13 +155,15 @@ pub(crate) struct RequestResendArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
+    #[arg(long)]
+    pub(crate) node_did: Option<String>,
     #[arg(long = "request-id")]
     pub(crate) request_id_flag: Option<String>,
     #[arg(value_name = "REQUEST_ID")]
     pub(crate) request_id: Option<String>,
     #[arg(long = "output-file")]
     pub(crate) output_file: Option<PathBuf>,
-    #[arg(long, default_value_t = true)]
+    #[arg(long, default_value_t = false)]
     pub(crate) no_wait: bool,
     #[arg(long, default_value_t = crate::DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS)]
     pub(crate) timeout_secs: u64,
@@ -171,6 +177,8 @@ pub(crate) struct RequestShowArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
+    #[arg(long)]
+    pub(crate) node_did: Option<String>,
     #[arg(long = "output", value_enum, default_value_t = OutputFormat::Text)]
     pub(crate) output: OutputFormat,
     #[arg(long = "request-id")]
@@ -239,6 +247,8 @@ pub(crate) struct ResponseShowArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
+    #[arg(long)]
+    pub(crate) node_did: Option<String>,
     #[arg(long = "request-id")]
     pub(crate) request_id_flag: Option<String>,
     #[arg(value_name = "REQUEST_ID")]
@@ -251,6 +261,8 @@ pub(crate) struct ResponseWaitArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(long)]
     pub(crate) graphql: Option<String>,
+    #[arg(long)]
+    pub(crate) node_did: Option<String>,
     #[arg(long = "request-id")]
     pub(crate) request_id_flag: Option<String>,
     #[arg(value_name = "REQUEST_ID")]

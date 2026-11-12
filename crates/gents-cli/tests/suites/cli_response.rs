@@ -349,7 +349,7 @@ async fn assert_invalid_terminal_selection(
     let wait_error = response_wait_failure(runtime, request_id, "5")?;
     assert!(
         wait_error.contains(&format!(
-            "canonical output for request {request_id} is invalid"
+            "request {request_id} reached its end but its answer is invalid"
         )),
         "wait must report the invalid canonical observation: {wait_error}"
     );
@@ -497,7 +497,7 @@ async fn response_show_diagnoses_missing_materialized_message() -> Result<()> {
     );
     let loading_wait_error = response_wait_failure(&runtime, &loading_request_id, "1")?;
     assert!(
-        loading_wait_error.contains("timed out waiting for materialized AgentMessage"),
+        loading_wait_error.contains("did not reach a terminal state within 1s"),
         "wait must report the materialization timeout, got: {loading_wait_error}"
     );
     assert!(loading_wait_error.contains(&loading_request_id));

@@ -21,7 +21,7 @@ use serde_json::Value;
 
 use crate::cli::ConfigTaskRunArgs;
 use crate::config_writes::ConfigAccess;
-use crate::request_helpers::wait_for_terminal_response;
+use crate::request_helpers::{request_ref, wait_for_request};
 use crate::{print_json, resolve_config_access};
 use gents_service::home_state::resolve_graphql_endpoint;
 
@@ -30,11 +30,12 @@ pub(crate) async fn config_task_run(args: ConfigTaskRunArgs) -> Result<()> {
     let mut value = serde_json::to_value(&output)?;
     if args.wait {
         let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
-        let response = wait_for_terminal_response(
-            &graphql,
-            &output.request_id,
+        let response = wait_for_request(
+            &gents_store::config_client::ConfigAccess::Graphql(graphql),
+            request_ref(&output.node_did, &output.request_id),
             args.timeout_secs,
             args.poll_secs,
+            || async { Ok(false) },
         )
         .await?;
         if let Some(object) = value.as_object_mut() {

@@ -375,7 +375,7 @@ async fn request_interrupt_does_not_latch_completed_request() -> Result<()> {
     )
     .await?;
 
-    let interrupted = run_cli_json(
+    let refused = run_cli_failure_stderr(
         &home_dir,
         &[
             "utils",
@@ -389,35 +389,15 @@ async fn request_interrupt_does_not_latch_completed_request() -> Result<()> {
             &request_id,
         ],
     )?;
-    assert_eq!(
-        interrupted.get("request_id").and_then(Value::as_str),
-        Some(request_id.as_str())
-    );
-    assert_eq!(
-        interrupted.get("lifecycle_state").and_then(Value::as_str),
-        Some("completed")
-    );
-    assert_eq!(
-        interrupted.get("already_terminal").and_then(Value::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        interrupted
-            .get("already_interrupted")
-            .and_then(Value::as_bool),
-        Some(false)
+    assert!(
+        refused.contains(&format!(
+            "request {request_id} is already completed and cannot be interrupted"
+        )),
+        "a completed request is refused: {refused}"
     );
     assert!(
-        interrupted
-            .get("interrupt_landed_at")
-            .is_none_or(Value::is_null),
-        "completed request should not report a new interrupt landing time: {interrupted}"
-    );
-    assert!(
-        interrupted
-            .get("interrupt_requested_at")
-            .is_none_or(Value::is_null),
-        "completed request should not latch interrupt_requested_at: {interrupted}"
+        refused.contains("Next: gents utils debug request show <REQUEST_ID>"),
+        "the refusal names the next call: {refused}"
     );
 
     let row = wait_for_request_lifecycle_state(

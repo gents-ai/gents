@@ -7,13 +7,15 @@ use anyhow::Context;
 use chrono::{DateTime, Local, Utc};
 use gents_desktop_core::client::canonical_output::CanonicalLiveText;
 use gents_desktop_core::client::{
-    interrupt_request_on, load_node_snapshot_on, load_session_compaction_entries_on,
-    load_session_live_text_on, load_session_transcript_window_on, tool_file_changes_on,
-    ClientStore, TranscriptWindow,
+    load_node_snapshot_on, load_session_compaction_entries_on, load_session_live_text_on,
+    load_session_transcript_window_on, tool_file_changes_on, ClientStore, TranscriptWindow,
 };
 use gents_desktop_core::inference::{load_inference_setup_state, AgentView};
 use gents_protocol::node_readiness::AgentReadinessState;
-use gents_protocol::request_input::{QueueDelivery, RequestInput};
+use gents_protocol::operations::request::{
+    MessageSendInput, RequestInterruptInput, RequestOperationError, RequestReceipt,
+};
+use gents_protocol::request_input::RequestInput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::session::SessionScope;
 use gents_session::session::mailbox::MailboxItem;
@@ -1718,7 +1720,7 @@ impl Source {
                 .await?
                 .context("MailboxItem not found")?;
             let reply = work::reply_from_text(text, &item).map_err(anyhow::Error::msg)?;
-            mailbox::reply_to(&work.endpoint, &item, reply).await
+            mailbox::reply_to(&work.access(), &item, reply).await
         };
         if let Err(error) = replied.await {
             self.tell(Update::Notice(format!("{error:#}")));
@@ -1852,26 +1854,10 @@ impl Source {
         let session = self.session_for(tab, session);
         let principal = &self.principal;
         let submitted = async {
-            // The owner requires a retry key, by which it recognises a retried submission.
-            let request_id = uuid::Uuid::new_v4().to_string();
-            let options = crate::RequestSubmitOptions {
-                retry_key: Some(format!("goal-request:{request_id}")),
-                ..Default::default()
-            };
-            let prepared = crate::prepare_agent_request_with_input(
-                &work.endpoint,
-                principal,
-                &objective,
-                Some(&session),
-                Some(agent),
-                Some(request_id),
-                options,
-            )
-            .await?;
             let access = work.access();
-            let create = &prepared.create;
+            let create = goal_request(&access, principal, &session, agent, &objective).await?;
             gents_automation::goal::submit_goal_backed_request(
-                &access, principal, &session, &objective, None, create,
+                &access, principal, &session, &objective, None, &create,
             )
             .await
         };
@@ -1893,10 +1879,13 @@ impl Source {
         let Ok(work) = self.work.clone() else {
             return;
         };
-        if !ended(&work.access(), &self.principal, &turn).await {
-            let stopped = interrupt_request_on(&work.access(), &self.principal, &turn).await;
-            if let Err(error) = stopped {
-                return self.tell(Update::Notice(error));
+        let request = crate::request_helpers::request_ref(&self.principal, &turn);
+        let input = RequestInterruptInput { request };
+        match gents::operations::request::interrupt(&work.access(), input).await {
+            Ok(_) | Err(RequestOperationError::InterruptTerminal { .. }) => {}
+            Err(error) => {
+                let failure = crate::operation_failure::OperationFailure::from(error);
+                return self.tell(Update::Notice(failure.to_string()));
             }
         }
         self.interrupted.insert(turn.clone());
@@ -1909,7 +1898,8 @@ impl Source {
     }
 }
 
-/// The user's message, queued as the desktop queues one: it steers a running turn.
+/// The user's message. A turn still running in the session finishes first: the shell has no
+/// per-message choice to steer it.
 async fn submit(
     work: &Work,
     node: &str,
@@ -1917,24 +1907,68 @@ async fn submit(
     agent: &str,
     text: &str,
     skills: Vec<String>,
-) -> anyhow::Result<crate::SubmittedRequest> {
-    let input = RequestInput {
-        selected_skill_ids: skills,
+) -> anyhow::Result<RequestReceipt> {
+    let access = work.access();
+    let signer = crate::request_helpers::client_signer(&access)?;
+    let input = MessageSendInput {
+        node_did: node.to_owned(),
+        session_id: Some(session.to_owned()),
+        agent_did: Some(agent.to_owned()),
+        content: text.to_owned(),
+        input: RequestInput {
+            selected_skill_ids: skills,
+            ..Default::default()
+        },
         ..Default::default()
     };
-    let (access, steer) = (work.access(), QueueDelivery::Steer);
-    let input = gents_session::request::lifecycle::prepare_user_message_input(
-        &access, node, session, input, steer,
-    );
-    let options = crate::RequestSubmitOptions {
-        input: Some(input.await?),
-        ..Default::default()
+    let sent = gents::operations::request::send(&access, &signer, input).await;
+    Ok(sent.map_err(crate::operation_failure::OperationFailure::from)?)
+}
+
+/// The goal's first request, signed by this CLI's User. The goal owner commits it with the goal
+/// and recognises a retried submission by its retry key, so it is built here rather than sent.
+pub(super) async fn goal_request(
+    access: &ConfigAccess,
+    node: &str,
+    session: &str,
+    agent: &str,
+    objective: &str,
+) -> anyhow::Result<gents_protocol::request_admission::AgentRequestCreate> {
+    use gents_session::request::lifecycle::{
+        build_signed_client_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
+        RetryLink, DEFAULT_REQUEST_MAX_RETRIES,
     };
-    let (session, agent) = (Some(session), Some(agent));
-    let endpoint = &work.endpoint;
-    let prepared =
-        crate::prepare_agent_request(endpoint, node, text, session, agent, None, options);
-    crate::submit_prepared_agent_request_committed(endpoint, &prepared.await?).await
+    let signer = crate::request_helpers::client_signer(access)?;
+    let actor = gents_store::identity::NodeIdentity::did(&signer).to_owned();
+    let requester =
+        gents_session::session::client_requester_scope(access, node, session, &actor).await?;
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let spec = RequestSpec {
+        retry_key: Some(format!("goal-request:{request_id}")),
+        retry: Some(RetryLink {
+            parent_request_id: None,
+            parent_request_doc_id: None,
+            root_request_id: request_id.clone(),
+            retry_count: 0,
+            max_retries: i64::from(DEFAULT_REQUEST_MAX_RETRIES),
+        }),
+        ..RequestSpec::new(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            RequestIdentity {
+                request_id,
+                node_did: node.to_owned(),
+                requester_did: Some(requester),
+                agent_did: agent.to_owned(),
+                session_id: session.to_owned(),
+                content: objective.to_owned(),
+                execution_origin: ExecutionOrigin::Interactive,
+                created_at,
+            },
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::client(&actor),
+        )
+    };
+    build_signed_client_request(access, spec, RequestSigner::Identity(&signer)).await
 }
 
 /// The session's running request, unless the user stopped it.
@@ -1947,18 +1981,6 @@ fn turn_of(
     let request = store.turn_request_id_for_session_for_node(session, node)?;
     let state = store.derive_turn_for_request_for_node(&request, node)?;
     (!state.is_terminal() && !stopped.contains(&request)).then_some(request)
-}
-
-/// Whether `request` has ended, as the node has it now; a request that cannot be read is
-/// taken to run, so the interrupt owner says why it cannot be stopped.
-async fn ended(access: &ConfigAccess, node: &str, request: &str) -> bool {
-    let query = crate::request_terminal_query(request, None);
-    let rows = crate::graphql_rows(access, "AgentRequest", &query).await;
-    let mut rows = rows.into_iter().flatten();
-    rows.any(|row| {
-        row["node_did"] == node
-            && RequestLifecycleState::is_terminal_str(row["lifecycle_state"].as_str())
-    })
 }
 
 /// Why `request` failed, when it did.
