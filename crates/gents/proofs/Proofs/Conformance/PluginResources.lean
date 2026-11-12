@@ -26,10 +26,18 @@ def limitConsent : Family LimitConsentInput Bool where
     [false, true].map fun consent => { requested, previous, consent }
   model := fun i => pluginResourceConsented i.requested i.previous i.consent
 
-private def budgetsJson : Json := toJson <| [(64, 4096), (5, 900), (60, 900), (1, 4)].flatMap fun (baseline, ceiling) =>
-  [0, 1, baseline, ceiling, ceiling + 1, 4294967295].map fun requested => Json.mkObj [
-    ("baseline", toJson baseline), ("requested", toJson requested), ("ceiling", toJson ceiling),
-    ("expected", toJson (effectivePluginResource baseline requested ceiling))]
+structure LimitBudgetInput where
+  baseline : Nat
+  requested : Nat
+  ceiling : Nat
+  deriving ToJson
+
+@[conformance_family]
+def limitBudget : Family LimitBudgetInput Nat where
+  inputs := [(64, 4096), (5, 900), (60, 900), (1, 4)].flatMap fun (baseline, ceiling) =>
+    [0, 1, baseline, ceiling, ceiling + 1, 4294967295].map fun requested =>
+      { baseline, requested, ceiling }
+  model := fun i => effectivePluginResource i.baseline i.requested i.ceiling
 
 private def modelSlotsJson : Json := toJson <| [false, true].flatMap fun declared =>
   [false, true].flatMap fun optional =>
@@ -443,9 +451,6 @@ theorem route_regressions :
       [ false, false, false, true, false, false, false, true
       , false, false, false, true, false, false, false, true ] := by
   native_decide
-
-def pluginResourceBudgetCasesJson : String :=
-  budgetsJson.compress
 
 def pluginResourcePublicationCasesJson : String :=
   publicationJson.compress

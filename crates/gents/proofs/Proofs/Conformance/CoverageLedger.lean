@@ -1627,8 +1627,8 @@ def caseCoverage : List CoverageEntry :=
       "PluginModelSlotCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_budget_cases"
-      "PluginResourceCases")
+      "family"
+      "plugin_resources_limit_budget")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_resource_network_cases"
