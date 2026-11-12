@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import type { JobView } from "@source-inc/gents-desktop-client/generated/JobView";
 
+import { sessionDraftKey } from "../src/hooks/shellView";
 import { href } from "../src/ui/lib/router";
 import { JobProgressCell } from "../src/ui/screens/JobProgressCell";
 import { node, renderIn, testApp } from "./app-fixture";
@@ -43,7 +44,9 @@ function mount(
   const app = testApp({
     api: { getJobView, ...api },
     deployments: [node(owner)],
-    selection: { nodeDid: owner.nodeDid, sessionId: "session-intro" },
+    /* no session open: in one, Open run opens the run in the session's
+       panel instead (workflows-surface.test.tsx) */
+    selection: { nodeDid: owner.nodeDid, sessionId: null },
   });
   const view = renderIn(app, cell(tool));
   return { app, view };
@@ -133,7 +136,9 @@ describe("WorkflowRunSheet", () => {
   it("links each child to its session", async () => {
     mount(vi.fn().mockResolvedValue(run()));
     const sheet = await openRun();
-    const links = within(sheet).getAllByRole("link");
+    const links = within(within(sheet).getByTestId("run-children")).getAllByRole(
+      "link",
+    );
     expect(links.map((link) => link.getAttribute("href"))).toEqual([
       href({ name: "session", sessionId: "session-workflow-review" }),
       href({ name: "session", sessionId: "session-workflow-verify" }),
@@ -196,7 +201,8 @@ describe("WorkflowRunSheet", () => {
     expect(within(sheet).getByTestId("run-question").textContent).toBe("Which branch?");
     expect(within(sheet).queryByRole("button", { name: "Stop" })).toBeNull();
     fireEvent.click(within(sheet).getByRole("button", { name: "Answer" }));
-    const key = app.view.getState().draftKey;
+    /* the run's own session's draft, opened from outside it */
+    const key = sessionDraftKey(waiting.scope.node_did, waiting.session_id);
     expect(app.drafts.getState().drafts[key]).toBe("Answer for review: ");
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });

@@ -704,8 +704,7 @@ describe("the running in background group", () => {
     expect(screen.queryByRole("region", { name: "Running" })).toBeNull();
   });
 
-  it("stops a running job through job control", async () => {
-    const controlJob = vi.fn().mockResolvedValue({ Applied: {} });
+  it("leaves a workflow run in the session's rows to the Workflows tab", async () => {
     const { app } = appWith(
       [
         command("job", "nightly-report", {
@@ -715,17 +714,12 @@ describe("the running in background group", () => {
         }),
       ],
       [],
-      { jobControl: controlJob },
     );
     render(<BackgroundSurface placement="dock" sessionId="parent" />, {
       wrapper: withApp(app),
     });
-    fireEvent.click(screen.getByRole("button", { name: "Stop nightly-report" }));
-    expect(controlJob).toHaveBeenCalledWith({
-      nodeDid: NODE,
-      toolCallDocId: "doc-job",
-      action: "stop",
-    });
+    expect(screen.queryByText(/nightly-report/)).toBeNull();
+    expect(screen.getByText("Nothing running")).toBeVisible();
   });
 
   it("stops only the displayed native invocation", async () => {

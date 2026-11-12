@@ -88,6 +88,8 @@ export function backgroundCalls(
     (t): t is RenderedToolCallView & { requestId: string; toolCallId: string } =>
       t.awaitMode === "background" &&
       Boolean(t.requestId && t.toolCallId) &&
+      /* a workflow run has its own tab */
+      !(t.jobProgress || t.jobState) &&
       t.presentation.kind !== "agent" &&
       (t.presentation.kind !== "process" || t.presentation.action === "spawn"),
   );

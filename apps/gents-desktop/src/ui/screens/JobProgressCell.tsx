@@ -17,6 +17,7 @@ import { useFleet } from "../hooks/useFleet";
 import { useHomeDid } from "../hooks/useClient";
 import { isLocalNode } from "../lib/firstRun";
 import { WorkflowRunSheet } from "./WorkflowRunSheet";
+import { openWorkflowRun } from "./WorkflowsSurface";
 import {
   isTerminalJob,
   JobProgressBody,
@@ -121,7 +122,16 @@ export function JobProgressCell({ tool }: { tool: RenderedToolCallView }) {
             </>
           )}
           {tool.toolCallDocId && tool.nodeDid && (
-            <Button size="xs" variant="quiet" onClick={() => setRunOpen(true)}>
+            <Button
+              size="xs"
+              variant="quiet"
+              onClick={() =>
+                /* in a session, the run opens in its panel; elsewhere, in a sheet */
+                sessionId && tool.toolCallDocId
+                  ? openWorkflowRun(sessionId, tool.toolCallDocId)
+                  : setRunOpen(true)
+              }
+            >
               <PanelRightOpen />
               Open run
             </Button>

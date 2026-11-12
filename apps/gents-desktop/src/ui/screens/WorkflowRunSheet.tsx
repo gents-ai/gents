@@ -1,52 +1,11 @@
-/* One workflow run as the node's operator reads it (`desktop_job_view`, the
-   reader `gents automation job show` prints). The state is the view's own,
-   derived from the row's lifecycle, never the progress record's. It re-reads
-   when the cell's observation of the row changes; nothing here polls. */
+/* A workflow run in a sheet, for where there is no session panel to show
+   it in: the node's Workflows page. */
 
-import { useEffect, useRef, useState } from "react";
-import type { JobControlKind } from "@source-inc/gents-desktop-client/generated/JobControlKind";
-import type { JobView } from "@source-inc/gents-desktop-client/generated/JobView";
-import { CircleCheck, CircleX, History, Pause, Square } from "lucide-react";
-import type { JobChildState } from "@source-inc/gents-desktop-client/generated/JobChildState";
-import { AsciiLoader } from "@gents/ui/components/ascii-loader";
-import { Button } from "@gents/ui/components/button";
-import { Hint } from "./Hint";
-import { cn } from "@gents/ui/lib/utils";
-import { useApp } from "@/app/AppContext";
-import { duration } from "@/lib/duration";
-import { href } from "@/lib/router";
-import { compactTokens } from "@/lib/tokens";
-import { errorText } from "../../lib/errorText";
-import { nodeOf } from "../../hooks/fleetStore";
-import { useFleet } from "../hooks/useFleet";
-import { useHomeDid } from "../hooks/useClient";
-import { isLocalNode } from "../lib/firstRun";
-import { toastFailure } from "../lib/failure";
+import { useRef } from "react";
 import { EditorSheet } from "./agent/EditorSheet";
-import {
-  JobProgressBody,
-  JobStateMark,
-  JobStatePill,
-  useAnswerJob,
-  words,
-} from "./jobParts";
-import { PromoteWorkflowDialog } from "./PromoteWorkflowDialog";
+import { runTitle, useWorkflowRun, WorkflowRunView } from "./WorkflowRun";
 
-export const runAt = (ms: number) =>
-  new Date(ms).toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-
-/** An installed plugin by its `pack/name`; a one-off script by its id. */
-export const whatRan = (view: JobView) =>
-  view.pin.origin === "dynamic"
-    ? `Script ${view.pin.script_id.slice(0, 8)}`
-    : view.pin.plugin_ref;
-
-type Read = { key: string; view: JobView | null; error: string | null };
+export { runAt, whatRan } from "./WorkflowRun";
 
 export function WorkflowRunSheet({
   open,
@@ -62,76 +21,17 @@ export function WorkflowRunSheet({
   observed: string;
   onClose: () => void;
 }) {
-  const { actions } = useApp();
-  const answerJob = useAnswerJob();
-  const homeDid = useHomeDid();
-  const runNode = useFleet((fleet) => nodeOf(fleet, nodeDid));
-  const nodeIsLocal = !!runNode && isLocalNode(runNode, homeDid);
-  /* the earlier runs opened along the resume chain, latest last */
-  const [trail, setTrail] = useState<string[]>([]);
-  const [promoting, setPromoting] = useState(false);
-  const [read, setRead] = useState<Read | null>(null);
+  const run = useWorkflowRun({ nodeDid, rowDocId, observed, active: open });
   const answering = useRef(false);
-  const shown = trail[trail.length - 1] ?? rowDocId;
-  const key = `${nodeDid}\u0000${shown}`;
-
-  useEffect(() => {
-    if (!open) return;
-    let current = true;
-    actions.getJobView({ nodeDid, rowDocId: shown }).then(
-      (view) => current && setRead({ key, view, error: null }),
-      (e: unknown) =>
-        current &&
-        setRead((held) => ({
-          key,
-          view: held?.key === key ? held.view : null,
-          error: errorText(e),
-        })),
-    );
-    return () => {
-      current = false;
-    };
-  }, [actions, open, nodeDid, shown, key, observed]);
-
   const close = () => {
-    setTrail([]);
-    setPromoting(false);
+    run.reset();
     onClose();
   };
-  const current = read?.key === key ? read : null;
-  const view = current?.view ?? null;
-  const progress = view?.progress ?? null;
-  const control = (action: JobControlKind) => {
-    if (!view) return;
-    actions
-      .controlJob({ nodeDid, toolCallDocId: view.row_doc_id, action })
-      .catch((e: unknown) => toastFailure(action, e));
-  };
-  const answer = () => {
-    if (!view) return;
-    answering.current = true;
-    answerJob(view.handle, {
-      sessionId: view.session_id,
-      nodeDid: view.scope.node_did,
-    });
-    close();
-  };
-  const children = view
-    ? [...view.children].sort(
-        (a, b) => Number(b.state === "live") - Number(a.state === "live"),
-      )
-    : [];
-  const promotable =
-    !!view &&
-    view.state === "completed" &&
-    view.pin.origin === "dynamic" &&
-    nodeIsLocal;
-
   return (
     <EditorSheet
       open={open}
       onClose={close}
-      title={view ? progress?.title || view.handle : "Workflow run"}
+      title={runTitle(run.view)}
       finalFocus={() => {
         if (!answering.current) return true;
         answering.current = false;
@@ -142,202 +42,13 @@ export function WorkflowRunSheet({
         );
       }}
     >
-      <div className="grid gap-5 text-sm" data-testid="run-view">
-        {trail.length > 0 && (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="justify-self-start"
-            onClick={() => setTrail(trail.slice(0, -1))}
-          >
-            Back
-          </Button>
-        )}
-        {current?.error && (
-          <p data-testid="run-error" className="text-destructive">
-            {current.error}
-          </p>
-        )}
-        {!current && <p className="text-muted-foreground">Loading run…</p>}
-        {view && (
-          <>
-            <div className="grid gap-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <JobStateMark state={view.state} />
-                <JobStatePill state={view.state} />
-                <span
-                  data-testid="run-what"
-                  className="font-mono text-xs text-muted-foreground"
-                >
-                  {whatRan(view)}
-                </span>
-                {view.state === "running" && (
-                  <span className="ml-auto flex gap-0.5">
-                    <Hint label="Pause">
-                      <Button
-                        size="icon-xs"
-                        variant="quiet"
-                        aria-label="Pause"
-                        onClick={() => control("pause")}
-                      >
-                        <Pause />
-                      </Button>
-                    </Hint>
-                    <Hint label="Stop">
-                      <Button
-                        size="icon-xs"
-                        variant="quiet"
-                        aria-label="Stop"
-                        onClick={() => control("stop")}
-                      >
-                        <Square />
-                      </Button>
-                    </Hint>
-                  </span>
-                )}
-              </div>
-              <dl
-                data-testid="run-times"
-                className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-0.5 text-xs"
-              >
-                <dt className="text-muted-foreground">Started</dt>
-                <dd>{runAt(view.created_at)}</dd>
-                {view.completed_at != null && (
-                  <>
-                    <dt className="text-muted-foreground">Finished</dt>
-                    <dd>{runAt(view.completed_at)}</dd>
-                    <dt className="text-muted-foreground">Duration</dt>
-                    <dd data-testid="run-duration">
-                      {duration(view.completed_at - view.created_at)}
-                    </dd>
-                  </>
-                )}
-              </dl>
-              {view.pin.resume_of && (
-                <button
-                  type="button"
-                  data-testid="run-resumed-from"
-                  className="inline-flex items-center gap-1 justify-self-start text-xs text-muted-foreground underline decoration-border underline-offset-4 hover:text-foreground hover:decoration-foreground"
-                  onClick={() => setTrail([...trail, view.pin.resume_of!])}
-                >
-                  <History className="size-3" />
-                  Resumed from an earlier run
-                </button>
-              )}
-            </div>
-            {progress && (
-              <div className="grid gap-2">
-                <JobProgressBody state={view.state} progress={progress} />
-              </div>
-            )}
-            {view.state === "awaiting_user" && progress?.question && (
-              <div className="flex items-center gap-2">
-                <p data-testid="run-question" className="min-w-0 flex-1">
-                  {progress.question}
-                </p>
-                <Button size="sm" variant="outline" onClick={answer}>
-                  Answer
-                </Button>
-              </div>
-            )}
-            {(view.state === "failed" || view.state === "timed_out") &&
-              view.outcome && (
-                <p data-testid="run-outcome">
-                  <span className="font-mono">{view.outcome.code}</span>{" "}
-                  {view.outcome.message}
-                </p>
-              )}
-            {children.length > 0 && (
-              <section className="grid gap-2">
-                <h3 className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-                  Agents
-                </h3>
-                <ul
-                  data-testid="run-children"
-                  className="grid divide-y divide-border/60"
-                >
-                  {children.map((child) => {
-                    const name = child.title || child.slot;
-                    return (
-                      <li
-                        key={child.slot}
-                        data-testid="run-child"
-                        data-state={child.state}
-                        className="flex items-center gap-3 py-2"
-                      >
-                        <ChildMark state={child.state} />
-                        <span className="min-w-0 flex-1 truncate">
-                          {child.session_id ? (
-                            <a
-                              href={href({
-                                name: "session",
-                                sessionId: child.session_id,
-                              })}
-                              className="underline decoration-border underline-offset-4 hover:decoration-foreground"
-                              onClick={close}
-                            >
-                              {name}
-                            </a>
-                          ) : (
-                            name
-                          )}
-                        </span>
-                        <span
-                          className={cn(
-                            "text-xs",
-                            child.state !== "live" && "text-muted-foreground",
-                          )}
-                        >
-                          {words(child.state)}
-                        </span>
-                        <span className="text-xs text-muted-foreground tabular-nums">
-                          {compactTokens(child.usage.total)} tokens
-                        </span>
-                        <span className="text-xs text-muted-foreground tabular-nums">
-                          {duration(child.duration_ms)}
-                        </span>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </section>
-            )}
-            {promotable && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="justify-self-start"
-                onClick={() => setPromoting(true)}
-              >
-                Promote
-              </Button>
-            )}
-            {promoting && promotable && (
-              <PromoteWorkflowDialog
-                key={view.address}
-                selector={view.address}
-                onClose={() => setPromoting(false)}
-              />
-            )}
-          </>
-        )}
-      </div>
+      <WorkflowRunView
+        run={run}
+        onLeave={(toComposer) => {
+          answering.current = toComposer;
+          close();
+        }}
+      />
     </EditorSheet>
-  );
-}
-
-function ChildMark({ state }: { state: JobChildState }) {
-  return (
-    <span className="grid size-4 shrink-0 place-items-center text-muted-foreground">
-      {state === "live" ? (
-        <AsciiLoader className="text-foreground" />
-      ) : state === "completed" ? (
-        <CircleCheck className="size-3.5" />
-      ) : state === "failed" ? (
-        <CircleX className="size-3.5 text-destructive" />
-      ) : (
-        <span className="size-1.5 rounded-full bg-border" />
-      )}
-    </span>
   );
 }
