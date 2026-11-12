@@ -914,6 +914,7 @@ async fn sink_deliveries_match_the_lean_capture_model() {
             .await
             .err()
             .map(|error| sink_refusal(&error));
+        let bound_after_redelivery = reopened.stored_fact(&delivery).await.unwrap().is_some();
         let unrelated = fixture.turn(
             2,
             json!({"messages": [{"role": "user", "content": "fresh"}]}),
@@ -925,6 +926,7 @@ async fn sink_deliveries_match_the_lean_capture_model() {
             bound,
             blocks_written,
             redelivery_refusal,
+            bound_after_redelivery,
             unrelated_durable,
         });
         node.shutdown().await.expect("node shutdown");

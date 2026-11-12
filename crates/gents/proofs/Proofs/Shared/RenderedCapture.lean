@@ -1047,6 +1047,7 @@ structure SinkDelivery where
   bound : Bool
   blocksWritten : Bool
   redeliveryRefusal : Option SinkRefusal
+  boundAfterRedelivery : Bool
   unrelatedDurable : Bool
   deriving DecidableEq, Repr
 
@@ -1064,6 +1065,7 @@ def sinkDeliver (key : CaptureKey) (prior : SinkPrior) (blockDeleted : Bool) : S
   let sc : Scenario := { key, request := deliveredRequest, priorBinding := prior.binding }
   let blocked := blockDeleted && prior.binding.isNone
   let post := if blocked then sc.store else sc.postStore
+  let redelivered := if blocked then post else (capture post key deliveredRequest).2
   let unrelated := { key with turnIndex := key.turnIndex + 1 }
   { refusal := if blocked then some .missingBlock else SinkDelivery.refusalOf sc.outcome
   , bound := (post key).isSome
@@ -1071,7 +1073,8 @@ def sinkDeliver (key : CaptureKey) (prior : SinkPrior) (blockDeleted : Bool) : S
   , redeliveryRefusal :=
       if blocked then some .missingBlock
       else SinkDelivery.refusalOf (capture post key deliveredRequest).1
-  , unrelatedDurable := (capture post unrelated ⟨3⟩).1.durable }
+  , boundAfterRedelivery := (redelivered key).isSome
+  , unrelatedDurable := (capture redelivered unrelated ⟨3⟩).1.durable }
 
 def sinkKey : CaptureKey := ⟨0, 0, 0, 0, 0⟩
 
@@ -1088,7 +1091,8 @@ theorem same_capture_key_cannot_rebind_its_transport_route :
 theorem deleted_blocks_never_publish_dangling_references :
     sinkDeliver sinkKey .unbound true =
       { refusal := some .missingBlock, bound := false, blocksWritten := false
-      , redeliveryRefusal := some .missingBlock, unrelatedDurable := true } := by
+      , redeliveryRefusal := some .missingBlock, boundAfterRedelivery := false
+      , unrelatedDurable := true } := by
   decide
 
 /-! ## Reading a stored capture back -/

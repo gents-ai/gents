@@ -290,10 +290,14 @@ mod tests {
         out
     }
 
-    fn manifest_capture() -> (String, Vec<(String, String, Vec<u8>)>) {
+    fn manifest_body() -> Value {
         let mut body = serde_json::json!({"model": "m", "stream": true, "request": 7});
         body["padding"] = serde_json::json!(capture_text(6000));
-        let canonical = canonical_json_string(&body).unwrap();
+        body
+    }
+
+    fn manifest_capture() -> (String, Vec<(String, String, Vec<u8>)>) {
+        let canonical = canonical_json_string(&manifest_body()).unwrap();
         let chunks = encoding::chunk_capture_body(&canonical);
         assert!(chunks.len() > 1, "fixture must span several blocks");
         let blocks = chunks
@@ -447,11 +451,15 @@ mod tests {
         serde_json::json!({"model": "m", "stream": false, "request": 7, "padding": "x".repeat(4096)})
     }
 
-    fn delta_request_capture() -> String {
+    fn delta_request_value() -> Value {
         let mut value = delta_base_value();
         value["stream"] = serde_json::json!(true);
+        value
+    }
+
+    fn delta_request_capture() -> String {
         let request = encoding::encode_against(
-            &value,
+            &delta_request_value(),
             &delta_base_value(),
             encoding::BaseWitness {
                 doc_id: "bae-base".into(),
@@ -469,27 +477,37 @@ mod tests {
         encoding::encode_container(&request, &provenance).unwrap()
     }
 
+    /// Decodes `stored` uncached and through a cache that already read
+    /// `captured`, the unfaulted capture of `expected`, through the same
+    /// reader: a cached base or block must not skip the witness checks.
     async fn stored_decode_observation<R>(
         reader: &R,
         version: u32,
+        captured: &str,
         stored: &str,
+        expected: &Value,
         kinds: &[CapturePayloadKind],
     ) -> (Option<u64>, Option<String>)
     where
         R: CaptureBaseReader + Sync,
     {
-        let mut cache = CaptureReadCache::default();
         let mut observed = Vec::new();
         for kind in kinds {
+            let mut cache = CaptureReadCache::default();
+            let _ =
+                decode_capture_json_from_cached(reader, version, captured, *kind, &mut cache).await;
             for decoded in [
                 decode_capture_json_from(reader, version, stored, *kind).await,
                 decode_capture_json_from_cached(reader, version, stored, *kind, &mut cache).await,
             ] {
                 observed.push(match decoded {
-                    Ok(value) => (
-                        Some(value["request"].as_u64().expect("decoded request")),
-                        None,
-                    ),
+                    Ok(value) => {
+                        assert_eq!(&value, expected, "decoded value is not the captured request");
+                        (
+                            Some(value["request"].as_u64().expect("decoded request")),
+                            None,
+                        )
+                    }
                     Err(error) => (
                         None,
                         Some(
@@ -539,7 +557,9 @@ mod tests {
                     stored_decode_observation(
                         &DeltaBaseStore { readable, base },
                         2,
+                        &delta,
                         &stored,
+                        &delta_request_value(),
                         &[CapturePayloadKind::RequestBody],
                     )
                     .await
@@ -580,6 +600,8 @@ mod tests {
                         &store,
                         3,
                         &manifest,
+                        &manifest,
+                        &manifest_body(),
                         &[
                             CapturePayloadKind::RequestBody,
                             CapturePayloadKind::ProvenancePayload,
