@@ -23,25 +23,15 @@ fn claude_sign_in(did: &str, who: &str) -> gents_inference::auth::credential::OA
 #[tokio::test]
 async fn account_events_never_repoint_a_profile() -> Result<()> {
     use gents_inference::auth::credential::{
-        remove_account_in_txn, resolve_oauth_credential, set_account_enabled, store_sign_in,
-        AccountPick,
+        resolve_oauth_credential, set_account_enabled, store_sign_in, AccountPick,
     };
-    let did = "did:key:z6MkTestProfileEvents";
-    let db = gents_inference::test_support::test_db(
-        "account-events",
-        gents_automation::lifecycle_hooks::composition(),
-    )
-    .await;
+    use gents_store::identity::NodeIdentity;
+    let (db, _user, user_access, _binding) =
+        crate::test_support::root::signed_test_node("account-events-profile").await;
     let node = db.node.clone();
-    let access = ConfigAccess::local_as(
-        node.clone(),
-        identity::Did::new(
-            node.node_identity_did()
-                .expect("fixture node has an identity"),
-        )
-        .unwrap(),
-    );
-    gents_documents::test_support::bootstrap_signed_test_node(&access, did).await;
+    let did_owned = db.node_identity.did().to_string();
+    let did = did_owned.as_str();
+    let access = ConfigAccess::local_as(node.clone(), identity::Did::new(did).unwrap());
     let spec = gents_inference::backends::setup::connection_spec(
         gents_inference::backends::setup::InferenceProviderId::Anthropic,
         gents_inference::backends::setup::InferenceAuthMethod::ClaudeOauth,
@@ -65,13 +55,13 @@ async fn account_events_never_repoint_a_profile() -> Result<()> {
         tags: Vec::new(),
     };
     gents_documents::write_inference_backend_document(
-        &access,
+        &user_access,
         &original,
         &gents_inference::resolved::ProviderProfilePolicy,
     )
     .await?;
-    let a = store_sign_in(&access, claude_sign_in(did, "a"), None).await?;
-    let b = store_sign_in(&access, claude_sign_in(did, "b"), None).await?;
+    let a = store_sign_in(&user_access, claude_sign_in(did, "a"), None).await?;
+    let b = store_sign_in(&user_access, claude_sign_in(did, "b"), None).await?;
     let b_backend = format!(
         "{}-{}",
         gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
@@ -87,7 +77,7 @@ async fn account_events_never_repoint_a_profile() -> Result<()> {
             "model_name": "model-x",
         }))?;
         gents_documents::write_inference_profile_document(
-            &access,
+            &user_access,
             &profile,
             &gents_inference::resolved::ProviderProfilePolicy,
         )
@@ -118,29 +108,31 @@ async fn account_events_never_repoint_a_profile() -> Result<()> {
     };
     let before = profiles().await;
     let remove = |credential_id: String| {
-        let access = &access;
+        let user_access = &user_access;
         async move {
-            access
-                .transact_write("test.remove", |txn| {
-                    let credential_id = credential_id.clone();
-                    Box::pin(async move { remove_account_in_txn(txn, did, &credential_id).await })
-                })
+            let account = gents_inference::auth::credential::list_accounts(user_access, did)
                 .await
                 .unwrap()
+                .into_iter()
+                .find(|account| account.credential_id == credential_id)
+                .expect("the account to remove is signed in");
+            gents_inference::operations::remove_account(user_access, did, &account)
+                .await
+                .unwrap();
         }
     };
 
-    store_sign_in(&access, claude_sign_in(did, "c"), None).await?;
+    store_sign_in(&user_access, claude_sign_in(did, "c"), None).await?;
     assert_eq!(profiles().await, before, "add C");
-    store_sign_in(&access, claude_sign_in(did, "a"), None).await?;
+    store_sign_in(&user_access, claude_sign_in(did, "a"), None).await?;
     assert_eq!(profiles().await, before, "refresh A");
-    store_sign_in(&access, claude_sign_in(did, "b"), Some("label-b2")).await?;
+    store_sign_in(&user_access, claude_sign_in(did, "b"), Some("label-b2")).await?;
     assert_eq!(profiles().await, before, "relabel B");
-    set_account_enabled(&access, did, &b.credential.credential_id, false).await?;
+    set_account_enabled(&user_access, did, &b.credential.credential_id, false).await?;
     assert_eq!(profiles().await, before, "disable B");
     remove(a.credential.credential_id.clone()).await;
     assert_eq!(profiles().await, before, "remove A");
-    let d = store_sign_in(&access, claude_sign_in(did, "d"), None).await?;
+    let d = store_sign_in(&user_access, claude_sign_in(did, "d"), None).await?;
     assert!(
         d.credential.account_ref.is_some(),
         "B remains, so D is added"
@@ -150,7 +142,7 @@ async fn account_events_never_repoint_a_profile() -> Result<()> {
     for account in gents_inference::auth::credential::list_accounts(&access, did).await? {
         remove(account.credential_id).await;
     }
-    let reused = store_sign_in(&access, claude_sign_in(did, "e"), None).await?;
+    let reused = store_sign_in(&user_access, claude_sign_in(did, "e"), None).await?;
     assert_eq!(reused.credential.account_ref, None, "the original slot");
     assert_eq!(reused.profiles, ["on-a"]);
     assert_eq!(profiles().await, before, "remove all, then sign in");

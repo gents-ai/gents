@@ -1929,10 +1929,6 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
     let did = identity.did().to_string();
     let default_agent_did = binding.agent_did;
     bind_default_agent_claude_backend(&user_access, &did, &default_agent_did).await;
-    let access = gents_store::config_client::ConfigAccess::local_as(
-        node.clone(),
-        identity::Did::new(&did).unwrap(),
-    );
     let sign_in = |who: &str| {
         gents_inference::auth::claude::credential_from_login_tokens(
             did.clone(),
@@ -1949,9 +1945,9 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
             chrono::Utc::now(),
         )
     };
-    store_sign_in(&access, sign_in("a"), None).await.unwrap();
-    let b = store_sign_in(&access, sign_in("b"), None).await.unwrap();
-    let b_ref = b.credential.account_ref.clone().expect("b has a reference");
+    store_sign_in(&user_access, sign_in("a"), None).await.unwrap();
+    let b = store_sign_in(&user_access, sign_in("b"), None).await.unwrap();
+    let b_ref =b.credential.account_ref.clone().expect("b has a reference");
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
@@ -1980,7 +1976,7 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
     };
     assert!(ready_on(None).await && ready_on(Some(b_ref.clone())).await);
 
-    set_account_enabled(&access, &did, &b.credential.credential_id, false)
+    set_account_enabled(&user_access, &did, &b.credential.credential_id, false)
         .await
         .unwrap();
     assert!(
@@ -1989,7 +1985,7 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
     );
     assert!(ready_on(None).await, "the other account keeps running");
 
-    access
+    user_access
         .transact_write("test.remove_account", |txn| {
             let did = did.clone();
             let credential_id = b.credential.credential_id.clone();
@@ -2014,10 +2010,6 @@ async fn an_account_pool_agent_follows_its_enabled_accounts() {
     let did = identity.did().to_string();
     let default_agent_did = binding.agent_did;
     bind_default_agent_claude_backend(&user_access, &did, &default_agent_did).await;
-    let access = gents_store::config_client::ConfigAccess::local_as(
-        node.clone(),
-        identity::Did::new(&did).unwrap(),
-    );
     let sign_in = |who: &str| {
         gents_inference::auth::claude::credential_from_login_tokens(
             did.clone(),
@@ -2065,17 +2057,17 @@ async fn an_account_pool_agent_follows_its_enabled_accounts() {
     let pool = gents_documents::BackendAuth::NodeOAuthPool {
         allow_overage: false,
     };
-    let a = store_sign_in(&access, sign_in("a"), None).await.unwrap();
+    let a = store_sign_in(&user_access, sign_in("a"), None).await.unwrap();
     let a_id = a.credential.credential_id.clone();
     assert_eq!(pool_with(pool.clone()).await, vec![a_id.clone()]);
 
-    let b = store_sign_in(&access, sign_in("b"), None).await.unwrap();
+    let b = store_sign_in(&user_access, sign_in("b"), None).await.unwrap();
     let b_id = b.credential.credential_id.clone();
     let grown = pool_with(pool.clone()).await;
     assert_eq!(grown.len(), 2, "a sign-in joins the pool: {grown:?}");
     assert!(grown.contains(&a_id) && grown.contains(&b_id));
 
-    set_account_enabled(&access, &did, &b_id, false)
+    set_account_enabled(&user_access, &did, &b_id, false)
         .await
         .unwrap();
     assert_eq!(
@@ -2103,10 +2095,6 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
     let did = identity.did().to_string();
     let x = binding.agent_did;
     bind_default_agent_claude_backend(&user_access, &did, &x).await;
-    let access = gents_store::config_client::ConfigAccess::local_as(
-        node.clone(),
-        identity::Did::new(&did).unwrap(),
-    );
     let sign_in = |who: &str| {
         gents_inference::auth::claude::credential_from_login_tokens(
             did.clone(),
@@ -2123,8 +2111,8 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
             chrono::Utc::now(),
         )
     };
-    store_sign_in(&access, sign_in("a"), None).await.unwrap();
-    let b = store_sign_in(&access, sign_in("b"), None).await.unwrap();
+    store_sign_in(&user_access, sign_in("a"), None).await.unwrap();
+    let b = store_sign_in(&user_access, sign_in("b"), None).await.unwrap();
     let b_backend = format!(
         "{}-{}",
         gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
@@ -2222,13 +2210,13 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
         assert!(is_behavior_unavailable_rejection(expected.public_message()));
         assert_eq!(y_reason, None, "Y on A keeps running");
     };
-    set_account_enabled(&access, &did, &b.credential.credential_id, false)
+    set_account_enabled(&user_access, &did, &b.credential.credential_id, false)
         .await
         .unwrap();
     rejected_only_x(reasons(false).await, Reason::CredentialsRequired);
     rejected_only_x(reasons(true).await, Reason::ToolConfigurationInvalid);
 
-    access
+    user_access
         .transact_write("test.remove_account", |txn| {
             let did = did.clone();
             let credential_id = b.credential.credential_id.clone();
