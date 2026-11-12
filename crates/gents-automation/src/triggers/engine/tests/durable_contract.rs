@@ -866,13 +866,23 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
             }
             let post = observed_delivery_state(&access, FireIdentity::clone).await;
             let response = access
-                .execute("{ FireOutcome { handoff_id terminal_state } Goal { _docID } }")
+                .execute("{ FireOutcome { handoff_id terminal_state } AgentRequest { _docID } Goal { _docID } }")
                 .await
                 .unwrap();
             assert_eq!(
                 response["data"]["Goal"].as_array().unwrap().len(),
                 post["goals"].as_array().unwrap().len(),
                 "{name} step {index}: every Goal is bound to an admitted fire"
+            );
+            assert_eq!(
+                response["data"]["FireOutcome"].as_array().unwrap().len(),
+                post["outcomes"].as_array().unwrap().len(),
+                "{name} step {index}: every FireOutcome belongs to a receipt"
+            );
+            assert_eq!(
+                response["data"]["AgentRequest"].as_array().unwrap().len(),
+                post["requests"].as_array().unwrap().len(),
+                "{name} step {index}: every AgentRequest belongs to a receipt"
             );
             let published = post["outcomes"]
                 .as_array()
