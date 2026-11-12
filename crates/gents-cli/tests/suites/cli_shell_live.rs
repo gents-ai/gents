@@ -150,7 +150,7 @@ async fn start_live() -> Result<Live> {
     let node_did = node_did_from_init(&init)?;
 
     let port = allocate_port()?;
-    let (mut serve, _) = spawn_server_with_ready_json(
+    let (serve, _) = spawn_server_with_ready_json(
         &home,
         port,
         &["--home", home_arg, "--p2p-transport", "none"],
