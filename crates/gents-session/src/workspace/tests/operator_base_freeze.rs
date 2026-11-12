@@ -215,7 +215,7 @@ fn generated_operator_base_freeze_cases_drive_real_git_executor() {
         let writer_receipt = !docs.receipts.is_empty();
         let trunk_effects: u64 = git(
             &fx.repo,
-            &["rev-list", "--count", &format!("{trunk_before}..HEAD")],
+            &["rev-list", "--count", &format!("{trunk_before}...HEAD")],
         )
         .parse()
         .unwrap();
