@@ -579,39 +579,39 @@ def caseCoverage : List CoverageEntry :=
       "ProcessTransitions")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery"
+      "trigger_delivery_admission_cases"
       "Triggers.Durable")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery"
+      "trigger_delivery_session_cases"
       "Triggers.SessionKey")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery"
+      "trigger_fire_budget_cases"
       "Triggers.FireBudget")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery"
+      "trigger_delivery_queue_cases"
       "Triggers.Queue")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery"
+      "trigger_delivery_option_cases"
       "Triggers.Types")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery"
+      "trigger_delivery_observed_claim_cases"
       "Triggers.Durable")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery"
+      "trigger_delivery_cursor_cases"
       "EventDelivery.Durable")
       "event-delivery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery"
+      "trigger_delivery_callback_cursor_cases"
       "EventDelivery.Durable")
       "event-delivery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "trigger_delivery"
+      "trigger_delivery_outcome_cases"
       "Triggers.Durable.Outcomes")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
@@ -837,15 +837,15 @@ def caseCoverage : List CoverageEntry :=
       "AgentRequestAdmissionCases")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "causal_hop_contract"
+      "causal_hop_step_cases"
       "CausalHopContract")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "causal_hop_contract"
+      "causal_hop_session_target_cases"
       "SessionTargetAuthorityCases")
       "request-lifecycle" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "causal_hop_contract"
+      "causal_hop_session_list_cases"
       "SessionListEntryCases")
       "request-lifecycle" [Surface.agentFacing]
   , tagged (followUpCoverage
@@ -1627,51 +1627,51 @@ def caseCoverage : List CoverageEntry :=
       "SelfConfigSelectionCases")
       "self-config" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_model_slot_cases"
       "PluginModelSlotCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_budget_cases"
       "PluginResourceCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_network_cases"
       "PluginNetworkCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_call_access_cases"
       "PluginCallAccessCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_invocation_cases"
       "PluginInvocationCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_publication_cases"
       "ToolPolicy.PluginPublication")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_receipt_cases"
       "PluginReceiptCases")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_child_admission_cases"
       "PluginChildAdmissionCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_tool_effect_cases"
       "PluginEffectCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_tool_effect_terminal_cases"
       "PluginEffectTerminalCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_tool_effect_accounting_cases"
       "PluginEffectAccountingCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_tool_call_cases"
       "PluginToolCallCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
@@ -1736,11 +1736,11 @@ def caseCoverage : List CoverageEntry :=
       "PluginDataCases")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_scratch_cases"
       "PluginScratchCases")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_host_import_cases"
       "PluginHostImportCases")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
@@ -1872,8 +1872,8 @@ def caseCoverage : List CoverageEntry :=
       "goal_request_head_contracts_membership")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_edit_cases"
-      "GoalEditCases")
+      "family"
+      "goal_edit_contracts_edit")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_client_control_cases"
@@ -2522,16 +2522,16 @@ def caseCoverage : List CoverageEntry :=
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage "session_reply_preview_cases" "SessionReplyPreviewCases")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp "session_document_cases" "SessionDocumentCases"
+  , tagged (consumerWithFollowUp "session_document_projection_cases" "SessionDocumentCases"
       "Generated pending timeline cases bind physical identity, admission order, same or following request anchors, hidden or missing anchor fallback, tool-first replication, orphan groups and overlay ownership to the shared protocol ordering owner. Durable request lookup and authored-message suppression remain bridge-owner obligations.")
       "client-shell" [Surface.runtimeInternal]
-  , tagged (consumerCoverage "session_document_cases" "SessionDocumentCases")
+  , tagged (consumerCoverage "session_document_selection_cases" "SessionDocumentCases")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (consumerCoverage "session_document_cases" "SessionDocumentCases")
+  , tagged (consumerCoverage "session_document_fork_cases" "SessionDocumentCases")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (consumerCoverage "session_document_cases" "SessionDocumentCases")
+  , tagged (consumerCoverage "session_document_archive_cases" "SessionDocumentCases")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (followUpCoverage "session_document_cases" "SessionDocumentCases"
+  , tagged (followUpCoverage "session_document_retry_cases" "SessionDocumentCases"
       "Canonical session DB/lifecycle and fork tests specify target behavior; the generated interned-ID selection/projection/retry/fork rows still need real-owner adapters, including exact physical references and transactional freshness. No fixture-local state machine may substitute.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (followUpCoverage "background_wake_row_cases" "BackgroundWakeRowCases"

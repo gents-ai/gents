@@ -4,9 +4,7 @@ use gents_protocol::session::SessionArchiveVisibility;
 
 #[test]
 fn authorized_archive_transitions_match_executed_model() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot()
-        .session_document_cases
-        .archive;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().session_document_archive_cases;
     assert!(!cases.is_empty());
     let mut checked = 0;
     let mut checked_restored_generation = false;

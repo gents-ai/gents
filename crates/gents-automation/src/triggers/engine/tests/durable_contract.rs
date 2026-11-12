@@ -48,8 +48,7 @@ struct State {
 }
 
 fn contract() -> serde_json::Value {
-    gents_lean_contract::load_contract_snapshot::<serde_json::Value>().unwrap()["trigger_delivery"]
-        .clone()
+    gents_lean_contract::load_contract_snapshot::<serde_json::Value>().unwrap()
 }
 
 fn decode<T>(value: &serde_json::Value) -> T
@@ -105,7 +104,7 @@ fn request_mutation_as(receipt: &TriggerFire, agent_did: &str) -> String {
 #[test]
 fn durable_delivery_predicates_match_executable_lean_owners() {
     let cases = contract();
-    for case in cases["delivery_options"].as_array().unwrap() {
+    for case in cases["trigger_delivery_option_cases"].as_array().unwrap() {
         let kind = match case["kind"].as_str().unwrap() {
             "schedule" => TriggerKind::Schedule,
             "event" => TriggerKind::Event,
@@ -124,7 +123,7 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
             "{case}"
         );
     }
-    for case in cases["identities"].as_array().unwrap() {
+    for case in cases["trigger_delivery_identity_cases"].as_array().unwrap() {
         let id: FireIdentity = decode(&case["identity"]);
         let key = durable::fire_key(&id);
         assert_eq!(key, case["key"].as_str().unwrap());
@@ -132,7 +131,7 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
         assert_eq!(id.session_id(), case["session_id"]);
         assert_eq!(id.outcome_id(), case["outcome_id"]);
     }
-    for case in cases["sessions"].as_array().unwrap() {
+    for case in cases["trigger_delivery_session_cases"].as_array().unwrap() {
         let id: FireIdentity = decode(&case["identity"]);
         assert_eq!(
             durable::resolve_session_id(
@@ -144,7 +143,7 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
             decode::<Option<String>>(&case["resolved"])
         );
     }
-    for case in cases["outcomes"].as_array().unwrap() {
+    for case in cases["trigger_delivery_outcome_cases"].as_array().unwrap() {
         let state: State = decode(&case["pre"]);
         let request = &state.requests[0];
         let mut fire = receipt(&request.fire, 0);
@@ -169,7 +168,10 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
             case["name"]
         );
     }
-    for case in cases["retained_outcomes"].as_array().unwrap() {
+    for case in cases["trigger_delivery_retained_outcome_cases"]
+        .as_array()
+        .unwrap()
+    {
         let request: Request = decode(&case["request"]);
         let mut fire = receipt(&request.fire, 0);
         fire.goal_assignment_applied = request.goal_assignment_applied;
@@ -191,7 +193,7 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
             case["name"]
         );
     }
-    for case in cases["queues"].as_array().unwrap() {
+    for case in cases["trigger_delivery_queue_cases"].as_array().unwrap() {
         let identity: FireIdentity = decode(&case["identity"]);
         let rows: Vec<gents_session::request::lifecycle::arrival_order::ClaimObservation> =
             decode(&case["observations"]);
@@ -208,7 +210,10 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
             case["name"]
         );
     }
-    for case in cases["self_sessions"].as_array().unwrap() {
+    for case in cases["trigger_delivery_self_session_cases"]
+        .as_array()
+        .unwrap()
+    {
         assert_eq!(
             gents_tools::native::session_history::is_current_session(
                 case["caller_owner"].as_str().unwrap(),
@@ -223,7 +228,7 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
 
 #[tokio::test]
 async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_work() {
-    for (case_index, case) in contract()["latest_admissions"]
+    for (case_index, case) in contract()["trigger_delivery_latest_admission_cases"]
         .as_array()
         .unwrap()
         .iter()
@@ -370,7 +375,10 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
 }
 #[tokio::test]
 async fn generated_fire_transactions_are_atomic_and_owner_scoped() {
-    for case in contract()["admissions"].as_array().unwrap() {
+    for case in contract()["trigger_delivery_admission_cases"]
+        .as_array()
+        .unwrap()
+    {
         let node_db = gents_inference::test_support::test_db(
             "generated-fire-transactions-are-atomic-a",
             crate::lifecycle_hooks::composition(),
@@ -475,7 +483,10 @@ async fn persisted_outcome_requests(
 
 #[tokio::test]
 async fn generated_terminal_outcome_action_traces_use_native_owners() {
-    for trace in contract()["outcome_traces"].as_array().unwrap() {
+    for trace in contract()["trigger_delivery_outcome_trace_cases"]
+        .as_array()
+        .unwrap()
+    {
         // The Task's Agent admits, claims, terminalizes and recovers its fires.
         let (db, _user, _access, binding) =
             crate::test_support::signed_test_node(trace["name"].as_str().unwrap()).await;
@@ -755,7 +766,10 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
     use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     use gents_store::config_client::{ConfigAccess, NodePermission};
     use gents_store::identity::NodeIdentity as _;
-    for case in contract()["cursors"].as_array().unwrap() {
+    for case in contract()["trigger_delivery_cursor_cases"]
+        .as_array()
+        .unwrap()
+    {
         let db = gents_inference::test_support::test_db(
             "arrival-checkpoints",
             crate::lifecycle_hooks::composition(),
@@ -1084,7 +1098,10 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
     use gents_documents::apply_desired_state_plan;
     use gents_documents::{DesiredStateApplyDocument, DesiredStateApplyPlan};
     use gents_store::config_client::{ConfigAccess, NodePermission};
-    for case in contract()["callback_cursors"].as_array().unwrap() {
+    for case in contract()["trigger_delivery_callback_cursor_cases"]
+        .as_array()
+        .unwrap()
+    {
         let name = &case["name"];
         use gents_store::identity::NodeIdentity as _;
         let db = gents_inference::test_support::test_db(
@@ -1332,7 +1349,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
 #[test]
 fn observed_claim_cohorts_match_lean() {
     let contract = gents_lean_contract::load_contract_snapshot::<serde_json::Value>().unwrap();
-    for case in contract["trigger_delivery"]["observed_claims"]
+    for case in contract["trigger_delivery_observed_claim_cases"]
         .as_array()
         .unwrap()
     {
@@ -1354,7 +1371,7 @@ fn observed_claim_cohorts_match_lean() {
 #[test]
 fn task_goal_assignment_root_matches_lean() {
     let contract = gents_lean_contract::load_contract_snapshot::<serde_json::Value>().unwrap();
-    for case in contract["trigger_delivery"]["assignment_roots"]
+    for case in contract["trigger_delivery_assignment_root_cases"]
         .as_array()
         .unwrap()
     {
@@ -1390,7 +1407,10 @@ fn trigger_with_options(
 #[test]
 fn generated_session_key_cases_match_admission_and_config() {
     let cases = contract();
-    for case in cases["session_config"].as_array().unwrap() {
+    for case in cases["trigger_delivery_session_config_cases"]
+        .as_array()
+        .unwrap()
+    {
         let trigger = trigger_with_options(
             case["template"].as_str(),
             case["create_session"].as_bool(),
@@ -1483,14 +1503,17 @@ async fn seed_receipt(agent: &gents_store::config_client::ConfigAccess, fire: &T
 async fn generated_fire_budget_cases_stop_at_the_modeled_receipt_count() {
     let cases = contract();
     assert_eq!(
-        cases["fire_budget_default"].as_u64(),
+        cases["trigger_fire_budget_default"].as_u64(),
         Some(gents_documents::DEFAULT_MAX_FIRES_PER_HOUR as u64)
     );
     assert_eq!(
-        cases["fire_budget_status"].as_str(),
+        cases["trigger_fire_budget_status"].as_str(),
         Some(gents_documents::BUDGET_EXHAUSTED_STATUS)
     );
-    for case in cases["fire_budget_config"].as_array().unwrap() {
+    for case in cases["trigger_fire_budget_config_cases"]
+        .as_array()
+        .unwrap()
+    {
         let trigger = trigger_with_options(
             None,
             None,
@@ -1504,7 +1527,7 @@ async fn generated_fire_budget_cases_stop_at_the_modeled_receipt_count() {
         );
     }
     let now = chrono::DateTime::parse_from_rfc3339(BUDGET_NOW).unwrap();
-    for case in cases["fire_budget"].as_array().unwrap() {
+    for case in cases["trigger_fire_budget_cases"].as_array().unwrap() {
         let name = case["name"].as_str().unwrap();
         let (_db, client, agent, materializer, task, owner, trigger_doc) =
             budget_fixture(&format!("fire-budget-{name}")).await;

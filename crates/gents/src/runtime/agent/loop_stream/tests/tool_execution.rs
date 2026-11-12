@@ -1611,7 +1611,8 @@ async fn allow_general_agent_target(
 
 #[tokio::test]
 async fn generated_child_admission_cases_drive_real_dispatcher() {
-    let cases = gents_lean_vocab::lean_contract_snapshot().plugin_resource_cases["child_admission"]
+    let cases = gents_lean_vocab::lean_contract_snapshot()
+        .plugin_resource_child_admission_cases
         .as_array()
         .unwrap();
     let hook_owned = hook_owned_children();

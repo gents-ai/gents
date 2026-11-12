@@ -87,20 +87,10 @@ fn unpinned_sampling_knobs_emit_no_provider_params() {
 fn context_override_admission_matches_lean() {
     use gents_lean_vocab::families::configuration_scope_context_bounds as family;
 
-    let limit = |value: &Option<family::ContextLimit>| {
-        value.as_ref().map(|limit| {
-            let magnitude = limit.magnitude as i64;
-            if limit.negative {
-                -magnitude
-            } else {
-                magnitude
-            }
-        })
-    };
     family::replay(|i| {
         let mut selected = profile(1);
-        selected.context_window = limit(&i.selected);
-        let model = advertised(limit(&i.model_default), limit(&i.maximum));
+        selected.context_window = i.selected;
+        let model = advertised(i.model_default, i.maximum);
         validate_advertised_context_override(&selected, &model).is_ok()
     });
 }

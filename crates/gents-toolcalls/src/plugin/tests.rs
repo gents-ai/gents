@@ -104,7 +104,9 @@ async fn generated_plugin_call_access_cases_drive_bind_admission() {
         let directory = tempfile::tempdir().unwrap();
         let marker = directory.path().join("verified");
         let cases = tokio::task::spawn_blocking(|| {
-            gents_lean_vocab::lean_contract_snapshot().plugin_resource_cases["call_access"].clone()
+            gents_lean_vocab::lean_contract_snapshot()
+                .plugin_resource_call_access_cases
+                .clone()
         })
         .await
         .unwrap();

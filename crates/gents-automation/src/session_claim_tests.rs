@@ -359,7 +359,7 @@ async fn claim_queue_uses_arrival_order_and_scopes_sessions_to_owner() {
 async fn serial_claim_considers_active_owner_requests_across_pages() {
     let node = test_node().await;
     let contract = gents_lean_contract::load_contract_snapshot::<serde_json::Value>().unwrap();
-    let queue_cases = contract["trigger_delivery"]["queues"].as_array().unwrap();
+    let queue_cases = contract["trigger_delivery_queue_cases"].as_array().unwrap();
     let identity = |source_doc_id: &str| gents_protocol::trigger_delivery::FireIdentity {
         owner_did: test_node_did(),
         trigger_id: "serial-trigger".into(),

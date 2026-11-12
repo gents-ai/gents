@@ -345,16 +345,24 @@ private def forkAuthorityCases : List Json :=
       ("source_agent", toJson source), ("target_agent", toJson target),
       ("allowed", toJson (SessionFork.mayReuseSourceFragments source target))]
 
-def sessionDocumentsJson : String := (Json.mkObj
-  [("starter_verification", toJson starterVerificationCases),
-   ("archive", toJson archiveCases),
-   ("document_reference_encoding", toJson "interned collection plus _docID, not raw _docID"),
-   ("retry", toJson [
+def sessionDocumentStarterVerificationCasesJson : String :=
+  (toJson starterVerificationCases).compress
+
+def sessionDocumentArchiveCasesJson : String :=
+  (toJson archiveCases).compress
+
+def sessionDocumentReferenceEncodingJson : String :=
+  (toJson "interned collection plus _docID, not raw _docID").compress
+
+def sessionDocumentRetryCasesJson : String :=
+  (toJson [
       retryJson "exact_parent" [old] 101,
       retryJson "newer_authoritative_row" [old, newerRequest] 101,
       retryJson "wrong_physical_parent" [old] 999,
-      retryJson "existing_candidate_missing_from_auxiliary_projection" [old, olderExistingCandidate] 101]),
-   ("projection", toJson (Conformance.TaskLineage.cases ++ taskOpeningCases ++ forkAuthorityCases ++ pendingTimelineCases ++
+      retryJson "existing_candidate_missing_from_auxiliary_projection" [old, olderExistingCandidate] 101]).compress
+
+def sessionDocumentProjectionCasesJson : String :=
+  (toJson (Conformance.TaskLineage.cases ++ taskOpeningCases ++ forkAuthorityCases ++ pendingTimelineCases ++
       (admissionCases.map fun (name, before, input) => admissionJson name before input) ++ [renameJson, clearTitleJson,
       tipCoverageJson false true false 2,
       tipCoverageJson false false false,
@@ -382,8 +390,10 @@ def sessionDocumentsJson : String := (Json.mkObj
       refreshJson "missing_current_row_noop" newerRequest [],
       refreshJson "foreign_scope_current_row_noop" newerRequest
         [{ completedRequest with scope := { completedRequest.scope with requester := some 99 } }],
-      refreshJson "wrong_agent_current_row_noop" newerRequest [{ completedRequest with agent:= 99 }]] ++ Conformance.RuntimeInput.cases)),
-   ("selection", toJson [
+      refreshJson "wrong_agent_current_row_noop" newerRequest [{ completedRequest with agent:= 99 }]] ++ Conformance.RuntimeInput.cases)).compress
+
+def sessionDocumentSelectionCasesJson : String :=
+  (toJson [
       selectionJson "timestamp_tie_forward" [old, newerRequest] 1 10 none,
       selectionJson "timestamp_tie_reverse" [newerRequest, old] 1 10 none,
       selectionJson "newer_title_preserves_normal_head" [titleRequest, old] 1 10 none,
@@ -396,10 +406,16 @@ def sessionDocumentsJson : String := (Json.mkObj
       selectionJson "same_second_later_terminalization" [finishedPredecessor, sameSecondCompletion] 1 10 none,
       selectionJson "same_second_later_terminalization_reverse" [sameSecondCompletion, finishedPredecessor] 1 10 none,
       selectionJson "same_second_live_outranks_later_refusal" [sameSecondClaim, sameSecondRefusal] 1 10 none,
-      selectionJson "earlier_second_live_loses" [{ sameSecondClaim with createdAt := 1 }, finishedPredecessor] 1 10 none]),
-   ("edit_anchors", toJson (editAnchorCases.map editAnchorJson)),
-   ("edit_fork_bindings", toJson (editForkCases.map editForkJson)),
-   ("fork", toJson [
+      selectionJson "earlier_second_live_loses" [{ sameSecondClaim with createdAt := 1 }, finishedPredecessor] 1 10 none]).compress
+
+def sessionDocumentEditAnchorCasesJson : String :=
+  (toJson (editAnchorCases.map editAnchorJson)).compress
+
+def sessionDocumentEditForkBindingCasesJson : String :=
+  (toJson (editForkCases.map editForkJson)).compress
+
+def sessionDocumentForkCasesJson : String :=
+  (toJson [
       forkJson "exact_copy" history child 1 true true true,
       forkJson "empty_prefix" history child 0 true true true,
       forkJson "duplicate_message_sequence" duplicateSequenceHistory child 1 true true true,
@@ -410,5 +426,5 @@ def sessionDocumentsJson : String := (Json.mkObj
       forkJson "cursor_beyond_source"
         { history with compactions := [⟨4, scope.session, 1, 99⟩] } child 100 true true true,
       forkJson "invalid_compaction_sequence"
-        { history with compactions := [⟨4, scope.session, 2, 0⟩] } child 1 true true true])]).compress
+        { history with compactions := [⟨4, scope.session, 2, 0⟩] } child 1 true true true]).compress
 end Conformance.Contracts

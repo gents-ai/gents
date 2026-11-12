@@ -532,24 +532,65 @@ def latestAdmissionCases : List String :=
       ("fire", fireJson next), ("destination_allowed", toString allowed),
       ("post", stateJson (admitLatest before next allowed))]
 
-def casesJson : String := object [
-  ("admissions", jsonArray admissionCases), ("queues", jsonArray queueCases),
-  ("observed_claims", jsonArray observedClaimCases),
-  ("assignment_roots", jsonArray assignmentRootCases),
-  ("outcomes", jsonArray outcomeCases), ("outcome_traces", jsonArray outcomeTraces),
-  ("retained_outcomes", jsonArray retainedOutcomeCases),
-  ("cursors", jsonArray cursorCases),
-  ("callback_cursors", jsonArray callbackCursorCases),
-  ("callback_visibility", jsonArray callbackVisibilityCases),
-  ("identities", jsonArray identityCases), ("sessions", jsonArray sessionCases),
-  ("session_config", jsonArray sessionConfigCases),
-  ("fire_budget", jsonArray budgetCases),
-  ("fire_budget_config", jsonArray budgetConfigCases),
-  ("fire_budget_default", toString Triggers.FireBudget.defaultMaxPerHour),
-  ("fire_budget_status", jsonString Triggers.FireBudget.exhaustedStatus),
-  ("delivery_options", jsonArray deliveryOptionCases),
-  ("latest_admissions", jsonArray latestAdmissionCases),
-  ("self_sessions", jsonArray selfCases)]
+def triggerDeliveryAdmissionCasesJson : String :=
+  jsonArray admissionCases
+
+def triggerDeliveryQueueCasesJson : String :=
+  jsonArray queueCases
+
+def triggerDeliveryObservedClaimCasesJson : String :=
+  jsonArray observedClaimCases
+
+def triggerDeliveryAssignmentRootCasesJson : String :=
+  jsonArray assignmentRootCases
+
+def triggerDeliveryOutcomeCasesJson : String :=
+  jsonArray outcomeCases
+
+def triggerDeliveryOutcomeTraceCasesJson : String :=
+  jsonArray outcomeTraces
+
+def triggerDeliveryRetainedOutcomeCasesJson : String :=
+  jsonArray retainedOutcomeCases
+
+def triggerDeliveryCursorCasesJson : String :=
+  jsonArray cursorCases
+
+def triggerDeliveryCallbackCursorCasesJson : String :=
+  jsonArray callbackCursorCases
+
+def triggerDeliveryCallbackVisibilityCasesJson : String :=
+  jsonArray callbackVisibilityCases
+
+def triggerDeliveryIdentityCasesJson : String :=
+  jsonArray identityCases
+
+def triggerDeliverySessionCasesJson : String :=
+  jsonArray sessionCases
+
+def triggerDeliverySessionConfigCasesJson : String :=
+  jsonArray sessionConfigCases
+
+def triggerFireBudgetCasesJson : String :=
+  jsonArray budgetCases
+
+def triggerFireBudgetConfigCasesJson : String :=
+  jsonArray budgetConfigCases
+
+def triggerFireBudgetDefaultJson : String :=
+  toString Triggers.FireBudget.defaultMaxPerHour
+
+def triggerFireBudgetStatusJson : String :=
+  jsonString Triggers.FireBudget.exhaustedStatus
+
+def triggerDeliveryOptionCasesJson : String :=
+  jsonArray deliveryOptionCases
+
+def triggerDeliveryLatestAdmissionCasesJson : String :=
+  jsonArray latestAdmissionCases
+
+def triggerDeliverySelfSessionCasesJson : String :=
+  jsonArray selfCases
 
 example : (admit (admit {} (fire "a")) (fire "a")).requests.length = 1 := by native_decide
 example : outcomeDue {} { fire := { fire "a" with goalBacked := true }, terminal := false } = false := by

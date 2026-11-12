@@ -99,7 +99,7 @@ impl LeanPluginJobAuthorityCase {
     }
 }
 
-/// `plugin_resource_cases.host_import`: whether the `gents` imports are
+/// `plugin_resource_host_import_cases`: whether the `gents` imports are
 /// linked for a plugin and what `run_script` answers.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -110,7 +110,7 @@ pub struct LeanPluginHostImportCase {
     pub answer: Option<String>,
 }
 
-/// `plugin_resource_cases.scratch`: `scratchAdmitted`. `handle` is not an
+/// `plugin_resource_scratch_cases`: `scratchAdmitted`. `handle` is not an
 /// owner input; rows that differ only in it share a path.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -193,23 +193,31 @@ pub fn lean_contract_snapshot() -> &'static LeanContractSnapshot {
     LEAN_CONTRACT_SNAPSHOT.get_or_init(load_lean_contract_snapshot)
 }
 
-/// One strictly decoded group of `plugin_resource_cases`.
-fn lean_plugin_resource_group<T>(group: &str) -> Vec<T>
+fn lean_plugin_resource_group<T>(key: &str, cases: &serde_json::Value) -> Vec<T>
 where
     T: serde::de::DeserializeOwned,
 {
-    serde_json::from_value(lean_contract_snapshot().plugin_resource_cases[group].clone())
-        .unwrap_or_else(|error| panic!("plugin_resource_cases.{group}: {error}"))
+    serde_json::from_value(cases.clone()).unwrap_or_else(|error| panic!("{key}: {error}"))
 }
 
 pub fn lean_plugin_host_import_cases() -> &'static [LeanPluginHostImportCase] {
     static CASES: OnceLock<Vec<LeanPluginHostImportCase>> = OnceLock::new();
-    CASES.get_or_init(|| lean_plugin_resource_group("host_import"))
+    CASES.get_or_init(|| {
+        lean_plugin_resource_group(
+            "plugin_resource_host_import_cases",
+            &lean_contract_snapshot().plugin_resource_host_import_cases,
+        )
+    })
 }
 
 pub fn lean_plugin_scratch_cases() -> &'static [LeanPluginScratchCase] {
     static CASES: OnceLock<Vec<LeanPluginScratchCase>> = OnceLock::new();
-    CASES.get_or_init(|| lean_plugin_resource_group("scratch"))
+    CASES.get_or_init(|| {
+        lean_plugin_resource_group(
+            "plugin_resource_scratch_cases",
+            &lean_contract_snapshot().plugin_resource_scratch_cases,
+        )
+    })
 }
 
 pub fn lean_vocabulary_contract(domain: &str) -> &'static LeanVocabularyContract {

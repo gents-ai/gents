@@ -445,8 +445,7 @@ async fn task_admission_is_atomic_idempotent_and_defers_goal_assignment() {
     assert_eq!(session["data"]["AgentSession"].as_array().unwrap().len(), 1);
     let session = &session["data"]["AgentSession"][0];
     let modeled = gents_lean_vocab::lean_contract_snapshot()
-        .session_document_cases
-        .projection
+        .session_document_projection_cases
         .iter()
         .find(|case| {
             case["operation"] == "atomic_admission" && case["name"] == "agent_unattended_creation"

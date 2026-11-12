@@ -60,8 +60,8 @@ fn error(results: &Map<String, Value>, id: &str) -> String {
 
 #[test]
 fn generated_plugin_network_cases_drive_admission() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_resource_cases;
-    let cases = cases["network"].as_array().unwrap();
+    let cases = gents_lean_vocab::lean_contract_snapshot();
+    let cases = cases.plugin_resource_network_cases.as_array().unwrap();
     assert!(!cases.is_empty());
     for case in cases {
         let net = match &case["grant"] {

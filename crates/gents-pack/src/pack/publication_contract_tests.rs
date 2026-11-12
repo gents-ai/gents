@@ -5,7 +5,8 @@ use super::plugin_lifecycle::{install, tests::fixture};
 #[tokio::test]
 async fn generated_local_publication_survives_notification_outcomes() {
     let contract = gents_lean_vocab::lean_contract_snapshot();
-    for case in contract.plugin_resource_cases["publication"]
+    for case in contract
+        .plugin_resource_publication_cases
         .as_array()
         .unwrap()
     {

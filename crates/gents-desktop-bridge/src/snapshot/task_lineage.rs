@@ -123,7 +123,7 @@ mod tests {
     #[test]
     fn generated_task_lineage_cases_match_projection() {
         let contract: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases: Vec<_> = contract["session_document_cases"]["projection"]
+        let cases: Vec<_> = contract["session_document_projection_cases"]
             .as_array()
             .unwrap()
             .iter()
@@ -164,7 +164,7 @@ mod tests {
     #[test]
     fn generated_scoped_lineage_cases_preserve_the_task_owner() {
         let contract: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let cases: Vec<_> = contract["session_document_cases"]["projection"]
+        let cases: Vec<_> = contract["session_document_projection_cases"]
             .as_array()
             .unwrap()
             .iter()

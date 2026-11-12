@@ -3,10 +3,11 @@ use crate::goal::{
     GoalDocument,
 };
 use gents_protocol::goal_status::GoalStatus;
+use gents_lean_vocab::families::goal_edit_contracts_edit as family;
 use gents_protocol::operations::goal::{GoalExpected, GoalOperationError, GoalSetInput};
 use gents_store::graphql::escape_graphql_string;
 use gents_store::identity::NodeIdentity;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Deserialize)]
@@ -14,30 +15,26 @@ struct Contracts {
     goal_objective_whitespace_codepoints: Vec<u32>,
 }
 
-#[derive(Debug, PartialEq)]
-struct Assignment {
-    status: GoalStatus,
-    sequence: i64,
-    objective: String,
-    budget: Option<i64>,
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Origin {
+    Agent,
+    Client,
 }
 
-fn assignment(goal: &GoalDocument) -> Assignment {
-    Assignment {
+type WireAssignment = family::Assignment<GoalStatus>;
+
+fn wire_assignment(goal: &GoalDocument) -> WireAssignment {
+    WireAssignment {
         status: goal.parsed_status().unwrap(),
-        sequence: goal.continuation_sequence(),
+        sequence: u64::try_from(goal.continuation_sequence()).unwrap(),
         objective: goal.objective.clone(),
         budget: goal.token_budget,
     }
 }
 
-fn case_assignment(status: &str, sequence: u64, objective: &str, budget: u64) -> Assignment {
-    Assignment {
-        status: serde_json::from_value(Value::String(status.to_owned())).unwrap(),
-        sequence: sequence as i64,
-        objective: objective.to_owned(),
-        budget: Some(budget as i64),
-    }
+fn same(left: &WireAssignment, right: &WireAssignment) -> bool {
+    serde_json::to_value(left).unwrap() == serde_json::to_value(right).unwrap()
 }
 
 async fn durable_rows(access: &gents_store::config_client::ConfigAccess) -> Value {
@@ -46,32 +43,13 @@ async fn durable_rows(access: &gents_store::config_client::ConfigAccess) -> Valu
 
 #[tokio::test]
 async fn generated_goal_edit_cases_drive_real_transactions() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_edit_cases;
+    let cases = family::cases::<Origin, GoalStatus>();
     assert_eq!(cases.len(), 66);
-    for case in cases {
-        let observed_case = case_assignment(
-            &case.observed.status,
-            case.observed.sequence,
-            &case.observed.objective,
-            case.observed.budget,
-        );
-        let current_case = case_assignment(
-            &case.current.status,
-            case.current.sequence,
-            &case.current.objective,
-            case.current.budget,
-        );
-        let expected = case.expected.as_ref().map(|expected| {
-            case_assignment(
-                &expected.status,
-                expected.sequence,
-                &expected.objective,
-                expected.budget,
-            )
-        });
+    for case in &cases {
+        let row = &case.input;
         let input = GoalSetInput {
-            objective: case.fields.objective.clone(),
-            token_budget: case.fields.budget.map(Some),
+            objective: row.fields.objective.clone(),
+            token_budget: row.fields.budget.map(Some),
             ..Default::default()
         };
         let (db, user, access, binding) = gents_inference::test_support::signed_test_node(
@@ -121,22 +99,25 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
             Box::pin(async move {
                 txn.execute_client_signed_update(
                     &format!(r#"mutation($input: GoalMutationInputArg!) {{update_Goal(docID: "{doc}", input: $input) {{_docID}}}}"#),
-                    &serde_json::json!({"input": {"status": case.current.status.as_str(),
-                        "continuation_sequence": case.current.sequence, "objective": case.current.objective.as_str(),
-                        "token_budget": case.current.budget}}),
+                    &serde_json::json!({"input": {"status": row.current.status,
+                        "continuation_sequence": row.current.sequence, "objective": row.current.objective.as_str(),
+                        "token_budget": row.current.budget}}),
                     gents_protocol::schemas::GOAL,
                 ).await
             })
         }).await.unwrap();
-        observed.status = case.observed.status.clone();
-        observed.continuation_sequence = Some(case.observed.sequence as i64);
-        observed.objective = case.observed.objective.clone();
-        observed.token_budget = Some(case.observed.budget as i64);
-        assert_eq!(
-            assignment(&observed),
-            observed_case,
+        observed.status = serde_json::to_value(row.observed.status)
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_owned();
+        observed.continuation_sequence = Some(i64::try_from(row.observed.sequence).unwrap());
+        observed.objective = row.observed.objective.clone();
+        observed.token_budget = row.observed.budget;
+        assert!(
+            same(&wire_assignment(&observed), &row.observed),
             "{} observation",
-            case.name
+            row.name
         );
         let current = access
             .transact_readonly("test.goal_edit.current", |txn| {
@@ -149,18 +130,17 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(
-            assignment(&current),
-            current_case,
+        assert!(
+            same(&wire_assignment(&current), &row.current),
             "{} durable input",
-            case.name
+            row.name
         );
         let before = durable_rows(&access).await;
-        let edit = match case.origin.as_str() {
-            "agent" => {
+        let edit = match row.origin {
+            Origin::Agent => {
                 super::set_as_working_agent(&agent_access, &observed, &input, None, "request").await
             }
-            _ => {
+            Origin::Client => {
                 let input = GoalSetInput {
                     expected: Some(GoalExpected::Assignment {
                         goal_doc_id: observed.doc_id.clone(),
@@ -178,30 +158,34 @@ async fn generated_goal_edit_cases_drive_real_transactions() {
         };
         let result = match edit {
             Ok(result) => Some(result),
-            Err(GoalOperationError::Passthrough(error)) => panic!("{}: {error:#}", case.name),
+            Err(GoalOperationError::Passthrough(error)) => panic!("{}: {error:#}", row.name),
             Err(_) => None,
         };
-        assert_eq!(result.as_ref().map(assignment), expected, "{}", case.name);
-        if let (Some(updated), Some(expected)) = (&result, &expected) {
+        let edited = result.as_ref().map(wire_assignment);
+        case.check(edited.clone());
+        if let Some(updated) = &result {
             let prompt =
                 crate::triggers::engine::goal_source::continuation_prompt(updated, None, false);
-            let objective = serde_json::to_string(&expected.objective).unwrap();
+            let objective = serde_json::to_string(&updated.objective).unwrap();
             assert!(
                 prompt.contains(&format!(
                     "<goal-objective-json>{objective}</goal-objective-json>"
                 )),
                 "{}",
-                case.name
+                row.name
             );
         }
         let after = durable_rows(&access).await;
         assert_eq!(
             before["GoalCreationClaim"], after["GoalCreationClaim"],
             "{}",
-            case.name
+            row.name
         );
-        if expected.is_none() || expected == Some(current_case) {
-            assert_eq!(before, after, "{} must not write", case.name);
+        if edited
+            .as_ref()
+            .is_none_or(|edited| same(edited, &wire_assignment(&current)))
+        {
+            assert_eq!(before, after, "{} must not write", row.name);
         }
         assert_eq!(after["Goal"][0]["goal_id"], before["Goal"][0]["goal_id"]);
         node.shutdown().await.expect("node shutdown");

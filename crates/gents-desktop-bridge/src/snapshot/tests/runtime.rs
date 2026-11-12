@@ -742,7 +742,7 @@ async fn recorded_summary_starters_follow_the_starter_verification_model() {
     .await
     .unwrap()
     .unwrap();
-    let cases = model["session_document_cases"]["starter_verification"]
+    let cases = model["session_document_starter_verification_cases"]
         .as_array()
         .unwrap();
     let dir = tempfile::tempdir().unwrap();

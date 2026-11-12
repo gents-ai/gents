@@ -34,31 +34,18 @@ private def contextBoundsCases : List (Option Int × Option Int × Option Int) :
   (some 872001, none, some 872000),
   (some 872001, some (-1), some 872000)]
 
-structure ContextLimit where
-  negative : Bool
-  magnitude : Nat
-  deriving ToJson
-
-private def ContextLimit.ofInt (n : Int) : ContextLimit := { negative := n < 0, magnitude := n.natAbs }
-
-private def ContextLimit.toInt (l : ContextLimit) : Int :=
-  if l.negative then -(l.magnitude : Int) else (l.magnitude : Int)
-
 structure ContextBoundsInput where
-  selected : Option ContextLimit
-  modelDefault : Option ContextLimit
-  maximum : Option ContextLimit
+  selected : Option Int
+  modelDefault : Option Int
+  maximum : Option Int
   deriving ToJson
 
 @[conformance_family]
 def contextBounds : Conformance.Family ContextBoundsInput Bool where
   inputs := contextBoundsCases.map fun (selected, modelDefault, maximum) =>
-    { selected := selected.map ContextLimit.ofInt
-      modelDefault := modelDefault.map ContextLimit.ofInt
-      maximum := maximum.map ContextLimit.ofInt }
+    { selected, modelDefault, maximum }
   model := fun i =>
-    ConfigDefaults.contextOverrideAllowed (i.selected.map ContextLimit.toInt)
-      (i.modelDefault.map ContextLimit.toInt) (i.maximum.map ContextLimit.toInt)
+    ConfigDefaults.contextOverrideAllowed i.selected i.modelDefault i.maximum
 
 private def defaultAgentCases :
     List (String × String × Bool × Option String × Option String) := [

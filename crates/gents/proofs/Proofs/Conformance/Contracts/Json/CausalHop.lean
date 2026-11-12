@@ -325,20 +325,44 @@ def capObservationCaseJson (c : CapObservationCase) : String :=
       | none => "null"
       | some value => toString value) ++ "}"
 
-def contractJson : String :=
-  "{\"default_max_request_hop\":" ++ optionalNatJson CausalHop.defaultMaxRequestHop
-    ++ ",\"cap_observation_cases\":" ++ jsonArray (capObservationCases.map capObservationCaseJson)
-    ++ ",\"step_cases\":" ++ jsonArray (stepCases.map stepCaseJson)
-    ++ ",\"chain_cases\":" ++ jsonArray (chainCases.map chainCaseJson)
-    ++ ",\"call_cases\":" ++ jsonArray (callCases.map callCaseJson)
-    ++ ",\"interrupt_cases\":" ++ jsonArray (interruptCases.map interruptCaseJson)
-    ++ ",\"creation_cases\":" ++ jsonArray (creationCases.map creationCaseJson)
-    ++ ",\"creation_signer_cases\":" ++ jsonArray (creationSignerCases.map creationSignerCaseJson)
-    ++ ",\"job_creation_cases\":" ++ jsonArray (jobCreationCases.map jobCreationCaseJson)
-    ++ ",\"deferred_creation_cases\":" ++ jsonArray (jobCreationCases.map deferredCreationCaseJson)
-    ++ ",\"write_cases\":" ++ jsonArray (writeCases.map writeCaseJson)
-    ++ ",\"session_target_cases\":" ++ jsonArray (sessionTargetCases.map sessionTargetCaseJson)
-    ++ ",\"session_list_cases\":" ++ jsonArray (sessionListCases.map sessionListCaseJson) ++ "}"
+def defaultMaxRequestHopJson : String :=
+  optionalNatJson CausalHop.defaultMaxRequestHop
+
+def capObservationCasesJson : String :=
+  jsonArray (capObservationCases.map capObservationCaseJson)
+
+def stepCasesJson : String :=
+  jsonArray (stepCases.map stepCaseJson)
+
+def chainCasesJson : String :=
+  jsonArray (chainCases.map chainCaseJson)
+
+def callCasesJson : String :=
+  jsonArray (callCases.map callCaseJson)
+
+def interruptCasesJson : String :=
+  jsonArray (interruptCases.map interruptCaseJson)
+
+def creationCasesJson : String :=
+  jsonArray (creationCases.map creationCaseJson)
+
+def creationSignerCasesJson : String :=
+  jsonArray (creationSignerCases.map creationSignerCaseJson)
+
+def jobCreationCasesJson : String :=
+  jsonArray (jobCreationCases.map jobCreationCaseJson)
+
+def deferredCreationCasesJson : String :=
+  jsonArray (jobCreationCases.map deferredCreationCaseJson)
+
+def writeCasesJson : String :=
+  jsonArray (writeCases.map writeCaseJson)
+
+def sessionTargetCasesJson : String :=
+  jsonArray (sessionTargetCases.map sessionTargetCaseJson)
+
+def sessionListCasesJson : String :=
+  jsonArray (sessionListCases.map sessionListCaseJson)
 
 
 theorem step_cases_cover_causes_and_outcomes :

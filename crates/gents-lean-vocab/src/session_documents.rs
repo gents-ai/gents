@@ -11,8 +11,7 @@ mod tests {
     fn generated_output_obligation_cases_match_runtime_input_classification() {
         use gents_protocol::output::{authored, MessageRole};
         let cases: Vec<_> = lean_contract_snapshot()
-            .session_document_cases
-            .projection
+            .session_document_projection_cases
             .iter()
             .filter(|case| case["operation"] == "output_obligation_control")
             .collect();
@@ -40,8 +39,7 @@ mod tests {
     #[test]
     fn generated_pending_timeline_cases_preserve_request_identities_and_order() {
         let cases: Vec<_> = lean_contract_snapshot()
-            .session_document_cases
-            .projection
+            .session_document_projection_cases
             .iter()
             .filter(|case| case["operation"] == "pending_timeline")
             .collect();
@@ -107,8 +105,7 @@ mod tests {
     #[test]
     fn generated_question_reply_source_cases_preserve_attribution() {
         let cases: Vec<_> = lean_contract_snapshot()
-            .session_document_cases
-            .projection
+            .session_document_projection_cases
             .iter()
             .filter(|case| case["operation"] == "question_reply_source")
             .collect();

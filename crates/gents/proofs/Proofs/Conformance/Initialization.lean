@@ -13,19 +13,16 @@ structure SeedInput where
   preset : Option String
   presetDefault : Option String
   localDefault : String
-  concurrent : Option Nat
+  concurrent : Option Int
   deriving ToJson
 
-/-- Seeding never pins a context or output limit, so those overrides are always
-absent; the wire carries concurrency as a natural number because authored
-concurrency is never negative. -/
 structure SeedPlan where
   model : Option String
   enabled : Bool
-  concurrent : Option Nat
+  concurrent : Option Int
   effectiveConcurrent : Nat
-  contextOverride : Option Nat
-  outputOverride : Option Nat
+  contextOverride : Option Int
+  outputOverride : Option Int
   recordsProbe : Bool
   unselectedModelReason : Option String
   enabledUnselectedModelReason : Option String
@@ -50,12 +47,12 @@ def initialInference : Conformance.Family SeedInput (Option SeedPlan) where
   model := fun i =>
     (seed { engineer := i.engineer, requestedModel := i.requestedModel, preset := i.preset
             presetDefault := i.presetDefault, localDefault := i.localDefault
-            concurrent := i.concurrent.map fun n => (n : Int) }).map fun plan =>
+            concurrent := i.concurrent }).map fun plan =>
       { model := plan.model, enabled := plan.enabled
-        concurrent := plan.concurrent.map Int.toNat
+        concurrent := plan.concurrent
         effectiveConcurrent := plan.effectiveConcurrent
-        contextOverride := plan.contextOverride.map Int.toNat
-        outputOverride := plan.outputOverride.map Int.toNat
+        contextOverride := plan.contextOverride
+        outputOverride := plan.outputOverride
         recordsProbe := plan.recordsProbe
         unselectedModelReason := unselectedModelReason plan.enabled plan.model
         enabledUnselectedModelReason := unselectedModelReason true plan.model }

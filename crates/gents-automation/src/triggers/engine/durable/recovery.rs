@@ -175,7 +175,7 @@ mod tests {
             "crash_after_outcome_retry",
             "continuing_goal_has_no_outcome",
         ] {
-            let case = contract["trigger_delivery"]["outcomes"]
+            let case = contract["trigger_delivery_outcome_cases"]
                 .as_array()
                 .unwrap()
                 .iter()

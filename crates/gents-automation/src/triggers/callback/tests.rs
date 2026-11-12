@@ -1624,7 +1624,8 @@ async fn callback_result_visibility_and_repair_match_the_executable_cursor_contr
         tokio_util::sync::CancellationToken::new(),
     );
     engine.snapshots = Some(super::test_snapshot());
-    let cases = &gents_lean_vocab::lean_contract_snapshot().trigger_delivery["callback_visibility"];
+    let cases =
+        &gents_lean_vocab::lean_contract_snapshot().trigger_delivery_callback_visibility_cases;
     let mut interrupted_after_grant = false;
     for case in cases.as_array().expect("Lean callback visibility cases") {
         let visible = case["visible"].as_bool().unwrap();

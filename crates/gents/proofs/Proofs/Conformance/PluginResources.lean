@@ -436,14 +436,51 @@ theorem route_regressions :
       , false, false, false, true, false, false, false, true ] := by
   native_decide
 
-def casesJson : String := (Json.mkObj [("consent", consentJson), ("budgets", budgetsJson),
-  ("publication", publicationJson), ("tool_calls", toolCallsJson), ("child_admission", childAdmissionJson),
-  ("tool_effects", PluginEffects.casesJson),
-  ("tool_effect_receipts", PluginEffects.receiptCasesJson),
-  ("tool_effect_terminals", PluginEffects.terminalCasesJson),
-  ("tool_effect_accounting", PluginEffects.accountingCasesJson),
-  ("model_slots", modelSlotsJson), ("network", networkJson),
-  ("call_access", callAccessJson), ("invocation", invocationJson), ("receipt", Conformance.PluginReceipt.casesJson),
-  ("scratch", scratchJson),
-  ("host_import", hostImportJson)]).compress
+def pluginResourceConsentCasesJson : String :=
+  consentJson.compress
+
+def pluginResourceBudgetCasesJson : String :=
+  budgetsJson.compress
+
+def pluginResourcePublicationCasesJson : String :=
+  publicationJson.compress
+
+def pluginResourceToolCallCasesJson : String :=
+  toolCallsJson.compress
+
+def pluginResourceChildAdmissionCasesJson : String :=
+  childAdmissionJson.compress
+
+def pluginResourceToolEffectCasesJson : String :=
+  PluginEffects.casesJson.compress
+
+def pluginResourceToolEffectReceiptCasesJson : String :=
+  PluginEffects.receiptCasesJson.compress
+
+def pluginResourceToolEffectTerminalCasesJson : String :=
+  PluginEffects.terminalCasesJson.compress
+
+def pluginResourceToolEffectAccountingCasesJson : String :=
+  PluginEffects.accountingCasesJson.compress
+
+def pluginResourceModelSlotCasesJson : String :=
+  modelSlotsJson.compress
+
+def pluginResourceNetworkCasesJson : String :=
+  networkJson.compress
+
+def pluginResourceCallAccessCasesJson : String :=
+  callAccessJson.compress
+
+def pluginResourceInvocationCasesJson : String :=
+  invocationJson.compress
+
+def pluginResourceReceiptCasesJson : String :=
+  Conformance.PluginReceipt.casesJson.compress
+
+def pluginResourceScratchCasesJson : String :=
+  scratchJson.compress
+
+def pluginResourceHostImportCasesJson : String :=
+  hostImportJson.compress
 end Conformance.PluginResources

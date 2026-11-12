@@ -144,7 +144,10 @@ fn perturbed(value: &Value) -> Value {
     match value {
         Value::Null => Value::Bool(true),
         Value::Bool(flag) => Value::Bool(!flag),
-        Value::Number(number) => Value::from(number.as_u64().unwrap_or(0) + 1),
+        Value::Number(number) => match number.as_i64() {
+            Some(signed) => Value::from(signed.wrapping_add(1)),
+            None => Value::from(number.as_u64().unwrap_or(0).wrapping_add(1)),
+        },
         Value::String(text) => Value::String(format!("{text}~")),
         Value::Array(items) if items.is_empty() => Value::Array(vec![Value::Null]),
         Value::Array(items) => Value::Array(items[1..].to_vec()),

@@ -182,9 +182,7 @@ async fn title_transitions_preserve_session_and_request_observation() {
 
 #[tokio::test]
 async fn generated_user_title_cases_drive_the_shared_session_owner() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot()
-        .session_document_cases
-        .projection;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().session_document_projection_cases;
     let cases = cases
         .iter()
         .filter(|case| case["operation"] == "rename")
@@ -274,8 +272,7 @@ async fn verified_signer_as_user(
 async fn user_title_update_is_signed_on_authenticated_http() -> anyhow::Result<()> {
     use gents_store::identity::NodeIdentity;
     let case = gents_lean_vocab::lean_contract_snapshot()
-        .session_document_cases
-        .projection
+        .session_document_projection_cases
         .iter()
         .find(|case| case["operation"] == "rename" && case["title"]["text"].is_string())
         .expect("modeled user rename");

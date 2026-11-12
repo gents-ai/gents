@@ -37,9 +37,7 @@ fn observation(
 
 #[tokio::test]
 async fn tool_publications_follow_lean_session_activity() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot()
-        .session_document_cases
-        .projection;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().session_document_projection_cases;
     let cases: Vec<_> = cases
         .iter()
         .filter(|case| case["operation"] == "tool_activity")
