@@ -716,6 +716,8 @@ export function createChatActions({
 
   return {
     sendMessage,
+
+    tookSentTurn: (key: string) => chat.tookSentTurn(stores.chat, key),
     editPendingQueue,
     steerPendingMessage,
     retryMessage,

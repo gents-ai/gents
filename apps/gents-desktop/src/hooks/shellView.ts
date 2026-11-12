@@ -1,7 +1,7 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 
 import type { OptimisticPendingTurn } from "@source-inc/gents-desktop-chat";
-import type { SentTurn } from "./chatStore";
+import type { SentTurn } from "./sentTurns";
 
 import {
   projectSessionLoadingStatus,

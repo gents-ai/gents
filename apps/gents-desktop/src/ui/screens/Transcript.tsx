@@ -854,6 +854,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     onMeasured,
     sentTurn: rows.joined ? sentTurn : null,
     anchorSentTurn,
+    tookSentTurn: actions.tookSentTurn,
     turnWorks,
     turns: turnKeys,
     opening,
@@ -960,7 +961,11 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     if (!joined) reset();
     toBottom();
   }, [joined, reset, toBottom]);
+
+  const sentSeen = useRef(sentTurn);
   useEffect(() => {
+    if (sentTurn === sentSeen.current) return;
+    sentSeen.current = sentTurn;
     if (!joined && sentTurn) reset();
   }, [joined, sentTurn, reset]);
   useEffect(() => {
