@@ -357,6 +357,10 @@ async fn retained_goal_observation_roots_match_the_lean_projection_model() {
                 .as_mut()
                 .unwrap()
                 .assignment_root_request_doc_id = None;
+            assert!(serde_json::to_value(retained.goal.as_ref().unwrap())
+                .unwrap()
+                .get("assignment_root_request_doc_id")
+                .is_none());
         }
         retained.signature = f
             .agent
