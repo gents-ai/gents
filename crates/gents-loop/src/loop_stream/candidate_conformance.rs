@@ -417,6 +417,7 @@ async fn observe(input: &family::Input) -> family::Observation {
         retries: Vec::new(),
         final_text: None,
         failed: false,
+        turn_limit: false,
         dirty_inputs: Vec::new(),
         context_inputs: Vec::new(),
         captures: Vec::new(),
@@ -456,8 +457,9 @@ async fn observe(input: &family::Input) -> family::Observation {
             }),
             Ok(LoopStreamItem::Final { text }) => observed.final_text = Some(text),
             Ok(_) => {}
-            Err(_) => {
+            Err(error) => {
                 observed.failed = true;
+                observed.turn_limit = error.cause() == &crate::error::LoopFailureCause::MaxTurns;
                 break;
             }
         }

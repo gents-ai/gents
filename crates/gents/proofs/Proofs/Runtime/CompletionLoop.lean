@@ -30,7 +30,9 @@ structure Input where
   resample : Nat := 2
   repair : Bool := true
   deadlineFits : Bool := true
-  /-- Zero leaves the loop uncapped. A positive bound counts provider turns, not retry attempts. -/
+  /-- The bound counts accepted tool rounds after the first: a dispatch is refused once more
+  than `maxTurns + 1` turns have run, so zero is the tightest limit and never an absent one.
+  Retry attempts are not turns. -/
   maxTurns : Nat := 0
   context : Bool := false
   initialDirty : Bool := false
@@ -70,6 +72,7 @@ structure Observation where
   retries : List Retry := []
   finalText : Option String := none
   failed : Bool := false
+  turnLimit : Bool := false
   dirtyInputs : List Bool := []
   contextInputs : List Bool := []
   captures : List Capture := []
@@ -106,8 +109,8 @@ def run (input : Input) : Observation := Id.run do
   result := { result with ledgerUsed := ledger.map (·.used) }
   for call in input.calls do
     if result.failed || result.finalText.isSome then break
-    if input.maxTurns > 0 && state.turn ≥ input.maxTurns then
-      result := { result with failed := true }
+    if state.turn > input.maxTurns + 1 then
+      result := { result with failed := true, turnLimit := true }
       break
     if ledger.isSome && (ledger.map (·.remaining)).getD 0 == 0 then
       result := { result with failed := true }
