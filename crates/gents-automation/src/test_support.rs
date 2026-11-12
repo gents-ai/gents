@@ -190,3 +190,20 @@ pub async fn signed_test_node(
     gents_inference::test_support::signed_test_node(name, crate::lifecycle_hooks::composition())
         .await
 }
+
+pub mod self_config;
+pub mod self_config_text;
+
+pub async fn self_config_fixture(
+    name: &str,
+) -> gents_toolcalls::test_support::self_config::SelfConfigFixture {
+    let db = gents_inference::test_support::test_db_with_tool_policy(
+        name,
+        crate::lifecycle_hooks::composition(),
+        std::sync::Arc::new(gents_tools::surface::ToolCeiling::meta_only()),
+    )
+    .await;
+    gents_toolcalls::test_support::self_config::SelfConfigFixture::from_db(db, name).await
+}
+
+pub mod loop_stream;

@@ -16,8 +16,10 @@ use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 use tokio_util::sync::CancellationToken;
 
-use crate::support::enrollment::{authorize_enrollment_generation, EnrollmentGeneration};
 use crate::support::{self, TestDb};
+use gents_p2p::test_support::enrollment::{
+    authorize_enrollment_generation, EnrollmentGeneration,
+};
 
 struct Stop(CancellationToken);
 impl Drop for Stop {
@@ -82,9 +84,11 @@ async fn opted_in_members_renew_over_authenticated_routes() {
     gents_documents::ensure_node(&member.node, member.node_identity.did())
         .await
         .unwrap();
-    let (member_peer, _) = support::enrollment::wait_for_peer_identity(&member.node).await;
-    let (server_peer, _) = support::enrollment::wait_for_peer_identity(&server.node).await;
-    let (_, token) = support::enrollment::signed_enrollment_offer(
+    let (member_peer, _) =
+        gents_p2p::test_support::enrollment::wait_for_peer_identity(&member.node).await;
+    let (server_peer, _) =
+        gents_p2p::test_support::enrollment::wait_for_peer_identity(&server.node).await;
+    let (_, token) = gents_p2p::test_support::enrollment::signed_enrollment_offer(
         &server.node,
         "automatic-renewal-network",
         "Renewal network",
@@ -246,7 +250,8 @@ async fn re_enrolling_an_active_member_renews_its_lease_in_place() {
     gents_documents::ensure_node(&member.node, &member_did)
         .await
         .unwrap();
-    let (peer, address) = support::enrollment::wait_for_peer_identity(&member.node).await;
+    let (peer, address) =
+        gents_p2p::test_support::enrollment::wait_for_peer_identity(&member.node).await;
     let cancel = CancellationToken::new();
     let _stop = Stop(cancel.clone());
     let (owner, authority) = enrollment_authority_channel();

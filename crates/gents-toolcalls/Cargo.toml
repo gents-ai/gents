@@ -59,6 +59,9 @@ afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev =
 ] }
 
 [dev-dependencies]
+base64.workspace = true
+rig-core.workspace = true
+gents-toolcalls = { path = ".", features = ["test-fixtures"] }
 gents-store = { workspace = true, features = ["test-fixtures"] }
 gents-documents = { workspace = true, features = ["test-fixtures"] }
 gents-inference = { workspace = true, features = ["test-fixtures"] }

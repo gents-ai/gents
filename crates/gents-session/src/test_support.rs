@@ -699,3 +699,15 @@ pub async fn assert_block_signer(node: &defra_node::Node, cid: &str, signer: &st
         signer
     );
 }
+
+pub async fn test_p2p_db(name: &str) -> gents_inference::test_support::TestDb {
+    let db = gents_inference::test_support::embedded::test_db_with_p2p(
+        name,
+        crate::test_support::no_lifecycle_plugins(),
+        |path| gents_p2p::test_support::transport::test_p2p_config(&Default::default(), path),
+    )
+    .await;
+    let (db, _user, _access) =
+        gents_inference::test_support::signed_test_node_without_agent_from_db(db, name).await;
+    db
+}

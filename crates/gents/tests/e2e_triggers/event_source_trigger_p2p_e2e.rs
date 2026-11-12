@@ -15,8 +15,8 @@ use gents_p2p::p2p_reconcile::{
 use gents_store::graphql::escape_graphql_string;
 use serde_json::Value;
 
-use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
 use crate::support::test_p2p_db;
+use gents_p2p::test_support::transport::{wait_for_connected_peer, wait_for_listen_addr};
 
 const EXTERNAL_ID: &str = "wh-p2p-1";
 

@@ -36,7 +36,7 @@ async fn runtime_http_test_node(identity: Arc<KeyIdentity>) -> (TestNode, String
                 )
                 .unwrap(),
             )
-            .with_p2p(support::test_p2p_config(
+            .with_p2p(gents_p2p::test_support::transport::test_p2p_config(
                 &Default::default(),
                 directory.path(),
             ))
@@ -258,12 +258,14 @@ async fn private_client_journal_obeys_native_policy_and_refuses_exact_peer_pull(
         .unwrap();
     let public_id = gents_store::graphql::created_doc_id(&public, "PeerRegistry").unwrap();
     let public_id_escaped = escape_graphql_string(&public_id);
-    let (_, source_address) = support::enrollment::wait_for_peer_identity(source).await;
-    let (_, receiver_address) = support::enrollment::wait_for_peer_identity(receiver).await;
+    let (_, source_address) =
+        gents_p2p::test_support::enrollment::wait_for_peer_identity(source).await;
+    let (_, receiver_address) =
+        gents_p2p::test_support::enrollment::wait_for_peer_identity(receiver).await;
     let source_addresses = vec![source_address];
     let receiver_addresses = vec![receiver_address];
     receiver_admin.connect(&source_addresses).await.unwrap();
-    support::p2p_waits::wait_for_connected_peer(receiver).await;
+    gents_p2p::test_support::transport::wait_for_connected_peer(receiver).await;
     source_admin
         .add_replicator(
             &receiver_addresses,

@@ -1,5 +1,5 @@
-use crate::support::enrollment::wait_for_peer_identity;
 use crate::support::test_p2p_db;
+use gents_p2p::test_support::enrollment::wait_for_peer_identity;
 
 #[tokio::test]
 async fn p2p_crash_reopens_same_durable_peer_identity() {
