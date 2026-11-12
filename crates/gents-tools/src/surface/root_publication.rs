@@ -675,56 +675,57 @@ mod tests {
             node.verified_block_signer_did(&version.cid).await?,
             user.did()
         );
-        let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_root_access_cases;
-        assert!(!cases.is_empty());
-        for case in cases {
-            let key = match case.actor.as_str() {
-                "user" => &user as &dyn NodeIdentity,
+        let cases = gents_lean_vocab::families::workspace_root_access_root_access::cases();
+        let key_of = |actor: &str| -> &dyn NodeIdentity {
+            match actor {
+                "user" => &user,
                 "runtime" => &runtime,
                 "writer" => writer.as_ref(),
                 "integrator" => integrator.as_ref(),
                 "other" => &other,
                 actor => panic!("unknown modeled actor {actor}"),
-            };
-            let permission = match case.permission.as_str() {
-                "read" => defra_node::DocumentPermission::Read,
-                "update" => defra_node::DocumentPermission::Update,
-                "delete" => defra_node::DocumentPermission::Delete,
-                permission => panic!("unknown modeled permission {permission}"),
-            };
+            }
+        };
+        let permission_of = |permission: &str| match permission {
+            "read" => defra_node::DocumentPermission::Read,
+            "update" => defra_node::DocumentPermission::Update,
+            "delete" => defra_node::DocumentPermission::Delete,
+            permission => panic!("unknown modeled permission {permission}"),
+        };
+        let guard = crate::surface::RootExecutionGuard {
+            agent_did: writer.did().to_owned(),
+            selected_root: Some(std::path::PathBuf::from(&path)),
+            ceiling_root: None,
+        };
+        let mut expected = Vec::new();
+        let mut may_publish = Vec::new();
+        let mut writer_execution = Vec::new();
+        for case in &cases {
+            let key = key_of(&case.input.actor);
             let allowed = node
                 .document_acp()
                 .check_doc_access(
                     &defra_node::AcpIdentity::Authenticated(key.did().parse()?),
-                    permission,
+                    permission_of(&case.input.permission),
                     &policy,
                     "workspace_roots",
                     &root_doc,
                 )
                 .await?;
-            assert_eq!(allowed, case.expected, "{case:?}");
-            let may_publish = node
-                .document_acp()
-                .check_doc_access(
-                    &defra_node::AcpIdentity::Authenticated(key.did().parse()?),
-                    defra_node::DocumentPermission::Update,
-                    &policy,
-                    "nodes",
-                    &node_doc,
-                )
-                .await?;
-            assert_eq!(may_publish, case.may_publish, "{case:?}");
-            if case.permission == "read" {
-                let guard = crate::surface::RootExecutionGuard {
-                    agent_did: writer.did().to_owned(),
-                    selected_root: Some(std::path::PathBuf::from(&path)),
-                    ceiling_root: None,
-                };
-                assert_eq!(
-                    guard.validate(&node, key).await.is_ok(),
-                    case.writer_execution,
-                    "{case:?}"
-                );
+            expected.push(allowed);
+            may_publish.push(
+                node.document_acp()
+                    .check_doc_access(
+                        &defra_node::AcpIdentity::Authenticated(key.did().parse()?),
+                        defra_node::DocumentPermission::Update,
+                        &policy,
+                        "nodes",
+                        &node_doc,
+                    )
+                    .await?,
+            );
+            writer_execution.push(guard.validate(&node, key).await.is_ok());
+            if case.input.permission == "read" {
                 let query = format!(
                     "{{ WorkspaceRoot(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
                     escape_graphql_string(&root_doc)
@@ -733,7 +734,8 @@ mod tests {
                 assert_eq!(
                     !value_rows(&response, "WorkspaceRoot")?.is_empty(),
                     allowed,
-                    "{case:?}"
+                    "{:?}",
+                    case.input
                 );
             }
         }
@@ -758,11 +760,11 @@ mod tests {
                 .is_empty(),
             Err(_) => false,
         };
-        let writer_case = cases
+        let writer_update = cases
             .iter()
-            .find(|case| case.actor == "writer" && case.permission == "update")
+            .position(|case| case.input.actor == "writer" && case.input.permission == "update")
             .context("missing modeled writer update")?;
-        assert_eq!(changed, writer_case.expected);
+        assert_eq!(changed, expected[writer_update]);
         let observed = owner
             .execute(&format!(
                 "{{ WorkspaceRoot(filter: {{_docID: {{_eq: \"{}\"}}}}) {{ enabled }} }}",
@@ -831,54 +833,36 @@ mod tests {
             })
         }).await;
         assert!(aborted.is_err());
-        assert_eq!(
-            !root_row_in_access(&owner, &aborted_path).await?.is_empty(),
-            cases[0].aborted_document
-        );
+        let aborted_document = !root_row_in_access(&owner, &aborted_path).await?.is_empty();
         revoke_workspace_root_reader(&owner, &path, writer.did()).await?;
-        let writer_case = cases
-            .iter()
-            .find(|case| case.actor == "writer" && case.permission == "read")
-            .context("missing modeled writer read")?;
-        let guard = crate::surface::RootExecutionGuard {
-            agent_did: writer.did().to_owned(),
-            selected_root: Some(std::path::PathBuf::from(&path)),
-            ceiling_root: None,
-        };
-        assert_eq!(
-            guard.validate(&node, writer.as_ref()).await.is_ok(),
-            writer_case.writer_execution_after_revocation
-        );
+        let mut writer_execution_after_revocation = Vec::new();
+        for case in &cases {
+            writer_execution_after_revocation.push(
+                guard
+                    .validate(&node, key_of(&case.input.actor))
+                    .await
+                    .is_ok(),
+            );
+        }
         assert_eq!(
             set_workspace_root(&owner, runtime.did(), &path, None, true).await?,
             root_doc
         );
-        for case in cases {
-            let key = match case.actor.as_str() {
-                "user" => &user as &dyn NodeIdentity,
-                "runtime" => &runtime,
-                "writer" => writer.as_ref(),
-                "integrator" => integrator.as_ref(),
-                "other" => &other,
-                actor => panic!("unknown modeled actor {actor}"),
-            };
-            let permission = match case.permission.as_str() {
-                "read" => defra_node::DocumentPermission::Read,
-                "update" => defra_node::DocumentPermission::Update,
-                "delete" => defra_node::DocumentPermission::Delete,
-                permission => panic!("unknown modeled permission {permission}"),
-            };
-            let allowed = node
-                .document_acp()
-                .check_doc_access(
-                    &defra_node::AcpIdentity::Authenticated(key.did().parse()?),
-                    permission,
-                    &policy,
-                    "workspace_roots",
-                    &root_doc,
-                )
-                .await?;
-            assert_eq!(allowed, case.after_writer_revocation, "{case:?}");
+        let mut after_writer_revocation = Vec::new();
+        for case in &cases {
+            after_writer_revocation.push(
+                node.document_acp()
+                    .check_doc_access(
+                        &defra_node::AcpIdentity::Authenticated(
+                            key_of(&case.input.actor).did().parse()?,
+                        ),
+                        permission_of(&case.input.permission),
+                        &policy,
+                        "workspace_roots",
+                        &root_doc,
+                    )
+                    .await?,
+            );
         }
         grant_workspace_root_reader(&owner, &path, writer.did()).await?;
         owner
@@ -888,32 +872,21 @@ mod tests {
             set_workspace_root(&owner, runtime.did(), &path, None, false).await?,
             root_doc
         );
-        for case in cases {
-            let key = match case.actor.as_str() {
-                "user" => &user as &dyn NodeIdentity,
-                "runtime" => &runtime,
-                "writer" => writer.as_ref(),
-                "integrator" => integrator.as_ref(),
-                "other" => &other,
-                actor => panic!("unknown modeled actor {actor}"),
-            };
-            let permission = match case.permission.as_str() {
-                "read" => defra_node::DocumentPermission::Read,
-                "update" => defra_node::DocumentPermission::Update,
-                "delete" => defra_node::DocumentPermission::Delete,
-                permission => panic!("unknown modeled permission {permission}"),
-            };
-            let allowed = node
-                .document_acp()
-                .check_doc_access(
-                    &defra_node::AcpIdentity::Authenticated(key.did().parse()?),
-                    permission,
-                    &policy,
-                    "workspace_roots",
-                    &root_doc,
-                )
-                .await?;
-            assert_eq!(allowed, case.after_parent_revocation, "{case:?}");
+        let mut after_parent_revocation = Vec::new();
+        for case in &cases {
+            after_parent_revocation.push(
+                node.document_acp()
+                    .check_doc_access(
+                        &defra_node::AcpIdentity::Authenticated(
+                            key_of(&case.input.actor).did().parse()?,
+                        ),
+                        permission_of(&case.input.permission),
+                        &policy,
+                        "workspace_roots",
+                        &root_doc,
+                    )
+                    .await?,
+            );
         }
         let query = format!(
             "{{ Agent(filter: {{agent_did: {{_eq: \"{}\"}}}}) {{ _docID }} }}",
@@ -931,21 +904,36 @@ mod tests {
             })
             .await?;
         revoke_workspace_root_reader(&owner, &path, integrator.did()).await?;
-        let integrator_case = cases
-            .iter()
-            .find(|case| case.actor == "integrator" && case.permission == "read")
-            .context("missing modeled integrator read")?;
-        let allowed = node
-            .document_acp()
-            .check_doc_access(
-                &defra_node::AcpIdentity::Authenticated(integrator.did().parse()?),
-                defra_node::DocumentPermission::Read,
-                &policy,
-                "workspace_roots",
-                &root_doc,
-            )
-            .await?;
-        assert_eq!(allowed, integrator_case.after_integrator_revocation);
+        let mut after_integrator_revocation = Vec::new();
+        for case in &cases {
+            after_integrator_revocation.push(
+                node.document_acp()
+                    .check_doc_access(
+                        &defra_node::AcpIdentity::Authenticated(
+                            key_of(&case.input.actor).did().parse()?,
+                        ),
+                        permission_of(&case.input.permission),
+                        &policy,
+                        "workspace_roots",
+                        &root_doc,
+                    )
+                    .await?,
+            );
+        }
+        for (index, case) in cases.iter().enumerate() {
+            case.check(
+                gents_lean_vocab::families::workspace_root_access_root_access::AccessOutput {
+                    expected: expected[index],
+                    may_publish: may_publish[index],
+                    writer_execution: writer_execution[index],
+                    aborted_document,
+                    writer_execution_after_revocation: writer_execution_after_revocation[index],
+                    after_writer_revocation: after_writer_revocation[index],
+                    after_parent_revocation: after_parent_revocation[index],
+                    after_integrator_revocation: after_integrator_revocation[index],
+                },
+            );
+        }
         delete_workspace_root(&owner, &path).await?;
         assert!(root_row_in_access(&owner, &path).await?.is_empty());
         node.shutdown().await?;

@@ -71,19 +71,6 @@ theorem root_execution_uses_selected_agent :
     workspaceRootExecutionAllowed "writer" "runtime" workspaceRootFixture = false ∧
     workspaceRootExecutionAllowed "writer" "writer" workspaceRootAfterWriterRevocation = false := by native_decide
 
-def workspaceRootAccessCasesJson : String :=
-  (Lean.toJson (["user", "runtime", "writer", "integrator", "other"].flatMap fun actor =>
-    ["read", "update", "delete"].map fun permission => Lean.Json.mkObj
-      [("actor", Lean.toJson actor), ("permission", Lean.toJson permission),
-       ("expected", Lean.toJson (workspaceRootPermission actor permission)),
-       ("writer_execution", Lean.toJson (workspaceRootExecutionAllowed "writer" actor workspaceRootFixture)),
-       ("writer_execution_after_revocation", Lean.toJson (workspaceRootExecutionAllowed "writer" actor workspaceRootAfterWriterRevocation)),
-       ("may_publish", Lean.toJson (workspaceRootPublicationAllowed actor)),
-       ("after_parent_revocation", Lean.toJson (Household.allowed 6 workspaceRootAfterRevocation actor "workspace_roots" "root" permission)),
-       ("after_integrator_revocation", Lean.toJson (Household.allowed 6 workspaceRootAfterIntegratorRevocation actor "workspace_roots" "root" permission)),
-       ("after_writer_revocation", Lean.toJson (Household.allowed 6 workspaceRootAfterWriterRevocation actor "workspace_roots" "root" permission)),
-       ("aborted_document", Lean.toJson (Identity.NodeFileRequests.publish false).document)])).compress
-
 /-- Workspace workflow configuration chooses the writer and integrator
 Agents explicitly. Their selection is frozen into the recorded action plan;
 the node DID and planner-provided labels are not substitute principals. -/

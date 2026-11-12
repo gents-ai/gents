@@ -1486,9 +1486,13 @@ def caseCoverage : List CoverageEntry :=
       "WorkspaceDatastoreWriteCases")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
-      "workspace_root_access_cases"
-      "WorkspaceRootAccessCases"
+      "family"
+      "workspace_root_access_root_access"
       "User publication fences on native Node update and commits the physical parent; raw direct creates remain outside the writer-fencing premise.")
+      "identity-permission" [Surface.runtimeInternal, Surface.api]
+  , tagged (consumerCoverage
+      "family"
+      "workspace_root_access_unrelated_agent_read")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
       "workspace_child_revocation_cases"

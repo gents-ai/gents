@@ -18,6 +18,7 @@ import Proofs.Conformance.Identity.WorkspaceAndFileRequests
 import Proofs.Conformance.Identity.MailboxAccess
 import Proofs.Conformance.Identity.SessionChildLocalSelfPublication
 import Proofs.Conformance.Identity.NodeProvisioning
+import Proofs.Conformance.Identity.WorkspaceRootAccess
 import Proofs.Conformance.HomeResolution
 import Proofs.Conformance.GraphqlName
 import Proofs.Conformance.ClaudeRefresh
@@ -706,7 +707,6 @@ def snapshotIdentityCasesJson : String :=
     ++ "\"pack_placement_reader_cases\":" ++ Identity.PackPlacementReaders.casesJson ++ ","
     ++ "\"native_route_cases\":" ++ Triggers.NativeRoute.casesJson ++ ","
     ++ "\"workspace_datastore_write_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceDatastoreWriteCasesJson ++ ","
-    ++ "\"workspace_root_access_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceRootAccessCasesJson ++ ","
     ++ "\"workspace_child_revocation_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceChildRevocationCasesJson ++ ","
     ++ "\"workspace_admission_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceAdmissionCasesJson ++ ","
     ++ "\"workspace_cleanup_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceCleanupCasesJson ++ ","

@@ -2969,7 +2969,6 @@ pub struct LeanContractSnapshot {
     pub pack_placement_reader_cases: Vec<LeanPackPlacementReaderCase>,
     pub native_route_cases: Vec<LeanNativeRouteCase>,
     pub workspace_datastore_write_cases: Vec<LeanWorkspaceDatastoreWriteCase>,
-    pub workspace_root_access_cases: Vec<LeanWorkspaceRootAccessCase>,
     pub workspace_child_revocation_cases: Vec<LeanWorkspaceChildRevocationCase>,
     pub workspace_admission_cases: Vec<LeanWorkspaceAdmissionCase>,
     pub workspace_cleanup_cases: Vec<LeanWorkspaceCleanupCase>,
@@ -12271,19 +12270,4 @@ pub struct LeanWorkspaceQuickstartSelectionCase {
     pub actor: String,
     pub after_revocation: bool,
     pub before: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanWorkspaceRootAccessCase {
-    pub aborted_document: bool,
-    pub actor: String,
-    pub after_integrator_revocation: bool,
-    pub after_parent_revocation: bool,
-    pub after_writer_revocation: bool,
-    pub expected: bool,
-    pub may_publish: bool,
-    pub permission: String,
-    pub writer_execution: bool,
-    pub writer_execution_after_revocation: bool,
 }
