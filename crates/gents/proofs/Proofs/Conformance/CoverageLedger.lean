@@ -1381,8 +1381,8 @@ def caseCoverage : List CoverageEntry :=
       "RetrySelectionCases")
       "request-lifecycle" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "fold_turn_input_cases"
-      "FoldTurnInputCases")
+      "family"
+      "fold_queue_contracts_turn_input")
       "request-lifecycle" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "interrupt_queue_cases"

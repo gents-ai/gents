@@ -692,7 +692,7 @@ pub async fn owned_test_hook_with_identity() -> (
 }
 
 pub async fn owned_test_hook_with_folded_case(
-    case: &gents_lean_vocab::LeanFoldTurnInputCase,
+    case: &gents_lean_vocab::families::fold_queue_contracts_turn_input::TurnInputCase,
 ) -> (
     TestDb,
     DefraSessionHook,
@@ -748,7 +748,7 @@ async fn write_owned_request(
 async fn owned_test_hook_with_identity_policy(
     attributed: bool,
     policy: FailurePolicy,
-    folded_case: Option<&gents_lean_vocab::LeanFoldTurnInputCase>,
+    folded_case: Option<&gents_lean_vocab::families::fold_queue_contracts_turn_input::TurnInputCase>,
     signature: RequestSignature,
 ) -> (
     TestDb,

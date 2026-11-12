@@ -201,10 +201,6 @@ pub fn lean_fold_queue_cases() -> &'static [LeanFoldQueueCase] {
     &lean_contract_snapshot().fold_queue_cases
 }
 
-pub fn lean_fold_turn_input_cases() -> &'static [LeanFoldTurnInputCase] {
-    &lean_contract_snapshot().fold_turn_input_cases
-}
-
 pub fn lean_goal_capability_resolution_cases() -> &'static [LeanGoalCapabilityResolutionCase] {
     &lean_contract_snapshot().goal_capability_resolution_cases
 }
@@ -3230,7 +3226,6 @@ pub struct LeanContractSnapshot {
     pub interrupt_queue_cases: Vec<LeanInterruptQueueCase>,
     pub session_control_cases: Vec<serde_json::Value>,
     pub fold_queue_cases: Vec<LeanFoldQueueCase>,
-    pub fold_turn_input_cases: Vec<LeanFoldTurnInputCase>,
     pub handover_fold_cases: Vec<LeanHandoverFoldCase>,
     pub fold_publication_cases: Vec<LeanFoldPublicationCase>,
     pub steering_publication_cases: Vec<LeanFoldPublicationCase>,
@@ -4098,14 +4093,6 @@ pub struct LeanFleetSlotAccountingCase {
     pub aggregate_reconstructed_not_persisted: bool,
 }
 
-#[derive(Debug, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanFoldAuthoredKey {
-    Context,
-    Prompt,
-    Folded { request_id: u64 },
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanFoldPublicationCase {
@@ -4193,31 +4180,6 @@ pub struct LeanFoldQueueObservation {
     pub folding: Vec<u64>,
     pub terminal: Vec<u64>,
     pub claims: Vec<LeanFoldQueueClaim>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanFoldTurnInputAuthored {
-    pub key: LeanFoldAuthoredKey,
-    pub content: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanFoldTurnInputCase {
-    pub name: String,
-    pub context: Option<String>,
-    pub head: String,
-    pub folded: Vec<LeanFoldTurnInputFolded>,
-    pub authored: Vec<LeanFoldTurnInputAuthored>,
-    pub provider_input: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanFoldTurnInputFolded {
-    pub request_id: u64,
-    pub content: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

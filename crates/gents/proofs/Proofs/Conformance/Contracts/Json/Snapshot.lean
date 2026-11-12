@@ -537,8 +537,6 @@ def snapshotRequestCasesJson : String :=
     ++ "\"steering_publication_cases\":" ++ FoldQueueContracts.steeringPublicationCasesJson ++ ","
     ++ "\"fold_queue_cases\":"
       ++ Conformance.FoldQueueContracts.casesJson ++ ","
-    ++ "\"fold_turn_input_cases\":"
-      ++ Conformance.FoldQueueContracts.turnInputCasesJson ++ ","
     ++ "\"handover_fold_cases\":"
       ++ Conformance.FoldQueueContracts.handoverCasesJson ++ ","
     ++ "\"fold_publication_cases\":"

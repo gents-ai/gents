@@ -3,6 +3,7 @@ import Proofs.Session.SessionQueue.ManagementCases
 import Proofs.Session.SessionQueue.InputEditCases
 import Proofs.Runtime.CanonicalOutput.Execution.FoldPublicationCases
 import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Family
 
 namespace Conformance.FoldQueueContracts
 
@@ -45,23 +46,55 @@ def caseJson (entry : String × List Event) : String :=
 
 def casesJson : String := jsonArray (cases.map caseJson)
 
-def authoredKeyJson : AuthoredKey → String
-  | .context => "{\"kind\":\"context\"}"
-  | .prompt => "{\"kind\":\"prompt\"}"
-  | .folded id => "{\"kind\":\"folded\",\"request_id\":" ++ toString id ++ "}"
+inductive AuthoredKeyKind where
+  | context
+  | prompt
+  | folded
+  deriving Lean.ToJson
 
-def turnInputCaseJson (entry : String × TurnInput String) : String :=
-  let input := entry.2
-  "{\"name\":" ++ jsonString entry.1 ++
-  ",\"context\":" ++ (match input.context with | none => "null" | some c => jsonString c) ++
-  ",\"head\":" ++ jsonString input.head ++
-  ",\"folded\":" ++ jsonArray (input.folded.map fun (id, content) =>
-    "{\"request_id\":" ++ toString id ++ ",\"content\":" ++ jsonString content ++ "}") ++
-  ",\"authored\":" ++ jsonArray (input.authored.map fun (key, content) =>
-    "{\"key\":" ++ authoredKeyJson key ++ ",\"content\":" ++ jsonString content ++ "}") ++
-  ",\"provider_input\":" ++ jsonArray (input.providerInput.map jsonString) ++ "}"
+structure AuthoredKeyWire where
+  kind : AuthoredKeyKind
+  requestId : Option Nat
+  deriving Lean.ToJson
 
-def turnInputCasesJson : String := jsonArray (turnInputCases.map turnInputCaseJson)
+def AuthoredKeyWire.ofModel : AuthoredKey → AuthoredKeyWire
+  | .context => { kind := .context, requestId := none }
+  | .prompt => { kind := .prompt, requestId := none }
+  | .folded id => { kind := .folded, requestId := some id }
+
+structure FoldedWire where
+  requestId : Nat
+  content : String
+  deriving Lean.ToJson
+
+structure AuthoredWire where
+  key : AuthoredKeyWire
+  content : String
+  deriving Lean.ToJson
+
+structure TurnInputCase where
+  name : String
+  context : Option String
+  head : String
+  folded : List FoldedWire
+  deriving Lean.ToJson
+
+structure TurnInputObservation where
+  authored : List AuthoredWire
+  providerInput : List String
+  deriving Lean.ToJson
+
+@[conformance_family]
+def turnInput : Family TurnInputCase TurnInputObservation where
+  inputs := turnInputCases.map fun (name, input) =>
+    { name, context := input.context, head := input.head
+      folded := input.folded.map fun (requestId, content) => { requestId, content } }
+  model := fun i =>
+    let input : TurnInput String :=
+      ⟨i.context, i.head, i.folded.map fun folded => (folded.requestId, folded.content)⟩
+    { authored := input.authored.map fun (key, content) =>
+        { key := AuthoredKeyWire.ofModel key, content }
+      providerInput := input.providerInput }
 
 open CanonicalOutput.Execution.Handover.Cases in
 def handoverCaseJson (value : FoldClaimCase) : String :=

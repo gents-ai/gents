@@ -472,17 +472,16 @@ async fn generated_layer_cases_pin_the_assembled_request_order() {
 
 #[tokio::test]
 async fn folded_prompts_publish_and_send_in_queue_order() {
-    let cases = gents_lean_vocab::lean_fold_turn_input_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        drive_generated_turn_input(case, false).await;
-    }
-}
-
-#[tokio::test]
-async fn first_turn_compaction_keeps_folded_authored_input() {
-    for case in gents_lean_vocab::lean_fold_turn_input_cases() {
-        drive_generated_turn_input(case, true).await;
+    for case in gents_lean_vocab::families::fold_queue_contracts_turn_input::cases::<String>() {
+        let sent = drive_generated_turn_input(&case.input, false).await;
+        let compacted = drive_generated_turn_input(&case.input, true).await;
+        assert_eq!(
+            serde_json::to_value(&compacted).unwrap(),
+            serde_json::to_value(&sent).unwrap(),
+            "{}: first-turn compaction keeps the folded authored input",
+            case.input.name
+        );
+        case.check(sent);
     }
 }
 
