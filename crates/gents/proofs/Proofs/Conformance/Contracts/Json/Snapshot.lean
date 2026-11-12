@@ -416,7 +416,6 @@ def snapshotJsonTail : String :=
 def snapshotGoalCasesJson : String :=
   ""
     ++ "\"generated_by\":\"lake env lean --run Proofs/Conformance/Contracts.lean\","
-    ++ "\"storage_failure_cases\":" ++ Conformance.StorageFailureContracts.casesJson ++ ","
     ++ "\"root_admission_cases\":"
       ++ Conformance.RootAdmissionContracts.casesJson ++ ","
     ++ "\"vocabularies\":"

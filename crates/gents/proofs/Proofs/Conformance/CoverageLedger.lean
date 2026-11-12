@@ -1164,8 +1164,24 @@ def caseCoverage : List CoverageEntry :=
       "ClientDirectSessionReadCases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
-      "storage_failure_cases"
-      "StorageFailureCases")
+      "family"
+      "storage_failure_contracts_classification")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "family"
+      "storage_failure_contracts_readiness")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "family"
+      "storage_failure_contracts_ambiguous_write")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "family"
+      "storage_failure_contracts_full_transaction")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "family"
+      "storage_failure_contracts_host_error")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "client_request_closure_cases"
