@@ -1,8 +1,9 @@
 //! An embedded node with a served GraphQL endpoint. It starts the node through
-//! the store owner's protected start with no installed plugins and a policy
-//! that projects no tools, composed with what the calling layer names: the
-//! bundled lifecycle plugins where they can be named, an explicitly empty set
-//! below them, or nothing.
+//! the store owner's protected start with no installed plugins and, unless a
+//! layer that owns one passes its production tool policy, a policy that
+//! projects no tools, composed with what the calling layer names: the bundled
+//! lifecycle plugins where they can be named, an explicitly empty set below
+//! them, or nothing.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -44,6 +45,7 @@ pub struct TestDb {
     pub node_identity: Arc<dyn NodeIdentity>,
     pub process_generation: u64,
     composition: gents_store::node_extension::Extensions,
+    tool_policy: Arc<dyn ToolSourcePolicy>,
     endpoint: String,
     data_path: PathBuf,
     store_key: StoreKey,
@@ -113,6 +115,7 @@ impl TestDb {
             self.node_identity.clone(),
             None,
             &self.composition,
+            self.tool_policy.clone(),
         )
         .await?;
         self.node = node;
@@ -162,6 +165,7 @@ async fn start(
     identity: Arc<dyn NodeIdentity>,
     p2p: Option<defra_node::P2PConfig>,
     composition: &gents_store::node_extension::Extensions,
+    tool_policy: Arc<dyn ToolSourcePolicy>,
 ) -> Result<(Arc<EmbeddedNode>, String)> {
     let did = identity.did().to_string();
     let protected =
@@ -180,7 +184,7 @@ async fn start(
             identity.clone(),
             Some(http),
             p2p,
-            Arc::new(NoToolSources),
+            tool_policy,
             Vec::new(),
             composition,
         )
@@ -255,11 +259,22 @@ async fn store_key(path: &Path, data: &Path) -> Result<StoreKey> {
 }
 
 pub async fn test_db(name: &str, composition: gents_store::node_extension::Extensions) -> TestDb {
+    test_db_with_tool_policy(name, composition, Arc::new(NoToolSources)).await
+}
+
+/// A served test node whose permission projector uses `tool_policy`, so a
+/// fixture Agent's Tools selection projects the node permissions its tool
+/// sources need, as the runtime's ceiling does in production.
+pub async fn test_db_with_tool_policy(
+    name: &str,
+    composition: gents_store::node_extension::Extensions,
+    tool_policy: Arc<dyn ToolSourcePolicy>,
+) -> TestDb {
     let tempdir = tempfile::Builder::new()
         .prefix(&format!("gents-{name}-"))
         .tempdir()
         .expect("tempdir");
-    let mut db = test_db_at(tempdir.path(), None, composition)
+    let mut db = test_db_at_with_tool_policy(tempdir.path(), None, composition, tool_policy)
         .await
         .expect("test node");
     db.tempdir = Some(tempdir);
@@ -297,6 +312,15 @@ pub async fn test_db_at(
     path: &Path,
     p2p: Option<defra_node::P2PConfig>,
     composition: gents_store::node_extension::Extensions,
+) -> Result<TestDb> {
+    test_db_at_with_tool_policy(path, p2p, composition, Arc::new(NoToolSources)).await
+}
+
+async fn test_db_at_with_tool_policy(
+    path: &Path,
+    p2p: Option<defra_node::P2PConfig>,
+    composition: gents_store::node_extension::Extensions,
+    tool_policy: Arc<dyn ToolSourcePolicy>,
 ) -> Result<TestDb> {
     let path = path.to_path_buf();
     let identity_path = path.join("node.key");
@@ -338,6 +362,7 @@ pub async fn test_db_at(
         identity.clone(),
         p2p,
         &composition,
+        tool_policy.clone(),
     )
     .await?;
     gents_store::schema::ensure_runtime_schemas(&node).await?;
@@ -346,6 +371,7 @@ pub async fn test_db_at(
         node_identity: identity,
         process_generation: 0,
         composition,
+        tool_policy,
         endpoint,
         data_path,
         store_key: key,
