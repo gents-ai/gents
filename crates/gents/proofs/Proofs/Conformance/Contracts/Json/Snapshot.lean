@@ -306,8 +306,6 @@ def snapshotCaptureTailJson : String :=
       ++ compactionProjectionJoinCasesJson ++ ","
     ++ "\"compaction_canonical_projection_cases\":"
       ++ compactionCanonicalProjectionCasesJson ++ ","
-    ++ "\"repaired_projection_admission_cases\":"
-      ++ repairedProjectionAdmissionCasesJson ++ ","
     ++ "\"rendered_capture_key_cases\":"
       ++ renderedCaptureKeyCasesJson ++ ","
     ++ "\"auxiliary_session_child_binding_cases\":"

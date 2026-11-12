@@ -139,7 +139,8 @@ the native-owner boundary, not a Lean implementation of provider serialization.
 and selected identities and compares the complete native messages passed to
 initial projection and checkpoint rebuilding. Missing selected identities and
 loading dependencies stop the composition instead of shortening the request.
-`repaired_projection_admission_cases` exercises fresh admission after a provider
+The family
+`contract_cases_compaction_canonical_projection_repaired_admission_unreached` exercises fresh admission after a provider
 view has been repaired; it does not model the repair transformation itself.
 The latter two groups separate `input` from `expected`, so native adapters cannot
 receive expected messages or decisions as construction inputs.

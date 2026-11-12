@@ -2117,9 +2117,9 @@ def caseCoverage : List CoverageEntry :=
       "Concrete canonical records and selected identities exercise the composed reconstruction/projection/reduction entry. Compare full native messages at initial and checkpoint-rebuild callbacks, and reject missing or loading dependencies without shortened history. The native serializer and ACP-authorized snapshot remain external premises.")
       "compaction" [Surface.agentFacing]
   , tagged (followUpCoverage
-      "repaired_projection_admission_cases"
-      "RepairedProjectionAdmissionCases"
-      "Fresh provider-view admission reprojects and re-estimates supplied repaired input; generated observations cover failures, equality, over-threshold and output-capacity checks. This does not model the repair transformation or establish native consumer coverage.")
+      "family"
+      "contract_cases_compaction_canonical_projection_repaired_admission_unreached"
+      "model-production-gap: production admits a fresh provider request inside gents-loop request assembly over the serialized request, where projection and estimation are the provider's own calls; no production function takes a supplied projection outcome and estimate. This does not model the repair transformation.")
       "compaction" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "canonical_output_projection_cases"

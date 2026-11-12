@@ -585,10 +585,6 @@ pub fn lean_rendered_capture_key_cases() -> &'static [LeanRenderedCaptureKeyCase
     &lean_contract_snapshot().rendered_capture_key_cases
 }
 
-pub fn lean_repaired_projection_admission_cases() -> &'static [LeanRepairedProjectionCase] {
-    &lean_contract_snapshot().repaired_projection_admission_cases
-}
-
 pub fn lean_request_execution_lease_cases() -> &'static [LeanRequestExecutionLeaseCase] {
     &lean_contract_snapshot().request_execution_lease_cases
 }
@@ -3355,7 +3351,6 @@ pub struct LeanContractSnapshot {
     pub durable_reduction_cases: Vec<LeanDurableReductionCase>,
     pub compaction_projection_join_cases: Vec<LeanCompactionProjectionJoinCase>,
     pub compaction_canonical_projection_cases: Vec<LeanCanonicalCompactionCase>,
-    pub repaired_projection_admission_cases: Vec<LeanRepairedProjectionCase>,
     pub rendered_capture_key_cases: Vec<LeanRenderedCaptureKeyCase>,
     pub auxiliary_session_child_binding_cases: Vec<LeanAuxiliarySessionChildBindingCase>,
     pub client_request_publication_cases: Vec<serde_json::Value>,
@@ -10162,33 +10157,6 @@ pub enum LeanRenderedKind {
     Arguments,
     ToolOutput,
     Media,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRepairedProjectionCase {
-    pub name: String,
-    pub input: LeanRepairedProjectionInput,
-    pub expected: LeanRepairedProjectionObservation,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRepairedProjectionInput {
-    pub source: Vec<u64>,
-    pub project_succeeds: bool,
-    pub estimate_tokens: Option<u64>,
-    pub effective_input_budget: u64,
-    pub context_window: u64,
-    pub configured_max_output_tokens: u64,
-}
-
-#[derive(Debug, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRepairedProjectionObservation {
-    pub result: String,
-    pub output_tokens: Option<u64>,
-    pub projected_source: Option<Vec<u64>>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
