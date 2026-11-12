@@ -1832,8 +1832,8 @@ def caseCoverage : List CoverageEntry :=
       "goal_request_ancestry_contracts_scope")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "goal_request_ancestry_cases"
-      "GoalRequestAncestryCases")
+      "family"
+      "goal_request_ancestry_contracts_ancestry")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_queue_assignment_cases"

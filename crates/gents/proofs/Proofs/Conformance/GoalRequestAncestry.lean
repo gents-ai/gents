@@ -37,15 +37,28 @@ def cases : List Case :=
       rows := [root, child, {grandchild with receiptValid := false}]}
   ]
 
-def caseJson (c : Case) : String :=
-  "{\"name\":" ++ Conformance.Contracts.jsonString c.name ++
-    ",\"scope\":{\"owner\":1,\"session\":1,\"goal\":1}" ++
-    ",\"rows\":" ++ Conformance.Contracts.jsonArray (c.rows.map rowJson) ++
-    ",\"current\":" ++ toString c.current ++
-    ",\"expected_goal\":" ++ (toJson c.expectedGoal).compress ++
-    ",\"expected_entry\":" ++ (toJson (signedEntry 1 1 c.rows c.expectedGoal c.current)).compress ++ "}"
+structure AncestryInput where
+  name : String
+  scope : Scope
+  rows : List GoalRequestHeadContracts.RowWire
+  current : Nat
+  expectedGoal : Option Nat
+  deriving ToJson
 
-def casesJson : String := Conformance.Contracts.jsonArray (cases.map caseJson)
+structure AncestryOutput where
+  entry : Option Nat
+  deriving ToJson
+
+/-- The signed physical entry `authenticated_entry` proves for the current
+request, given the Goal the caller expects, over every ancestry case. -/
+@[conformance_family]
+def ancestry : Family AncestryInput AncestryOutput where
+  inputs := cases.map fun c =>
+    { name := c.name, scope := ⟨1, 1, 1⟩, rows := c.rows.map GoalRequestHeadContracts.RowWire.ofModel
+      current := c.current, expectedGoal := c.expectedGoal }
+  model := fun i =>
+    { entry := signedEntry i.scope.owner i.scope.session
+        (i.rows.map GoalRequestHeadContracts.RowWire.toModel) i.expectedGoal i.current }
 
 example : cases.length = 12 := by decide
 example : (cases.map fun c => signedEntry 1 1 c.rows c.expectedGoal c.current).take 6 =

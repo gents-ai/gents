@@ -2907,7 +2907,6 @@ pub struct LeanContractSnapshot {
     pub goal_backed_runtime_cases: Vec<LeanGoalBackedRuntimeCase>,
     pub goal_wake_coalescing_cases: Vec<serde_json::Value>,
     pub goal_wake_ancestry_cases: Vec<LeanGoalWakeAncestryCase>,
-    pub goal_request_ancestry_cases: Vec<LeanGoalRequestAncestryCase>,
     pub goal_queue_assignment_cases: Vec<LeanGoalQueueAssignmentCase>,
     pub plugin_job_commit_kill_cases: Vec<LeanPluginJobCommitKillCase>,
     pub client_process_claim_cases: Vec<serde_json::Value>,
@@ -5346,42 +5345,6 @@ pub struct LeanGoalReadinessGateCase {
     pub expected_readiness: String,
     pub expected_gate: String,
     pub expected_retries: i64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalRequestAncestryCase {
-    pub current: u64,
-    pub expected_entry: Option<u64>,
-    pub expected_goal: Option<u64>,
-    pub name: String,
-    pub rows: Vec<LeanGoalRequestAncestryCaseRowsItem>,
-    pub scope: LeanGoalRequestAncestryCaseScope,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalRequestAncestryCaseRowsItem {
-    pub deterministic_identity: bool,
-    pub doc: u64,
-    pub goal: Option<u64>,
-    pub input_disposition: String,
-    pub owner: u64,
-    pub parent_doc: Option<u64>,
-    pub parent_request: Option<u64>,
-    pub purpose: String,
-    pub receipt_valid: bool,
-    pub request: u64,
-    pub sequence: u64,
-    pub session: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalRequestAncestryCaseScope {
-    pub goal: u64,
-    pub owner: u64,
-    pub session: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
