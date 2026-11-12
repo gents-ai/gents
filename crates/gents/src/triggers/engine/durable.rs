@@ -16,8 +16,10 @@ pub(crate) use recovery::recover_outcomes_with_access;
 pub(crate) struct PreparedFire {
     pub receipt: TriggerFire,
     pub target_existing: bool,
+    pub create_session: bool,
     pub replace_prior: bool,
     pub event_source_generation: Option<serde_json::Value>,
+    pub max_fires_per_hour: u32,
 }
 
 pub(crate) fn fire_key(identity: &FireIdentity) -> String {
@@ -28,11 +30,73 @@ pub(crate) fn resolve_session_id(
     identity: &FireIdentity,
     target: Option<&str>,
     owned: bool,
+    create_missing: bool,
 ) -> Option<String> {
     match target {
         None => Some(identity.session_id()),
-        Some(value) if !value.is_empty() && owned => Some(value.to_owned()),
+        Some(value) if !value.is_empty() && (owned || create_missing) => Some(value.to_owned()),
         Some(_) => None,
+    }
+}
+
+/// Lean: `Triggers.FireBudget.decideFire`.
+pub(crate) fn fire_budget_exhausted(budget: u32, admitted_in_window: usize) -> bool {
+    u64::try_from(admitted_in_window).unwrap_or(u64::MAX) >= u64::from(budget)
+}
+
+/// A stopped Trigger keeps its arrival cursor, so re-enabling resumes exactly the
+/// undelivered documents. Requests admitted before the stop are unaffected;
+/// gents-ai/gents#3548 owns stopping an accepted backlog.
+fn budget_stop_reason(trigger_id: &str, budget: u32) -> String {
+    format!(
+        "Trigger {trigger_id} admitted its budget of {budget} fires within one hour, so it was disabled. Find out why it fires this often with trigger explain; a Task writing its own event-source collection is the usual cause. Then raise max_fires_per_hour, or wait for the hour to pass, and set enabled to true."
+    )
+}
+
+impl PreparedFire {
+    /// Counts this Trigger's receipts in the budget window inside the admission
+    /// transaction and returns the stop when the budget is spent. A replayed
+    /// fire spends nothing. The caller admits nothing on a stop and records it
+    /// through [`crate::documents::stop_trigger_for_budget`].
+    pub(crate) async fn stage_budget(
+        &self,
+        txn: &ConfigApplyTxn<'_>,
+    ) -> Result<Option<super::MaterializeBudgetExhausted>> {
+        let fire = &self.receipt;
+        let now = chrono::DateTime::parse_from_rfc3339(&fire.created_at)
+            .context("fire receipt has no valid admission time")?
+            .with_timezone(&chrono::Utc);
+        let cutoff =
+            (now - chrono::Duration::hours(1)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let owner = escape_graphql_string(&fire.identity.owner_did);
+        let trigger_id = escape_graphql_string(&fire.identity.trigger_id);
+        let budget = self.max_fires_per_hour;
+        let response = txn
+            .execute(&format!(
+                "{{ TriggerFire(filter: {{owner_did: {{_eq: \"{owner}\"}}, trigger_id: {{_eq: \"{trigger_id}\"}}, created_at: {{_gt: \"{cutoff}\"}}}}, limit: {budget}) {{ fire_key }} }}",
+            ))
+            .await?;
+        let admitted = response["data"]["TriggerFire"]
+            .as_array()
+            .context("fire budget query omitted rows")?
+            .len();
+        if !fire_budget_exhausted(budget, admitted) {
+            return Ok(None);
+        }
+        let replay = txn
+            .execute(&format!(
+                "{{ TriggerFire(filter: {{fire_key: {{_eq: \"{}\"}}}}, limit: 1) {{ fire_key }} }}",
+                escape_graphql_string(&fire.fire_key)
+            ))
+            .await?;
+        if replay["data"]["TriggerFire"]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty())
+        {
+            return Ok(None);
+        }
+        let reason = budget_stop_reason(&fire.identity.trigger_id, budget);
+        Ok(Some(super::MaterializeBudgetExhausted { reason }))
     }
 }
 
@@ -105,11 +169,19 @@ async fn observe_goal_outcome_binding(
     {
         return Ok(current_binding);
     }
-    let response = txn.execute(&format!(
-        r#"{{AgentRequest(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, request_id: {{_eq: "{}"}}}}) {{_docID}}}}"#,
-        escape_graphql_string(&fire.identity.owner_did), escape_graphql_string(&fire.session_id),
-        escape_graphql_string(&fire.request_id)
-    )).await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(Selection::doc_id())
+                .filter(Filter::eq(fields::NODE_DID, &fire.identity.owner_did))
+                .filter(Filter::eq(fields::SESSION_ID, &fire.session_id))
+                .filter(Filter::eq(fields::REQUEST_ID, &fire.request_id))
+                .render(),
+        )
+        .await?
+    };
     let requests = response["data"]["AgentRequest"]
         .as_array()
         .context("Task assignment request query omitted rows")?;
@@ -224,12 +296,17 @@ pub(crate) async fn stage_fire_receipt(
         fire.request_id == fire.identity.request_id(),
         "noncanonical fire request ID"
     );
-    let prior = txn
-        .execute(&format!(
-            "{{ TriggerFire(filter: {{fire_key: {{_eq: \"{}\"}}}}) {{ request_id }} }}",
-            escape_graphql_string(&fire.fire_key)
-        ))
-        .await?;
+    let prior = {
+        use gents_protocol::document_query::{
+            fields::trigger_fire as fields, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(Selection::new().field(fields::REQUEST_ID))
+                .filter(Filter::eq(fields::FIRE_KEY, &fire.fire_key))
+                .render(),
+        )
+        .await?
+    };
     if prior["data"]["TriggerFire"]
         .as_array()
         .is_some_and(|rows| !rows.is_empty())
@@ -407,12 +484,17 @@ pub(crate) async fn stage_outcome_reader(
 const FIRE_FIELDS: &str = "fire_key owner_did trigger_id source_collection source_doc_id task_id request_id session_id goal_id goal_objective goal_token_budget goal_assignment_applied emit_outcome queued_serial source_handoff_id reply_session_id shard_id attempt created_at";
 
 async fn outcome_published(txn: &ConfigApplyTxn<'_>, fire: &TriggerFire) -> Result<bool> {
-    let response = txn
-        .execute(&format!(
-            "{{ FireOutcome(filter: {{handoff_id: {{_eq: \"{}\"}}}}) {{ handoff_id }} }}",
-            escape_graphql_string(&fire.identity.outcome_id())
-        ))
-        .await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::fire_outcome as fields, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(Selection::new().field(fields::HANDOFF_ID))
+                .filter(Filter::eq(fields::HANDOFF_ID, fire.identity.outcome_id()))
+                .render(),
+        )
+        .await?
+    };
     Ok(!response["data"]["FireOutcome"]
         .as_array()
         .context("Task outcome query omitted rows")?
@@ -427,7 +509,18 @@ pub(crate) async fn publish_request_outcome(
     reason: &str,
     now: &str,
 ) -> Result<()> {
-    let response = txn.execute(&format!("{{ TriggerFire(filter: {{owner_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}) {{ {FIRE_FIELDS} }} }}", escape_graphql_string(owner), escape_graphql_string(request_id))).await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::trigger_fire as fields, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(Selection::owned(FIRE_FIELDS))
+                .filter(Filter::eq(fields::OWNER_DID, owner))
+                .filter(Filter::eq(fields::REQUEST_ID, request_id))
+                .render(),
+        )
+        .await?
+    };
     let rows: Vec<TriggerFire> = serde_json::from_value(response["data"]["TriggerFire"].clone())?;
     for fire in rows {
         let stage = OutcomeStage {
@@ -449,7 +542,18 @@ pub(crate) async fn publish_goal_outcomes(
     reason: &str,
     now: &str,
 ) -> Result<()> {
-    let response = txn.execute(&format!("{{ TriggerFire(filter: {{owner_did: {{_eq: \"{}\"}}, goal_id: {{_eq: \"{}\"}}}}) {{ {FIRE_FIELDS} }} }}", escape_graphql_string(owner), escape_graphql_string(goal_id))).await?;
+    let response = {
+        use gents_protocol::document_query::{
+            fields::trigger_fire as fields, Filter, Query, Selection,
+        };
+        txn.run(
+            &Query::select(Selection::owned(FIRE_FIELDS))
+                .filter(Filter::eq(fields::OWNER_DID, owner))
+                .filter(Filter::eq(fields::GOAL_ID, goal_id))
+                .render(),
+        )
+        .await?
+    };
     let rows: Vec<TriggerFire> = serde_json::from_value(response["data"]["TriggerFire"].clone())?;
     for fire in rows {
         if outcome_published(txn, &fire).await? {

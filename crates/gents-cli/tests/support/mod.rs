@@ -1,9 +1,7 @@
 #![allow(dead_code, unused_imports)]
 
-#[path = "../../src/desired_state/document_handle.rs"]
-mod document_handle;
 pub mod fs;
-pub(crate) use document_handle::document_handle;
+pub(crate) use gents::pack::authoring::export::document_handle;
 pub mod graphql;
 #[path = "../../../gents/tests/support/inference_target.rs"]
 pub mod inference_target;

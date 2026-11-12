@@ -5,13 +5,14 @@ mod agent_management;
 mod agent_queries;
 #[cfg(test)]
 use agent_management::agent_mutate;
+pub(crate) use agent_management::create_agent;
 use agent_management::load_agent_catalog;
 pub use agent_management::{configure_agent, grant_own_self_configuration};
 #[cfg(test)]
 use agent_queries::node_default_agent;
 use agent_queries::{agent_inspect, agent_list, guard_agent_profile_choice};
 mod command;
-pub(crate) use command::{is_help_call, ConfigCommandParams};
+pub use command::{is_help_call, ConfigCommandParams};
 pub mod configuration_discovery;
 mod execution;
 pub use execution::ConfigExecutionReceipt;
@@ -19,8 +20,13 @@ mod ops;
 mod pack_catalog;
 mod pack_documents;
 mod pack_installer;
-use pack_installer::{installs_kind, ConfigPackDistribution, PackInstallParams, PackInstaller};
+use crate::pack::node_packs::{
+    self, Distribution, DriftPolicy, HomePackRemovalError, LocalPackError, NodePacks, PackChange,
+    PluginPinConflict,
+};
+use pack_installer::{pin_edit, pin_move_call, PackInstaller};
 mod pack_plugins;
+mod pack_wiring;
 mod read;
 mod requests;
 #[cfg(test)]
@@ -28,8 +34,11 @@ use requests::profile_request;
 use requests::{
     agent_request, anchored_request, automation_request, automation_target, backend_request,
     local_backend_create_request, mcp_service_request, outcome_text, profile_create_request,
-    profile_target_request, protect_working_agent, refuse_silent_tools_drops, tools_request,
+    profile_target_request, protect_working_agent, refuse_silent_tools_drops,
+    refuse_uninstalled_plugins, tools_request,
 };
+#[cfg(test)]
+mod agent_operation_text_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -55,6 +64,7 @@ use crate::tools::surface::presets::{builtin_preset_names, preset_fields};
 use crate::tools::surface::SelfConfigToolConfig;
 use crate::NodeIdentity;
 use defra_node::Node as EmbeddedNode;
+use gents_protocol::operations::StringUpdate;
 use ops::{decode_merged, validate_merged_selection, ApplyRequest};
 
 pub const ENGINEER_AGENT_TAG: &str = "gents:engineer";
@@ -103,45 +113,6 @@ impl std::error::Error for SelfConfigError {
 impl From<anyhow::Error> for SelfConfigError {
     fn from(error: anyhow::Error) -> Self {
         Self(error)
-    }
-}
-
-/// Model-facing tri-state for agent edits. A present JSON null is `Clear`;
-/// the property must be absent to stay `Omitted`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub enum StringUpdate {
-    #[default]
-    Omitted,
-    Clear,
-    Set(String),
-}
-
-impl<'de> serde::Deserialize<'de> for StringUpdate {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        Option::<String>::deserialize(deserializer).map(|value| match value {
-            Some(value) => Self::Set(value),
-            None => Self::Clear,
-        })
-    }
-}
-
-impl StringUpdate {
-    fn is_present(&self) -> bool {
-        !matches!(self, Self::Omitted)
-    }
-
-    fn value(&self) -> Option<&str> {
-        match self {
-            Self::Set(value) => Some(value),
-            Self::Omitted | Self::Clear => None,
-        }
-    }
-
-    fn owned_value(&self) -> Option<String> {
-        self.value().map(ToOwned::to_owned)
     }
 }
 
@@ -295,6 +266,7 @@ pub(crate) fn build_self_config_tools_with_runtime(
             .with_held_grants(OperatorGrants {
                 pack_install: config.enable_pack_install,
                 policy: config.categories.contains("policy"),
+                pack_authority: config.enable_pack_authority,
             }),
         Err(error) => {
             tracing::warn!(
@@ -322,6 +294,8 @@ pub(crate) fn build_self_config_tools_with_runtime(
         process_ceiling: config.process_ceiling.clone(),
         execution: Arc::new(execution::ExecutionObservation::default()),
         plugins,
+        selected_plugins: config.selected_plugins.clone(),
+        ceiling_plugins: config.ceiling_plugins.clone(),
     }));
     tools
 }

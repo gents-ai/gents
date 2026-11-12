@@ -10,6 +10,7 @@ import { revealInFolderLabel } from "../../../lib/shellPlatform";
 import { reloadRuntimeUxPlugins } from "@/contrib/runtime-door";
 import {
   setUxPluginEnabled,
+  uxDecisionKey,
   useUxDecisions,
   useUxPluginRecords,
   type UxPluginRecord,
@@ -20,6 +21,7 @@ const DOOR_LABEL: Record<UxPluginRecord["door"], string> = {
   bundled: "Built in",
   dev: "Dev folder",
   pack: "Pack",
+  document: "Page on this node",
 };
 
 function describe(record: UxPluginRecord): string {
@@ -66,7 +68,7 @@ export function UxPluginsPanel() {
         {rows.length === 0 && (
           <Row
             label="None loaded"
-            description="Drop a plugin.js into <home>/ux-plugins/<id>/ or install a pack that ships one, then Reload."
+            description="Ask the Engineer for a page and it appears here. To add one by hand, drop a plugin.js into <home>/ux-plugins/<id>/ or install a pack that ships one, then Reload."
           />
         )}
         {rows.map((record) => (
@@ -113,7 +115,7 @@ export function UxPluginSwitch({ record }: { record: UxPluginRecord }) {
     <Switch
       aria-label={`Enable ${record.name}`}
       checked={record.status === "loaded"}
-      disabled={record.status === "error" && !(record.id in decisions)}
+      disabled={record.status === "error" && !(uxDecisionKey(record) in decisions)}
       onCheckedChange={(checked) =>
         void setUxPluginEnabled(record.id, checked).catch((error: unknown) =>
           toast.error(error instanceof Error ? error.message : String(error)),

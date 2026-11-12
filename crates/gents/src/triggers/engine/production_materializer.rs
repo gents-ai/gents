@@ -115,32 +115,33 @@ pub(crate) async fn recover_workspace_binding_pending_requests(
     // does not see it under ACP, so each held Agent reads its own requests.
     let mut staged = Vec::new();
     for agent_identity in agent_identities {
-        let query = format!(
-            r#"{{
-                AgentRequest(filter: {{
-                    lifecycle_state: {{ _eq: "{workspace_binding_pending}" }},
-                    node_did: {{ _eq: "{node}" }},
-                    agent_did: {{ _eq: "{agent}" }}
-                }}) {{
-                    _docID
-                    request_id
-                    node_did
-                    agent_did
-                    workspace_id
-                    workspace_owner_node_did
-                    workspace_authority
-                    workspace_seal_hash
-                }}
-            }}"#,
-            workspace_binding_pending = RequestLifecycleState::WorkspaceBindingPending.as_str(),
-            node = escape_graphql_string(node_did),
-            agent = escape_graphql_string(agent_identity.did()),
-        );
+        let rendered = {
+            use gents_protocol::document_query::{
+                fields::agent_request as fields, Filter, Query, Selection,
+            };
+            Query::select(
+                Selection::doc_id()
+                    .field(fields::REQUEST_ID)
+                    .field(fields::NODE_DID)
+                    .field(fields::AGENT_DID)
+                    .field(fields::WORKSPACE_ID)
+                    .field(fields::WORKSPACE_OWNER_NODE_DID)
+                    .field(fields::WORKSPACE_AUTHORITY)
+                    .field(fields::WORKSPACE_SEAL_HASH),
+            )
+            .filter(Filter::eq(
+                fields::LIFECYCLE_STATE,
+                RequestLifecycleState::WorkspaceBindingPending.as_str(),
+            ))
+            .filter(Filter::eq(fields::NODE_DID, node_did))
+            .filter(Filter::eq(fields::AGENT_DID, agent_identity.did()))
+            .render()
+        };
         let response = crate::store::config_client::ConfigAccess::local_as(
             node.clone(),
             identity::Did::new(agent_identity.did())?,
         )
-        .execute(&query)
+        .read(&rendered)
         .await
         .context("load workspace-binding-pending AgentRequest rows as their Agent")?;
         staged.extend(rows::<AgentRequestRow>(
@@ -590,27 +591,54 @@ impl MaterializerHandle for ProductionMaterializer {
         let access = Self::agent_access(&self.node, &self.snapshot_rx.borrow(), &task.agent_did);
         Box::pin(async move {
             let key = crate::triggers::engine::durable::fire_key(&identity);
-            access?.transact_readonly(
-                "trigger.recover_admitted_fire",
-                |txn| { let key = key.clone(); let identity = identity.clone(); Box::pin(async move {
-                    let result = txn.execute(&format!(
-                        "{{ TriggerFire(filter: {{fire_key: {{_eq: \"{}\"}}}}, limit: 2) {{request_id}} }}",
-                        escape_graphql_string(&key),
-                    )).await?;
-                    let receipts = result["data"]["TriggerFire"].as_array()
-                        .context("fire recovery omitted receipt rows")?;
-                    anyhow::ensure!(receipts.len() <= 1, "fire receipt is not unique");
-                    let Some(receipt) = receipts.first() else { return Ok(None); };
-                    let request_id = identity.request_id();
-                    anyhow::ensure!(receipt["request_id"].as_str() == Some(request_id.as_str()), "fire receipt request identity mismatch");
-                    let result = txn.execute(&format!(
-                        "{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}, limit: 2) {{_docID}} }}",
-                        escape_graphql_string(&identity.owner_did), escape_graphql_string(&request_id),
-                    )).await?;
-                    anyhow::ensure!(result["data"]["AgentRequest"].as_array().is_some_and(|rows| rows.len() == 1), "fire receipt has no unique admitted request");
-                    Ok(Some(request_id))
-                }) },
-            ).await
+            access?
+                .transact_readonly("trigger.recover_admitted_fire", |txn| {
+                    let key = key.clone();
+                    let identity = identity.clone();
+                    Box::pin(async move {
+                        let rendered = {
+                            use gents_protocol::document_query::{
+                                fields::trigger_fire as fire, Filter, Query, Selection,
+                            };
+                            Query::select(Selection::new().field(fire::REQUEST_ID))
+                                .filter(Filter::eq(fire::FIRE_KEY, &key))
+                                .limit(2)
+                                .render()
+                        };
+                        let result = txn.run(&rendered).await?;
+                        let receipts = result["data"]["TriggerFire"]
+                            .as_array()
+                            .context("fire recovery omitted receipt rows")?;
+                        anyhow::ensure!(receipts.len() <= 1, "fire receipt is not unique");
+                        let Some(receipt) = receipts.first() else {
+                            return Ok(None);
+                        };
+                        let request_id = identity.request_id();
+                        anyhow::ensure!(
+                            receipt["request_id"].as_str() == Some(request_id.as_str()),
+                            "fire receipt request identity mismatch"
+                        );
+                        let rendered = {
+                            use gents_protocol::document_query::{
+                                fields::agent_request as request, Filter, Query, Selection,
+                            };
+                            Query::select(Selection::doc_id())
+                                .filter(Filter::eq(request::NODE_DID, &identity.owner_did))
+                                .filter(Filter::eq(request::REQUEST_ID, &request_id))
+                                .limit(2)
+                                .render()
+                        };
+                        let result = txn.run(&rendered).await?;
+                        anyhow::ensure!(
+                            result["data"]["AgentRequest"]
+                                .as_array()
+                                .is_some_and(|rows| rows.len() == 1),
+                            "fire receipt has no unique admitted request"
+                        );
+                        Ok(Some(request_id))
+                    })
+                })
+                .await
         })
     }
 
@@ -634,18 +662,28 @@ impl MaterializerHandle for ProductionMaterializer {
                 request_id: identity.request_id,
                 retry_key: identity.retry_key,
             };
-            let query = format!(
-                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 2) {{
-                    request_id node_did agent_did session_id retry_key
-                }} }}"#,
-                escape_graphql_string(&expected.request_id),
-            );
+            let rendered = {
+                use gents_protocol::document_query::{
+                    fields::agent_request as fields, Filter, Query, Selection,
+                };
+                Query::select(
+                    Selection::new()
+                        .field(fields::REQUEST_ID)
+                        .field(fields::NODE_DID)
+                        .field(fields::AGENT_DID)
+                        .field(fields::SESSION_ID)
+                        .field(fields::RETRY_KEY),
+                )
+                .filter(Filter::eq(fields::REQUEST_ID, &expected.request_id))
+                .limit(2)
+                .render()
+            };
             let access = crate::ConfigAccess::local_managed_agent(
                 node,
                 identity::Did::new(&agent_did)?,
                 agent_identity.as_ref(),
             )?;
-            let response = access.execute(&query).await?;
+            let response = access.read(&rendered).await?;
             let requests = response["data"]["AgentRequest"]
                 .as_array()
                 .context("deterministic Goal Task recovery omitted request rows")?
@@ -684,21 +722,24 @@ impl MaterializerHandle for ProductionMaterializer {
     ) -> Pin<Box<dyn std::future::Future<Output = Result<bool>> + Send + '_>> {
         let access = self.trigger_access(trigger_id);
         let owner = node_did.to_string();
-        let node_did = escape_graphql_string(node_did);
-        let trigger_id = escape_graphql_string(trigger_id);
+        let node_did = node_did.to_owned();
+        let trigger_id = trigger_id.to_owned();
         let durable_fire_key = durable_fire_key.to_owned();
         Box::pin(async move {
-            let query = format!(
-                r#"query {{
-                    AgentRequest(
-                        filter: {{
-                            node_did: {{ _eq: "{node_did}" }},
-                            caused_by_trigger_id: {{ _eq: "{trigger_id}" }}
-                        }}
-                    ) {{ _docID request_id retry_key }}
-                }}"#,
-            );
-            let response = access?.execute(&query).await?;
+            let rendered = {
+                use gents_protocol::document_query::{
+                    fields::agent_request as fields, Filter, Query, Selection,
+                };
+                Query::select(
+                    Selection::doc_id()
+                        .field(fields::REQUEST_ID)
+                        .field(fields::RETRY_KEY),
+                )
+                .filter(Filter::eq(fields::NODE_DID, &node_did))
+                .filter(Filter::eq(fields::CAUSED_BY_TRIGGER_ID, &trigger_id))
+                .render()
+            };
+            let response = access?.read(&rendered).await?;
             let rows = response["data"]["AgentRequest"]
                 .as_array()
                 .context("materialized event-trigger group omitted rows")?;

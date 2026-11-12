@@ -1,6 +1,8 @@
 import Proofs.Triggers.Durable
 import Proofs.EventDelivery.Durable
 import Proofs.Conformance.ContractTypes
+import Proofs.Triggers.SessionKey
+import Proofs.Triggers.FireBudget
 
 namespace Conformance.TriggerDelivery
 
@@ -410,10 +412,66 @@ def identityCases : List String :=
 
 def sessionCases : List String :=
   let id := identity "owner-a" "a"
-  [(none, true), (some "lead-one", true), (some "lead-two", true),
-   (some "", true), (some "foreign", false)].map fun (target, owned) => object [
+  [(none, true, false), (some "lead-one", true, false), (some "lead-two", true, false),
+   (some "", true, false), (some "foreign", false, false),
+   (some "game:a:red", false, true), (some "game:a:red", true, true),
+   (some "", false, true)].map fun (target, owned, create) => object [
      ("identity", identityJson id), ("target", jsonOptionalString target),
-     ("owned", toString owned), ("resolved", jsonOptionalString (resolveSession id target owned))]
+     ("owned", toString owned), ("create_missing", toString create),
+     ("resolved", jsonOptionalString (resolveSession id target owned create))]
+
+def sessionConfigCases : List String :=
+  [(none, false), (none, true), (some "game:{{ doc.id }}", false),
+   (some "game:{{ doc.id }}", true)].map fun (template, create) => object [
+     ("template", jsonOptionalString template), ("create_session", toString create),
+     ("allowed", toString (Triggers.SessionKey.configValid template create))]
+
+structure BudgetScenario where
+  name : String
+  configured : Option Nat := none
+  priorAges : List Nat := []
+  replay : Bool := false
+
+def jsonOptionNat : Option Nat → String
+  | none => "null"
+  | some value => toString value
+
+/-- Ages are seconds before the fire; the window boundary is exercised in both
+directions so the receipt query's strictness is checked against the model. -/
+def budgetCase (scenario : BudgetScenario) : String :=
+  let now := 7200
+  let times := scenario.priorAges.map (now - ·)
+  let trigger : Triggers.FireBudget.Trigger := { admittedAt := times }
+  let f := fire "budget-fire"
+  let before : State := if scenario.replay then admit {} f else {}
+  let (after, stopped) := Triggers.FireBudget.admitBudgeted before trigger scenario.configured
+    "over budget" now f
+  object [
+    ("name", jsonString scenario.name), ("configured", jsonOptionNat scenario.configured),
+    ("prior_ages", jsonArray (scenario.priorAges.map toString)),
+    ("replay", toString scenario.replay),
+    ("budget", toString (Triggers.FireBudget.effective scenario.configured)),
+    ("window_count", toString (Triggers.FireBudget.windowCount times now)),
+    ("admitted", toString (decide (after.receipts.length > before.receipts.length))),
+    ("stopped", toString (!stopped.enabled)),
+    ("status", jsonOptionalString stopped.lastStatus)]
+
+def budgetCases : List String := [
+  ({ name := "empty_window_admits", configured := some 2 } : BudgetScenario),
+  { name := "under_budget_admits", configured := some 2, priorAges := [10] },
+  { name := "at_budget_stops", configured := some 2, priorAges := [10, 20] },
+  { name := "boundary_receipt_is_outside_window", configured := some 2, priorAges := [10, 3600] },
+  { name := "inside_boundary_counts", configured := some 2, priorAges := [10, 3599] },
+  { name := "expired_receipts_do_not_count", configured := some 2, priorAges := [7200, 3601] },
+  { name := "default_budget_applies_without_configuration", priorAges := [10] },
+  { name := "replay_spends_no_budget", configured := some 1, priorAges := [10], replay := true }
+].map budgetCase
+
+def budgetConfigCases : List String :=
+  [(none, false), (none, true), (some 1, true), (some 1, false), (some 5000, true),
+   (some 0, true)].map fun (configured, receipted) =>
+    object [("configured", jsonOptionNat configured), ("receipted", toString receipted),
+      ("allowed", toString (Triggers.FireBudget.configValid configured receipted))]
 
 def observedClaimCases : List String :=
   let old : ClaimObservation := { document := "old", owner := "owner", session := "session" }
@@ -484,6 +542,11 @@ def casesJson : String := object [
   ("callback_cursors", jsonArray callbackCursorCases),
   ("callback_visibility", jsonArray callbackVisibilityCases),
   ("identities", jsonArray identityCases), ("sessions", jsonArray sessionCases),
+  ("session_config", jsonArray sessionConfigCases),
+  ("fire_budget", jsonArray budgetCases),
+  ("fire_budget_config", jsonArray budgetConfigCases),
+  ("fire_budget_default", toString Triggers.FireBudget.defaultMaxPerHour),
+  ("fire_budget_status", jsonString Triggers.FireBudget.exhaustedStatus),
   ("delivery_options", jsonArray deliveryOptionCases),
   ("latest_admissions", jsonArray latestAdmissionCases),
   ("self_sessions", jsonArray selfCases)]

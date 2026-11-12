@@ -12,7 +12,7 @@ use crate::store::config_client::session_children::{
     output_segment_bound_variables, transcript_message_bound_variables,
 };
 use crate::store::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
-use crate::store::graphql::{created_doc_id, escape_graphql_string, mutation_documents};
+use crate::store::graphql::{created_doc_id, mutation_documents};
 use gents_protocol::output::rows::{
     decode_transcript_message_row, AGENT_MESSAGE_FIELDS, CREATE_AGENT_MESSAGE_MUTATION,
     CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
@@ -367,16 +367,22 @@ async fn replay_publication_in_txn(
         expected,
         background_calls,
     } = replay;
-    let requester = exemplar.requester_did.as_ref().map_or_else(
-        || "null".to_owned(),
-        |did| format!("\"{}\"", escape_graphql_string(did)),
-    );
-    let response = txn.execute_local_response(&format!(
-        r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{}" }}, request_doc_id: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: {requester} }} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#,
-        escape_graphql_string(message_key),
-        escape_graphql_string(&exemplar.request_doc_id),
-        escape_graphql_string(&exemplar.node_did),
-    )).await?;
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::agent_message as fields, Filter, Query, Selection,
+        };
+        let requester = match exemplar.requester_did.as_deref() {
+            Some(did) => Filter::eq(fields::REQUESTER_DID, did),
+            None => Filter::is_null(fields::REQUESTER_DID),
+        };
+        Query::select(Selection::owned(AGENT_MESSAGE_FIELDS))
+            .filter(Filter::eq(fields::MESSAGE_KEY, message_key))
+            .filter(Filter::eq(fields::REQUEST_DOC_ID, &exemplar.request_doc_id))
+            .filter(Filter::eq(fields::NODE_DID, &exemplar.node_did))
+            .filter(requester)
+            .render()
+    };
+    let response = txn.run_local_response(&rendered).await?;
     let rows = response
         .data
         .as_ref()
@@ -422,10 +428,26 @@ async fn replay_publication_in_txn(
         else {
             continue;
         };
-        let response = txn.execute_local_response(&format!(
-            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_doc_id session_id node_did requester_did message_sequence tool_call_id tool_name lifecycle_state await_mode }} }}"#,
-            escape_graphql_string(tool_call_doc_id),
-        )).await?;
+        let rendered = {
+            use gents_protocol::document_query::{
+                fields::agent_tool_call as fields, Filter, Query, Selection,
+            };
+            Query::select(
+                Selection::doc_id()
+                    .field(fields::REQUEST_DOC_ID)
+                    .field(fields::SESSION_ID)
+                    .field(fields::NODE_DID)
+                    .field(fields::REQUESTER_DID)
+                    .field(fields::MESSAGE_SEQUENCE)
+                    .field(fields::TOOL_CALL_ID)
+                    .field(fields::TOOL_NAME)
+                    .field(fields::LIFECYCLE_STATE)
+                    .field(fields::AWAIT_MODE),
+            )
+            .filter(Filter::eq(fields::DOC_ID, tool_call_doc_id))
+            .render()
+        };
+        let response = txn.run_local_response(&rendered).await?;
         let tools = response
             .data
             .as_ref()

@@ -14,6 +14,8 @@ use crate::store::config_client::{
 };
 use crate::Collection;
 
+mod page;
+
 const NODE: &str = "did:key:z";
 const BOARD: &str = "acme/board/board";
 
@@ -42,7 +44,7 @@ fn operator_ux_surface_checks_follow_model() {
             vec!["add_task"]
         };
         install_board(home.path(), vec![declared("board", &tools)]);
-        let listing = listing_with_data(home.path(), BOARD).unwrap();
+        let listing = crate::plugin::ux::find(home.path(), BOARD).unwrap();
         let allowed = manifest_allows_tool(&listing, "board", "list_tasks");
         let mut surface = initial.clone();
         surface.enabled = case["enabled"].as_bool().unwrap();
@@ -311,6 +313,7 @@ fn install_board(home: &std::path::Path, data: Vec<UxDataSurface>) {
                 default_enabled: None,
                 data,
             }],
+            created_collections: Vec::new(),
         },
     )
     .unwrap();

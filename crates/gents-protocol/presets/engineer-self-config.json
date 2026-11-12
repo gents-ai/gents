@@ -3,5 +3,6 @@
   "self_config_categories": ["node", "agent", "tools", "profile", "backend", "mcp_service", "automation", "policy"],
   "self_config_no_lockout": true,
   "self_config_preview": true,
-  "enable_pack_install": true
+  "enable_pack_install": true,
+  "enable_pack_authority": true
 }

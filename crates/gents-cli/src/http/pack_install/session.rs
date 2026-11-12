@@ -387,6 +387,7 @@ async fn run_inner(
         let overrides = crate::commands::pack::parse_dependency_variables(
             &received.request.dependency_variables,
         )?;
+        let provided = crate::commands::pack::parse_agent_bindings(&received.request.bind_agents)?;
         let mut prepared = gents::pack::prepare_document_pack_archive(
             &access,
             &state.node_did,
@@ -399,7 +400,7 @@ async fn run_inner(
                 .collect::<Vec<_>>(),
             gents::pack::InstalledVia::Operator,
             Some(&home),
-            &|name| std::env::var(name).ok(),
+            &gents::pack::install_variables(&provided),
             &overrides,
         )
         .await?;
@@ -408,6 +409,14 @@ async fn run_inner(
             &received.root,
             &received.dependencies,
         );
+        // The client grants after this install, from the rows of its plan.
+        let planned = crate::commands::pack::wire::planned_root_agents(
+            &access,
+            &state.node_did,
+            received.root.manifest(),
+            &prepared,
+        )
+        .await?;
         let prepared = Arc::new(prepared);
         let stage = gents::pack::stage_hosted_pack(
             &state.node_did,
@@ -418,10 +427,10 @@ async fn run_inner(
             received.request.explicit,
         )
         .await?;
-        Ok::<_, anyhow::Error>((received, prepared, stage))
+        Ok::<_, anyhow::Error>((received, prepared, stage, planned))
     }
     .await;
-    let (received, prepared, stage) = prepare.map_err(|error| (error, "not_installed"))?;
+    let (received, prepared, stage, planned) = prepare.map_err(|error| (error, "not_installed"))?;
     let installed_plugins = stage.installed_plugins().to_vec();
     let materialized = if received.request.explicit {
         let cache_home = home.clone();
@@ -502,6 +511,12 @@ async fn run_inner(
     };
     gents::store::config_client::verify_pack_schema_approval(actor.as_str(), &scope, evidence)
         .map_err(|error| (anyhow::Error::new(error), "not_installed"))?;
+    // Read before any schema is applied: the collections this install
+    // brings, which `pack remove --with-collections` later drops.
+    let created_collections =
+        gents::pack::collections_install_creates(&runtime_access, received.root.archive())
+            .await
+            .map_err(|error| (error, "not_installed"))?;
     gents::pack::apply_prepared_dependency_schemas(&runtime_access, &prepared)
         .await
         .map_err(|error| (error, "not_installed"))?;
@@ -561,6 +576,7 @@ async fn run_inner(
             installed_via: Some(gents::pack::InstalledVia::Operator),
             source: Some(received.root.provenance()),
             source_history: Vec::new(),
+            created_collections,
         };
         Some(gents::pack::HostedHomePublication {
             home,
@@ -595,7 +611,8 @@ async fn run_inner(
         manifest.metadata.namespace, manifest.name
     ))
     .map_err(|error| (error, "unconfirmed"))?;
-    let result = json!({"pack":received.root.manifest().name, "source":received.root.label(), "digest":received.root.digest(), "owner":state.node_did, "inference":prepared.inference, "dependency_inference":prepared.dependency_inference, "origin_tag":origin_tag, "dependencies":received.root.manifest().metadata.dependencies, "schemas":schemas, "apply":report});
+    let mut result = json!({"pack":received.root.manifest().name, "source":received.root.label(), "digest":received.root.digest(), "owner":state.node_did, "inference":prepared.inference, "dependency_inference":prepared.dependency_inference, "origin_tag":origin_tag, "dependencies":received.root.manifest().metadata.dependencies, "schemas":schemas, "apply":report});
+    crate::commands::pack::wire::attach_planned_root_agents(&mut result, &planned);
     send(
         &mut *socket.lock().await,
         json!({"type":"finished", "result":result}),

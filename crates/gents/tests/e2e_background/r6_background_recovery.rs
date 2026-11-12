@@ -301,7 +301,7 @@ async fn recover_all_interrupts_backgrounded_running_tool_with_live_parent() {
             .expect("reload crashed worker's managed Agent identity");
     // Reopen through the home owner: the store is protected by its home key
     // and lives under the home's data directory.
-    let home = gents::eval::runner::embedded::EmbeddedHome::open_retained(&ready.data_path)
+    let home = gents::runtime::embedded::EmbeddedHome::open_retained(&ready.data_path)
         .await
         .expect("reopen crashed recovery home");
     assert_eq!(home.did(), ready.node_did);

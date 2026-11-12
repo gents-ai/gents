@@ -24,7 +24,6 @@ help:
 	@echo "Build:"
 	@echo "  make build                 Build default Rust workspace members"
 	@echo "  make build-cli             Build the Gents CLI"
-	@echo "  make build-cli-headless    Build CLI without embedded Codex TUI"
 	@echo "  make fast-dev-cli          Build CLI with lean dev debug artifacts"
 	@echo "  PROFILE=<profile>          Cargo profile for build/test recipes (agents: fast-dev)"
 	@echo "  make sweep [SWEEP_DAYS=7]  Delete target artifacts untouched for SWEEP_DAYS days"
@@ -33,7 +32,6 @@ help:
 	@echo
 	@echo "Release (CI calls these; TARGET=<triple> optional, defaults to host):"
 	@echo "  make release-cli           Build the release CLI (full features)"
-	@echo "  make release-cli-headless  Build the release CLI without embedded Codex TUI"
 	@echo "  make dist-cli              Build + package $(DIST_DIR)/gents-<triple>.tar.gz(+sha256)"
 	@echo "  make dist-docs             Export $(DIST_DIR)/gents-docs-<version>.tar.gz + SHA256SUMS-docs.txt from RELEASE_BIN"
 	@echo
@@ -46,7 +44,6 @@ help:
 	@echo "  make fmt                   Format Rust and desktop UI code"
 	@echo "  make fmt-check             Check Rust and desktop UI formatting"
 	@echo "  make lint                  Run clippy on all workspace targets (-D warnings)"
-	@echo "  make check-cli-headless    Check CLI without embedded Codex TUI"
 	@echo "  make proofs                Build Lean proofs"
 	@echo
 	@echo "Tests:"
@@ -99,15 +96,12 @@ worktree:
 	@test -n "$(BRANCH)" || { echo "usage: make worktree BRANCH=<branch> [DIR=<dest>] [BASE=<ref>]" >&2; exit 2; }
 	@WORKTREE_DIR="$(DIR)" WORKTREE_BASE="$(BASE)" scripts/worktree-bootstrap.sh "$(BRANCH)"
 
-.PHONY: build build-cli build-cli-headless build-desktop build-desktop-ui
+.PHONY: build build-cli build-desktop build-desktop-ui
 build:
 	$(CARGO) build $(CARGO_PROFILE_FLAG)
 
 build-cli:
 	CARGO_TARGET_DIR="$(CARGO_TARGET_DIR)" $(CARGO) build -p gents-cli $(CARGO_PROFILE_FLAG) $(CARGO_TARGET_FLAG)
-
-build-cli-headless:
-	$(CARGO) build -p gents-cli --no-default-features $(CARGO_PROFILE_FLAG)
 
 build-desktop:
 	$(CARGO) build -p gents-desktop-tauri $(CARGO_PROFILE_FLAG)
@@ -130,12 +124,9 @@ RELEASE_ARTIFACT := gents-$(TARGET_TRIPLE)
 RELEASE_VERSION ?= $(shell awk '/^\[workspace\.package\]$$/ { p = 1; next } /^\[/ { p = 0 } p && $$1 == "version" { gsub(/"/, "", $$3); print $$3; exit }' Cargo.toml)
 DOCS_ARTIFACT := gents-docs-$(RELEASE_VERSION)
 
-.PHONY: release-cli release-cli-headless fast-dev-cli dist-cli dist-docs measure-build-graph measure-release-cli measure-build-attribution
+.PHONY: release-cli fast-dev-cli dist-cli dist-docs measure-build-graph measure-release-cli measure-build-attribution
 release-cli:
 	CARGO_TARGET_DIR="$(CARGO_TARGET_DIR)" $(CARGO) build -p gents-cli --release --locked $(CARGO_TARGET_FLAG)
-
-release-cli-headless:
-	$(CARGO) build -p gents-cli --release --locked --no-default-features $(CARGO_TARGET_FLAG)
 
 fast-dev-cli:
 	$(CARGO) build -p gents-cli --profile fast-dev --locked $(CARGO_TARGET_FLAG)
@@ -173,7 +164,7 @@ dist-docs:
 	@rm -rf "$(DIST_DIR)/$(DOCS_ARTIFACT)"
 	@ls -lh "$(DIST_DIR)/$(DOCS_ARTIFACT).tar.gz" "$(DIST_DIR)/SHA256SUMS-docs.txt"
 
-.PHONY: fmt fmt-check lint check-cli-headless proofs
+.PHONY: fmt fmt-check lint proofs
 fmt:
 	$(CARGO) fmt --all
 	$(NPM) --prefix $(DESKTOP_DIR) run format
@@ -185,14 +176,11 @@ fmt-check:
 lint:
 	$(CARGO) clippy --workspace --all-targets $(CARGO_PROFILE_FLAG) -- -D warnings
 
-check-cli-headless:
-	$(CARGO) check -p gents-cli --no-default-features $(CARGO_PROFILE_FLAG)
-
 proofs:
 	cd $(PROOFS_DIR) && $(LAKE) build
 
-.PHONY: test test-agent test-agent-conformance test-agent-e2e test-cli test-evals live-configurator-eval
-test: test-agent test-cli
+.PHONY: test test-agent test-agent-conformance test-agent-e2e test-cli test-eval-drivers test-evals live-configurator-eval
+test: test-agent test-cli test-eval-drivers
 
 test-agent:
 	$(CARGO) test -p gents $(CARGO_PROFILE_FLAG)
@@ -200,9 +188,12 @@ test-agent:
 test-agent-conformance:
 	$(CARGO) test -p gents --test conformance $(CARGO_PROFILE_FLAG)
 
+test-eval-drivers:
+	$(CARGO) test -p gents-eval $(CARGO_PROFILE_FLAG)
+
 test-evals:
-	$(CARGO) test -p gents --test onboarding_evals $(CARGO_PROFILE_FLAG)
-	$(CARGO) test -p gents --test eval_runner_canary $(CARGO_PROFILE_FLAG)
+	$(CARGO) test -p gents-eval --test onboarding_evals $(CARGO_PROFILE_FLAG)
+	$(CARGO) test -p gents-eval --test eval_runner_canary $(CARGO_PROFILE_FLAG)
 
 live-configurator-eval:
 	GENTS_EVAL_TARGET=$${GENTS_EVAL_TARGET:-workstation-1} scripts/evals/run-ladder.sh $${GENTS_EVAL_SUITE:-all} $${GENTS_EVAL_TRIALS:-3} $${GENTS_EVAL_CONCURRENCY:-4}

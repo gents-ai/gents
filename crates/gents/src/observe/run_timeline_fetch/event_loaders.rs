@@ -19,15 +19,14 @@ pub(super) async fn resolve_timeline_messages_for_session(
             let session_id = session_id.clone();
             let requester_did = requester_did.clone();
             Box::pin(async move {
-                let scope = gents_protocol::session::session_scope_filter(
-                    &node_did,
-                    &session_id,
-                    requester_did.as_deref(),
-                );
-                let query = format!(
-                    r#"{{ AgentMessage(filter: {{ {scope} }}, order: {{ sequence: ASC }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#
-                );
-                let response = txn.execute(&query).await?;
+                use gents_protocol::document_query::{
+                    fields::agent_message as fields, session_scope, Direction, Query, Selection,
+                };
+                let query = Query::select(Selection::owned(AGENT_MESSAGE_FIELDS))
+                    .filter(session_scope(&node_did, &session_id, requester_did.as_deref()))
+                    .order_by(fields::SEQUENCE, Direction::Asc)
+                    .render();
+                let response = txn.run(&query).await?;
                 anyhow::ensure!(
                     response.get("errors").is_none_or(|errors| {
                         errors.is_null() || errors.as_array().is_some_and(Vec::is_empty)
@@ -261,6 +260,7 @@ async fn load_tool_observations(
                 tool_name
                 tool_call_id
                 spawned_by_tool_call_doc_id
+                plugin_parent_tool_call_doc_id
                 status
                 lifecycle_state
                 started_at
@@ -296,95 +296,42 @@ pub(super) async fn resolve_timeline_tool_observations(
 ) -> Result<Vec<TimelineToolCallRow>> {
     let mut rows = Vec::with_capacity(observations.len());
     for observation in observations {
-        let spawned = observation.spawned_by_tool_call_doc_id.is_some();
-        let mut row = resolve_tool_payloads(observation, messages)?;
-        if spawned
-            && matches!(
-                row.lifecycle_state.as_deref(),
-                Some("completed" | "failed" | "timedOut" | "cancelled")
-            )
+        if observation.spawned_by_tool_call_doc_id.is_some()
+            || observation.plugin_parent_tool_call_doc_id.is_some()
         {
-            let tool_doc_id = row
-                .doc_id
-                .as_deref()
-                .context("spawned timeline tool lacks physical identity")?;
-            let request_doc_id = row
-                .request_doc_id
-                .as_deref()
-                .context("spawned timeline tool lacks request binding")?;
-            row.result = Some(
-                load_spawned_tool_output(
-                    access,
-                    node_did,
-                    session_id,
-                    requester_did,
-                    request_doc_id,
-                    tool_doc_id,
-                )
-                .await?,
-            );
+            let mut row = observation.row;
+            row.status = row
+                .lifecycle_state
+                .clone()
+                .filter(|state| !state.trim().is_empty())
+                .context("timeline AgentToolCall omits authoritative lifecycle_state")?;
+            match crate::tools::call::lifecycle::query::load_tool_call_presentation(
+                access,
+                row.doc_id
+                    .as_deref()
+                    .context("derived timeline tool lacks physical identity")?,
+                node_did,
+                session_id,
+                requester_did,
+            )
+            .await
+            {
+                Ok(presentation) => {
+                    row.args = presentation.arguments;
+                    row.result = presentation.result;
+                }
+                Err(error) => {
+                    tracing::warn!(tool_call_id = %row.tool_call_id, error = %format!("{error:#}"),
+                        "derived timeline tool payload is unreadable");
+                    row.payload_unavailable = Some(format!("{error:#}"));
+                }
+            }
+            rows.push(row);
+        } else {
+            rows.push(resolve_tool_payloads(observation, messages)?);
         }
-        rows.push(row);
     }
     Ok(rows)
-}
-
-async fn load_spawned_tool_output(
-    access: &ConfigAccess,
-    node_did: &str,
-    session_id: &str,
-    requester_did: Option<&str>,
-    request_doc_id: &str,
-    tool_doc_id: &str,
-) -> Result<String> {
-    use gents_protocol::output::{
-        reconstruction::{reconstruct_stream, ObservedSegment},
-        OutputSource, PayloadRef, StreamPayload,
-    };
-    let query = gents_protocol::output::rows::request_output_segments_query(request_doc_id);
-    let values = query_rows(access, "AgentOutputSegment", &query).await?;
-    let source = OutputSource::ToolCall {
-        tool_call_doc_id: tool_doc_id.to_owned(),
-    };
-    let rows = gents_protocol::output::rows::decode_scoped_request_output_segments(
-        &values,
-        node_did,
-        Some(session_id),
-        requester_did,
-    )?
-    .into_iter()
-    .filter(|row| row.segment.source == source)
-    .collect::<Vec<_>>();
-    let closes = rows
-        .iter()
-        .filter(|row| row.segment.close.is_some())
-        .collect::<Vec<_>>();
-    anyhow::ensure!(
-        closes.len() == 1,
-        "spawned timeline tool output lacks one exact closure"
-    );
-    let observed = rows
-        .iter()
-        .map(|row| ObservedSegment {
-            doc_id: &row.doc_id,
-            segment: &row.segment,
-        })
-        .collect::<Vec<_>>();
-    let stream = reconstruct_stream(
-        &observed,
-        &[],
-        &[],
-        &PayloadRef {
-            close_doc_id: closes[0].doc_id.clone(),
-            stream: 0,
-        },
-    )
-    .map_err(anyhow::Error::from)?;
-    anyhow::ensure!(
-        matches!(stream.declaration.payload, StreamPayload::ToolOutput),
-        "spawned timeline source is not tool output"
-    );
-    Ok(stream.text)
 }
 
 #[derive(serde::Deserialize)]
@@ -392,6 +339,8 @@ pub(super) struct ToolLifecycleObservation {
     #[serde(flatten)]
     pub(super) row: TimelineToolCallRow,
     pub(super) spawned_by_tool_call_doc_id: Option<String>,
+    #[serde(default)]
+    pub(super) plugin_parent_tool_call_doc_id: Option<String>,
 }
 
 pub(super) fn resolve_tool_payloads(
@@ -403,6 +352,7 @@ pub(super) fn resolve_tool_payloads(
     let ToolLifecycleObservation {
         mut row,
         spawned_by_tool_call_doc_id,
+        ..
     } = observation;
     let lifecycle_state = row
         .lifecycle_state

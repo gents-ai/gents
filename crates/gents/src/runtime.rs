@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod embedded;
 pub mod native_logging;
 pub(crate) mod node_readiness_publisher;
 pub mod node_start;

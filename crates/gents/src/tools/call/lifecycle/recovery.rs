@@ -114,6 +114,21 @@ struct RunningToolCallRow {
     cancel_cause: Option<String>,
     #[serde(default)]
     job_pin: Option<gents_protocol::job::JobPin>,
+    #[serde(default)]
+    plugin_parent_tool_call_doc_id: Option<String>,
+}
+
+impl RunningToolCallRow {
+    /// A child of an execution this process still runs is that execution's:
+    /// it settles the child when it stops, and it may outlive its request.
+    fn owned_by_live_execution(
+        &self,
+        executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
+    ) -> bool {
+        self.plugin_parent_tool_call_doc_id
+            .as_ref()
+            .is_some_and(|parent| executions.active_tool_call_doc_ids().contains(parent))
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -221,6 +236,7 @@ impl super::ToolCallLifecycle {
             }
             if await_mode(&row) == AwaitMode::Background
                 || executions.contains(&row.tool_call_id, &row.doc_id).await
+                || row.owned_by_live_execution(executions)
             {
                 continue;
             }
@@ -740,6 +756,30 @@ mod tests {
         assert!(!deadline_at_is_expired(now, None));
     }
 
+    #[test]
+    fn a_child_of_a_live_execution_is_not_an_orphan() {
+        let child: RunningToolCallRow = serde_json::from_value(serde_json::json!({
+            "_docID": "child-doc",
+            "session_id": "session",
+            "tool_call_id": "plugin-effect:parent-doc:1",
+            "await_mode": "foreground",
+            "plugin_parent_tool_call_doc_id": "parent-doc",
+        }))
+        .unwrap();
+        let executions = crate::tools::call::hook::BackgroundExecutionRegistry::default();
+        assert!(!child.owned_by_live_execution(&executions));
+        let reservation = executions
+            .reserve(
+                "spawned:spawn-doc".to_owned(),
+                "parent-doc".to_owned(),
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .unwrap();
+        assert!(child.owned_by_live_execution(&executions));
+        drop(reservation);
+        assert!(!child.owned_by_live_execution(&executions));
+    }
+
     /// Every native restart and orphan witness, including the still-running
     /// verdict no test host can construct, through the native classifier.
     #[test]
@@ -960,6 +1000,7 @@ async fn recover_stuck_running_tool_calls(
         if row.node_did.as_deref() != Some(node_did)
             || await_mode(&row) == AwaitMode::Background
             || executions.contains(&row.tool_call_id, &row.doc_id).await
+            || row.owned_by_live_execution(executions)
         {
             continue;
         }
@@ -1093,6 +1134,7 @@ async fn load_running_tool_call_rows_with_filter(
             await_mode
             cancel_cause
             job_pin
+            plugin_parent_tool_call_doc_id
         }}
     }}"#
     );
@@ -1124,37 +1166,38 @@ async fn load_pending_background_completion_rows(
     node_did: &str,
     accesses: &RecoveryAccesses,
 ) -> Result<Vec<TerminalBackgroundToolRow>> {
-    let node_did = escape_graphql_string(node_did);
-    let query = format!(
-        r#"{{
-            AgentToolCall(filter: {{
-                node_did: {{ _eq: "{node_did}" }},
-                await_mode: {{ _eq: "background" }},
-                lifecycle_state: {{ _in: ["completed", "failed", "timedOut", "cancelled"] }},
-                status: {{
-                    _like: "completionPending%",
-                    _ge: "completionPending",
-                    _lt: "completionPendinh"
-                }}
-            }}) {{
-                _docID
-                request_id
-                request_doc_id
-                node_did
-                requester_did
-                session_id
-                tool_call_id
-                tool_name
-                status
-                lifecycle_state
-                cancel_cause
-            }}
-        }}"#
-    );
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_tool_call as fields, Filter, Query, Selection,
+        };
+        Query::select(
+            Selection::doc_id()
+                .field(fields::REQUEST_ID)
+                .field(fields::REQUEST_DOC_ID)
+                .field(fields::NODE_DID)
+                .field(fields::REQUESTER_DID)
+                .field(fields::SESSION_ID)
+                .field(fields::TOOL_CALL_ID)
+                .field(fields::TOOL_NAME)
+                .field(fields::STATUS)
+                .field(fields::LIFECYCLE_STATE)
+                .field(fields::CANCEL_CAUSE),
+        )
+        .filter(Filter::eq(fields::NODE_DID, node_did))
+        .filter(Filter::eq(fields::AWAIT_MODE, "background"))
+        .filter(Filter::any_of(
+            fields::LIFECYCLE_STATE,
+            ["completed", "failed", "timedOut", "cancelled"],
+        ))
+        .filter(Filter::like(fields::STATUS, "completionPending%"))
+        .filter(Filter::ge(fields::STATUS, "completionPending"))
+        .filter(Filter::lt(fields::STATUS, "completionPendinh"))
+        .render()
+    };
     let mut rows = Vec::new();
     let mut seen = rapidhash::RapidHashSet::default();
     for access in accesses.values() {
-        let response = access.execute(&query).await?;
+        let response = access.read(&query).await?;
         let values = response
             .pointer("/data/AgentToolCall")
             .and_then(serde_json::Value::as_array)
@@ -1302,15 +1345,31 @@ async fn selected_agent_observes_terminal_tool(
         row: RunningToolCallRow,
         lifecycle_state: Option<String>,
     }
-    let query = format!(
-        r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{
-            _docID request_id request_doc_id requester_did node_did session_id
-            tool_call_id tool_name deadline_at await_mode cancel_cause job_pin lifecycle_state
-        }} }}"#,
-        escape_graphql_string(tool_doc_id)
-    );
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_tool_call as fields, Filter, Query, Selection,
+        };
+        Query::select(
+            Selection::doc_id()
+                .field(fields::REQUEST_ID)
+                .field(fields::REQUEST_DOC_ID)
+                .field(fields::REQUESTER_DID)
+                .field(fields::NODE_DID)
+                .field(fields::SESSION_ID)
+                .field(fields::TOOL_CALL_ID)
+                .field(fields::TOOL_NAME)
+                .field(fields::DEADLINE_AT)
+                .field(fields::AWAIT_MODE)
+                .field(fields::CANCEL_CAUSE)
+                .field(fields::JOB_PIN)
+                .field(fields::LIFECYCLE_STATE),
+        )
+        .filter(Filter::eq(fields::DOC_ID, tool_doc_id))
+        .limit(2)
+        .render()
+    };
     for (agent_did, access) in accesses {
-        let response = access.execute(&query).await?;
+        let response = access.read(&query).await?;
         let values = response
             .pointer("/data/AgentToolCall")
             .and_then(serde_json::Value::as_array)

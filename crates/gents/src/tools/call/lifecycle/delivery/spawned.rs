@@ -1,9 +1,8 @@
 use crate::store::config_client::IdempotentTransactionRetry;
-use crate::store::graphql::{created_doc_id, escape_graphql_string};
+use crate::store::graphql::created_doc_id;
 use crate::tools::call::lifecycle::{ToolCallLifecycle, ToolCallState};
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
-use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, OutputOutcome};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 impl ToolCallLifecycle {
@@ -29,38 +28,61 @@ impl ToolCallLifecycle {
         let tool_call_id = self.tool_call_id.clone();
         let tool_name = self.tool_name.clone();
         let message_sequence = self.message_sequence;
-        let started = self.access()?.transact_idempotent(
-            IdempotentTransactionRetry::Standard,
-            "tool_call.start_running_spawned_background",
-            move |txn| {
-                let doc_id = doc_id.clone(); let parent_doc_id = parent_doc_id.clone();
-                let request_doc_id = request_doc_id.clone(); let session_id = session_id.clone();
-                let node_did = node_did.clone(); let requester_did = requester_did.clone();
-                let tool_call_id = tool_call_id.clone(); let tool_name = tool_name.clone();
-                Box::pin(async move {
-                    let now = fixture_now.unwrap_or_else(Utc::now);
-                    let doc = escape_graphql_string(&doc_id);
-                    let parent = escape_graphql_string(&parent_doc_id);
-                    let request = escape_graphql_string(&request_doc_id);
-                    let session = escape_graphql_string(&session_id);
-                    let agent = escape_graphql_string(&node_did);
-                    let requester_filter = requester_did.as_deref().map(|value| format!(r#", requester_did: {{ _eq: "{}" }}"#, escape_graphql_string(value)))
-                        .unwrap_or_else(|| ", requester_did: { _eq: null }".to_owned());
-                    let mutation = txn.execute(&format!(r#"mutation {{ update_AgentToolCall(docID: "{doc}", filter: {{
-                        _docID: {{ _eq: "{doc}" }}, spawned_by_tool_call_doc_id: {{ _eq: "{parent}" }},
-                        request_doc_id: {{ _eq: "{request}" }}, session_id: {{ _eq: "{session}" }},
-                        node_did: {{ _eq: "{agent}" }}, tool_call_id: {{ _eq: "{}" }},
-                        tool_name: {{ _eq: "{}" }}, message_sequence: {{ _eq: {message_sequence} }},
-                        await_mode: {{ _eq: "background" }},
-                        lifecycle_state: {{ _eq: "pending" }}{requester_filter}
-                    }}, input: {{ lifecycle_state: "running", started_at: "{}" }}) {{ _docID }} }}"#,
-                        escape_graphql_string(&tool_call_id), escape_graphql_string(&tool_name),
-                        escape_graphql_string(&now.to_rfc3339_opts(SecondsFormat::Nanos, true)))).await?;
-                    Ok::<_, anyhow::Error>(mutation["data"]["update_AgentToolCall"].as_array()
-                        .is_some_and(|rows| !rows.is_empty()).then_some(now))
-                })
-            }
-        ).await?;
+        let started = self
+            .access()?
+            .transact_idempotent(
+                IdempotentTransactionRetry::Standard,
+                "tool_call.start_running_spawned_background",
+                move |txn| {
+                    let doc_id = doc_id.clone();
+                    let parent_doc_id = parent_doc_id.clone();
+                    let request_doc_id = request_doc_id.clone();
+                    let session_id = session_id.clone();
+                    let node_did = node_did.clone();
+                    let requester_did = requester_did.clone();
+                    let tool_call_id = tool_call_id.clone();
+                    let tool_name = tool_name.clone();
+                    Box::pin(async move {
+                        let now = fixture_now.unwrap_or_else(Utc::now);
+                        let mutation = {
+                            use gents_protocol::document_query::{
+                                fields::agent_tool_call as fields, Filter, Input, Update,
+                            };
+                            let requester = match requester_did.as_deref() {
+                                Some(value) => Filter::eq(fields::REQUESTER_DID, value),
+                                None => Filter::is_null(fields::REQUESTER_DID),
+                            };
+                            let filter = Filter::eq(fields::DOC_ID, &doc_id)
+                                .and(Filter::eq(
+                                    fields::SPAWNED_BY_TOOL_CALL_DOC_ID,
+                                    &parent_doc_id,
+                                ))
+                                .and(Filter::eq(fields::REQUEST_DOC_ID, &request_doc_id))
+                                .and(Filter::eq(fields::SESSION_ID, &session_id))
+                                .and(Filter::eq(fields::NODE_DID, &node_did))
+                                .and(Filter::eq(fields::TOOL_CALL_ID, &tool_call_id))
+                                .and(Filter::eq(fields::TOOL_NAME, &tool_name))
+                                .and(Filter::eq(fields::MESSAGE_SEQUENCE, message_sequence))
+                                .and(Filter::eq(fields::AWAIT_MODE, "background"))
+                                .and(Filter::eq(fields::LIFECYCLE_STATE, "pending"))
+                                .and(requester);
+                            let input = Input::new().set(fields::LIFECYCLE_STATE, "running").set(
+                                fields::STARTED_AT,
+                                now.to_rfc3339_opts(SecondsFormat::Nanos, true),
+                            );
+                            let rendered = Update::doc(&doc_id, input).filter(filter).render();
+                            txn.run(&rendered).await?
+                        };
+                        Ok::<_, anyhow::Error>(
+                            mutation["data"]["update_AgentToolCall"]
+                                .as_array()
+                                .is_some_and(|rows| !rows.is_empty())
+                                .then_some(now),
+                        )
+                    })
+                },
+            )
+            .await?;
         let started = started.context("spawned background child is no longer pending")?;
         self.state = ToolCallState::Running;
         self.started_at = Some(started);
@@ -101,7 +123,6 @@ impl ToolCallLifecycle {
                 self.state,
                 ToolCallState::Running | ToolCallState::Completed
             ) && !self.is_spawned_background()
-                && self.plugin_effect.is_none()
                 && self.tool_name == crate::tools::native::SPAWN_PROCESS_TOOL_NAME,
             "spawned background admission requires the accepted spawn_process owner"
         );
@@ -160,19 +181,37 @@ impl ToolCallLifecycle {
                 let stable_key = persisted_stable_key.clone();
                 let selected = persisted_selected.clone();
                 Box::pin(async move {
-                    let parent = escape_graphql_string(&parent_doc_id);
-                    let request = escape_graphql_string(&request_doc_id);
-                    let session = escape_graphql_string(&session_id);
-                    let agent = escape_graphql_string(&node_did);
-                    let requester_filter = requester_did.as_deref().map(|value| format!(
-                        r#", requester_did: {{ _eq: "{}" }}"#, escape_graphql_string(value)
-                    )).unwrap_or_else(|| ", requester_did: { _eq: null }".to_owned());
-                    let existing = txn.execute(&format!(r#"{{ AgentToolCall(filter: {{
-                        spawned_by_tool_call_doc_id: {{ _eq: "{parent}" }}, request_doc_id: {{ _eq: "{request}" }},
-                        session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }}{requester_filter}
-                    }}, limit: 2) {{ _docID tool_call_key tool_call_id tool_name message_sequence
-                        lifecycle_state await_mode spawned_by_tool_call_doc_id deadline_at
-                        selected_service_id selected_tool_name }} }}"#)).await?;
+                    let existing = {
+                        use gents_protocol::document_query::{
+                            fields::agent_tool_call as fields, Filter, Query, Selection,
+                        };
+                        let requester = match requester_did.as_deref() {
+                            Some(value) => Filter::eq(fields::REQUESTER_DID, value),
+                            None => Filter::is_null(fields::REQUESTER_DID),
+                        };
+                        let filter = Filter::eq(fields::SPAWNED_BY_TOOL_CALL_DOC_ID, &parent_doc_id)
+                            .and(Filter::eq(fields::REQUEST_DOC_ID, &request_doc_id))
+                            .and(Filter::eq(fields::SESSION_ID, &session_id))
+                            .and(Filter::eq(fields::NODE_DID, &node_did))
+                            .and(requester);
+                        let rendered = Query::select(
+                            Selection::doc_id()
+                                .field(fields::TOOL_CALL_KEY)
+                                .field(fields::TOOL_CALL_ID)
+                                .field(fields::TOOL_NAME)
+                                .field(fields::MESSAGE_SEQUENCE)
+                                .field(fields::LIFECYCLE_STATE)
+                                .field(fields::AWAIT_MODE)
+                                .field(fields::SPAWNED_BY_TOOL_CALL_DOC_ID)
+                                .field(fields::DEADLINE_AT)
+                                .field(fields::SELECTED_SERVICE_ID)
+                                .field(fields::SELECTED_TOOL_NAME),
+                        )
+                        .filter(filter)
+                        .limit(2)
+                        .render();
+                        txn.run(&rendered).await?
+                    };
                     let rows = existing["data"]["AgentToolCall"].as_array()
                         .context("spawned admission lookup omitted rows")?;
                     anyhow::ensure!(rows.len() <= 1, "accepted spawn_process already has ambiguous background children");
@@ -198,35 +237,44 @@ impl ToolCallLifecycle {
                     }
 
                     let now = fixture_now.unwrap_or_else(Utc::now);
-                    let (accepted, _) = crate::session::load_canonical_message_in_txn(
-                        txn,
-                        &accepted_header_doc_id,
-                        &node_did,
-                        requester_did.as_deref(),
-                    )
-                    .await?;
+                    let accepted = ToolCallLifecycle::load_accepted_binding_in_txn(
+                        txn, &parent_doc_id, &node_did, &session_id, requester_did.as_deref(), true,
+                    ).await?;
                     anyhow::ensure!(
                         accepted.session_id == session_id
-                            && accepted.request_doc_id.as_deref() == Some(request_doc_id.as_str())
-                            && accepted.role == MessageRole::Assistant
-                            && accepted.outcome == OutputOutcome::Complete
-                            && accepted.sequence == message_sequence
-                            && matches!(&accepted.publication,
-                                MessagePublication::RequestExecution { execution_generation }
-                                if execution_generation == &generation)
-                            && accepted.blocks.iter().any(|block| matches!(block,
-                                MessageBlock::ToolCall { tool_call_doc_id, id, name, .. }
-                                if tool_call_doc_id == &parent_doc_id
-                                    && id == &parent_tool_call_id
-                                    && name == crate::tools::native::SPAWN_PROCESS_TOOL_NAME)),
+                            && accepted.request_doc_id == request_doc_id
+                            && accepted.message_sequence == message_sequence
+                            && accepted.execution_generation == generation
+                            && accepted.accepted_header_doc_id == accepted_header_doc_id
+                            && accepted.id == parent_tool_call_id
+                            && accepted.tool_name == crate::tools::native::SPAWN_PROCESS_TOOL_NAME,
                         "spawned admission parent is not exactly bound by its accepted provider header"
                     );
-                    let parent_row = txn.execute(&format!(r#"{{ AgentToolCall(filter: {{
-                        _docID: {{ _eq: "{parent}" }}, request_doc_id: {{ _eq: "{request}" }},
-                        session_id: {{ _eq: "{session}" }}, node_did: {{ _eq: "{agent}" }},
-                        tool_call_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "spawn_process" }},
-                        message_sequence: {{ _eq: {message_sequence} }}, lifecycle_state: {{ _eq: "running" }}{requester_filter}
-                    }}, limit: 2) {{ _docID spawned_by_tool_call_doc_id }} }}"#, escape_graphql_string(&parent_tool_call_id))).await?;
+                    let parent_row = {
+                        use gents_protocol::document_query::{
+                            fields::agent_tool_call as fields, Filter, Query, Selection,
+                        };
+                        let requester = match requester_did.as_deref() {
+                            Some(value) => Filter::eq(fields::REQUESTER_DID, value),
+                            None => Filter::is_null(fields::REQUESTER_DID),
+                        };
+                        let filter = Filter::eq(fields::DOC_ID, &parent_doc_id)
+                            .and(Filter::eq(fields::REQUEST_DOC_ID, &request_doc_id))
+                            .and(Filter::eq(fields::SESSION_ID, &session_id))
+                            .and(Filter::eq(fields::NODE_DID, &node_did))
+                            .and(Filter::eq(fields::TOOL_CALL_ID, &parent_tool_call_id))
+                            .and(Filter::eq(fields::TOOL_NAME, "spawn_process"))
+                            .and(Filter::eq(fields::MESSAGE_SEQUENCE, message_sequence))
+                            .and(Filter::eq(fields::LIFECYCLE_STATE, "running"))
+                            .and(requester);
+                        let rendered = Query::select(
+                            Selection::doc_id().field(fields::SPAWNED_BY_TOOL_CALL_DOC_ID),
+                        )
+                        .filter(filter)
+                        .limit(2)
+                        .render();
+                        txn.run(&rendered).await?
+                    };
                     anyhow::ensure!(parent_row["data"]["AgentToolCall"].as_array().is_some_and(|rows|
                         rows.len() == 1 && rows[0]["spawned_by_tool_call_doc_id"].is_null()),
                         "spawned admission lost its exact running accepted parent");
@@ -237,42 +285,58 @@ impl ToolCallLifecycle {
                     anyhow::ensure!(
                         request_row["node_did"].as_str() == Some(node_did.as_str())
                             && request_row["session_id"].as_str() == Some(session_id.as_str())
-                            && request_row["requester_did"].as_str() == requester_did.as_deref()
-                            && RequestLifecycleState::parse_opt(request_row["lifecycle_state"].as_str())
-                                == Some(RequestLifecycleState::Processing)
-                            && request_row["execution_generation"].as_str() == Some(generation.as_str())
-                            && request_row["interrupt_requested_at"].is_null(),
-                        "spawned admission lost live request generation ownership"
+                            && request_row["requester_did"].as_str() == requester_did.as_deref(),
+                        "spawned admission parent request is out of scope"
                     );
                     let expires_at = request_row["execution_lease_expires_at"].as_str()
                         .context("spawned admission request lacks lease")?;
-                    anyhow::ensure!(DateTime::parse_from_rfc3339(expires_at)?.with_timezone(&Utc) > now,
-                        "spawned admission request lease has expired");
+                    // A spawned process spends the live request lease (Lean
+                    // `admitSpawnedBackgroundCore`), even for a script that outlives it.
+                    if RequestLifecycleState::parse_opt(request_row["lifecycle_state"].as_str())
+                        != Some(RequestLifecycleState::Processing)
+                        || request_row["execution_generation"].as_str() != Some(generation.as_str())
+                        || !request_row["interrupt_requested_at"].is_null()
+                        || DateTime::parse_from_rfc3339(expires_at)?.with_timezone(&Utc) <= now
+                    {
+                        return Err(crate::tools::call::hook::persistence::BackgroundSlotRefusal::RequestStopped.into());
+                    }
                     let request_id = request_row["request_id"].as_str()
                         .filter(|id| !id.trim().is_empty()).context("spawned admission request lacks logical identity")?;
-                    let deadline = escape_graphql_string(&deadline_at.to_rfc3339_opts(SecondsFormat::Nanos, true));
-                    let selected_fields = match &selected {
-                        Some((service, tool)) => format!(
-                            r#"selected_service_id: "{}", selected_tool_name: "{}","#,
-                            escape_graphql_string(service), escape_graphql_string(tool)),
-                        None => String::new(),
-                    };
                     let (session_doc_id, selected_agent) = crate::store::config_client::session_children::agent_session_child_binding_in_txn(
                         txn, &node_did, &session_id, requester_did.as_deref()).await?;
-                    let session_doc_id = escape_graphql_string(&session_doc_id);
-                    let selected_agent = escape_graphql_string(&selected_agent);
-                    let created = txn.execute(&format!(r#"mutation {{ create_AgentToolCall(input: {{
-                        session_doc_id: "{session_doc_id}", agent_did: "{selected_agent}", creator_did: "{selected_agent}", parent_linked: false,
-                        tool_call_key: "{}", request_id: "{}", request_doc_id: "{request}",
-                        session_id: "{session}", node_did: "{agent}", {}
-                        message_sequence: {message_sequence}, tool_name: "{}", tool_call_id: "{}",
-                        lifecycle_state: "pending", status: "pending", deadline_at: "{deadline}",
-                        await_mode: "background",
-                        {selected_fields} spawned_by_tool_call_doc_id: "{parent}"
-                    }}) {{ _docID }} }}"#,
-                        escape_graphql_string(&stable_key), escape_graphql_string(request_id),
-                        crate::session::requester_did_create_field(requester_did.as_deref()),
-                        escape_graphql_string(&tool_name), escape_graphql_string(&stable_id))).await?;
+                    let created = {
+                        use gents_protocol::document_query::{
+                            fields::agent_tool_call as fields, Create, Input,
+                        };
+                        let mut input = Input::new()
+                            .set(fields::SESSION_DOC_ID, &session_doc_id)
+                            .set(fields::AGENT_DID, &selected_agent)
+                            .set(fields::CREATOR_DID, &selected_agent)
+                            .set(fields::PARENT_LINKED, false)
+                            .set(fields::TOOL_CALL_KEY, &stable_key)
+                            .set(fields::REQUEST_ID, request_id)
+                            .set(fields::REQUEST_DOC_ID, &request_doc_id)
+                            .set(fields::SESSION_ID, &session_id)
+                            .set(fields::NODE_DID, &node_did)
+                            .set(fields::MESSAGE_SEQUENCE, message_sequence)
+                            .set(fields::TOOL_NAME, &tool_name)
+                            .set(fields::TOOL_CALL_ID, &stable_id)
+                            .set(fields::LIFECYCLE_STATE, "pending")
+                            .set(fields::STATUS, "pending")
+                            .set(fields::DEADLINE_AT, deadline_at.to_rfc3339_opts(SecondsFormat::Nanos, true))
+                            .set(fields::AWAIT_MODE, "background")
+                            .set(fields::SPAWNED_BY_TOOL_CALL_DOC_ID, &parent_doc_id);
+                        if let Some(did) = requester_did.as_deref().map(str::trim).filter(|did| !did.is_empty()) {
+                            input = input.set(fields::REQUESTER_DID, did);
+                        }
+                        if let Some((service, tool)) = &selected {
+                            input = input
+                                .set(fields::SELECTED_SERVICE_ID, service)
+                                .set(fields::SELECTED_TOOL_NAME, tool);
+                        }
+                        let rendered = Create::new(input).render();
+                        txn.run(&rendered).await?
+                    };
                     Ok(created_doc_id(&created, "AgentToolCall")?)
                 })
             }

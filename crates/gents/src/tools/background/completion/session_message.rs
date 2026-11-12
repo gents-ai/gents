@@ -54,13 +54,19 @@ pub(super) async fn settle_rows_after_request_update(
     local_did: &str,
     request_doc_id: &str,
 ) -> Result<usize> {
-    let query = format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{
-            _docID request_id lifecycle_state caused_by_parent_tool_call_doc_id
-        }} }}"#,
-        escape_graphql_string(request_doc_id)
-    );
-    let response = access.execute(&query).await?;
+    use gents_protocol::document_query::{
+        fields::agent_request as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(
+        Selection::doc_id()
+            .field(fields::REQUEST_ID)
+            .field(fields::LIFECYCLE_STATE)
+            .field(fields::CAUSED_BY_PARENT_TOOL_CALL_DOC_ID),
+    )
+    .filter(Filter::eq(fields::DOC_ID, request_doc_id))
+    .limit(1)
+    .render();
+    let response = access.read(&query).await?;
     let mut requests: Vec<AgentRequestRow> =
         serde_json::from_value(response["data"]["AgentRequest"].clone())?;
     let Some(request) = requests.pop() else {

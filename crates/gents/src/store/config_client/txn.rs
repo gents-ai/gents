@@ -32,7 +32,7 @@ pub use gate::LocalConfigAccess;
 pub use native::{NativeOperationAbandoned, ReentrantEmbeddedWrite};
 #[cfg(test)]
 pub(super) use transact::client_signed_write_may_retry;
-pub use transact::IdempotentTransactionRetry;
+pub use transact::{IdempotentTransactionRetry, TransactionFinalityError};
 pub use verified_pack::{VerifiedPackTransactionError, VerifiedPackTxn};
 
 /// Tracing target of DefraDB transaction and read telemetry; tests observe it by this name.

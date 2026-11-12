@@ -14,10 +14,6 @@ use investigation::{
     ToolCallDetailRow,
 };
 mod observation;
-pub use observation::{
-    load_pinned_request_context_observation, load_request_context_observation,
-    load_session_inference_observation, load_session_request_doc_ids,
-};
 mod snapshot;
 pub use snapshot::{load_session_history_snapshot, load_session_history_snapshot_with_access};
 
@@ -166,20 +162,6 @@ pub struct SessionTokenUsage {
     pub incomplete: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SessionInferenceObservation {
-    pub token_usage: SessionTokenUsage,
-    pub inference_turns: Option<u64>,
-    pub latest_context: Option<super::context_budget::LastRequestContextSnapshot>,
-    pub latest_completion_tokens: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct RequestContextObservation {
-    pub context: super::context_budget::LastRequestContextSnapshot,
-    pub completion_tokens: Option<u64>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionCompactionEvent {
     pub scope: String,
@@ -262,8 +244,6 @@ struct InferenceDetailRow {
     #[serde(default)]
     ended_at: Option<String>,
     #[serde(default)]
-    request_doc_id: Option<String>,
-    #[serde(default)]
     call_kind: Option<String>,
     #[serde(default)]
     request_id: String,
@@ -342,7 +322,7 @@ impl Tool for SessionHistoryTool {
                         "agent_did":{"type":"string"},"status":{"type":"string","enum":["open","closed"]},
                         "tag":{"type":"string"},"created_after":{"type":"string"},"created_before":{"type":"string"},"text":{"type":"string","description":"Title or session ID substring only; use query to search transcript text."}
                     }},
-                    "cursor":{"type":"string","description":"Previous next_cursor with the same action and filters."},"query":{"type":"string","minLength":1,"description":"Required for search: literal case-insensitive substring of title, ID or transcript."},"details":{"type":"boolean","description":"Include accounting and timeline for get."},
+                    "cursor":{"type":"string","description":"Previous next_cursor with the same action and filters."},"query":{"type":"string","minLength":1,"description":"Required for search: literal case-insensitive substring of title, ID or transcript."},"details":{"type":"boolean","description":"get: the whole session document, accounting and timeline. transcript: message IDs and payload references."},
                     "call_id":{"type":"string","minLength":1,"description":"Output: the call_id of a tool result or [tool: …] stub."},
                     "tool_call_doc_id":{"type":"string","minLength":1,"description":"Output: exact tool call document, when a call_id is ambiguous."},
                     "offset_bytes":{"type":"integer","minimum":0,"description":"Output: from the previous next_call."},

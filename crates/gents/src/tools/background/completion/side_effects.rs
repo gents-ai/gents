@@ -9,23 +9,19 @@ async fn existing_notification(
     parent: &gents_protocol::row::AgentRequest,
     message_key: &str,
 ) -> Result<Option<ExistingNotification>> {
-    let scope = gents_protocol::session::session_scope_filter(
-        &parent.node_did,
-        &parent.session_id,
-        parent.requester_did.as_deref(),
-    );
-    let message_key = escape_graphql_string(message_key);
-    let query = format!(
-        r#"{{
-            AgentMessage(
-                filter: {{ {scope}, message_key: {{ _eq: "{message_key}" }} }},
-                limit: 2
-            ) {{
-                _docID
-            }}
-        }}"#
-    );
-    let response = access.execute(&query).await?;
+    use gents_protocol::document_query::{
+        fields::agent_message as message, session_scope, Filter, Query, Selection,
+    };
+    let query = Query::select(Selection::doc_id())
+        .filter(session_scope(
+            &parent.node_did,
+            &parent.session_id,
+            parent.requester_did.as_deref(),
+        ))
+        .filter(Filter::eq(message::MESSAGE_KEY, message_key))
+        .limit(2)
+        .render();
+    let response = access.read(&query).await?;
     let rows: Vec<serde_json::Value> =
         serde_json::from_value(response["data"]["AgentMessage"].clone())?;
     anyhow::ensure!(

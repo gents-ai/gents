@@ -146,6 +146,22 @@ private def invocationJson : Json :=
           | some current => PluginInvocation.reusable original current))]
 
 private def toolCallsJson : Json := Json.mkObj [
+  ("host_call_lifetime", toJson <| [(300, false, none), (300, false, some 100),
+      (300, false, some 600), (300, true, some 36000), (300, true, some 0)].map
+    fun (declared, background, remaining) => Json.mkObj [
+      ("declared", toJson declared), ("background", toJson background),
+      ("remaining", toJson remaining),
+      ("expected", toJson (PluginCalls.hostCallLifetime declared background remaining))]),
+  ("compute_allowance", toJson <| [(300, 36000, false), (300, 100, false), (300, 0, false),
+      (300, 36000, true), (0, 10, false)].map
+    fun (declared, remaining, stopped) => Json.mkObj [
+      ("declared", toJson declared), ("remaining", toJson remaining),
+      ("stopped", toJson stopped),
+      ("expected", toJson (PluginCalls.computeAllowance declared remaining stopped))]),
+  ("sleep", toJson <| [(0, 0), (1, 0), (0, 1), (30, 30), (31, 30), (1000, 60000)].map
+    fun (milliseconds, remaining) => Json.mkObj [
+      ("milliseconds", toJson milliseconds), ("remaining", toJson remaining),
+      ("expected", toJson (PluginCalls.sleepAdmissible milliseconds remaining))]),
   ("supported", toJson <| [("ordinary", PluginCalls.DispatchRoute.ordinary),
     ("hook_owned", .hookOwned)].map fun (route, value) =>
       Json.mkObj [("route", toJson route), ("expected", toJson (PluginCalls.supported value))]),
@@ -153,6 +169,10 @@ private def toolCallsJson : Json := Json.mkObj [
     [("live", true), ("absent", false), ("child", PluginCalls.childDispatcher)].map fun (scope, live) =>
       Json.mkObj [("grant", toJson grant), ("dispatcher", toJson scope),
         ("expected", toJson (PluginCalls.available grant live))]),
+  ("spawned_dispatcher", toJson <| [("accepted", PluginCalls.Origin.spawnedByAccepted),
+    ("plugin_child", .spawnedByPluginChild)].map fun (spawner, origin) =>
+      Json.mkObj [("spawner", toJson spawner),
+        ("expected", toJson (PluginCalls.dispatcherFor origin))]),
   ("reservation", toJson <| [0, 1, 63, 64, 65, 1000].map fun used => Json.mkObj [
     ("used", toJson used), ("expected", toJson (PluginCalls.reserve used))]),
   ("result_bytes", toJson <| [0, 1048575, 1048576, 1048577].map fun bytes => Json.mkObj [
@@ -412,13 +432,14 @@ def routeCasesJson : String := (toJson <| routeCases.map fun c => Json.mkObj [
 
 theorem route_regressions :
     routeCases.map routeVerdict =
-      [ false, false, false, true, false, false, false, false
-      , false, false, false, false, false, false, false, false ] := by
+      [ false, false, false, true, false, false, false, true
+      , false, false, false, true, false, false, false, true ] := by
   native_decide
 
 def casesJson : String := (Json.mkObj [("consent", consentJson), ("budgets", budgetsJson),
   ("publication", publicationJson), ("tool_calls", toolCallsJson), ("child_admission", childAdmissionJson),
   ("tool_effects", PluginEffects.casesJson),
+  ("tool_effect_receipts", PluginEffects.receiptCasesJson),
   ("tool_effect_terminals", PluginEffects.terminalCasesJson),
   ("tool_effect_accounting", PluginEffects.accountingCasesJson),
   ("model_slots", modelSlotsJson), ("network", networkJson),

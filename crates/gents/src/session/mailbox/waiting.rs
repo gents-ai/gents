@@ -59,13 +59,20 @@ pub(crate) async fn required_question_in_txn(
     if parent.lifecycle_state != Some(RequestLifecycleState::Completed) {
         return Ok(false);
     }
-    let query = format!(
-        "{{ MailboxItem(filter: {{ node_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}, status: {{_eq: \"open\"}} }}) {{ {} }} }}",
-        crate::store::graphql::escape_graphql_string(parent.node_did.as_deref().unwrap_or_default()),
-        crate::store::graphql::escape_graphql_string(&parent.request_id),
-        super::MAILBOX_FIELDS,
-    );
-    let response = txn.execute_local_response(&query).await?;
+    let rendered = {
+        use gents_protocol::document_query::{
+            fields::mailbox_item as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::owned(super::MAILBOX_FIELDS))
+            .filter(Filter::eq(
+                fields::NODE_DID,
+                parent.node_did.as_deref().unwrap_or_default(),
+            ))
+            .filter(Filter::eq(fields::REQUEST_ID, &parent.request_id))
+            .filter(Filter::eq(fields::STATUS, "open"))
+            .render()
+    };
+    let response = txn.run_local_response(&rendered).await?;
     let items = crate::store::graphql::rows::<MailboxItemRow>(
         &response,
         gents_protocol::row::MAILBOX_COLLECTION,

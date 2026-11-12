@@ -7,6 +7,10 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@gents/ui/components/dropdown-menu";
+import type {
+  PackAuthorityAsk,
+  PackFolderAccess,
+} from "@source-inc/gents-desktop-client";
 import { navigate } from "@/lib/router";
 import { Skeleton } from "@gents/ui/components/skeleton";
 import {
@@ -282,6 +286,46 @@ export function PackMenu({
         ))}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/** what each plugin of a pack asks to be allowed, one plugin to a row */
+export function AccessAsks({ asks }: { asks: readonly PackAuthorityAsk[] }) {
+  return (
+    <ul className="grid gap-1 text-sm">
+      {asks.map((ask) => (
+        <li key={ask.plugin}>
+          <span className="font-medium">{ask.plugin}</span>{" "}
+          <span className="text-muted-foreground">{ask.asks}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** the folder a pack's agents would work in, one agent to a row */
+export function FolderAccess({ access }: { access: PackFolderAccess }) {
+  const detail = (verb: string) => `${verb} file and shell tools in ${access.root}`;
+  return (
+    <ul className="grid gap-1 text-sm" aria-label="Folder access">
+      {access.agents.length > 0 ? (
+        access.agents.map((agent) => (
+          <li key={agent}>
+            <span className="font-medium">{agent}</span>{" "}
+            <span className="wrap-break-word text-muted-foreground">
+              {detail("uses its")}
+            </span>
+          </li>
+        ))
+      ) : (
+        <li>
+          <span className="font-medium">The agents it adds</span>{" "}
+          <span className="wrap-break-word text-muted-foreground">
+            {detail("use their")}
+          </span>
+        </li>
+      )}
+    </ul>
   );
 }
 

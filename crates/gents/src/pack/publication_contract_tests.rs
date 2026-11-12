@@ -18,6 +18,7 @@ async fn generated_local_publication_survives_notification_outcomes() {
                 false,
                 None,
                 &BTreeMap::new(),
+                crate::pack::InstalledVia::Operator,
                 super::PackSource::local(std::path::Path::new("fixture.afb")),
                 |_, _| async { Ok(()) },
             )
@@ -51,6 +52,7 @@ async fn generated_local_publication_survives_notification_outcomes() {
                     false,
                     None,
                     &bindings,
+                    crate::pack::InstalledVia::Operator,
                     super::PackSource::local(std::path::Path::new("fixture.afb")),
                     move |_, _| async move {
                         assert!(crate::plugin::store::try_lock_store(&notify_home).is_err());
@@ -68,6 +70,7 @@ async fn generated_local_publication_survives_notification_outcomes() {
                     false,
                     None,
                     &bindings,
+                    crate::pack::InstalledVia::Operator,
                     super::PackSource::local(std::path::Path::new("fixture.afb")),
                     move |_, _| async move {
                         assert!(crate::plugin::store::try_lock_store(&notify_home).is_err());
@@ -93,6 +96,7 @@ async fn generated_local_publication_survives_notification_outcomes() {
                         false,
                         None,
                         &bindings,
+                        crate::pack::InstalledVia::Operator,
                         super::PackSource::local(std::path::Path::new("fixture.afb")),
                         move |_, _| async move {
                             assert!(crate::plugin::store::try_lock_store(&notify_home).is_err());
@@ -164,6 +168,7 @@ async fn home_removal_excludes_reinstall_until_pin_and_records_are_removed() {
         false,
         None,
         &bindings,
+        crate::pack::InstalledVia::Operator,
         super::PackSource::local(std::path::Path::new("fixture.afb")),
         |_, _| async { Ok(()) },
     )
@@ -230,6 +235,7 @@ async fn home_removal_excludes_reinstall_until_pin_and_records_are_removed() {
         false,
         None,
         &bindings,
+        crate::pack::InstalledVia::Operator,
         super::PackSource::local(std::path::Path::new("fixture.afb")),
         |_, _| async { Ok(()) },
     )
@@ -254,6 +260,7 @@ async fn non_pin_notification_rejection_restores_previous_plugin_and_home_record
         false,
         None,
         &BTreeMap::new(),
+        crate::pack::InstalledVia::Operator,
         super::PackSource::local(std::path::Path::new("fixture.afb")),
         |_, _| async { Ok(()) },
     )
@@ -305,6 +312,7 @@ async fn non_pin_notification_rejection_restores_previous_plugin_and_home_record
         false,
         Some(&owner),
         &BTreeMap::new(),
+        crate::pack::InstalledVia::Operator,
         super::PackSource::local(std::path::Path::new("fixture.afb")),
         move |identity, changes| async move {
             let staged =

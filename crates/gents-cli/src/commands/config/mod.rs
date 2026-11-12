@@ -6,13 +6,14 @@ pub(crate) mod apply;
 pub(crate) mod backend;
 pub(crate) mod behavior;
 pub(crate) mod binding;
-mod crud;
+pub(crate) mod crud;
 pub(crate) mod diff;
 pub(crate) mod export;
 pub(crate) mod profile;
 pub(crate) mod skill;
 pub(crate) mod task_run;
 pub(crate) mod tools;
+pub(crate) mod trigger_explain;
 pub(crate) mod validate;
 pub(crate) mod workspace_root;
 
@@ -62,6 +63,9 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
         ConfigCommand::Trigger { command } => match command {
             ConfigTriggerCommand::List(args) => crud::config_list(crud::TRIGGER_SPEC, args).await,
             ConfigTriggerCommand::Show(args) => crud::config_show(crud::TRIGGER_SPEC, args).await,
+            ConfigTriggerCommand::Explain(args) => {
+                trigger_explain::config_trigger_explain(args).await
+            }
         },
         ConfigCommand::Schedule { command } => match command {
             ConfigScheduleCommand::List(args) => crud::config_list(crud::SCHEDULE_SPEC, args).await,
@@ -94,10 +98,6 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
             WorkspaceRootCommand::Show(args) => workspace_root::workspace_root_show(args).await,
             WorkspaceRootCommand::Rm(args) => workspace_root::workspace_root_rm(args).await,
         },
-        ConfigCommand::Client { command } => {
-            tokio::task::spawn_blocking(move || crate::client_settings::config_client(command))
-                .await?
-        }
         ConfigCommand::Export(args) => export::config_export(args).await,
         ConfigCommand::Pack { command } => crate::commands::pack::dispatch(command).await,
     }

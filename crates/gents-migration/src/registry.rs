@@ -269,6 +269,14 @@ static BASELINE_SCHEMAS: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::DATASTORE_TOOL_SURFACE
     ),
     baseline_entry!(
+        gents_protocol::schemas::PAGE_NAME,
+        gents_protocol::schemas::PAGE
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::PLUGIN_SOURCE_NAME,
+        gents_protocol::schemas::PLUGIN_SOURCE
+    ),
+    baseline_entry!(
         gents_protocol::schemas::PENDING_CHAT_SUBMISSION_NAME,
         gents_protocol::schemas::PENDING_CHAT_SUBMISSION
     ),
@@ -367,6 +375,10 @@ static BASELINE_SCHEMAS: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_REQUEST_NAME,
         gents_protocol::schemas::AGENT_REQUEST
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::AGENT_REQUEST_BACKEND_WAIT_NAME,
+        gents_protocol::schemas::AGENT_REQUEST_BACKEND_WAIT
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_OUTPUT_SEGMENT_NAME,

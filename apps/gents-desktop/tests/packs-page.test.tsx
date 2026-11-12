@@ -35,6 +35,7 @@ import {
   showPublisher,
   publisherOf,
 } from "../src/ui/screens/packs/model";
+import { resetDefaultPacks } from "../src/ui/screens/packs/useDefaultPacks";
 import { bareOriginCount, packSettings } from "../src/ui/screens/agent/packContents";
 import { renderIn, testApp, withFlags } from "./app-fixture";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
@@ -84,7 +85,10 @@ function plugins() {
   });
 }
 
-beforeEach(() => resetInstalledPacks());
+beforeEach(() => {
+  resetInstalledPacks();
+  resetDefaultPacks();
+});
 afterEach(() => {
   undo?.();
   undo = null;
@@ -101,6 +105,7 @@ function show(item?: string, api: Record<string, unknown> = {}) {
   const app = testApp({
     api: {
       listInstalledPacks: async () => ({ packs: [research] }),
+      listDefaultPacks: async () => ({ packs: [] }),
       packInfo: async () => ({
         description: "Searches the web and writes a cited summary.",
         latest: "1.1.0",

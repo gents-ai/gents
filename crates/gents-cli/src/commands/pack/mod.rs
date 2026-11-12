@@ -4,6 +4,7 @@ mod cache;
 mod check;
 pub(crate) mod cli_process;
 mod edit;
+mod export;
 mod import;
 mod inspect;
 mod install;
@@ -23,11 +24,12 @@ pub(crate) mod wire;
 use crate::cli::*;
 use anyhow::{Context, Result};
 pub(crate) use install::{
-    install, install_documents_pack, install_documents_pack_resolved, parse_dependency_variables,
-    wire_pack_plugins,
+    check_expected_digest, install, install_documents_pack, install_documents_pack_resolved,
+    parse_agent_bindings, parse_dependency_variables, wire_pack_plugins,
+    wire_pack_plugins_consenting,
 };
 pub(crate) use scope::{
-    plugin_notification_scope, record_plugin_store_change, resolve_home_owner_under_plugin_store,
+    plugin_notification_scope, record_plugin_retirement, resolve_home_owner_under_plugin_store,
     resolve_scope_owner, warn_on_unrecorded_removal,
 };
 use serde_json::json;
@@ -39,6 +41,7 @@ pub(crate) use source::{
 use std::collections::BTreeMap;
 
 use gents::pack::materialize::CacheRelease;
+use gents::pack::PackChangeError;
 
 pub(crate) fn parse_inference_slot_bindings(
     values: &[String],
@@ -73,14 +76,20 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
         PackCommand::Add(args) => edit::add(args),
         PackCommand::RemovePart(args) => edit::remove_part(args),
         PackCommand::Fmt(args) => edit::fmt(args),
+        PackCommand::Export(args) => export::export(args).await,
         PackCommand::Diff(args) => inspect::diff(args).await,
         PackCommand::Test(args) => test::test(args).await,
         PackCommand::Check(args) => check::check(args).await,
-        PackCommand::Install(args) => install(args).await,
+        PackCommand::Install(args) => install(args).await.map_err(PackChangeError::into_anyhow),
         PackCommand::Wire(args) => wire::wire(args).await,
-        PackCommand::Remove(args) => remove::remove(args).await,
+        PackCommand::Starter(args) => crate::commands::init::default_packs::starter(args).await,
+        PackCommand::Remove(args) => remove::remove(args)
+            .await
+            .map_err(PackChangeError::into_anyhow),
         PackCommand::Outdated(args) => update::outdated(args).await,
-        PackCommand::Update(args) => update::update(args).await,
+        PackCommand::Update(args) => update::update(args)
+            .await
+            .map_err(PackChangeError::into_anyhow),
         PackCommand::Prune(args) => cache::prune(args).await,
         PackCommand::Scenario(PackScenarioCommand::Run(args)) => scenario::run(args).await,
         PackCommand::Scenario(PackScenarioCommand::Init(args)) => scenario::init_pack(args).await,

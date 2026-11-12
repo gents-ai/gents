@@ -65,13 +65,25 @@ pub(crate) async fn print_reply(
         .as_deref()
         .filter(|reason| !reason.trim().is_empty())
     {
-        bail!("the agent's turn failed: {reason}");
+        bail!("{}", turn_failure(reason));
     }
     let reply = chat_turn_text_content(&envelope);
     if !reply.trim().is_empty() {
         println!("{reply}");
     }
     Ok(())
+}
+
+/// A turn refused because its agent has no model that answers is fixed in the shell, which
+/// connects one, so that failure names it.
+fn turn_failure(reason: &str) -> String {
+    let unready = gents_protocol::node_readiness::unavailable_rejection_reason(reason);
+    match unready.is_some_and(crate::commands::start::wants_a_model) {
+        true => format!(
+            "the agent's turn failed: {reason}. Run `gents` in a terminal to connect a model."
+        ),
+        false => format!("the agent's turn failed: {reason}"),
+    }
 }
 
 async fn deny_pending_approvals(home: &Path, session_id: &str) -> Result<bool> {
@@ -99,4 +111,36 @@ pub(crate) fn chat_turn_text_content(envelope: &RequestOutputEnvelope) -> &str {
     terminal_presentation(envelope)
         .map(|presentation| presentation.body_markdown.as_str())
         .unwrap_or("")
+}
+
+#[cfg(test)]
+mod tests {
+    use gents_protocol::node_readiness::AgentReadinessUnavailableReason as Reason;
+
+    use super::turn_failure;
+
+    /// `gents -p` has no terminal to set a model up in, so a turn refused for want of one
+    /// names the shell, never a file to edit.
+    #[test]
+    fn a_turn_refused_for_want_of_a_model_names_the_shell() {
+        for reason in [
+            Reason::BackendNotConfigured,
+            Reason::BackendTemporarilyUnavailable,
+            Reason::CredentialsRequired,
+        ] {
+            let failure = turn_failure(reason.public_message());
+            assert!(failure.contains(reason.public_message()), "{failure}");
+            assert!(
+                failure.ends_with("Run `gents` in a terminal to connect a model."),
+                "{failure}"
+            );
+            assert!(!failure.contains(".json"), "{failure}");
+        }
+        for other in [Reason::AgentDisabled.public_message(), "the model said no"] {
+            assert_eq!(
+                turn_failure(other),
+                format!("the agent's turn failed: {other}")
+            );
+        }
+    }
 }

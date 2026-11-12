@@ -63,6 +63,8 @@ def requestProgressCases : List RequestProgressCase :=
   , requestProgressCase "pending_is_queued" .pending
   , requestProgressCase "claimed_is_claimed" .claimed
   , requestProgressCase "processing_is_working" .processing
+  , requestProgressCase "waiting_for_backend" .waitingForBackend
+  , requestProgressCase "resuming_backend" .resumingBackend
   , requestProgressCase "completed_is_completed" .completed
   , requestProgressCase "failed_is_failed" .failed
   , requestProgressCase "superseded_is_superseded" .superseded

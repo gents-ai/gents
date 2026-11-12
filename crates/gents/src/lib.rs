@@ -1,13 +1,14 @@
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 extern crate self as gents;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
 #[path = "../tests/support/mod.rs"]
-pub(crate) mod support;
+pub mod support;
 
 pub mod claude_gateway_login;
 mod claude_request_context;
-pub mod codex_shim_binding;
+mod collection_use;
 pub mod documents;
 pub mod drop_cleanup;
 pub mod error;
@@ -19,6 +20,7 @@ pub mod inference;
 pub(crate) mod lean_vocab_test;
 pub mod observe;
 pub mod openai_wire;
+pub mod operations;
 pub mod pack;
 pub mod plugin;
 pub use gents_loop::provider_input::ProviderInputProfile;
@@ -32,8 +34,75 @@ pub(crate) mod provider_usage;
 pub mod runtime;
 pub mod store;
 
-#[cfg(test)]
-pub(crate) mod test_support {
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+#[allow(dead_code)]
+pub mod test_support {
+    mod crate_owners;
+    pub use crate_owners::{
+        checkpoint_prefix, event_admission_generation, execution_ownership_lost_reason,
+        pending_agent_request_spec, update_trigger_runtime_fields,
+        write_trigger_delivery_with_identity, EventConfigDocIds, PreparedFire,
+        TriggerRuntimeUpdate,
+    };
+
+    pub fn tool_policy(
+        ceiling: &crate::tools::surface::ToolCeiling,
+    ) -> &crate::tools::surface::ToolPolicySurface {
+        ceiling.policy()
+    }
+
+    pub async fn delete_configuration_document(
+        txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+        collection: &str,
+        doc_id: &str,
+    ) -> Result<(), crate::store::config_client::ConfigClientError> {
+        txn.delete_configuration_document(collection, doc_id).await
+    }
+
+    pub async fn publish_provider_message(
+        writer: &crate::request::streaming::DefraStreamWriter,
+        request: &crate::request::lifecycle::RequestLifecycle,
+        turn: usize,
+        message: &gents_protocol::message::Message,
+    ) -> anyhow::Result<String> {
+        writer
+            .start_provider_attempt(
+                &request.request().doc_id,
+                turn,
+                0,
+                format!("inference.{}", turn + 1).parse()?,
+            )
+            .await;
+        Ok(writer
+            .publish_native_turn(request, turn, 0, message)
+            .await?
+            .message_doc_id)
+    }
+
+    pub async fn admitted_client_lifecycle(
+        node: std::sync::Arc<defra_node::Node>,
+        runtime: std::sync::Arc<dyn crate::NodeIdentity>,
+        request: &crate::AgentRequest,
+        agent: &dyn crate::NodeIdentity,
+    ) -> anyhow::Result<crate::request::lifecycle::RequestLifecycle> {
+        let (_owner, authority) =
+            crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+        let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
+            node.clone(),
+            runtime,
+            authority,
+        );
+        let (request, admission) = verifier
+            .verify_fresh_for_claim_with_identity(request, agent)
+            .await?;
+        let mut lifecycle =
+            crate::request::lifecycle::RequestLifecycle::new_with_node_did(node, request, 60);
+        lifecycle.bind_managed_agent(agent)?;
+        lifecycle.set_client_claim_admission(admission);
+        Ok(lifecycle)
+    }
+
     pub(crate) mod acp_policies;
     pub(crate) mod read_observation;
 
@@ -43,12 +112,12 @@ pub(crate) mod test_support {
         clippy::disallowed_methods,
         reason = "a test's #[tokio::test] runtime is its entry-point runtime"
     )]
-    pub(crate) fn runtime_handle() -> tokio::runtime::Handle {
+    pub fn runtime_handle() -> tokio::runtime::Handle {
         tokio::runtime::Handle::current()
     }
 
     /// Fixtures that reopen a store must retain its original signing identity.
-    pub(crate) fn node_builder() -> defra_node::NodeBuilder {
+    pub fn node_builder() -> defra_node::NodeBuilder {
         use crate::NodeIdentity as _;
 
         let directory = tempfile::tempdir().unwrap();
@@ -200,7 +269,7 @@ pub(crate) mod test_support {
         bootstrap_signed_test_node(&access, node_did).await;
     }
 
-    pub(crate) async fn bootstrap_signed_test_node(
+    pub async fn bootstrap_signed_test_node(
         access: &crate::store::config_client::ConfigAccess,
         node_did: &str,
     ) {
@@ -276,7 +345,7 @@ pub(crate) mod test_support {
         (db, user, access)
     }
 
-    pub(crate) async fn signed_test_node_from_db(
+    pub async fn signed_test_node_from_db(
         db: crate::support::TestDb,
         name: &str,
     ) -> (
@@ -497,6 +566,7 @@ pub(crate) mod test_support {
         .unwrap();
     }
 
+    #[cfg(test)]
     pub(crate) fn fixture_pack_copy(
         name: &str,
         plugin_output: &serde_json::Value,
@@ -534,6 +604,7 @@ pub(crate) mod test_support {
         (dir, root)
     }
 
+    #[cfg(test)]
     pub(crate) fn home_with_fixture_pack(
         name: &str,
     ) -> (
@@ -645,8 +716,8 @@ pub use documents::automation::{
     MAX_EVENT_TRIGGER_GROUP_DOCS,
 };
 pub use documents::template::{
-    check_template_vocabulary, parse_template_for_validation, render_template, TemplateError,
-    TemplateScope, VariableRef,
+    check_template_vocabulary, parse_template_for_validation, render_manual_template,
+    render_template, TemplateError, TemplateScope, VariableRef,
 };
 pub use documents::{
     default_inference_profile_id_for_agent, default_inference_profile_id_for_node,
@@ -764,7 +835,6 @@ pub use tools::background::diagnostics::{
     load_background_completion_diagnostics, BackgroundCompletionDiagnostics,
     BackgroundCompletionEpochDiagnostic,
 };
-pub use tools::background::status::load_caused_request_terminal;
 pub use tools::background::status::status_projection::OutputEvidence;
 pub use tools::call::control::{cancel_background_tool_call, CancelBackgroundToolCallOutcome};
 pub use tools::call::hook::{
@@ -779,9 +849,9 @@ pub use tools::mcp::health::{
 pub use tools::mcp::meta::build_meta_tools;
 pub use tools::mcp::pool::McpPool;
 pub use tools::native::{
-    build_native_tools, enable_self_runner, CliToolConfig, CommandExecutionMode,
-    CommandExecutionPolicy, CommandNetworkMode, FileToolLimits, NativeTool, ToolSet,
-    ToolSetBuilder,
+    build_native_tools, enable_self_runner, run_plugin_build, CliToolConfig, CommandExecutionMode,
+    CommandExecutionPolicy, CommandNetworkMode, FileToolLimits, NativeTool, PluginBuildOutcome,
+    ToolSet, ToolSetBuilder, PLUGIN_BUILD_COMMAND,
 };
 pub use tools::surface::{
     cli_tool, AgentToolSurfaceConfig, BashMode, CustomToolFactory, FileToolMode,
@@ -802,6 +872,47 @@ pub use turn::prompt::{LayeredPromptBuilder, PromptBuilder};
 
 #[doc(hidden)]
 pub mod __test_internals {
+    pub async fn park_backend(
+        lifecycle: &mut crate::request::lifecycle::RequestLifecycle,
+    ) -> anyhow::Result<bool> {
+        lifecycle.park_for_backend().await
+    }
+
+    pub async fn wake_backend(
+        lifecycle: &mut crate::request::lifecycle::RequestLifecycle,
+    ) -> anyhow::Result<bool> {
+        Ok(lifecycle
+            .wake_for_backend(Some(chrono::Utc::now()))
+            .await?
+            .resumed())
+    }
+
+    pub fn backend_generation(
+        lifecycle: &crate::request::lifecycle::RequestLifecycle,
+    ) -> anyhow::Result<&str> {
+        lifecycle.execution_generation()
+    }
+
+    pub fn backend_deadline(
+        lifecycle: &crate::request::lifecycle::RequestLifecycle,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        lifecycle.claimed_deadline_at()
+    }
+
+    pub async fn settle_parked_backend(
+        access: &crate::ConfigAccess,
+        request_doc_id: &str,
+        generation: &str,
+        interrupted: bool,
+    ) -> anyhow::Result<crate::request::lifecycle::TerminalizeResult> {
+        crate::request::lifecycle::terminalize_parked_request(
+            access,
+            request_doc_id,
+            generation,
+            interrupted,
+        )
+        .await
+    }
     pub use crate::request::lifecycle::materialize::activate_workspace_bound_request_with_identity;
     pub use crate::request::lifecycle::materialize::supersede_trigger_requests_in_txn;
     pub use crate::request::lifecycle::queue::{
@@ -809,6 +920,5 @@ pub mod __test_internals {
         QueueSource,
     };
     pub use crate::runtime::agent::principal_assembly::AgentBuildError;
-    pub use crate::store::config_client::TXN_TRACING_TARGET;
     pub use gents_protocol::request_lifecycle::EnqueuedAgentRequest;
 }

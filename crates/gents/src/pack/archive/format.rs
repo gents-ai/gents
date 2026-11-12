@@ -46,12 +46,13 @@ impl PackHeader {
     }
 
     pub fn file_name(&self) -> String {
-        format!(
-            "{}-{}.{EXTENSION}",
-            self.coordinate.replace('/', "."),
-            self.version
-        )
+        pack_file_name(&self.coordinate, &self.version)
     }
+}
+
+/// The file `pack build` writes for `coordinate` at `version`.
+pub fn pack_file_name(coordinate: &str, version: &str) -> String {
+    format!("{}-{version}.{EXTENSION}", coordinate.replace('/', "."))
 }
 
 pub fn digest_hex(digest: &str) -> Result<&str> {

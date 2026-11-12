@@ -146,23 +146,22 @@ pub(super) async fn publish_registry_heartbeat(
     entry: &RegistryEntry,
     now: &str,
 ) -> Result<()> {
+    use gents_protocol::document_query::{fields::peer_registry as fields, Filter, Input, Update};
     let mutation = registry_upsert_mutation(entry, now, UpsertKind::Heartbeat);
-    let peer_id = escape_graphql_string(&entry.peer_id);
-    let node_did = escape_graphql_string(&entry.node_did);
-    let network_id = escape_graphql_string(&entry.network_id);
-    let now = escape_graphql_string(now);
-    let network = format!(
-        r#"mutation {{
-        update_PeerRegistry(filter: {{ peer_id: {{ _eq: "{peer_id}" }}, node_did: {{ _eq: "{node_did}" }}, network_id: {{ _eq: null }} }},
-            input: {{ network_id: "{network_id}" }}) {{ _docID }}
-    }}"#
-    );
-    let registered = format!(
-        r#"mutation {{
-        update_PeerRegistry(filter: {{ peer_id: {{ _eq: "{peer_id}" }}, node_did: {{ _eq: "{node_did}" }}, registered_at: {{ _eq: null }} }},
-            input: {{ registered_at: "{now}" }}) {{ _docID }}
-    }}"#
-    );
+    let network = Update::matching(
+        Filter::eq(fields::PEER_ID, &entry.peer_id)
+            .and(Filter::eq(fields::NODE_DID, &entry.node_did))
+            .and(Filter::is_null(fields::NETWORK_ID)),
+        Input::new().set(fields::NETWORK_ID, &entry.network_id),
+    )
+    .render();
+    let registered = Update::matching(
+        Filter::eq(fields::PEER_ID, &entry.peer_id)
+            .and(Filter::eq(fields::NODE_DID, &entry.node_did))
+            .and(Filter::is_null(fields::REGISTERED_AT)),
+        Input::new().set(fields::REGISTERED_AT, now),
+    )
+    .render();
     crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
@@ -173,8 +172,8 @@ pub(super) async fn publish_registry_heartbeat(
             let registered = &registered;
             Box::pin(async move {
                 txn.execute(mutation).await?;
-                txn.execute(network).await?;
-                txn.execute(registered).await?;
+                txn.run(network).await?;
+                txn.run(registered).await?;
                 Ok(())
             })
         },

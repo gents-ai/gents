@@ -25,4 +25,11 @@ self_config_preview?: boolean | null,
  * this node. Disabled by absence and never implied by
  * general self-config.
  */
-enable_pack_install?: boolean | null, };
+enable_pack_install?: boolean | null,
+/**
+ * Pack authority: an install grants what the pack's plugins ask for, and
+ * `pack build` and `pack test` compile plugin source in the command
+ * sandbox. The Engineer preset carries it; other agents have it only
+ * through their own Tools, and a node owner narrows it by clearing it.
+ */
+enable_pack_authority?: boolean | null, };

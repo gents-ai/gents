@@ -2,8 +2,6 @@ use anyhow::Result;
 use defra_node::Node as EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
-use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
-
 use super::serde_helpers::first_row_with_doc_id;
 
 /// DefraDB DID identity for the runtime node. One active instance is an
@@ -62,28 +60,26 @@ pub(crate) async fn load_node_record(
     node: &EmbeddedNode,
     node_did: &str,
 ) -> Result<Option<(String, Node)>> {
-    let escaped_node_did = escape_graphql_string(node_did);
-    let query = format!(
-        r#"{{
-            Node(
-                filter: {{ node_did: {{ _eq: "{escaped_node_did}" }} }},
-                limit: 1
-            ) {{
-                _docID
-                node_did
-                display_name
-                avatar
-                default_agent_did
-                enabled
-                created_at
-                created_by
-                max_request_hop
-                tags
-            }}
-        }}"#
-    );
+    let rendered = {
+        use gents_protocol::document_query::{fields::node as fields, Filter, Query, Selection};
+        Query::select(
+            Selection::doc_id()
+                .field(fields::NODE_DID)
+                .field(fields::DISPLAY_NAME)
+                .field(fields::AVATAR)
+                .field(fields::DEFAULT_AGENT_DID)
+                .field(fields::ENABLED)
+                .field(fields::CREATED_AT)
+                .field(fields::CREATED_BY)
+                .field(fields::MAX_REQUEST_HOP)
+                .field(fields::TAGS),
+        )
+        .filter(Filter::eq(fields::NODE_DID, node_did))
+        .limit(1)
+        .render()
+    };
 
-    let resp = graphql_with_transaction_retry(node, &query, "query Node").await?;
+    let resp = crate::store::graphql::read_rendered(node, &rendered, "query Node").await?;
 
     Ok(first_row_with_doc_id(resp.data.as_ref(), "Node"))
 }

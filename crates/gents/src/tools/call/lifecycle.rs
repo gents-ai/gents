@@ -118,7 +118,7 @@ pub use crate::tools::native::file_contents::ContentDocument;
 pub use query::{
     load_tool_call_arguments, load_tool_call_file_changes, load_tool_call_presentation,
     load_tool_call_result, load_tool_file_change_observation, render_tool_result,
-    CanonicalToolCallPresentation, ToolFileChangeRead,
+    ToolFileChangeRead,
 };
 pub(crate) mod plugin_receipt;
 pub use plugin_receipt::ReceiptDecision;
@@ -128,8 +128,10 @@ mod session_message_call;
 mod transition;
 
 pub use gents_loop::tool_call_lifecycle::{FailureClass, ToolOutcome};
-#[cfg(test)]
-pub(crate) mod admission_fixture;
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+#[allow(dead_code)]
+pub mod admission_fixture;
 #[cfg(test)]
 mod background_conformance;
 #[cfg(test)]
@@ -549,6 +551,10 @@ impl ToolCallLifecycle {
         self.await_mode == AwaitMode::Background
             && self.spawned_by_tool_call_doc_id.is_none()
             && self.plugin_effect.is_none()
+    }
+
+    pub(crate) fn is_plugin_effect(&self) -> bool {
+        self.plugin_effect.is_some()
     }
 
     pub(crate) fn is_spawned_background(&self) -> bool {

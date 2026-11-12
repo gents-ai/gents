@@ -1,4 +1,5 @@
 use super::*;
+use crate::goal::{prepare_goal_input_in_txn, validate_task_goal_identity_in_txn};
 use anyhow::Context;
 use gents_protocol::request_lifecycle::{
     EnqueuedAgentRequest, SessionMessageCause, SessionMessageTarget,
@@ -703,33 +704,44 @@ pub async fn activate_workspace_bound_request_with_identity(
         actor,
         identity.and_then(|identity| identity.managed_agent_signer()),
     )?;
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                docID: "{doc_id}", filter: {{
-                    _docID: {{ _eq: "{doc_id}" }},
-                    lifecycle_state: {{ _eq: "{workspace_binding_pending}" }}
-                }},
-                input: {{ lifecycle_state: "{pending}" }}
-            ) {{ _docID }}
-        }}"#,
-        doc_id = escape_graphql_string(request_doc_id),
-        workspace_binding_pending = RequestLifecycleState::WorkspaceBindingPending.as_str(),
-        pending = RequestLifecycleState::Pending.as_str(),
-    );
+    let mutation = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Input, Update,
+        };
+        Update::doc(
+            request_doc_id,
+            Input::new().set(
+                fields::LIFECYCLE_STATE,
+                RequestLifecycleState::Pending.as_str(),
+            ),
+        )
+        .filter(Filter::eq(fields::DOC_ID, request_doc_id).and(Filter::eq(
+            fields::LIFECYCLE_STATE,
+            RequestLifecycleState::WorkspaceBindingPending.as_str(),
+        )))
+        .render()
+    };
     let response = access
-        .write("lifecycle.activate_workspace_bound", &mutation)
+        .write_rendered("lifecycle.activate_workspace_bound", &mutation)
         .await?;
     let response: defra_node::QueryResponse = serde_json::from_value(response)?;
     if crate::store::graphql::single_mutation_document(&response, "update_AgentRequest")?.is_none()
     {
-        let query = format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
-                request_id lifecycle_state workspace_id
-            }} }}"#,
-            doc_id = escape_graphql_string(request_doc_id),
-        );
-        let response = serde_json::from_value(access.execute(&query).await?)?;
+        let query = {
+            use gents_protocol::document_query::{
+                fields::agent_request as fields, Filter, Query, Selection,
+            };
+            Query::select(
+                Selection::new()
+                    .field(fields::REQUEST_ID)
+                    .field(fields::LIFECYCLE_STATE)
+                    .field(fields::WORKSPACE_ID),
+            )
+            .filter(Filter::eq(fields::DOC_ID, request_doc_id))
+            .limit(1)
+            .render()
+        };
+        let response = serde_json::from_value(access.read(&query).await?)?;
         let row = crate::store::graphql::first_row::<gents_protocol::row::AgentRequestRow>(
             &response,
             "AgentRequest",
@@ -804,6 +816,7 @@ impl RequestLifecycle {
             fold_admitted: Vec::new(),
             folded_selection: Vec::new(),
             natural_finish_allowed: false,
+            resumed_from_backend: false,
             execution_lease_duration_secs:
                 crate::inference::resolved::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         }
@@ -889,10 +902,16 @@ impl RequestLifecycle {
         let signer = RequestSigner::Identity(identity.as_ref());
         let create = super::client::build_signed_client_request(&access, spec, signer).await?;
         super::client::submit_client_request(&access, &create).await?;
-        let escaped_request = escape_graphql_string(&request_id);
-        let response = access.execute(&format!(
-            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request}" }} }}, limit: 2) {{ _docID }} }}"#,
-        )).await?;
+        let query = {
+            use gents_protocol::document_query::{
+                fields::agent_request as fields, Filter, Query, Selection,
+            };
+            Query::select(Selection::doc_id())
+                .filter(Filter::eq(fields::REQUEST_ID, &request_id))
+                .limit(2)
+                .render()
+        };
+        let response = access.read(&query).await?;
         let [row] = response["data"]["AgentRequest"]
             .as_array()
             .context("published AgentRequest query omitted rows")?
@@ -1029,14 +1048,18 @@ async fn labeled_session_rows_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
 ) -> Result<LabeledSessionRows> {
-    let response = txn
-        .execute(&format!(
-            r#"{{ AgentSession(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-            escape_graphql_string(&request.node_did),
-            escape_graphql_string(&request.session_id),
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_session as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::owned(
             gents_protocol::session::AGENT_SESSION_FIELDS,
         ))
-        .await?;
+        .filter(Filter::eq(fields::NODE_DID, &request.node_did))
+        .filter(Filter::eq(fields::SESSION_ID, &request.session_id))
+        .render()
+    };
+    let response = txn.run(&query).await?;
     let rows = response["data"]["AgentSession"]
         .as_array()
         .context("AgentSession query omitted rows")?;
@@ -1102,12 +1125,27 @@ pub(crate) async fn created_session_provenance_in_txn(
     if !matches!(kind, Some("manual" | "event" | "schedule")) {
         return Ok(provenance);
     }
-    let query = format!(
-        r#"{{ TriggerFire(filter: {{owner_did: {{_eq: "{}"}}, request_id: {{_eq: "{}"}}}}, limit: 2) {{fire_key owner_did request_id session_id trigger_id task_id source_collection source_doc_id}} }}"#,
-        escape_graphql_string(&request.node_did),
-        escape_graphql_string(&request.request_id),
-    );
-    let response = txn.execute(&query).await?;
+    let query = {
+        use gents_protocol::document_query::{
+            fields::trigger_fire as fields, Filter, Query, Selection,
+        };
+        Query::select(
+            Selection::new()
+                .field(fields::FIRE_KEY)
+                .field(fields::OWNER_DID)
+                .field(fields::REQUEST_ID)
+                .field(fields::SESSION_ID)
+                .field(fields::TRIGGER_ID)
+                .field(fields::TASK_ID)
+                .field(fields::SOURCE_COLLECTION)
+                .field(fields::SOURCE_DOC_ID),
+        )
+        .filter(Filter::eq(fields::OWNER_DID, &request.node_did))
+        .filter(Filter::eq(fields::REQUEST_ID, &request.request_id))
+        .limit(2)
+        .render()
+    };
+    let response = txn.run(&query).await?;
     let rows = response
         .pointer("/data/TriggerFire")
         .and_then(serde_json::Value::as_array)
@@ -1488,16 +1526,19 @@ pub(crate) async fn write_trigger_delivery_with_identity(
 ) -> Result<TaskDeliveryAdmission> {
     let identity = identity.context("trigger delivery requires a managed Agent identity")?;
     let access = crate::ConfigAccess::local_managed_agent(node.clone(), actor, identity)?;
-    access
+    let admitted = access
         .transact_write("lifecycle.admit_trigger_delivery", |txn| {
             Box::pin(async move {
+                if let Some(stop) = prepared.stage_budget(txn).await? {
+                    return Ok::<_, anyhow::Error>(Err(stop));
+                }
                 let fresh =
                     crate::triggers::engine::durable::stage_fire_receipt(txn, &prepared.receipt)
                         .await?;
                 let mut create = create.clone();
                 if fresh {
                     if prepared.target_existing && prepared.receipt.goal_id.is_none() {
-                        create.input = crate::goal::prepare_goal_input_in_txn(
+                        create.input = prepare_goal_input_in_txn(
                             txn,
                             &create.node_did,
                             &create.session_id,
@@ -1513,6 +1554,7 @@ pub(crate) async fn write_trigger_delivery_with_identity(
                     txn,
                     &prepared.receipt,
                     prepared.target_existing,
+                    prepared.create_session,
                     &create,
                     fresh,
                     prepared.event_source_generation.as_ref(),
@@ -1527,10 +1569,23 @@ pub(crate) async fn write_trigger_delivery_with_identity(
                     )
                     .await?;
                 }
-                Ok::<_, anyhow::Error>(admitted)
+                Ok(Ok(admitted))
             })
         })
-        .await
+        .await?;
+    match admitted {
+        Ok(admitted) => Ok(admitted),
+        Err(stop) => {
+            crate::documents::stop_trigger_for_budget(
+                node,
+                &prepared.receipt.identity.owner_did,
+                &prepared.receipt.identity.trigger_id,
+                &stop.reason,
+            )
+            .await?;
+            Err(stop.into())
+        }
+    }
 }
 
 #[doc(hidden)]
@@ -1540,25 +1595,37 @@ pub async fn supersede_trigger_requests_in_txn(
     trigger_id: &str,
     excluded_request_id: Option<&str>,
 ) -> Result<usize> {
-    let owner_gql = escape_graphql_string(owner);
-    let trigger_gql = escape_graphql_string(trigger_id);
-    let excluded = excluded_request_id
-        .map(|id| {
-            format!(
-                ", request_id: {{ _neq: \"{}\" }}",
-                escape_graphql_string(id),
-            )
-        })
-        .unwrap_or_default();
+    use gents_protocol::document_query::{
+        fields::agent_request as fields, Filter, Input, Query, Selection, Update,
+    };
     let now = chrono::Utc::now().to_rfc3339();
-    let unclaimed = gents_protocol::request_lifecycle::RequestLifecycleState::graphql_list([
-        gents_protocol::request_lifecycle::RequestLifecycleState::Pending,
-        gents_protocol::request_lifecycle::RequestLifecycleState::WorkspaceBindingPending,
-    ]);
-    let response = txn.execute(&format!(r#"mutation {{ update_AgentRequest(
-        filter: {{ node_did: {{ _eq: "{owner_gql}" }}, caused_by_trigger_id: {{ _eq: "{trigger_gql}" }}{excluded}, lifecycle_state: {{ _in: {unclaimed} }} }},
-        input: {{ lifecycle_state: "{superseded}", terminalized_at: "{}", terminal_redrive_attempts: 0 }}
-    ) {{ _docID request_id }} }}"#, escape_graphql_string(&now), superseded = RequestLifecycleState::Superseded.as_str())).await?;
+    let scope = Filter::eq(fields::NODE_DID, owner)
+        .and(Filter::eq(fields::CAUSED_BY_TRIGGER_ID, trigger_id));
+    let scope = match excluded_request_id {
+        Some(id) => scope.and(Filter::ne(fields::REQUEST_ID, id)),
+        None => scope,
+    };
+    let mutation = Update::matching(
+        scope.clone().and(Filter::any_of(
+            fields::LIFECYCLE_STATE,
+            [
+                gents_protocol::request_lifecycle::RequestLifecycleState::Pending,
+                gents_protocol::request_lifecycle::RequestLifecycleState::WorkspaceBindingPending,
+            ]
+            .into_iter()
+            .map(gents_protocol::request_lifecycle::RequestLifecycleState::as_str),
+        )),
+        Input::new()
+            .set(
+                fields::LIFECYCLE_STATE,
+                RequestLifecycleState::Superseded.as_str(),
+            )
+            .set(fields::TERMINALIZED_AT, now.as_str())
+            .set(fields::TERMINAL_REDRIVE_ATTEMPTS, 0_i32),
+    )
+    .returning(Selection::doc_id().field(fields::REQUEST_ID))
+    .render();
+    let response = txn.run(&mutation).await?;
     let pending = response["data"]["update_AgentRequest"]
         .as_array()
         .context("supersession omitted pending requests")?;
@@ -1575,27 +1642,40 @@ pub async fn supersede_trigger_requests_in_txn(
         )
         .await?;
     }
-    let active = gents_protocol::request_lifecycle::RequestLifecycleState::graphql_list([
-        gents_protocol::request_lifecycle::RequestLifecycleState::Claimed,
-        gents_protocol::request_lifecycle::RequestLifecycleState::Processing,
-    ]);
-    let response = txn.execute(&format!(r#"{{ AgentRequest(filter: {{
-        node_did: {{ _eq: "{owner_gql}" }}, caused_by_trigger_id: {{ _eq: "{trigger_gql}" }}{excluded},
-        lifecycle_state: {{ _in: {active} }}
-    }}) {{ _docID request_id node_did requester_did agent_did session_id lifecycle_state
-        execution_generation execution_lease_expires_at }} }}"#)).await?;
+    let query = Query::select(
+        Selection::doc_id()
+            .field(fields::REQUEST_ID)
+            .field(fields::NODE_DID)
+            .field(fields::REQUESTER_DID)
+            .field(fields::AGENT_DID)
+            .field(fields::SESSION_ID)
+            .field(fields::LIFECYCLE_STATE)
+            .field(fields::EXECUTION_GENERATION)
+            .field(fields::EXECUTION_LEASE_EXPIRES_AT),
+    )
+    .filter(scope.and(Filter::any_of(
+        fields::LIFECYCLE_STATE,
+        RequestLifecycleState::unsettled_execution().map(RequestLifecycleState::as_str),
+    )))
+    .render();
+    let response = txn.run(&query).await?;
     let active: Vec<gents_protocol::row::AgentRequestRow> =
         serde_json::from_value(response["data"]["AgentRequest"].clone())?;
     for row in &active {
-        anyhow::ensure!(
+        let reason = "superseded by a newer trigger fire";
+        let settled = if row.lifecycle_state == Some(RequestLifecycleState::WaitingForBackend) {
+            super::execution_lease::stage_supersede_parked_execution(txn, row, reason).await?
+        } else {
             super::execution_lease::stage_revoke_execution_preserving_output(
                 txn,
                 row,
                 RequestTerminalOutcome::Superseded,
-                "superseded by a newer trigger fire",
+                reason,
             )
             .await?
-                == TerminalizeResult::Won,
+        };
+        anyhow::ensure!(
+            settled == TerminalizeResult::Won,
             "execution changed during atomic trigger supersession",
         );
     }
@@ -1609,13 +1689,14 @@ async fn stage_task_delivery(
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<TaskDeliveryAdmission> {
     let fresh = crate::triggers::engine::durable::stage_fire_receipt(txn, fire).await?;
-    stage_task_delivery_with_receipt(txn, fire, continue_existing, create, fresh, None).await
+    stage_task_delivery_with_receipt(txn, fire, continue_existing, false, create, fresh, None).await
 }
 
 async fn stage_task_delivery_with_receipt(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     fire: &gents_protocol::trigger_delivery::TriggerFire,
     continue_existing: bool,
+    create_session: bool,
     create: &gents_protocol::request_admission::AgentRequestCreate,
     fresh: bool,
     expected_event_source: Option<&serde_json::Value>,
@@ -1651,7 +1732,7 @@ async fn stage_task_delivery_with_receipt(
         );
         match &fire.goal_id {
             Some(goal_id) => {
-                crate::goal::validate_task_goal_identity_in_txn(
+                validate_task_goal_identity_in_txn(
                     txn,
                     &create.node_did,
                     &create.session_id,
@@ -1694,7 +1775,8 @@ async fn stage_task_delivery_with_receipt(
                 crate::triggers::engine::durable::resolve_session_id(
                     &fire.identity,
                     Some(&create.session_id),
-                    session.is_some()
+                    session.is_some(),
+                    create_session,
                 )
                 .is_some(),
                 "Task target session is missing or belongs to another owner"
@@ -1705,7 +1787,8 @@ async fn stage_task_delivery_with_receipt(
                     || crate::triggers::engine::durable::resolve_session_id(
                         &fire.identity,
                         None,
-                        false
+                        false,
+                        false,
                     )
                     .as_deref()
                         == Some(fire.session_id.as_str()),
@@ -1752,10 +1835,16 @@ async fn stage_task_delivery_with_receipt(
                 .await?;
         }
     }
-    let query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}) {{ {} }} }}",
-        escape_graphql_string(&fire.identity.owner_did), escape_graphql_string(&fire.request_id),
-        gents_protocol::row::AGENT_REQUEST_FIELDS);
-    let response = txn.execute(&query).await?;
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::owned(gents_protocol::row::AGENT_REQUEST_FIELDS))
+            .filter(Filter::eq(fields::NODE_DID, &fire.identity.owner_did))
+            .filter(Filter::eq(fields::REQUEST_ID, &fire.request_id))
+            .render()
+    };
+    let response = txn.run(&query).await?;
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(serde_json::Value::as_array)
@@ -1873,12 +1962,16 @@ async fn stage_task_delivery_with_receipt(
         )
         .await?
         .context("Task receipt session is unavailable")?;
-        let receipt = txn
-            .execute(&format!(
-                "{{ TriggerFire(filter: {{fire_key: {{_eq: \"{}\"}}}}, limit: 2) {{_docID}} }}",
-                escape_graphql_string(&fire.fire_key),
-            ))
-            .await?;
+        let query = {
+            use gents_protocol::document_query::{
+                fields::trigger_fire as fields, Filter, Query, Selection,
+            };
+            Query::select(Selection::doc_id())
+                .filter(Filter::eq(fields::FIRE_KEY, &fire.fire_key))
+                .limit(2)
+                .render()
+        };
+        let receipt = txn.run(&query).await?;
         let rows = receipt["data"]["TriggerFire"]
             .as_array()
             .context("Task receipt query omitted rows")?;
@@ -1995,6 +2088,156 @@ mod task_delivery_tests {
                 task_for_opening("1", "10", "20", &fires).map(|task| task.parse::<u64>().unwrap());
             assert_eq!(actual, case["task"].as_u64(), "{}", case["name"]);
         }
+    }
+
+    async fn keyed_delivery(
+        node: &std::sync::Arc<EmbeddedNode>,
+        owner: &str,
+        agent: &dyn crate::store::identity::NodeIdentity,
+        document: &str,
+        session: &str,
+        create_session: bool,
+    ) -> Result<TaskDeliveryAdmission> {
+        let identity = gents_protocol::trigger_delivery::FireIdentity {
+            owner_did: owner.to_owned(),
+            trigger_id: "player-red".to_owned(),
+            source_collection: "Schedule".to_owned(),
+            source_doc_id: document.to_owned(),
+        };
+        let fire = gents_protocol::trigger_delivery::TriggerFire {
+            fire_key: identity.fire_key(),
+            request_id: identity.request_id(),
+            session_id: session.to_owned(),
+            identity,
+            task_id: "play".to_owned(),
+            goal_id: None,
+            goal_objective: None,
+            goal_token_budget: None,
+            goal_assignment_applied: false,
+            emit_outcome: false,
+            queued_serial: false,
+            source_handoff_id: None,
+            reply_session_id: None,
+            shard_id: None,
+            attempt: None,
+            created_at: "2030-06-01T00:00:00Z".to_owned(),
+        };
+        let prepared = crate::triggers::engine::durable::PreparedFire {
+            receipt: fire.clone(),
+            target_existing: true,
+            create_session,
+            replace_prior: false,
+            event_source_generation: None,
+            max_fires_per_hour: crate::documents::DEFAULT_MAX_FIRES_PER_HOUR,
+        };
+        let spec = pending_agent_request_spec(
+            owner,
+            agent.did(),
+            "play",
+            crate::request::lifecycle::ExecutionOrigin::Scheduled,
+            crate::request::lifecycle::TriggerLineage {
+                trigger_id: Some("player-red".to_owned()),
+                trigger_kind: Some("schedule".to_owned()),
+                ..Default::default()
+            },
+            None,
+            None,
+            &fire.request_id,
+            session,
+            Some(&fire.fire_key),
+            None,
+            Some("player-red-document"),
+        )?;
+        let create = build_request(spec)?;
+        write_trigger_delivery_with_identity(
+            node,
+            ::identity::Did::new(agent.did()).unwrap(),
+            &prepared,
+            &create,
+            Some(agent),
+        )
+        .await
+    }
+
+    /// The claim owner runs for each request as its own committed transaction;
+    /// the unique `(node_did, session_id)` index resolves the race between them.
+    #[tokio::test]
+    async fn fires_for_one_key_admit_before_it_exists_and_share_one_session() {
+        let (db, _user, _user_access, binding) =
+            crate::test_support::signed_test_node("keyed-session-fires").await;
+        let agent =
+            crate::store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
+                .unwrap();
+        let owner = db.node_identity.did().to_owned();
+        let node = &db.node;
+        let key = "game:g1:red";
+        let (first, second, third) = tokio::join!(
+            keyed_delivery(node, &owner, agent.as_ref(), "turn-1", key, true),
+            keyed_delivery(node, &owner, agent.as_ref(), "turn-2", key, true),
+            keyed_delivery(node, &owner, agent.as_ref(), "turn-3", key, true),
+        );
+        let admissions = [first.unwrap(), second.unwrap(), third.unwrap()];
+        assert!(admissions
+            .iter()
+            .all(|admission| admission.request.session_id == key));
+
+        let refused = keyed_delivery(node, &owner, agent.as_ref(), "turn-4", "game:g2:red", false)
+            .await
+            .err()
+            .expect("a literal target without create_session still requires an owned session");
+        assert!(
+            format!("{refused:#}").contains("Task target session is missing"),
+            "{refused:#}"
+        );
+
+        let access = crate::ConfigAccess::local_managed_agent(
+            node.clone(),
+            agent.did().parse().unwrap(),
+            agent.as_ref(),
+        )
+        .unwrap();
+        let now = "2030-06-01T00:00:01Z";
+        let requests = admissions.iter().map(|admission| {
+            let doc = admission.request.doc_id.clone();
+            let access = &access;
+            async move {
+                access
+                    .transact_write("test.project_keyed_claim", |txn| {
+                        let doc = doc.clone();
+                        Box::pin(async move {
+                            let rows = txn
+                                .execute(&format!(
+                                    "{{AgentRequest(filter: {{_docID: {{_eq: \"{doc}\"}}}}) {{{}}}}}",
+                                    gents_protocol::request_admission::SIGNED_REQUEST_FIELDS
+                                ))
+                                .await?;
+                            let row: gents_protocol::row::AgentRequestRow =
+                                serde_json::from_value(rows["data"]["AgentRequest"][0].clone())?;
+                            let request = crate::AgentRequest::try_from(row)
+                                .map_err(anyhow::Error::msg)?;
+                            apply_request_session_projection(txn, &request, now).await
+                        })
+                    })
+                    .await
+            }
+        });
+        for result in futures::future::join_all(requests).await {
+            result.unwrap();
+        }
+
+        let sessions = access
+            .execute(&format!(
+                r#"{{ AgentSession(filter: {{session_id: {{_eq: "{key}"}}}}) {{ agent_did provenance }} }}"#
+            ))
+            .await
+            .unwrap();
+        let rows = sessions["data"]["AgentSession"].as_array().unwrap();
+        assert_eq!(rows.len(), 1, "one session per key: {rows:?}");
+        assert_eq!(rows[0]["agent_did"], agent.did());
+        assert_eq!(
+            rows[0]["provenance"]["task_id"], "play",
+            "AgentSession provenance names the Task from its fire receipt"
+        );
     }
 
     #[test]
@@ -2385,14 +2628,11 @@ mod task_delivery_tests {
             "mutation {{ update_AgentRequest(docID: \"{}\", input: {{ lifecycle_state: \"completed\" }}) {{ _docID }} }}",
             escape_graphql_string(&first.request.doc_id)
         )).await.unwrap();
-        let observed = crate::eval::runner::embedded::observe::poll_request_with_access(
-            &user_access,
-            &first.request.request_id,
-        )
-        .await
-        .unwrap()
-        .expect("the user can observe the completed Task request");
-        assert_eq!(observed.lifecycle_state.as_deref(), Some("completed"));
+        let observed = user_access.execute(&request_query).await.unwrap();
+        assert_eq!(
+            observed["data"]["AgentRequest"][0]["lifecycle_state"],
+            "completed"
+        );
         let session_doc = session["_docID"].as_str().unwrap();
         let trace = crate::lean_vocab_test::lean_contract_snapshot()
             .identity_publication_cases
@@ -2650,10 +2890,16 @@ async fn is_client_request_in_txn(
     txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request: &AgentRequest,
 ) -> Result<bool> {
-    let response = txn.execute(&format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ admission_kind }} }}"#,
-        escape_graphql_string(&request.doc_id),
-    )).await?;
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_request as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::new().field(fields::ADMISSION_KIND))
+            .filter(Filter::eq(fields::DOC_ID, &request.doc_id))
+            .limit(1)
+            .render()
+    };
+    let response = txn.run(&query).await?;
     let row = response
         .pointer("/data/AgentRequest/0")
         .context("session projection request disappeared")?;

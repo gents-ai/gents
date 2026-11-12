@@ -19,6 +19,8 @@ pub(crate) mod backend_credential;
 pub(crate) mod desired_state;
 pub(crate) mod event_consumer;
 mod pack_config;
+mod page;
+mod plugin_source;
 mod principal;
 mod references;
 mod schedule;
@@ -102,8 +104,8 @@ pub use surface_tool::{
 pub(crate) use surface_tool::{
     validate_datastore_surface, DatastoreSurfaceScope, DatastoreToolSource,
 };
+pub use tools::{consent_tool_calls, unwire_plugin, wire_plugin, write_tools_document, WireReport};
 pub use tools::{load_agent_context_and_tools_in_txn, load_agent_tools_in_txn};
-pub use tools::{unwire_plugin, wire_plugin, write_tools_document, WireReport};
 pub use tools::{
     AgentTools, BashTools, BuiltInTools, CliTool, DatastoreTools, FileTools, HostTools,
     IntegrationTools, LspTools, PluginToolRef, RemoteServiceTools, RemoteToolStyle, RemoteTools,
@@ -119,20 +121,31 @@ pub(crate) use write_tool::{reject_protected_collection_name, undeclared_field_r
 pub use agent_target::AgentTargetDocument;
 
 pub use datastore_tool_surface::{list_datastore_tool_surfaces, DatastoreToolSurfaceDocument};
+pub use page::{
+    is_snake_case_name, is_valid_ux_data_tool_name, list_pages, validate_ux_data, PageDocument,
+    UxDataSurface, MAX_PAGE_SOURCE_BYTES, MAX_UX_DATA_SURFACE_ID_LEN, PAGE_AREAS,
+};
+pub use plugin_source::{
+    PluginSourceCase, PluginSourceDocument, MAX_PLUGIN_SOURCE_BYTES, PLUGIN_SOURCE_NAMESPACE,
+};
 pub use skill::SkillDocument;
 
 #[cfg(test)]
 pub(crate) use event_trigger::count_trigger_cursor_batch_queries;
 #[allow(unused_imports)]
 pub(crate) use event_trigger::{
-    load_trigger_next_run_at_batch, update_trigger_runtime_fields, TriggerRuntimeUpdate,
-    TRIGGER_CURSOR_BATCH_SIZE,
+    load_trigger_next_run_at_batch, stop_trigger_for_budget, update_trigger_runtime_fields,
+    TriggerRuntimeUpdate, TRIGGER_CURSOR_BATCH_SIZE,
 };
 pub use event_trigger::{EventGroup, EventGroupCount, EventSource};
 pub use schedule::{Schedule, ScheduleCadence, ScheduleObservation};
 #[allow(unused_imports)]
 pub use task::{Task, TaskHook, TaskHookPhase};
-pub use trigger::{ConcurrencyMode, Trigger, TriggerObservation, TriggerSource};
+pub use trigger::{
+    ConcurrencyMode, Trigger, TriggerObservation, TriggerSource, BUDGET_EXHAUSTED_STATUS,
+    DEFAULT_MAX_FIRES_PER_HOUR,
+};
+pub mod trigger_explain;
 
 use anyhow::Result;
 use defra_node::Node as EmbeddedNode;

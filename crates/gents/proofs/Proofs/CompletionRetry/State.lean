@@ -4,6 +4,9 @@ namespace CompletionRetry
 
 inductive FailureClass
   | transport
+  /-- A successful provider response with no visible output is a sampling failure,
+  independent of transport and parse-error budgets. -/
+  | emptySample
   | parseBadRequest
   /-- The provider rejected replayed reasoning: a Claude thinking signature
   that no longer binds its prefix or cannot be verified, or Responses
@@ -46,6 +49,7 @@ def FailureOrigin.class : FailureOrigin → FailureClass
 structure Budget where
   transportRetries : Nat
   resampleRetries : Nat
+  emptyRetries : Nat := 1
   allowRepair : Bool
   /-- Other eligible accounts when the attempt was issued; one rotation each. -/
   accountHops : Nat := 0
@@ -76,6 +80,7 @@ structure State where
   budget : Budget
   transportUsed : Nat
   resampleUsed : Nat
+  emptyUsed : Nat := 0
   repairUsed : Bool
   /-- The forced overflow reduction is a one-shot capability per completion. -/
   compactUsed : Bool := false

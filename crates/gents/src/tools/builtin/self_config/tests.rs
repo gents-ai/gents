@@ -84,7 +84,10 @@ pub(super) fn config(categories: &[&str]) -> SelfConfigToolConfig {
         no_lockout: false,
         preview: false,
         enable_pack_install: false,
+        enable_pack_authority: false,
         process_ceiling: Default::default(),
+        selected_plugins: Vec::new(),
+        ceiling_plugins: None,
     }
 }
 
@@ -408,6 +411,8 @@ impl SelfConfigFixture {
     pub(super) fn schema_tool(&self) -> crate::tools::builtin::schema_help::SchemaTool {
         crate::tools::builtin::schema_help::SchemaTool::for_managed_agent(
             self.db.node.clone(),
+            self.db.node_identity.did(),
+            None,
             self.agent.as_ref(),
         )
         .unwrap()
@@ -634,7 +639,7 @@ impl SelfConfigFixture {
         self.tools_with_plugins(grants, test_plugins())
     }
 
-    fn tools_with_plugins(
+    pub(super) fn tools_with_plugins(
         &self,
         grants: &SelfConfigToolConfig,
         plugins: Arc<crate::plugin::executor::PluginExecutor>,
@@ -800,6 +805,8 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
         "automation",
         "datastore",
         "skill",
+        "page",
+        "plugin-source",
         "agent-target",
         "execution",
     ]
@@ -1309,19 +1316,11 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         .unwrap()
         .contains("could not be opened"));
     std::fs::write(installed_path, installed_bytes).unwrap();
-    // Retiring the pack's plugin needs a complete reference inventory, which
-    // document ACP never gives an Agent (`ensure_plugins_unreferenced`), so the
-    // removal is refused and the installation remains.
-    let refused = tool
-        .call(json!({"argv": ["pack", "remove", "fixture/plugin_documents_fixture"]}).to_string())
+    // Nothing that survives the removal selects the pack's plugin, so the
+    // pack is removed and its plugin retired (`ensure_plugins_unreferenced`).
+    tool.call(json!({"argv": ["pack", "remove", "fixture/plugin_documents_fixture"]}).to_string())
         .await
-        .expect_err("an Agent cannot retire a pack's plugins");
-    assert!(
-        refused.to_string().contains(
-            "plugin retirement requires a complete native configuration reference inventory"
-        ),
-        "{refused:#}"
-    );
+        .expect("an unselected plugin retires with its pack");
     let response = fixture
         .user_access
         .execute(&format!(
@@ -1335,7 +1334,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
             .as_array()
             .unwrap()
             .len(),
-        1
+        0
     );
 }
 
@@ -1364,6 +1363,38 @@ async fn config_call(
         .expect("config registered")
         .call(json!({ "argv": argv }).to_string())
         .await
+}
+
+/// A digest names a stored pack. One the store does not hold is answered
+/// with where a just-built pack is, not an OS error and a home path.
+#[tokio::test]
+async fn a_digest_the_store_does_not_hold_points_at_the_built_pack_file() {
+    let (home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
+    let (_fixture, tools) = signed_pack_tool("pack-absent-digest", plugins).await;
+    let absent = format!("sha256:{}", "ab".repeat(32));
+    for verb in ["update", "install"] {
+        let error = config_call(&tools, &["pack", verb, &absent, "--digest", &absent])
+            .await
+            .unwrap_err()
+            .to_string();
+        let failure: Value = serde_json::from_str(&error[error.find('{').unwrap()..]).unwrap();
+        let message = failure["error"].as_str().unwrap();
+        assert!(
+            message.contains("not in this node's pack store"),
+            "{failure}"
+        );
+        assert!(message.contains("./FILE.pack"), "{failure}");
+        assert!(!message.contains("os error"), "{failure}");
+        assert!(
+            !message.contains(home.path().to_str().unwrap()),
+            "{failure}"
+        );
+        assert_eq!(
+            failure["recovery"]["next_call"]["argv"],
+            json!(["pack", "list"]),
+            "{failure}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -1477,25 +1508,29 @@ async fn pack_install_refuses_a_pack_shipped_job_block() {
     pack_config["agent_targets"] = json!([{"target_id": "wf-run", "target_node_did": "did:key:foreign", "agent_did": "fixture-worker", "name": "wf-run"}]);
     std::fs::write(&config_path, serde_json::to_vec(&pack_config).unwrap()).unwrap();
     let (_home, plugins) = crate::test_support::home_with_pack_dir(&dir);
-    let (fixture, tools) = signed_pack_tool("pack-job-block", plugins).await;
+    let (fixture, tools) = signed_pack_tool("pack-job-block", plugins.clone()).await;
     let slot = format!("worker={}:inference", fixture.agent_did());
-    let error = format!(
-        "{:#}",
-        config_call(
-            &tools,
-            &[
-                "pack",
-                "preview",
-                "install",
-                "fixture/documents_fixture",
-                "--inference-slot",
-                &slot,
-            ],
-        )
-        .await
-        .unwrap_err()
-    );
+    let argv = [
+        "pack",
+        "preview",
+        "install",
+        "fixture/documents_fixture",
+        "--inference-slot",
+        &slot,
+    ];
+    let error = format!("{:#}", config_call(&tools, &argv).await.unwrap_err());
     assert!(error.contains("operator install"), "{error}");
+
+    // Under pack authority the block is judged as an operator install's: the
+    // refusal that remains is the plugin this fixture never installs.
+    let mut tool_config = config(&[]);
+    tool_config.agent_did = fixture.agent_did().to_owned();
+    tool_config.enable_pack_install = true;
+    tool_config.enable_pack_authority = true;
+    let tools = fixture.tools_with_plugins(&tool_config, plugins);
+    let error = format!("{:#}", config_call(&tools, &argv).await.unwrap_err());
+    assert!(!error.contains("operator install"), "{error}");
+    assert!(error.contains("acme/runner"), "{error}");
 }
 
 #[tokio::test]
@@ -2159,6 +2194,24 @@ async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
     .await
     .unwrap_err();
     assert!(denied.contains("file read permission"), "{denied}");
+    let unsupported = call_config_tool(
+        &denied_tools,
+        command(&[
+            "discovery",
+            "scan",
+            "--source",
+            "s",
+            "grok",
+            "user",
+            source.to_str().unwrap(),
+        ]),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        unsupported.contains("expected claude or codex"),
+        "{unsupported}"
+    );
 
     grants.process_ceiling = crate::tools::surface::SelfConfigProcessCeiling {
         file_mode: crate::tools::surface::FileToolMode::ReadOnly,
@@ -2508,7 +2561,7 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
         .await
         .unwrap();
     assert!(
-        create_help.starts_with("datastore:") && create_help.contains("create ID | update ID"),
+        create_help.starts_with("datastore create: "),
         "{create_help}"
     );
     assert!(
@@ -2817,6 +2870,8 @@ async fn outcome_schema_error_returns_an_executable_schema_recovery() {
     );
     let schema = crate::tools::builtin::schema_help::SchemaTool::for_managed_agent(
         fixture.db.node.clone(),
+        fixture.db.node_identity.did(),
+        None,
         fixture.agent.as_ref(),
     )
     .unwrap();
@@ -3481,10 +3536,18 @@ async fn config_targets_owned_working_agent_for_all_bound_documents() {
         help.contains("Fields of Tools:") && help.contains("agents"),
         "{help}"
     );
-    let shapes = call_config_tool(&tools, vec!["tools".into(), "edit".into(), "--help".into()])
-        .await
-        .unwrap();
-    assert!(shapes.contains("\"agents\":{\"enabled\""), "{shapes}");
+    let shapes = call_config_tool(
+        &tools,
+        vec![
+            "tools".into(),
+            "edit".into(),
+            "--help".into(),
+            "agents".into(),
+        ],
+    )
+    .await
+    .unwrap();
+    assert!(shapes.contains("Tools.agents: {\"enabled\""), "{shapes}");
     assert!(shapes.contains("target_ids"), "{shapes}");
 
     let mailbox_help = call_config_tool(
@@ -6873,6 +6936,163 @@ async fn pack_install_blocks_a_dependency_plugin_without_operator_authority() {
     );
 }
 
+/// Editing an installed document live and installing again is the agent's
+/// loop: the preview lists the edited documents and what each choice does,
+/// the refusal names the same call with the choice, and each choice does
+/// what the operator CLI's `--keep` and `--overwrite` do.
+#[tokio::test]
+async fn an_agent_decides_what_a_pack_does_with_documents_edited_live() {
+    let (_fixture, directory) =
+        crate::test_support::fixture_pack_copy("documents_fixture", &json!({}));
+    let manifest_path = directory.join("manifest.json");
+    let mut manifest: Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    manifest.as_object_mut().unwrap().remove("schemas");
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let (_home, plugins) = crate::test_support::home_with_pack_dir(&directory);
+    let (fixture, tools) = signed_pack_tool("pack-edited-documents", plugins).await;
+    let slot = format!("worker={}:inference", fixture.agent_did());
+    let pack = "fixture/documents_fixture";
+    let pinned = "fixture/documents_fixture@1.0.0";
+    async fn slotted(
+        tools: &[Box<dyn ToolDyn>],
+        slot: &str,
+        words: &[&str],
+    ) -> Result<String, crate::inference::llm::tool::ToolError> {
+        let mut argv = words.to_vec();
+        argv.extend(["--inference-slot", slot]);
+        config_call(tools, &argv).await
+    }
+    let json_of = |text: String| serde_json::from_str::<Value>(&text).unwrap();
+    let preview = json_of(
+        slotted(&tools, &slot, &["pack", "preview", "install", pack])
+            .await
+            .unwrap(),
+    );
+    let digest = preview["artifact_digest"].as_str().unwrap().to_owned();
+    assert_eq!(preview["edited_documents"], Value::Null, "{preview}");
+    slotted(
+        &tools,
+        &slot,
+        &["pack", "install", pack, "--digest", &digest],
+    )
+    .await
+    .unwrap();
+
+    let task_name = || async {
+        fixture
+            .user_access
+            .execute(r#"{ Task(filter: {task_id: {_eq: "fixture-worker-task"}}) { _docID display_name } }"#)
+            .await
+            .unwrap()["data"]["Task"][0]
+            .clone()
+    };
+    let doc = task_name().await["_docID"].as_str().unwrap().to_owned();
+    fixture
+        .user_access
+        .transact_write("test.pack.edit_task", |txn| {
+            let doc = &doc;
+            Box::pin(async move {
+                txn.execute_client_signed_update(
+                    &format!(r#"mutation($input: TaskMutationInputArg!) {{ update_Task(docID: "{doc}", input: $input) {{ _docID }} }}"#),
+                    &json!({"input": {"display_name": "edited live"}}),
+                    gents_protocol::schemas::TASK,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+
+    let preview = json_of(
+        slotted(&tools, &slot, &["pack", "preview", "update", pinned])
+            .await
+            .unwrap(),
+    );
+    let edited = &preview["edited_documents"];
+    assert_eq!(
+        edited["documents"],
+        json!(["Task/fixture-worker-task"]),
+        "{preview}"
+    );
+    assert!(
+        edited["keep"].as_str().unwrap().contains("as edited"),
+        "{preview}"
+    );
+    assert!(
+        edited["overwrite"]
+            .as_str()
+            .unwrap()
+            .contains("pack's versions"),
+        "{preview}"
+    );
+
+    let refused = slotted(
+        &tools,
+        &slot,
+        &["pack", "update", pinned, "--digest", &digest],
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    let refused = refused.strip_prefix("ToolCallError: ").unwrap_or(&refused);
+    let failure: Value = serde_json::from_str(&refused[refused.find('{').unwrap()..]).unwrap();
+    assert!(
+        failure["error"]
+            .as_str()
+            .unwrap()
+            .contains("Task/fixture-worker-task of fixture/documents_fixture were edited"),
+        "{failure}"
+    );
+    assert!(!refused.contains("operator CLI"), "{refused}");
+    let next = &failure["recovery"]["next_call"];
+    assert_eq!(next["options"]["edited"], "keep", "{failure}");
+    assert_eq!(next["argv"][1], "update", "{failure}");
+    assert_eq!(task_name().await["display_name"], "edited live");
+
+    let recover = |decision: &'static str| {
+        let tools = &tools;
+        let mut next = next.clone();
+        next["options"]["edited"] = json!(decision);
+        async move {
+            tools
+                .iter()
+                .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+                .unwrap()
+                .call(next.to_string())
+                .await
+                .unwrap_or_else(|error| panic!("{decision}: {error}"))
+        }
+    };
+    let kept = json_of(recover("keep").await);
+    assert_eq!(
+        kept["install"]["kept"],
+        json!(["Task/fixture-worker-task"]),
+        "{kept}"
+    );
+    assert_eq!(task_name().await["display_name"], "edited live");
+    recover("overwrite").await;
+    assert_eq!(task_name().await["display_name"], "fixture-worker-task");
+
+    let bad = config_call(&tools, &["pack", "remove", pack, "--edited", "maybe"])
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(bad.contains("overwrite") && bad.contains("keep"), "{bad}");
+    let removal = json_of(
+        config_call(&tools, &["pack", "preview", "remove", pack])
+            .await
+            .unwrap(),
+    );
+    assert_eq!(removal["committed"], false, "{removal}");
+    assert_eq!(removal["edited_documents"], Value::Null, "{removal}");
+    assert_eq!(
+        removal["apply_with"]["argv"],
+        json!(["pack", "remove", pack]),
+        "{removal}"
+    );
+}
+
 #[tokio::test]
 async fn pack_document_installation_uses_existing_lifecycle() {
     let (_fixture, directory) =
@@ -7012,6 +7232,95 @@ async fn pack_document_installation_uses_existing_lifecycle() {
             .unwrap()
             .is_none()
     );
+    let collection = || fixture.db.node.get_collection("FixtureJob").unwrap();
+    assert!(
+        collection().is_some(),
+        "remove keeps collections by default"
+    );
+
+    let install = [
+        "pack",
+        "install",
+        "fixture/documents_fixture",
+        "--digest",
+        digest,
+        "--inference-slot",
+        &slot,
+    ];
+    let with_collections = [
+        "pack",
+        "remove",
+        "fixture/documents_fixture",
+        "--with-collections",
+    ];
+    let admin =
+        crate::ConfigAccess::local_as(fixture.db.node.clone(), identity::Did::new(did).unwrap());
+    // A reinstall finds the collection the first install left behind. It did
+    // not create it, so removing the pack with its collections keeps it.
+    config_call(&tools, &install).await.unwrap();
+    let adopted: Value =
+        serde_json::from_str(&config_call(&tools, &with_collections).await.unwrap()).unwrap();
+    assert_eq!(adopted["collections"][0]["removed"], false, "{adopted}");
+    assert!(
+        adopted["collections"][0]["kept_for"][0]["user"]
+            .as_str()
+            .unwrap()
+            .contains("did not create it"),
+        "{adopted}"
+    );
+    assert!(collection().is_some());
+    let drop_collection = || async {
+        admin.truncate_collection("FixtureJob").await.unwrap();
+        admin
+            .remove_collections(&["FixtureJob".to_owned()])
+            .await
+            .unwrap();
+    };
+    drop_collection().await;
+
+    config_call(&tools, &install).await.unwrap();
+    admin
+        .write(
+            "pack_test.seed",
+            r#"mutation { create_FixtureJob(input:{job_id:"one"}) { _docID } }"#,
+        )
+        .await
+        .unwrap();
+    let denied = config_call(&tools, &with_collections).await.unwrap_err();
+    assert!(
+        denied
+            .to_string()
+            .contains("cleaning up its collections failed"),
+        "{denied}"
+    );
+    assert!(
+        collection().is_some(),
+        "the Agent's own DID lacks truncate-collection"
+    );
+    drop_collection().await;
+
+    admin
+        .grant_node_permission(
+            &identity::Did::new(fixture.agent_did()).unwrap(),
+            crate::store::config_client::NodePermission::CollectionTruncate,
+        )
+        .await
+        .unwrap();
+    config_call(&tools, &install).await.unwrap();
+    admin
+        .write(
+            "pack_test.seed",
+            r#"mutation { create_FixtureJob(input:{job_id:"one"}) { _docID } }"#,
+        )
+        .await
+        .unwrap();
+    let removed: Value =
+        serde_json::from_str(&config_call(&tools, &with_collections).await.unwrap()).unwrap();
+    assert_eq!(
+        removed["collections"],
+        json!([{"collection":"FixtureJob","removed":true,"documents_removed":1}])
+    );
+    assert!(collection().is_none());
 }
 
 async fn account_state_rows(fixture: &SelfConfigFixture) -> Value {
@@ -7812,6 +8121,7 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
     let holder = core.with_held_grants(ops::OperatorGrants {
         pack_install: true,
         policy: false,
+        pack_authority: false,
     });
     holder
         .apply(protect_working_agent(
@@ -7896,6 +8206,100 @@ async fn model_reselection_and_existing_sibling_grants_use_invoker_bounds() {
         ))
         .await;
     assert_eq!(preview.is_ok(), no_source_change, "{preview:?}");
+}
+
+/// `pack wire` writes the Tools and Context the agent selects, so it reaches
+/// every agent that selects them: with the pack grant alone it is refused for
+/// a Tools a sibling shares, as a Tools edit is, and the catalog grant wires
+/// it.
+#[tokio::test]
+async fn pack_wire_into_a_shared_tools_needs_the_catalog_grant() {
+    let (workspace, artifact, archive) =
+        crate::pack::plugin_lifecycle::tests::fixture("1.0.0", false);
+    let home = tempfile::tempdir().unwrap();
+    let plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
+        home.path().to_owned(),
+    )));
+    let fixture = SelfConfigFixture::new("shared-pack-wire").await;
+    fixture.grant_selected_configuration().await;
+    fixture.grant_pack_install().await;
+    // The sharing guard counts the referrers the caller can read.
+    fixture.grant_node_reader().await;
+    fixture.publish_workspace_root(workspace.path()).await;
+    let tools_for = |categories: &[&str]| {
+        let mut cfg = config(categories);
+        cfg.agent_did = fixture.agent_did().to_owned();
+        cfg.enable_pack_install = true;
+        cfg.process_ceiling.file_mode = crate::tools::surface::FileToolMode::ReadOnly;
+        cfg.process_ceiling.root = Some(workspace.path().to_owned());
+        fixture.tools_with_plugins(&cfg, plugins.clone())
+    };
+    let tools = tools_for(&["tools", "agent"]);
+    // Reading the local pack file takes the agent's own file tools.
+    tools
+        .iter()
+        .find(|tool| tool.name() == CONFIG_TOOL_NAME)
+        .unwrap()
+        .call(json!({"argv":["tools","update"],"set":{"host":{"root":workspace.path(),"files":{"mode":"ReadOnly"},"bash":{"mode":"Off"}}}}).to_string())
+        .await
+        .unwrap();
+    config_call(
+        &tools,
+        &[
+            "pack",
+            "install",
+            artifact.to_str().unwrap(),
+            "--digest",
+            archive.digest(),
+        ],
+    )
+    .await
+    .unwrap();
+
+    let sibling = fixture.install_sibling("sibling-agent").await;
+    let rows = fixture
+        .user_access
+        .execute(&format!(
+            r#"{{ AgentContext(filter: {{context_id: {{_eq: "{}:context"}}}}) {{ _docID }} }}"#,
+            crate::store::graphql::escape_graphql_string(&sibling)
+        ))
+        .await
+        .unwrap();
+    let doc = rows["data"]["AgentContext"][0]["_docID"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the sibling has a Context: {rows}"))
+        .to_owned();
+    let shared = format!("{}:tools", fixture.agent_did());
+    fixture
+        .user_access
+        .transact_write("test.pack_wire.share_tools", |txn| {
+            let (doc, shared) = (&doc, &shared);
+            Box::pin(async move {
+                txn.execute_client_signed_update(
+                    &format!(
+                        r#"mutation($input: AgentContextMutationInputArg!) {{ update_AgentContext(docID: "{}", input: $input) {{ _docID }} }}"#,
+                        crate::store::graphql::escape_graphql_string(doc)
+                    ),
+                    &json!({"input": {"tools_id": shared}}),
+                    gents_protocol::schemas::AGENT_CONTEXT,
+                )
+                .await
+            })
+        })
+        .await
+        .unwrap();
+
+    let wire = ["pack", "wire", "fixture/native_echo_pack"];
+    let refused = config_call(&tools, &wire).await.unwrap_err().to_string();
+    assert!(refused.contains("agent catalog grant"), "{refused}");
+    let unchanged = config_call(&tools, &["tools", "get"]).await.unwrap();
+    assert!(!unchanged.contains("native_echo"), "{unchanged}");
+
+    let catalog = tools_for(&["tools", "agent", "node"]);
+    let wired: Value = serde_json::from_str(&config_call(&catalog, &wire).await.unwrap()).unwrap();
+    assert_eq!(wired["committed"], true, "{wired}");
+    let selected = config_call(&catalog, &["tools", "get"]).await.unwrap();
+    assert!(selected.contains("fixture/native_echo"), "{selected}");
 }
 
 #[tokio::test]
@@ -8063,16 +8467,70 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
     )
     .unwrap();
     assert_eq!(status["installed"]["version"], "2.0.0");
+
+    // A rebuilt artifact meets the pin: the refusal is the Tools edit that
+    // moves it, and after that edit the same update goes through.
+    let (_rebuilt_dir, rebuilt_path, rebuilt) =
+        crate::pack::plugin_lifecycle::tests::fixture_with_output(
+            "3.0.0",
+            false,
+            br#"{"native_pack_echo":"rebuilt"}"#,
+        );
+    std::fs::copy(rebuilt_path, &artifact).unwrap();
+    let pinned = config_call(
+        &tools,
+        &["pack", "update", path, "--digest", rebuilt.digest()],
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    let failure: Value = serde_json::from_str(&pinned[pinned.find('{').unwrap()..]).unwrap();
+    let message = failure["error"].as_str().unwrap();
+    assert!(
+        message.contains("nothing was installed") && message.contains("fixture/native_echo"),
+        "{failure}"
+    );
+    let move_pin = &failure["recovery"]["next_call"];
+    assert_eq!(move_pin["argv"], json!(["tools", "update"]), "{failure}");
+    assert_eq!(
+        move_pin["set"]["integrations"]["lsp"]["timeout_secs"], 31,
+        "the pin move keeps the other integrations: {failure}"
+    );
+    assert_eq!(
+        crate::pack::read_home_install(home.path(), "fixture/native_echo_pack")
+            .unwrap()
+            .unwrap()
+            .version,
+        "2.0.0"
+    );
+    tool.call(move_pin.to_string()).await.unwrap();
+    config_call(
+        &tools,
+        &["pack", "update", path, "--digest", rebuilt.digest()],
+    )
+    .await
+    .unwrap();
+    let rebuilt_record =
+        crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap();
+    assert_eq!(
+        move_pin["set"]["integrations"]["plugins"][0]["digest"],
+        rebuilt_record.digest.as_str()
+    );
     let removal = config_call(&tools, &["pack", "remove", "fixture/native_echo_pack"])
         .await
         .unwrap_err()
         .to_string();
-    assert!(removal.contains("native removal"));
+    assert!(
+        removal.contains(
+            "fixture/native_echo_pack was not removed (fixture/native_echo): selected by"
+        ) && removal.contains(r#""argv":["pack","wire","fixture/native_echo_pack","--remove"]"#),
+        "{removal}"
+    );
     assert_eq!(
         crate::plugin::store::read_record(home.path(), "fixture", "native_echo")
             .unwrap()
             .version,
-        "2.0.0"
+        "3.0.0"
     );
 }
 
@@ -8648,6 +9106,12 @@ async fn pack_documents_install_refuses_non_default_account_inference_bindings()
     assert!(node.get_collection("FixtureJob").unwrap().is_some());
 }
 
+/// `GENTS_PLUGIN_BUILDER` is process-wide, so the tests that point it at a
+/// stub builder hold this for as long as their stub is the builder.
+static PLUGIN_BUILDER_STUB: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+mod live_documents;
+mod pack_authoring;
 /// Lean `SelfConfig.yoloGroup` and `Identity.GrantSets.yoloRecipient`: an
 /// Agent the User grants its own self-configuration edits its own Tools
 /// through the self-config tool, writes no other Agent's configuration, and

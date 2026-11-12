@@ -23,10 +23,10 @@ fn action_help(topic: Option<&str>) -> Result<&'static str> {
             r#"{"action":"search","query":"rollback decision","limit":10}. Query is required: literal case-insensitive substring of titles, IDs and reconstructed transcript text, not semantic or indexed retrieval. filter.text restricts title/ID, not transcript. Hits include physical message IDs and payload references. Use a shorter substring if no hits. Pass next_cursor as cursor with the same query and filter. Limit: 1–100. Use help topic=list for filters."#
         }
         Some("get") => {
-            r#"{"action":"get","session_id":"<ID>","details":true}. Session ID is required; discover it with list or search. details=true adds timeline, tool/token/context accounting and compaction observations."#
+            r#"{"action":"get","session_id":"<ID>"}. Session ID is required; discover it with list or search. Returns the session's identity, state and latest request. details=true adds the whole session document with its signed creation receipt, plus timeline, tool/token/context accounting and compaction observations."#
         }
         Some("transcript") => {
-            r#"{"action":"transcript","session_id":"<ID>","limit":6}. Session ID is required; discover it with list or search. Returns canonical text with physical message IDs and payload references, up to six messages and 8000 characters per chunk. Pass next_cursor as cursor with the same session_id to continue."#
+            r#"{"action":"transcript","session_id":"<ID>","limit":6}. Session ID is required; discover it with list or search. Returns canonical text by sequence and role, up to six messages and 8000 characters per chunk; text_offset and text_complete appear only on a split message. details=true adds physical message IDs and payload references. Pass next_cursor as cursor with the same session_id to continue."#
         }
         Some("output") => {
             r#"{"action":"output","call_id":"<call_id>"}. Returns a tool call's full stored output, including bytes trimmed from the model's view, 16000 bytes per page. call_id comes from a tool result or a [tool: …] stub; session_id defaults to the current session. Continue with the returned next_call: its offset_bytes and expected_hash keep pages from mixing output versions. If a call_id is ambiguous, pass the tool_call_doc_id the error lists."#
@@ -354,7 +354,10 @@ async fn execute(
             } else {
                 None
             };
-            return Ok(json!({"session":session,"details":details}));
+            return Ok(match details {
+                Some(details) => json!({"session":session,"details":details}),
+                None => json!({"session":session_summary(session)}),
+            });
         }
         return transcript(txn, agent, requester, id, args, limit).await;
     }
@@ -474,12 +477,34 @@ async fn execute(
     })
 }
 
+/// What a caller watching or locating a session reads: null fields and the
+/// signed creation receipt are left to `details: true`, which returns the
+/// document whole.
+fn session_summary(mut session: Value) -> Value {
+    if let Some(provenance) = session.get_mut("provenance").and_then(Value::as_object_mut) {
+        provenance.remove("creation_receipt");
+    }
+    fn drop_nulls(value: &mut Value) {
+        if let Value::Object(fields) = value {
+            fields.retain(|_, field| !field.is_null());
+            fields.values_mut().for_each(drop_nulls);
+        }
+    }
+    drop_nulls(&mut session);
+    session
+}
+
 async fn authorized_session(txn: &ConfigApplyTxn<'_>, id: &str) -> Result<Value> {
+    use gents_protocol::document_query::{
+        fields::agent_session as session_fields, Filter, Query, Selection,
+    };
     let mut session = rows(
-        txn.execute(&format!(
-            "{{AgentSession(filter: {{session_id: {{_eq: {}}}}}, limit: 2) {{{FIELDS}}}}}",
-            quoted(id)
-        ))
+        txn.run(
+            &Query::select(Selection::owned(FIELDS))
+                .filter(Filter::eq(session_fields::SESSION_ID, id))
+                .limit(2)
+                .render(),
+        )
         .await?,
         "AgentSession",
     )?;
@@ -694,7 +719,17 @@ async fn transcript(
             .collect();
         let consumed = offset.saturating_add(text.chars().count());
         let complete = presentation.body_markdown.chars().count() <= consumed;
-        messages.push(json!({"message_doc_id":header_id,"sequence":header.sequence,"role":presentation.role.label(),"text":text,"text_offset":offset,"text_complete":complete,"payload_references":header.payload_references()}));
+        let mut entry =
+            json!({"sequence":header.sequence,"role":presentation.role.label(),"text":text});
+        if offset != 0 || !complete {
+            entry["text_offset"] = json!(offset);
+            entry["text_complete"] = json!(complete);
+        }
+        if args.details {
+            entry["message_doc_id"] = json!(header_id);
+            entry["payload_references"] = json!(header.payload_references());
+        }
+        messages.push(entry);
         if !complete {
             next = Some(serde_json::to_string(&TranscriptCursor {
                 sequence: header.sequence,

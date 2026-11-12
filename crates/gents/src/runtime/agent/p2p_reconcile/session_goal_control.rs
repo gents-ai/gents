@@ -9,7 +9,6 @@ use gents_protocol::goal_control::{
 
 use super::session_commands::CommandRow;
 use crate::store::config_client::{ConfigAccess, IdempotentTransactionRetry};
-use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::NodeIdentity;
 
 pub(super) async fn has_verified_receipt(
@@ -115,6 +114,9 @@ async fn process_command_with_clock(
     agent_identity: &dyn NodeIdentity,
     clock: impl Fn() -> DateTime<Utc> + Send + Sync,
 ) -> Result<Option<DateTime<Utc>>> {
+    use gents_protocol::document_query::{
+        fields, Filter, Input, Query, QuerySet, Selection, Update,
+    };
     let actor = ::identity::Did::new(agent_identity.did())?;
     let access = ConfigAccess::local_managed_agent(node.clone(), actor.clone(), agent_identity)?;
     let (deferred, pending_receipt) = access.transact_idempotent(IdempotentTransactionRetry::Standard,
@@ -122,7 +124,26 @@ async fn process_command_with_clock(
         let clock = &clock;
         let actor = &actor;
         Box::pin(async move {
-            let response = txn.execute(&format!(r#"{{ AgentSessionGoalControl(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID command_id requester_did requester_peer_id node_did agent_did session_id session_doc_id intent_json }} AgentSessionGoalReceipt(filter: {{ command_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID receipt_json relationships_pending }} }}"#, escape_graphql_string(doc_id), escape_graphql_string(doc_id))).await?;
+            let control = Query::select(
+                Selection::doc_id()
+                    .field(fields::agent_session_goal_control::COMMAND_ID)
+                    .field(fields::agent_session_goal_control::REQUESTER_DID)
+                    .field(fields::agent_session_goal_control::REQUESTER_PEER_ID)
+                    .field(fields::agent_session_goal_control::NODE_DID)
+                    .field(fields::agent_session_goal_control::AGENT_DID)
+                    .field(fields::agent_session_goal_control::SESSION_ID)
+                    .field(fields::agent_session_goal_control::SESSION_DOC_ID)
+                    .field(fields::agent_session_goal_control::INTENT_JSON),
+            )
+            .filter(Filter::eq(fields::agent_session_goal_control::DOC_ID, doc_id));
+            let receipt = Query::select(
+                Selection::doc_id()
+                    .field(fields::agent_session_goal_receipt::RECEIPT_JSON)
+                    .field(fields::agent_session_goal_receipt::RELATIONSHIPS_PENDING),
+            )
+            .filter(Filter::eq(fields::agent_session_goal_receipt::COMMAND_DOC_ID, doc_id))
+            .limit(2);
+            let response = txn.run(&QuerySet::new().plain(&control).plain(&receipt).render()).await?;
             let rows: Vec<CommandRow> = serde_json::from_value(response["data"]["AgentSessionGoalControl"].clone())?;
             let [row] = rows.as_slice() else {
                 anyhow::ensure!(rows.is_empty(), "goal control command is ambiguous");
@@ -141,8 +162,10 @@ async fn process_command_with_clock(
             anyhow::ensure!(owner.as_str() == command.requester_did,
                 "goal command author differs from its native owner");
             crate::store::graphql::fence_arrivals(txn, "AgentSessionGoalControl").await?;
-            let twins = txn.execute(&format!(r#"{{ AgentSessionGoalControl(filter: {{ node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }} }}) {{ _docID command_id }} }}"#,
-                escape_graphql_string(&row.node_did), escape_graphql_string(&row.requester_did))).await?;
+            let twins = txn.run(&Query::select(Selection::doc_id().field(fields::agent_session_goal_control::COMMAND_ID))
+                .filter(Filter::eq(fields::agent_session_goal_control::NODE_DID, &row.node_did)
+                    .and(Filter::eq(fields::agent_session_goal_control::REQUESTER_DID, &row.requester_did)))
+                .render()).await?;
             let twins = twins["data"]["AgentSessionGoalControl"].as_array().context("missing goal command identity query")?;
             if twins.iter().any(|twin| twin["command_id"].as_str() == Some(command.command_id.as_str()) && twin["_docID"].as_str() != Some(row.doc_id.as_str())) {
                 tracing::debug!(command_doc_id = doc_id, command_id = %command.command_id, "goal control identity collides; leaving it unanswered");
@@ -180,8 +203,10 @@ async fn process_command_with_clock(
                 && session.session.agent_did == command.agent_did
                 && agent_doc == command.agent_doc_id;
             if session.doc_id.as_str() != session_doc.as_str() || agent_doc != command.agent_doc_id {
-                let targets = txn.execute(&format!(r#"{{ AgentSession(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID }} Agent(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID }} }}"#,
-                    escape_graphql_string(session_doc), escape_graphql_string(&command.agent_doc_id))).await?;
+                let targets = txn.run(&QuerySet::new()
+                    .plain(&Query::select(Selection::doc_id()).filter(Filter::eq(fields::agent_session::DOC_ID, session_doc)).limit(2))
+                    .plain(&Query::select(Selection::doc_id()).filter(Filter::eq(fields::agent::DOC_ID, &command.agent_doc_id)).limit(2))
+                    .render()).await?;
                 for (collection, expected) in [("AgentSession", session_doc), ("Agent", &command.agent_doc_id)] {
                     let rows = targets["data"][collection].as_array().context("goal target visibility query omitted rows")?;
                     if rows.len() != 1 || rows[0]["_docID"].as_str() != Some(expected.as_str()) {
@@ -261,10 +286,19 @@ async fn process_command_with_clock(
                 &::identity::Did::new(&requester_did)?,
             )
             .await?;
-        let updated = access.write("goal.receipt_relationships_published", &format!(
-            r#"mutation {{ update_AgentSessionGoalReceipt(docID: "{}", input: {{ relationships_pending: false }}) {{ _docID }} }}"#,
-            escape_graphql_string(&receipt_doc),
-        )).await?;
+        let updated = access
+            .write_rendered(
+                "goal.receipt_relationships_published",
+                &Update::doc(
+                    receipt_doc.as_str(),
+                    Input::new().set(
+                        fields::agent_session_goal_receipt::RELATIONSHIPS_PENDING,
+                        false,
+                    ),
+                )
+                .render(),
+            )
+            .await?;
         anyhow::ensure!(
             updated["data"]["update_AgentSessionGoalReceipt"]
                 .as_array()

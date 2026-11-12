@@ -45,6 +45,19 @@ impl From<DefraQueryParams> for QueryParams {
     }
 }
 
+/// The words a model reaches for when it wants to change a document.
+const WRITE_VERBS: [&str; 7] = [
+    "write", "create", "insert", "update", "delete", "mutate", "add",
+];
+
+/// The write verb `args` asks `query` for, which only reads.
+pub(super) fn write_verb(args: &QueryParams) -> Option<&str> {
+    args.argv
+        .first()
+        .map(String::as_str)
+        .filter(|verb| WRITE_VERBS.contains(verb))
+}
+
 pub fn query_help(command: Option<&str>) -> Result<&'static str> {
     match command {
         None => Ok("query reads documents. argv: [fields], [find], [count], [search], [explain], [help,COMMAND]. Supply collection. fields discovers names/types; find returns a bounded page; count aggregates all matching rows; search ranks keywords with BM25. Configuration uses config; schema definitions use schema."),

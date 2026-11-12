@@ -319,8 +319,6 @@ async fn prepare_inner(
     args.http_addr = Some(address);
     args.http_port = Some(port);
     args.no_keychain_prompts = !args.keychain_startup_approval;
-    args.no_codex_shim = true;
-    args.grok_shim = false;
     super::serve::serve_prepared(
         args,
         runtime,

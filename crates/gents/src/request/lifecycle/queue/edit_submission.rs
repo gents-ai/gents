@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::client_requester_scope;
 use crate::store::config_client::ConfigAccess;
 use crate::store::identity::NodeIdentity;
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
@@ -19,8 +20,7 @@ pub async fn submit_pending_user_edit(
     session_id: &str,
     edit: PendingQueueEdit,
 ) -> Result<SessionInputEditReceipt> {
-    let requester_did =
-        crate::session::client_requester_scope(access, node_did, session_id, signer.did()).await?;
+    let requester_did = client_requester_scope(access, node_did, session_id, signer.did()).await?;
     let replacements = super::prepare_pending_user_edit(
         access,
         signer,
@@ -62,8 +62,7 @@ pub async fn submit_pending_user_steer(
             }
         })
         .collect::<Vec<_>>();
-    let requester_did =
-        crate::session::client_requester_scope(access, node_did, session_id, signer.did()).await?;
+    let requester_did = client_requester_scope(access, node_did, session_id, signer.did()).await?;
     let replacements = super::management::prepare_pending_user_edit_with_deliveries(
         access,
         signer,
@@ -198,12 +197,16 @@ async fn answered(
     doc_id: &str,
     command: &SessionInputEdit,
 ) -> Result<SessionInputEditReceipt> {
-    let query = format!(
-        r#"{{ AgentSessionInputEdit(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ receipt_json }} }}"#,
-        escape_graphql_string(doc_id)
-    );
+    let query = {
+        use gents_protocol::document_query::{
+            fields::agent_session_input_edit as fields, Filter, Query, Selection,
+        };
+        Query::select(Selection::new().field(fields::RECEIPT_JSON))
+            .filter(Filter::eq(fields::DOC_ID, doc_id))
+            .render()
+    };
     loop {
-        let response = access.execute(&query).await?;
+        let response = access.read(&query).await?;
         let receipt = response["data"]["AgentSessionInputEdit"][0]["receipt_json"]
             .as_str()
             .and_then(|raw| serde_json::from_str::<SessionInputEditReceipt>(raw).ok())

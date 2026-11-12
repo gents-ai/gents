@@ -9,15 +9,18 @@ export interface UxDeclaredContributions {
 }
 
 export interface UxPluginListing {
-  /** `<name>` for a dev plugin, `<ns>/<pack>/<name>` for a pack one */
+  /** `<name>` for a dev plugin, `<ns>/<pack>/<name>` for a pack one,
+      `page/<page_id>` for a page document on the selected node */
   id: string;
-  door: "dev" | "pack";
+  door: "dev" | "pack" | "document";
   producer: "file" | "afb";
   file: string;
   pack?: string | null;
   description?: string | null;
   contributes?: UxDeclaredContributions | null;
   defaultEnabled?: boolean | null;
+  /** a page document's content digest: a changed digest is an edit */
+  digest?: string | null;
 }
 
 export interface UxPluginSource {

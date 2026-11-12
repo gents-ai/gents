@@ -2,6 +2,7 @@ use super::*;
 use anyhow::Context;
 use futures::FutureExt;
 use std::panic::AssertUnwindSafe;
+use std::sync::Arc;
 
 mod cancel;
 pub(super) mod finish;
@@ -183,15 +184,41 @@ impl DefraSessionHook {
         let mut lifecycle = match admission {
             Ok(lifecycle) => lifecycle,
             Err(error) => {
-                if let Some(capacity) = error.downcast_ref::<BackgroundCapacityExceeded>() {
-                    return complete_spawn_process_failure(
-                        self,
-                        &mut parent_lifecycle,
-                        FailureClass::ServiceUnavailable,
-                        background_budget_exceeded_payload(SPAWN_PROCESS_TOOL_NAME, capacity.0),
-                        None,
-                    )
-                    .await;
+                match error.downcast_ref::<BackgroundSlotRefusal>() {
+                    Some(BackgroundSlotRefusal::CapacityExceeded(admitted)) => {
+                        return complete_spawn_process_failure(
+                            self,
+                            &mut parent_lifecycle,
+                            FailureClass::ServiceUnavailable,
+                            background_budget_exceeded_payload(SPAWN_PROCESS_TOOL_NAME, *admitted),
+                            None,
+                        )
+                        .await;
+                    }
+                    // A script that outlived its request cannot start background
+                    // work; that is this child's failure, not the script's.
+                    Some(BackgroundSlotRefusal::RequestStopped)
+                        if parent_lifecycle.is_plugin_effect() =>
+                    {
+                        return complete_spawn_process_failure(
+                            self,
+                            &mut parent_lifecycle,
+                            FailureClass::ServiceUnavailable,
+                            json_string(json!({
+                                "ok": false,
+                                "failure_class": "service_unavailable",
+                                "code": "request_stopped",
+                                "path": "/",
+                                "message": "the request that started this script has stopped; a script can start a background process only while that request runs",
+                                "retryable": false,
+                                "service_id": "process",
+                                "tool_name": SPAWN_PROCESS_TOOL_NAME
+                            })),
+                            None,
+                        )
+                        .await;
+                    }
+                    _ => {}
                 }
                 return Err(error);
             }
@@ -211,6 +238,25 @@ impl DefraSessionHook {
             cancellation_token.clone(),
         )?;
         lifecycle.start_running().await?;
+
+        let composes = parent_lifecycle.spawns_composing_invocation();
+        let selected_tools = self.selected_loop_tools.lock().await.clone();
+        let dispatcher = if let Some(tools) = selected_tools.filter(|_| composes) {
+            let mut hook = self.clone();
+            let mut parents = rapidhash::RapidHashMap::default();
+            parents.insert(background_tool_call_id.clone(), lifecycle.clone());
+            hook.in_flight_lifecycles = Arc::new(tokio::sync::Mutex::new(parents));
+            hook.effect_tool_calls = Default::default();
+            hook.effect_lifecycles = Default::default();
+            Some(gents_loop::loop_stream::tool_effect_dispatcher(
+                tools,
+                Arc::new(hook),
+                background_tool_call_id.clone(),
+            ))
+        } else {
+            None
+        };
+        let stopped_children = dispatcher.clone();
 
         let node = self.node.clone();
         let live_outputs = self.background_live_outputs.clone();
@@ -288,7 +334,8 @@ impl DefraSessionHook {
                                         },
                                     ).await
                                 } else {
-                                    crate::tools::call::lifecycle::runtime::call_tool_managed(target_tool.as_ref(), target_args).await
+                                    gents_loop::tool_effects::scope(dispatcher,
+                                        crate::tools::call::lifecycle::runtime::call_tool_managed(target_tool.as_ref(), target_args)).await
                                 }
                             },
                         )
@@ -298,6 +345,18 @@ impl DefraSessionHook {
             ))
             .catch_unwind()
             .await;
+
+            // Cancellation, lifetime expiry and a guest failure all drop the
+            // in-flight child call, so its row is settled here, before the
+            // background owner publishes its own terminal.
+            if let Some(children) = stopped_children {
+                let panicked = crate::tools::call::lifecycle::ToolOutcome::Cancelled;
+                let stop = execution.as_ref().unwrap_or(&panicked);
+                if let Err(error) = children.settle_stopped(stop).await {
+                    tracing::warn!(%error, tool_call_id = %lifecycle.tool_call_id(),
+                        "background invocation left an unsettled child");
+                }
+            }
 
             finish_background_execution(
                 lifecycle,

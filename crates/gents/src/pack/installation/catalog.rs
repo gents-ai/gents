@@ -25,11 +25,23 @@ pub async fn installed_catalog(
     owner: &str,
     home: Option<&Path>,
 ) -> Result<BTreeMap<String, InstalledCatalogEntry>> {
+    use gents_protocol::document_query::{
+        fields::pack_installation as fields, Direction, Filter, Query, Selection,
+    };
     let mut installed = BTreeMap::new();
-    let response = access.execute(&format!(
-        r#"{{ PackInstallation(filter: {{ node_did: {{ _eq: "{}" }} }}, order: {{ coordinate: ASC }}) {{ coordinate version digest plugin_store source source_history }} }}"#,
-        crate::store::graphql::escape_graphql_string(owner)
-    )).await?;
+    let rendered = Query::select(
+        Selection::new()
+            .field(fields::COORDINATE)
+            .field(fields::VERSION)
+            .field(fields::DIGEST)
+            .field(fields::PLUGIN_STORE)
+            .field(fields::SOURCE)
+            .field(fields::SOURCE_HISTORY),
+    )
+    .filter(Filter::eq(fields::NODE_DID, owner))
+    .order_by(fields::COORDINATE, Direction::Asc)
+    .render();
+    let response = access.read(&rendered).await?;
     let records = response["data"]["PackInstallation"]
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("reading pack installation records"))?;

@@ -85,14 +85,16 @@ pub(crate) enum TaskHookOutcome {
     Success,
     Failure(HookPrimaryError),
     Interrupted,
+    Parked,
 }
 
 impl TaskHookOutcome {
-    pub(crate) fn terminal_outcome(&self) -> RequestTerminalOutcome {
+    pub(crate) fn terminal_outcome(&self) -> Option<RequestTerminalOutcome> {
         match self {
-            Self::Success => RequestTerminalOutcome::Completed,
-            Self::Failure(_) => RequestTerminalOutcome::Failed,
-            Self::Interrupted => RequestTerminalOutcome::Interrupted,
+            Self::Success => Some(RequestTerminalOutcome::Completed),
+            Self::Failure(_) => Some(RequestTerminalOutcome::Failed),
+            Self::Interrupted => Some(RequestTerminalOutcome::Interrupted),
+            Self::Parked => None,
         }
     }
 }
@@ -103,6 +105,7 @@ pub(crate) enum TaskAgentResult {
     Failure,
     Cancelled,
     Interrupted,
+    Parked,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -206,6 +209,7 @@ fn phase_outcome(attempts: &[HookAttempt]) -> TaskHookOutcome {
     }
 }
 
+#[cfg(test)]
 pub(crate) async fn run_task_hooks<Work, Fut>(
     hooks: &[TaskHook],
     exec: &dyn TaskHookExec,
@@ -215,8 +219,24 @@ where
     Work: FnOnce() -> Fut,
     Fut: std::future::Future<Output = TaskAgentResult>,
 {
+    run_task_hooks_with_before(hooks, exec, None, work).await
+}
+
+pub(crate) async fn run_task_hooks_with_before<Work, Fut>(
+    hooks: &[TaskHook],
+    exec: &dyn TaskHookExec,
+    recorded_before: Option<Vec<HookAttempt>>,
+    work: Work,
+) -> TaskHookRun
+where
+    Work: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = TaskAgentResult>,
+{
     let mut run = TaskHookRun {
-        before_attempted: run_phase(hooks, TaskHookPhase::Before, exec).await,
+        before_attempted: match recorded_before {
+            Some(attempts) => attempts,
+            None => run_phase(hooks, TaskHookPhase::Before, exec).await,
+        },
         ..Default::default()
     };
     let skipped = run
@@ -231,6 +251,7 @@ where
     if !skipped {
         match phase_outcome(&run.before_attempted) {
             TaskHookOutcome::Interrupted => run.outcome = TaskHookOutcome::Interrupted,
+            TaskHookOutcome::Parked => unreachable!("hook phase cannot park"),
             TaskHookOutcome::Failure(error) => {
                 run.outcome = TaskHookOutcome::Failure(error);
                 run.after_failure_attempted =
@@ -240,6 +261,10 @@ where
                 let agent = work().await;
                 run.agent_result = Some(agent);
                 match agent {
+                    TaskAgentResult::Parked => {
+                        run.outcome = TaskHookOutcome::Parked;
+                        return run;
+                    }
                     TaskAgentResult::Cancelled | TaskAgentResult::Interrupted => {
                         run.outcome = TaskHookOutcome::Interrupted
                     }
@@ -552,14 +577,15 @@ async fn load_fire_task_id(
     node_did: &str,
     request_id: &str,
 ) -> Result<Option<String>> {
-    let response = access.execute(
-        &format!(
-            r#"{{ TriggerFire(filter: {{ owner_did: {{ _eq: "{}" }}, request_id: {{ _eq: "{}" }} }}, limit: 2) {{ task_id }} }}"#,
-            escape_graphql_string(node_did),
-            escape_graphql_string(request_id),
-        ),
-    )
-    .await?;
+    use gents_protocol::document_query::{
+        fields::trigger_fire as fields, Filter, Query, Selection,
+    };
+    let query = Query::select(Selection::new().field(fields::TASK_ID))
+        .filter(Filter::eq(fields::OWNER_DID, node_did))
+        .filter(Filter::eq(fields::REQUEST_ID, request_id))
+        .limit(2)
+        .render();
+    let response = access.read(&query).await?;
     let rows: Vec<TaskIdRow> = serde_json::from_value(response["data"]["TriggerFire"].clone())?;
     anyhow::ensure!(
         rows.len() <= 1,
@@ -575,14 +601,13 @@ async fn load_trigger_task_id(
     node_did: &str,
     trigger_id: &str,
 ) -> Result<Option<String>> {
-    let response = access.execute(
-        &format!(
-            r#"{{ Trigger(filter: {{ node_did: {{ _eq: "{}" }}, trigger_id: {{ _eq: "{}" }} }}, limit: 2) {{ task_id }} }}"#,
-            escape_graphql_string(node_did),
-            escape_graphql_string(trigger_id),
-        ),
-    )
-    .await?;
+    use gents_protocol::document_query::{fields::trigger as fields, Filter, Query, Selection};
+    let query = Query::select(Selection::new().field(fields::TASK_ID))
+        .filter(Filter::eq(fields::NODE_DID, node_did))
+        .filter(Filter::eq(fields::TRIGGER_ID, trigger_id))
+        .limit(2)
+        .render();
+    let response = access.read(&query).await?;
     let rows: Vec<TaskIdRow> = serde_json::from_value(response["data"]["Trigger"].clone())?;
     anyhow::ensure!(
         rows.len() <= 1,

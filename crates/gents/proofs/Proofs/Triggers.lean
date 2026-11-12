@@ -9,3 +9,5 @@ import Proofs.Triggers.Groups
 import Proofs.Triggers.Durable
 import Proofs.Triggers.Refinement
 import Proofs.Triggers.NativeRoute
+import Proofs.Triggers.SessionKey
+import Proofs.Triggers.FireBudget

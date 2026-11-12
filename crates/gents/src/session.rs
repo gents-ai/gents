@@ -61,7 +61,7 @@ pub(crate) use history::load_history_with_access;
 pub use history::{load_history, sequence_message_key};
 pub(crate) use history::{
     load_sequenced_history_for_request, load_sequenced_history_projection_on,
-    retry_has_published_input,
+    resumed_request_has_published_input, retry_has_published_input,
 };
 pub(crate) use observations::load_latest_requests_in_txn;
 pub(crate) use observations::{
@@ -109,7 +109,7 @@ pub(crate) use sessions::{
     finalize_plugin_job_session_in_txn, finalize_reserved_runtime_session_in_txn,
     grant_created_session_relationships, max_sequence_as, reopen_session_in_txn,
     stage_agent_new_session_in_txn, stage_created_session_relationships_in_txn,
-    stage_plugin_job_session_in_txn, stage_session_relationships_in_txn, touch_session_in_txn,
+    stage_plugin_job_session_in_txn, touch_session_in_txn,
 };
 
 #[cfg(test)]
@@ -170,3 +170,5 @@ pub(crate) struct SequencedMessage {
 
 #[cfg(test)]
 mod user_title_tests;
+
+pub use sessions::stage_session_relationships_in_txn;

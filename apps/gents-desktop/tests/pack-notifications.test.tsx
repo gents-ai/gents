@@ -5,6 +5,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryNavProvider, useNav, type Nav } from "@gents/shell";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { notifierKey } from "@/contrib/activate";
 import { loadRuntimeUxPlugin, retireRuntimeUxPlugin } from "@/contrib/loader";
 import { parseNotificationKinds } from "@/contrib/notification-kinds";
 import { installUxHost, type UxHost, type UxNotifyCaller } from "@/contrib/plugin";
@@ -107,6 +108,22 @@ describe("the window that speaks for a plugin", () => {
     );
     expect(await speaksHere("board", "gents-view-1", open([]))).toBe(false);
     expect(await speaksHere("other", "main", open([own]))).toBe(true);
+  });
+});
+
+describe("what a plugin's notification switches are kept under", () => {
+  it("is a pack plugin's listing, and a home plugin's door and id", () => {
+    expect(notifierKey({ id: "board", door: "pack", pack: "acme/kit" })).toBe(
+      "acme/kit/board",
+    );
+    expect(notifierKey({ id: "board", door: "dev" })).toBe("dev:board");
+  });
+
+  it("is a page document's node and id, so two nodes' pages of one id keep their own switches", () => {
+    const on = (node: string) =>
+      notifierKey({ id: "board", door: "document", scope: `${node}/board` });
+    expect(on("did:key:a")).toBe("document:did:key:a/board");
+    expect(on("did:key:b")).not.toBe(on("did:key:a"));
   });
 });
 

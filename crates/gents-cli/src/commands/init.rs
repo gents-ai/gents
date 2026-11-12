@@ -6,7 +6,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use gents::documents::apply_desired_state_plan;
 use gents::documents::{
-    Agent, AgentContext, AgentTools, BackendAuth, BashTools, BuiltInTools,
+    Agent, AgentContext, AgentTargetDocument, AgentTools, BackendAuth, BashTools, BuiltInTools,
     DatastoreToolSurfaceDocument, DatastoreTools, FileTools, HostTools, InferenceBackend,
     InferenceExecution, InferenceSampling, SurfaceToolDecl, Tools,
 };
@@ -32,6 +32,7 @@ use crate::{
     BackendResolutionMode,
 };
 
+pub(crate) mod default_packs;
 mod model_choice;
 
 const STANDARD_READONLY_SYSTEM_PROMPT: &str = r#"You are a terminal-native engineering and operations agent running for the user inside a local DefraDB runtime.
@@ -61,6 +62,7 @@ You have write-capable local tools. When the user asks you to make a change, you
 For long-running commands such as builds, test suites, installs, servers, and log tails, prefer spawn_process with tool_name "bash_unrestricted" instead of shell backgrounding with "&". Use list_processes, read_process, wait_process, or cancel_process to inspect, finish, or stop backgrounded work."#;
 
 const ENGINEER_SYSTEM_PROMPT: &str = gents_protocol::ENGINEER_PROMPT;
+const ENGINEER_TARGET_ID: &str = "engineer";
 
 const YOLO_WARNING: &str = "\
 WARNING: --yolo bootstraps UNRESTRICTED tools. The agent can run any command\n\
@@ -353,7 +355,7 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
         .with_client_signing_capability(client_signing)?
         .with_client_signed_agent_creates(),
     );
-    let result = async {
+    let result: Result<Value> = async {
         gents::store::schema::migration::ensure_all_runtime_migrations(init_node.clone()).await?;
         gents::store::local::store_key::upgrade::finish(&data_dir)?;
         let binding = if fresh_store {
@@ -478,7 +480,28 @@ pub(crate) async fn init_home(mut args: InitArgs) -> Result<Value> {
     if let Err(error) = init_node.shutdown().await {
         tracing::warn!(error = %gents_protocol::error_chain::ErrorChain(&error), "failed to shut down embedded node");
     }
-    result
+    let mut output = result?;
+    // The pack installer opens the home itself, so the store claim and the
+    // node this init held are released first: the node's database lock goes
+    // with its last handle, not with its shutdown.
+    drop(access);
+    drop(held_store_access);
+    drop(init_node);
+    if args.engineer && fresh_store && !args.no_default_packs {
+        let engineer = output["default_agent_did"]
+            .as_str()
+            .context("init reports no default agent")?
+            .to_owned();
+        output["default_packs"] = default_packs::install(
+            &home_dir,
+            &engineer,
+            default_packs::ENGINEER_DEFAULT_PACKS,
+            None,
+            default_packs::Approval::resolve(args.approve_default_packs, !args.unattended),
+        )
+        .await;
+    }
+    Ok(output)
 }
 
 /// A consumed marker is never removed by ordinary initialization; an
@@ -610,10 +633,13 @@ async fn maybe_inline_grok_login(
             provider,
             label: None,
         },
+        crate::commands::grok_login::print_grok_sign_in_url,
+        &tokio_util::sync::CancellationToken::new(),
     )
     .await
     {
         Ok(outcome) => {
+            crate::commands::login_wait::print_sign_in_notes(&outcome.sign_in);
             if let Some(note) = added_account_note(&outcome.sign_in) {
                 eprintln!("{note}");
             }
@@ -687,10 +713,13 @@ async fn maybe_inline_claude_login(
             client_id: None,
             token_url: None,
         },
+        |url| eprintln!("Open this URL to sign in with Claude:\n{url}"),
+        &tokio_util::sync::CancellationToken::new(),
     )
     .await
     {
         Ok(outcome) => {
+            crate::commands::login_wait::print_sign_in_notes(&outcome.sign_in);
             if let Some(note) = added_account_note(&outcome.sign_in) {
                 eprintln!("{note}");
             }
@@ -742,10 +771,13 @@ async fn maybe_inline_codex_login(
             issuer: None,
             device_auth: false,
         },
+        |url| eprintln!("Open this URL to sign in with ChatGPT:\n{url}"),
+        &tokio_util::sync::CancellationToken::new(),
     )
     .await
     {
         Ok(outcome) => {
+            crate::commands::login_wait::print_sign_in_notes(&outcome.sign_in);
             if let Some(note) = added_account_note(&outcome.sign_in) {
                 eprintln!("{note}");
             }
@@ -1188,9 +1220,14 @@ async fn initialize_runtime_home(
         args.defra_query_collections.clone(),
     );
     tools.self_config = Some(engineer_self_config());
-    let engineer_mailbox = args
-        .engineer
-        .then(|| engineer_tools(&mut tools, node_did, !args.disable_defra_query));
+    let engineer_documents = args.engineer.then(|| {
+        engineer_tools(
+            &mut tools,
+            node_did,
+            &default_agent_did,
+            !args.disable_defra_query,
+        )
+    });
     let context = AgentContext {
         context_id: default_context_id_for_agent(&default_agent_did),
         node_did: node_did.to_string(),
@@ -1246,7 +1283,10 @@ async fn initialize_runtime_home(
             "Default".to_string()
         }),
         description: if args.engineer {
-            Some("Walks you through configuring Gents for the work you want to do.".to_string())
+            Some(
+                "Builds what you need on this node: apps, automations and teams of agents."
+                    .to_string(),
+            )
         } else {
             None
         },
@@ -1289,8 +1329,9 @@ async fn initialize_runtime_home(
         replacement(Collection::Agent, &agent)?,
         replacement(Collection::Tools, &wide_open_tools_document(node_did))?,
     ]);
-    if let Some(surface) = &engineer_mailbox {
+    if let Some((surface, own_target)) = &engineer_documents {
         documents.push(replacement(Collection::DatastoreToolSurface, surface)?);
+        documents.push(replacement(Collection::AgentTarget, own_target)?);
     }
     publish_home_config(
         access,
@@ -1507,11 +1548,21 @@ fn wide_open_tools_document(node_did: &str) -> Tools {
 fn engineer_tools(
     tools: &mut Tools,
     node_did: &str,
+    agent_did: &str,
     enable_defra_query: bool,
-) -> DatastoreToolSurfaceDocument {
+) -> (DatastoreToolSurfaceDocument, AgentTargetDocument) {
     let surface_id = "engineer-mailbox".to_string();
+    let own_target = AgentTargetDocument {
+        target_id: ENGINEER_TARGET_ID.to_string(),
+        node_did: node_did.to_string(),
+        target_node_did: node_did.to_string(),
+        agent_did: agent_did.to_string(),
+        name: ENGINEER_TARGET_ID.to_string(),
+        description: Some("Start another session of this Engineer.".to_string()),
+        tags: Vec::new(),
+    };
     tools.agents = Some(AgentTools {
-        target_ids: Vec::new(),
+        target_ids: vec![own_target.target_id.clone()],
         enabled: Some(true),
     });
     let built_ins = tools.built_ins.get_or_insert_with(Default::default);
@@ -1522,7 +1573,7 @@ fn engineer_tools(
     let datastore = tools.datastore.get_or_insert_with(Default::default);
     datastore.enable_defra_query = Some(enable_defra_query);
     datastore.datastore_tool_surface_ids = Some(vec![surface_id.clone()]);
-    DatastoreToolSurfaceDocument {
+    let surface = DatastoreToolSurfaceDocument {
         surface_id,
         node_did: node_did.to_string(),
         display_name: Some("Engineer escalations".to_string()),
@@ -1532,7 +1583,8 @@ fn engineer_tools(
         )]),
         created_at: None,
         tags: Vec::new(),
-    }
+    };
+    (surface, own_target)
 }
 
 fn wide_open_tools_id_for_node(node_did: &str) -> String {
@@ -1714,18 +1766,18 @@ fn init_next_steps(
     {
         steps.push("gents accounts login claude".to_string());
     }
+    let home = crate::shell_word(home);
     if summary.model_name.is_empty() {
-        steps.push(
-            "Select a provider and model in Gents settings before starting work.".to_string(),
-        );
+        steps.push(format!(
+            "No model is selected yet, so the Engineer cannot answer. Run `gents --home {home}` in a terminal to connect one, or use the desktop's Providers settings."
+        ));
     } else if is_probably_ollama_endpoint(&summary.endpoint) {
         steps.push(format!("ollama pull {}", summary.model_name));
     } else if is_probably_llama_server_endpoint(&summary.endpoint) {
         steps.push(format!("llama-server -hf {}", summary.model_name));
     }
     steps.push("gents runtime server".to_string());
-    steps.push("gents codex".to_string());
-    let home = crate::shell_word(home);
+    steps.push("gents".to_string());
     steps.push(format!(
         "To change the model's address, save the output of `gents config backend show {} --home {home}` without its `_docID`, edit `endpoint`, and load it with `gents config backend set --file <backend.json> --home {home}`.",
         summary.backend_id
@@ -1799,7 +1851,7 @@ mod inference_seed_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::eval::runner::embedded::EmbeddedHome;
+    use gents::runtime::embedded::EmbeddedHome;
 
     #[tokio::test]
     async fn an_identity_only_home_protects_its_fresh_store_for_later_openers() {
@@ -2250,7 +2302,27 @@ mod tests {
             .find(|resolved| resolved.agent_did == summary.default_agent_did)
             .expect("init default agent resolves")
             .tools
-            .explain_with_runtime(false, &owner, &Default::default())
+            .explain_with_runtime(
+                false,
+                &owner,
+                &std::iter::once(summary.default_agent_did.clone()).collect(),
+            )
+    }
+
+    #[tokio::test]
+    async fn a_fresh_engineer_can_start_its_own_agent() {
+        let engineer = explain_initialized_default_agent(true).await;
+        assert!(
+            engineer.tool_names.iter().any(|name| name == "agent_new"),
+            "{:?}",
+            engineer.tool_names
+        );
+        let other = explain_initialized_default_agent(false).await;
+        assert!(
+            !other.tool_names.iter().any(|name| name == "agent_new"),
+            "{:?}",
+            other.tool_names
+        );
     }
 
     #[tokio::test]
@@ -2841,6 +2913,9 @@ mod tests {
             disable_defra_query: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
+            approve_default_packs: false,
+            no_default_packs: true,
+            unattended: false,
         }
     }
 }

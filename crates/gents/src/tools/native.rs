@@ -17,7 +17,9 @@ pub(crate) use file_tools::file_contents;
 mod goal;
 pub(crate) mod lsp;
 mod native_runner;
+mod plugin_build;
 pub use native_runner::enable_self_runner;
+pub use plugin_build::{run_plugin_build, PluginBuildOutcome, PLUGIN_BUILD_COMMAND};
 pub(crate) mod session_history;
 mod title_audit_usage;
 pub(crate) use title_audit_usage::load_parent_inclusive_budget_usage;
@@ -87,14 +89,11 @@ pub use lsp::{
     result_path_matches, LspAction, LspMutationSource,
 };
 pub use session_history::{
-    build_session_history_tool, load_latest_session_context_calls,
-    load_pinned_request_context_observation, load_request_context_observation,
-    load_session_context_details, load_session_history_snapshot,
-    load_session_history_snapshot_with_access, load_session_inference_observation,
-    load_session_investigation, load_session_request_doc_ids, RequestContextObservation,
-    SessionCompactionEvent, SessionContextDetails, SessionHistoryRow, SessionHistorySnapshot,
-    SessionInferenceObservation, SessionInvestigationSnapshot, SessionRequestEvent,
-    SessionTokenUsage, SessionToolCallStats, SESSION_HISTORY_TOOL_NAME,
+    build_session_history_tool, load_latest_session_context_calls, load_session_context_details,
+    load_session_history_snapshot, load_session_history_snapshot_with_access,
+    load_session_investigation, SessionCompactionEvent, SessionContextDetails, SessionHistoryRow,
+    SessionHistorySnapshot, SessionInvestigationSnapshot, SessionRequestEvent,
+    SessionToolCallStats, SESSION_HISTORY_TOOL_NAME,
 };
 #[cfg(test)]
 pub(crate) use shared::apply_workspace_authority;

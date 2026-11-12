@@ -17,6 +17,7 @@ Do not duplicate changing versions in instructions.
 | --- | --- |
 | Runtime documents, admission, tasks and recovery | `crates/gents/src/` |
 | Provider turn execution and input assembly | `crates/gents-loop/src/` |
+| Eval and optimization drivers | `crates/gents-eval/` |
 | Canonical wire types and database vocabulary | `crates/gents-protocol/`, `crates/gents-schemas/` |
 | Executable models and model-driven contracts | `crates/gents/proofs/`, `crates/gents-lean-contract/` |
 | CLI and installed editor helpers | `crates/gents-cli/`, `crates/gents-client-host/`, `crates/gents-media-host/` |
@@ -288,6 +289,7 @@ edit. Recheck when the source, dependency inputs or a concrete failure warrants
 it. Keep test, browser and installed-editor evidence distinct.
 
 Before pushing native implementation changes, run `cargo test -p gents`,
+`make test-eval-drivers` (`cargo test -p gents-eval`),
 `cargo check --workspace --all-targets` and `make lint` (clippy, `-D warnings`).
 Run `lake build` for proof changes and the relevant CLI or desktop suites for
 affected consumers. The named intentionally red specification layers above

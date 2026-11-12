@@ -9,24 +9,20 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{bail, ensure, Context, Result};
-use futures_util::{SinkExt, StreamExt};
 use portable_pty::{CommandBuilder, MasterPty, PtySize};
-use serde_json::{json, Value};
-use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-use tokio_tungstenite::tungstenite::Message;
+use serde_json::Value;
 
 pub(super) const HTTP_PORT: u16 = 21919;
-pub(super) const SHIM_PORT: u16 = 21929;
 pub(super) const NO_MODEL_ENDPOINT: &str = "http://127.0.0.1:9/v1";
 pub(super) const NO_MODEL_NAME: &str = "no-model";
-pub(super) const MISSING_BIN: &str = "/nonexistent/gents-live-interface";
-pub(super) const INSTALL_MESSAGE: &str = "Codex was not found";
+/// The built-in shell turns on mouse capture once raw mode and the alternate screen are on.
+pub(super) const SHELL_UP: &str = "\x1b[?1006h";
 /// Longer than the 60 s `gents` itself waits for the endpoint.
 pub(super) const RUNTIME_UP: Duration = Duration::from_secs(90);
 pub(super) const EXIT: Duration = Duration::from_secs(10);
 pub(super) const PROMPT: Duration = Duration::from_secs(30);
 pub(super) const TURN: Duration = Duration::from_secs(240);
-pub(super) const FOLDER_QUESTION: &str = "Data folder [";
+pub(super) const FOLDER_QUESTION: &str = "Gents home [";
 pub(super) const INFERENCE_QUESTION: &str = "Choose an inference provider";
 /// The answer to `INFERENCE_QUESTION` that picks a local server.
 pub(super) const LOCAL_PROVIDER: &str = "4";
@@ -38,9 +34,6 @@ pub(super) const ROOT_QUESTION: &str = "Which folder should agents work in?";
 /// A relative answer to `ROOT_QUESTION`, because every test's terminal starts in its
 /// temporary `HOME`. `LiveBox::new` creates it.
 pub(super) const WORK_FOLDER: &str = "work";
-pub(super) const ENDPOINT_TEXT: &str = "127.0.0.1:21929";
-pub(super) const OPENS_THREAD: Duration = Duration::from_secs(60);
-pub(super) const OUTSIDE_THE_ROOT_TEXT: &str = "the thread will use";
 
 /// One test's temporary user. Owns the launchd job from the moment it exists,
 /// and every refusal happens before that, so `Drop` never removes a job this
@@ -55,9 +48,7 @@ pub(super) struct LiveBox {
 
 pub(super) struct InitializedHome {
     pub(super) home: PathBuf,
-    pub(super) node_did: String,
     pub(super) default_agent_did: String,
-    pub(super) profile_id: String,
 }
 
 fn job_loaded(target: &str) -> Result<bool> {
@@ -111,23 +102,12 @@ impl LiveBox {
             !job_loaded(&target)?,
             "{label} is already loaded; run `launchctl bootout {target}`"
         );
-        for port in [HTTP_PORT, SHIM_PORT] {
-            ensure!(
-                std::net::TcpListener::bind(("127.0.0.1", port)).is_ok(),
-                "port {port} is in use; if a killed run left it, run `launchctl bootout {target}`"
-            );
-        }
+        ensure!(
+            std::net::TcpListener::bind(("127.0.0.1", HTTP_PORT)).is_ok(),
+            "port {HTTP_PORT} is in use; if a killed run left it, run `launchctl bootout {target}`"
+        );
 
         fs::create_dir(root.join(WORK_FOLDER))?;
-        let codex_home = root.join("codex-home");
-        fs::create_dir_all(&codex_home)?;
-        // The first window caches the release it saw, and the next one would stop
-        // at Codex's update screen before opening a thread.
-        fs::write(
-            codex_home.join("config.toml"),
-            "# Existing user Codex config should remain client-side.\n\
-             check_for_update_on_startup = false\n",
-        )?;
         Ok(Self {
             _temp: temp,
             root,
@@ -146,14 +126,12 @@ impl LiveBox {
         command
             .current_dir(&self.root)
             .env("HOME", &self.root)
-            .env("CODEX_HOME", self.root.join("codex-home"))
             .env("TERM", "xterm-256color")
             .env("RUST_LOG", "error")
+            .env("GENTS_REGISTRY", "http://127.0.0.1:9")
             .env_remove("GENTS_HOME")
             .env_remove("XDG_CONFIG_HOME")
             .env_remove("XDG_RUNTIME_DIR")
-            .env_remove("GENTS_CODEX_BIN")
-            .env_remove("GENTS_GROK_BIN")
             .env_remove("INFERENCE_ENDPOINT");
         command
     }
@@ -174,11 +152,9 @@ impl LiveBox {
     }
 
     /// Bare `gents` choosing file store-key custody, as it would on a first run.
-    pub(super) fn first_run(&self, interface: &str) -> Command {
+    pub(super) fn first_run(&self) -> Command {
         let mut command = self.gents();
-        command
-            .env("GENTS_CODEX_BIN", interface)
-            .args(["--store-key-custody", "file"]);
+        command.args(["--store-key-custody", "file"]);
         command
     }
 
@@ -204,101 +180,24 @@ impl LiveBox {
         let init: Value = serde_json::from_slice(&output.stdout)?;
         Ok(InitializedHome {
             home,
-            node_did: node_did_from_init(&init)?,
             default_agent_did: init["default_agent_did"]
                 .as_str()
                 .context("init reports a default agent")?
                 .to_string(),
-            profile_id: init["inference_profile_id"]
-                .as_str()
-                .context("init reports an inference profile")?
-                .to_string(),
         })
     }
 
-    /// Clones `home`'s default agent, with no restart, and waits for its publish.
-    pub(super) async fn clone_agent(
-        &self,
-        home: &InitializedHome,
-        display_name: &str,
-    ) -> Result<String> {
-        let output = self
-            .gents()
-            .args([
-                "config",
-                "agent",
-                "clone",
-                &home.default_agent_did,
-                "--home",
-            ])
-            .arg(&home.home)
-            .args(["--graphql", &graphql_url(HTTP_PORT)])
-            .args(["--display-name", display_name])
-            .args(["--profile-id", &home.profile_id])
-            .output()
-            .context("running gents config agent clone")?;
-        ensure!(
-            output.status.success(),
-            "gents config agent clone failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let cloned: Value = serde_json::from_slice(&output.stdout)?;
-        let agent = cloned["agent_did"]
-            .as_str()
-            .context("clone reports its agent")?
-            .to_string();
-        let deadline = Instant::now() + PROMPT;
-        loop {
-            let runtime: Value = reqwest::Client::builder()
-                .no_proxy()
-                .build()?
-                .get(format!("http://127.0.0.1:{SHIM_PORT}/runtime"))
-                .send()
-                .await?
-                .error_for_status()?
-                .json()
-                .await?;
-            if runtime["runnable_agents"]
-                .as_array()
-                .is_some_and(|agents| agents.iter().any(|listed| listed == &agent))
-            {
-                return Ok(agent);
-            }
-            ensure!(
-                Instant::now() < deadline,
-                "{agent} was never published: {runtime}"
-            );
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        }
-    }
-
-    /// `gents --home <home>`, opening `interface` as its Codex binary.
-    pub(super) fn bare_gents(&self, interface: &str, home: &Path) -> Command {
+    /// `gents --home <home>`.
+    pub(super) fn bare_gents(&self, home: &Path) -> Command {
         let mut command = self.gents();
-        command
-            .env("GENTS_CODEX_BIN", interface)
-            .arg("--home")
-            .arg(home);
+        command.arg("--home").arg(home);
         command
     }
 
-    /// `gents --home <home>`, opening `interface` as its Grok binary.
-    pub(super) fn bare_gents_grok(&self, interface: &str, home: &Path) -> Command {
-        let mut command = self.gents();
-        command
-            .env("GENTS_GROK_BIN", interface)
-            .arg("--home")
-            .arg(home);
-        command
-    }
-
-    /// Brings up `home`'s service through bare `gents`, which then stops at the
-    /// missing interface.
+    /// Brings up `home`'s service through bare `gents`, then quits the shell it opens.
     pub(super) async fn bring_up(&self, home: &Path) -> Result<()> {
-        let mut terminal =
-            Terminal::spawn(&self.bare_gents(MISSING_BIN, home), &self.log("bring-up"))?;
-        terminal.expect(INSTALL_MESSAGE, RUNTIME_UP).await?;
-        terminal.expect_exit(1).await
+        let mut terminal = Terminal::spawn(&self.bare_gents(home), &self.log("bring-up"))?;
+        terminal.quit_shell().await
     }
 
     pub(super) fn gents_ok(&self, args: &[&str]) -> Result<()> {
@@ -369,7 +268,7 @@ impl Drop for LiveBox {
     }
 }
 
-/// The five queries `write_expect_smoke` answers for Codex's terminal startup.
+/// The five queries `write_expect_smoke` answers for a terminal UI's startup.
 const TERMINAL_QUERIES: [(&[u8], &[u8]); 5] = [
     (b"\x1b[6n", b"\x1b[24;1R"),
     (b"\x1b[?u", b"\x1b[?0u"),
@@ -570,19 +469,12 @@ impl Terminal {
         }
     }
 
-    /// Returns once the interface has stopped drawing for a moment, or after `PROMPT`
-    /// if it never does. The outcome a caller asserts is what counts.
-    pub(super) async fn settle(&self) {
-        let deadline = Instant::now() + PROMPT;
-        let mut seen = self.transcript.lock().expect("transcript lock").len();
-        while Instant::now() < deadline {
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            let now = self.transcript.lock().expect("transcript lock").len();
-            if now > 0 && now == seen {
-                return;
-            }
-            seen = now;
-        }
+    /// Bare `gents` opens the built-in shell once setup finishes; ctrl-c twice quits it in
+    /// every key set.
+    pub(super) async fn quit_shell(&mut self) -> Result<()> {
+        self.expect(SHELL_UP, RUNTIME_UP).await?;
+        self.send("\x03\x03")?;
+        self.expect_exit(0).await
     }
 
     pub(super) async fn expect_exit(&mut self, code: u32) -> Result<()> {
@@ -598,8 +490,7 @@ impl Terminal {
 
 impl Drop for Terminal {
     /// The child leads its PTY session, so its group also holds the interface `gents`
-    /// started. Real Grok still running when its runtime stops starts a detached stock
-    /// leader on the socket, so the interface must be gone before `LiveBox` stops it.
+    /// started.
     fn drop(&mut self) {
         // A reaped child's group may no longer be ours to signal. Until it is reaped, its
         // PID and so its group stay reserved.
@@ -634,114 +525,9 @@ pub(super) async fn live_model() -> Result<(String, String)> {
     Ok((endpoint, model))
 }
 
-/// The installed interface, or `None` after printing that the test is skipped.
-pub(super) fn real_interface(name: &str) -> Option<PathBuf> {
-    let found = std::env::split_paths(&std::env::var_os("PATH")?)
-        .map(|directory| directory.join(name))
-        .find(|candidate| candidate.is_file());
-    if found.is_none() {
-        eprintln!("skipped: {name} is not installed");
-    }
-    found
-}
-
 pub(super) fn node_did_of(home: &Path) -> Result<String> {
     read_json_file(&home.join("init.json"))?["node_did"]
         .as_str()
         .map(str::to_string)
         .context("init.json names a node DID")
-}
-
-/// A new connection each call, as a client that just started would make.
-pub(super) async fn shim_call(route: &str, method: &str, params: Value) -> Result<Value> {
-    let url = format!("ws://127.0.0.1:{SHIM_PORT}{route}");
-    let (mut socket, _) = tokio_tungstenite::connect_async(url.as_str())
-        .await
-        .with_context(|| format!("connecting to {url}"))?;
-    for message in [
-        json!({
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "clientInfo": {"name": "cli-onboarding-live", "title": null, "version": "0"},
-                "capabilities": null,
-            },
-        }),
-        json!({"method": "initialized"}),
-        json!({"id": 2, "method": method, "params": params}),
-    ] {
-        socket
-            .send(Message::Text(message.to_string().into()))
-            .await?;
-    }
-    while let Some(message) = socket.next().await {
-        let Message::Text(text) = message? else {
-            continue;
-        };
-        let reply: Value = serde_json::from_str(&text)?;
-        if reply["id"] == json!(2) {
-            ensure!(reply.get("error").is_none(), "{method} failed: {reply}");
-            return Ok(reply["result"].clone());
-        }
-    }
-    bail!("the shim closed before answering {method}")
-}
-
-pub(super) fn agent_route(agent: &str) -> String {
-    format!("/agents/{agent}")
-}
-
-pub(super) async fn loaded_threads(route: &str) -> Result<Vec<String>> {
-    Ok(serde_json::from_value(
-        shim_call(route, "thread/loaded/list", json!({})).await?["data"].clone(),
-    )?)
-}
-
-/// Waits for `route` to load a thread outside `known`. Nothing is pressed, so any Codex
-/// screen in the way of a thread, such as its trust question, fails this.
-pub(super) async fn wait_for_loaded_thread(
-    terminal: &Terminal,
-    route: &str,
-    known: &[String],
-) -> Result<String> {
-    let deadline = Instant::now() + OPENS_THREAD;
-    loop {
-        if let Ok(loaded) = loaded_threads(route).await {
-            if let Some(thread) = loaded.into_iter().find(|thread| !known.contains(thread)) {
-                return Ok(thread);
-            }
-        }
-        ensure!(
-            Instant::now() < deadline,
-            "Codex loaded no thread on {route} within {OPENS_THREAD:?}; transcript:\n{}",
-            terminal.transcript()
-        );
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
-}
-
-/// Holds the shim port for a test, as something that is not a Gents runtime would.
-pub(super) struct HeldShimPort(tokio::task::JoinHandle<()>);
-
-impl HeldShimPort {
-    /// With an empty `reply`, each connection is closed as soon as it arrives.
-    pub(super) async fn serving(reply: &'static [u8]) -> Result<Self> {
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", SHIM_PORT)).await?;
-        Ok(Self(tokio::spawn(async move {
-            while let Ok((mut stream, _)) = listener.accept().await {
-                if reply.is_empty() {
-                    continue;
-                }
-                let mut request = [0_u8; 4096];
-                let _ = stream.read(&mut request).await;
-                let _ = stream.write_all(reply).await;
-                let _ = stream.shutdown().await;
-            }
-        })))
-    }
-
-    pub(super) async fn release(self) {
-        self.0.abort();
-        let _ = self.0.await;
-    }
 }

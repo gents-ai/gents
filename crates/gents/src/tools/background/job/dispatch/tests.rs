@@ -193,3 +193,43 @@ fn split_address_splits_at_the_last_colon() {
     );
     assert_eq!(split_address("nocolon"), None);
 }
+
+/// A step that spawns without a target, on a job whose targets the caller's
+/// Tools do not select, is told which targets are unwired; a named target or
+/// a fully offered job is an ordinary malformed output.
+#[test]
+fn a_targetless_spawn_names_the_job_targets_the_caller_has_not_wired() {
+    let binding = |targets: &[&str]| JobBinding {
+        tool_name: "workflow".into(),
+        plugin: crate::documents::PluginToolRef {
+            plugin: "gents/workflow".into(),
+            digest: None,
+            tool_calls: false,
+            input_fields: Vec::new(),
+            job: None,
+        },
+        settings: Some(gents_protocol::job::PluginJobSettings {
+            agent_targets: targets.iter().map(|target| (*target).to_owned()).collect(),
+            max_live: 1,
+            max_spawns: 1,
+            max_messages_per_slot: 1,
+            result_bytes: 1,
+            max_wall_secs: 1,
+            policy: Default::default(),
+        }),
+    };
+    let targetless = serde_json::json!({"effects": {"spawn": [{"slot": "a", "prompt": "p"}]}});
+    let unwired = unwired_spawn_targets(&targetless, &binding(&["wf-read-only"]), &[])
+        .expect("the job's only target is not offered");
+    assert_eq!(unwired.job, ["wf-read-only"]);
+    assert_eq!(unwired.missing, ["wf-read-only"]);
+    assert!(unwired_spawn_targets(
+        &targetless,
+        &binding(&["wf-read-only"]),
+        &["wf-read-only".to_owned()]
+    )
+    .is_none());
+    let named =
+        serde_json::json!({"effects": {"spawn": [{"slot": "a", "target": "wf-read-only"}]}});
+    assert!(unwired_spawn_targets(&named, &binding(&["wf-read-only"]), &[]).is_none());
+}

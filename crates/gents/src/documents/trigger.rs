@@ -1,5 +1,11 @@
 use serde::{Deserialize, Serialize};
 
+/// Lean: `Triggers.FireBudget.defaultMaxPerHour`.
+pub const DEFAULT_MAX_FIRES_PER_HOUR: u32 = 1000;
+
+/// Lean: `Triggers.FireBudget.exhaustedStatus`.
+pub const BUDGET_EXHAUSTED_STATUS: &str = "budget_exhausted";
+
 /// Desired configuration for firing a reusable task.
 ///
 /// A source supplies fire variables; the shared trigger engine renders the task
@@ -20,10 +26,21 @@ pub struct Trigger {
     pub task_id: String,
     pub source: TriggerSource,
     /// Render an existing session ID from the fire scope. Missing/null creates
-    /// a session; a configured template must render a nonempty owned session.
+    /// a session per fire; a configured template must render a nonempty owned
+    /// session unless `create_session` admits a missing one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub session_id_template: Option<String>,
+    /// Create the session `session_id_template` renders on its first fire.
+    /// Lean: `Triggers.SessionKey`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub create_session: Option<bool>,
+    /// Fires admitted per rolling hour before the Trigger disables itself and
+    /// records why. Null uses the default. Lean: `Triggers.FireBudget`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub max_fires_per_hour: Option<u32>,
     #[serde(
         default = "super::serde_helpers::default_enabled",
         deserialize_with = "super::serde_helpers::deserialize_enabled",
@@ -51,6 +68,33 @@ pub struct Trigger {
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
     #[schemars(transform = crate::documents::accepts_null)]
     pub tags: Vec<String>,
+}
+
+impl Trigger {
+    /// Lean: `Triggers.FireBudget.effective`.
+    pub fn effective_max_fires_per_hour(&self) -> u32 {
+        self.max_fires_per_hour
+            .unwrap_or(DEFAULT_MAX_FIRES_PER_HOUR)
+    }
+
+    /// Lean: `Triggers.SessionKey.configValid` and `Triggers.FireBudget.configValid`.
+    pub fn validate_options(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.create_session != Some(true) || self.session_id_template.is_some(),
+            "create_session requires session_id_template: render the session key to get or create"
+        );
+        anyhow::ensure!(
+            self.max_fires_per_hour != Some(0),
+            "max_fires_per_hour must be positive; omit it to use the default"
+        );
+        anyhow::ensure!(
+            self.max_fires_per_hour.is_none()
+                || matches!(self.source, TriggerSource::Event { .. })
+                || self.session_id_template.is_some(),
+            "max_fires_per_hour needs an event source or a scheduled session_id_template; an untargeted schedule is limited by its cadence"
+        );
+        Ok(())
+    }
 }
 
 /// Exactly one configured source per trigger. Source documents can be reused;

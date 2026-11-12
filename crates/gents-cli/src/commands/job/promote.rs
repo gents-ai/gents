@@ -242,6 +242,7 @@ pub async fn promote(
         package: dir.display().to_string(),
         inference_slots: Vec::new(),
         dependency_variables: Vec::new(),
+        bind_agents: Vec::new(),
         preview: false,
         scope: ScopeArgs {
             home: Some(home.to_path_buf()),
@@ -255,12 +256,15 @@ pub async fn promote(
         grant_authority: true,
         wire: Vec::new(),
         expect_digest: None,
+        root_agents: None,
         explicit: true,
     };
     let installed = async {
         let source =
             crate::commands::pack::resolve_pack_source(&install.package, None, home).await?;
-        crate::commands::pack::install_documents_pack(access, actor, &source, &install, true).await
+        crate::commands::pack::install_documents_pack(access, actor, &source, &install, true)
+            .await
+            .map_err(gents::pack::PackChangeError::into_anyhow)
     }
     .await
     .context("promote install failed")?;
@@ -296,6 +300,8 @@ pub async fn promote(
             targets_from: run.owners.clone(),
             remove: false,
             preview: false,
+            dynamic_consent: false,
+            tool_calls_consent: false,
         },
     )
     .await

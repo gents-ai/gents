@@ -25,6 +25,8 @@ pub struct ScaffoldReport {
     pub template: &'static str,
     pub dir: PathBuf,
     pub files: Vec<String>,
+    /// The requested name when it was normalized to `pack`.
+    pub renamed_from: Option<String>,
 }
 
 impl Template {
@@ -45,6 +47,8 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<Scaffol
         "{} already holds a pack",
         dir.display()
     );
+    let requested = name;
+    let name = &super::pack_name(requested);
     let names = Names::new(name, &input.namespace)?;
     let template = input
         .template
@@ -52,7 +56,7 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<Scaffol
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
 
     // Resolve generated paths through the rooted owner before writing, refusing nested symlink escapes.
-    let context = crate::tools::native::ToolContext::new(dir.to_path_buf(), false)?;
+    let context = super::ToolContext::new(dir.to_path_buf(), false)?;
     let mut output_paths = vec!["README.md".to_owned(), "manifest.json".to_owned()];
     if input.ux {
         output_paths.push(format!("ux/{}/plugin.js", names.name));
@@ -217,17 +221,8 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<Scaffol
     }
 
     if input.ux {
-        let (path, source) = ux_plugin_source(&names);
-        let directive = names.name.replace('_', "-");
-        manifest["ux"] = json!([{
-            "name": names.name,
-            "description": format!("{} page, nav row and ::{directive} directive.", names.title),
-            "entry": path,
-            "contributes": {
-                "areas": ["nav", "plugin.pages", "transcript.directives"],
-                "directives": [directive],
-            },
-        }]);
+        let (path, source, entry) = ux_plugin(&names);
+        manifest["ux"] = json!([entry]);
         files.push((path, source));
     }
 
@@ -262,6 +257,7 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<Scaffol
         template: template.as_slug(),
         dir: dir.to_path_buf(),
         files: written,
+        renamed_from: (requested != name).then(|| requested.to_owned()),
     })
 }
 
@@ -275,6 +271,22 @@ fn list_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// A UX plugin's pack-relative entry path, source and `ux[]` manifest row.
+pub(super) fn ux_plugin(names: &Names) -> (String, String, Value) {
+    let (path, source) = ux_plugin_source(names);
+    let directive = names.name.replace('_', "-");
+    let entry = json!({
+        "name": names.name,
+        "description": format!("{} page, nav row and ::{directive} directive.", names.title),
+        "entry": path,
+        "contributes": {
+            "areas": ["nav", "plugin.pages", "transcript.directives"],
+            "directives": [directive],
+        },
+    });
+    (path, source, entry)
 }
 
 /// The scaffolded UX plugin: a plain ESM file (no build) that lands a nav
@@ -817,7 +829,7 @@ mod tests {
         let check = super::super::check::check_dir(&dir).await;
         assert_eq!(
             check.problems,
-            ["build the plugins (demo_flow) with gents config pack build before checking its configuration"],
+            ["build the plugins (demo_flow) with pack build before checking its configuration"],
             "the only problem is the unbuilt artifact"
         );
     }
@@ -855,7 +867,7 @@ mod tests {
         let check = super::super::check::check_dir(&dir).await;
         assert_eq!(
             check.problems,
-            ["build the plugins (demo_flow) with gents config pack build before checking its configuration"],
+            ["build the plugins (demo_flow) with pack build before checking its configuration"],
         );
     }
 

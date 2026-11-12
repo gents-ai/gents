@@ -1,36 +1,8 @@
-use std::collections::BTreeSet;
-
 use anyhow::{Context, Result};
 
 use super::{InferenceDetailRow, SessionTokenUsage};
 
-pub(super) const INFERENCE_DETAIL_FIELDS: &str = "request_doc_id request_id call_id call_seq queued_at started_at ended_at prompt_tokens call_kind completion_tokens cached_input_tokens cache_creation_input_tokens reasoning_output_tokens provider_total_tokens usage_completeness context_accounting_json";
-
-pub(super) fn inference_turns(rows: &[InferenceDetailRow]) -> Result<Option<u64>> {
-    let mut turns = BTreeSet::new();
-    for row in rows {
-        match row.call_kind.as_deref() {
-            Some("inference") => {}
-            Some("compaction" | "oneoff") => continue,
-            _ => return Ok(None),
-        }
-        let Some(request_doc_id) = row.request_doc_id.as_deref().filter(|id| !id.is_empty()) else {
-            return Ok(None);
-        };
-        let Some(encoded) = row
-            .context_accounting_json
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-        else {
-            return Ok(None);
-        };
-        let accounting: gents_protocol::rendered_request::ContextAccounting =
-            serde_json::from_str(encoded)
-                .with_context(|| format!("decoding turn coordinate for call {}", row.call_id))?;
-        turns.insert((request_doc_id, accounting.turn_index));
-    }
-    Ok(Some(turns.len() as u64))
-}
+pub(super) const INFERENCE_DETAIL_FIELDS: &str = "request_id call_id call_seq queued_at started_at ended_at prompt_tokens call_kind completion_tokens cached_input_tokens cache_creation_input_tokens reasoning_output_tokens provider_total_tokens usage_completeness context_accounting_json";
 
 pub(super) fn aggregate_inference_usage(rows: &[InferenceDetailRow]) -> Result<SessionTokenUsage> {
     let api_duration_ms = rows.iter().try_fold(0_u64, |total, row| {

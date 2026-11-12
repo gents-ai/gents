@@ -87,6 +87,7 @@ type Request = {
   expectDigest?: string | null;
   edited?: string;
   grantAuthority?: boolean;
+  rootAgents?: string[];
   inferenceSlots?: string[];
 };
 
@@ -291,6 +292,118 @@ describe("the install review", () => {
     await user.click(installButton(review));
     await waitFor(() => expect(installs(installPack)).toHaveLength(1));
     expect(installs(installPack)[0]).toMatchObject({ grantAuthority: true });
+  });
+
+  it("names the folder its agents are let into beside the access its plugins ask for", async () => {
+    const installPack = bridge(() =>
+      preview({
+        authority: [{ plugin: "fetch", asks: "HTTP to api.example.com" }],
+        host_tool_roots: {
+          tools: ["hands-tools"],
+          agents: ["Hands worker"],
+          rows: [
+            {
+              pack: "acme/docs",
+              agent: "hands-worker",
+              name: "Hands worker",
+              tools: "hands-tools",
+            },
+          ],
+          root: "/home/me/work",
+          reader_on: "/home/me",
+          granted_with: "--grant-authority",
+        },
+      }),
+    );
+    show(installPack);
+    const { user, review } = await openRegistryReview();
+    const access = await within(review).findByRole("region", {
+      name: "Access it asks for",
+    });
+    expect(within(access).getByText("HTTP to api.example.com")).toBeInTheDocument();
+    const folders = within(access).getByRole("list", { name: "Folder access" });
+    expect(within(folders).getByText("Hands worker")).toBeInTheDocument();
+    expect(
+      within(folders).getByText("uses its file and shell tools in /home/me/work"),
+    ).toBeInTheDocument();
+    expect(installButton(review)).toBeDisabled();
+    expect(
+      within(access).queryByRole("checkbox", { name: "Allow this access" }),
+    ).toBeNull();
+    await user.click(
+      within(access).getByRole("checkbox", {
+        name: "Allow this access, and let its agents work in /home/me",
+      }),
+    );
+    await user.click(installButton(review));
+    await waitFor(() => expect(installs(installPack)).toHaveLength(1));
+    expect(installs(installPack)[0]).toMatchObject({ grantAuthority: true });
+  });
+
+  it("asks before letting agents into a folder when no plugin asks for anything", async () => {
+    const installPack = bridge(() =>
+      preview({
+        authority: [],
+        host_tool_roots: {
+          tools: ["hands-tools"],
+          agents: ["Hands worker"],
+          rows: [
+            {
+              pack: "acme/docs",
+              agent: "hands-worker",
+              name: "Hands worker",
+              tools: "hands-tools",
+            },
+          ],
+          root: "/home/me/work",
+          reader_on: "/home/me",
+          granted_with: "--grant-authority",
+        },
+      }),
+    );
+    show(installPack);
+    const { user, review } = await openRegistryReview();
+    const access = await within(review).findByRole("region", {
+      name: "Access it asks for",
+    });
+    expect(within(access).getByText("Hands worker")).toBeInTheDocument();
+    expect(within(access).queryByText(/A plugin it installs/)).toBeNull();
+    expect(installButton(review)).toBeDisabled();
+    expect(installs(installPack)).toEqual([]);
+    await user.click(
+      within(access).getByRole("checkbox", {
+        name: "Let its agents work in /home/me",
+      }),
+    );
+    await user.click(installButton(review));
+    await waitFor(() => expect(installs(installPack)).toHaveLength(1));
+    expect(installs(installPack)[0]).toMatchObject({
+      grantAuthority: true,
+      rootAgents: ["acme/docs=hands-worker"],
+    });
+    expect(within(review).queryByRole("alert")).toBeNull();
+  });
+
+  it("asks for nothing when no shared folder covers where its agents work", async () => {
+    const installPack = bridge(() =>
+      preview({
+        host_tool_roots: {
+          tools: ["hands-tools"],
+          agents: ["Hands worker"],
+          rows: [],
+          root: "/home/me/work",
+          unpublished_root: "/home/me/work",
+        },
+      }),
+    );
+    show(installPack);
+    const { review } = await openRegistryReview();
+    const access = await within(review).findByRole("region", {
+      name: "Access it asks for",
+    });
+    expect(within(access).getByText(/Installing grants\s+nothing there/)).toBeTruthy();
+    expect(within(access).queryByRole("checkbox")).toBeNull();
+    await waitFor(() => expect(installButton(review)).toBeEnabled());
   });
 
   it("asks there when the install finds authority the preview didn't list", async () => {

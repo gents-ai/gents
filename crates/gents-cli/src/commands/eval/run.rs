@@ -5,8 +5,8 @@ use std::io::Write;
 use anyhow::{anyhow, Context, Result};
 use gents::eval::documents::default_breaker_threshold;
 use gents::eval::load_trials;
-use gents::eval::report::load_report;
-use gents::eval::runner::{self, CellRequest, RunOutcome, RunRequest, CANCEL_MARKER};
+use gents_eval::report::load_report;
+use gents_eval::runner::{self, CellRequest, RunOutcome, RunRequest, CANCEL_MARKER};
 
 use super::{
     default_id, follow_progress, render, source_commit, source_dirty, write_json, Deps,
