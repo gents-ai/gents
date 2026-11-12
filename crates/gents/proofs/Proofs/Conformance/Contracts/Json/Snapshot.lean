@@ -457,7 +457,6 @@ def snapshotGoalCasesJson : String :=
 
 def snapshotGoalMutationCasesJson : String :=
   ""
-    ++ "\"goal_edit_cases\":" ++ Conformance.GoalEditContracts.casesJson ++ ","
     ++ "\"goal_client_control_cases\":" ++ Conformance.GoalClientControlContracts.casesJson ++ ","
     ++ "\"goal_client_start_cases\":" ++ Conformance.GoalClientStartContracts.casesJson ++ ","
     ++ "\"goal_client_receipt_cases\":" ++ Conformance.GoalClientMutationContracts.receiptCasesJson ++ ","

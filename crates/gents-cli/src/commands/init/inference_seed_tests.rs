@@ -144,10 +144,10 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
         case.check(Some(family::SeedPlan {
             model,
             enabled: backend.enabled,
-            concurrent: backend.max_concurrent.map(|value| value as u64),
+            concurrent: backend.max_concurrent,
             effective_concurrent: backend.effective_max_concurrent() as u64,
-            context_override: profile.context_window.map(|value| value as u64),
-            output_override: profile.max_output_tokens.map(|value| value as u64),
+            context_override: profile.context_window,
+            output_override: profile.max_output_tokens,
             records_probe: observation.probe_status.is_some(),
             unselected_model_reason,
             enabled_unselected_model_reason,

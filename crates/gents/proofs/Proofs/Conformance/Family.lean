@@ -14,6 +14,7 @@ wire name: the name its `conformance_vocabulary` function gives it, or
 inductive Schema where
   | bool
   | nat
+  | int
   | string
   | option (item : Schema)
   | list (item : Schema)
@@ -45,6 +46,7 @@ def wireKey (declaration : Name) : String :=
 partial def Schema.wire : Schema → Json
   | .bool => "bool"
   | .nat => "nat"
+  | .int => "int"
   | .string => "string"
   | .option item => Json.mkObj [("option", item.wire)]
   | .list item => Json.mkObj [("list", item.wire)]
@@ -109,6 +111,7 @@ private partial def schemaTerm (type : Expr) : MetaM (TSyntax `term) := do
   match type with
   | .const ``Bool _ => `(Schema.bool)
   | .const ``Nat _ => `(Schema.nat)
+  | .const ``Int _ => `(Schema.int)
   | .const ``String _ => `(Schema.string)
   | .app (.const ``Option _) item => do `(Schema.option $(← schemaTerm item))
   | .app (.const ``List _) item => do `(Schema.list $(← schemaTerm item))
