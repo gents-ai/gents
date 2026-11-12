@@ -4,17 +4,27 @@ use gents_loop::provider_limit::{classify_provider_limit, ProviderLimit};
 use gents_store::config_client::{ConfigAccess, ConfigApplyTxn};
 use gents_store::identity::NodeIdentity;
 
+#[derive(Debug)]
+pub enum ResetResume {
+    NotUsageLimited,
+    Deferred,
+    Resumed(GoalResumeReceipt),
+}
+
 pub async fn resume_at_reset(
     node: &std::sync::Arc<EmbeddedNode>,
     runtime: &dyn NodeIdentity,
     identity: &dyn NodeIdentity,
     goal: &GoalDocument,
     now: DateTime<Utc>,
-) -> Result<Option<GoalResumeReceipt>> {
+) -> Result<ResetResume> {
+    if goal.parsed_status() != Some(GoalStatus::UsageLimited) {
+        return Ok(ResetResume::NotUsageLimited);
+    }
     if goal.auto_resume_at_reset != Some(true)
         || reported_reset(goal.last_failure.as_deref(), now).is_none_or(|reset| reset > now)
     {
-        return Ok(None);
+        return Ok(ResetResume::Deferred);
     }
     let (node_did, session_id) = (goal.node_did.as_str(), goal.session_id.as_str());
     let access = ConfigAccess::local_with_optional_agent_signer(
@@ -38,11 +48,11 @@ async fn stage_reset_resume(
     node_did: &str,
     session_id: &str,
     now: DateTime<Utc>,
-) -> Result<Option<GoalResumeReceipt>> {
+) -> Result<ResetResume> {
     let Some((goal, references, request, Some(call))) =
         goal_stopped_in_txn(txn, node_did, session_id).await?
     else {
-        return Ok(None);
+        return Ok(ResetResume::Deferred);
     };
     anyhow::ensure!(
         txn.actor_did() == Some(identity.did()),
@@ -51,7 +61,7 @@ async fn stage_reset_resume(
     if request.agent_did.as_deref() != Some(identity.did())
         || call.agent_did.as_deref() != Some(identity.did())
     {
-        return Ok(None);
+        return Ok(ResetResume::Deferred);
     }
     let sessions = {
         use gents_protocol::document_query::{
@@ -73,12 +83,13 @@ async fn stage_reset_resume(
         .and_then(serde_json::Value::as_array)
         .context("reset resume session query omitted rows")?;
     if sessions.len() != 1 || sessions[0]["agent_did"].as_str() != Some(identity.did()) {
-        return Ok(None);
+        return Ok(ResetResume::Deferred);
     }
-    if goal.parsed_status() != Some(GoalStatus::UsageLimited)
-        || goal.auto_resume_at_reset != Some(true)
-    {
-        return Ok(None);
+    if goal.parsed_status() != Some(GoalStatus::UsageLimited) {
+        return Ok(ResetResume::NotUsageLimited);
+    }
+    if goal.auto_resume_at_reset != Some(true) {
+        return Ok(ResetResume::Deferred);
     }
     let started = call
         .started_at
@@ -89,24 +100,24 @@ async fn stage_reset_resume(
     let (Some(reset), Some(started)) =
         (reported_reset(call.failure_reason.as_deref(), now), started)
     else {
-        return Ok(None);
+        return Ok(ResetResume::Deferred);
     };
     if !(started < reset && reset <= now) {
-        return Ok(None);
+        return Ok(ResetResume::Deferred);
     }
     let agent_did = identity.did();
     let Some(profile) = served_profile(&references, agent_did, &call) else {
-        return Ok(None);
+        return Ok(ResetResume::Deferred);
     };
     let Some((_, backend)) = references.profile_with_backend(&profile)? else {
-        return Ok(None);
+        return Ok(ResetResume::Deferred);
     };
     let account_serves = backend.enabled
         && match gents_inference::auth::credential::account_pick(&backend.auth) {
             Some(pick) => {
                 use gents_inference::backends::provider::BackendProviderOauthExt;
                 let Some(provider) = backend.provider_kind.oauth_provider() else {
-                    return Ok(None);
+                    return Ok(ResetResume::Deferred);
                 };
                 gents_inference::auth::credential::runtime_oauth_account_served_before(
                     txn, runtime, node_did, provider, pick, started,
@@ -116,11 +127,11 @@ async fn stage_reset_resume(
             None => backend.enabled,
         };
     if !account_serves {
-        return Ok(None);
+        return Ok(ResetResume::Deferred);
     }
     super::operator_resume::stage_resume(txn, identity, node_did, session_id, &request.request_id)
         .await
-        .map(Some)
+        .map(ResetResume::Resumed)
 }
 
 fn reported_reset(text: Option<&str>, now: DateTime<Utc>) -> Option<DateTime<Utc>> {

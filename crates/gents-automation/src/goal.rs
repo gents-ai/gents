@@ -84,7 +84,7 @@ pub(crate) use request_head::{
     assignment_request_id_in_txn, goal_session_is_idle, latest_goal_request, load_session_requests,
     request_selection_fields, verify_goal_continuation_edge,
 };
-pub use reset_resume::resume_at_reset;
+pub use reset_resume::{resume_at_reset, ResetResume};
 mod question_wait;
 pub(crate) use backed_request::fingerprint::GoalBackedRequestFingerprint;
 pub(crate) use backed_request::submit_goal_backed_request;

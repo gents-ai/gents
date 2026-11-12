@@ -505,8 +505,6 @@ def snapshotGoalMutationCasesJson : String :=
       ++ Conformance.GoalOperatorResumeContracts.resumeOnCasesJson ++ ","
     ++ "\"goal_config_reactivation_cases\":"
       ++ Conformance.GoalOperatorResumeContracts.configCasesJson ++ ","
-    ++ "\"goal_reset_resume_cases\":"
-      ++ Conformance.GoalResetResumeContracts.casesJson ++ ","
 
 def snapshotRequestCasesJson : String :=
   ""
