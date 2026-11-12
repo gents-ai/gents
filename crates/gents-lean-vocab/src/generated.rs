@@ -597,10 +597,6 @@ pub fn lean_restart_disposition_cases() -> &'static [LeanRestartDispositionCase]
     &lean_contract_snapshot().restart_disposition_cases
 }
 
-pub fn lean_retry_selection_cases() -> &'static [LeanRetrySelectionCase] {
-    &lean_contract_snapshot().retry_selection_cases
-}
-
 pub fn lean_runtime_reconcile_cases() -> &'static [LeanRuntimeReconcileCase] {
     &lean_contract_snapshot().runtime_reconcile_cases
 }
@@ -3234,7 +3230,6 @@ pub struct LeanContractSnapshot {
     pub session_input_edit_client_observation_cases: Vec<
         LeanSessionInputEditClientObservationCase,
     >,
-    pub retry_selection_cases: Vec<LeanRetrySelectionCase>,
     pub canonical_worker_capacity_cases: Vec<LeanWorkerCapacityCase>,
     pub canonical_payload_presentation_cases: Vec<LeanPayloadPresentationCase>,
     pub terminal_diagnostic_presentation_cases: Vec<
@@ -10267,16 +10262,6 @@ pub struct LeanRetryFrontierCase {
     pub same_requester: bool,
     pub same_session: bool,
     pub scoped_terminal: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanRetrySelectionCase {
-    pub name: String,
-    pub parent_published: bool,
-    pub selected: Vec<u64>,
-    pub resume: bool,
-    pub answered: Vec<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

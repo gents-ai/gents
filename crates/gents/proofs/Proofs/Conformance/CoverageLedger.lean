@@ -1377,8 +1377,8 @@ def caseCoverage : List CoverageEntry :=
       "SteeringUnsafeBoundaryCases")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "retry_selection_cases"
-      "RetrySelectionCases")
+      "family"
+      "fold_queue_contracts_retry_selection")
       "request-lifecycle" [Surface.agentFacing]
   , tagged (consumerCoverage
       "family"

@@ -164,12 +164,24 @@ def publicationCasesJson : String :=
 def steeringPublicationCasesJson : String :=
   publicationCasesJsonFor CanonicalOutput.Execution.FoldPublication.steeringCases
 
-def retrySelectionCasesJson : String := jsonArray (retrySelectionCases.map fun value =>
-  "{\"name\":" ++ jsonString value.name ++
-  ",\"parent_published\":" ++ jsonOptionalBool (some value.parentPublished) ++
-  ",\"selected\":" ++ jsonArray (value.selected.map toString) ++
-  ",\"resume\":" ++ jsonOptionalBool (some value.resume) ++
-  ",\"answered\":" ++ jsonArray (value.answered.map toString) ++ "}")
+structure RetrySelectionInput where
+  name : String
+  parentPublished : Bool
+  selected : List Nat
+  deriving Lean.ToJson
+
+structure RetrySelectionOutput where
+  resume : Bool
+  answered : List Nat
+  deriving Lean.ToJson
+
+@[conformance_family]
+def retrySelection : Family RetrySelectionInput RetrySelectionOutput where
+  inputs := retrySelectionCases.map fun c =>
+    { name := c.name, parentPublished := c.parentPublished, selected := c.selected }
+  model := fun i =>
+    let value : RetrySelectionCase := ⟨i.name, i.parentPublished, i.selected⟩
+    { resume := value.resume, answered := value.answered }
 
 def managementStateJson (state : SessionQueueState) : String :=
   "{\"active\":" ++ jsonOptionalNat state.active ++
