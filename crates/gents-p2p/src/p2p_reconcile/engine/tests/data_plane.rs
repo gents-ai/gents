@@ -8,7 +8,8 @@ use crate::p2p_reconcile::engine::{
     data_plane_desired_from_pairing_row, merge_layered_desired, EnrollmentEndpointEntry,
     PairingStateRow,
 };
-use crate::p2p_reconcile::{equality_filter, single_string_eq, PairingDesired};
+use crate::p2p_reconcile::{equality_filter, single_string_eq, FilterPredicate, PairingDesired};
+use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -183,4 +184,69 @@ fn layered_desired_merge_matches_lean() {
         )
         .map(modeled),
     });
+}
+
+fn set(values: &[&str]) -> BTreeSet<String> {
+    values.iter().map(|value| value.to_string()).collect()
+}
+
+fn merge_desired(
+    base: Option<PairingDesired>,
+    data_plane: Option<PairingDesired>,
+) -> Option<PairingDesired> {
+    merge_layered_desired("did:key:local", "did:key:peer", base, data_plane)
+}
+
+#[test]
+fn layered_desired_merge_prefers_signed_data_plane_filter() {
+    let base_filter = equality_filter("requester_did", "did:key:phone");
+    let data_filter = FilterPredicate::predicate(
+        serde_json::json!({ "lifecycle_state": { "_in": ["pending", "processing"] } })
+            .as_object()
+            .expect("object")
+            .clone(),
+    );
+    let layer = |filter| PairingDesired {
+        replicator_addresses: set(&["addr"]),
+        replicator_collections: set(&["AgentRequest"]),
+        replicator_filter: [("AgentRequest".to_string(), filter)].into_iter().collect(),
+        template_ids: BTreeSet::new(),
+    };
+
+    let merged = merge_desired(
+        Some(layer(base_filter.clone())),
+        Some(layer(data_filter.clone())),
+    )
+    .expect("merged desired state");
+
+    assert_eq!(
+        merged.replicator_filter.get("AgentRequest"),
+        Some(&data_filter)
+    );
+}
+
+/// Lean `base_preserved` and `data_plane_filters_preserved`: merging keeps
+/// the control layer's replication and adds the data-plane layer's.
+#[test]
+fn data_plane_layer_adds_replication_beside_control_pairing() {
+    let base = PairingDesired {
+        replicator_addresses: set(&["addr-b"]),
+        replicator_collections: set(&["ControlA", "ControlB"]),
+        replicator_filter: Default::default(),
+        template_ids: set(&["machine"]),
+    };
+    let data_plane = PairingDesired {
+        replicator_addresses: set(&["addr-b"]),
+        replicator_collections: set(&["ChangeProposed"]),
+        replicator_filter: Default::default(),
+        template_ids: set(&["client"]),
+    };
+    let merged = merge_desired(Some(base.clone()), Some(data_plane)).expect("merged");
+    assert!(merged.replicator_collections.contains("ControlA"));
+    assert!(merged.replicator_collections.contains("ChangeProposed"));
+    assert!(
+        merged.replicator_filter.is_empty(),
+        "both layers unscoped => no filter"
+    );
+    assert!(merged.template_ids.contains("machine"));
 }

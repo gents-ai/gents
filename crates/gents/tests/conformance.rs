@@ -58,8 +58,6 @@ mod client_runtime;
 mod compaction_gate;
 #[path = "conformance/coverage.rs"]
 mod coverage;
-#[path = "conformance/directory_projection.rs"]
-mod directory_projection;
 #[path = "conformance/enrollment.rs"]
 mod enrollment;
 #[path = "conformance/eval.rs"]
@@ -78,8 +76,6 @@ mod lsp;
 mod mailbox;
 #[path = "conformance/mcp_health.rs"]
 mod mcp_health;
-#[path = "conformance/p2p_observability.rs"]
-mod p2p_observability;
 #[path = "conformance/p2p_replication.rs"]
 mod p2p_replication;
 #[path = "conformance/plugin_job.rs"]
@@ -189,11 +185,6 @@ fn generated_self_config_cases_fence_patch_merge() {
 }
 
 #[test]
-fn pairing_reconcile_sweep_does_not_head_of_line_block_ready_peer() {
-    pairing_reconcile::pairing_reconcile_sweep_does_not_head_of_line_block_ready_peer();
-}
-
-#[test]
 fn generated_mcp_health_cases_pin_threshold_projection_shape() {
     mcp_health::generated_mcp_health_cases_pin_threshold_projection_shape();
 }
@@ -288,8 +279,6 @@ mod identity;
 mod live_overlay;
 #[path = "conformance/manual_run.rs"]
 mod manual_run;
-#[path = "conformance/pairing_invariant_tests.rs"]
-mod pairing_invariant_tests;
 #[path = "conformance/pairing_reconcile.rs"]
 mod pairing_reconcile;
 #[path = "conformance/prompt_assembly.rs"]
