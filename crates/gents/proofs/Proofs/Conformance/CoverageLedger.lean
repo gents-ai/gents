@@ -735,6 +735,15 @@ def caseCoverage : List CoverageEntry :=
       "pack_wire_lock_cases"
       "PackWireLockCases")
       "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "contracts_pack_installation_hosted_plugin")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "family"
+      "contracts_pack_installation_hosted_plugin_unreached"
+      "model-production-gap: production has no single decision over the reviewed digest, the client plan and native authorization, and no production scenario installs a hosted plugin root with one of them missing.")
+      "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "family"
       "contracts_pack_installation_hosted_schema"

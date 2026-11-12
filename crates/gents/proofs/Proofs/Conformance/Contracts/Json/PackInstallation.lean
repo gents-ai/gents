@@ -112,12 +112,32 @@ def identityReference :
       fun binding => ResolvedBinding.mk binding.creationNonce binding.agentDid
 
 
-def hostedPluginCasesJson : String := jsonArray (
+structure HostedPluginInput where
+  reviewed : Bool
+  plan : Bool
+  native : Bool
+  deriving Lean.ToJson
+
+def hostedPluginInputs : List HostedPluginInput :=
   [false, true].flatMap fun reviewed => [false, true].flatMap fun plan =>
-    [false, true].map fun native =>
-      "{\"reviewed\":" ++ toString reviewed ++
-      ",\"plan\":" ++ toString plan ++ ",\"native\":" ++ toString native ++
-      ",\"allowed\":" ++ toString (Configuration.hostedPluginInstallAllowed reviewed plan native) ++ "}")
+    [false, true].map fun native => { reviewed, plan, native }
+
+/-- The hosted plugin-root scenario applies a reviewed archive's graph with
+the client's plan in a native-authorized transaction: it builds only the case
+where all three hold. -/
+@[conformance_family]
+def hostedPlugin : Conformance.Family HostedPluginInput Bool where
+  inputs := hostedPluginInputs.filter fun i => i.reviewed && i.plan && i.native
+  model := fun i => Configuration.hostedPluginInstallAllowed i.reviewed i.plan i.native
+
+/-- model-production-gap: production has no single decision over the reviewed
+digest, the client plan and native authorization; each denial is distributed
+across the hosted install route, and no production scenario yet installs a
+plugin root with one of them missing. -/
+@[conformance_family]
+def hostedPluginUnreached : Conformance.Family HostedPluginInput Bool where
+  inputs := hostedPluginInputs.filter fun i => !(i.reviewed && i.plan && i.native)
+  model := fun i => Configuration.hostedPluginInstallAllowed i.reviewed i.plan i.native
 
 def finalityCasesJson : String := jsonArray (Configuration.packFinalityCases.map fun attempts =>
   let name := fun event : Configuration.PackAttemptEvidence => match event with

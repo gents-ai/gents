@@ -346,16 +346,6 @@ async fn plugin_only_pack_installs_through_reviewed_user_session() -> Result<()>
         )
     })
     .await?;
-    let snapshot: Value = gents_lean_contract::load_contract_snapshot()?;
-    let expected = snapshot["hosted_plugin_cases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|case| case["reviewed"] == true && case["plan"] == true && case["native"] == true)
-        .unwrap()["allowed"]
-        .as_bool()
-        .unwrap();
-    assert_eq!(outcome.is_ok(), expected);
     let outcome = outcome?;
     assert_eq!(outcome["apply"]["plugins"][0]["name"], "job_fixture");
     assert!(

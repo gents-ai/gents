@@ -4565,12 +4565,10 @@ async fn hosted_plugin_root_preserves_existing_pack_documents() -> Result<()> {
             })
         })
         .await;
-    let model = gents_lean_vocab::lean_contract_snapshot()
-        .hosted_plugin_cases
-        .iter()
-        .find(|case| case["reviewed"] == true && case["plan"] == true && case["native"] == true)
-        .unwrap();
-    assert_eq!(result.is_ok(), model["allowed"].as_bool().unwrap());
+    for case in gents_lean_vocab::families::contracts_pack_installation_hosted_plugin::cases() {
+        assert!(case.input.reviewed && case.input.plan && case.input.native);
+        case.check(result.is_ok());
+    }
     result?;
     let record = access
         .transact_readonly("test.hosted_plugin.read", |txn| {
