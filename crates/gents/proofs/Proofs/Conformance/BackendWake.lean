@@ -46,16 +46,16 @@ def healthyWake : Family HealthInput Bool where
       ⟨10, 20, some 20⟩, ⟨10, 20, some 21⟩ ]
   model := fun i => RequestBackendWake.freshHealthy i.startedMs i.nowMs i.observedMs
 
-def generationCases : List (Option Nat × Option Nat) :=
-  [(none, none), (none, some 1), (some 1, some 1), (some 1, some 2), (some 2, none)]
+structure GenerationInput where
+  marked : Option Nat
+  observed : Option Nat
+  deriving ToJson
 
-def generationCaseJson (input : Option Nat × Option Nat) : String :=
-  let (marked, observed) := input
-  "{\"marked\":" ++ (marked.map toString).getD "null" ++
-    ",\"observed\":" ++ (observed.map toString).getD "null" ++
-    ",\"applies\":" ++ (if EventDelivery.Watcher.generationMarkApplies marked observed then "true" else "false") ++ "}"
-
-def generationCasesJson : String := jsonArray (generationCases.map generationCaseJson)
+@[conformance_family]
+def generationMark : Family GenerationInput Bool where
+  inputs :=
+    [ ⟨none, none⟩, ⟨none, some 1⟩, ⟨some 1, some 1⟩, ⟨some 1, some 2⟩, ⟨some 2, none⟩ ]
+  model := fun i => EventDelivery.Watcher.generationMarkApplies i.marked i.observed
 
 def admissionFacts : List RequestResumeAdmission.ClaimFacts :=
   [ ⟨true, true, true, true, true, true⟩,

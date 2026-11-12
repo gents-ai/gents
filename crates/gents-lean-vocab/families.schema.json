@@ -19,6 +19,7 @@
   "backend_health_retention_cycle": {"input":{"fields":[["entries",{"list":"nat"}],["observed",{"list":"nat"}],["cancelled","bool"]],"struct":"CycleInput"},"output":{"list":"nat"}},
   "backend_wake_capture_scope": {"input":{"fields":[["persisted",{"list":"nat"}]],"struct":"CaptureScopeInput"},"output":"nat"},
   "backend_wake_fallback_wake": {"input":{"fields":[["now_ms","nat"],["deadline_ms","nat"],["attempts","nat"]],"struct":"WakeInput"},"output":{"option":"nat"}},
+  "backend_wake_generation_mark": {"input":{"fields":[["marked",{"option":"nat"}],["observed",{"option":"nat"}]],"struct":"GenerationInput"},"output":"bool"},
   "backend_wake_healthy_wake": {"input":{"fields":[["started_ms","nat"],["now_ms","nat"],["observed_ms",{"option":"nat"}]],"struct":"HealthInput"},"output":"bool"},
   "background_process_control_may_settle_terminal": {"input":{"fields":[["intent",{"enum":"TerminalIntent","values":["completed","cancelled","timed_out","failed","panicked"]}],["evidence",{"enum":"LiveProcessEvidence","values":["never_spawned","spawned_unverified","exited"]}]],"struct":"Input"},"output":"bool"},
   "background_process_control_retire_stop_receipt": {"input":{"fields":[["terminal_committed","bool"]],"struct":"Input"},"output":"bool"},

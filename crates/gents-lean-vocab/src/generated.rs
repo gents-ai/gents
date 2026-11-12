@@ -1193,13 +1193,6 @@ pub struct LeanAuxiliarySessionChildBindingCaseBinding {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct LeanBackendGenerationMarkCase {
-    pub marked: Option<u64>,
-    pub observed: Option<u64>,
-    pub applies: bool,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct LeanBackendHealthAdmissionCase {
     pub name: String,
     pub enabled: bool,
@@ -3222,7 +3215,6 @@ pub struct LeanContractSnapshot {
     pub tool_preflight_cases: Vec<LeanToolPreflightCase>,
     pub tool_retry_cases: Vec<LeanToolRetryCase>,
     pub completion_retry_cases: Vec<LeanCompletionRetryCase>,
-    pub backend_generation_mark_cases: Vec<LeanBackendGenerationMarkCase>,
     pub backend_resume_admission_cases: Vec<LeanBackendResumeAdmissionCase>,
     pub backend_repark_cases: Vec<LeanBackendReparkCase>,
     pub backend_parked_finalize_cases: Vec<LeanBackendParkedFinalizeCase>,
