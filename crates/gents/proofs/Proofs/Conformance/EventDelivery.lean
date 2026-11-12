@@ -1,6 +1,7 @@
 import Proofs.Automation.EventDelivery
 import Proofs.Conformance.EventGroups
 import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Family
 
 namespace Conformance.EventDelivery
 
@@ -274,21 +275,63 @@ def groupClockCases : List GroupClockCase :=
   , ⟨"consistent_cache_preserves_deadline", ⟨callback, 100, none⟩, some 100, 150, 40⟩
   , ⟨"evicted_cache_preserves_deadline", ⟨callback, 100, none⟩, none, 150, 40⟩ ]
 
-def eventGroupClockCasesJson : String :=
-  jsonArray (groupClockCases.map fun c =>
-    let after := c.clock.quiesce c.now
-    let again := after.quiesce (c.now + 1)
-    "{\"name\":" ++ jsonString c.name
-      ++ ",\"key\":" ++ Conformance.EventGroupContracts.keyJson c.clock.key
-      ++ ",\"first_seen\":" ++ toString c.clock.firstSeen
-      ++ ",\"quiesced_at\":" ++ Conformance.EventGroupContracts.jsonOptionNat c.clock.quiescedAt
-      ++ ",\"cached_first_seen\":" ++ Conformance.EventGroupContracts.jsonOptionNat c.cached
-      ++ ",\"now\":" ++ toString c.now ++ ",\"timeout\":" ++ toString c.timeout
-      ++ ",\"first_seen_after\":" ++ toString after.firstSeen
-      ++ ",\"quiesced_at_after\":" ++ Conformance.EventGroupContracts.jsonOptionNat after.quiescedAt
-      ++ ",\"quiesced_at_again\":" ++ Conformance.EventGroupContracts.jsonOptionNat again.quiescedAt
-      ++ ",\"elapsed_before\":" ++ toString ((c.clock.observe c.cached).elapsed c.now c.timeout)
-      ++ ",\"elapsed_after\":" ++ toString ((after.observe c.cached).elapsed c.now c.timeout) ++ "}")
+structure KeyWire where
+  nodeDid : String
+  consumerKind : String
+  consumerId : String
+  consumerConfigKey : String
+  correlation : String
+  deriving Lean.ToJson
+
+def KeyWire.ofModel (key : Triggers.Groups.EventGroupKey) : KeyWire :=
+  { nodeDid := key.nodeDid, consumerKind := key.consumer.kind, consumerId := key.consumer.id
+    consumerConfigKey := key.consumerConfigKey, correlation := key.correlation }
+
+def KeyWire.toModel (key : KeyWire) : Triggers.Groups.EventGroupKey :=
+  { nodeDid := key.nodeDid
+    consumer := if key.consumerKind == "trigger" then .trigger key.consumerId
+      else .callbackBinding key.consumerId
+    consumerConfigKey := key.consumerConfigKey, correlation := key.correlation }
+
+structure ClockInput where
+  name : String
+  key : KeyWire
+  firstSeen : Nat
+  quiescedAt : Option Nat
+  cachedFirstSeen : Option Nat
+  now : Nat
+  timeout : Nat
+  deriving Lean.ToJson
+
+structure ClockOutput where
+  firstSeenAfter : Nat
+  quiescedAtAfter : Option Nat
+  quiescedAtAgain : Option Nat
+  elapsedBefore : Bool
+  elapsedAfter : Bool
+  deriving Lean.ToJson
+
+def ClockInput.clock (i : ClockInput) : _root_.EventDelivery.Group.EventGroupState :=
+  ⟨i.key.toModel, i.firstSeen, i.quiescedAt⟩
+
+/-- model-production-gap: the durable group clock (`load_or_create_group`,
+`quiesce_group` and `evaluate_group` in gents-automation) stamps first-seen and
+quiescence with the wall clock inside a served transaction and keeps no cached
+first-seen observation, so no production path takes `now`, `timeout` or a
+cached first-seen as an input. -/
+@[conformance_family]
+def groupClockUnreached : Family ClockInput ClockOutput where
+  inputs := groupClockCases.map fun c =>
+    { name := c.name, key := KeyWire.ofModel c.clock.key, firstSeen := c.clock.firstSeen
+      quiescedAt := c.clock.quiescedAt, cachedFirstSeen := c.cached, now := c.now
+      timeout := c.timeout }
+  model := fun i =>
+    let after := i.clock.quiesce i.now
+    { firstSeenAfter := after.firstSeen
+      quiescedAtAfter := after.quiescedAt
+      quiescedAtAgain := (after.quiesce (i.now + 1)).quiescedAt
+      elapsedBefore := (i.clock.observe i.cachedFirstSeen).elapsed i.now i.timeout
+      elapsedAfter := (after.observe i.cachedFirstSeen).elapsed i.now i.timeout }
 
 
 def eventGroupCaptureCases :

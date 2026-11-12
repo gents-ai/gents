@@ -2550,8 +2550,8 @@ def caseCoverage : List CoverageEntry :=
       "apply-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "initialization_initial_inference")
       "apply-reconcile" [Surface.operatorCli]
-  , tagged (followUpCoverage "event_group_clock_cases" "EventGroupClockCases"
-      "Drive the existing durable group clock owner after typed trigger/callback identity migration; preserve first-seen and quiescence across restart.")
+  , tagged (followUpCoverage "family" "event_delivery_group_clock_unreached"
+      "model-production-gap: the durable group clock stamps first-seen and quiescence with the wall clock inside a served transaction and keeps no cached first-seen observation; no production path takes now, timeout or a cached first-seen as an input.")
       "triggers" [Surface.runtimeInternal]
   , tagged (followUpCoverage "event_group_capture_cases" "EventGroupCaptureCases"
       "Drive captured ordered input and typed origin through the callback capture owner; quiesced groups must reject capture.")
