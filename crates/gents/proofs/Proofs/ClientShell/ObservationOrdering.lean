@@ -136,13 +136,19 @@ inductive InitConfigStatus where
 /-- Remote-only clients have no local init file, and a desktop that may run a
 local node has none until local setup is chosen. In either case a persisted
 enrollment marks configuration complete even while the live route reconnects
-after restart; local setup stays available from the node list. Enrollment
-authority and send readiness remain with their existing owners; operator
-configuration access is not required. Unreadable bootstrap state stays
-unresolved, and an active wizard retains ownership until explicit completion. -/
+after restart. Enrollment authority and send readiness remain with their
+existing owners; operator configuration access is not required. Unreadable
+bootstrap state stays unresolved, and an active wizard retains ownership until
+explicit completion.
+
+`localHomeLost` is true when this launch retired the saved peer of a local node
+whose home is gone. Saved remotes do not complete setup then: the user approved
+that a home that disappeared returns to the setup wizard, which still offers
+connecting to a remote, rather than opening without the local node. -/
 def observeFirstRun (phase : FirstRunPhase) (snapshotReady : Bool)
     (initConfigStatus : InitConfigStatus)
-    (needsSetup authoritative localRuntimeAllowed remoteConfigured : Bool) : FirstRunPhase :=
+    (needsSetup authoritative localRuntimeAllowed remoteConfigured localHomeLost : Bool) :
+    FirstRunPhase :=
   match phase with
   | .active => .active
   | .done => .done
@@ -152,32 +158,42 @@ def observeFirstRun (phase : FirstRunPhase) (snapshotReady : Bool)
         | .unreadable | .unknown => .unknown
         | status =>
           if !localRuntimeAllowed || status == .absent then
-            if remoteConfigured then .done else .active
+            if remoteConfigured && !localHomeLost then .done else .active
           else if !authoritative then .unknown
           else if needsSetup then .active else .done
 
 theorem configured_remote_completes_without_operator_access :
-    observeFirstRun .unknown true .absent true false false true = .done := by rfl
+    observeFirstRun .unknown true .absent true false false true false = .done := by rfl
 
 theorem unconfigured_remote_keeps_setup :
-    observeFirstRun .unknown true .absent false true false false = .active := by rfl
+    observeFirstRun .unknown true .absent false true false false false = .active := by rfl
 
 theorem desktop_saved_remote_completes_without_local_home (needsSetup authoritative : Bool) :
-    observeFirstRun .unknown true .absent needsSetup authoritative true true = .done := by
+    observeFirstRun .unknown true .absent needsSetup authoritative true true false = .done := by
   cases needsSetup <;> cases authoritative <;> rfl
 
-theorem desktop_without_local_home_or_remote_keeps_setup (needsSetup authoritative : Bool) :
-    observeFirstRun .unknown true .absent needsSetup authoritative true false = .active := by
-  cases needsSetup <;> cases authoritative <;> rfl
+theorem desktop_without_local_home_or_remote_keeps_setup
+    (needsSetup authoritative localHomeLost : Bool) :
+    observeFirstRun .unknown true .absent needsSetup authoritative true false localHomeLost
+      = .active := by
+  cases needsSetup <;> cases authoritative <;> cases localHomeLost <;> rfl
+
+theorem lost_local_home_returns_to_setup_despite_saved_remotes
+    (needsSetup authoritative remoteConfigured : Bool) :
+    observeFirstRun .unknown true .absent needsSetup authoritative true remoteConfigured true
+      = .active := by
+  cases needsSetup <;> cases authoritative <;> cases remoteConfigured <;> rfl
 
 theorem active_setup_keeps_ownership (snapshotReady : Bool) (status : InitConfigStatus)
-    (needsSetup authoritative localRuntimeAllowed remoteConfigured : Bool) :
-    observeFirstRun .active snapshotReady status needsSetup authoritative localRuntimeAllowed remoteConfigured = .active := by
+    (needsSetup authoritative localRuntimeAllowed remoteConfigured localHomeLost : Bool) :
+    observeFirstRun .active snapshotReady status needsSetup authoritative localRuntimeAllowed
+      remoteConfigured localHomeLost = .active := by
   rfl
 
 theorem unreadable_bootstrap_stays_unresolved
-    (needsSetup authoritative localRuntimeAllowed remoteConfigured : Bool) :
-    observeFirstRun .unknown true .unreadable needsSetup authoritative localRuntimeAllowed remoteConfigured = .unknown := by
+    (needsSetup authoritative localRuntimeAllowed remoteConfigured localHomeLost : Bool) :
+    observeFirstRun .unknown true .unreadable needsSetup authoritative localRuntimeAllowed
+      remoteConfigured localHomeLost = .unknown := by
   rfl
 
 /-- A client observation can recover a client error, not managed-server authority.
