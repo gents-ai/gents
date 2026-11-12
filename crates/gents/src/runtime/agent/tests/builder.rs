@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use super::super::*;
 use super::support::*;
 use gents_tools::surface::ToolCeiling;

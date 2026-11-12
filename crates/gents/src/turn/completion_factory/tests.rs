@@ -5,7 +5,6 @@ use std::time::Duration;
 use gents_inference::resolved::SamplingConfig;
 use gents_loop::completion_retry::CompletionRetryProfileFields;
 use gents_protocol::row::AgentRequest;
-use gents_session::request::aggregate_token_limit::parse_aggregate_token_limit;
 use gents_store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
 
 fn request() -> AgentRequest {
@@ -724,38 +723,6 @@ fn calibration_accounting(estimator: &str, estimated: usize, ratio: Option<u64>)
         "compaction_reason": "below_threshold",
     })
     .to_string()
-}
-
-/// The ratio the seed sets before any default prior: the window's maximum,
-/// else the newest dispatched ratio.
-fn session_input_ratio_only(rows: &[CalibrationCallRow], estimator: &str) -> Option<u64> {
-    let seed = session_calibration_seed(rows, estimator);
-    seed.observations
-        .iter()
-        .copied()
-        .max()
-        .or(seed.dispatched_ratio)
-}
-
-fn calibration_row(
-    usage: Option<(i64, i64, i64)>,
-    accounting: Option<String>,
-) -> CalibrationCallRow {
-    CalibrationCallRow {
-        prompt_tokens: usage.map(|(input, _, _)| input),
-        completion_tokens: usage.map(|_| 7_000),
-        cached_input_tokens: usage.map(|(_, read, _)| read),
-        cache_creation_input_tokens: usage.map(|(_, _, write)| write),
-        usage_completeness: Some(
-            if usage.is_some() {
-                "complete"
-            } else {
-                "missing"
-            }
-            .into(),
-        ),
-        context_accounting_json: accounting,
-    }
 }
 
 #[tokio::test]

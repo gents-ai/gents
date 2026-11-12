@@ -11,7 +11,7 @@ use crate::runtime::agent::PendingAgent;
 use crate::runtime::status::RuntimeStatusHandle;
 use gents_inference::admission::BackendAdmissionConfig;
 use gents_inference::backends::provider::BackendProviderKind;
-use gents_inference::resolved::{MaxTurnsProvenance, ResolvedAgent, DEFAULT_MAX_TURNS};
+use gents_inference::resolved::ResolvedAgent;
 use gents_lean_vocab::lean_runtime_reconcile_case;
 use gents_protocol::row::AgentRequest;
 use gents_store::graphql::escape_graphql_string;
@@ -214,41 +214,6 @@ fn background_child_request(index: usize, agent_did: &str) -> AgentRequest {
         workspace_authority: None,
         workspace_owner_node_did: None,
         workspace_seal_hash: None,
-    }
-}
-
-async fn read_failure_is_noop_self_loop(node: Arc<defra_node::Node>) -> bool {
-    use gents_p2p::p2p_reconcile::{
-        reconcile_peer_tick, EmbeddedRemoteP2pAdmin, LoadedPairingApplied, PairingDesired,
-        PairingStateStore,
-    };
-
-    struct FailingDesiredStore;
-    #[async_trait::async_trait]
-    impl PairingStateStore for FailingDesiredStore {
-        async fn load_desired(&self, _peer_id: &str) -> anyhow::Result<Option<PairingDesired>> {
-            anyhow::bail!("simulated desired-state read failure")
-        }
-        async fn load_applied(&self, _peer_id: &str) -> anyhow::Result<LoadedPairingApplied> {
-            Ok(LoadedPairingApplied::default())
-        }
-        async fn persist_applied(
-            &self,
-            _peer_id: &str,
-            _applied: &LoadedPairingApplied,
-        ) -> anyhow::Result<()> {
-            Ok(())
-        }
-        async fn list_peer_ids(&self) -> anyhow::Result<BTreeSet<String>> {
-            Ok(BTreeSet::new())
-        }
-    }
-
-    let admin = EmbeddedRemoteP2pAdmin::new(node);
-    let store = FailingDesiredStore;
-    match reconcile_peer_tick(&admin, &store, "peer-a").await {
-        Ok(outcome) => outcome.desired_read_failed && outcome.ops_applied.is_empty(),
-        Err(_) => false,
     }
 }
 

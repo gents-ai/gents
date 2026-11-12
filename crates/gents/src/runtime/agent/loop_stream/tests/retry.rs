@@ -1,11 +1,3 @@
-fn reasoning_rejection() -> CompletionError {
-    CompletionError::ProviderError(
-        "400 invalid_request_error: messages.1.content.0: Invalid `signature` in `thinking` \
-         block"
-            .to_string(),
-    )
-}
-
 #[tokio::test]
 async fn owned_hook_observes_retry_and_clears_after_execution() {
     use gents_inference::inference_observation::{InferenceKey, InferenceObservationRegistry};

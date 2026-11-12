@@ -1,8 +1,4 @@
 use super::*;
-use gents_inference::llm::message::AssistantContent;
-use gents_loop::claude_messages_body::ReplayTag;
-use gents_protocol::output::OutputSource;
-use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 use gents_store::test_support::first_content;
 
 fn test_builder(system_prompt: &str, agent_did: &str) -> LayeredPromptBuilder {

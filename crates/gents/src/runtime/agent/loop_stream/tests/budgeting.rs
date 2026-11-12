@@ -113,29 +113,6 @@ fn generated_turn_budget_cases_drive_every_completion_dispatch() {
     }
 }
 
-/// The second dispatch's context size after the first call's usage: its
-/// estimate at the ratio that usage set, anchored on the first call when that
-/// call's response was accepted into the transcript.
-fn context_after_first_usage(
-    dispatches: &[(u64, Option<u64>)],
-    first_input: u64,
-    accepted_output: Option<u64>,
-) -> u64 {
-    let first_estimate = usize::try_from(dispatches[0].0).unwrap();
-    let calibration = crate::turn::provider_input::budget::ContextCalibration::default();
-    calibration.observe(first_input, first_estimate).unwrap();
-    if let Some(output_tokens) = accepted_output {
-        calibration.anchor_accepted(crate::turn::provider_input::budget::ContextAnchor {
-            input_tokens: first_input,
-            output_tokens,
-            estimated_input_tokens: first_estimate,
-        });
-    }
-    calibration
-        .context(usize::try_from(dispatches[1].0).unwrap())
-        .tokens as u64
-}
-
 /// A staged per-turn reduction writes its row only once the rebuilt request
 /// fits (#3283). Each expected row count is the model's
 /// `commitRequestLocalAfterRebuild` for the matching rebuilt result.
@@ -299,12 +276,6 @@ async fn staged_turn_reduction_commits_its_row_only_when_the_rebuilt_request_fit
     }
 }
 
-#[derive(serde::Deserialize, schemars::JsonSchema)]
-struct BudgetedStructuredResponse {
-    #[allow(dead_code)]
-    answer: String,
-}
-
 #[test]
 fn generated_budget_cases_drive_dynamic_output_compaction_trigger() {
     let cases = gents_lean_vocab::lean_prompt_assembly_budget_cases();
@@ -448,140 +419,4 @@ fn generated_compaction_trigger_cases_drive_the_production_trigger() {
             case.name
         );
     }
-}
-
-/// The live Claude Messages rejection, as the transport renders it.
-const CLAUDE_PROMPT_TOO_LONG: &str = r#"Claude Messages HTTP 400 Bad Request (request-id -) body={"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 1001685 tokens > 1000000 maximum"},"request_id":"req_011CgVVYfxcw64a1gDiAAhYC"}"#;
-
-type AdmittedReduction = Arc<std::sync::Mutex<Vec<(usize, usize)>>>;
-
-/// A 1M-window turn whose bytes/4 estimate (~561k) is below the 0.75
-/// threshold, as in the live failure, with a compactor that records each
-/// admission it receives.
-fn overflow_loop_config(admitted: AdmittedReduction) -> LoopConfig {
-    let mut loop_config = config(0);
-    loop_config.context_window = 1_000_000;
-    loop_config.compaction_threshold = 0.75;
-    loop_config.max_tokens = Some(32_000);
-    loop_config.turn_compactor = Some(Arc::new(move |request: TurnCompactionRequest| {
-        admitted.lock().unwrap().push((
-            request.admission.input_tokens(),
-            request.admission.effective_input_budget(),
-        ));
-        Box::pin(async {
-            Ok(TurnCompactionOutcome::Reduced {
-                messages: vec![TaggedMessage::unassociated(Message::user(
-                    "compacted prompt",
-                ))],
-                reduction_key: "overflow-reduction-1".to_string(),
-                commit: TurnReductionCommit::new(|| async { Ok(()) }),
-            })
-        })
-    }));
-    loop_config
-}
-
-fn live_sized_prompt() -> TaggedMessage {
-    TaggedMessage::unassociated(Message::user("x".repeat(2_244_000)))
-}
-
-fn echo_call(id: &str) -> ScriptedCall {
-    ScriptedCall::Turn(vec![
-        RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
-            id.to_string(),
-            "echo".to_string(),
-            serde_json::json!({}),
-        )),
-        RawStreamingChoice::FinalResponse(()),
-    ])
-}
-
-/// The one forced compaction is per completion: a later turn of the same
-/// request that overflows again compacts again, while a second overflow
-/// within one turn still ends the request.
-
-type CapturedAccounting =
-    Arc<std::sync::Mutex<Vec<gents_inference::rendered_request::ContextAccounting>>>;
-
-fn capture_accounting(loop_config: &mut LoopConfig) -> CapturedAccounting {
-    let captured = CapturedAccounting::default();
-    let sink = captured.clone();
-    loop_config.on_rendered_request = Some(Arc::new(move |_, _, _, trace| {
-        let sink = sink.clone();
-        Box::pin(async move {
-            sink.lock().unwrap().extend(trace.context_accounting);
-            Ok(())
-        })
-    }));
-    captured
-}
-
-async fn anchored_compaction_run(
-    first_output_tokens: u64,
-) -> (
-    Vec<(usize, usize)>,
-    Vec<gents_inference::rendered_request::ContextAccounting>,
-) {
-    let model = UsageScriptedModel::new(vec![
-        usage_echo_tool_turn(UsageResponse {
-            usage: Some(Usage {
-                input_tokens: 700_000,
-                output_tokens: first_output_tokens,
-                total_tokens: 700_000 + first_output_tokens,
-                cached_input_tokens: 0,
-                cache_creation_input_tokens: 0,
-            }),
-        }),
-        vec![
-            RawStreamingChoice::Message("done".to_string()),
-            RawStreamingChoice::FinalResponse(usage_response(1_000, 10, 1_010)),
-        ],
-    ]);
-    let admitted = AdmittedReduction::default();
-    let mut loop_config = overflow_loop_config(admitted.clone());
-    let captured = capture_accounting(&mut loop_config);
-
-    let collected = collect_scripted_stream(run_loop_stream(
-        model,
-        None::<gents_toolcalls::call::hook::DefraSessionHook>,
-        TaggedMessage::unassociated(Message::user("x".repeat(1_600_000))),
-        Vec::new(),
-        Arc::new(vec![echo_tool()]),
-        loop_config,
-    ))
-    .await;
-    assert_eq!(collected.error, None);
-    let admitted = admitted.lock().unwrap().clone();
-    let accounting = captured.lock().unwrap().clone();
-    (admitted, accounting)
-}
-
-async fn pre_turn_admissions(incoming_bytes: usize) -> usize {
-    let model = ScriptedModel::new(vec![
-        RawStreamingChoice::Message("done".to_string()),
-        RawStreamingChoice::FinalResponse(()),
-    ]);
-    let admitted = AdmittedReduction::default();
-    let mut loop_config = overflow_loop_config(admitted.clone());
-    loop_config.context_calibration =
-        crate::turn::provider_input::budget::ContextCalibration::with_ratio(
-            crate::turn::provider_input::budget::CLAUDE_MESSAGES_PRIOR_INPUT_RATIO_BASIS_POINTS,
-        );
-    let history = vec![
-        TaggedMessage::unassociated(Message::user("h".repeat(1_200_000))),
-        TaggedMessage::unassociated(Message::assistant("ok")),
-    ];
-
-    let collected = collect_scripted_stream(run_loop_stream(
-        model,
-        None::<gents_toolcalls::call::hook::DefraSessionHook>,
-        TaggedMessage::unassociated(Message::user("y".repeat(incoming_bytes))),
-        history,
-        Arc::new(Vec::new()),
-        loop_config,
-    ))
-    .await;
-    assert_eq!(collected.error, None);
-    let admitted = admitted.lock().unwrap().len();
-    admitted
 }

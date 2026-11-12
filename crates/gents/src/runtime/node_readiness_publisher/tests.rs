@@ -1,23 +1,15 @@
 use std::collections::VecDeque;
 
-use tokio::sync::Semaphore;
-
 use super::*;
 
 #[derive(Clone, Copy)]
 enum WritePlan {
     Success,
-    Fail,
-    StorageFull,
-    BlockForever,
-    BlockThenFail,
-    BlockThenSucceed,
 }
 
 struct ControlledWriter {
     plans: std::sync::Mutex<VecDeque<WritePlan>>,
     attempts: mpsc::UnboundedSender<NodeReadinessProcessState>,
-    release: Semaphore,
     persisted: tokio::sync::Mutex<Vec<NodeReadinessProcessState>>,
 }
 
@@ -40,20 +32,6 @@ impl NodeReadinessWriter for ControlledWriter {
             .expect("attempt observer remains alive");
         match plan {
             WritePlan::Success => {}
-            WritePlan::Fail => anyhow::bail!("injected readiness persistence failure"),
-            WritePlan::StorageFull => {
-                return Err(anyhow::Error::new(
-                    gents_protocol::database_error::StorageFull,
-                ))
-            }
-            WritePlan::BlockForever => std::future::pending().await,
-            WritePlan::BlockThenFail => {
-                self.release.acquire().await.unwrap().forget();
-                anyhow::bail!("injected readiness persistence failure");
-            }
-            WritePlan::BlockThenSucceed => {
-                self.release.acquire().await.unwrap().forget();
-            }
         }
         self.persisted.lock().await.push(snapshot.process_state);
         Ok(())
@@ -72,7 +50,6 @@ async fn generated_readiness_publication_traces_write_only_semantic_changes() {
                 case.states.len()
             ])),
             attempts: attempts_tx,
-            release: Semaphore::new(0),
             persisted: tokio::sync::Mutex::new(Vec::new()),
         });
         let (owner, publisher) = NodeReadinessPublisherHandle::start_with_writer(

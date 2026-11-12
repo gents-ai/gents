@@ -584,38 +584,3 @@ async fn wait_for_restart(
         _ = shutdown.changed() => false,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use anyhow::anyhow;
-    use tokio::sync::Notify;
-
-    use super::*;
-
-    struct FailingDemotionPolicy {
-        attempted: Arc<Notify>,
-    }
-
-    #[async_trait::async_trait]
-    impl SlotFailurePolicy for FailingDemotionPolicy {
-        fn build_failure_budget(&self) -> u32 {
-            1
-        }
-
-        async fn on_slot_created(&self, _agent_did: &str, _generation: u64) -> Result<()> {
-            Ok(())
-        }
-
-        async fn try_demote(
-            &self,
-            _agent_did: &str,
-            _generation: u64,
-            _error: &str,
-        ) -> Result<bool> {
-            self.attempted.notify_one();
-            Err(anyhow!("injected demotion persistence failure"))
-        }
-
-        async fn on_slot_retired(&self, _agent_did: &str, _generation: u64, _recreated: bool) {}
-    }
-}
