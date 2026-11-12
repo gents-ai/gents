@@ -718,67 +718,6 @@ async fn manifest_entries(
 }
 
 #[tokio::test]
-async fn deleted_blocks_never_publish_dangling_references() {
-    let fixture = CaptureFixture::new().await;
-    let node = fixture.db.node.clone();
-    let access = fixture.access();
-    let sink = fixture.sink();
-    let body = json!({"messages":[{"role":"user","content":capture_text(89, 24 * 1024)}]});
-    let first = fixture.turn(0, body.clone());
-    sink.capture(first.clone()).await.unwrap();
-    let row = stored_capture(&access, &first.capture_key).await;
-    let record = gents_inference::rendered_request::encoding::decode_capture_record(
-        gents_inference::rendered_request::CAPTURE_VERSION,
-        row["request_json"].as_str().unwrap(),
-        gents_inference::rendered_request::CapturePayloadKind::RequestBody,
-    )
-    .unwrap();
-    let leaves = gents_inference::rendered_request::manifest_leaf_entries(&access, record)
-        .await
-        .unwrap();
-    let id = escape_graphql_string(&leaves[0].doc_id);
-    // Blocks are written, and so natively owned, by the capturing Agent. The
-    // runtime grants it the node delete permission so its own access can
-    // remove one out from under the next capture.
-    let runtime_did = fixture.db.node_identity.did().to_owned();
-    gents_store::config_client::ConfigAccess::local_as(
-        node.clone(),
-        identity::Did::new(runtime_did).unwrap(),
-    )
-    .grant_node_permission(
-        &identity::Did::new(fixture.agent.did()).unwrap(),
-        gents_store::config_client::NodePermission::DocumentDelete,
-    )
-    .await
-    .unwrap();
-    let deleted = access
-        .write(
-            "test.delete_capture_block",
-            &format!(r#"mutation {{ delete_RenderedRequestBlock(docID: "{id}") {{ _docID }} }}"#),
-        )
-        .await
-        .unwrap();
-    assert!(gents_store::graphql::response_has_documents(
-        &deleted["data"]["delete_RenderedRequestBlock"]
-    ));
-    let next = fixture.turn(1, body);
-    let error = sink.capture(next.clone()).await.unwrap_err();
-    assert!(format!("{error:#}").contains("deleted"), "{error:#}");
-    assert!(sink.stored_fact(&next).await.unwrap().is_none());
-    let reopened = fixture.sink();
-    let error = reopened.capture(next.clone()).await.unwrap_err();
-    assert!(format!("{error:#}").contains("deleted"), "{error:#}");
-    assert!(reopened.stored_fact(&next).await.unwrap().is_none());
-    let unrelated = fixture.turn(
-        2,
-        json!({"messages": [{"role": "user", "content": "fresh"}]}),
-    );
-    reopened.capture(unrelated.clone()).await.unwrap();
-    assert!(reopened.stored_fact(&unrelated).await.unwrap().is_some());
-    node.shutdown().await.expect("node shutdown");
-}
-
-#[tokio::test]
 async fn shared_manifest_roots_stay_small_and_reconstruct_after_reopen() {
     let fixture = CaptureFixture::new().await;
     let node = fixture.db.node.clone();
@@ -876,52 +815,120 @@ async fn shared_manifest_roots_stay_small_and_reconstruct_after_reopen() {
     node.shutdown().await.expect("node shutdown");
 }
 
-#[tokio::test]
-async fn same_capture_key_cannot_rebind_its_transport_route() {
-    let fixture = CaptureFixture::new().await;
-    let node = fixture.db.node.clone();
-    let sink = fixture.sink();
-    let mut first = fixture.turn(
-        0,
-        json!({"messages": [{"role": "user", "content": capture_text(3, 3 * 1024)}]}),
-    );
-    first.provenance_json["provider_family"] = json!("OpenAiCompatible");
-    first.provenance_json["provider_endpoint"] = json!("https://example.test");
-    first.provenance_json["provider_route_path_sha256"] = json!("path-a");
-    sink.capture(first.clone()).await.expect("first capture");
-
-    let mut rebound = first;
-    rebound.provenance_json["provider_route_path_sha256"] = json!("path-b");
-    let error = sink.capture(rebound).await.unwrap_err();
-    assert!(
-        error.to_string().contains("integrity violation"),
-        "{error:#}"
-    );
-    node.shutdown().await.expect("node shutdown");
+fn sink_refusal(error: &anyhow::Error) -> String {
+    let text = format!("{error:#}");
+    if text.contains("integrity violation") {
+        "integrity_violation".to_owned()
+    } else if text.contains("deleted") {
+        "missing_block".to_owned()
+    } else {
+        panic!("unclassified sink refusal: {text}")
+    }
 }
 
 #[tokio::test]
-async fn re_delivering_a_capture_is_idempotent() {
-    let fixture = CaptureFixture::new().await;
-    let node = fixture.db.node.clone();
-    let access = fixture.access();
-    let sink = fixture.sink();
-    let rendered = fixture.turn(
-        0,
-        json!({"messages": [{"role": "user", "content": capture_text(5, 5 * 1024)}]}),
-    );
-    sink.capture(rendered.clone()).await.expect("first capture");
-    let blocks_after_first = block_rows(&access).await.len();
-
-    sink.capture(rendered.clone())
-        .await
-        .expect("re-delivery is idempotent");
-    assert_eq!(
-        block_rows(&access).await.len(),
-        blocks_after_first,
-        "no block may be written twice"
-    );
-    node.shutdown().await.expect("node shutdown");
+async fn sink_deliveries_match_the_lean_capture_model() {
+    for case in gents_lean_vocab::families::contract_cases_rendered_capture_sink_delivery::cases::<
+        String,
+        String,
+    >() {
+        let fixture = CaptureFixture::new().await;
+        let node = fixture.db.node.clone();
+        let access = fixture.access();
+        let sink = fixture.sink();
+        let body = json!({"messages":[{"role":"user","content":capture_text(89, 24 * 1024)}]});
+        let routed = |turn: usize, body: Value, route: &str| {
+            let mut rendered = fixture.turn(turn, body);
+            rendered.provenance_json["provider_family"] = json!("OpenAiCompatible");
+            rendered.provenance_json["provider_endpoint"] = json!("https://example.test");
+            rendered.provenance_json["provider_route_path_sha256"] = json!(route);
+            rendered
+        };
+        let delivery = routed(0, body.clone(), "path-a");
+        match case.input.prior.as_str() {
+            "unbound" => {}
+            "same_request" => sink.capture(delivery.clone()).await.unwrap(),
+            "other_route" => sink
+                .capture(routed(0, body.clone(), "path-b"))
+                .await
+                .unwrap(),
+            "other_body" => sink
+                .capture(routed(
+                    0,
+                    json!({"messages":[{"role":"user","content":capture_text(90, 24 * 1024)}]}),
+                    "path-a",
+                ))
+                .await
+                .unwrap(),
+            other => panic!("unknown prior {other}"),
+        }
+        if case.input.block_deleted {
+            let earlier = routed(5, body.clone(), "path-a");
+            sink.capture(earlier.clone()).await.unwrap();
+            let row = stored_capture(&access, &earlier.capture_key).await;
+            let record = gents_inference::rendered_request::encoding::decode_capture_record(
+                gents_inference::rendered_request::CAPTURE_VERSION,
+                row["request_json"].as_str().unwrap(),
+                gents_inference::rendered_request::CapturePayloadKind::RequestBody,
+            )
+            .unwrap();
+            let leaves = gents_inference::rendered_request::manifest_leaf_entries(&access, record)
+                .await
+                .unwrap();
+            let id = escape_graphql_string(&leaves[0].doc_id);
+            let runtime_did = fixture.db.node_identity.did().to_owned();
+            gents_store::config_client::ConfigAccess::local_as(
+                node.clone(),
+                identity::Did::new(runtime_did).unwrap(),
+            )
+            .grant_node_permission(
+                &identity::Did::new(fixture.agent.did()).unwrap(),
+                gents_store::config_client::NodePermission::DocumentDelete,
+            )
+            .await
+            .unwrap();
+            let deleted = access
+                .write(
+                    "test.delete_capture_block",
+                    &format!(
+                        r#"mutation {{ delete_RenderedRequestBlock(docID: "{id}") {{ _docID }} }}"#
+                    ),
+                )
+                .await
+                .unwrap();
+            assert!(gents_store::graphql::response_has_documents(
+                &deleted["data"]["delete_RenderedRequestBlock"]
+            ));
+        }
+        let blocks_before = block_rows(&access).await.len();
+        let refusal = sink
+            .capture(delivery.clone())
+            .await
+            .err()
+            .map(|error| sink_refusal(&error));
+        let blocks_written = block_rows(&access).await.len() > blocks_before;
+        let bound = sink.stored_fact(&delivery).await.unwrap().is_some();
+        let reopened = fixture.sink();
+        let redelivery_refusal = reopened
+            .capture(delivery.clone())
+            .await
+            .err()
+            .map(|error| sink_refusal(&error));
+        let unrelated = fixture.turn(
+            2,
+            json!({"messages": [{"role": "user", "content": "fresh"}]}),
+        );
+        let unrelated_durable = reopened.capture(unrelated.clone()).await.is_ok()
+            && reopened.stored_fact(&unrelated).await.unwrap().is_some();
+        case.check(gents_lean_vocab::families::contract_cases_rendered_capture_sink_delivery::SinkDelivery {
+            refusal,
+            bound,
+            blocks_written,
+            redelivery_refusal,
+            unrelated_durable,
+        });
+        node.shutdown().await.expect("node shutdown");
+    }
 }
 
 #[tokio::test]
