@@ -921,25 +921,6 @@ async fn set_request_state_as(access: &ConfigAccess, doc: &str, state: &str) {
     );
 }
 
-async fn wait_for_request_terminal_as(
-    access: &ConfigAccess,
-    request_id: &str,
-    timeout: Duration,
-) -> String {
-    let request = escape_graphql_string(request_id);
-    tokio::time::timeout(timeout, async {
-        loop {
-            let response = access.execute(&format!(r#"{{AgentRequest(filter: {{request_id: {{_eq: "{request}"}}}}, limit: 2) {{_docID lifecycle_state}}}}"#)).await.unwrap();
-            let rows = response["data"]["AgentRequest"].as_array().unwrap();
-            assert!(rows.len() <= 1, "ambiguous request identity");
-            if let Some(state) = rows.first().and_then(|row| row["lifecycle_state"].as_str()) {
-                if gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(Some(state)) { break state.to_owned(); }
-            }
-            tokio::time::sleep(Duration::from_millis(250)).await;
-        }
-    }).await.expect("request did not terminalize")
-}
-
 async fn load_history_as(
     access: &ConfigAccess,
     node_did: &str,

@@ -5,7 +5,6 @@ use gents_protocol::output::TerminalOutput;
 use gents_store::collection::Collection;
 use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
-use gents_store::identity::NodeIdentity;
 use serde_json::json;
 
 use crate::support::live_inference::{
