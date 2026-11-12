@@ -522,6 +522,12 @@ mod editor_contract_tests {
             "args": { "request": { "nodeDid": "did:key:node", "agentDid": "did:key:agent", "workspacePath": "/workspace" } }
         });
         assert!(serde_json::from_value::<ClientCommand>(command.clone()).is_ok());
+        let mut scoped = command.clone();
+        scoped["args"]["request"]
+            .as_object_mut()
+            .unwrap()
+            .insert("sessionId".into(), "chat-1".into());
+        assert!(serde_json::from_value::<ClientCommand>(scoped).is_ok());
         let mut rejected = command;
         let scope = rejected["args"]["request"].as_object_mut().unwrap();
         scope.remove("agentDid");

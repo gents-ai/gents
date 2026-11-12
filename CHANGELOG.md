@@ -230,6 +230,15 @@ source consistency checks, not a separate runtime compatibility version.
   notice. Codex as a model provider, including `accounts login codex`, is
   unchanged.
 - `gents` remembers the home setup chose. This also moves the desktop's default home.
+- Each chat chooses its own permissions. An approval mode and the commands it
+  remembers were shared by every chat on the same agent and folder; each chat
+  now keeps its own, beside an agent and folder default that still governs any
+  chat that has not chosen. A selection made before this release is that
+  default, so every chat keeps the mode, reviewer and allowed folders it had
+  until one picks its own, and the desktop shows which chat a choice applies
+  to. Work a chat delegates to another agent opens a chat of its own, so it
+  follows the default rather than the chat that started it; raise the default
+  if delegated work needs more.
 - Stopping the native service waits for the runtime's own shutdown instead of
   about a second, so a stop that succeeds no longer reports `native supervisor
   did not confirm that the Gents job unloaded or became inactive`. Stop node in
