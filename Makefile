@@ -288,6 +288,7 @@ live-client:
 live-editor:
 	@test -d "$$GENTS_VSCODE_ROOT" || { echo "Set GENTS_VSCODE_ROOT to the installed-editor extension checkout" >&2; exit 2; }
 	@test -f "$$GENTS_VSCODE_VSIX" || { echo "Set GENTS_VSCODE_VSIX to the built editor extension package" >&2; exit 2; }
+	@unzip -Z -1 "$$GENTS_VSCODE_VSIX" '*gents-media-host*' >/dev/null 2>&1 || { echo "The editor VSIX must bundle gents-media-host; rebuild the extension package with its native helpers" >&2; exit 2; }
 	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-client-host --features editor-e2e --test runtime $(if $(strip $(LIVE_FILTER)),$(LIVE_FILTER),editor_preserves_live_session_and_draft_across_window_reload) $(CARGO_PROFILE_FLAG) -- --exact --nocapture --test-threads=1
 
 live-desktop-smoke:
