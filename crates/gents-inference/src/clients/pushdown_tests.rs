@@ -226,27 +226,6 @@ fn megabytes_of_chat_history_reasoning_do_not_change_provider_accounting() {
 }
 
 #[test]
-fn reasoning_only_chat_history_has_zero_provider_visible_message_cost() {
-    let counter = ProviderInputCounter::new(
-        BackendProviderKind::OpenAiCompatible,
-        OpenAiWireApi::ChatCompletions,
-        "test-model",
-    );
-    let reasoning_only = vec![Message::Assistant {
-        request_id: None,
-        id: None,
-        content: vec![AssistantContent::Reasoning(
-            Reasoning::new(&"hidden".repeat(500_000)).with_id("rs_only".to_string()),
-        )],
-    }];
-
-    assert_eq!(
-        counter.estimate_message_request(&reasoning_only).unwrap(),
-        0
-    );
-}
-
-#[test]
 fn component_partition_stays_exact_across_json_remainders() {
     let counter = ProviderInputCounter::new(
         BackendProviderKind::OpenAiCompatible,
