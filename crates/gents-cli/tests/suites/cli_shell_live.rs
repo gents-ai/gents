@@ -121,41 +121,50 @@ struct Live {
     home: PathBuf,
     node_did: String,
     graphql: String,
-    tools_id: String,
     _serve: ServeProcess,
     _tempdir: tempfile::TempDir,
 }
 
-async fn start_live() -> Result<Live> {
+async fn start_live(questions: bool) -> Result<Live> {
     let target = gents::support::live_inference::live_target().await;
     let model_endpoint = target.endpoint().to_owned();
     let model_name = target.model().to_owned();
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let home = tempdir.path().join("home");
-    fs::create_dir_all(&home)?;
-    let home_arg = home.to_str().context("home is not UTF-8")?;
-    let init = run_init_json(
-        &home,
-        &[
-            "--home",
-            home_arg,
-            "--node-name",
-            "shell-live",
-            "--model-name",
-            &model_name,
-            "--inference-url",
-            &model_endpoint,
-        ],
-    )?;
-    let node_did = node_did_from_init(&init)?;
-
-    let port = allocate_port()?;
-    let (serve, _) = spawn_server_with_ready_json(
-        &home,
-        port,
-        &["--home", home_arg, "--p2p-transport", "none"],
-        &[],
-    )?;
+    let (tempdir, home, node_did, mut serve, port) = tokio::task::spawn_blocking(move || {
+        let tempdir = tempfile::tempdir().context("creating tempdir")?;
+        let home = tempdir.path().join("home");
+        fs::create_dir_all(&home)?;
+        let home_arg = home.to_str().context("home is not UTF-8")?;
+        let init = run_init_json(
+            &home,
+            &[
+                "--home",
+                home_arg,
+                "--node-name",
+                "shell-live",
+                "--model-name",
+                &model_name,
+                "--inference-url",
+                &model_endpoint,
+            ],
+        )?;
+        let node_did = node_did_from_init(&init)?;
+        if questions {
+            let tools_id = init
+                .pointer("/init/tools_id")
+                .and_then(serde_json::Value::as_str)
+                .context("init did not return tools_id")?;
+            configure_questions(&home, &node_did, tools_id)?;
+        }
+        let port = allocate_port()?;
+        let (serve, _) = spawn_server_with_ready_json(
+            &home,
+            port,
+            &["--home", home_arg, "--p2p-transport", "none"],
+            &[],
+        )?;
+        Ok::<_, anyhow::Error>((tempdir, home, node_did, serve, port))
+    })
+    .await??;
     let graphql = graphql_url(port);
     serve
         .capturing(wait_for_runtime_ready(
@@ -168,11 +177,6 @@ async fn start_live() -> Result<Live> {
         home,
         node_did,
         graphql,
-        tools_id: init
-            .pointer("/init/tools_id")
-            .and_then(serde_json::Value::as_str)
-            .context("init did not return tools_id")?
-            .to_owned(),
         _serve: serve,
         _tempdir: tempdir,
     })
@@ -256,15 +260,16 @@ fn quit_cleanly(shell: &Session) -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "select GENTS_LIVE_TARGET and run the live CLI target"]
 async fn the_shell_streams_a_live_reply_and_quits_cleanly() -> Result<()> {
-    let live = start_live().await?;
+    let live = start_live(false).await?;
     let shell = start_shell(&live, PROMPT.to_owned()).await?;
     let answer = request_reply(&live, PROMPT).await?;
     tokio::task::spawn_blocking(move || {
         let visible = answer
-            .lines()
-            .find(|line| !line.trim().is_empty())
-            .context("empty reply")?;
-        wait_for(&shell, visible.trim(), REPLY)?;
+            .split_whitespace()
+            .take(5)
+            .collect::<Vec<_>>()
+            .join(" ");
+        wait_for(&shell, &visible, REPLY)?;
         let rows = conversation_rows(&shell)?;
         let rendered = rows
             .join(" ")
@@ -281,15 +286,11 @@ async fn the_shell_streams_a_live_reply_and_quits_cleanly() -> Result<()> {
     .await?
 }
 
-async fn configure_questions(live: &Live) -> Result<()> {
+fn configure_questions(home: &Path, node_did: &str, previous_tools: &str) -> Result<()> {
     use gents_documents::mailbox_write_decl::{
         canonical_mailbox_write_decl, MailboxAction, MailboxKind, MailboxNotificationPolicy,
     };
-    use gents_documents::{
-        apply_desired_state_plan, DatastoreToolSurfaceDocument, DatastoreTools,
-        DesiredStateApplyDocument, DesiredStateApplyPlan, SurfaceToolDecl, Tools,
-    };
-    use gents_store::collection::Collection;
+    use gents_documents::{DatastoreToolSurfaceDocument, DatastoreTools, SurfaceToolDecl, Tools};
     let mut declaration = canonical_mailbox_write_decl();
     declaration.notification = Some(MailboxNotificationPolicy {
         kind: MailboxKind::Ask,
@@ -297,8 +298,8 @@ async fn configure_questions(live: &Live) -> Result<()> {
         ..Default::default()
     });
     let tools = Tools {
-        node_did: live.node_did.clone(),
-        tools_id: live.tools_id.clone(),
+        node_did: node_did.into(),
+        tools_id: "shell-question-tools".into(),
         datastore: Some(DatastoreTools {
             datastore_tool_surface_ids: Some(vec!["shell-questions".into()]),
             ..Default::default()
@@ -307,43 +308,50 @@ async fn configure_questions(live: &Live) -> Result<()> {
     };
     let surface = DatastoreToolSurfaceDocument {
         surface_id: "shell-questions".into(),
-        node_did: live.node_did.clone(),
+        node_did: node_did.into(),
         display_name: None,
         enabled: true,
         entries: Some(vec![SurfaceToolDecl::Create(declaration)]),
         created_at: None,
         tags: vec![],
     };
-    let plan = DesiredStateApplyPlan::new(
-        [
-            (Collection::Tools, serde_json::to_value(tools)?),
-            (
-                Collection::DatastoreToolSurface,
-                serde_json::to_value(surface)?,
-            ),
-        ]
-        .into_iter()
-        .map(|(collection, value)| DesiredStateApplyDocument {
-            collection,
-            add: value.clone(),
-            update: value,
-        })
-        .collect(),
+    let directory = home.join("question-config");
+    let root = directory
+        .to_str()
+        .context("configuration root is not UTF-8")?;
+    let home_arg = home.to_str().context("home is not UTF-8")?;
+    run_cli_text(
+        home,
+        &["config", "export", "--home", home_arg, "--root", root],
     )?;
-    runtime_access(live)
-        .transact_write("test.shell_questions", |txn| {
-            let plan = &plan;
-            Box::pin(async move {
-                apply_desired_state_plan(
-                    txn,
-                    plan,
-                    &gents_inference::resolved::ProviderProfilePolicy,
-                )
-                .await
-                .map(|_| ())
-            })
-        })
-        .await?;
+    let path = directory.join("pack_config.json");
+    let mut config = read_json_file(&path)?;
+    let contexts = config["contexts"]
+        .as_array_mut()
+        .context("exported contexts missing")?;
+    let context = contexts
+        .iter_mut()
+        .find(|context| context["tools_id"] == previous_tools)
+        .context("default Agent context missing from configuration export")?;
+    context["tools_id"] = serde_json::json!("shell-question-tools");
+    context["system_prompt"] = serde_json::json!("Follow the user's requested tool call exactly. After it succeeds, acknowledge briefly without calling it again. When notified of the user's answer, acknowledge it without tools.");
+    config["tools"]
+        .as_array_mut()
+        .context("exported Tools missing")?
+        .push(serde_json::to_value(tools)?);
+    let surface = serde_json::to_value(surface)?;
+    match config
+        .get_mut("datastore_tool_surfaces")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        Some(surfaces) => surfaces.push(surface),
+        None => config["datastore_tool_surfaces"] = serde_json::json!([surface]),
+    }
+    write_json_file(&path, &config)?;
+    run_cli_text(
+        home,
+        &["config", "apply", "--home", home_arg, "--root", root],
+    )?;
     Ok(())
 }
 
@@ -354,8 +362,7 @@ async fn the_shell_answers_a_question_and_the_item_is_acted() -> Result<()> {
     use gents_protocol::mailbox_question::{
         MailboxQuestion, MailboxQuestionOption, MAILBOX_QUESTION_VERSION,
     };
-    let live = start_live().await?;
-    configure_questions(&live).await?;
+    let live = start_live(true).await?;
     let question = MailboxQuestion {
         version: MAILBOX_QUESTION_VERSION,
         prompt: "Which channel ships?".into(),
