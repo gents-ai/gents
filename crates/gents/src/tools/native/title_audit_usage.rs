@@ -253,8 +253,28 @@ pub(crate) async fn load_session_goal_usage(
             .clone(),
     )
     .context("decoding goal usage AgentRequest rows")?;
+    session_goal_usage_from_rows(txn, node_did, &requests).await
+}
+
+/// Charges the same session scope from rows a caller already read, so one
+/// session scan can serve both request attribution and usage. The rows may
+/// carry any purpose; the charged scope is selected here.
+pub(crate) async fn session_goal_usage_from_rows(
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    node_did: &str,
+    rows: &[AgentRequestRow],
+) -> Result<crate::goal::SessionTokenUsage> {
+    let requests: Vec<&AgentRequestRow> = rows
+        .iter()
+        .filter(|request| {
+            matches!(
+                request.purpose,
+                Some(RequestPurpose::Normal) | Some(RequestPurpose::AccessReview)
+            )
+        })
+        .collect();
     let mut by_doc = BTreeMap::new();
-    for request in &requests {
+    for request in requests.iter().copied() {
         let doc = nonempty(request.doc_id.as_deref(), "goal physical request")?;
         anyhow::ensure!(
             by_doc.insert(doc, request).is_none(),
@@ -262,7 +282,7 @@ pub(crate) async fn load_session_goal_usage(
         );
     }
     let mut request_ids = BTreeMap::new();
-    for request in &requests {
+    for request in requests.iter().copied() {
         if request.purpose == Some(RequestPurpose::AccessReview) {
             let parent_doc = nonempty(
                 request.caused_by_parent_request_doc_id.as_deref(),

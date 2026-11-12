@@ -142,6 +142,8 @@ pub use schema_install::{
     SchemaInstallPlan,
 };
 pub(crate) use txn::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT;
+#[cfg(test)]
+pub(crate) use txn::{count_statements, StatementCounts};
 pub use txn::{
     ConfigApplyTxn, ConfigCursor, IdempotentTransactionRetry, LocalConfigAccess,
     NativeOperationAbandoned, ReceiptWriteError, ReentrantEmbeddedWrite, TransactionFinalityError,
