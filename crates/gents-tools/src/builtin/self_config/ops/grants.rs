@@ -200,16 +200,16 @@ mod lean_bound_tests {
     #[test]
     fn modeled_grant_bound_matches_the_owner() {
         for case in &gents_lean_vocab::lean_contract_snapshot().policy_grant_bound_cases {
-            let grants = |field: &str| OperatorGrants {
+            let grants = |policy: bool| OperatorGrants {
                 pack_install: false,
-                policy: case[field].as_bool().unwrap(),
+                policy,
                 pack_authority: false,
             };
             assert_eq!(
-                grants("candidate_policy")
-                    .bounded_by(&grants("stored_policy"), &grants("held_policy")),
-                case["accepted"].as_bool().unwrap(),
-                "{case}"
+                grants(case.candidate_policy)
+                    .bounded_by(&grants(case.stored_policy), &grants(case.held_policy)),
+                case.accepted,
+                "{case:?}"
             );
         }
     }
