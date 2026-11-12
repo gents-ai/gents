@@ -80,3 +80,6 @@ mod session_limit_live;
 
 #[path = "e2e_live/tool_recovery_live.rs"]
 mod tool_recovery_live;
+
+#[path = "e2e_background/r6_background_recovery.rs"]
+mod r6_background_recovery;
