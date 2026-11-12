@@ -1,22 +1,19 @@
-/* A node's workflow runs, read with `listJobs` over the node's operator
-   access, so a remote node reads as a local one does. The reader filters
-   every job row on the node in memory and has no limit. */
+/* A node's workflow runs as the Workflows page lists them: those going now,
+   and each workflow's history. */
 
-import { useEffect, useState } from "react";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
-import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import type { JobState } from "@source-inc/gents-desktop-client/generated/JobState";
 import type { JobView } from "@source-inc/gents-desktop-client/generated/JobView";
-import { useApp } from "@/app/AppContext";
+import { useJobs } from "../../../hooks/jobs";
 import { duration } from "@/lib/duration";
 import { href } from "@/lib/router";
-import { errorText } from "../../../lib/errorText";
 import { JobStatePill } from "../jobParts";
 import { runAt } from "../WorkflowRunSheet";
 import { span, useMinute } from "../time";
 import { EmptyList } from "./ListDetail";
 import { Group } from "./rows";
 
+export { useJobs };
 export const ACTIVE_STATES: JobState[] = ["running", "paused", "awaiting_user"];
 export const ALL_STATES: JobState[] = [
   ...ACTIVE_STATES,
@@ -25,39 +22,6 @@ export const ALL_STATES: JobState[] = [
   "cancelled",
   "timed_out",
 ];
-
-type JobsRequest = Parameters<DesktopApiAdapter["listJobs"]>[0];
-
-/** The runs `request` names, read again whenever `observed` changes; a
-    failed re-read keeps the runs it had. */
-export function useJobs(request: JobsRequest | null, observed: unknown) {
-  const { actions } = useApp();
-  const key = request ? JSON.stringify(request) : null;
-  const [read, setRead] = useState<{
-    key: string;
-    runs: JobView[] | null;
-    error: string | null;
-  } | null>(null);
-  useEffect(() => {
-    if (!key) return;
-    let current = true;
-    actions.listJobs(JSON.parse(key) as JobsRequest).then(
-      (runs) => current && setRead({ key, runs, error: null }),
-      (e: unknown) =>
-        current &&
-        setRead((held) => ({
-          key,
-          runs: held?.key === key ? held.runs : null,
-          error: errorText(e),
-        })),
-    );
-    return () => {
-      current = false;
-    };
-  }, [actions, key, observed]);
-  const current = read && read.key === key ? read : null;
-  return { runs: current?.runs ?? null, error: current?.error ?? null };
-}
 
 /** What the run view re-reads on: the run as the latest list shows it. */
 export const observedOf = (run: JobView | undefined) =>
