@@ -717,11 +717,6 @@ async fn managed_readiness_status_reads_as_the_user_never_the_node_key() {
     }
 }
 
-/// Issue #3609: a desktop-provisioned home's first admin is the CLI client
-/// key, so the readiness read signs with it until the desktop's own key has a
-/// completed enrollment into that Node, including when the desktop key exists
-/// but pairing never finished. A key that is not admin is still refused the
-/// private body, and the choice never retries with another key.
 #[tokio::test]
 async fn hosted_status_reader_is_the_home_admin_before_and_after_desktop_enrollment() {
     use gents_desktop_core::local_runtime::{fetch_hosted_runtime_status, hosted_status_signer};
@@ -759,9 +754,6 @@ async fn hosted_status_reader_is_the_home_admin_before_and_after_desktop_enrollm
         .unwrap();
     assert_eq!(private["tool_root"], "/private/operator/workspace");
 
-    // A completed enrollment into this Node selects the desktop key. Here the
-    // record claims it but the runtime never made that key admin: the private
-    // body is refused, and no other key is tried.
     let mut enrolled = record.clone();
     enrolled.source = Some("enrollment".into());
     enrolled.pairing_network_id = Some("network".into());
@@ -784,13 +776,38 @@ async fn hosted_status_reader_is_the_home_admin_before_and_after_desktop_enrollm
     )
     .await
     .unwrap();
-    assert_eq!(chosen.did(), desktop_user.did());
-    let stored = hosted_status_signer(&desktop, Some(&node_did), &[enrolled], None)
+    assert_eq!(chosen.did(), f.admin.did());
+    let stored = hosted_status_signer(
+        &desktop,
+        Some(&node_did),
+        std::slice::from_ref(&enrolled),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(stored.did(), f.admin.did());
+    let private = fetch_hosted_runtime_status(&record, Some(&chosen))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(private["node_did"], node_did.as_str());
+    assert_eq!(private["tool_root"], "/private/operator/workspace");
+    assert_eq!(private["home"], "/private/operator/home");
+
+    let orphan = DesktopPaths::from_root(f._temp.path().join("orphan"));
+    orphan.ensure_root_dirs().await.unwrap();
+    let orphan_user = PrincipalIdentity::load_or_create(&orphan).await.unwrap();
+    assert!(!orphan.cli_client().identity_key_path().exists());
+    let orphan_running = hosted_status_signer(&orphan, Some(&node_did), &[], Some(running))
         .await
         .unwrap();
-    assert_eq!(stored.did(), desktop_user.did());
+    assert_eq!(orphan_running.did(), desktop_user.did());
+    let fallback = hosted_status_signer(&orphan, Some(&node_did), &[enrolled], None)
+        .await
+        .unwrap();
+    assert_eq!(fallback.did(), orphan_user.did());
     let before = f.status_requests.load(std::sync::atomic::Ordering::SeqCst);
-    let public = fetch_hosted_runtime_status(&record, Some(&chosen))
+    let public = fetch_hosted_runtime_status(&record, Some(&fallback))
         .await
         .unwrap()
         .unwrap();
