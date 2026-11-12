@@ -487,9 +487,7 @@ def caseCoverage : List CoverageEntry :=
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "network_protocol_resource")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "identity_secret_publication_cases" "IdentitySecretPublicationCases"
-      "The snapshot emits and the decoder accepts these cases; no native test reads them.")
+  , tagged (consumerCoverage "family" "identity_secret_publication_creation")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "family"

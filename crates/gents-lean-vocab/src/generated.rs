@@ -3033,7 +3033,6 @@ pub struct LeanContractSnapshot {
     pub identity_eval_record_cases: Vec<LeanIdentityEvalRecordCase>,
     pub identity_optimization_promotion_cases: Vec<serde_json::Value>,
     pub identity_readiness_preflight_cases: Vec<serde_json::Value>,
-    pub identity_secret_publication_cases: Vec<serde_json::Value>,
     pub identity_deferred_operation_cases: Vec<serde_json::Value>,
     pub identity_pairing_partition_cases: Vec<LeanIdentityPairingPartitionCase>,
     pub identity_desired_publisher_cases: Vec<serde_json::Value>,

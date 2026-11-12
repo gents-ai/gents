@@ -227,8 +227,9 @@ import Proofs.Conformance.Contracts.Json.PayloadPresentation
 import Proofs.Conformance.Eval
 import Proofs.Conformance.Optimization
 import Proofs.Documents.ScopeTemplates.Derivation
-
 import Proofs.Conformance.ScopeCollectionRules
+import Proofs.Conformance.Identity.SecretPublication
+
 namespace Conformance.Contracts
 
 open Conformance.ContractCases
@@ -722,8 +723,6 @@ def snapshotIdentityCasesJson : String :=
       ++ Identity.OptimizationPromotion.casesJson ++ ","
     ++ "\"identity_readiness_preflight_cases\":"
       ++ Identity.OperationsConformance.preflightCasesJson ++ ","
-    ++ "\"identity_secret_publication_cases\":"
-      ++ Identity.OperationsConformance.secretPublicationCasesJson ++ ","
     ++ "\"identity_deferred_operation_cases\":"
       ++ Identity.OperationsConformance.deferredCasesJson ++ ","
     ++ "\"identity_pairing_partition_cases\":"
