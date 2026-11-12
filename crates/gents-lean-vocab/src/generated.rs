@@ -449,10 +449,6 @@ pub fn lean_prompt_assembly_claude_replay_cases() -> &'static [LeanPromptAssembl
     &lean_contract_snapshot().prompt_assembly_claude_replay_cases
 }
 
-pub fn lean_prompt_assembly_claude_thinking_stream_cases() -> &'static [LeanPromptAssemblyClaudeThinkingStreamCase] {
-    &lean_contract_snapshot().prompt_assembly_claude_thinking_stream_cases
-}
-
 pub fn lean_prompt_assembly_compaction_trigger_cases() -> &'static [LeanPromptAssemblyCompactionTriggerCase] {
     &lean_contract_snapshot().prompt_assembly_compaction_trigger_cases
 }
@@ -1979,24 +1975,6 @@ pub struct LeanClaudeCheckpointResolution {
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-pub struct LeanClaudeContentStep {
-    #[serde(deserialize_with = "required_nullable")]
-    pub provisional_thinking: Option<String>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub provisional_signature: Option<String>,
-    #[serde(deserialize_with = "required_nullable")]
-    pub provisional_redacted: Option<String>,
-    pub sealed: Vec<LeanClaudeStreamBlock>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-pub struct LeanClaudeReasoningPart {
-    pub kind: String,
-    pub payload: String,
-    pub signature: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct LeanClaudeReasoningWitness {
     pub block_index: usize,
@@ -2043,28 +2021,6 @@ pub enum LeanClaudeReplayOrigin {
     Foreign,
     Missing,
     Ambiguous,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-pub struct LeanClaudeStreamBlock {
-    pub kind: String,
-    pub value: Option<String>,
-    pub parts: Option<Vec<LeanClaudeReasoningPart>>,
-    pub id: Option<u64>,
-    pub name: Option<String>,
-    pub arguments: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-pub struct LeanClaudeStreamEvent {
-    pub kind: String,
-    pub value: Option<String>,
-    pub id: Option<u64>,
-    pub name: Option<String>,
-    pub input: Option<String>,
-    pub index: Option<u64>,
-    pub fragment: Option<String>,
-    pub data: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
@@ -3280,9 +3236,6 @@ pub struct LeanContractSnapshot {
         LeanPromptAssemblyCompactionTriggerCase,
     >,
     pub prompt_assembly_claude_body_cases: Vec<LeanPromptAssemblyClaudeBodyCase>,
-    pub prompt_assembly_claude_thinking_stream_cases: Vec<
-        LeanPromptAssemblyClaudeThinkingStreamCase,
-    >,
     pub prompt_assembly_responses_storage_cases: Vec<
         LeanPromptAssemblyResponsesStorageCase,
     >,
@@ -9395,16 +9348,6 @@ pub struct LeanPromptAssemblyClaudeReplayCase {
     pub blocks: Vec<LeanClaudeReplayInputBlock>,
     pub outcome: String,
     pub replay: Vec<LeanClaudeReplayBlock>,
-}
-
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
-pub struct LeanPromptAssemblyClaudeThinkingStreamCase {
-    pub name: String,
-    pub surface: Vec<String>,
-    pub events: Vec<LeanClaudeStreamEvent>,
-    pub outcome: String,
-    pub steps: Vec<LeanClaudeContentStep>,
-    pub content: Vec<LeanClaudeStreamBlock>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

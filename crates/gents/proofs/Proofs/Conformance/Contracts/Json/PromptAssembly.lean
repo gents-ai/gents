@@ -515,56 +515,97 @@ private def claudeReasoningPartJson {α : Type} (payloadJson : α → String) :
   | .summary payload =>
       "{\"kind\":\"summary\",\"payload\":" ++ payloadJson payload ++ "}"
 
-private def claudeStreamEventJson : PromptAssembly.ClaudeMap.StreamEvent → String
-  | .text value => "{\"kind\":\"text\",\"value\":" ++ jsonString value ++ "}"
-  | .start id name input =>
-      "{\"kind\":\"toolStart\",\"id\":" ++ toString id ++
-      ",\"name\":" ++ jsonString name ++ ",\"input\":" ++ jsonOptionalString input ++ "}"
-  | .delta fragment =>
-      "{\"kind\":\"toolDelta\",\"fragment\":" ++ jsonString fragment ++ "}"
-  | .stop => "{\"kind\":\"toolStop\"}"
-  | .thinkingStart index initialText =>
-      "{\"kind\":\"thinkingStart\",\"index\":" ++ toString index ++
-      ",\"value\":" ++ jsonString initialText ++ "}"
-  | .thinkingDelta index fragment =>
-      "{\"kind\":\"thinkingDelta\",\"index\":" ++ toString index ++
-      ",\"fragment\":" ++ jsonString fragment ++ "}"
-  | .signatureDelta index fragment =>
-      "{\"kind\":\"signatureDelta\",\"index\":" ++ toString index ++
-      ",\"fragment\":" ++ jsonString fragment ++ "}"
-  | .redactedStart index data =>
-      "{\"kind\":\"redactedStart\",\"index\":" ++ toString index ++
-      ",\"data\":" ++ jsonString data ++ "}"
-  | .contentStop index =>
-      "{\"kind\":\"contentStop\",\"index\":" ++ toString index ++ "}"
+structure ClaudeReasoningPartWire where
+  kind : String
+  payload : String
+  signature : Option String
+  deriving Lean.ToJson
 
-private def claudeStreamBlockJson : PromptAssembly.ClaudeMap.StreamBlock → String
-  | .text value => "{\"kind\":\"text\",\"value\":" ++ jsonString value ++ "}"
+def ClaudeReasoningPartWire.ofPart : CanonicalOutput.ReasoningPart String → ClaudeReasoningPartWire
+  | .text payload signature => { kind := "text", payload, signature }
+  | .redacted payload => { kind := "redacted", payload, signature := none }
+  | .encrypted payload => { kind := "encrypted", payload, signature := none }
+  | .summary payload => { kind := "summary", payload, signature := none }
+
+structure ClaudeStreamBlockWire where
+  kind : String
+  value : Option String
+  parts : Option (List ClaudeReasoningPartWire)
+  id : Option Nat
+  name : Option String
+  arguments : Option String
+  deriving Lean.ToJson
+
+def ClaudeStreamBlockWire.ofBlock : PromptAssembly.ClaudeMap.StreamBlock → ClaudeStreamBlockWire
+  | .text value =>
+      { kind := "text", value := some value, parts := none, id := none, name := none
+        arguments := none }
   | .reasoning parts =>
-      "{\"kind\":\"reasoning\",\"parts\":" ++
-        jsonArray (parts.map (claudeReasoningPartJson jsonString)) ++ "}"
+      { kind := "reasoning", value := none, parts := some (parts.map ClaudeReasoningPartWire.ofPart)
+        id := none, name := none, arguments := none }
   | .toolUse id name arguments =>
-      "{\"kind\":\"toolUse\",\"id\":" ++ toString id ++
-      ",\"name\":" ++ jsonString name ++
-      ",\"arguments\":" ++ jsonString arguments ++ "}"
+      { kind := "toolUse", value := none, parts := none, id := some id, name := some name
+        arguments := some arguments }
 
-private def claudeContentStepJson (step : PromptAssembly.ClaudeMap.ContentStep) : String :=
-  "{\"provisional_thinking\":" ++ jsonOptionalString step.provisionalThinking ++
-    ",\"provisional_signature\":" ++ jsonOptionalString step.provisionalSignature ++
-    ",\"provisional_redacted\":" ++ jsonOptionalString step.provisionalRedacted ++
-    ",\"sealed\":" ++ jsonArray (step.sealed.map claudeStreamBlockJson) ++ "}"
+structure ClaudeContentStepWire where
+  provisionalThinking : Option String
+  provisionalSignature : Option String
+  provisionalRedacted : Option String
+  sealed : List ClaudeStreamBlockWire
+  deriving Lean.ToJson
 
-def promptAssemblyClaudeThinkingStreamCaseJson
-    (witness : PromptAssemblyClaudeThinkingStreamCase) : String :=
-  "{\"name\":" ++ jsonString witness.name ++
-    ",\"surface\":" ++ jsonStringArray witness.surface ++
-    ",\"events\":" ++ jsonArray (witness.events.map claudeStreamEventJson) ++
-    ",\"outcome\":" ++ jsonString witness.outcome ++
-    ",\"steps\":" ++ jsonArray (witness.steps.map claudeContentStepJson) ++
-    ",\"content\":" ++ jsonArray (witness.content.map claudeStreamBlockJson) ++ "}"
+def ClaudeContentStepWire.ofStep (step : PromptAssembly.ClaudeMap.ContentStep) :
+    ClaudeContentStepWire :=
+  { provisionalThinking := step.provisionalThinking
+    provisionalSignature := step.provisionalSignature
+    provisionalRedacted := step.provisionalRedacted
+    sealed := step.sealed.map ClaudeStreamBlockWire.ofBlock }
 
-def promptAssemblyClaudeThinkingStreamCasesJson : String :=
-  jsonArray (promptAssemblyClaudeThinkingStreamCases.map promptAssemblyClaudeThinkingStreamCaseJson)
+structure ClaudeThinkingStreamOutput where
+  outcome : String
+  steps : List ClaudeContentStepWire
+  content : List ClaudeStreamBlockWire
+  deriving Lean.ToJson
+
+def claudeThinkingStreamOutput (surface : List String)
+    (events : List PromptAssembly.ClaudeMap.StreamEvent) : ClaudeThinkingStreamOutput :=
+  match PromptAssembly.ClaudeMap.runContentTrace surface.toFinset events with
+  | .ok (steps, content) =>
+      { outcome := "ok", steps := steps.map ClaudeContentStepWire.ofStep
+        content := content.map ClaudeStreamBlockWire.ofBlock }
+  | .error error =>
+      let steps := match PromptAssembly.ClaudeMap.runDecodedPrefixTrace surface.toFinset events with
+        | .ok (steps, _) => steps
+        | .error _ => []
+      { outcome := PromptAssembly.ClaudeMap.errorName error
+        steps := steps.map ClaudeContentStepWire.ofStep, content := [] }
+
+def claudeThinkingStreamModel (i : ClaudeStreamInput) : ClaudeThinkingStreamOutput :=
+  match promptAssemblyClaudeThinkingStreamWitnesses.find?
+      (fun w => ClaudeStreamInput.ofWitness w == i) with
+  | some w => claudeThinkingStreamOutput w.1 w.2
+  | none => { outcome := "unknown", steps := [], content := [] }
+
+@[conformance_family]
+def claudeThinkingStream : Family ClaudeStreamInput ClaudeThinkingStreamOutput where
+  inputs := promptAssemblyClaudeThinkingStreamWitnesses.map ClaudeStreamInput.ofWitness
+  model := claudeThinkingStreamModel
+
+/-- The streams that seal only reasoning and open a thinking block with initial
+text: the canonical accumulator must seal that text with the streamed deltas. -/
+@[conformance_family]
+def claudeThinkingSeal : Family ClaudeStreamInput (List (List ClaudeReasoningPartWire)) where
+  inputs := (promptAssemblyClaudeThinkingStreamWitnesses.filter fun w =>
+      match PromptAssembly.ClaudeMap.runContentTrace w.1.toFinset w.2 with
+      | .ok (_, content) =>
+          !content.isEmpty &&
+            content.all (fun block => match block with | .reasoning _ => true | _ => false) &&
+            w.2.any (fun event => match event with
+              | .thinkingStart _ text => text != ""
+              | _ => false)
+      | .error _ => false).map ClaudeStreamInput.ofWitness
+  model := fun i =>
+    (claudeThinkingStreamModel i).content.map fun block => block.parts.getD []
 
 private def responsesStorageFamilyJson :
     PromptAssembly.ResponsesStorage.Family → String

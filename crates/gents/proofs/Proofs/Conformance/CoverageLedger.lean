@@ -2348,13 +2348,13 @@ def caseCoverage : List CoverageEntry :=
       "contracts_claude_stream")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "prompt_assembly_claude_thinking_stream_cases"
-      "PromptAssemblyClaudeThinkingStreamCases"
+      "family"
+      "contracts_claude_thinking_stream"
       "Drives the native Claude Messages SSE parser and compares cumulative provisional text and sealed signed/redacted content. The owned loop's persistence and provider continuation are not exercised here.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "prompt_assembly_claude_thinking_stream_cases"
-      "PromptAssemblyClaudeThinkingStreamCases"
+      "family"
+      "contracts_claude_thinking_seal"
       "Drives modeled nonempty thinking-start text through the native parser and canonical accumulator, checking exact sealed content. Owned-loop persistence and provider continuation remain unbound.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp

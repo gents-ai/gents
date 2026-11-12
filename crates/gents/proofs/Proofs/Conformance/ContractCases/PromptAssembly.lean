@@ -855,9 +855,6 @@ private def retentionCase (witness : RetentionWitness) : PromptAssemblyRetention
 def promptAssemblyRetentionCases : List PromptAssemblyRetentionCase :=
   retentionWitnesses.map retentionCase
 
-private def surfaceOf (names : List String) : PromptAssembly.ClaudeMap.Surface :=
-  names.toFinset
-
 def promptAssemblyClaudeMapWitnesses : List (List String × List PromptAssembly.ClaudeMap.Block) :=
   [ ([], [.text])
   , (["echo"], [.toolUse 1 "echo"])
@@ -1237,57 +1234,21 @@ def promptAssemblyClaudeStreamWitnesses :
        .delta "{\"path\":\".\"}", .stop])
   ]
 
-structure PromptAssemblyClaudeThinkingStreamCase where
-  name : String
-  surface : List String
-  events : List PromptAssembly.ClaudeMap.StreamEvent
-  outcome : String
-  steps : List PromptAssembly.ClaudeMap.ContentStep
-  content : List PromptAssembly.ClaudeMap.StreamBlock
-  deriving Repr
-
-private def claudeThinkingStreamCase (name : String) (surface : List String)
-    (events : List PromptAssembly.ClaudeMap.StreamEvent) :
-    PromptAssemblyClaudeThinkingStreamCase :=
-  match PromptAssembly.ClaudeMap.runContentTrace (surfaceOf surface) events with
-  | .ok (steps, content) => { name, surface, events, outcome := "ok", steps, content }
-  | .error error =>
-      let steps := match PromptAssembly.ClaudeMap.runDecodedPrefixTrace
-          (surfaceOf surface) events with
-        | .ok (steps, _) => steps
-        | .error _ => []
-      { name, surface, events, outcome := PromptAssembly.ClaudeMap.errorName error,
-        steps, content := [] }
-
-def promptAssemblyClaudeThinkingStreamCases : List PromptAssemblyClaudeThinkingStreamCase :=
-  [ claudeThinkingStreamCase "unicode-fragmented-signature" []
-      [.thinkingStart 0 "", .thinkingDelta 0 "考", .thinkingDelta 0 "慮",
-       .signatureDelta 0 "署", .signatureDelta 0 "名", .contentStop 0]
-  , claudeThinkingStreamCase "initial-text-then-delta" []
-      [.thinkingStart 0 "初", .thinkingDelta 0 "続",
-       .signatureDelta 0 "sig", .contentStop 0]
-  , claudeThinkingStreamCase "empty-text-signed" []
-      [.thinkingStart 0 "", .signatureDelta 0 "signature", .contentStop 0]
-  , claudeThinkingStreamCase "redacted-before-tool" ["echo"]
-      [.redactedStart 0 "opaque", .contentStop 0,
-       .start 1 "echo" none, .delta "{}", .stop]
-  , claudeThinkingStreamCase "missing-signature" []
-      [.thinkingStart 0 "", .thinkingDelta 0 "thinking", .contentStop 0]
-  , claudeThinkingStreamCase "wrong-index" []
-      [.thinkingStart 0 "", .signatureDelta 1 "sig"]
-  , claudeThinkingStreamCase "reused-block-index" []
-      [.thinkingStart 0 "", .signatureDelta 0 "sig", .contentStop 0,
-       .redactedStart 0 "opaque"]
-  , claudeThinkingStreamCase "interleaved-text" []
-      [.thinkingStart 0 "", .text "not-this-block"]
-  , claudeThinkingStreamCase "text-during-tool" ["echo"]
-      [.start 1 "echo" none, .text "not-this-block"]
-  , claudeThinkingStreamCase "thinking-after-signature" []
-      [.thinkingStart 0 "", .signatureDelta 0 "sig", .thinkingDelta 0 "late"]
-  , claudeThinkingStreamCase "abort-after-signature-delta" []
-      [.thinkingStart 0 "", .signatureDelta 0 "sig"]
-  , claudeThinkingStreamCase "abort-after-redacted-start" []
-      [.redactedStart 0 "opaque"]
+def promptAssemblyClaudeThinkingStreamWitnesses :
+    List (List String × List PromptAssembly.ClaudeMap.StreamEvent) :=
+  [ ([], [.thinkingStart 0 "", .thinkingDelta 0 "考", .thinkingDelta 0 "慮",
+       .signatureDelta 0 "署", .signatureDelta 0 "名", .contentStop 0])
+  , ([], [.thinkingStart 0 "初", .thinkingDelta 0 "続", .signatureDelta 0 "sig", .contentStop 0])
+  , ([], [.thinkingStart 0 "", .signatureDelta 0 "signature", .contentStop 0])
+  , (["echo"], [.redactedStart 0 "opaque", .contentStop 0, .start 1 "echo" none, .delta "{}", .stop])
+  , ([], [.thinkingStart 0 "", .thinkingDelta 0 "thinking", .contentStop 0])
+  , ([], [.thinkingStart 0 "", .signatureDelta 1 "sig"])
+  , ([], [.thinkingStart 0 "", .signatureDelta 0 "sig", .contentStop 0, .redactedStart 0 "opaque"])
+  , ([], [.thinkingStart 0 "", .text "not-this-block"])
+  , (["echo"], [.start 1 "echo" none, .text "not-this-block"])
+  , ([], [.thinkingStart 0 "", .signatureDelta 0 "sig", .thinkingDelta 0 "late"])
+  , ([], [.thinkingStart 0 "", .signatureDelta 0 "sig"])
+  , ([], [.redactedStart 0 "opaque"])
   ]
 
 structure PromptAssemblyClaudeReplayCase where
