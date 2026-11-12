@@ -20,6 +20,7 @@ pub struct PublishedAdmissionOptions {
     /// `ToolRowKind::PluginJob`.
     pub job_pin: bool,
     pub p2p: bool,
+    pub composition: gents_store::node_extension::Extensions,
 }
 
 impl Default for PublishedAdmissionOptions {
@@ -34,6 +35,7 @@ impl Default for PublishedAdmissionOptions {
             paired_client: false,
             job_pin: false,
             p2p: false,
+            composition: gents_session::test_support::no_lifecycle_plugins(),
         }
     }
 }
@@ -570,7 +572,8 @@ pub async fn published_admission_with_owner(
     let path =
         std::env::temp_dir().join(format!("admission-fixture-{name}-{}", uuid::Uuid::new_v4()));
     let p2p = options.p2p.then(test_p2p_config);
-    let db = gents_inference::test_support::test_db_at(&path, p2p).await?;
+    let db =
+        gents_inference::test_support::test_db_at(&path, p2p, options.composition.clone()).await?;
     let (db, user, owner, binding) =
         gents_inference::test_support::signed_test_node_from_db(db, &name).await;
     let node = db.node.clone();
@@ -941,8 +944,8 @@ pub async fn materialize_session_message(
         plan,
         false,
     )
-        .await
-        .map_err(Into::into)
+    .await
+    .map_err(Into::into)
 }
 
 pub struct PublishedSessionMessage {
@@ -1243,9 +1246,7 @@ mod lifecycle_tests {
     }
 }
 
-pub fn recovery_identities(
-    admission: &PublishedAdmission,
-) -> Vec<Arc<dyn NodeIdentity>> {
+pub fn recovery_identities(admission: &PublishedAdmission) -> Vec<Arc<dyn NodeIdentity>> {
     let signer = admission
         .tool
         .access()
@@ -1278,11 +1279,7 @@ async fn execute_fixture_write(
     panic!("fixture write kept failing: {mutation}: {last_error:?}");
 }
 
-pub async fn update(
-    access: &gents_store::config_client::ConfigAccess,
-    doc_id: &str,
-    fields: &str,
-) {
+pub async fn update(access: &gents_store::config_client::ConfigAccess, doc_id: &str, fields: &str) {
     let doc_id = gents_store::graphql::escape_graphql_string(doc_id);
     execute_fixture_write(access, "fixture.tool_call.update", &format!(
         r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#

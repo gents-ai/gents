@@ -176,3 +176,15 @@ pub async fn write_trigger_delivery_with_identity(
     )
     .await
 }
+
+pub async fn signed_test_node(
+    name: &str,
+) -> (
+    gents_inference::test_support::TestDb,
+    gents_store::identity::KeyIdentity,
+    gents_store::config_client::ConfigAccess,
+    gents_protocol::agent_identity::AgentIdentityBinding,
+) {
+    gents_inference::test_support::signed_test_node(name, crate::lifecycle_hooks::composition())
+        .await
+}

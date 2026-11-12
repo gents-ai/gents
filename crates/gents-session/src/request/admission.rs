@@ -1969,7 +1969,11 @@ mod tests {
 
     impl AdmissionFixture {
         async fn new(name: &str) -> Self {
-            let db = gents_inference::test_support::test_db(name).await;
+            let db = gents_inference::test_support::test_db(
+                name,
+                crate::test_support::no_lifecycle_plugins(),
+            )
+            .await;
             let (db, _user, user, binding) =
                 gents_inference::test_support::signed_test_node_from_db(db, name).await;
             let runtime = db.node_identity.clone();

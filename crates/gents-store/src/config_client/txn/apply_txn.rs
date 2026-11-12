@@ -69,8 +69,6 @@ impl<'a> ConfigApplyTxn<'a> {
         self.local_node().is_some()
     }
 
-    /// The `T` this transaction's in-process node carries or, for a
-    /// transaction over a plain GraphQL endpoint, the endpoint carries.
     pub fn extension<T>(&self) -> Option<Arc<T>>
     where
         T: std::any::Any + Send + Sync,
@@ -356,7 +354,7 @@ impl<'a> ConfigApplyTxn<'a> {
                 client_signed_write_dispatched: AtomicBool::new(false),
                 relationship_grants: Mutex::new(Vec::new()),
                 owed_deliveries: Mutex::new(Vec::new()),
-            rerun_notes: Vec::new(),
+                rerun_notes: Vec::new(),
                 publication_observer: None,
                 pack_approval: None,
                 loopback_node: None,

@@ -12,8 +12,11 @@ async fn parent_recovery_lookup_uses_agent_native_authority() {
     use gents_store::config_client::{ConfigAccess, NodePermission};
     use gents_store::identity::NodeIdentity;
 
-    let (db, user, owner, binding) =
-        gents_inference::test_support::signed_test_node("inference-recovery-native-authority").await;
+    let (db, user, owner, binding) = gents_inference::test_support::signed_test_node(
+        "inference-recovery-native-authority",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
     let node = db.node.clone();
     let runtime = db.node_identity.clone();
     let agent = gents_store::identity::resolve_agent_identity(runtime.as_ref(), &binding).unwrap();
@@ -30,17 +33,16 @@ async fn parent_recovery_lookup_uses_agent_native_authority() {
         "2026-09-01T00:00:00Z",
         AgentRequestAdmissionRecord::client(user.did()),
     );
-    let lifecycle =
-        crate::call::lifecycle::admission_fixture::pending_client_fixture_request(
-            &node,
-            &owner,
-            runtime.clone(),
-            &user,
-            agent.as_ref(),
-            create,
-        )
-        .await
-        .unwrap();
+    let lifecycle = crate::call::lifecycle::admission_fixture::pending_client_fixture_request(
+        &node,
+        &owner,
+        runtime.clone(),
+        &user,
+        agent.as_ref(),
+        create,
+    )
+    .await
+    .unwrap();
     let request_doc = lifecycle.request().doc_id.clone();
     let agent_access = ConfigAccess::local_managed_agent(
         node.clone(),

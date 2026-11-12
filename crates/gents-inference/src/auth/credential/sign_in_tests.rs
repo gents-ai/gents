@@ -67,8 +67,11 @@ fn grok(did: &str, access_claims: Value, refresh_token: &str) -> OAuthCredential
 
 #[tokio::test]
 async fn a_matching_sign_in_fills_an_empty_key() {
-    let (db, _user, _user_access, _binding) =
-        crate::test_support::signed_test_node("credential-upsert").await;
+    let (db, _user, _user_access, _binding) = crate::test_support::signed_test_node(
+        "credential-upsert",
+        gents_store::node_extension::Extensions::none(),
+    )
+    .await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let before = sign_in(&node, &chatgpt(did, None, "refresh-1")).await;
@@ -82,8 +85,11 @@ async fn a_matching_sign_in_fills_an_empty_key() {
 
 #[tokio::test]
 async fn the_raw_upsert_of_another_account_replaces_tokens_and_key() {
-    let (db, _user, _user_access, _binding) =
-        crate::test_support::signed_test_node("credential-upsert").await;
+    let (db, _user, _user_access, _binding) = crate::test_support::signed_test_node(
+        "credential-upsert",
+        gents_store::node_extension::Extensions::none(),
+    )
+    .await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     sign_in(&node, &chatgpt(did, Some("member-a"), "refresh-1")).await;
@@ -107,8 +113,11 @@ async fn the_raw_upsert_of_another_account_replaces_tokens_and_key() {
 
 #[tokio::test]
 async fn a_keyless_sign_in_clears_the_stored_key() {
-    let (db, _user, _user_access, _binding) =
-        crate::test_support::signed_test_node("credential-upsert").await;
+    let (db, _user, _user_access, _binding) = crate::test_support::signed_test_node(
+        "credential-upsert",
+        gents_store::node_extension::Extensions::none(),
+    )
+    .await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let claims = json!({ "principal_type": "user", "principal_id": "principal-1" });

@@ -343,8 +343,11 @@ mod tests {
         };
         use gents_store::config_client::{ConfigAccess, NodePermission};
         use gents_store::identity::NodeIdentity;
-        let (db, user, access) =
-            crate::test_support::signed_test_node_without_agent("rebuilt-oauth-client").await;
+        let (db, user, access) = crate::test_support::signed_test_node_without_agent(
+            "rebuilt-oauth-client",
+            gents_store::node_extension::Extensions::none(),
+        )
+        .await;
         let node = db.node.clone();
         let did = db.node_identity.did();
         let runtime = ConfigAccess::local_as(node.clone(), did.parse().unwrap());

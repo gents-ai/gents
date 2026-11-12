@@ -45,8 +45,11 @@ impl CaptureFixture {
         use gents_protocol::request_admission::{
             AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
         };
-        let (db, user, client, binding) =
-            gents_inference::test_support::signed_test_node("rendered-capture").await;
+        let (db, user, client, binding) = gents_inference::test_support::signed_test_node(
+            "rendered-capture",
+            gents_session::test_support::no_lifecycle_plugins(),
+        )
+        .await;
         let agent =
             gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding)
                 .unwrap();
@@ -350,12 +353,14 @@ fn rendered_turn_for(
         tools_json: json!([]),
         tool_choice_json: Value::Null,
         sampling_json: Value::Null,
-        provenance_json: serde_json::to_value(gents_inference::rendered_request::ProvenanceManifest::captured_only(
-            capture_scope,
-            None,
-            None,
-            assembly_trace.clone(),
-        ))
+        provenance_json: serde_json::to_value(
+            gents_inference::rendered_request::ProvenanceManifest::captured_only(
+                capture_scope,
+                None,
+                None,
+                assembly_trace.clone(),
+            ),
+        )
         .unwrap(),
         provenance_payload_json: serde_json::to_value(&assembly_trace).unwrap(),
         assembly_trace,
@@ -550,8 +555,9 @@ async fn repeated_tool_output_is_stored_once_across_wire_and_native_payloads() {
     });
     sink.capture(rendered.clone()).await.unwrap();
     let rows = block_rows(&access).await;
-    let text_chunks =
-        gents_inference::rendered_request::encoding::chunk_capture_body(&serde_json::to_string(&text).unwrap());
+    let text_chunks = gents_inference::rendered_request::encoding::chunk_capture_body(
+        &serde_json::to_string(&text).unwrap(),
+    );
     for chunk in text_chunks {
         assert_eq!(
             rows.iter()
@@ -837,14 +843,18 @@ async fn shared_manifest_roots_stay_small_and_reconstruct_after_reopen() {
             else {
                 panic!("expected shared manifest");
             };
-            let leaves = gents_inference::rendered_request::manifest_tree_leaves(&access, &tree, &mut cache)
-                .await
-                .unwrap();
-            flat.push(gents_inference::rendered_request::encoding::encode_manifest(&leaves).unwrap());
+            let leaves =
+                gents_inference::rendered_request::manifest_tree_leaves(&access, &tree, &mut cache)
+                    .await
+                    .unwrap();
+            flat.push(
+                gents_inference::rendered_request::encoding::encode_manifest(&leaves).unwrap(),
+            );
         }
-        flat_bytes += gents_inference::rendered_request::encoding::encode_container(&flat[0], &flat[1])
-            .unwrap()
-            .len();
+        flat_bytes +=
+            gents_inference::rendered_request::encoding::encode_container(&flat[0], &flat[1])
+                .unwrap()
+                .len();
         if turn > 0 {
             assert!(
                 cache
@@ -964,7 +974,8 @@ async fn concurrent_identical_captures_store_each_block_once() {
         .map(|row| row["content_key"].as_str().unwrap().to_owned())
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(rows.len(), keys.len(), "one document per content key");
-    let layout = gents_inference::rendered_request::encoding::capture_block_layout(&request_json).unwrap();
+    let layout =
+        gents_inference::rendered_request::encoding::capture_block_layout(&request_json).unwrap();
     let chunks = gents_inference::rendered_request::encoding::chunk_capture_layout(&layout);
     assert!(chunks.len() > CAPTURE_BLOCK_CREATE_BATCH);
     for chunk in chunks {
@@ -1157,7 +1168,9 @@ async fn a_repeated_agent_loop_request_stores_only_its_appended_turn() {
             .unwrap(),
             (
                 gents_inference::rendered_request::canonical_json(&rendered.request_json),
-                gents_inference::rendered_request::canonical_json(&rendered.provenance_payload_json)
+                gents_inference::rendered_request::canonical_json(
+                    &rendered.provenance_payload_json
+                )
             )
         );
     }
@@ -1180,8 +1193,8 @@ fn the_collection_names_are_valid_graphql_identifiers() {
 
 #[tokio::test]
 async fn title_capture_uses_parent_session_and_managed_agent_native_signatures() {
-    use gents_session::request::lifecycle::{ClaimOutcome, RequestLifecycle};
     use gents_protocol::request_admission::RequestPurpose;
+    use gents_session::request::lifecycle::{ClaimOutcome, RequestLifecycle};
 
     let fixture = CaptureFixture::new().await;
     let node = fixture.db.node.clone();
@@ -1199,16 +1212,17 @@ async fn title_capture_uses_parent_session_and_managed_agent_native_signatures()
         .unwrap()
         .to_owned();
     let parent = fixture.lifecycle.request().clone();
-    let auxiliary = gents_session::request::lifecycle::materialize::write_pending_auxiliary_request(
-        &node,
-        &parent,
-        RequestPurpose::TitleAudit,
-        parent.content.clone(),
-        None,
-        &signer,
-    )
-    .await
-    .unwrap();
+    let auxiliary =
+        gents_session::request::lifecycle::materialize::write_pending_auxiliary_request(
+            &node,
+            &parent,
+            RequestPurpose::TitleAudit,
+            parent.content.clone(),
+            None,
+            &signer,
+        )
+        .await
+        .unwrap();
     let mut lifecycle = RequestLifecycle::new_with_node_did(node.clone(), auxiliary, 60);
     lifecycle.bind_managed_agent(agent.as_ref()).unwrap();
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
@@ -1234,14 +1248,15 @@ async fn title_capture_uses_parent_session_and_managed_agent_native_signatures()
         rendered.attempt,
     )
     .unwrap();
-    rendered.provenance_json =
-        serde_json::to_value(gents_inference::rendered_request::ProvenanceManifest::captured_only(
+    rendered.provenance_json = serde_json::to_value(
+        gents_inference::rendered_request::ProvenanceManifest::captured_only(
             rendered.capture_scope.clone(),
             None,
             None,
             rendered.assembly_trace.clone(),
-        ))
-        .unwrap();
+        ),
+    )
+    .unwrap();
     let sink = DefraRenderedRequestSink::with_signer(node.clone(), signer);
     sink.capture(rendered.clone()).await.unwrap();
 

@@ -156,8 +156,11 @@ fn resolver_reference_names_exactly_one_account() {
 
 #[tokio::test]
 async fn resolver_reads_through_config_access() {
-    let (db, _user, _user_access, _binding) =
-        crate::test_support::signed_test_node("credential-resolver").await;
+    let (db, _user, _user_access, _binding) = crate::test_support::signed_test_node(
+        "credential-resolver",
+        gents_store::node_extension::Extensions::none(),
+    )
+    .await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let access = super::rows::runtime_credential_access(&node, did).unwrap();
@@ -182,8 +185,11 @@ async fn resolver_reads_through_config_access() {
 
 #[tokio::test]
 async fn resolver_missing_account_keeps_the_missing_guidance() {
-    let (db, _user, _user_access, _binding) =
-        crate::test_support::signed_test_node("credential-resolver").await;
+    let (db, _user, _user_access, _binding) = crate::test_support::signed_test_node(
+        "credential-resolver",
+        gents_store::node_extension::Extensions::none(),
+    )
+    .await;
     let node = db.node.clone();
     let did = db.node_identity.did();
     let missing = classify_oauth_auth_error(

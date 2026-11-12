@@ -1474,10 +1474,10 @@ pub async fn reconcile_client_retry(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     use crate::test_support::{
         client_access, grant_operator_user, seed_owned_agent, serve_client_node,
     };
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     use gents_store::identity::{KeyIdentity, NodeIdentity};
     use std::sync::Arc;
 
@@ -2285,7 +2285,11 @@ mod tests {
 
     #[tokio::test]
     async fn delegated_recovery_does_not_grant_a_signed_request_without_its_creation_receipt() {
-        let db = gents_inference::test_support::test_db("delegated-recovery").await;
+        let db = gents_inference::test_support::test_db(
+            "delegated-recovery",
+            crate::test_support::no_lifecycle_plugins(),
+        )
+        .await;
         let (db, user, user_access, parent) =
             gents_inference::test_support::signed_test_node_from_db(db, "delegated-recovery").await;
         let node = db.node.clone();

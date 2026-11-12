@@ -39,8 +39,11 @@ async fn seed_codex_account(
 async fn usage_wiring_codex_client_records_under_its_account_key() {
     use rig::client::CompletionClient;
     use rig::completion::CompletionModel;
-    let (db, _user, _user_access, _binding) =
-        crate::test_support::signed_test_node("codex-usage").await;
+    let (db, _user, _user_access, _binding) = crate::test_support::signed_test_node(
+        "codex-usage",
+        gents_store::node_extension::Extensions::none(),
+    )
+    .await;
     let did = db.node_identity.did();
     let cache: std::sync::Arc<crate::usage_observation::UsageCache> = std::sync::Arc::default();
     let node = db.node.clone();
@@ -71,8 +74,11 @@ async fn usage_wiring_codex_client_records_under_its_account_key() {
 async fn usage_wiring_codex_key_backfill_lands_under_the_key() {
     use rig::client::CompletionClient;
     use rig::completion::CompletionModel;
-    let (db, _user, _user_access, _binding) =
-        crate::test_support::signed_test_node("codex-usage").await;
+    let (db, _user, _user_access, _binding) = crate::test_support::signed_test_node(
+        "codex-usage",
+        gents_store::node_extension::Extensions::none(),
+    )
+    .await;
     let did = db.node_identity.did();
     let cache: std::sync::Arc<crate::usage_observation::UsageCache> = std::sync::Arc::default();
     let node = db.node.clone();
