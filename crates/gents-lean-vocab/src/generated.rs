@@ -2930,7 +2930,6 @@ pub struct LeanContractSnapshot {
     pub schema_argument_repair_cases: Vec<LeanSchemaArgumentRepairCase>,
     pub invalid_tool_progress_cases: Vec<LeanInvalidToolProgressCase>,
     pub repeated_tool_failure_cases: Vec<serde_json::Value>,
-    pub tool_timeout_cases: LeanToolTimeoutCases,
     pub plugin_resource_consent_cases: serde_json::Value,
     pub plugin_resource_budget_cases: serde_json::Value,
     pub plugin_resource_publication_cases: serde_json::Value,
@@ -11970,101 +11969,6 @@ pub struct LeanToolRetryCase {
     pub idempotency: String,
     pub failure_class: String,
     pub disposition: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanToolTimeoutCases {
-    pub background: Vec<LeanToolTimeoutCasesBackgroundItem>,
-    pub cli: Vec<LeanToolTimeoutCasesCliItem>,
-    pub foreground: Vec<LeanToolTimeoutCasesForegroundItem>,
-    pub lsp: Vec<LeanToolTimeoutCasesLspItem>,
-    pub wait: Vec<LeanToolTimeoutCasesWaitItem>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanToolTimeoutCasesBackgroundItem {
-    pub background_timeout_secs: Option<i64>,
-    pub expected: Option<u64>,
-    pub name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanToolTimeoutCasesCliItem {
-    pub expected: Option<u64>,
-    pub host_default: u64,
-    pub host_maximum: u64,
-    pub name: String,
-    pub registration_secs: u64,
-    pub timeout_secs: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanToolTimeoutCasesForegroundItem {
-    pub expected: Option<LeanToolTimeoutCasesForegroundItemExpected>,
-    pub host_default: u64,
-    pub host_maximum: u64,
-    pub max_timeout_secs: Option<u64>,
-    pub name: String,
-    pub timeout_secs: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanToolTimeoutCasesForegroundItemExpected {
-    pub default: u64,
-    pub maximum: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanToolTimeoutCasesLspItem {
-    pub expected: Option<LeanToolTimeoutCasesLspItemExpected>,
-    pub max_timeout_secs: Option<u64>,
-    pub name: String,
-    pub requests: Vec<LeanToolTimeoutCasesLspItemRequestsItem>,
-    pub timeout_secs: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanToolTimeoutCasesLspItemExpected {
-    pub default: u64,
-    pub maximum: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanToolTimeoutCasesLspItemRequestsItem {
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanToolTimeoutCasesWaitItem {
-    pub expected: Option<LeanToolTimeoutCasesWaitItemExpected>,
-    pub max_timeout_secs: Option<u64>,
-    pub name: String,
-    pub requests: Vec<LeanToolTimeoutCasesWaitItemRequestsItem>,
-    pub timeout_secs: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanToolTimeoutCasesWaitItemExpected {
-    pub default: u64,
-    pub maximum: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanToolTimeoutCasesWaitItemRequestsItem {
-    pub effective: Option<u64>,
-    pub requested: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]

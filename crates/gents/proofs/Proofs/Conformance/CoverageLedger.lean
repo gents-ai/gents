@@ -1748,8 +1748,24 @@ def caseCoverage : List CoverageEntry :=
       "SelfConfigCases")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "tool_timeout_cases"
-      "ToolTimeoutCases")
+      "family"
+      "tool_timeouts_foreground_pair")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "tool_timeouts_cli_timeout")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "tool_timeouts_background_lifetime")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "tool_timeouts_wait_policy")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "family"
+      "tool_timeouts_lsp_policy")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "workspace_path_alias_cases"
