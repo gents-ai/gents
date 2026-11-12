@@ -249,15 +249,19 @@ fn openrouter_additional_params_require_parameters() {
 
 #[test]
 fn generated_responses_storage_cases_drive_loop_config() {
-    use gents_lean_vocab::families::contracts_prompt_assembly_responses_storage as storage;
-
-    storage::replay::<String, String>(|case| {
+    gents_lean_vocab::families::prompt_assembly_responses_storage_family_vocabulary::replay(&[
+        BackendProviderKind::OpenAiCompatible,
+        BackendProviderKind::XaiGrokOAuth,
+        BackendProviderKind::ChatGptCodex,
+        BackendProviderKind::OpenRouter,
+    ]);
+    gents_lean_vocab::families::contracts_prompt_assembly_responses_storage::replay::<
+        BackendProviderKind,
+        gents_loop::openai_wire::OpenAiWireApi,
+    >(|case| {
         let mut agent = agent_with_retry(Default::default());
-        agent.backend_provider_kind =
-            BackendProviderKind::parse_optional(Some(&case.family)).expect("Lean family");
-        agent.openai_wire_api =
-            serde_json::from_value(serde_json::Value::String(case.wire.clone()))
-                .expect("Lean wire");
+        agent.backend_provider_kind = case.family;
+        agent.openai_wire_api = case.wire;
         agent.backend_endpoint = case.endpoint.clone();
         let config = loop_config(
             &agent,
@@ -290,7 +294,7 @@ fn generated_responses_storage_cases_drive_loop_config() {
                     item.as_str() == Some(gents_loop::provider_patches::ENCRYPTED_REASONING_INCLUDE)
                 })
             });
-        storage::ResponsesStorageOutput {
+        gents_lean_vocab::families::contracts_prompt_assembly_responses_storage::ResponsesStorageOutput {
             store,
             encrypted_include,
         }

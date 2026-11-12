@@ -237,39 +237,38 @@ fn profile_of_order(mode: &str) -> ProviderInputProfile {
 #[test]
 fn generated_assistant_order_cases_bind_selected_provider_order() {
     use crate::compaction::history::normalize_assistant_content_order;
-    use gents_lean_vocab::families::contracts_prompt_assembly_assistant_order as family;
-    family::replay::<String>(|case| {
-        let profile = profile_of_order(&case.order_mode);
-        let input = vec![Message::Assistant {
-            request_id: None,
-            id: None,
-            content: recode::<_, Vec<Item>>(&case.input)
-                .iter()
-                .map(assistant_item)
-                .collect(),
-        }];
-        let once = normalize_assistant_content_order(profile, input);
-        let [once_row] = once.as_slice() else {
-            panic!("{}: one assistant message stays one: {once:?}", case.name);
-        };
-        let expected = row_of_message(once_row).content;
-        let twice = normalize_assistant_content_order(profile, once);
-        let [twice_row] = twice.as_slice() else {
-            panic!("{}: one assistant message stays one: {twice:?}", case.name);
-        };
-        family::AssistantOrderOutput {
+    gents_lean_vocab::families::contracts_prompt_assembly_assistant_order::replay::<String>(
+        |case| {
+            let profile = profile_of_order(&case.order_mode);
+            let input = vec![Message::Assistant {
+                request_id: None,
+                id: None,
+                content: recode::<_, Vec<Item>>(&case.input)
+                    .iter()
+                    .map(assistant_item)
+                    .collect(),
+            }];
+            let once = normalize_assistant_content_order(profile, input);
+            let [once_row] = once.as_slice() else {
+                panic!("{}: one assistant message stays one: {once:?}", case.name);
+            };
+            let expected = row_of_message(once_row).content;
+            let twice = normalize_assistant_content_order(profile, once);
+            let [twice_row] = twice.as_slice() else {
+                panic!("{}: one assistant message stays one: {twice:?}", case.name);
+            };
+            gents_lean_vocab::families::contracts_prompt_assembly_assistant_order::AssistantOrderOutput {
             expected: recode(&expected),
             twice: recode(&row_of_message(twice_row).content),
         }
-    });
+        },
+    );
 }
 
 #[test]
 fn generated_sanitize_cases_drive_the_production_sanitizer() {
     use crate::compaction::sanitize_history_for_provider;
-    use gents_lean_vocab::families::contracts_prompt_assembly_sanitize as family;
-    use gents_lean_vocab::families::contracts_prompt_assembly_sanitize_split as split;
-    family::replay(|case| {
+    gents_lean_vocab::families::contracts_prompt_assembly_sanitize::replay(|case| {
         let input = recode::<_, Vec<Row>>(&case.input);
         assert_eq!(
             rows_of(&messages_of(&input)),
@@ -285,18 +284,18 @@ fn generated_sanitize_cases_drive_the_production_sanitizer() {
             ProviderInputProfile::OpenAiChatCompletions,
             once.clone(),
         );
-        family::SanitizeOutput {
+        gents_lean_vocab::families::contracts_prompt_assembly_sanitize::SanitizeOutput {
             expected: recode(&rows_of(&once)),
             twice: recode(&rows_of(&twice)),
         }
     });
-    split::replay(|case| {
+    gents_lean_vocab::families::contracts_prompt_assembly_sanitize_split::replay(|case| {
         let input = recode::<_, Vec<Row>>(&case.input);
         let index = usize::try_from(case.index).expect("split index fits");
         let suffix = input
             .get(index..)
             .unwrap_or_else(|| panic!("{}: split {index} exceeds the input", case.name));
-        recode::<_, Vec<split::PromptAssemblyRowCase>>(&rows_of(&sanitize_history_for_provider(
+        recode::<_, Vec<gents_lean_vocab::families::contracts_prompt_assembly_sanitize_split::PromptAssemblyRowCase>>(&rows_of(&sanitize_history_for_provider(
             ProviderInputProfile::OpenAiChatCompletions,
             messages_of(suffix),
         )))
@@ -320,8 +319,7 @@ fn generated_mode_sanitize_cases_bind_composed_provider_view() {
     use crate::loop_stream::{
         provider_messages, provider_view_tagged, sanitize_tagged_history, TaggedMessage,
     };
-    use gents_lean_vocab::families::contracts_prompt_assembly_mode_sanitize as family;
-    family::replay::<String>(|case| {
+    gents_lean_vocab::families::contracts_prompt_assembly_mode_sanitize::replay::<String>(|case| {
         let profile = profile_of_order(&case.order_mode);
         let input = recode::<_, Vec<Row>>(&case.input);
         let once = sanitize_history_for_provider(profile, messages_of(&input));
@@ -362,7 +360,7 @@ fn generated_mode_sanitize_cases_bind_composed_provider_view() {
             .iter()
             .map(|row| row.message.clone())
             .collect::<Vec<_>>();
-        family::ModeSanitizeOutput {
+        gents_lean_vocab::families::contracts_prompt_assembly_mode_sanitize::ModeSanitizeOutput {
             expected: recode(&rows_of(&once)),
             twice: recode(&rows_of(&twice)),
             association: recode(&rows_of(&native)),
