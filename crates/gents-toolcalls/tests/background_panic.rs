@@ -1,7 +1,13 @@
-use super::*;
+use gents_inference::llm::message::{Message, UserContent};
+use gents_inference::llm::ToolCallHookAction;
+use gents_store::identity::NodeIdentity;
+use serde_json::json;
+
+use gents_toolcalls::call::hook::fixtures::*;
+use gents_toolcalls::call::hook::*;
+
 use chrono::Utc;
 use gents_loop::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
-use gents_store::identity::NodeIdentity;
 
 struct PanickingTool;
 
@@ -31,8 +37,11 @@ async fn accepted_background_panic_terminalizes_and_notifies_before_release() {
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
     };
 
-    let (db, user, owner, binding) =
-        crate::test_support::root::signed_test_node("hook-background-panic").await;
+    let (db, user, owner, binding) = gents_inference::test_support::signed_test_node(
+        "hook-background-panic",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
     let node = db.node.clone();
     let agent =
         gents_store::identity::resolve_agent_identity(db.node_identity.as_ref(), &binding).unwrap();

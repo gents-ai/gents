@@ -41,7 +41,7 @@ async fn apply(access: &ConfigAccess, documents: Vec<(Collection, Value)>) {
 }
 
 async fn install_in(
-    db: &crate::support::TestDb,
+    db: &gents_inference::test_support::TestDb,
     user: &gents_store::identity::KeyIdentity,
     access: &ConfigAccess,
     archive: &PackArchive,
@@ -84,8 +84,11 @@ async fn rows(access: &ConfigAccess, query: &str) -> Value {
 
 #[tokio::test]
 async fn a_plugin_built_on_the_node_exports_as_the_packs_plugin_and_runs_where_it_installs() {
-    let (origin, _user, access, worker) =
-        crate::test_support::root::signed_test_node("pack-export-plugin").await;
+    let (origin, _user, access, worker) = gents_inference::test_support::signed_test_node(
+        "pack-export-plugin",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
     let owner = origin.node_identity.did().to_owned();
     let tools_id = format!("{}:tools", worker.agent_did);
     let source = "module.exports = (input) => ({ n: input.n * 2 });\n";
@@ -189,8 +192,11 @@ async fn a_plugin_built_on_the_node_exports_as_the_packs_plugin_and_runs_where_i
     let archive = PackArchive::from_bytes(&bytes).unwrap();
 
     let (second, second_user, second_access) =
-        crate::test_support::root::signed_test_node_without_agent("pack-export-plugin-second")
-            .await;
+        gents_inference::test_support::signed_test_node_without_agent(
+            "pack-export-plugin-second",
+            gents_session::test_support::no_lifecycle_plugins(),
+        )
+        .await;
     let second_owner = second.node_identity.did().to_owned();
     apply(
         &second_access,

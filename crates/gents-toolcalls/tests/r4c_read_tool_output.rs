@@ -5,7 +5,7 @@ use gents_loop::tool::{ToolDyn, ToolError};
 use gents_toolcalls::call::hook::{BackgroundToolRegistry, DefraSessionHook};
 use serde_json::{json, Value};
 
-use crate::support::test_db;
+use gents_inference::test_support::test_db;
 use gents_toolcalls::call::hook::fixtures::r4c_private_support::{
     accepted_call, assert_accepted_control_rows, setup_private_hook,
 };
@@ -60,8 +60,17 @@ impl ToolDyn for PendingTool {
 async fn setup_hook(
     test_name: &str,
     registry: BackgroundToolRegistry,
-) -> (crate::support::TestDb, DefraSessionHook, String, String) {
-    let db = test_db(test_name).await;
+) -> (
+    gents_inference::test_support::TestDb,
+    DefraSessionHook,
+    String,
+    String,
+) {
+    let db = test_db(
+        test_name,
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
     let session_id = format!("{test_name}-session");
     let request_id = format!("{test_name}-request");
     let hook = setup_private_hook(
@@ -76,7 +85,7 @@ async fn setup_hook(
 }
 
 async fn setup_hook_on_db(
-    db: &crate::support::TestDb,
+    db: &gents_inference::test_support::TestDb,
     request_id: &str,
     session_id: &str,
     registry: BackgroundToolRegistry,
@@ -163,7 +172,7 @@ fn skip_reason_json(action: ToolCallHookAction) -> Value {
 
 async fn create_foreground_tool_call(hook: &DefraSessionHook) -> String {
     let tool_call_id = "foreground-call".to_string();
-    let mut lifecycle = super::accepted_hook_tool_lifecycle(
+    let mut lifecycle = gents_toolcalls::call::hook::fixtures::accepted_hook_tool_lifecycle(
         hook,
         &tool_call_id,
         "foreground_tool",
@@ -628,7 +637,11 @@ async fn read_tool_output_rejects_non_backgrounded() {
 
 #[tokio::test]
 async fn read_tool_output_rejects_unauthorized() {
-    let db = test_db("r4c-read-output-unauthorized").await;
+    let db = test_db(
+        "r4c-read-output-unauthorized",
+        gents_session::test_support::no_lifecycle_plugins(),
+    )
+    .await;
     let (hook_1, _session_1, _request_1) = setup_hook_on_db(
         &db,
         "parent-one",

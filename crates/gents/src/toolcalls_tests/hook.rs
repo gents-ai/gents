@@ -15,9 +15,9 @@ use gents_toolcalls::call::hook::*;
 
 mod background_admission;
 mod background_budget;
-mod background_panic;
+
 mod delegated_finality_tests;
-mod r4c_read_tool_output;
+
 mod script_composition;
 mod wait_settlement;
 
