@@ -51,10 +51,12 @@ fn selection() -> Selection<session::Doc> {
         .field(session::TAGS)
 }
 
-fn scoped(input: &SessionListInput) -> Query<session::Doc> {
+fn scoped(input: &SessionListInput, reader_did: &str) -> Query<session::Doc> {
     let mut query = Query::select(selection());
     if let Some(node) = &input.node_did {
         query = query.filter(Filter::eq(session::NODE_DID, node));
+    } else {
+        query = query.filter(Filter::eq(session::REQUESTER_DID, reader_did));
     }
     if let Some(requester) = &input.requester_did {
         query = query.filter(Filter::eq(session::REQUESTER_DID, requester));
@@ -119,8 +121,8 @@ impl View for SessionPage {
     type Collection = session::Doc;
     type Row = SessionRow;
 
-    fn query(&self, _reader_did: &str) -> Query<Self::Collection> {
-        let mut query = ordered(scoped(&self.input));
+    fn query(&self, reader_did: &str) -> Query<Self::Collection> {
+        let mut query = ordered(scoped(&self.input, reader_did));
         if let Some(agent) = &self.agent_did {
             query = query.filter(Filter::eq(session::AGENT_DID, agent));
         }

@@ -14,6 +14,14 @@ visible only when the caller explicitly selects it. -/
 def visible (readable sameNode sameRequester archived includeArchived : Bool) : Bool :=
   readable && sameNode && sameRequester && (!archived || includeArchived)
 
+def callerVisible (readable sameRequester : Bool) : Bool :=
+  readable && sameRequester
+
+theorem caller_visible_requires_reader_scope (readable sameRequester : Bool)
+    (included : callerVisible readable sameRequester = true) :
+    readable = true ∧ sameRequester = true := by
+  exact Bool.and_eq_true.mp included
+
 def rows (source : List Row) (includeArchived : Bool) : List Row :=
   source.filter fun row =>
     visible row.readable row.sameNode row.sameRequester row.archived includeArchived

@@ -260,6 +260,7 @@ async fn load_node_snapshot(access: &ConfigAccess, node_did: &str) -> Result<Cli
             gents_session::views::SessionList {
                 input: gents_protocol::operations::session::SessionListInput {
                     node_did: Some(node_did.to_owned()),
+                include_archived: true,
                     ..Default::default()
                 },
             },

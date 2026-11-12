@@ -12,6 +12,7 @@ import Proofs.Conformance.Family
 
 attribute [conformance_function] ReadViews.runner ReadViews.counted McpViews.inventory
   McpViews.page McpViews.health TaskInventory.selection SessionViews.visible
+  SessionViews.callerVisible
   ConfigurationViews.inventory InferenceActivityViews.included
   TranscriptViews.visible TranscriptViews.window TranscriptViews.sourceVisible
   RequestViews.observedSeed RequestViews.causalChild

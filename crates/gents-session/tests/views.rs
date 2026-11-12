@@ -80,6 +80,31 @@ async fn session_views_match_model_on_served_node() -> anyhow::Result<()> {
         case.check(!rows.is_empty());
         case.check(count.into_iter().sum::<u64>() > 0);
     }
+    let other_session = "view-other-requester";
+    gents_session::test_support::create_agent_owned_session(
+        &agent_access,
+        db.node_identity.did(),
+        other_session,
+        Some(stranger.did()),
+    )
+    .await;
+    let caller_cases = gents_lean_vocab::families::session_views_caller_visible::cases();
+    assert_eq!(caller_cases.len(), 4);
+    for case in caller_cases {
+        let input = &case.input;
+        let same_user = input.readable == input.same_requester;
+        let selected = if same_user { session_id } else { other_session };
+        let access = db.client_access(if input.readable { &user } else { &stranger });
+        let view = SessionList {
+            input: SessionListInput {
+                session_id: Some(selected.to_owned()),
+                include_archived: true,
+                ..Default::default()
+            },
+        };
+        let rows = access.read_view(&view).await?;
+        case.check(!rows.is_empty());
+    }
     db.node.shutdown().await?;
     Ok(())
 }

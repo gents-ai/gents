@@ -305,7 +305,7 @@ async fn execute(
         "limit must be 1 through 100; next call: sessions {{\"action\":\"help\"}}"
     );
     if action == "output" {
-        return tool_output(txn, current_session, args).await;
+        return tool_output(txn, agent, current_session, args).await;
     }
     if matches!(action, "get" | "transcript") {
         let id = args
@@ -313,7 +313,7 @@ async fn execute(
             .as_deref()
             .filter(|id| !id.trim().is_empty())
             .context("session_id required; next call: sessions {\"action\":\"list\"}")?;
-        let session = authorized_session(txn, id).await?;
+        let session = authorized_session(txn, agent, id).await?;
         let agent = session["node_did"]
             .as_str()
             .context("session node DID missing")?;
@@ -489,10 +489,11 @@ fn session_summary(mut session: Value) -> Value {
     session
 }
 
-async fn authorized_session(txn: &ConfigApplyTxn<'_>, id: &str) -> Result<Value> {
+async fn authorized_session(txn: &ConfigApplyTxn<'_>, node_did: &str, id: &str) -> Result<Value> {
     let mut sessions = txn
         .read_view(&gents_session::views::SessionPage {
             input: gents_protocol::operations::session::SessionListInput {
+                node_did: Some(node_did.to_owned()),
                 session_id: Some(id.to_owned()),
                 include_archived: true,
                 ..Default::default()
@@ -510,6 +511,7 @@ async fn authorized_session(txn: &ConfigApplyTxn<'_>, id: &str) -> Result<Value>
 
 async fn tool_output(
     txn: &ConfigApplyTxn<'_>,
+    node_did: &str,
     current_session: Option<&str>,
     args: &SessionHistoryParams,
 ) -> Result<Value> {
@@ -527,7 +529,7 @@ async fn tool_output(
         )?;
     let call_id = nonblank(&args.call_id);
     let named_doc = nonblank(&args.tool_call_doc_id);
-    let session = authorized_session(txn, &session_id).await?;
+    let session = authorized_session(txn, node_did, &session_id).await?;
     let agent = session["node_did"]
         .as_str()
         .context("session node DID missing")?;
