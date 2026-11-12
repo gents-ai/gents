@@ -1,8 +1,8 @@
 use super::*;
 use crate::request::lifecycle::test_support::{
     agent_access, agent_identity, agent_signer, agent_write_value, claimed_owner,
-    claimed_owner_caused_by, expire_observed_execution, observed_case_request, observed_execution,
-    output_segment_snapshot, owner, request_row, test_node, PendingNativeOutcome,
+    expire_observed_execution, observed_case_request, observed_execution, output_segment_snapshot,
+    owner, request_row, test_node, PendingNativeOutcome,
 };
 use anyhow::Result;
 use std::{sync::Arc, time::Duration};

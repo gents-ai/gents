@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use gents_documents::mailbox_write_decl::{MailboxAction, MailboxKind};
 use crate::session::mailbox::{
-    stamp_create_with_access, FileMailboxItemArgs, MailboxSourceKind,
-    MailboxStampContext, MailboxStatus, MAILBOX_CLOSE_COLLECTIONS,
+    stamp_create_with_access, FileMailboxItemArgs, MailboxSourceKind, MailboxStampContext,
+    MailboxStatus, MAILBOX_CLOSE_COLLECTIONS,
 };
+use gents_documents::mailbox_write_decl::{MailboxAction, MailboxKind};
 
 use gents_lean_vocab::{
     assert_state_machine_contract_is_complete, lean_state_machine_contract, lean_vocabulary_values,

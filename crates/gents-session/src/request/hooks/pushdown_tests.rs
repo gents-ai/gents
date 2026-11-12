@@ -1,24 +1,5 @@
 use std::sync::{Arc, Mutex};
 
-use gents_lean_vocab::{
-    lean_lifecycle_hook_admit_cases, lean_lifecycle_hook_combine_cases,
-    lean_lifecycle_hook_delivery_cases, lean_lifecycle_hook_effect_cases,
-    lean_lifecycle_hook_gate_cases, lean_lifecycle_hook_grant_cases,
-    lean_lifecycle_hook_must_commit_cases, lean_lifecycle_hook_owed_delivery_cases,
-    lean_lifecycle_hook_queue_scope_cases, lean_lifecycle_hook_stage_cases,
-    LeanLifecycleHookAccess, LeanLifecycleHookAdmitResult,
-    LeanLifecycleHookBinding, LeanLifecycleHookChoice,
-    LeanLifecycleHookDecision, LeanLifecycleHookDeliveryRecord, LeanLifecycleHookDeliveryStep,
-    LeanLifecycleHookEffect, LeanLifecycleHookGateResult, LeanLifecycleHookManifest,
-    LeanLifecycleHookOwedAttempt, LeanLifecycleHookOwedKey, LeanLifecycleHookOwedKind,
-    LeanLifecycleHookOwedRecord, LeanLifecycleHookOwedSettlement, LeanLifecycleHookOwedStep,
-    LeanLifecycleHookOwedWrite, LeanLifecycleHookPartition, LeanLifecycleHookPreparedVerdict,
-    LeanLifecycleHookQueueScopeResult, LeanLifecycleHookRef, LeanLifecycleHookRefusal,
-    LeanLifecycleHookRow, LeanLifecycleHookScopeAnswer, LeanLifecycleHookScopeKey,
-    LeanLifecycleHookScript, LeanLifecycleHookStageResult, LeanLifecycleHookStale,
-    LeanLifecycleHookState, LeanLifecycleHookSubject, LeanLifecycleHookSubjectKind,
-    LeanLifecycleHookVerdict, LeanLifecycleHookWorld,
-};
 use crate::request::hooks::claim::{combine, ClaimVerdict, Successor};
 use crate::request::hooks::delivery::DeliveryRecord;
 use crate::request::hooks::effect::{
@@ -33,6 +14,24 @@ use crate::request::hooks::queue_scope::{
 };
 use crate::request::hooks::stage::{
     gate, owed, stage, stage_dropping, ApplyFailure, HookError, Host, Plugin, Staged,
+};
+use gents_lean_vocab::{
+    lean_lifecycle_hook_admit_cases, lean_lifecycle_hook_combine_cases,
+    lean_lifecycle_hook_delivery_cases, lean_lifecycle_hook_effect_cases,
+    lean_lifecycle_hook_gate_cases, lean_lifecycle_hook_grant_cases,
+    lean_lifecycle_hook_must_commit_cases, lean_lifecycle_hook_owed_delivery_cases,
+    lean_lifecycle_hook_queue_scope_cases, lean_lifecycle_hook_stage_cases,
+    LeanLifecycleHookAccess, LeanLifecycleHookAdmitResult, LeanLifecycleHookBinding,
+    LeanLifecycleHookChoice, LeanLifecycleHookDecision, LeanLifecycleHookDeliveryRecord,
+    LeanLifecycleHookDeliveryStep, LeanLifecycleHookEffect, LeanLifecycleHookGateResult,
+    LeanLifecycleHookManifest, LeanLifecycleHookOwedAttempt, LeanLifecycleHookOwedKey,
+    LeanLifecycleHookOwedKind, LeanLifecycleHookOwedRecord, LeanLifecycleHookOwedSettlement,
+    LeanLifecycleHookOwedStep, LeanLifecycleHookOwedWrite, LeanLifecycleHookPartition,
+    LeanLifecycleHookPreparedVerdict, LeanLifecycleHookQueueScopeResult, LeanLifecycleHookRef,
+    LeanLifecycleHookRefusal, LeanLifecycleHookRow, LeanLifecycleHookScopeAnswer,
+    LeanLifecycleHookScopeKey, LeanLifecycleHookScript, LeanLifecycleHookStageResult,
+    LeanLifecycleHookStale, LeanLifecycleHookState, LeanLifecycleHookSubject,
+    LeanLifecycleHookSubjectKind, LeanLifecycleHookVerdict, LeanLifecycleHookWorld,
 };
 use serde_json::Value;
 

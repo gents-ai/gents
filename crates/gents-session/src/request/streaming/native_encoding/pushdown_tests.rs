@@ -3,8 +3,8 @@ use gents_loop::stream_processor::AssistantTurnAccumulator;
 
 #[test]
 fn coalesced_reasoning_fragments_encode_as_one_native_stream() {
-    use gents_inference::llm::message::ReasoningContent;
     use crate::request::streaming::native_encoding::encode_native_message;
+    use gents_inference::llm::message::ReasoningContent;
 
     let mut accumulator = AssistantTurnAccumulator::default();
     for _ in 0..128 {

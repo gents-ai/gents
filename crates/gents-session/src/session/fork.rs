@@ -1240,10 +1240,10 @@ mod tests {
 
     #[tokio::test]
     async fn retained_edit_fork_survives_reopen_without_copying_or_rechecking_current_agent() {
-        use gents_store::identity::NodeIdentity as _;
         use crate::session::publish_signed_history;
         use crate::test_support::{fork_reader_node, history_on, session_rewrite_rows};
         use gents_store::graphql::escape_graphql_string;
+        use gents_store::identity::NodeIdentity as _;
         const SOURCE: &str = "retained-source";
         const CHILD: &str = "retained-child";
         let (mut db, user, client, binding) = fork_reader_node("retained-edit-fork").await;
