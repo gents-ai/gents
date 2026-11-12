@@ -1,3 +1,4 @@
+import Proofs.Conformance.EventSourceCursor
 import Proofs.Conformance.Identity.AgentTargetAccess
 import Proofs.Conformance.Identity.WorkspaceCompletion
 import Proofs.Conformance.Identity.ReceiverGrant

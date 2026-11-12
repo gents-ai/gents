@@ -162,6 +162,16 @@ async fn source_only_replacement_seeds_disabled_consumers_before_later_arrivals(
     Ok(())
 }
 
+#[test]
+fn seed_position_matches_the_lean_model() {
+    gents_lean_vocab::families::event_source_cursor_seed::replay(
+        |i: &gents_lean_vocab::families::event_source_cursor_seed::SeedInput| -> u64 {
+            let head = i.collection_exists.then(|| i.head.to_string());
+            seed_after(head.as_deref()).parse().unwrap()
+        },
+    );
+}
+
 #[tokio::test]
 async fn source_registered_before_collection_retains_its_first_arrival() -> Result<()> {
     let fixture = fixture(false).await?;

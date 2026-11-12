@@ -72,6 +72,10 @@ pub async fn load_for_source(
     Ok(None)
 }
 
+pub(crate) fn seed_after(head: Option<&str>) -> String {
+    head.unwrap_or("0").to_owned()
+}
+
 /// The caller has checked that no cursor exists and resolved
 /// `writer_agent_did`, the consumer's selected Agent, in this transaction.
 pub(crate) async fn seed_for_source(
@@ -88,7 +92,7 @@ pub(crate) async fn seed_for_source(
             &gents_store::config_client::schema_introspection::introspection_query(collection)?,
         )
         .await?;
-    let after = if gents_store::config_client::schema_introspection::parse_collection_schema(
+    let head = if gents_store::config_client::schema_introspection::parse_collection_schema(
         schema.get("data"),
     )
     .is_some()
@@ -99,13 +103,16 @@ pub(crate) async fn seed_for_source(
                 escape_graphql_string(collection)
             ))
             .await?;
-        response["data"]["_documentArrivals"]["head"]
-            .as_str()
-            .context("arrival journal omitted head")?
-            .to_owned()
+        Some(
+            response["data"]["_documentArrivals"]["head"]
+                .as_str()
+                .context("arrival journal omitted head")?
+                .to_owned(),
+        )
     } else {
-        "0".to_owned()
+        None
     };
+    let after = seed_after(head.as_deref());
     let cursor = EventSourceCursor {
         cursor_key: key,
         owner_did: owner.into(),
