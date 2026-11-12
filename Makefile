@@ -72,9 +72,9 @@ help:
 	@echo "  make desktop-native-build  Build the native Tauri app bundle"
 	@echo
 	@echo "Live:"
-	@echo "  make live-cli              Run live CLI smoke test"
+	@echo "  make live-cli              Run live CLI end-to-end tests"
 	@echo "  make live-onboarding       Run bare gents against real launchd and a PTY (macOS)"
-	@echo "  make live-eval               Run live inference eval-driver tests"
+	@echo "  make live-eval             Run live inference eval-driver tests"
 	@echo "  make live-agent            Run live inference runtime tests"
 	@echo "  make live-desktop-smoke    Run live desktop smoke suites"
 	@echo
@@ -194,6 +194,7 @@ test-eval-drivers:
 
 test-evals:
 	$(CARGO) test -p gents-eval --test onboarding_evals $(CARGO_PROFILE_FLAG)
+	$(CARGO) test -p gents-eval --test eval_runner_canary $(CARGO_PROFILE_FLAG)
 
 live-configurator-eval:
 	GENTS_EVAL_TARGET=$${GENTS_EVAL_TARGET:-workstation-1} scripts/evals/run-ladder.sh $${GENTS_EVAL_SUITE:-all} $${GENTS_EVAL_TRIALS:-3} $${GENTS_EVAL_CONCURRENCY:-4}
@@ -259,11 +260,11 @@ desktop-native-build: desktop-native-stage-sidecar
 
 .PHONY: live-eval live-cli live-onboarding live-agent live-desktop-smoke
 live-cli:
-	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-cli --features live-e2e --test cli_live_suite cli_live::standard_onboarding_live_demo_runs_real_conversation_with_filesystem_tools $(CARGO_PROFILE_FLAG) -- --ignored --nocapture --test-threads=1
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-cli --features live-e2e --test cli_live_suite $(if $(strip $(LIVE_FILTER)),$(LIVE_FILTER),cli_live::) $(CARGO_PROFILE_FLAG) -- --ignored --nocapture --test-threads=1
 
-LIVE_FILTER ?= cli_onboarding_live::
+LIVE_FILTER ?=
 live-onboarding:
-	$(CARGO) test -p gents-cli --features live-e2e,native-e2e --test cli_live_suite $(LIVE_FILTER) $(CARGO_PROFILE_FLAG) -- --ignored --nocapture --test-threads=1
+	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents-cli --features live-e2e,native-e2e --test cli_live_suite $(if $(strip $(LIVE_FILTER)),$(LIVE_FILTER),cli_onboarding_live::) $(CARGO_PROFILE_FLAG) -- --ignored --nocapture --test-threads=1
 
 live-agent:
 	GENTS_LIVE_TARGET=$${GENTS_LIVE_TARGET:-workstation-1} $(CARGO) test -p gents --features live-e2e --test e2e_live $(LIVE_FILTER) $(CARGO_PROFILE_FLAG) -- --nocapture --test-threads=1

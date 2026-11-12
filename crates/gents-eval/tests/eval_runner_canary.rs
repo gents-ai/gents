@@ -29,6 +29,7 @@ const SEED_MARKER: &str = "Seeded item: wh-1";
 const SEED_ITEM_SDL: &str = "type SeedItem {\n  label: String\n}\n";
 const QUIET_ITEM_SDL: &str = "type QuietItem {\n  label: String\n}\n";
 
+#[cfg(feature = "live-e2e")]
 #[tokio::test]
 async fn the_canary_runs_two_cases_end_to_end_on_an_embedded_home_with_live_inference() {
     let target = support::live_inference::live_target().await;
@@ -170,6 +171,7 @@ async fn the_canary_runs_two_cases_end_to_end_on_an_embedded_home_with_live_infe
         );
     }
 }
+#[cfg(feature = "live-e2e")]
 #[tokio::test]
 async fn a_subject_profile_bound_to_an_execution_and_retry_policy_starts_its_trial() {
     let target = support::live_inference::live_target().await;
@@ -229,16 +231,19 @@ async fn a_subject_profile_bound_to_an_execution_and_retry_policy_starts_its_tri
     );
 }
 
+#[cfg(feature = "live-e2e")]
 #[tokio::test]
 async fn a_seed_stage_fires_the_pack_trigger_and_observes_the_task_request() {
     seed_stage_routes_to_session(false).await;
 }
 
+#[cfg(feature = "live-e2e")]
 #[tokio::test]
 async fn a_seed_stage_routes_to_the_session_supplied_by_the_fixture() {
     seed_stage_routes_to_session(true).await;
 }
 
+#[cfg(feature = "live-e2e")]
 async fn seed_stage_routes_to_session(existing_session: bool) {
     let target = support::live_inference::live_target().await;
     let (canary, mut request) = live_canary_request(&target, "run-seed").await;
@@ -639,6 +644,7 @@ async fn freeze_refuses_unrestricted_bash_and_an_oauth_backend_before_creating_a
         );
     }
 }
+#[cfg(feature = "live-e2e")]
 #[tokio::test]
 #[ignore = "select GENTS_LIVE_TARGET and run the live eval target"]
 async fn live_smoke_one_trial_on_a_real_provider_reports_whether_seed_was_honoured() {
@@ -800,6 +806,7 @@ impl Canary {
             .unwrap();
     }
 }
+#[cfg(feature = "live-e2e")]
 async fn live_canary_request(
     target: &support::live_inference::InferenceTarget,
     run_id: &str,
