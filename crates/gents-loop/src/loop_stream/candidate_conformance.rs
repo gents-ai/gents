@@ -15,7 +15,7 @@ use crate::provider_input::ProviderInputCounter;
 use crate::session_hook::NoopSessionHook;
 use crate::tool::{BoxFuture, ToolDefinition, ToolError};
 
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct Response {
     usage: Option<rig::completion::Usage>,
 }
