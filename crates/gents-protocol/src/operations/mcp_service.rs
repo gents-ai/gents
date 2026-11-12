@@ -64,6 +64,17 @@ pub enum EndpointStorage {
 
 /// Registers an MCP service at `endpoint`, or moves a registered one there.
 /// Everything the call omits keeps its stored value.
+/// One probe of a registered MCP service: the health state the checker
+/// names, how long the probe took and why it failed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpProbeReceipt {
+    pub service_id: String,
+    pub health_state: String,
+    pub latency_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct McpRegisterInput {
     pub service_id: String,
