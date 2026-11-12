@@ -311,3 +311,7 @@ mod candidate_sanitation_conformance {
         });
     }
 }
+
+#[cfg(test)]
+#[path = "compaction_view_tests.rs"]
+mod tests;
