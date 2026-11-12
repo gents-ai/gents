@@ -588,17 +588,19 @@ mod tests {
 
     #[test]
     fn fallback_matches_the_generated_model() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().backend_wake_cases;
-        assert!(!cases.is_empty());
-        for case in cases {
-            let now = Utc.timestamp_millis_opt(case.now_ms).single().unwrap();
-            let deadline = Utc.timestamp_millis_opt(case.deadline_ms).single().unwrap();
-            assert_eq!(
-                fallback_wake(now, deadline, case.attempts).map(|wake| wake.timestamp_millis()),
-                case.wake_ms,
-                "{case:?}"
-            );
-        }
+        let at = |millis: u64| {
+            Utc.timestamp_millis_opt(i64::try_from(millis).unwrap())
+                .single()
+                .unwrap()
+        };
+        gents_lean_vocab::families::backend_wake_fallback_wake::replay(|i| {
+            fallback_wake(
+                at(i.now_ms),
+                at(i.deadline_ms),
+                u32::try_from(i.attempts).unwrap(),
+            )
+            .map(|wake| u64::try_from(wake.timestamp_millis()).unwrap())
+        });
     }
 
     #[test]

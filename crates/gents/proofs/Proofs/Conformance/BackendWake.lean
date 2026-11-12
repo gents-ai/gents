@@ -4,28 +4,25 @@ import Proofs.Automation.EventDelivery.Watcher
 import Proofs.Session.Request.ResumeAdmission
 import Proofs.Session.RequestExecutionLease.Transition
 import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Family
 
 namespace Conformance.BackendWake
 
-open Conformance.Contracts
+open Lean Conformance.Contracts
 
-structure Input where
-  now : Nat
-  deadline : Nat
+structure WakeInput where
+  nowMs : Nat
+  deadlineMs : Nat
   attempts : Nat
+  deriving ToJson
 
-def inputs : List Input :=
-  [ ⟨0, 100000, 0⟩, ⟨1000, 100000, 1⟩, ⟨2000, 100000, 4⟩,
-    ⟨3000, 100000, 5⟩, ⟨4000, 100000, 30⟩, ⟨9500, 10000, 2⟩,
-    ⟨10000, 10000, 0⟩, ⟨11000, 10000, 3⟩ ]
-
-def inputJson (input : Input) : String :=
-  let wake := RequestBackendWake.fallback input.now input.deadline input.attempts
-  "{\"now_ms\":" ++ toString input.now ++ ",\"deadline_ms\":" ++
-    toString input.deadline ++ ",\"attempts\":" ++ toString input.attempts ++
-    ",\"wake_ms\":" ++ (wake.map toString).getD "null" ++ "}"
-
-def casesJson : String := jsonArray (inputs.map inputJson)
+@[conformance_family]
+def fallbackWake : Family WakeInput (Option Nat) where
+  inputs :=
+    [ ⟨0, 100000, 0⟩, ⟨1000, 100000, 1⟩, ⟨2000, 100000, 4⟩,
+      ⟨3000, 100000, 5⟩, ⟨4000, 100000, 30⟩, ⟨9500, 10000, 2⟩,
+      ⟨10000, 10000, 0⟩, ⟨11000, 10000, 3⟩ ]
+  model := fun i => RequestBackendWake.fallback i.nowMs i.deadlineMs i.attempts
 
 def captureScopeCases : List (List Nat) :=
   [[], [1], [1, 4, 2], [8, 8, 3], [0, 15]]
