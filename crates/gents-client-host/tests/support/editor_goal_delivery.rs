@@ -143,11 +143,11 @@ pub async fn verify(
     root: &Path,
 ) -> Result<Value> {
     let opening: Value =
-        serde_json::from_slice(&std::fs::read(root.join("editor-goal-reply-loss.json"))?)?;
+        serde_json::from_slice(&tokio::fs::read(root.join("editor-goal-reply-loss.json")).await?)?;
     let pause: Value =
-        serde_json::from_slice(&std::fs::read(root.join("editor-goal-pause-loss.json"))?)?;
+        serde_json::from_slice(&tokio::fs::read(root.join("editor-goal-pause-loss.json")).await?)?;
     let acknowledgement: Value =
-        serde_json::from_slice(&std::fs::read(root.join("editor-goal-ack-loss.json"))?)?;
+        serde_json::from_slice(&tokio::fs::read(root.join("editor-goal-ack-loss.json")).await?)?;
     ensure!(
         opening["command"] == "desktop_goal_control" && pause["command"] == "desktop_goal_control"
     );
@@ -168,6 +168,19 @@ pub async fn verify(
     }}"#,
         gents::SIGNED_REQUEST_FIELDS,
         gents_protocol::goal::GOAL_FIELDS
+    );
+    let paths = gents_desktop_core::client::DesktopPaths::from_root(root.join("client"));
+    let signer = tokio::task::spawn_blocking(move || {
+        gents_desktop_core::client::PrincipalIdentity::load_existing(&paths)
+    })
+    .await??;
+    ensure!(signer.did() == author);
+    let ConfigAccess::Graphql(endpoint) = access else {
+        anyhow::bail!("installed Goal recovery requires the served runtime");
+    };
+    let access = ConfigAccess::Graphql(
+        gents_store::config_client::GraphqlEndpoint::as_principal(endpoint.url(), author)
+            .with_client_signing_capability(signer.client_signing_capability()?)?,
     );
     let value = access.execute(&query).await?;
     let controls = value["data"]["AgentSessionGoalControl"]
