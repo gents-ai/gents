@@ -564,20 +564,3 @@ fn queued_steering_traces_are_derived_from_connected_owners() {
     }
 }
 
-#[test]
-fn queued_steering_rejects_incoherent_claim_and_interrupted_publication() {
-    let cases = lean_queued_steering_guard_cases();
-    assert_eq!(cases.len(), 3);
-    for case in cases {
-        assert!(
-            case.prefix_admitted,
-            "case {:?} never reached its rejecting stage",
-            case.name
-        );
-        assert!(
-            !case.admitted,
-            "case {:?} was unexpectedly admitted",
-            case.name
-        );
-    }
-}

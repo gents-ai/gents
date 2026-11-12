@@ -537,10 +537,6 @@ pub fn lean_queue_management_cases() -> &'static [LeanQueueManagementCase] {
     &lean_contract_snapshot().queue_management_cases
 }
 
-pub fn lean_queued_steering_guard_cases() -> &'static [LeanQueuedSteeringGuardCase] {
-    &lean_contract_snapshot().queued_steering_guard_cases
-}
-
 pub fn lean_queued_steering_trace_cases() -> &'static [LeanQueuedSteeringTraceCase] {
     &lean_contract_snapshot().queued_steering_trace_cases
 }
@@ -3246,7 +3242,6 @@ pub struct LeanContractSnapshot {
     pub request_progress_cases: Vec<LeanRequestProgressCase>,
     pub pending_user_turn_cases: Vec<LeanPendingUserTurnCase>,
     pub queued_steering_trace_cases: Vec<LeanQueuedSteeringTraceCase>,
-    pub queued_steering_guard_cases: Vec<LeanQueuedSteeringGuardCase>,
     pub agent_delivery_cases: Vec<LeanAgentDeliveryCase>,
     pub interrupt_delivery_cases: Vec<LeanInterruptDeliveryCase>,
     pub agent_steer_disposition_cases: Vec<LeanAgentSteerDispositionCase>,
@@ -9753,15 +9748,6 @@ pub struct LeanQueuedSteeringEntry {
     pub queue_key: Option<u64>,
     #[serde(rename = "queuedAfter")]
     pub queued_after: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanQueuedSteeringGuardCase {
-    pub name: String,
-    #[serde(rename = "prefixAdmitted")]
-    pub prefix_admitted: bool,
-    pub admitted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

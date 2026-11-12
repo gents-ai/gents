@@ -36,7 +36,6 @@ GROUPS = {
     "protected_replay_compaction_cases": "LeanProtectedReplayCompactionCase",
     "request_execution_lease_cases": "LeanRequestExecutionLeaseCase",
     "queued_steering_trace_cases": "LeanQueuedSteeringTraceCase",
-    "queued_steering_guard_cases": "LeanQueuedSteeringGuardCase",
 }
 INT_RANGES = {
     "u8": (0, 2**8 - 1), "u16": (0, 2**16 - 1),

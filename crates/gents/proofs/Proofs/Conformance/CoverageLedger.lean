@@ -798,10 +798,10 @@ def caseCoverage : List CoverageEntry :=
       "AgentMessageOutcomeCases"
       "Binds outcome selection; physical-head binding and notification replay need native flow coverage.")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
-      "queued_steering_guard_cases"
-      "QueuedSteeringGuardCases"
-      "Wrong-head claim, incoherent supplied-owner and interrupted publication guards are checked by the Lean owner and generated decoder/conformance structural tests only. The exact physical interrupt latch, like native interrupt_request_by_doc_id, permits terminal rows and preserves an existing stamp; lifecycle terminalization is separate. Bind each guard to the native queue/owned-execution rejection path before claiming native conformance.")
+  , tagged (boundaryCoverage
+      "family"
+      "contracts_queued_steering_guard_unreached"
+      "model-production-gap: wrong-head claim, incoherent supplied owner and interrupted publication are rejected by the native queue and owned-execution owners only on persisted rows no production scenario builds; the exact physical interrupt latch, like native interrupt_request_by_doc_id, permits terminal rows and preserves an existing stamp.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "aggregate_token_budget_cases"

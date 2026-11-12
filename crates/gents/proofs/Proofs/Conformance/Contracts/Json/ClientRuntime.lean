@@ -7,6 +7,7 @@ import Proofs.Runtime.CanonicalOutput.Execution.AuxiliaryCases
 import Proofs.Session.Compaction.Executable
 import Proofs.Conformance.Recovery.ContractCases
 import Proofs.Clients.QueuedSteering
+import Proofs.Conformance.Family
 
 namespace Conformance.Contracts
 
@@ -115,12 +116,41 @@ def pendingUserTurnCaseJson (witness : PendingUserTurnCase) : String :=
     ++ "\"expectPendingTurn\":" ++ boolString witness.expectPendingTurn
     ++ "}"
 
-def queuedSteeringGuardJson (witness : QueuedSteering.GuardObservation) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"prefixAdmitted\":" ++ boolString witness.prefixAdmitted ++ ","
-    ++ "\"admitted\":" ++ boolString witness.admitted
-    ++ "}"
+inductive QueuedSteeringGuard where
+  | wrongHead
+  | incoherentOwner
+  | interruptedPublish
+  deriving Lean.ToJson
+
+structure QueuedSteeringGuardInput where
+  guard : QueuedSteeringGuard
+  deriving Lean.ToJson
+
+structure QueuedSteeringGuardOutput where
+  prefixAdmitted : Bool
+  admitted : Bool
+  deriving Lean.ToJson
+
+private def guardObservation : QueuedSteeringGuard → QueuedSteering.GuardObservation
+  | .wrongHead => QueuedSteering.wrongHeadObservation
+  | .incoherentOwner => QueuedSteering.incoherentOwnerObservation
+  | .interruptedPublish => QueuedSteering.interruptedPublishObservation
+
+example : (QueuedSteering.guardObservations.length == 3 &&
+    QueuedSteering.guardObservations.all fun observation =>
+      observation.prefixAdmitted && !observation.admitted) = true := by native_decide
+
+/-- model-production-gap: the native queue claim and owned-execution
+publication owners reject a different queue head, an incoherent supplied owner
+and publication after an interrupt only on persisted rows; no production
+scenario builds those rows, so each guard is checked in the model alone. -/
+@[conformance_family]
+def queuedSteeringGuardUnreached :
+    Conformance.Family QueuedSteeringGuardInput QueuedSteeringGuardOutput where
+  inputs := [⟨.wrongHead⟩, ⟨.incoherentOwner⟩, ⟨.interruptedPublish⟩]
+  model := fun i =>
+    let observation := guardObservation i.guard
+    { prefixAdmitted := observation.prefixAdmitted, admitted := observation.admitted }
 
 private def tagged (kind fields : String) : String :=
   "{\"kind\":" ++ jsonString kind ++ fields ++ "}"
