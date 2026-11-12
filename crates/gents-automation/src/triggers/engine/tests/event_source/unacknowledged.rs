@@ -266,8 +266,8 @@ impl Delivery {
 }
 
 fn lean_cursor_case(name: &str) -> serde_json::Value {
-    gents_lean_contract::load_contract_snapshot::<serde_json::Value>().unwrap()["trigger_delivery"]
-        ["cursors"]
+    gents_lean_contract::load_contract_snapshot::<serde_json::Value>().unwrap()
+        ["trigger_delivery_cursor_cases"]
         .as_array()
         .unwrap()
         .iter()

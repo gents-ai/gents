@@ -952,8 +952,8 @@ mod bound {
 
 #[tokio::test]
 async fn generated_plugin_invocation_retry_revalidates_current_installation() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_resource_cases;
-    for case in cases["invocation"].as_array().unwrap() {
+    let cases = gents_lean_vocab::lean_contract_snapshot();
+    for case in cases.plugin_resource_invocation_cases.as_array().unwrap() {
         let (home, original) = installed_plugin(ECHO_WAT, Some(gents_pack::pack::BindAccess::Read));
         let mut executor = PluginExecutor::new(Some(home.path().to_owned()));
         executor

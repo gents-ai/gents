@@ -210,8 +210,8 @@ fn plugins_pack(slots: serde_json::Value, model_slot: Option<&str>) -> PackManif
 
 #[test]
 fn generated_plugin_model_slots_require_optional_agent_free_declarations() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_resource_cases;
-    for case in cases["model_slots"].as_array().unwrap() {
+    let cases = gents_lean_vocab::lean_contract_snapshot();
+    for case in cases.plugin_resource_model_slot_cases.as_array().unwrap() {
         let slots = if case["declared"].as_bool().unwrap() {
             serde_json::json!([{"name":"remote_ocr", "description":"d",
                 "optional":case["optional"],

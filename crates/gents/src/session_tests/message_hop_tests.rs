@@ -32,9 +32,7 @@ async fn generated_session_message_writes_carry_the_calling_edge() {
         agent_did: caused.agent_did.clone(),
         session_id: caused.session_id.clone(),
     };
-    let cases = &gents_lean_vocab::lean_contract_snapshot()
-        .causal_hop_contract
-        .write_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().causal_hop_write_cases;
     assert!(cases.iter().any(|case| case.delivery == "queue"));
     assert!(cases.iter().any(|case| case.delivery == "steer"));
     for case in cases {

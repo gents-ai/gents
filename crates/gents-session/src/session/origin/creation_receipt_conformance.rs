@@ -47,7 +47,7 @@ async fn verified_receipt_cannot_authorize_a_different_opening_request() {
 
 #[test]
 fn job_creation_binding_matches_executable_model() {
-    for case in &gents_lean_vocab::lean_causal_hop_contract().job_creation_cases {
+    for case in &gents_lean_vocab::lean_contract_snapshot().causal_hop_job_creation_cases {
         assert_eq!(
             super::job_creation_matches(case.parent, case.job, case.key, case.spawn),
             case.expected
@@ -57,7 +57,7 @@ fn job_creation_binding_matches_executable_model() {
 
 #[test]
 fn deferred_creation_matches_executable_model() {
-    for case in &gents_lean_vocab::lean_causal_hop_contract().deferred_creation_cases {
+    for case in &gents_lean_vocab::lean_contract_snapshot().causal_hop_deferred_creation_cases {
         assert_eq!(
             super::deferred_creation_allowed(case.kind, case.receipt, case.opening, case.cause),
             case.expected
@@ -82,7 +82,7 @@ async fn receipt_verification_matches_executable_creation_model() {
     assert_ne!(node.did(), agent.did());
     assert_ne!(node.did(), user.did());
     assert_ne!(agent.did(), user.did());
-    for case in &gents_lean_vocab::lean_causal_hop_contract().creation_cases {
+    for case in &gents_lean_vocab::lean_contract_snapshot().causal_hop_creation_cases {
         let mut receipt = SessionCreationReceipt {
             node_did: node.did().into(),
             session_id: if case.scope_matches {
@@ -187,7 +187,7 @@ async fn receipt_signer_matches_creation_model() {
         None,
     )
     .unwrap();
-    for case in &gents_lean_vocab::lean_causal_hop_contract().creation_signer_cases {
+    for case in &gents_lean_vocab::lean_contract_snapshot().causal_hop_creation_signer_cases {
         let cause = if case.agent_new {
             SessionCreationCause::AgentNew
         } else {

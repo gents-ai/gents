@@ -387,7 +387,7 @@ mod tests {
 
     #[test]
     fn invocation_lifetimes_conform_to_lean() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_resource_cases["tool_calls"]
+        let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_resource_tool_call_cases
             ["host_call_lifetime"];
         for case in cases.as_array().unwrap() {
             let actual = wall_clock_for_invocation(
@@ -405,7 +405,7 @@ mod tests {
 
     #[test]
     fn compute_allowances_conform_to_lean() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_resource_cases["tool_calls"]
+        let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_resource_tool_call_cases
             ["compute_allowance"];
         for case in cases.as_array().unwrap() {
             let actual = compute_allowance(
@@ -423,8 +423,8 @@ mod tests {
 
     #[test]
     fn sleep_bounds_conform_to_lean() {
-        let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_resource_cases["tool_calls"]
-            ["sleep"];
+        let cases =
+            &gents_lean_vocab::lean_contract_snapshot().plugin_resource_tool_call_cases["sleep"];
         for case in cases.as_array().unwrap() {
             assert_eq!(
                 sleep_admissible(

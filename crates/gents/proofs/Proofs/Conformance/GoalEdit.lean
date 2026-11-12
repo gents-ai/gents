@@ -1,9 +1,15 @@
 import Proofs.Automation.GoalAutomation.Edit
 import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Functions.Automation
+import Proofs.Conformance.Family
+
+namespace GoalAutomation.Edit
+deriving instance Lean.ToJson for Assignment, Fields, Origin
+end GoalAutomation.Edit
 
 namespace Conformance.GoalEditContracts
 
-open GoalAutomation.Edit Conformance.Contracts
+open Lean GoalAutomation.Edit Conformance.Contracts
 
 structure Case where
   name : String
@@ -69,29 +75,20 @@ example : apply? {base with status := .paused} {base with status := .paused}
 example : apply? base {base with status := .paused} ⟨some "verify", none⟩ .client = none := by
   native_decide
 
-private def optionalIntJson : Option Int → String
-  | none => "null"
-  | some value => toString value
+structure EditInput where
+  name : String
+  origin : Origin
+  observed : Assignment
+  current : Assignment
+  fields : Fields
+  deriving ToJson
 
-def assignmentJson (assignment : Assignment) : String :=
-  "{\"status\":" ++ jsonString assignment.status.toDefraDB ++
-  ",\"sequence\":" ++ toString assignment.sequence ++
-  ",\"objective\":" ++ jsonString assignment.objective ++
-  ",\"budget\":" ++ optionalIntJson assignment.budget ++ "}"
-
-def caseJson (origin : Origin) (c : Case) : String :=
-  let source := if origin == .agent then "agent" else "client"
-  "{\"name\":" ++ jsonString (source ++ "_" ++ c.name) ++
-  ",\"origin\":" ++ jsonString source ++
-  ",\"observed\":" ++ assignmentJson c.observed ++
-  ",\"current\":" ++ assignmentJson c.current ++
-  ",\"fields\":{\"objective\":" ++ (match c.fields.objective with
-    | none => "null" | some objective => jsonString objective) ++
-  ",\"budget\":" ++ optionalIntJson c.fields.budget ++ "}" ++
-  ",\"expected\":" ++ (match apply? c.observed c.current c.fields origin with
-    | none => "null" | some assignment => assignmentJson assignment) ++ "}"
-
-def casesJson : String := jsonArray (cases.map fun (origin, c) => caseJson origin c)
+@[conformance_family]
+def edit : Family EditInput (Option Assignment) where
+  inputs := cases.map fun (origin, c) =>
+    { name := (if origin == .agent then "agent_" else "client_") ++ c.name, origin,
+      observed := c.observed, current := c.current, fields := c.fields }
+  model := fun i => apply? i.observed i.current i.fields i.origin
 
 def whitespaceCodepointsJson : String :=
   jsonArray (TextNormalization.objectiveWhitespaceCodepoints.map toString)

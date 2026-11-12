@@ -38,7 +38,7 @@ fn request_row(
 fn generated_title_selection_keeps_only_the_normal_public_head() {
     let snapshot: serde_json::Value =
         gents_lean_contract::load_contract_snapshot().expect("Lean session selection cases");
-    let selections = snapshot["session_document_cases"]["selection"]
+    let selections = snapshot["session_document_selection_cases"]
         .as_array()
         .expect("modeled selections");
     for name in [

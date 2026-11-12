@@ -348,9 +348,7 @@ async fn same_second_claim_after_completion_becomes_the_observed_head() {
 /// query and head selection over DefraDB.
 #[tokio::test]
 async fn generated_selection_cases_drive_the_native_request_head() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot()
-        .session_document_cases
-        .selection;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().session_document_selection_cases;
     assert!(cases.len() >= 13);
     let base = chrono::DateTime::parse_from_rfc3339("2030-01-01T00:00:00Z").unwrap();
     let seconds = |value: &serde_json::Value| {

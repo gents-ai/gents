@@ -2641,7 +2641,7 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
                     .await
                     .unwrap()
                     .was_claimed();
-                let expected = cases["trigger_delivery"]["queues"]
+                let expected = cases["trigger_delivery_queue_cases"]
                     .as_array()
                     .unwrap()
                     .iter()

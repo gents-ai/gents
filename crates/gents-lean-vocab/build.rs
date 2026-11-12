@@ -24,6 +24,7 @@ impl Module {
             return match scalar {
                 "bool" => "bool".into(),
                 "nat" => "u64".into(),
+                "int" => "i64".into(),
                 "string" => "String".into(),
                 other => panic!("unknown family scalar {other}"),
             };

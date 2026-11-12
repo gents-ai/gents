@@ -52,7 +52,7 @@ fn session_target_fixture(
 
 #[test]
 fn session_target_authority_matches_lean_owner() {
-    let cases = &gents_lean_vocab::lean_causal_hop_contract().session_target_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().causal_hop_session_target_cases;
     assert_eq!(cases.len(), 16);
     for case in cases {
         let (session, tools) = session_target_fixture(
@@ -71,7 +71,7 @@ fn session_target_authority_matches_lean_owner() {
 
 #[test]
 fn session_list_entries_match_lean_owner() {
-    let cases = &gents_lean_vocab::lean_causal_hop_contract().session_list_cases;
+    let cases = &gents_lean_vocab::lean_contract_snapshot().causal_hop_session_list_cases;
     assert_eq!(cases.len(), 64);
     for case in cases {
         let (session, tools) = session_target_fixture(

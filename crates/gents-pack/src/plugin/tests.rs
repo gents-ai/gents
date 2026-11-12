@@ -719,8 +719,8 @@ fn tool_instructions_live_beside_the_plugin_and_stay_small_text() {
 
 #[test]
 fn generated_plugin_resource_cases_bind_budget_and_consent() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_resource_cases;
-    for case in cases["consent"].as_array().unwrap() {
+    let cases = gents_lean_vocab::lean_contract_snapshot();
+    for case in cases.plugin_resource_consent_cases.as_array().unwrap() {
         let requested = case["requested"].as_u64().unwrap() as u32;
         let previous = case["previous"].as_u64().unwrap() as u32;
         let consent = case["consent"].as_bool().unwrap();
@@ -752,7 +752,7 @@ fn generated_plugin_resource_cases_bind_budget_and_consent() {
             );
         }
     }
-    for case in cases["budgets"].as_array().unwrap() {
+    for case in cases.plugin_resource_budget_cases.as_array().unwrap() {
         let baseline = case["baseline"].as_u64().unwrap();
         let requested = case["requested"].as_u64().unwrap() as u32;
         let ceiling = case["ceiling"].as_u64().unwrap();

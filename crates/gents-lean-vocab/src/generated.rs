@@ -89,10 +89,6 @@ pub fn lean_capture_scope_cases() -> &'static [LeanCaptureScopeCase] {
     &lean_contract_snapshot().capture_scope_cases
 }
 
-pub fn lean_causal_hop_contract() -> &'static LeanCausalHopContract {
-    &lean_contract_snapshot().causal_hop_contract
-}
-
 pub fn lean_client_agent_readiness_cases() -> &'static [LeanClientAgentReadinessCase] {
     &lean_contract_snapshot().client_agent_readiness_cases
 }
@@ -1996,24 +1992,6 @@ pub struct LeanCausalHopChainStep {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanCausalHopContract {
-    pub default_max_request_hop: Option<u32>,
-    pub cap_observation_cases: Vec<LeanCapObservationCase>,
-    pub step_cases: Vec<LeanCausalHopStepCase>,
-    pub chain_cases: Vec<LeanCausalHopChainCase>,
-    pub call_cases: Vec<LeanCausalHopCallCase>,
-    pub interrupt_cases: Vec<LeanAgentInterruptCase>,
-    pub creation_cases: Vec<LeanSessionCreationCase>,
-    pub creation_signer_cases: Vec<LeanSessionCreationSignerCase>,
-    pub job_creation_cases: Vec<LeanJobCreationCase>,
-    pub deferred_creation_cases: Vec<LeanDeferredCreationCase>,
-    pub write_cases: Vec<LeanSessionMessageWriteCase>,
-    pub session_target_cases: Vec<LeanSessionTargetCase>,
-    pub session_list_cases: Vec<LeanSessionListCase>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanCausalHopStepCase {
     pub name: String,
     pub cause: String,
@@ -2957,7 +2935,26 @@ pub struct LeanContractSnapshot {
     pub goal_operator_resume_on_cases: Vec<LeanGoalOperatorResumeOnCase>,
     pub goal_config_reactivation_cases: Vec<LeanGoalConfigReactivationCase>,
     pub goal_reset_resume_cases: Vec<LeanGoalResetResumeCase>,
-    pub trigger_delivery: serde_json::Value,
+    pub trigger_delivery_admission_cases: serde_json::Value,
+    pub trigger_delivery_queue_cases: serde_json::Value,
+    pub trigger_delivery_observed_claim_cases: serde_json::Value,
+    pub trigger_delivery_assignment_root_cases: serde_json::Value,
+    pub trigger_delivery_outcome_cases: serde_json::Value,
+    pub trigger_delivery_outcome_trace_cases: serde_json::Value,
+    pub trigger_delivery_retained_outcome_cases: serde_json::Value,
+    pub trigger_delivery_cursor_cases: serde_json::Value,
+    pub trigger_delivery_callback_cursor_cases: serde_json::Value,
+    pub trigger_delivery_callback_visibility_cases: serde_json::Value,
+    pub trigger_delivery_identity_cases: serde_json::Value,
+    pub trigger_delivery_session_cases: serde_json::Value,
+    pub trigger_delivery_session_config_cases: serde_json::Value,
+    pub trigger_fire_budget_cases: serde_json::Value,
+    pub trigger_fire_budget_config_cases: serde_json::Value,
+    pub trigger_fire_budget_default: serde_json::Value,
+    pub trigger_fire_budget_status: serde_json::Value,
+    pub trigger_delivery_option_cases: serde_json::Value,
+    pub trigger_delivery_latest_admission_cases: serde_json::Value,
+    pub trigger_delivery_self_session_cases: serde_json::Value,
     pub operator_base_freeze_cases: Vec<serde_json::Value>,
     pub workspace_path_capability_cases: Vec<LeanWorkspacePathCapabilityCase>,
     pub file_inventory_direct_reader_cases: Vec<serde_json::Value>,
@@ -2977,7 +2974,22 @@ pub struct LeanContractSnapshot {
     pub invalid_tool_progress_cases: Vec<LeanInvalidToolProgressCase>,
     pub repeated_tool_failure_cases: Vec<serde_json::Value>,
     pub tool_timeout_cases: LeanToolTimeoutCases,
-    pub plugin_resource_cases: serde_json::Value,
+    pub plugin_resource_consent_cases: serde_json::Value,
+    pub plugin_resource_budget_cases: serde_json::Value,
+    pub plugin_resource_publication_cases: serde_json::Value,
+    pub plugin_resource_tool_call_cases: serde_json::Value,
+    pub plugin_resource_child_admission_cases: serde_json::Value,
+    pub plugin_resource_tool_effect_cases: serde_json::Value,
+    pub plugin_resource_tool_effect_receipt_cases: serde_json::Value,
+    pub plugin_resource_tool_effect_terminal_cases: serde_json::Value,
+    pub plugin_resource_tool_effect_accounting_cases: serde_json::Value,
+    pub plugin_resource_model_slot_cases: serde_json::Value,
+    pub plugin_resource_network_cases: serde_json::Value,
+    pub plugin_resource_call_access_cases: serde_json::Value,
+    pub plugin_resource_invocation_cases: serde_json::Value,
+    pub plugin_resource_receipt_cases: serde_json::Value,
+    pub plugin_resource_scratch_cases: serde_json::Value,
+    pub plugin_resource_host_import_cases: serde_json::Value,
     pub plugin_data_cases: LeanPluginDataCases,
     pub plugin_calls_route_cases: Vec<LeanPluginCallsRouteCase>,
     pub plugin_job_admission_cases: Vec<LeanPluginJobAdmissionCase>,
@@ -3084,7 +3096,15 @@ pub struct LeanContractSnapshot {
     pub event_group_capture_cases: Vec<serde_json::Value>,
     pub callback_transition_case_count: usize,
     pub callback_transition_cases: Vec<LeanCallbackTransitionCase>,
-    pub session_document_cases: LeanSessionDocumentCases,
+    pub session_document_starter_verification_cases: Vec<serde_json::Value>,
+    pub session_document_archive_cases: Vec<serde_json::Value>,
+    pub session_document_reference_encoding: String,
+    pub session_document_selection_cases: Vec<serde_json::Value>,
+    pub session_document_projection_cases: Vec<serde_json::Value>,
+    pub session_document_retry_cases: Vec<serde_json::Value>,
+    pub session_document_fork_cases: Vec<serde_json::Value>,
+    pub session_document_edit_anchor_cases: Vec<serde_json::Value>,
+    pub session_document_edit_fork_binding_cases: Vec<serde_json::Value>,
     pub plugin_job_opening_cases: Vec<LeanPluginJobOpeningCase>,
     pub session_reply_preview_cases: Vec<LeanSessionReplyPreviewCase>,
     pub request_input_cases: Vec<serde_json::Value>,
@@ -3097,7 +3117,6 @@ pub struct LeanContractSnapshot {
     pub goal_claimed_readiness_cases: Vec<LeanGoalClaimedReadinessCase>,
     pub goal_transition_cases: Vec<LeanGoalTransitionCase>,
     pub goal_create_cases: Vec<LeanGoalCreateCase>,
-    pub goal_edit_cases: Vec<LeanGoalEditCase>,
     pub goal_client_delivery_cases: Vec<serde_json::Value>,
     pub goal_client_control_cases: Vec<LeanGoalClientControlCase>,
     pub goal_client_start_cases: Vec<serde_json::Value>,
@@ -3136,7 +3155,19 @@ pub struct LeanContractSnapshot {
     pub enrollment_auto_renewal_cases: Vec<LeanEnrollmentAutoRenewalCase>,
     pub enrollment_renewal_intent_cases: Vec<LeanEnrollmentRenewalIntentCase>,
     pub agent_request_admission_cases: Vec<LeanAgentRequestAdmissionCase>,
-    pub causal_hop_contract: LeanCausalHopContract,
+    pub causal_hop_default_max_request_hop: Option<u32>,
+    pub causal_hop_cap_observation_cases: Vec<LeanCapObservationCase>,
+    pub causal_hop_step_cases: Vec<LeanCausalHopStepCase>,
+    pub causal_hop_chain_cases: Vec<LeanCausalHopChainCase>,
+    pub causal_hop_call_cases: Vec<LeanCausalHopCallCase>,
+    pub causal_hop_interrupt_cases: Vec<LeanAgentInterruptCase>,
+    pub causal_hop_creation_cases: Vec<LeanSessionCreationCase>,
+    pub causal_hop_creation_signer_cases: Vec<LeanSessionCreationSignerCase>,
+    pub causal_hop_job_creation_cases: Vec<LeanJobCreationCase>,
+    pub causal_hop_deferred_creation_cases: Vec<LeanDeferredCreationCase>,
+    pub causal_hop_write_cases: Vec<LeanSessionMessageWriteCase>,
+    pub causal_hop_session_target_cases: Vec<LeanSessionTargetCase>,
+    pub causal_hop_session_list_cases: Vec<LeanSessionListCase>,
     pub scope_collection_rules: std::collections::BTreeMap<
         String,
         Vec<LeanScopeCollectionRule>,
@@ -5014,51 +5045,6 @@ pub struct LeanGoalDecisionCase {
     pub wrapup_requested: bool,
     pub wrapup_completed: bool,
     pub expected_decision: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalEditCase {
-    pub current: LeanGoalEditCaseCurrent,
-    pub expected: Option<LeanGoalEditCaseExpected>,
-    pub fields: LeanGoalEditCaseFields,
-    pub name: String,
-    pub observed: LeanGoalEditCaseObserved,
-    pub origin: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalEditCaseCurrent {
-    pub budget: u64,
-    pub objective: String,
-    pub sequence: u64,
-    pub status: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalEditCaseExpected {
-    pub budget: u64,
-    pub objective: String,
-    pub sequence: u64,
-    pub status: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalEditCaseFields {
-    pub budget: Option<i64>,
-    pub objective: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalEditCaseObserved {
-    pub budget: u64,
-    pub objective: String,
-    pub sequence: u64,
-    pub status: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -10933,20 +10919,6 @@ pub struct LeanSessionCreationSignerCase {
     pub has_requester: bool,
     pub signer: String,
     pub expected: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanSessionDocumentCases {
-    pub starter_verification: Vec<serde_json::Value>,
-    pub archive: Vec<serde_json::Value>,
-    pub document_reference_encoding: String,
-    pub selection: Vec<serde_json::Value>,
-    pub projection: Vec<serde_json::Value>,
-    pub retry: Vec<serde_json::Value>,
-    pub fork: Vec<serde_json::Value>,
-    pub edit_anchors: Vec<serde_json::Value>,
-    pub edit_fork_bindings: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]

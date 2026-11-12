@@ -8,7 +8,8 @@ use gents_store::graphql::escape_graphql_string;
 async fn generated_plugin_child_terminal_presentation_matches_execution_owner() {
     use gents_protocol::output::{PayloadPresentation, PresentationPart};
     let snapshot = gents_lean_vocab::lean_contract_snapshot();
-    let cases = snapshot.plugin_resource_cases["tool_effect_terminals"]
+    let cases = snapshot
+        .plugin_resource_tool_effect_terminal_cases
         .as_array()
         .expect("generated plugin terminal cases");
     for (index, case) in cases.iter().enumerate() {

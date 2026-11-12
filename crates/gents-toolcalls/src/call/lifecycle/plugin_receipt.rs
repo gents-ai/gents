@@ -70,7 +70,8 @@ mod tests {
 
     #[test]
     fn generated_receipt_commit_cases() {
-        for case in gents_lean_vocab::lean_contract_snapshot().plugin_resource_cases["receipt"]
+        for case in gents_lean_vocab::lean_contract_snapshot()
+            .plugin_resource_receipt_cases
             .as_array()
             .expect("modeled plugin receipt cases")
         {

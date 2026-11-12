@@ -692,8 +692,7 @@ async fn editing_a_canonical_user_message_forks_its_prefix_and_preserves_the_sou
     use gents_store::identity::NodeIdentity;
     const SOURCE: &str = "edit-source";
     let case = gents_lean_vocab::lean_contract_snapshot()
-        .session_document_cases
-        .edit_anchors
+        .session_document_edit_anchor_cases
         .iter()
         .find(|case| case["name"] == "three_user_turns")
         .unwrap();
@@ -810,8 +809,7 @@ async fn a_reader_granted_only_the_fork_reads_its_whole_retained_transcript() {
     use gents_store::identity::NodeIdentity;
     const SOURCE: &str = "shared-fork-source";
     let case = gents_lean_vocab::lean_contract_snapshot()
-        .session_document_cases
-        .fork
+        .session_document_fork_cases
         .iter()
         .find(|case| case["name"] == "exact_copy")
         .unwrap();
@@ -1901,9 +1899,8 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
 
 #[tokio::test]
 async fn unsigned_starter_cannot_populate_the_index() {
-    let starter_cases = &gents_lean_vocab::lean_contract_snapshot()
-        .session_document_cases
-        .starter_verification;
+    let starter_cases =
+        &gents_lean_vocab::lean_contract_snapshot().session_document_starter_verification_cases;
     assert_eq!(
         starter_cases
             .iter()
@@ -1912,8 +1909,7 @@ async fn unsigned_starter_cannot_populate_the_index() {
         false
     );
     let case = gents_lean_vocab::lean_contract_snapshot()
-        .session_document_cases
-        .projection
+        .session_document_projection_cases
         .iter()
         .find(|case| case["operation"] == "rename")
         .unwrap();
