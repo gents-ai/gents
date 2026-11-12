@@ -2117,3 +2117,141 @@ async fn wait_tool_unknown_handle_returns_tool_error_instead_of_failing_turn() {
         .contains("missing-background-handle"));
     turn.runtime.shutdown().await;
 }
+
+/// `Some(true)` while this test's own child is alive, `Some(false)` once it
+/// has exited, and `None` once its managed owner reaped it. `WNOWAIT` leaves
+/// the status for that owner, and an unreaped pid cannot have been recycled,
+/// so an answer here always describes the process this test spawned.
+#[cfg(unix)]
+fn observe_own_child(pid: i32) -> Option<bool> {
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    // SAFETY: a non-blocking, non-consuming wait on this process's own child.
+    let observed = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            pid as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    };
+    if observed == -1 {
+        return None;
+    }
+    Some(unsafe { info.si_pid() } == 0)
+}
+
+/// Ends the test's own spawned child if an assertion unwinds before the
+/// shutdown under test has stopped it.
+#[cfg(unix)]
+struct SpawnedChildGuard(i32);
+
+#[cfg(unix)]
+impl Drop for SpawnedChildGuard {
+    fn drop(&mut self) {
+        if observe_own_child(self.0) == Some(true) {
+            // SAFETY: the pid was just observed as this process's own unreaped
+            // child, so it cannot name anything else.
+            unsafe { libc::kill(self.0, libc::SIGKILL) };
+        }
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn runtime_shutdown_terminates_a_spawned_background_process() {
+    let turn = boot_background_turn("r6-background-shutdown-stop", Vec::new()).await;
+    finish_dynamic_turn(&turn);
+    wait_for_initial_request_terminal(&turn).await;
+    let directory = tempfile::tempdir().unwrap();
+    let pid_path = directory.path().join("pid");
+    let gate = directory.path().join("gate");
+    assert!(tokio::process::Command::new("mkfifo")
+        .arg(&gate)
+        .status()
+        .await
+        .unwrap()
+        .success());
+    let prompt = "start a process that must not outlive this runtime";
+    turn.runtime.backend.enable_dynamic_followups(prompt);
+    turn.runtime.backend.enqueue_response(
+        prompt,
+        crate::support::streaming_backend::StreamResponse::streams(
+            prompt,
+            vec![StreamChunk::tool_call(
+                "meta-bg-shutdown",
+                "spawn_process",
+                serde_json::json!({
+                    "tool_name": "bash",
+                    "args": {
+                        "command": "sh",
+                        "args": [
+                            "-c",
+                            r#"trap '' TERM; printf '%s' $$ > "$1"; read ignored < "$2""#,
+                            "gents-shutdown-probe",
+                            pid_path.to_string_lossy(),
+                            gate.to_string_lossy()
+                        ]
+                    }
+                })
+                .to_string(),
+            )],
+        ),
+    );
+    turn.runtime.backend.enqueue_response(
+        prompt,
+        crate::support::streaming_backend::StreamResponse::completes(prompt, ["started"]),
+    );
+    crate::support::accepted_turn::enqueue_managed_accepted_request(
+        &turn.db,
+        &turn.fixture,
+        "r6-background-shutdown-stop-request-2",
+        &turn.session_id,
+        prompt,
+    )
+    .await;
+    let row = wait_for_named_tool_call(&turn.fixture.access, &turn.session_id, "bash").await;
+    let tool_call_id = row.tool_call_id.expect("background handle");
+    let pid: i32 = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if let Ok(recorded) = tokio::fs::read_to_string(&pid_path).await {
+                if let Ok(pid) = recorded.trim().parse() {
+                    return pid;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the background child installs its TERM trap and records its pid");
+    let guard = SpawnedChildGuard(pid);
+    assert_eq!(observe_own_child(pid), Some(true));
+
+    turn.runtime.shutdown().await;
+
+    assert_ne!(
+        observe_own_child(pid),
+        Some(true),
+        "runtime shutdown must terminate the background process it owns"
+    );
+    drop(guard);
+
+    let settled = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let row = load_tool_call(&turn.fixture.access, &turn.session_id, &tool_call_id).await;
+            if row.lifecycle_state.as_deref() != Some("running") {
+                return row;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the stopped worker settles its row while the node is open");
+    assert_eq!(settled.lifecycle_state.as_deref(), Some("cancelled"));
+    assert_eq!(
+        settled
+            .cancel_cause
+            .as_deref()
+            .and_then(CancelCause::from_persisted),
+        Some(CancelCause::Interrupted)
+    );
+}

@@ -13,6 +13,10 @@ use serde_json::json;
 use super::fixtures::*;
 use super::*;
 
+#[cfg(unix)]
+#[path = "tests/background_shutdown.rs"]
+mod background_shutdown;
+
 #[path = "tests/transcript_native.rs"]
 mod transcript_native;
 

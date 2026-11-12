@@ -235,6 +235,14 @@ source consistency checks, not a separate runtime compatibility version.
   notice. Codex as a model provider, including `accounts login codex`, is
   unchanged.
 - `gents` remembers the home setup chose. This also moves the desktop's default home.
+- Shutting the runtime down stops the background processes it started. A
+  process a turn started with `spawn_process` kept running after `gents
+  server` exited; teardown now cancels each live execution and terminates its
+  process group, or its Job Object on Windows, escalating past an ignored
+  `SIGTERM`, while the node is still open so each one settles its own tool
+  call. A child that put itself in its own session escapes any process-group
+  scheme, and a server that is killed outright still leaves its processes to
+  the next start's recovery sweep.
 - Stopping the native service waits for the runtime's own shutdown instead of
   about a second, so a stop that succeeds no longer reports `native supervisor
   did not confirm that the Gents job unloaded or became inactive`. Stop node in

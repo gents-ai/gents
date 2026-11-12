@@ -50,6 +50,17 @@ pub(super) async fn shutdown_runtime(
         .task_hook_records()
         .clone();
     let task_hook_recoveries = tokio::spawn(async move { task_hook_records.shutdown().await });
+    let background_executions = agent.background_execution_registry.clone();
+    let background_process_stops = tokio::spawn(async move {
+        let report = background_executions.shutdown().await;
+        tracing::info!(
+            target: "gents::shutdown",
+            stage = "managed_process_stop",
+            stopped = report.stopped,
+            unstopped = report.unstopped,
+            "stopped the background processes this runtime owned"
+        );
+    });
     while let Some(joined) = background_tasks.join_next().await {
         let task_result = match joined {
             Ok(task) => task.into_result(),
@@ -67,6 +78,7 @@ pub(super) async fn shutdown_runtime(
 
     for (name, joined) in [
         ("task hook recovery", task_hook_recoveries.await),
+        ("background process stop", background_process_stops.await),
         ("readiness", readiness_handle.await),
         ("trigger engine", trigger_engine_handle.await),
         ("callback engine", callback_engine_handle.await),
