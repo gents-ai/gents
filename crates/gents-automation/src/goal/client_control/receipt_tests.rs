@@ -2,61 +2,232 @@ use super::contract_tests::{persist_command, receipt};
 use super::*;
 use crate::goal::operator_resume::support::{execute, Fixture, SESSION};
 use crate::goal::session_goal_control::process_command_at;
-use gents_protocol::goal_control::{GoalRevision, SESSION_GOAL_CONTROL_VERSION};
+use gents_lean_vocab::{
+    LeanGoalClientReceiptCaseBeforeGoal, LeanGoalClientReceiptCaseCommand,
+    LeanGoalClientReceiptCaseExpectedGoal, LeanGoalClientReceiptCaseFacts,
+    LeanGoalClientReceiptCaseHistoryItemCommand, LeanGoalClientReceiptCaseHistoryItemFacts,
+    LeanGoalClientReceiptCaseInitial, LeanGoalClientReceiptCaseInitialGoal,
+};
+use gents_protocol::goal_control::{GoalOperation, GoalRevision, SESSION_GOAL_CONTROL_VERSION};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-#[derive(Deserialize)]
-struct Contracts {
-    goal_client_receipt_cases: Vec<Case>,
-}
-
-#[derive(Deserialize)]
-struct Case {
-    name: String,
-    initial: Value,
-    history: Vec<Step>,
-    before: Value,
-    command: Command,
-    facts: Value,
-    now: i64,
-    next_composite: String,
-    commit: bool,
-    expected: Value,
-    recovered: Value,
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum Step {
-    Apply {
-        command: Box<Command>,
-        facts: Value,
-        now: i64,
-        next_composite: String,
-        commit: bool,
-    },
-    LoseReceipts,
-}
-
-#[derive(Deserialize)]
-struct Command {
-    id: u64,
-    digest: u64,
-    has_peer: bool,
-    session_document: String,
-    issued_at: i64,
-    expires_at: i64,
-    expected: GoalRevision,
-    operation: GoalOperation,
-}
-
-fn stamp(value: i64) -> DateTime<Utc> {
+fn stamp(value: u64) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339("2026-10-17T00:00:00Z")
         .unwrap()
         .with_timezone(&Utc)
-        + chrono::Duration::seconds(value)
+        + chrono::Duration::seconds(value as i64)
+}
+
+fn operation_of(kind: &str) -> GoalOperation {
+    serde_json::from_value(serde_json::json!({ "kind": kind })).unwrap()
+}
+
+trait ReceiptCommandModel {
+    fn digest(&self) -> u64;
+    fn expected(&self) -> (&str, &str);
+    fn expires_at(&self) -> u64;
+    fn has_peer(&self) -> bool;
+    fn id(&self) -> u64;
+    fn issued_at(&self) -> u64;
+    fn operation_kind(&self) -> &str;
+    fn session_document(&self) -> &str;
+}
+
+impl ReceiptCommandModel for LeanGoalClientReceiptCaseCommand {
+    fn digest(&self) -> u64 {
+        self.digest
+    }
+
+    fn expected(&self) -> (&str, &str) {
+        (&self.expected.document, &self.expected.composite)
+    }
+
+    fn expires_at(&self) -> u64 {
+        self.expires_at
+    }
+
+    fn has_peer(&self) -> bool {
+        self.has_peer
+    }
+
+    fn id(&self) -> u64 {
+        self.id
+    }
+
+    fn issued_at(&self) -> u64 {
+        self.issued_at
+    }
+
+    fn operation_kind(&self) -> &str {
+        &self.operation.kind
+    }
+
+    fn session_document(&self) -> &str {
+        &self.session_document
+    }
+}
+
+impl ReceiptCommandModel for LeanGoalClientReceiptCaseHistoryItemCommand {
+    fn digest(&self) -> u64 {
+        self.digest
+    }
+
+    fn expected(&self) -> (&str, &str) {
+        (&self.expected.document, &self.expected.composite)
+    }
+
+    fn expires_at(&self) -> u64 {
+        self.expires_at
+    }
+
+    fn has_peer(&self) -> bool {
+        self.has_peer
+    }
+
+    fn id(&self) -> u64 {
+        self.id
+    }
+
+    fn issued_at(&self) -> u64 {
+        self.issued_at
+    }
+
+    fn operation_kind(&self) -> &str {
+        &self.operation.kind
+    }
+
+    fn session_document(&self) -> &str {
+        &self.session_document
+    }
+}
+
+trait ReceiptFactsModel {
+    fn command_identity_unique(&self) -> bool;
+    fn session_owned(&self) -> bool;
+    fn signature_valid(&self) -> bool;
+    fn unfinished_request(&self) -> bool;
+}
+
+impl ReceiptFactsModel for LeanGoalClientReceiptCaseFacts {
+    fn command_identity_unique(&self) -> bool {
+        self.command_identity_unique
+    }
+
+    fn session_owned(&self) -> bool {
+        self.authority.session_owned
+    }
+
+    fn signature_valid(&self) -> bool {
+        self.authority.signature_valid
+    }
+
+    fn unfinished_request(&self) -> bool {
+        self.control.unfinished_request
+    }
+}
+
+impl ReceiptFactsModel for LeanGoalClientReceiptCaseHistoryItemFacts {
+    fn command_identity_unique(&self) -> bool {
+        self.command_identity_unique
+    }
+
+    fn session_owned(&self) -> bool {
+        self.authority.session_owned
+    }
+
+    fn signature_valid(&self) -> bool {
+        self.authority.signature_valid
+    }
+
+    fn unfinished_request(&self) -> bool {
+        self.control.unfinished_request
+    }
+}
+
+trait GoalState {
+    fn execution(&self) -> Value;
+    fn objective(&self) -> &str;
+    fn composite(&self) -> &str;
+}
+
+impl GoalState for LeanGoalClientReceiptCaseInitialGoal {
+    fn execution(&self) -> Value {
+        let execution = &self.execution;
+        serde_json::json!({
+            "blocked_audits": execution.blocked_audits,
+            "children": execution.children,
+            "last_continued_from": execution.last_continued_from,
+            "latest_request": execution.latest_request,
+            "sequence": execution.sequence,
+            "status": execution.status,
+            "token_budget": execution.token_budget,
+            "tokens_used": execution.tokens_used,
+            "wrapup_completed": execution.wrapup_completed,
+            "wrapup_requested": execution.wrapup_requested,
+        })
+    }
+
+    fn objective(&self) -> &str {
+        &self.objective
+    }
+
+    fn composite(&self) -> &str {
+        &self.revision.composite
+    }
+}
+
+impl GoalState for LeanGoalClientReceiptCaseBeforeGoal {
+    fn execution(&self) -> Value {
+        let execution = &self.execution;
+        serde_json::json!({
+            "blocked_audits": execution.blocked_audits,
+            "children": execution.children,
+            "last_continued_from": execution.last_continued_from,
+            "latest_request": execution.latest_request,
+            "sequence": execution.sequence,
+            "status": execution.status,
+            "token_budget": execution.token_budget,
+            "tokens_used": execution.tokens_used,
+            "wrapup_completed": execution.wrapup_completed,
+            "wrapup_requested": execution.wrapup_requested,
+        })
+    }
+
+    fn objective(&self) -> &str {
+        &self.objective
+    }
+
+    fn composite(&self) -> &str {
+        &self.revision.composite
+    }
+}
+
+impl GoalState for LeanGoalClientReceiptCaseExpectedGoal {
+    fn execution(&self) -> Value {
+        let execution = &self.execution;
+        serde_json::json!({
+            "blocked_audits": execution.blocked_audits,
+            "children": execution.children,
+            "last_continued_from": execution.last_continued_from,
+            "latest_request": execution.latest_request,
+            "sequence": execution.sequence,
+            "status": execution.status,
+            "token_budget": execution.token_budget,
+            "tokens_used": execution.tokens_used,
+            "wrapup_completed": execution.wrapup_completed,
+            "wrapup_requested": execution.wrapup_requested,
+        })
+    }
+
+    fn objective(&self) -> &str {
+        &self.objective
+    }
+
+    fn composite(&self) -> &str {
+        &self.revision.composite
+    }
 }
 
 struct Driver {
@@ -67,10 +238,11 @@ struct Driver {
 }
 
 impl Driver {
-    async fn new(initial: &Value) -> Self {
-        let fixture = Fixture::new_with_parent_state(&initial["goal"]["execution"], false).await;
+    async fn new(initial: &LeanGoalClientReceiptCaseInitial) -> Self {
+        let execution = initial.goal.execution();
+        let fixture = Fixture::new_with_parent_state(&execution, false).await;
         execute(&fixture.agent_access(), &format!(r#"mutation {{ update_Goal(docID: "{}", input: {{ objective: "{}" }}) {{ _docID }} }}"#,
-            escape_graphql_string(&fixture.goal.doc_id), escape_graphql_string(initial["goal"]["objective"].as_str().unwrap()))).await;
+            escape_graphql_string(&fixture.goal.doc_id), escape_graphql_string(initial.goal.objective()))).await;
         let access = fixture.user_access();
         let session = access
             .transact_readonly("test.goal_receipt_session", |txn| {
@@ -90,24 +262,21 @@ impl Driver {
         Self {
             fixture,
             session_doc_id: session.doc_id,
-            revisions: BTreeMap::from([(
-                initial["goal"]["revision"]["composite"]
-                    .as_str()
-                    .unwrap()
-                    .into(),
-                current,
-            )]),
+            revisions: BTreeMap::from([(initial.goal.composite().to_owned(), current)]),
             commands: BTreeMap::new(),
         }
     }
 
-    async fn prepared_command(&self, model: &Command) -> SessionGoalControl {
-        assert!(!model.has_peer);
-        assert_eq!(model.session_document, "session-document");
-        assert_eq!(model.expected.document, "goal-document");
+    async fn prepared_command<C>(&self, model: &C) -> SessionGoalControl
+    where
+        C: ReceiptCommandModel,
+    {
+        assert!(!model.has_peer());
+        assert_eq!(model.session_document(), "session-document");
+        assert_eq!(model.expected().0, "goal-document");
         let mut command = SessionGoalControl {
             version: SESSION_GOAL_CONTROL_VERSION,
-            command_id: format!("receipt-command-{}", model.id),
+            command_id: format!("receipt-command-{}", model.id()),
             requester_did: self.fixture.user.did().into(),
             requester_peer_id: None,
             node_did: self.fixture.identity.did().into(),
@@ -120,13 +289,13 @@ impl Driver {
             .await,
             session_id: SESSION.into(),
             session_doc_id: Some(self.session_doc_id.clone()),
-            issued_at: stamp(model.issued_at).to_rfc3339(),
-            expires_at: stamp(model.expires_at).to_rfc3339(),
+            issued_at: stamp(model.issued_at()).to_rfc3339(),
+            expires_at: stamp(model.expires_at()).to_rfc3339(),
             expected: Some(GoalRevision {
                 document: self.fixture.goal.doc_id.clone(),
-                composite: self.revisions[&model.expected.composite].clone(),
+                composite: self.revisions[model.expected().1].clone(),
             }),
-            operation: model.operation.clone(),
+            operation: operation_of(model.operation_kind()),
             initial_request: None,
             native_evidence: None,
             signature: Vec::new(),
@@ -140,10 +309,13 @@ impl Driver {
         command
     }
 
-    async fn command(&mut self, model: &Command) -> (String, SessionGoalControl) {
+    async fn command<C>(&mut self, model: &C) -> (String, SessionGoalControl)
+    where
+        C: ReceiptCommandModel,
+    {
         let command = self.prepared_command(model).await;
-        if let Some((digest, doc, original)) = self.commands.get(&model.id) {
-            assert_eq!(*digest, model.digest);
+        if let Some((digest, doc, original)) = self.commands.get(&model.id()) {
+            assert_eq!(*digest, model.digest());
             assert_eq!(
                 original, &command,
                 "a replay must preserve the complete signed wire record"
@@ -153,24 +325,26 @@ impl Driver {
         let access = self.fixture.user_access();
         let doc_id = persist_command(&access, &command).await;
         self.commands
-            .insert(model.id, (model.digest, doc_id.clone(), command.clone()));
+            .insert(model.id(), (model.digest(), doc_id.clone(), command.clone()));
         (doc_id, command)
     }
 
-    async fn apply(
+    async fn apply<C, F>(
         &mut self,
-        command: &Command,
-        facts: &Value,
-        now: i64,
+        command: &C,
+        facts: &F,
+        now: u64,
         next: &str,
         commit: bool,
-    ) {
+    ) where
+        C: ReceiptCommandModel,
+        F: ReceiptFactsModel,
+    {
         assert!(commit);
-        assert_eq!(facts["command_identity_unique"], true);
-        for field in ["signature_valid", "session_owned"] {
-            assert_eq!(facts["authority"][field], true);
-        }
-        assert_eq!(facts["control"]["unfinished_request"], true);
+        assert!(facts.command_identity_unique());
+        assert!(facts.signature_valid());
+        assert!(facts.session_owned());
+        assert!(facts.unfinished_request());
         let (doc_id, command) = self.command(command).await;
         let access = self.fixture.user_access();
         let previous = receipt(&access, &doc_id).await;
@@ -223,26 +397,30 @@ impl Driver {
         })).await.unwrap();
     }
 
-    async fn assert_state(&self, expected: &Value, name: &str) {
+    async fn assert_state<G>(&self, goal: &G, receipts: &[(u64, u64, String)], name: &str)
+    where
+        G: GoalState,
+    {
         assert_eq!(
-            self.fixture.observe().await,
-            expected["goal"]["execution"],
+            self.fixture.observe().await, goal.execution(),
             "{name}: execution"
         );
-        let goal = self.fixture.current_goal().await;
+        let current_goal = self.fixture.current_goal().await;
         assert_eq!(
-            goal.objective,
-            expected["goal"]["objective"].as_str().unwrap(),
+            current_goal.objective, goal.objective(),
             "{name}: objective"
         );
         assert_eq!(
-            goal.doc_id, self.fixture.goal.doc_id,
+            current_goal.doc_id, self.fixture.goal.doc_id,
             "{name}: goal identity"
         );
-        let current = self.fixture.goal_commit(&goal.doc_id).await.cid;
+        let current = self
+            .fixture
+            .goal_commit(&current_goal.doc_id)
+            .await
+            .cid;
         assert_eq!(
-            current,
-            self.revisions[expected["goal"]["revision"]["composite"].as_str().unwrap()],
+            current, self.revisions[goal.composite()],
             "{name}: goal revision"
         );
         let access = self.fixture.agent_access();
@@ -261,22 +439,18 @@ impl Driver {
             "{name}: no extra request"
         );
         for (id, (digest, doc, command)) in &self.commands {
-            let modeled = expected["receipts"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|receipt| receipt["command_id"] == *id);
+            let modeled = receipts.iter().find(|row| row.0 == *id);
             let actual = receipt(&access, doc).await;
             match modeled {
-                Some(modeled) => {
-                    assert_eq!(modeled["digest"], *digest);
+                Some((_, modeled_digest, modeled_outcome)) => {
+                    assert_eq!(modeled_digest, digest);
                     let actual = actual.expect("modeled receipt must be durable");
                     actual.validate_for(command).unwrap();
                     let outcome = match actual.outcome {
                         GoalControlOutcome::Applied { .. } => "applied",
                         GoalControlOutcome::Rejected { .. } => "rejected",
                     };
-                    assert_eq!(modeled["outcome"], outcome, "{name}: receipt {id}");
+                    assert_eq!(modeled_outcome, outcome, "{name}: receipt {id}");
                 }
                 None => assert!(actual.is_none(), "{name}: receipt {id} stays absent"),
             }
@@ -284,30 +458,58 @@ impl Driver {
     }
 }
 
+fn receipt_rows(receipts: &[Value]) -> Vec<(u64, u64, String)> {
+    receipts
+        .iter()
+        .map(|row| {
+            (
+                row["command_id"].as_u64().unwrap(),
+                row["digest"].as_u64().unwrap(),
+                row["outcome"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect()
+}
+
 #[tokio::test]
 async fn generated_goal_receipt_traces_preserve_results_and_reject_erased_stale_intents() {
-    let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(contracts.goal_client_receipt_cases.len(), 4);
-    for case in contracts.goal_client_receipt_cases {
+    let cases = &gents_lean_vocab::lean_contract_snapshot().goal_client_receipt_cases;
+    assert_eq!(cases.len(), 4);
+    for case in cases {
         let mut driver = Driver::new(&case.initial).await;
-        driver.assert_state(&case.initial, &case.name).await;
-        for step in case.history {
-            match step {
-                Step::Apply {
-                    command,
-                    facts,
-                    now,
-                    next_composite,
-                    commit,
-                } => {
+        driver
+            .assert_state(
+                &case.initial.goal,
+                &receipt_rows(&case.initial.receipts),
+                &case.name,
+            )
+            .await;
+        for step in &case.history {
+            match step.kind.as_str() {
+                "apply" => {
                     driver
-                        .apply(&command, &facts, now, &next_composite, commit)
+                        .apply(
+                            step.command.as_ref().unwrap(),
+                            step.facts.as_ref().unwrap(),
+                            step.now.unwrap(),
+                            step.next_composite.as_deref().unwrap(),
+                            step.commit.unwrap(),
+                        )
                         .await
                 }
-                Step::LoseReceipts => driver.lose_receipts().await,
+                "lose_receipts" => driver.lose_receipts().await,
+                kind => panic!("unknown goal receipt step kind: {kind}"),
             }
         }
-        driver.assert_state(&case.before, &case.name).await;
+        let before_receipts = case
+            .before
+            .receipts
+            .iter()
+            .map(|row| (row.command_id, row.digest, row.outcome.clone()))
+            .collect::<Vec<_>>();
+        driver
+            .assert_state(&case.before.goal, &before_receipts, &case.name)
+            .await;
         let access = driver.fixture.user_access();
         let query = "{ AgentSessionGoalControl { _docID intent_json } AgentSessionGoalReceipt { _docID receipt_json } }";
         let before = access.execute(query).await.unwrap();
@@ -321,16 +523,17 @@ async fn generated_goal_receipt_traces_preserve_results_and_reject_erased_stale_
         .unwrap();
         match recovered {
             Some(receipt) => {
-                assert_eq!(case.recovered["command_id"], case.command.id);
-                assert_eq!(case.recovered["digest"], case.command.digest);
+                let modeled = case.recovered.as_ref().unwrap();
+                assert_eq!(modeled.command_id, case.command.id);
+                assert_eq!(modeled.digest, case.command.digest);
                 receipt.validate_for(&command).unwrap();
                 let outcome = match receipt.outcome {
                     GoalControlOutcome::Applied { .. } => "applied",
                     GoalControlOutcome::Rejected { .. } => "rejected",
                 };
-                assert_eq!(case.recovered["outcome"], outcome, "{}", case.name);
+                assert_eq!(modeled.outcome, outcome, "{}", case.name);
             }
-            None => assert!(case.recovered.is_null(), "{}", case.name),
+            None => assert!(case.recovered.is_none(), "{}", case.name),
         }
         assert_eq!(
             access.execute(query).await.unwrap(),
@@ -338,7 +541,9 @@ async fn generated_goal_receipt_traces_preserve_results_and_reject_erased_stale_
             "{}: recovery cannot publish or mutate the original intent",
             case.name
         );
-        driver.assert_state(&case.before, &case.name).await;
+        driver
+            .assert_state(&case.before.goal, &before_receipts, &case.name)
+            .await;
         driver
             .apply(
                 &case.command,
@@ -348,16 +553,22 @@ async fn generated_goal_receipt_traces_preserve_results_and_reject_erased_stale_
                 case.commit,
             )
             .await;
-        driver.assert_state(&case.expected, &case.name).await;
+        let expected_receipts = case
+            .expected
+            .receipts
+            .iter()
+            .map(|row| (row.command_id, row.digest, row.outcome.clone()))
+            .collect::<Vec<_>>();
+        driver
+            .assert_state(&case.expected.goal, &expected_receipts, &case.name)
+            .await;
         driver.fixture.node.shutdown().await.expect("node shutdown");
     }
 }
 
 #[tokio::test]
 async fn modeled_publication_retries_pending_receipt_relationships() {
-    let snapshot = gents_lean_contract::load_contract_snapshot::<Value>().unwrap();
-    let seed: Case =
-        serde_json::from_value(snapshot["goal_client_receipt_cases"][0].clone()).unwrap();
+    let seed = &gents_lean_vocab::lean_contract_snapshot().goal_client_receipt_cases[0];
     for trace in gents_lean_vocab::lean_contract_snapshot()
         .identity_publication_cases
         .iter()
