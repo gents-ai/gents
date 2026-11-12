@@ -36,12 +36,14 @@ fn source_projection_is_sorted_and_unavailability_wins() {
                 dispatcher_present: true,
                 unavailable_reason: Some(AgentReadinessUnavailableReason::BackendDisabled),
                 startup_demoted: false,
+                effective_inference: None,
             },
             AgentReadinessSourceEntry {
                 agent_did: "a".to_string(),
                 dispatcher_present: true,
                 unavailable_reason: None,
                 startup_demoted: false,
+                effective_inference: None,
             },
         ],
     )
@@ -56,6 +58,7 @@ fn ready_snapshot_does_not_expire_without_semantic_changes() {
         agent_did: "a".to_string(),
         state: AgentReadinessState::Ready,
         reason: None,
+        effective_inference: None,
     }]);
     let row = readiness_row("did:test:node", serde_json::to_string(&snapshot).unwrap());
     let projection = project_node_readiness(Some(&row), "did:test:node", ["a"], Some("a"));
@@ -76,11 +79,13 @@ fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
         agent_did: "a".to_string(),
         state: AgentReadinessState::Ready,
         reason: None,
+        effective_inference: None,
     };
     let unavailable = AgentReadinessEntry {
         agent_did: "b".to_string(),
         state: AgentReadinessState::Unavailable,
         reason: Some(AgentReadinessUnavailableReason::BackendDisabled),
+        effective_inference: None,
     };
     let canonical = readiness_row(
         "did:test:node",
@@ -107,6 +112,7 @@ fn projection_accepts_only_canonical_bound_payloads_and_process_states() {
             agent_did: "a".to_string(),
             state: AgentReadinessState::Unavailable,
             reason: None,
+            effective_inference: None,
         }]),
     ];
     for snapshot in malformed_snapshots {

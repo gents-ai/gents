@@ -2,7 +2,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-pub const NODE_READINESS_FORMAT_VERSION: u32 = 2;
+/// Version 3 added `AgentReadinessEntry::effective_inference`. The snapshot
+/// decoder denies unknown fields, so any added field is a decode break for an
+/// older reader; the version bump makes that an explicit
+/// `ReadinessVersionUnsupported` rather than a malformed-row diagnosis.
+pub const NODE_READINESS_FORMAT_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NodeReadinessProcessState {
@@ -112,12 +116,70 @@ pub fn unavailable_rejection_reason(
         .find(|reason| reason.public_message() == failure_reason)
 }
 
+/// This generation's service tier for an agent.
+///
+/// `NotSupportedByProvider` is a capability fact, not a fallback: the provider
+/// has no service tier at all, and selecting one would fail the agent's
+/// resolution rather than being silently ignored. A refused selection
+/// therefore never appears here; the agent is unavailable and
+/// [`AgentReadinessUnavailableReason`] carries the refusal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ServiceTierBinding {
+    Unset,
+    Selected { tier: String },
+    NotSupportedByProvider,
+}
+
+/// Whether this generation will actually send the configured reasoning effort.
+/// `DroppedUnsupported` carries the provider-advertised choices so a client can
+/// explain the fallback instead of implying the configured effort was used.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ReasoningEffortBinding {
+    Unset,
+    Sent {
+        effort: String,
+    },
+    DroppedUnsupported {
+        effort: String,
+        /// Provider-advertised efforts for the selected model; `None` is an
+        /// unknown catalog, which is distinct from an empty advertised list.
+        advertised: Option<Vec<String>>,
+    },
+}
+
+/// The inference settings this generation's slot binds to any request
+/// dispatched to the agent now.
+///
+/// This is a per-generation fact, never a per-request one: the settings of a
+/// specific request are fixed at that request's own dispatch and recorded by
+/// its claim. Correlate with [`NodeReadinessSnapshot::active_generation`];
+/// a request whose claim recorded a different runtime generation ran under
+/// different settings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EffectiveInferenceSettings {
+    pub profile_id: Option<String>,
+    pub backend_id: Option<String>,
+    pub model_name: String,
+    /// The configured effort, before provider capability is applied.
+    pub reasoning_effort: Option<String>,
+    pub service_tier: ServiceTierBinding,
+    pub reasoning_effort_dispatch: ReasoningEffortBinding,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentReadinessEntry {
     pub agent_did: String,
     pub state: AgentReadinessState,
     pub reason: Option<AgentReadinessUnavailableReason>,
+    /// Absent when the agent is not runnable in this generation, and absent on
+    /// a snapshot written before this field existed. Absent never means "the
+    /// configured settings apply"; it means the binding is unknown here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_inference: Option<EffectiveInferenceSettings>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -137,6 +199,9 @@ pub struct AgentReadinessSourceEntry {
     pub dispatcher_present: bool,
     pub unavailable_reason: Option<AgentReadinessUnavailableReason>,
     pub startup_demoted: bool,
+    /// Only a Ready entry publishes a binding; an unavailable or unassigned
+    /// agent dispatches nothing, so it has no effective settings to report.
+    pub effective_inference: Option<EffectiveInferenceSettings>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,11 +260,13 @@ pub fn project_node_readiness_source(
                 agent_did: source.agent_did.clone(),
                 state: AgentReadinessState::Ready,
                 reason: None,
+                effective_inference: source.effective_inference,
             }),
             EffectiveAgentReadinessAdmission::Unavailable(reason) => Some(AgentReadinessEntry {
                 agent_did: source.agent_did.clone(),
                 state: AgentReadinessState::Unavailable,
                 reason: Some(reason),
+                effective_inference: None,
             }),
             EffectiveAgentReadinessAdmission::Unassigned => None,
         };

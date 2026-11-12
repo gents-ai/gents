@@ -1127,6 +1127,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_default_replacements_preserve_runtime_startup_selection",
         },
         ConformanceConsumer::RustTest {
+            id: "runtime::agent::runtime::tests::effective_settings_binding::generated_effective_settings_bindings_match_the_runtime_owners",
+            package: "gents",
+            source_path: "crates/gents/src/runtime/agent/runtime/tests/effective_settings_binding.rs",
+            module_path: "runtime::agent::runtime::tests::effective_settings_binding",
+            function: "generated_effective_settings_bindings_match_the_runtime_owners",
+        },
+        ConformanceConsumer::RustTest {
             id: "runtime::agent::runtime::tests::agent_resolution::explicit_agent_resolution_matches_lean_binding_cases",
             package: "gents",
             source_path: "crates/gents/src/runtime/agent/runtime/tests/agent_resolution.rs",

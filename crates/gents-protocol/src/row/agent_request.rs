@@ -22,6 +22,11 @@ pub const AGENT_REQUEST_FIELDS: &str = r#"
                     execution_lease_secs
                     execution_lease_expires_at
                     backend_id
+                    executed_model_name
+                    executed_reasoning_effort
+                    executed_service_tier
+                    executed_inference_profile_id
+                    executed_runtime_generation
                     request_hop
                     caused_by_parent_request_id
                     caused_by_parent_request_doc_id
@@ -75,6 +80,16 @@ pub struct AgentRequest {
     pub execution_generation: Option<String>,
     pub execution_lease_secs: Option<i64>,
     pub execution_lease_expires_at: Option<String>,
+    /// Inference settings this request's claim bound to its execution. Empty
+    /// is the honest value for work that has not been dispatched: it has no
+    /// effective settings yet and will bind at its own dispatch.
+    pub executed_model_name: Option<String>,
+    pub executed_reasoning_effort: Option<String>,
+    pub executed_service_tier: Option<String>,
+    pub executed_inference_profile_id: Option<String>,
+    /// The runtime generation whose slot owned this execution; joins to
+    /// `NodeReadinessSnapshot::active_generation`.
+    pub executed_runtime_generation: Option<i64>,
     pub request_hop: u32,
     pub caused_by_parent_request_id: Option<String>,
     pub caused_by_parent_request_doc_id: Option<String>,
@@ -91,7 +106,52 @@ pub struct AgentRequest {
     pub workspace_seal_hash: Option<String>,
 }
 
+/// Inference settings one execution of a request was bound to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutedInferenceSettings {
+    pub model_name: String,
+    /// `None` is an unset selection, never "the provider default was chosen
+    /// for me": the configured effort is the Agent's, and an unset one means
+    /// the provider's own default applied.
+    pub reasoning_effort: Option<String>,
+    pub service_tier: Option<String>,
+    pub inference_profile_id: Option<String>,
+    /// Joins to `NodeReadinessSnapshot::active_generation`.
+    pub runtime_generation: Option<u64>,
+}
+
+/// What is known about the inference settings of a request's execution.
+///
+/// The settings of a unit of work are fixed when the router hands that request
+/// to an agent slot, and the claim records them in the same compare-and-swap
+/// that installs the lifecycle state and execution generation. A request that
+/// has not been dispatched therefore has no settings, and that absence is the
+/// correct answer rather than a missing one: a queued successor and a pending
+/// request bind at their own dispatch, under whatever generation is active
+/// then. A consumer must not substitute the Agent's configured selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExecutedInferenceBinding {
+    NotYetBound,
+    Bound(ExecutedInferenceSettings),
+}
+
 impl AgentRequest {
+    /// The durable binding this request's current execution recorded.
+    pub fn executed_inference(&self) -> ExecutedInferenceBinding {
+        let Some(model_name) = self.executed_model_name.clone() else {
+            return ExecutedInferenceBinding::NotYetBound;
+        };
+        ExecutedInferenceBinding::Bound(ExecutedInferenceSettings {
+            model_name,
+            reasoning_effort: self.executed_reasoning_effort.clone(),
+            service_tier: self.executed_service_tier.clone(),
+            inference_profile_id: self.executed_inference_profile_id.clone(),
+            runtime_generation: self
+                .executed_runtime_generation
+                .and_then(|generation| u64::try_from(generation).ok()),
+        })
+    }
+
     pub fn has_automated_trigger_lineage(&self) -> bool {
         let has_trigger_id = self
             .caused_by_trigger_id
@@ -151,6 +211,13 @@ impl TryFrom<AgentRequestRow> for AgentRequest {
             execution_generation: normalize_optional_string(row.execution_generation),
             execution_lease_secs,
             execution_lease_expires_at: normalize_optional_string(row.execution_lease_expires_at),
+            executed_model_name: normalize_optional_string(row.executed_model_name),
+            executed_reasoning_effort: normalize_optional_string(row.executed_reasoning_effort),
+            executed_service_tier: normalize_optional_string(row.executed_service_tier),
+            executed_inference_profile_id: normalize_optional_string(
+                row.executed_inference_profile_id,
+            ),
+            executed_runtime_generation: row.executed_runtime_generation,
             request_hop,
             caused_by_parent_request_id: row.caused_by_parent_request_id,
             caused_by_parent_request_doc_id: row.caused_by_parent_request_doc_id,

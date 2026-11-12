@@ -311,6 +311,10 @@ impl NodeReadinessPublisherHandle {
                         .get(&agent_did)
                         .map(|unavailable| unavailable.public_reason),
                     startup_demoted: false,
+                    effective_inference: snapshot
+                        .agents
+                        .get(&agent_did)
+                        .map(|agent| agent.effective_inference()),
                 };
                 (agent_did, entry)
             })
@@ -508,6 +512,7 @@ async fn run_publisher(
                                 AgentReadinessUnavailableReason::RuntimeConfigurationInvalid,
                             ),
                             startup_demoted: false,
+                            effective_inference: None,
                         },
                     )]),
                     slot_generations: BTreeMap::new(),

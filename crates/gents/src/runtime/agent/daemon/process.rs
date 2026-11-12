@@ -81,6 +81,8 @@ where
             self.request_admission.clone(),
             self.agent_config.agent_identity.clone(),
         );
+        lifecycle
+            .set_executed_inference(self.agent_config.executed_inference(self.slot_generation));
         lifecycle.set_execution_lease_duration(self.agent_config.stream_liveness_timeout);
         lifecycle.set_configured_max_total_tokens(self.agent_config.max_total_tokens);
         let parked = if request.execution_generation.is_some() {

@@ -140,6 +140,7 @@ async fn publish_ready(access: &ConfigAccess, agents: &[&str]) {
             agent_did: did(name),
             state: AgentReadinessState::Ready,
             reason: None,
+            effective_inference: None,
         })
         .collect();
     entries.sort_by(|left, right| left.agent_did.cmp(&right.agent_did));
@@ -1182,6 +1183,7 @@ fn the_reason_no_agent_can_run_is_the_default_agents() {
             agent_did: "engineer".to_string(),
             state,
             reason,
+            effective_inference: None,
         }],
     };
     let why = |reason| {

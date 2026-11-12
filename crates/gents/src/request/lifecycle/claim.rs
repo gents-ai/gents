@@ -1,6 +1,40 @@
 use super::*;
 use anyhow::Context;
 
+/// The claim's inference binding as GraphQL input fields.
+///
+/// This runs inside the most contended mutation in the runtime, which is
+/// string interpolated. Every value goes through
+/// `gents_protocol::graphql::nullable_string_field`, which escapes the string
+/// and writes `null` for an unset one; an unset effort, tier or profile is
+/// therefore `null`, never `""` with meaning and never an empty list.
+fn executed_inference_input_fields(
+    executed: Option<&gents_protocol::row::ExecutedInferenceSettings>,
+) -> Result<String> {
+    let Some(executed) = executed else {
+        return Ok(String::new());
+    };
+    let nullable = gents_protocol::graphql::nullable_string_field;
+    let generation = gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(
+        executed.runtime_generation,
+    )?)?;
+    Ok([
+        nullable("executed_model_name", Some(executed.model_name.as_str())),
+        nullable(
+            "executed_reasoning_effort",
+            executed.reasoning_effort.as_deref(),
+        ),
+        nullable("executed_service_tier", executed.service_tier.as_deref()),
+        nullable(
+            "executed_inference_profile_id",
+            executed.inference_profile_id.as_deref(),
+        ),
+        format!("executed_runtime_generation: {generation}"),
+    ]
+    .join(",\n                        ")
+        + ",")
+}
+
 pub(crate) struct DurableClaimReceipt {
     request: AgentRequest,
     request_commit_cid: String,
@@ -865,6 +899,8 @@ impl RequestLifecycle {
             escape_graphql_string(&execution_lease_expires_at.to_rfc3339());
         let escaped_deadline = escape_graphql_string(&deadline);
         let escaped_backend_id = escape_graphql_string(&self.backend_id);
+        let executed_inference_fields =
+            executed_inference_input_fields(self.executed_inference.as_ref())?;
         let execution_origin = self.execution_origin.as_str();
         let request_fields = gents_protocol::row::AGENT_REQUEST_FIELDS;
 
@@ -912,6 +948,7 @@ impl RequestLifecycle {
                         execution_generation: "{escaped_execution_generation}",
                         execution_lease_expires_at: "{escaped_execution_lease_expires_at}",
                         execution_lease_secs: {lease_secs},
+                        {executed_inference_fields}
                         {budget_field}
                         {background_completion_snapshot_fields}
                         deadline: "{escaped_deadline}"
@@ -1001,6 +1038,50 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
+    /// The claim mutation is interpolated, so a model name or profile
+    /// identifier that contains a quote must not be able to close the input
+    /// object. An unset effort or tier is `null`.
+    #[test]
+    fn the_executed_binding_is_escaped_and_unset_values_are_null() {
+        assert_eq!(executed_inference_input_fields(None).unwrap(), "");
+        let hostile = gents_protocol::row::ExecutedInferenceSettings {
+            model_name: r#"m", lifecycle_state: "completed"#.to_string(),
+            reasoning_effort: None,
+            service_tier: None,
+            inference_profile_id: Some("profile\n\"x".to_string()),
+            runtime_generation: Some(4),
+        };
+        let fields = executed_inference_input_fields(Some(&hostile)).unwrap();
+        assert!(
+            fields.contains(r#"executed_model_name: "m\", lifecycle_state: \"completed""#),
+            "the model name is escaped, not spliced: {fields}"
+        );
+        assert!(
+            fields.contains(r#"executed_inference_profile_id: "profile\n\"x""#),
+            "the profile identifier is escaped: {fields}"
+        );
+        assert!(
+            fields.contains("executed_reasoning_effort: null"),
+            "{fields}"
+        );
+        assert!(fields.contains("executed_service_tier: null"), "{fields}");
+        assert!(
+            !fields.contains("[]"),
+            "no empty list is ever emitted: {fields}"
+        );
+        assert!(
+            fields.contains("executed_runtime_generation: 4"),
+            "{fields}"
+        );
+        let unset_generation = gents_protocol::row::ExecutedInferenceSettings {
+            runtime_generation: None,
+            ..hostile
+        };
+        assert!(executed_inference_input_fields(Some(&unset_generation))
+            .unwrap()
+            .contains("executed_runtime_generation: null"));
+    }
 
     fn test_node_did() -> String {
         use crate::store::identity::NodeIdentity as _;

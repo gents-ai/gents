@@ -788,6 +788,11 @@ pub fn build_request(
         workspace_authority: None,
         workspace_owner_node_did: None,
         workspace_seal_hash: None,
+        executed_model_name: None,
+        executed_reasoning_effort: None,
+        executed_service_tier: None,
+        executed_inference_profile_id: None,
+        executed_runtime_generation: None,
     }
 }
 

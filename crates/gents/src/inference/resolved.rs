@@ -452,6 +452,85 @@ impl std::fmt::Debug for ResolvedAgent {
 }
 
 impl ResolvedAgent {
+    /// The settings this agent's slot binds to any request dispatched to it
+    /// while this generation is active.
+    ///
+    /// The slot holds one immutable `ResolvedAgent` for its whole life and the
+    /// router re-checks the active snapshot immediately before handing a
+    /// request to a dispatcher, so this is exactly what a request dispatched
+    /// now will use. A request already dispatched keeps the settings of the
+    /// generation that dispatched it, which its claim recorded; this
+    /// projection says nothing about it.
+    pub fn effective_inference(&self) -> gents_protocol::row::EffectiveInferenceSettings {
+        let configured = self.sampling.reasoning_effort;
+        let sent = crate::inference::backends::setup::sent_reasoning_effort(
+            self.backend_provider_kind,
+            self.openai_wire_api,
+            &self.backend_endpoint,
+            self.resolved_reasoning_efforts.as_deref(),
+            configured,
+        );
+        let reasoning_effort_dispatch = match (configured, sent) {
+            (None, _) => gents_protocol::row::ReasoningEffortBinding::Unset,
+            (Some(_), Some(sent)) => gents_protocol::row::ReasoningEffortBinding::Sent {
+                effort: sent.as_str().to_string(),
+            },
+            (Some(configured), None) => {
+                gents_protocol::row::ReasoningEffortBinding::DroppedUnsupported {
+                    effort: configured.as_str().to_string(),
+                    advertised: self.resolved_reasoning_efforts.as_ref().map(|efforts| {
+                        efforts
+                            .iter()
+                            .map(|effort| effort.as_str().to_string())
+                            .collect()
+                    }),
+                }
+            }
+        };
+        // A resolved agent exists only when `validate_service_tier` accepted
+        // its selection, so an unsupported selection is reported against the
+        // agent as an unavailable reason and never reaches this projection.
+        // What this does report is whether the provider has a tier at all.
+        let service_tier = match self.service_tier {
+            Some(tier) => gents_protocol::row::ServiceTierBinding::Selected {
+                tier: tier.as_str().to_string(),
+            },
+            None if supports_service_tier(self.backend_provider_kind) => {
+                gents_protocol::row::ServiceTierBinding::Unset
+            }
+            None => gents_protocol::row::ServiceTierBinding::NotSupportedByProvider,
+        };
+        gents_protocol::row::EffectiveInferenceSettings {
+            profile_id: self.profile_id.clone(),
+            backend_id: self.backend_id.clone(),
+            model_name: self.model_name.clone(),
+            reasoning_effort: configured.map(|effort| effort.as_str().to_string()),
+            service_tier,
+            reasoning_effort_dispatch,
+        }
+    }
+
+    /// The binding a claim records for one execution dispatched to this
+    /// slot under `runtime_generation`. It is the same resolved configuration
+    /// the slot will use for every provider call of that request, because the
+    /// loop configuration and provider model handle are built once per
+    /// request and reused for every turn, retry and tool round trip.
+    pub fn executed_inference(
+        &self,
+        runtime_generation: u64,
+    ) -> gents_protocol::row::ExecutedInferenceSettings {
+        gents_protocol::row::ExecutedInferenceSettings {
+            model_name: self.model_name.clone(),
+            reasoning_effort: self
+                .sampling
+                .reasoning_effort
+                .map(|effort| effort.as_str().to_string()),
+            service_tier: self.service_tier.map(|tier| tier.as_str().to_string()),
+            inference_profile_id: self.profile_id.clone(),
+            runtime_generation: Some(runtime_generation),
+        }
+    }
+
     pub fn compaction_threshold(&self) -> f64 {
         self.compaction
             .as_ref()
@@ -559,11 +638,76 @@ pub fn admits_reasoning_effort(
             && crate::inference::backends::setup::is_xai_api_endpoint(&backend.endpoint))
 }
 
+/// Why a configured reasoning effort will not reach the provider.
+///
+/// The fallback is silent on the wire, so the typed reason is the only way a
+/// client can say that the model default applied rather than the configured
+/// effort. `NoCatalog` and `AdvertisesNone` stay distinct: an undiscovered
+/// catalog is unknown support, not an absence of support.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnsentReasoningEffortReason {
+    NoCatalog,
+    CatalogPredatesEffortDiscovery,
+    AdvertisesNone,
+    Advertises(Vec<ReasoningEffort>),
+}
+
+/// A configured effort the selected backend will drop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnsentReasoningEffort {
+    pub profile_id: String,
+    pub model_name: String,
+    pub effort: ReasoningEffort,
+    pub reason: UnsentReasoningEffortReason,
+}
+
+impl UnsentReasoningEffort {
+    pub fn advertised(&self) -> Option<&[ReasoningEffort]> {
+        match &self.reason {
+            UnsentReasoningEffortReason::NoCatalog
+            | UnsentReasoningEffortReason::CatalogPredatesEffortDiscovery => None,
+            UnsentReasoningEffortReason::AdvertisesNone => Some(&[]),
+            UnsentReasoningEffortReason::Advertises(list) => Some(list),
+        }
+    }
+}
+
+impl std::fmt::Display for UnsentReasoningEffort {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let reason = match &self.reason {
+            UnsentReasoningEffortReason::NoCatalog => {
+                "has no discovered catalog; run `gents config backend discover-models`".to_string()
+            }
+            UnsentReasoningEffortReason::CatalogPredatesEffortDiscovery => {
+                "catalog predates effort discovery; run `gents config backend discover-models`"
+                    .to_string()
+            }
+            UnsentReasoningEffortReason::AdvertisesNone => {
+                "advertises no reasoning effort".to_string()
+            }
+            UnsentReasoningEffortReason::Advertises(list) => format!(
+                "advertises {}",
+                list.iter()
+                    .map(|effort| effort.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        };
+        write!(
+            formatter,
+            "profile {} reasoning effort {} is not sent: model {} {reason}; the model default applies",
+            self.profile_id,
+            self.effort.as_str(),
+            self.model_name
+        )
+    }
+}
+
 pub fn unsent_reasoning_effort(
     backend: &crate::documents::InferenceBackend,
     profile: &crate::documents::InferenceProfile,
     observation: Option<&crate::documents::InferenceBackendObservation>,
-) -> Option<String> {
+) -> Option<UnsentReasoningEffort> {
     let effort = profile.reasoning_effort?;
     let fields = backend.backend_fields();
     let model = backend_catalog(backend, observation)
@@ -584,30 +728,26 @@ pub fn unsent_reasoning_effort(
         Some(effort),
     )
     .is_none()
-    .then(|| {
-        let reason = match (model, advertised) {
-            (None, _) => "has no discovered catalog; run `gents config backend discover-models`"
-                .to_string(),
-            (Some(_), None) => {
-                "catalog predates effort discovery; run `gents config backend discover-models`"
-                    .to_string()
-            }
-            (Some(_), Some([])) => "advertises no reasoning effort".to_string(),
-            (Some(_), Some(list)) => format!(
-                "advertises {}",
-                list.iter()
-                    .map(|effort| effort.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-        };
-        format!(
-            "profile {} reasoning effort {} is not sent: model {} {reason}; the model default applies",
-            profile.profile_id,
-            effort.as_str(),
-            profile.model_name
-        )
+    .then(|| UnsentReasoningEffort {
+        profile_id: profile.profile_id.clone(),
+        model_name: profile.model_name.clone(),
+        effort,
+        reason: unsent_reasoning_effort_reason(model.is_some(), advertised),
     })
+}
+
+/// The structured reason for a dropped effort, from the same catalog facts
+/// `sent_reasoning_effort` consulted.
+pub fn unsent_reasoning_effort_reason(
+    model_discovered: bool,
+    advertised: Option<&[ReasoningEffort]>,
+) -> UnsentReasoningEffortReason {
+    match (model_discovered, advertised) {
+        (false, _) => UnsentReasoningEffortReason::NoCatalog,
+        (true, None) => UnsentReasoningEffortReason::CatalogPredatesEffortDiscovery,
+        (true, Some([])) => UnsentReasoningEffortReason::AdvertisesNone,
+        (true, Some(list)) => UnsentReasoningEffortReason::Advertises(list.to_vec()),
+    }
 }
 
 pub fn advertised_model_for_profile(
@@ -668,6 +808,165 @@ mod tests {
             display_name: None,
             enabled: true,
         })
+    }
+
+    #[test]
+    fn dropped_effort_reasons_distinguish_unknown_from_absent_support() {
+        assert_eq!(
+            unsent_reasoning_effort_reason(false, None),
+            UnsentReasoningEffortReason::NoCatalog
+        );
+        assert_eq!(
+            unsent_reasoning_effort_reason(false, Some(&[ReasoningEffort::Low])),
+            UnsentReasoningEffortReason::NoCatalog
+        );
+        assert_eq!(
+            unsent_reasoning_effort_reason(true, None),
+            UnsentReasoningEffortReason::CatalogPredatesEffortDiscovery
+        );
+        assert_eq!(
+            unsent_reasoning_effort_reason(true, Some(&[])),
+            UnsentReasoningEffortReason::AdvertisesNone
+        );
+        assert_eq!(
+            unsent_reasoning_effort_reason(true, Some(&[ReasoningEffort::Low])),
+            UnsentReasoningEffortReason::Advertises(vec![ReasoningEffort::Low])
+        );
+    }
+
+    /// The owner itself returns the structured reason, not prose a consumer
+    /// would have to parse. Without a discovered catalog the xAI Responses
+    /// path drops the effort and says why.
+    #[test]
+    fn the_owner_returns_a_structured_dropped_effort_reason() {
+        let backend: crate::documents::InferenceBackend =
+            serde_json::from_value(serde_json::json!({
+                "node_did": "did:test:node",
+                "backend_id": "xai",
+                "name": "xai",
+                "provider_kind": "OpenAiCompatible",
+                "openai_wire_api": "responses",
+                "endpoint": crate::inference::backends::setup::XAI_API_ENDPOINT,
+                "auth": {"kind": "unauthenticated"},
+            }))
+            .expect("canonical backend fixture");
+        let profile = crate::documents::InferenceProfile {
+            node_did: "did:test:node".to_string(),
+            profile_id: "grok".to_string(),
+            backend_id: "xai".to_string(),
+            model_name: "grok-4".to_string(),
+            reasoning_effort: Some(ReasoningEffort::Medium),
+            ..Default::default()
+        };
+        let unsent =
+            unsent_reasoning_effort(&backend, &profile, None).expect("the effort is not sent");
+        assert_eq!(unsent.effort, ReasoningEffort::Medium);
+        assert_eq!(unsent.profile_id, "grok");
+        assert_eq!(unsent.model_name, "grok-4");
+        assert_eq!(unsent.reason, UnsentReasoningEffortReason::NoCatalog);
+        assert_eq!(unsent.advertised(), None);
+
+        let sent = crate::documents::InferenceProfile {
+            reasoning_effort: None,
+            ..profile
+        };
+        assert!(unsent_reasoning_effort(&backend, &sent, None).is_none());
+    }
+
+    #[test]
+    fn a_dropped_effort_keeps_its_operator_text() {
+        let unsent = UnsentReasoningEffort {
+            profile_id: "grok".to_string(),
+            model_name: "grok-4".to_string(),
+            effort: ReasoningEffort::Medium,
+            reason: UnsentReasoningEffortReason::Advertises(vec![
+                ReasoningEffort::Low,
+                ReasoningEffort::High,
+            ]),
+        };
+        assert_eq!(
+            unsent.to_string(),
+            "profile grok reasoning effort medium is not sent: model grok-4 advertises low, high; the model default applies"
+        );
+        assert_eq!(
+            unsent.advertised(),
+            Some([ReasoningEffort::Low, ReasoningEffort::High].as_slice())
+        );
+    }
+
+    #[test]
+    fn effective_inference_reports_the_sent_effort_and_selected_tier() {
+        let mut agent_config = agent_with_wire(OpenAiWireApi::ChatCompletions);
+        agent_config.model_name = "model-a".to_string();
+        agent_config.sampling.reasoning_effort = Some(ReasoningEffort::Low);
+        agent_config.service_tier = Some(ServiceTier::Fast);
+        let effective = agent_config.effective_inference();
+        assert_eq!(effective.model_name, "model-a");
+        assert_eq!(effective.reasoning_effort.as_deref(), Some("low"));
+        assert_eq!(
+            effective.service_tier,
+            gents_protocol::row::ServiceTierBinding::Selected {
+                tier: "fast".to_string()
+            }
+        );
+        assert_eq!(
+            effective.reasoning_effort_dispatch,
+            gents_protocol::row::ReasoningEffortBinding::Sent {
+                effort: "low".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn an_unset_selection_is_reported_as_unset_not_as_a_default() {
+        let agent_config = agent_with_wire(OpenAiWireApi::ChatCompletions);
+        let effective = agent_config.effective_inference();
+        assert_eq!(effective.reasoning_effort, None);
+        assert_eq!(
+            effective.service_tier,
+            gents_protocol::row::ServiceTierBinding::Unset
+        );
+        assert_eq!(
+            effective.reasoning_effort_dispatch,
+            gents_protocol::row::ReasoningEffortBinding::Unset
+        );
+    }
+
+    /// The xAI Responses path drops an effort the catalog does not advertise.
+    /// The binding must say so rather than report the configured effort.
+    #[test]
+    fn a_dropped_effort_is_reported_as_dropped_with_the_advertised_list() {
+        let mut agent_config = agent_with_wire(OpenAiWireApi::Responses);
+        agent_config.backend_endpoint =
+            crate::inference::backends::setup::XAI_API_ENDPOINT.to_string();
+        agent_config.sampling.reasoning_effort = Some(ReasoningEffort::Medium);
+        agent_config.resolved_reasoning_efforts = Some(vec![ReasoningEffort::Low]);
+        let effective = agent_config.effective_inference();
+        assert_eq!(effective.reasoning_effort.as_deref(), Some("medium"));
+        assert_eq!(
+            effective.reasoning_effort_dispatch,
+            gents_protocol::row::ReasoningEffortBinding::DroppedUnsupported {
+                effort: "medium".to_string(),
+                advertised: Some(vec!["low".to_string()]),
+            }
+        );
+    }
+
+    /// An unsupported tier is refused at resolution, so it never becomes a
+    /// binding; the agent is reported unavailable instead.
+    #[test]
+    fn an_unsupported_tier_is_refused_rather_than_bound() {
+        assert!(validate_service_tier(
+            BackendProviderKind::AnthropicApiKey,
+            Some(ServiceTier::Fast)
+        )
+        .is_err());
+        assert!(validate_service_tier(BackendProviderKind::AnthropicApiKey, None).is_ok());
+        assert!(validate_service_tier(
+            BackendProviderKind::OpenAiCompatible,
+            Some(ServiceTier::Fast)
+        )
+        .is_ok());
     }
 
     fn agent_with_wire(openai_wire_api: OpenAiWireApi) -> ResolvedAgent {

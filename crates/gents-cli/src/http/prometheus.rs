@@ -1815,6 +1815,7 @@ mod tests {
                         agent_did: "default".to_string(),
                         state: AgentReadinessState::Ready,
                         reason: None,
+                        effective_inference: None,
                     },
                     AgentReadinessEntry {
                         agent_did: "offline".to_string(),
@@ -1822,6 +1823,7 @@ mod tests {
                         reason: Some(
                             AgentReadinessUnavailableReason::BackendTemporarilyUnavailable,
                         ),
+                        effective_inference: None,
                     },
                 ],
             })

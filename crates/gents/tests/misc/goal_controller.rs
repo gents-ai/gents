@@ -205,6 +205,7 @@ async fn publish_node_readiness_for_agent(
                 AgentReadinessState::Ready
             },
             reason: behavior,
+            effective_inference: None,
         }],
     };
     let did = gents::store::graphql::escape_graphql_string(db.node_identity.did());

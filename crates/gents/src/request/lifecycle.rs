@@ -567,6 +567,7 @@ pub struct RequestLifecycle {
     folded_selection: Vec<queue::FoldedInput>,
     natural_finish_allowed: bool,
     resumed_from_backend: bool,
+    executed_inference: Option<gents_protocol::row::ExecutedInferenceSettings>,
 }
 
 impl RequestLifecycle {
@@ -666,6 +667,22 @@ impl RequestLifecycle {
 
     pub(crate) fn folded_selection(&self) -> &[queue::FoldedInput] {
         &self.folded_selection
+    }
+
+    /// The inference settings the dispatching slot holds, recorded by the
+    /// claim's compare-and-swap so the execution's binding is durable. The
+    /// settings come from the slot's immutable `ResolvedAgent`, never from
+    /// request input, and are absent until this request is dispatched.
+    pub(crate) fn set_executed_inference(
+        &mut self,
+        executed: gents_protocol::row::ExecutedInferenceSettings,
+    ) {
+        assert_eq!(
+            self.state,
+            LocalLifecycleState::Pending,
+            "bind execution settings before claim"
+        );
+        self.executed_inference = Some(executed);
     }
 
     /// Configuration supplied by the runtime, never by request input; only

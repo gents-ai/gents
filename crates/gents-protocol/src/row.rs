@@ -14,7 +14,7 @@ use crate::request_lifecycle::RequestLifecycleState;
 mod agent_request;
 pub use agent_request::{
     normalize_optional_string, validate_agent_request, AgentRequest, AgentRequestRowError,
-    AGENT_REQUEST_FIELDS,
+    ExecutedInferenceBinding, ExecutedInferenceSettings, AGENT_REQUEST_FIELDS,
 };
 
 pub use crate::node_readiness::{
@@ -22,9 +22,10 @@ pub use crate::node_readiness::{
     is_behavior_unavailable_rejection, project_node_readiness, project_node_readiness_source,
     project_node_readiness_summary, AgentReadinessEntry, AgentReadinessSourceEntry,
     AgentReadinessState, AgentReadinessUnavailableReason, AgentReadinessUnknownReason,
-    EffectiveAgentReadinessAdmission, NodeReadinessProcessState, NodeReadinessProjection,
-    NodeReadinessRow, NodeReadinessSnapshot, NodeReadinessSummary, ProjectedAgentReadiness,
-    ProjectedNodeReadinessSummary, BEHAVIOR_NOT_ASSIGNED_MESSAGE, NODE_READINESS_FORMAT_VERSION,
+    EffectiveAgentReadinessAdmission, EffectiveInferenceSettings, NodeReadinessProcessState,
+    NodeReadinessProjection, NodeReadinessRow, NodeReadinessSnapshot, NodeReadinessSummary,
+    ProjectedAgentReadiness, ProjectedNodeReadinessSummary, ReasoningEffortBinding,
+    ServiceTierBinding, BEHAVIOR_NOT_ASSIGNED_MESSAGE, NODE_READINESS_FORMAT_VERSION,
 };
 
 pub(crate) fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
@@ -193,6 +194,18 @@ pub struct AgentRequestRow {
     /// deadline; expired owners cannot revive themselves with output or renewal.
     #[serde(default)]
     pub execution_lease_expires_at: Option<String>,
+    /// Inference settings bound by this request's claim; see
+    /// [`agent_request::ExecutedInferenceBinding`].
+    #[serde(default)]
+    pub executed_model_name: Option<String>,
+    #[serde(default)]
+    pub executed_reasoning_effort: Option<String>,
+    #[serde(default)]
+    pub executed_service_tier: Option<String>,
+    #[serde(default)]
+    pub executed_inference_profile_id: Option<String>,
+    #[serde(default)]
+    pub executed_runtime_generation: Option<i64>,
     #[serde(default)]
     pub background_completion_input_through_sequence: Option<i64>,
     #[serde(default)]

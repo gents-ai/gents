@@ -168,6 +168,19 @@ pub(in crate::runtime::agent) struct RouterInputs<W> {
         Option<Arc<dyn RuntimeSnapshotObserver>>,
 }
 
+/// Dispatch is the boundary at which a request's inference settings become
+/// effective.
+///
+/// The router re-reads the active snapshot immediately before handing a
+/// request to a slot's dispatcher and re-queues it if a newer generation
+/// exists, so a request only ever enters the dispatcher of the generation that
+/// was active at that instant. A slot holds one immutable `ResolvedAgent` for
+/// its whole life, and the request's claim records that binding durably on the
+/// AgentRequest. Model, effort and service tier therefore share this one
+/// boundary; they differ only in where the value is finally applied to the
+/// wire. A request already dispatched is never rebound: a configuration change
+/// restages the slot and the retired slot drains its buffered requests with
+/// the settings they were dispatched under.
 pub(in crate::runtime::agent) async fn run_router_with_watcher<W>(
     inputs: RouterInputs<W>,
 ) -> Result<()>
@@ -335,6 +348,11 @@ where
                         resolution.agent_did
                     )
                 })?;
+                // Lean `accept_requires_router_aligned_ready_generation`: a
+                // request may only be accepted under the generation the router
+                // observed. Re-checking here, after the permit was reserved,
+                // is what makes this send the point at which the settings of
+                // this unit of work are fixed.
                 if active_snapshot_rx.has_changed().unwrap_or(false) {
                     pending_request = Some(request);
                     continue;

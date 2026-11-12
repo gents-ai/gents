@@ -410,6 +410,7 @@ pub(super) async fn profile_effort_warning(
             .await
             .ok();
     gents::inference::resolved::unsent_reasoning_effort(&backend, &profile, observation.as_ref())
+        .map(|unsent| unsent.to_string())
 }
 
 #[cfg(test)]

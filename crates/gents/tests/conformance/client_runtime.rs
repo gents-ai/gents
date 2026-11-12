@@ -59,6 +59,7 @@ fn generated_agent_readiness_cases_drive_the_production_projector() {
                 None
             },
             startup_demoted: selected_assigned && case.startup_demoted,
+            effective_inference: None,
         }];
         let mut snapshot = project_node_readiness_source(
             process_state,

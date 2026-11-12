@@ -368,6 +368,7 @@ mod tests {
                     agent_did: agent.to_string(),
                     state: AgentReadinessState::Ready,
                     reason: None,
+                    effective_inference: None,
                 })
                 .collect(),
         }

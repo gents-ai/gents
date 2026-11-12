@@ -649,6 +649,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "pack_eval_subject_cases",
             "PackEvalSubjectCases",
         ),
+        (
+            !snapshot.runtime_effective_settings_binding_cases.is_empty(),
+            "runtime_effective_settings_binding_cases",
+            "RuntimeEffectiveSettingsBindingCases",
+        ),
     ] {
         if present {
             emitted.insert((key.into(), class.into()));

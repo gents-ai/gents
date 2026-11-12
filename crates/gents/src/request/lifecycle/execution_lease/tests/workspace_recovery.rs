@@ -368,6 +368,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
             dispatcher_present: true,
             unavailable_reason: None,
             startup_demoted: false,
+            effective_inference: None,
         }],
     )
     .unwrap();

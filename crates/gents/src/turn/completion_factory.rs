@@ -39,6 +39,10 @@ pub(crate) fn agent_connection_fingerprint(agent_config: &ResolvedAgent) -> Stri
 /// configuration plus the keyed connection identity of its inference and
 /// compaction clients. `ResolvedAgent`'s Debug redacts credentials, so a
 /// key rotation is visible only through the keyed fingerprints.
+///
+/// The Debug form covers the selected model, reasoning effort and service
+/// tier, so changing any of them restages the slot. Work already dispatched
+/// drains on the retired slot under the settings it was dispatched with.
 pub(crate) fn agent_slot_fingerprint(agent_config: &ResolvedAgent) -> String {
     let compaction = agent_config.compaction_inference.as_ref().map(|inference| {
         crate::inference::admission::backend_connection_fingerprint(
@@ -183,6 +187,10 @@ fn authoritative_reasoning_capabilities(
     Some(params)
 }
 
+/// Built once per request, from the dispatching slot's immutable resolved
+/// configuration, and reused for every turn, retry and tool round trip of that
+/// request. Nothing re-reads configuration between provider calls, so a
+/// settings change takes effect on the next request, not the next call.
 pub(crate) fn loop_config_for_request(
     agent_config: &ResolvedAgent,
     preamble: String,

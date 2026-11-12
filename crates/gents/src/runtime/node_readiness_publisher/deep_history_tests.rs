@@ -141,6 +141,7 @@ async fn fresh_peer_receives_readiness_past_8192_revisions_and_keeps_following()
             agent_did: "default".into(),
             state: AgentReadinessState::Ready,
             reason: None,
+            effective_inference: None,
         }],
     };
     for generation in 1..=8_200 {
