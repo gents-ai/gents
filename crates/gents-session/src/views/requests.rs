@@ -14,6 +14,9 @@ pub enum RequestOrder {
     Newest,
     Oldest,
     Physical,
+    /// DefraDB's planner requires the node/trigger/purpose equality prefix for
+    /// this index. Cutoff twins need a separate physical-ID boundary read;
+    /// an implicit physical suffix cannot be combined with this ordering.
     TriggerRecent,
 }
 
