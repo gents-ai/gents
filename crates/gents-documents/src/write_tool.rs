@@ -578,17 +578,13 @@ mod tests {
         let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_datastore_write_cases;
         assert!(!cases.is_empty());
         for case in cases {
-            let collection = case["collection"].as_str().unwrap();
+            let collection = case.collection.as_str();
             let declaration: super::WriteToolDecl = serde_json::from_value(serde_json::json!({
                 "tool_name":"create_fixture", "collection":collection,
                 "fields":[{"name":"workspace_id"}]
             }))
             .unwrap();
-            assert_eq!(
-                declaration.validate().is_ok(),
-                case["allowed"].as_bool().unwrap(),
-                "{case}"
-            );
+            assert_eq!(declaration.validate().is_ok(), case.allowed, "{case:?}");
         }
     }
 

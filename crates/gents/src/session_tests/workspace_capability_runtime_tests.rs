@@ -185,10 +185,9 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
     .is_err());
     assert_eq!(
         target.exists(),
-        gents_lean_vocab::lean_contract_snapshot().workspace_publication_cases
-            ["effect_after_failed_reservation"]
-            .as_bool()
-            .unwrap()
+        gents_lean_vocab::lean_contract_snapshot()
+            .workspace_publication_cases
+            .effect_after_failed_reservation
     );
     let workspace = IsolatedWorkspaceDoc {
         path_capability: action.path_capability.clone(),
@@ -261,10 +260,9 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         .is_empty();
     assert_eq!(
         visible,
-        gents_lean_vocab::lean_contract_snapshot().workspace_publication_cases
-            ["aborted_document_visible"]
-            .as_bool()
-            .unwrap()
+        gents_lean_vocab::lean_contract_snapshot()
+            .workspace_publication_cases
+            .aborted_document_visible
     );
     gents_session::workspace::flush_workspace_docs(&creator_access, &docs, creator.did(), &action).await?;
     let workspace_rows = writer_access
@@ -291,10 +289,9 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         .is_empty();
     assert_eq!(
         visible_after_retry,
-        gents_lean_vocab::lean_contract_snapshot().workspace_publication_cases
-            ["revoked_writer_restored"]
-            .as_bool()
-            .unwrap(),
+        gents_lean_vocab::lean_contract_snapshot()
+            .workspace_publication_cases
+            .revoked_writer_restored,
         "duplicate workspace publication changed a revoked role"
     );
     creator_access
@@ -327,10 +324,9 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         .is_empty();
     assert_eq!(
         visible,
-        gents_lean_vocab::lean_contract_snapshot().workspace_publication_cases
-            ["revoked_reader_restored"]
-            .as_bool()
-            .unwrap()
+        gents_lean_vocab::lean_contract_snapshot()
+            .workspace_publication_cases
+            .revoked_reader_restored
     );
     creator_access
         .add_actor_relationship(
@@ -386,7 +382,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         .unwrap()
         .to_owned();
     for case in &gents_lean_vocab::lean_contract_snapshot().workspace_child_cases {
-        let actor = match case["actor"].as_str().unwrap() {
+        let actor = match case.actor.as_str() {
             "user" => user.did(),
             "creator" => creator.did(),
             "writer" => writer.did(),
@@ -395,7 +391,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             "other" => other.did(),
             name => panic!("unknown actor {name}"),
         };
-        let permission = case["permission"].as_str().unwrap();
+        let permission = case.permission.as_str();
         let node_permission = match permission {
             "read" => acp::nac::NodePermission::DocumentRead,
             "update" => acp::nac::NodePermission::DocumentUpdate,
@@ -423,23 +419,25 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             .await?;
         assert_eq!(
             decisions == [defra_node::DocumentAccessDecision::Allowed],
-            case["expected"].as_bool().unwrap(),
-            "{case}"
+            case.expected,
+            "{case:?}"
         );
     }
     let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_admission_cases;
     assert_eq!(
         cases
             .iter()
-            .find(|case| case["complete"] == true && case["occupied"] == false)
-            .unwrap()["admitted"],
+            .find(|case| case.complete && !case.occupied)
+            .unwrap()
+            .admitted,
         true
     );
     assert_eq!(
         cases
             .iter()
-            .find(|case| case["complete"] == true && case["occupied"] == true)
-            .unwrap()["admitted"],
+            .find(|case| case.complete && case.occupied)
+            .unwrap()
+            .admitted,
         false
     );
     writer_access.write("test.workspace.seal", &format!(r#"mutation {{update_IsolatedWorkspace(docID: "{}", input: {{lifecycle_state: "sealed"}}) {{_docID}}}}"#, workspace_doc)).await?;
@@ -449,7 +447,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         other.as_ref(),
     )?;
     for case in &gents_lean_vocab::lean_contract_snapshot().workspace_cleanup_cases {
-        let name = case["name"].as_str().unwrap();
+        let name = case.name.as_str();
         if name == "unauthorized" {
             writer_access.write("test.workspace.release", &format!(r#"mutation {{update_WorkspaceBinding(docID: "{}", input: {{lifecycle_state: "released"}}) {{_docID}}}}"#, binding_doc)).await?;
         }
@@ -460,11 +458,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         };
         let result =
             gents_session::workspace::runtime::claim_workspace_cleanup(access, "workspace", user.did()).await;
-        assert_eq!(
-            result.is_ok(),
-            case["begins"].as_bool().unwrap(),
-            "{case}: {result:?}"
-        );
+        assert_eq!(result.is_ok(), case.begins, "{case:?}: {result:?}");
     }
     let state = writer_access
         .execute("{ IsolatedWorkspace { lifecycle_state } }")
@@ -478,10 +472,9 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             .await;
     assert_eq!(
         stale.is_ok(),
-        gents_lean_vocab::lean_contract_snapshot().workspace_publication_cases
-            ["stale_publication_allowed"]
-            .as_bool()
-            .unwrap(),
+        gents_lean_vocab::lean_contract_snapshot()
+            .workspace_publication_cases
+            .stale_publication_allowed,
         "stale callback publication changed a cleaning workspace"
     );
     let detached = WorkspaceBindingDoc {
@@ -509,8 +502,8 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
     let allowed = gents_lean_vocab::lean_contract_snapshot()
         .workspace_datastore_write_cases
         .iter()
-        .find(|case| case["collection"] == "WorkspaceBinding")
-        .and_then(|case| case["allowed"].as_bool())
+        .find(|case| case.collection == "WorkspaceBinding")
+        .map(|case| case.allowed)
         .context("missing modeled workspace write case")?;
     assert_eq!(
         gents_loop::tool::Tool::call(&tool, args).await.is_ok(),
@@ -562,7 +555,7 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
         )
         .await?;
     for case in &gents_lean_vocab::lean_contract_snapshot().workspace_child_revocation_cases {
-        let actor = match case["actor"].as_str().unwrap() {
+        let actor = match case.actor.as_str() {
             "user" => user.did(),
             "creator" => creator.did(),
             "writer" => writer.did(),
@@ -592,8 +585,8 @@ async fn native_workspace_publication_and_exclusive_admission() -> anyhow::Resul
             .await?;
         assert_eq!(
             decisions == [defra_node::DocumentAccessDecision::Allowed],
-            case["read"].as_bool().unwrap(),
-            "{case}"
+            case.read,
+            "{case:?}"
         );
     }
     node.shutdown().await?;
@@ -723,8 +716,8 @@ async fn overlapping_native_workspace_fences_conflict(
     let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_admission_cases;
     let expected = cases
         .iter()
-        .find(|case| case["complete"] == true && case["occupied"] == false)
-        .and_then(|case| case["admitted"].as_bool())
+        .find(|case| case.complete && !case.occupied)
+        .map(|case| case.admitted)
         .context("missing modeled empty admission")?;
     assert_eq!(rows.len(), usize::from(expected));
     let [winner] = rows.as_slice() else {
