@@ -258,7 +258,7 @@ async fn check_turn_chronology(retry: bool) {
     node.shutdown().await.expect("node shutdown");
     drop(node);
     drop(fixture.home);
-    let reopened = gents_toolcalls::test_support::TestHome::create_at(&fixture.path, None)
+    let reopened = gents_inference::test_support::test_db_at(&fixture.path, None)
         .await
         .unwrap();
     assert_eq!(

@@ -7,7 +7,6 @@ use defra_node::Node as EmbeddedNode;
 use events::Bus;
 use tokio_util::sync::CancellationToken;
 
-use super::enrollment::{enrollment_base_row, local_data_plane_row, materialized_enrollment_entry};
 use super::reconcile::reconcile_peer_tick_with_replay;
 use super::remote_topology::{canonical_replicator_address, read_actual};
 use super::rows::{graphql_nullable_string_array, AppliedStateRow};
@@ -17,20 +16,20 @@ use super::sweep::{
 use super::*;
 use crate::p2p_reconcile::templates::PairingFilters;
 use crate::p2p_reconcile::{
-    single_string_eq, to_replication_filters, RemoteP2pAdmin, RemoteP2pAdminError,
-    RemoteP2pAdminResult, RemoteReplicator,
+    to_replication_filters, RemoteP2pAdmin, RemoteP2pAdminError, RemoteP2pAdminResult,
+    RemoteReplicator,
 };
 use gents_store::graphql::rows;
 
-mod desired_state;
+mod data_plane;
 
 include!("tests/support.rs");
 include!("tests/admin.rs");
-include!("tests/desired_layers.rs");
 include!("tests/enrollment_routes.rs");
 include!("tests/sweep.rs");
 include!("tests/reconnect.rs");
 include!("tests/topology.rs");
 include!("tests/applied_state.rs");
 include!("tests/convergence.rs");
+include!("tests/tick.rs");
 include!("tests/overlay_acp.rs");

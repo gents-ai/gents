@@ -124,7 +124,10 @@ impl PackInstaller {
                 Box::pin(async move {
                     for profile in bindings.values() {
                         let backend = ops::profile_backend_id(txn, owner, profile).await?;
-                        ops::guard_backend_choice_in_txn(txn, owner, None, &backend).await?;
+                        gents_inference::operations::admit_backend_choice_in_txn(
+                            txn, owner, None, &backend,
+                        )
+                        .await?;
                     }
                     Ok(())
                 })

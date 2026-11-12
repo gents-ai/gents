@@ -1,12 +1,11 @@
 use gents_documents::AgentToolConfig;
 use gents_protocol::request_lifecycle::{SessionMessageCause, SessionMessageTarget};
 use gents_protocol::session::SessionScope;
-use gents_store::config_client::ConfigAccess;
 use gents_store::graphql::escape_graphql_string;
 use gents_toolcalls::call::lifecycle::admission_fixture::{
-    published_session_message, PublishedAdmissionOptions, PublishedSessionMessage,
+    materialize_session, materialize_session_at, owner, published_session_message, set_state,
+    started, PublishedAdmissionOptions, PublishedSessionMessage,
 };
-use gents_session::session::message::target::session_target_allowed;
 use gents_session::session::message::*;
 use gents_protocol::tool_call::AwaitMode;
 use gents_store::identity::NodeIdentity as _;
@@ -509,7 +508,7 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
         },
         None,
         false,
-        &crate::session_tests::message_hop_tests::signer(&message),
+        &gents_toolcalls::call::lifecycle::admission_fixture::signer(&message),
     )
     .await
     .unwrap()
@@ -547,102 +546,9 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
 }
 
 
-pub(super) async fn started(
-    name: &str,
-) -> (
-    PublishedSessionMessage,
-    gents_protocol::row::AgentRequest,
-    gents_protocol::row::AgentRequest,
-) {
-    let message = published_session_message(PublishedAdmissionOptions {
-        name: name.to_owned(),
-        real_identity: true,
-        await_mode: AwaitMode::Background,
-        ..Default::default()
-    })
-    .await
-    .unwrap();
-    let caller = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
-        &message.admission.tool.access().unwrap(),
-        message.admission.tool.request_doc_id().unwrap(),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    let caused = gents_session::request::binding::load_agent_request_by_doc_id_with_access(
-        &message.admission.tool.access().unwrap(),
-        &message.caused_request_doc_id,
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    materialize_session(&message.admission.tool.access().unwrap(), &caused).await;
-    (message, caller, caused)
-}
-
-/// The calling Agent's signed access. Its session-message rows are Agent-owned, so
-/// ACP hides them from the node identity.
-fn owner(message: &PublishedSessionMessage) -> ConfigAccess {
-    message.admission.tool.access().unwrap()
-}
-
 /// The calling Agent's DID, which signs the session-message interrupt checks.
 fn caller_agent_did(message: &PublishedSessionMessage) -> String {
     message.admission.tool.actor().to_string()
-}
-
-/// `commit` already materializes the caused session; this is the idempotent
-/// re-check, which must read the session through its owning Agent.
-async fn materialize_session(access: &ConfigAccess, caused: &gents_protocol::row::AgentRequest) {
-    // Sessions record created_at in the canonical second-precision UTC form.
-    materialize_session_at(
-        access,
-        caused,
-        &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-    )
-    .await;
-}
-
-async fn materialize_session_at(
-    access: &ConfigAccess,
-    caused: &gents_protocol::row::AgentRequest,
-    created_at: &str,
-) {
-    let caused = caused.clone();
-    let created_at = created_at.to_owned();
-    access
-        .transact_write("test.materialize_session", move |txn| {
-            let caused = caused.clone();
-            let created_at = created_at.clone();
-            Box::pin(async move {
-                gents_session::session::ensure_session_in_txn(
-                    txn,
-                    &caused.session_id,
-                    &caused.node_did,
-                    &caused.agent_did,
-                    caused.requester_did.as_deref(),
-                    None,
-                    gents_session::request::lifecycle::materialize::created_session_provenance(&caused),
-                    &created_at,
-                )
-                .await
-            })
-        })
-        .await
-        .unwrap();
-}
-
-async fn set_state(access: &ConfigAccess, doc_id: &str, state: &str) {
-    access
-        .write(
-            "test.set_state",
-            &format!(
-                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "{state}" }}) {{ _docID }} }}"#,
-                escape_graphql_string(doc_id)
-            ),
-        )
-        .await
-        .unwrap();
 }
 
 #[tokio::test]
@@ -721,7 +627,7 @@ async fn steer_reaches_a_head_parked_for_its_backend() {
     let (message, caller, caused) = started("agent-steer-parked-head").await;
     let node = message.admission.node.clone();
     set_state(&owner(&message), &caused.doc_id, "waitingForBackend").await;
-    let cause = crate::session_tests::message_hop_tests::cause(&message, caller.request_hop).await;
+    let cause = gents_toolcalls::call::lifecycle::admission_fixture::cause(&message, caller.request_hop).await;
     let target = SessionMessageTarget {
         node_did: caused.node_did.clone(),
         agent_did: caused.agent_did.clone(),
@@ -738,7 +644,7 @@ async fn steer_reaches_a_head_parked_for_its_backend() {
         },
         None,
         AgentMessageDelivery::Steer,
-        &crate::session_tests::message_hop_tests::signer(&message),
+        &gents_toolcalls::call::lifecycle::admission_fixture::signer(&message),
     )
     .await
     .unwrap()
@@ -777,7 +683,7 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
     let node = message.admission.node.clone();
     set_state(&owner(&message), &caused.doc_id, "processing").await;
     // Staging verifies the source edge, so the cause must name the accepted tool row.
-    let cause = crate::session_tests::message_hop_tests::cause(&message, caller.request_hop).await;
+    let cause = gents_toolcalls::call::lifecycle::admission_fixture::cause(&message, caller.request_hop).await;
     let target = SessionMessageTarget {
         node_did: caused.node_did.clone(),
         agent_did: caused.agent_did.clone(),
@@ -795,7 +701,7 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
             },
             None,
             AgentMessageDelivery::Steer,
-            &crate::session_tests::message_hop_tests::signer(&message),
+            &gents_toolcalls::call::lifecycle::admission_fixture::signer(&message),
         )
         .await
         .unwrap()
@@ -831,7 +737,7 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
         },
         None,
         AgentMessageDelivery::Queue,
-        &crate::session_tests::message_hop_tests::signer(&message),
+        &gents_toolcalls::call::lifecycle::admission_fixture::signer(&message),
     )
     .await
     .unwrap()
@@ -1224,7 +1130,7 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
         body(),
         None,
         false,
-        &crate::session_tests::message_hop_tests::signer(&message),
+        &gents_toolcalls::call::lifecycle::admission_fixture::signer(&message),
     )
     .await
     .unwrap()
@@ -1238,7 +1144,7 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
         body(),
         None,
         true,
-        &crate::session_tests::message_hop_tests::signer(&message),
+        &gents_toolcalls::call::lifecycle::admission_fixture::signer(&message),
     )
     .await
     .unwrap()
@@ -1316,7 +1222,7 @@ async fn explicit_stop_drains_pending_work_and_rejects_late_admission() {
         },
         None,
         false,
-        &crate::session_tests::message_hop_tests::signer(&message),
+        &gents_toolcalls::call::lifecycle::admission_fixture::signer(&message),
     )
     .await
     .unwrap();

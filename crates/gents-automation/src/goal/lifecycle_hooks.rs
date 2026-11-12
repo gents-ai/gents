@@ -16,13 +16,14 @@ use gents_session::request::hooks::effect::{
     DocRef, Effect, Grant, Manifest, OwnedCollection, Row, Subject, Write, SESSION_CHILD_GRANTS,
 };
 use gents_session::request::hooks::hook::{Direction, Hook, Outcome, Query};
-use gents_session::request::hooks::operations::{supersede_pending, Selector};
+use gents_session::request::hooks::operations::supersede_pending;
 use gents_session::request::hooks::prepared::{Decide, Verdict};
 use gents_session::request::hooks::queue_scope::{ScopeAnswer, ScopeAnswers, ScopeFailure};
 use gents_session::request::hooks::registry::{
     AdmitShown, ClaimApplied, ClaimCandidate, QueueScopeAsk, Registry, RequestCreated,
     SessionHalt, SessionResume,
 };
+use gents_session::request::hooks::supersede::Selector;
 use gents_store::config_client::agent_session::{decode_agent_session_read, AgentSessionRowRead};
 
 pub(super) const PLUGIN: &str = "goals";
@@ -40,6 +41,7 @@ pub(super) fn manifest() -> Manifest {
             grants: SESSION_CHILD_GRANTS,
         }],
         bound: EFFECTS_PER_POINT,
+        history: vec!["Goal"],
     }
 }
 
@@ -103,7 +105,46 @@ pub(super) fn canonical_goal<'a>(
     Ok(canonical.into_iter().next())
 }
 
-/// `control.session.halt`: an interrupt or stop pauses the session's Goal.
+/// Lean `Hooks.GoalHalt.Verdict`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HaltVerdict {
+    Inactive,
+    ChangedAfter,
+    UnreadableHalt,
+    Pause(GoalState),
+}
+
+fn instant(text: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(text)
+        .ok()
+        .map(|time| time.with_timezone(&Utc))
+}
+
+/// Lean `Hooks.GoalHalt.verdict`: what a halt at `halt_at` does to a Goal in
+/// `state` last changed at `updated_at`. Both times are compared as instants.
+pub fn halt_verdict(
+    state: Option<GoalState>,
+    updated_at: Option<&str>,
+    halt_at: &str,
+) -> HaltVerdict {
+    let Some(paused) = state.and_then(|state| state.step(GoalAction::Pause)) else {
+        return HaltVerdict::Inactive;
+    };
+    let Some(halt) = instant(halt_at) else {
+        return HaltVerdict::UnreadableHalt;
+    };
+    if updated_at
+        .and_then(instant)
+        .is_some_and(|updated| halt < updated)
+    {
+        HaltVerdict::ChangedAfter
+    } else {
+        HaltVerdict::Pause(paused)
+    }
+}
+
+/// `control.session.halt`: an interrupt or stop pauses the session's Goal
+/// (Lean `Hooks.GoalHalt.decide`).
 struct PauseOnHalt {
     manifest: Manifest,
 }
@@ -117,26 +158,15 @@ impl PauseOnHalt {
             return Ok(Vec::new());
         };
         let state = goal.state().context("Goal has an unknown status")?;
-        if state.step(GoalAction::Pause).is_none() {
-            return Ok(Vec::new());
-        }
+        let now = match halt_verdict(Some(state), goal.updated_at.as_deref(), &event.at) {
+            HaltVerdict::Inactive | HaltVerdict::ChangedAfter => return Ok(Vec::new()),
+            HaltVerdict::UnreadableHalt => bail!("halt time is not RFC 3339"),
+            HaltVerdict::Pause(_) => instant(&event.at).context("halt time is not RFC 3339")?,
+        };
         anyhow::ensure!(
             goal.token_budget.is_none_or(|budget| budget > 0),
             "goal token budget must be positive"
         );
-        let now = DateTime::parse_from_rfc3339(&event.at)
-            .context("halt time is not RFC 3339")?
-            .with_timezone(&Utc);
-        // A halt redriven or re-derived after the Goal changed (a resume, a
-        // new Goal) is older than that change and does not pause it.
-        if goal
-            .updated_at
-            .as_deref()
-            .and_then(|updated| DateTime::parse_from_rfc3339(updated).ok())
-            .is_some_and(|updated| updated.with_timezone(&Utc) > now)
-        {
-            return Ok(Vec::new());
-        }
         let paused = apply_operator_status_transition(state, GoalStatus::Paused)?;
         let input = serde_json::json!({
             "objective": goal.objective,
@@ -710,6 +740,10 @@ impl TaskGoalAssignment {
             successor: request.request_id.clone(),
             successor_doc: request.doc_id.clone(),
             reason: request_head::STALE_ASSIGNMENT_REASON.into(),
+            next: Some(format!(
+                "gents automation goal show --session {}",
+                assigned.session_id
+            )),
             at: at.to_owned(),
         }));
         effects.push(crate::triggers::lifecycle_hooks::apply_goal_assignment(
@@ -916,3 +950,6 @@ pub fn register(registry: &mut Registry) {
         manifest: manifest(),
     }));
 }
+
+#[cfg(test)]
+mod resume_conformance;

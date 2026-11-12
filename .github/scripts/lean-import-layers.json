@@ -1,5 +1,5 @@
 {
-  "about": "Layer of every Lean proof module, one layer per Rust crate it specifies, bottom to top. A module may import modules of its own layer or of layers below it (transitively through `below`). A module's layer is the layer whose `directory` holds it; `modules` names the modules outside every layer directory (the root barrel and the programs beside it). The pack layer has no models yet. `placements` records modules whose layer differs from the Rust crate that owns the code, and why. `exceptions` lists upward imports that remain because removing them would change a model. Checked by check-lean-import-layers.py.",
+  "about": "Layer of every Lean proof module, one layer per Rust crate it specifies, bottom to top. A module may import modules of its own layer or of layers below it (transitively through `below`). A module's layer is the layer whose `directory` holds it; `modules` names the modules outside every layer directory (the root barrel and the programs beside it). `placements` records modules whose layer differs from the Rust crate that owns the code, and why. `exceptions` lists upward imports that remain because removing them would change a model. Checked by check-lean-import-layers.py.",
   "root": "crates/gents/proofs",
   "layers": [
     {
@@ -60,7 +60,7 @@
       "below": [
         "inference"
       ],
-      "directory": null
+      "directory": "Proofs/Pack"
     },
     {
       "name": "session",
@@ -161,6 +161,14 @@
   },
   "placements": {
     "Proofs.Automation.Hooks.GoalFence": {
+      "rust_owner": "gents-automation",
+      "reason": "Goal instance of the hook contract"
+    },
+    "Proofs.Automation.Hooks.GoalHalt": {
+      "rust_owner": "gents-automation",
+      "reason": "Goal instance of the hook contract"
+    },
+    "Proofs.Automation.Hooks.GoalResume": {
       "rust_owner": "gents-automation",
       "reason": "Goal instance of the hook contract"
     },

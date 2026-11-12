@@ -1,6 +1,7 @@
 pub mod exec;
 pub mod file_contents;
 pub mod log_rate;
+pub mod operations;
 pub mod request;
 pub mod session;
 #[cfg(any(test, feature = "test-fixtures"))]

@@ -2,26 +2,55 @@ use super::*;
 use gents_protocol::request_input::QueueDelivery;
 use gents_store::config_client::ConfigAccess;
 
+#[derive(Debug, thiserror::Error)]
+pub enum UserMessageInputError {
+    #[error("node_did is required")]
+    NodeRequired,
+    #[error("session_id is required")]
+    SessionRequired,
+    #[error("user messages require an ordinary user queue entry")]
+    QueueEntryNotOrdinary,
+    #[error("session {session_id} has conflicting active requests")]
+    ConflictingActiveRequests { session_id: String },
+    #[error("reading the session's active requests")]
+    Read(#[source] gents_store::config_client::ConfigClientError),
+    #[error("decoding the session's active requests")]
+    Decode(#[source] serde_json::Error),
+}
+
 pub async fn prepare_user_message_input(
+    access: &ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+    input: RequestInput,
+    delivery: QueueDelivery,
+) -> Result<RequestInput> {
+    Ok(queue_user_message_input(access, node_did, session_id, input, delivery).await?)
+}
+
+pub async fn queue_user_message_input(
     access: &ConfigAccess,
     node_did: &str,
     session_id: &str,
     mut input: RequestInput,
     delivery: QueueDelivery,
-) -> Result<RequestInput> {
-    anyhow::ensure!(!node_did.trim().is_empty(), "node_did is required");
-    anyhow::ensure!(!session_id.trim().is_empty(), "session_id is required");
-    anyhow::ensure!(
-        input.queue.as_ref().is_none_or(|queue| {
-            queue.source == QueueSource::User
-                && queue.policy == QueuePolicy::Append
-                && queue.key.is_none()
-                && queue.position.is_none()
-                && queue.interrupted_request_id.is_none()
-                && queue.background_completion_wake_version.is_none()
-        }),
-        "user messages require an ordinary user queue entry"
-    );
+) -> std::result::Result<RequestInput, UserMessageInputError> {
+    if node_did.trim().is_empty() {
+        return Err(UserMessageInputError::NodeRequired);
+    }
+    if session_id.trim().is_empty() {
+        return Err(UserMessageInputError::SessionRequired);
+    }
+    if !input.queue.as_ref().is_none_or(|queue| {
+        queue.source == QueueSource::User
+            && queue.policy == QueuePolicy::Append
+            && queue.key.is_none()
+            && queue.position.is_none()
+            && queue.interrupted_request_id.is_none()
+            && queue.background_completion_wake_version.is_none()
+    }) {
+        return Err(UserMessageInputError::QueueEntryNotOrdinary);
+    }
     let response = {
         use gents_protocol::document_query::{
             fields::agent_request as fields, Filter, Query, Selection,
@@ -35,11 +64,19 @@ pub async fn prepare_user_message_input(
                 RequestLifecycleState::unsettled_execution().map(RequestLifecycleState::as_str),
             ))
             .render();
-        access.read(&query).await?
+        access
+            .read(&query)
+            .await
+            .map_err(UserMessageInputError::Read)?
     };
     let rows: Vec<AgentRequestRow> =
-        serde_json::from_value(response["data"]["AgentRequest"].clone())?;
-    anyhow::ensure!(rows.len() <= 1, "session has conflicting active requests");
+        serde_json::from_value(response["data"]["AgentRequest"].clone())
+            .map_err(UserMessageInputError::Decode)?;
+    if rows.len() > 1 {
+        return Err(UserMessageInputError::ConflictingActiveRequests {
+            session_id: session_id.to_owned(),
+        });
+    }
     input.queue = Some(RequestQueue {
         source: QueueSource::User,
         policy: QueuePolicy::Append,

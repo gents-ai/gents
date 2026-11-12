@@ -1677,7 +1677,7 @@ def runtimeDefaultChoiceCase (name currentKind nextKind : String)
   Json.mkObj [("name", toJson name), ("current_kind", toJson currentKind),
     ("current_ref", toJson currentRef), ("next_kind", toJson nextKind),
     ("next_ref", toJson nextRef), ("visible_default", toJson visibleDefault),
-    ("accepted", toJson (SelfConfig.backendChoiceAllowed (fun _ => visibleDefault) current next))]
+    ("accepted", toJson (InferenceOperations.backendChoiceAllowed (fun _ => visibleDefault) current next))]
 
 def runtimeDefaultChoiceCases : List Json :=
   [runtimeDefaultChoiceCase "cross-named-default" "ChatGptCodex" "XaiGrokOAuth"

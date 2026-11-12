@@ -5117,7 +5117,13 @@ async fn backend_choice_uses_runtime_visible_default_in_agent_transaction() {
             .transact_readonly("test.account_choice.runtime_default", |txn| {
                 let (current_id, next_id) = (&current_id, &next_id);
                 Box::pin(async move {
-                    ops::guard_backend_choice_in_txn(txn, owner, Some(current_id), next_id).await
+                    gents_inference::operations::admit_backend_choice_in_txn(
+                        txn,
+                        owner,
+                        Some(current_id),
+                        next_id,
+                    )
+                    .await
                 })
             })
             .await;
@@ -5303,6 +5309,54 @@ async fn assert_account_choice_refused(
             "{error:#}"
         );
     }
+}
+
+/// Lean `InferenceOperations.profileWriteDecision`: the account choice of a
+/// profile edit is decided alike through the Agent that selects the profile
+/// and by the profile's own ID. The cases are the ones this fixture's
+/// backends stand in: the Agent's profile is on `chat-original`.
+#[tokio::test]
+async fn a_profile_edit_is_fenced_alike_through_its_agent_and_by_its_exact_id() {
+    let (fixture, _core) = account_choice_core("profile-routes").await;
+    let tools = fixture.tools(&["profile"]);
+    let tool = tools
+        .iter()
+        .find(|tool| tool.name() == gents_protocol::tool_names::CONFIG_TOOL_NAME)
+        .expect("config registered");
+    let profile_id = format!("{}:inference", fixture.agent_did());
+    let represented = [
+        ("chat-original", "same", true),
+        ("chat-b", "same_provider", false),
+        ("grok-original", "other_provider", true),
+    ];
+    let family = &gents_lean_vocab::lean_contract_snapshot().families
+        ["inference_operations_profile_write_decision"];
+    let mut replayed = 0;
+    for case in &family.cases {
+        let input = &case.input;
+        if input["actor"] != "agent" || input["next"] != "oauth_account" {
+            continue;
+        }
+        let Some((backend, _, _)) = represented.iter().find(|(_, current, is_default)| {
+            input["current"] == *current && input["is_default"] == *is_default
+        }) else {
+            continue;
+        };
+        let argv = match input["route"].as_str() {
+            Some("anchored") => json!(["profile", "preview"]),
+            Some("exact_id") => json!(["profile", "preview", "update", profile_id]),
+            other => panic!("unknown route {other:?}"),
+        };
+        let text = tool
+            .call(json!({"argv": argv, "set": {"backend_id": backend}}).to_string())
+            .await
+            .unwrap_or_else(|error| panic!("{input}: {error:#}"));
+        let answer: Value = serde_json::from_str(&text).unwrap();
+        let decision = answer.get("refusal").cloned().unwrap_or(json!("admitted"));
+        assert_eq!(decision, case.expected, "{input}: {answer}");
+        replayed += 1;
+    }
+    assert_eq!(replayed, 6);
 }
 
 #[tokio::test]
@@ -8024,7 +8078,7 @@ async fn modeled_job_policy_updates_follow_native_tools_authorization() {
         if let Err(error) = result {
             if !case.native_authorized {
                 let denied = gents_protocol::error_chain::find_map_source(
-                    error.as_ref(),
+                    &error,
                     |cause| {
                         cause
                     .downcast_ref::<gents_store::config_client::ConfigClientError>()

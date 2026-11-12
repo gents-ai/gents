@@ -5,6 +5,7 @@ pub mod agent_management;
 mod agent_queries;
 #[cfg(test)]
 use agent_management::agent_mutate;
+pub use agent_management::holds_agent_catalog;
 use agent_management::load_agent_catalog;
 pub use agent_management::ObservedAdmission;
 pub use agent_management::{
@@ -33,13 +34,13 @@ mod pack_plugins;
 mod pack_wiring;
 mod read;
 mod requests;
+pub mod tools_operation;
 #[cfg(test)]
 use requests::{agent_request, profile_request};
 use requests::{
     anchored_request, automation_request, automation_target, backend_request,
-    local_backend_create_request, mcp_service_request, outcome_text, profile_create_request,
-    profile_target_request, protect_working_agent, refuse_silent_tools_drops,
-    refuse_uninstalled_plugins, tools_request,
+    local_backend_create_request, outcome_text, profile_create_request, profile_target_request,
+    protect_working_agent, refuse_unadmitted_tools_save, tools_request,
 };
 #[cfg(test)]
 mod tests;
@@ -52,16 +53,15 @@ pub mod test_support {
     pub use super::agent_queries::{agent_inspect, node_default_agent};
     pub use super::ops::ApplyRequest;
     pub use super::requests::{
-        agent_request, anchored_request, backend_request, profile_create_request,
-        profile_request, profile_target_request, protect_working_agent, tools_request,
+        agent_request, anchored_request, backend_request, profile_create_request, profile_request,
+        profile_target_request, protect_working_agent, tools_request,
     };
 }
 
 pub use ops::{
-    apply_tool_grant_selection, guard_agent_keeps_reach, guard_backend_auth, guard_backend_choice,
-    guard_tools_keep_control, guard_tools_keep_grants, reselection_keeps_grants,
-    validate_tool_network_selection, OperatorGrants, PatchOutcome, SelfConfigCore,
-    EFFECT_TIMING_NOTE,
+    apply_tool_grant_selection, guard_agent_keeps_reach, guard_tools_keep_control,
+    guard_tools_keep_grants, reselection_keeps_grants, validate_tool_network_selection,
+    OperatorGrants, PatchOutcome, SelfConfigCore, EFFECT_TIMING_NOTE,
 };
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -335,4 +335,3 @@ pub fn self_config_tool_names(config: &SelfConfigToolConfig) -> Vec<String> {
     names.push(CONFIG_TOOL_NAME.to_string());
     names
 }
-

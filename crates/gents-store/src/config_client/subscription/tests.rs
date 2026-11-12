@@ -25,99 +25,143 @@ async fn fragmented_subscription_preserves_utf8_and_completion() {
     assert_eq!(subscription.recv().await.unwrap(), None);
 }
 
-#[tokio::test]
-async fn subscription_returns_explicit_denial_without_retrying_or_falling_back() {
-    let wire = b"event: next\ndata: {\"errors\":[{\"message\":\"opaque\",\"extensions\":{\"code\":\"PERMISSION_DENIED\"}}]}\n\n";
-    let chunks = vec![Ok::<_, reqwest::Error>(wire.to_vec())];
-    let mut subscription = GraphqlSubscription {
-        events: Some(Box::pin(futures::stream::iter(chunks).eventsource())),
-        renew_at: None,
-        ended: None,
-    };
-    let error = subscription.recv().await.unwrap_err();
-    assert!(error.is_permission_denied());
-    assert!(!super::super::retry::is_retryable_ambiguous_write(&error));
-    assert!(subscription.recv().await.unwrap().is_none());
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Arrival {
+    Data,
+    Denial,
+    ErrorsList,
+    ErrorsObject,
+    ErrorsText,
+    Complete,
+    Closed,
+    UnknownEvent,
+    Malformed,
+    LateData,
+    Silence,
 }
 
-#[tokio::test(start_paused = true)]
-async fn subscription_closes_for_reauthentication_without_waiting_for_data() {
-    let mut subscription = GraphqlSubscription {
-        events: Some(Box::pin(futures::stream::pending())),
-        renew_at: Some(Instant::now() + Duration::from_secs(1)),
-        ended: None,
-    };
-    tokio::time::advance(Duration::from_secs(1)).await;
-    assert_eq!(subscription.recv().await.unwrap(), None);
-    assert!(subscription.events.is_none());
-    assert_eq!(subscription.end(), Some(SubscriptionEnd::RenewalDue));
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Received {
+    Data,
+    Nothing,
+    Denied,
+    Rejected,
+    UnknownEvent,
+    StreamError,
+    Pending,
 }
 
-#[tokio::test(start_paused = true)]
-async fn a_taken_renewal_keeps_delivering_past_its_deadline() {
-    let wire = b"event: next\ndata: {\"data\":{\"Parcel\":[]}}\n\n";
-    let events = futures::stream::pending::<std::result::Result<Vec<u8>, reqwest::Error>>();
-    let late = futures::stream::once(async {
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        Ok::<_, reqwest::Error>(wire.to_vec())
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum End {
+    RenewalDue,
+    Completed,
+}
+
+const DEADLINE: Duration = Duration::from_secs(1);
+
+fn arriving(arrival: Arrival) -> Events {
+    let data = "event: next\ndata: {\"data\":{\"Parcel\":[]}}\n\n";
+    let errors =
+        |errors: &str| format!("event: next\ndata: {{\"data\":null,\"errors\":{errors}}}\n\n");
+    let wire = match arrival {
+        Arrival::Data | Arrival::LateData => data.as_bytes().to_vec(),
+        Arrival::Denial => {
+            errors(r#"[{"message":"opaque","extensions":{"code":"PERMISSION_DENIED"}}]"#)
+                .into_bytes()
+        }
+        Arrival::ErrorsList => errors(r#"[{"message":"opaque"}]"#).into_bytes(),
+        Arrival::ErrorsObject => errors(r#"{"message":"not a list"}"#).into_bytes(),
+        Arrival::ErrorsText => errors(r#""text""#).into_bytes(),
+        Arrival::Complete => b"event: complete\ndata: {}\n\n".to_vec(),
+        Arrival::UnknownEvent => b"event: ping\ndata: {}\n\n".to_vec(),
+        Arrival::Malformed => b"event: next\ndata: \xff\xfe\n\n".to_vec(),
+        Arrival::Closed | Arrival::Silence => Vec::new(),
+    };
+    let delay = match arrival {
+        Arrival::LateData => DEADLINE * 2,
+        _ => Duration::ZERO,
+    };
+    let chunk = futures::stream::once(async move {
+        tokio::time::sleep(delay).await;
+        Ok::<_, reqwest::Error>(wire)
     });
-    let mut subscription = GraphqlSubscription {
-        events: Some(Box::pin(late.chain(events).eventsource())),
-        renew_at: Some(Instant::now() + Duration::from_secs(1)),
-        ended: None,
-    };
-    assert_eq!(
-        subscription.take_renewal(),
-        Some(SUBSCRIPTION_RENEWAL_PERIOD)
-    );
-    assert_eq!(
-        SUBSCRIPTION_RENEWAL_PERIOD * 2,
-        crate::identity::DEFRADB_BEARER_LIFETIME
-    );
-    assert_eq!(subscription.take_renewal(), None);
-    assert_eq!(
-        subscription.recv().await.unwrap(),
-        Some(json!({"data":{"Parcel":[]}}))
-    );
-    assert_eq!(subscription.end(), None);
+    match arrival {
+        Arrival::Closed => Box::pin(
+            futures::stream::empty::<std::result::Result<Vec<u8>, reqwest::Error>>().eventsource(),
+        ),
+        Arrival::Silence => Box::pin(
+            futures::stream::pending::<std::result::Result<Vec<u8>, reqwest::Error>>()
+                .eventsource(),
+        ),
+        Arrival::Malformed => Box::pin(chunk.eventsource()),
+        _ => Box::pin(chunk.chain(futures::stream::pending()).eventsource()),
+    }
 }
 
-#[tokio::test]
-async fn runtime_completion_is_not_a_planned_renewal() {
-    let wire = b"event: complete\ndata: {}\n\n";
-    let mut subscription = GraphqlSubscription {
-        events: Some(Box::pin(
-            futures::stream::iter(vec![Ok::<_, reqwest::Error>(wire.to_vec())]).eventsource(),
-        )),
-        renew_at: Some(Instant::now() + Duration::from_secs(3600)),
-        ended: None,
-    };
-    assert_eq!(subscription.recv().await.unwrap(), None);
-    assert_eq!(subscription.end(), Some(SubscriptionEnd::Completed));
+async fn receive(subscription: &mut GraphqlSubscription) -> (Received, bool) {
+    match tokio::time::timeout(DEADLINE * 10, subscription.recv()).await {
+        Err(_) => (Received::Pending, false),
+        Ok(Ok(Some(_))) => (Received::Data, false),
+        Ok(Ok(None)) => (Received::Nothing, false),
+        Ok(Err(error)) => {
+            let retryable = super::super::retry::is_retryable_ambiguous_write(&error);
+            let received = match &error {
+                error if error.is_permission_denied() => Received::Denied,
+                ConfigClientError::SubscriptionEvent(_) => Received::UnknownEvent,
+                ConfigClientError::SubscriptionStream(_) => Received::StreamError,
+                _ => Received::Rejected,
+            };
+            (received, retryable)
+        }
+    }
 }
 
-/// `recv` rejects every envelope that carries GraphQL errors, so a caller
-/// never sees one as data.
-#[tokio::test]
-async fn subscription_never_yields_an_errors_envelope() {
-    for errors in [
-        r#"[{"message":"opaque"}]"#,
-        r#"{"message":"not a list"}"#,
-        r#""text""#,
-    ] {
-        let wire = format!("event: next\ndata: {{\"data\":null,\"errors\":{errors}}}\n\n");
+#[tokio::test(start_paused = true)]
+async fn every_receive_matches_the_lean_model() {
+    use gents_lean_vocab::families::subscription_stream_step as family;
+    let cases = tokio::task::spawn_blocking(family::cases::<Arrival, End, Received>)
+        .await
+        .unwrap();
+    for case in cases {
         let mut subscription = GraphqlSubscription {
-            events: Some(Box::pin(
-                futures::stream::iter(vec![Ok::<_, reqwest::Error>(wire.into_bytes())])
-                    .eventsource(),
-            )),
-            renew_at: None,
+            events: Some(arriving(case.input.arrival)),
+            renew_at: case.input.minted.then(|| Instant::now() + DEADLINE),
             ended: None,
         };
-        let error = subscription.recv().await.unwrap_err();
-        assert!(!error.is_permission_denied(), "{error}");
-        assert_eq!(subscription.end(), None);
+        if case.input.taken {
+            subscription.take_renewal();
+        }
+        let (received, retryable) = receive(&mut subscription).await;
+        let ended = subscription.end().map(|end| match end {
+            SubscriptionEnd::RenewalDue => End::RenewalDue,
+            SubscriptionEnd::Completed => End::Completed,
+        });
+        let (again, _) = receive(&mut subscription).await;
+        case.check(family::Step {
+            received,
+            again,
+            ended,
+            retryable,
+        });
     }
+}
+
+#[tokio::test]
+async fn renewal_offers_match_the_lean_model() {
+    gents_lean_vocab::families::subscription_stream_take_renewal::replay(|i| {
+        let mut subscription = GraphqlSubscription {
+            events: Some(arriving(Arrival::Silence)),
+            renew_at: i.minted.then(|| Instant::now() + DEADLINE),
+            ended: None,
+        };
+        if i.already_taken {
+            subscription.take_renewal();
+        }
+        subscription.take_renewal().map(|period| period.as_secs())
+    });
 }
 
 #[tokio::test]

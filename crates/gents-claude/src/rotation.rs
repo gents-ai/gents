@@ -73,6 +73,8 @@ impl Claim {
 
 /// How severe a reported limit is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(test, serde(rename_all = "snake_case"))]
 pub enum Severity {
     /// Past the early-warning threshold but still serving.
     Warning,
@@ -82,6 +84,8 @@ pub enum Severity {
 
 /// One reported limit, live until `reset_at` (epoch seconds).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(test, serde(deny_unknown_fields))]
 pub struct Limit {
     /// The window it applies to.
     pub claim: Claim,
@@ -114,6 +118,8 @@ impl Overage {
 
 /// The last observed state of one account.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(test, serde(deny_unknown_fields))]
 pub struct Account {
     /// Whether the operator enabled the account.
     pub enabled: bool,
@@ -149,6 +155,8 @@ impl Tier {
 
 /// Rotation policy.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(test, serde(deny_unknown_fields))]
 pub struct Policy {
     /// Paid extra usage is an operator choice and is off by default.
     pub allow_overage: bool,

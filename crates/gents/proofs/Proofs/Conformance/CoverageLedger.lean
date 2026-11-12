@@ -567,16 +567,16 @@ def caseCoverage : List CoverageEntry :=
       "RequestExecutionObservedCases")
       "request-execution-lease" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "account_rotation_select_cases"
-      "AccountRotationSelectCases")
+      "family"
+      "account_rotation_contracts_selection")
       "account-rotation" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "account_rotation_attempt_cases"
-      "AccountRotationAttemptCases")
+      "family"
+      "account_rotation_contracts_attempts")
       "account-rotation" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "account_rotation_observe_cases"
-      "AccountRotationObserveCases")
+      "family"
+      "account_rotation_contracts_observation")
       "account-rotation" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "request_execution_lease_cases"
@@ -923,13 +923,13 @@ def caseCoverage : List CoverageEntry :=
       "Pending the node readiness publisher rename (L3). The native consumer drives semantic state changes and idle time through a controlled writer. Durable DefraDB publication and host/process failure behavior are not exercised by this writer fixture.")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (followUpCoverage
-      "apply_reconcile_cases"
-      "ApplyReconcileCases"
+      "family"
+      "apply_reconcile_contract_cases_publish_cases"
       "Regenerate the atomic-publication witnesses and bind them to the common config transaction owner. Rows invoke ApplyReconcile.publish directly; the old per-write Rust adapter does not implement this contract.")
       "apply-reconcile" [Surface.operatorCli]
   , tagged (consumerCoverage
-      "publish_if_cases"
-      "PublishIfCases")
+      "family"
+      "apply_reconcile_contract_cases_publish_if_cases")
       "apply-reconcile" [Surface.operatorCli]
   , tagged (consumerCoverage
       "eval_outcome_cases"
@@ -1294,6 +1294,16 @@ def caseCoverage : List CoverageEntry :=
       "lifecycle_hook_must_commit_cases"
       "LifecycleHookMustCommitCases")
       "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "lifecycle_hook_rerun_cases"
+      "LifecycleHookRerunCases"
+      "Production TransactionFailure::rerun_requested classifies a ConfigClientError::rerun carried through production wrappers (anyhow context, HookError::Operation, CommitError::Other re-erased as on the plugin-job path, text rendering). The transaction owner's rerun loop itself is not driven by these cases.")
+      "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "lifecycle_hook_goal_resume_cases"
+      "LifecycleHookGoalResumeCases"
+      "Production RestageOnResume and BindResumedRoot decide every case on rows built from it; the Goal row is advanced by applying their writes. Core's request.create operation and the DefraDB host are not driven by these cases.")
+      "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "lifecycle_hook_combine_cases"
       "LifecycleHookCombineCases")
@@ -1319,6 +1329,21 @@ def caseCoverage : List CoverageEntry :=
       "lifecycle_hook_grant_cases"
       "LifecycleHookGrantCases"
       "Production validate decides every representable case. A native grant rides on its create, so a grant on a document the result does not create cannot be expressed and is checked to be invalid in the model. The DefraDB host's relationship publication and the Goals listener (goal::lifecycle_hooks::TaskGoalAssignment) are not driven by these cases.")
+      "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "lifecycle_hook_supersede_cases"
+      "LifecycleHookSupersedeCases"
+      "Production Selector::stale classifies and renders every case from row facts. The facts' extraction from AgentRequest rows (receipt verification, the parent read by document) and the retirement through the pending-supersede path are not driven by these cases.")
+      "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "lifecycle_hook_goal_halt_cases"
+      "LifecycleHookGoalHaltCases"
+      "Production halt_verdict, with its RFC 3339 parsing, decides every case. The Goal write and outcome settlement PauseOnHalt stages for a pause verdict are not driven by these cases.")
+      "lifecycle-hooks" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "lifecycle_hook_history_cases"
+      "LifecycleHookHistoryCases"
+      "Production history_permitted decides every case. The DefraDB host's refusal of an out-of-bound revision read before answering it is not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "fold_queue_cases"
@@ -1512,8 +1537,8 @@ def caseCoverage : List CoverageEntry :=
       "Tests native mailbox publication and recipient revocation; authenticated producer provenance and durable runtime notices remain separate obligations.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp
-      "node_file_request_access_cases"
-      "NodeFileRequestAccessCases"
+      "family"
+      "node_file_requests_access"
       "The retained FileInventoryRequest schema has no production publisher or consumer; this test covers native document authority, not a live peer flow.")
       "identity-permission" [Surface.runtimeInternal, Surface.api]
   , tagged (consumerWithFollowUp

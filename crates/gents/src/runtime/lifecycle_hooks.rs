@@ -1,21 +1,13 @@
 use std::sync::Arc;
 
 use gents_session::request::hooks::registry::Registry;
-use gents_store::node_extension::NodeExtensionError;
+use gents_store::config_client::GraphqlEndpoint;
+use gents_store::node_extension::ExtensionError;
 
-/// Composes a started node with the bundled lifecycle plugins. Every
-/// production node start goes through here, so a served node always runs its
-/// lifecycle points with them; this process's transactions over a GraphQL
-/// endpoint run with the same plugins.
-pub fn compose(node: &Arc<defra_node::Node>) -> Result<(), NodeExtensionError> {
-    let bundled = gents_automation::lifecycle_hooks::bundled();
-    Registry::install_for_remote_transactions(Arc::clone(&bundled));
-    Registry::attach(node, bundled)
+pub fn compose(node: &Arc<defra_node::Node>) -> Result<(), ExtensionError> {
+    gents_automation::lifecycle_hooks::attach(node)
 }
 
-/// Composes a client process that starts no node: its lifecycle transactions
-/// travel over a GraphQL endpoint and run the points in this process, so the
-/// bundled plugins are installed for them.
-pub fn compose_client() {
-    Registry::install_for_remote_transactions(gents_automation::lifecycle_hooks::bundled());
+pub fn compose_endpoint(endpoint: GraphqlEndpoint) -> Result<GraphqlEndpoint, ExtensionError> {
+    Registry::carried_by(endpoint, gents_automation::lifecycle_hooks::bundled())
 }

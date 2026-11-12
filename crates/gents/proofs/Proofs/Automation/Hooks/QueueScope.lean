@@ -1,4 +1,5 @@
 import Proofs.Session.Hooks.Claim
+import Proofs.Session.Hooks.History
 import Proofs.Automation.Hooks.GoalTask
 
 namespace Hooks
@@ -213,6 +214,25 @@ theorem tagged_partition_is_creation_stamp (assignments : List Assignment) (entr
   · simp [GoalTask.stampedScope, tagged]
   · simp [goalScope, GoalTask.tagged_scope_is_stampable assignments entry named signed tagged,
       GoalTask.stampedScope, tagged]
+
+/-- The Goals listener's declared read here is the revision history of the
+session's Goal rows (`goal::history::assignment_history_read`), which Goals
+owns and declares history for in its manifest. -/
+def goalsHistory : Unit → Option (HistoryRead Assignment) := fun _ => some ⟨"Goal", none⟩
+
+def goalsHistoryDeclared : String → List String := fun _ => ["Goal"]
+
+/-- Goals' history read is within the bound, so the bound leaves its answers
+(and `goals_partition_is_queueScope`) unchanged. -/
+theorem goals_history_read_is_bounded {α : Type} (named : List (Ref Assignment))
+    (asked : List Entry) (run : Except Refusal α) :
+    bounded goalsHistory goalsHistoryDeclared named asked
+      [(goals : Plugin Unit (List Entry) (Answers QueueScope) Assignment Unit Op)] run = run := by
+  apply bounded_reads_run_unchanged
+  intro plugin member
+  simp only [List.mem_singleton] at member
+  subst member
+  simp [readsBounded, goals, goalsHistory, goalsHistoryDeclared, historyPermitted]
 
 end QueueScope
 

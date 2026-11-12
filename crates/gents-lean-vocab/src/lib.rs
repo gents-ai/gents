@@ -255,7 +255,6 @@ pub struct LeanContractSnapshot {
     pub inference_visibility_cases: Vec<serde_json::Value>,
     pub inference_route_cases: Vec<serde_json::Value>,
     pub identity_publication_cases: Vec<serde_json::Value>,
-    pub identity_grant_set_cases: Vec<LeanGrantSetCase>,
     pub identity_grant_recipient_cases: Vec<LeanGrantRecipientCase>,
     pub identity_delegation_cases: Vec<LeanDelegationCase>,
     pub identity_agent_baseline_cases: Vec<LeanAgentBaselineCase>,
@@ -266,7 +265,6 @@ pub struct LeanContractSnapshot {
     pub identity_client_agent_creation_cases: Vec<LeanIdentityClientAgentCreationCase>,
     pub identity_client_document_creation_cases: Vec<serde_json::Value>,
     pub identity_agent_block_signing_cases: Vec<LeanAgentBlockSigningCase>,
-    pub node_file_request_access_cases: Vec<serde_json::Value>,
     pub identity_private_journal_policy: LeanPrivateJournalPolicy,
     pub mailbox_runtime_notice_case: serde_json::Value,
     pub mailbox_sweep_actor_cases: Vec<serde_json::Value>,
@@ -453,11 +451,9 @@ pub struct LeanContractSnapshot {
     pub hosted_pack_schema_cases: Vec<serde_json::Value>,
     pub hosted_pack_home_cases: Vec<serde_json::Value>,
     pub readiness_publication_cases: Vec<LeanReadinessPublicationCase>,
-    pub apply_reconcile_cases: Vec<LeanApplyReconcileCase>,
     pub eval_outcome_cases: Vec<LeanEvalOutcomeCase>,
     pub eval_document_capture_cases: Vec<LeanEvalDocumentCaptureCase>,
     pub optimization_cases: LeanOptimizationCases,
-    pub publish_if_cases: Vec<LeanPublishIfCase>,
     pub tool_policy_cases: Vec<LeanToolPolicyCase>,
     pub application_write_cases: Vec<serde_json::Value>,
     pub field_read_cases: Vec<serde_json::Value>,
@@ -501,9 +497,6 @@ pub struct LeanContractSnapshot {
     pub backend_repark_cases: Vec<LeanBackendReparkCase>,
     pub backend_parked_finalize_cases: Vec<LeanBackendParkedFinalizeCase>,
     pub backend_resumed_turn_cases: Vec<LeanBackendResumedTurnCase>,
-    pub account_rotation_select_cases: Vec<LeanAccountRotationSelectCase>,
-    pub account_rotation_attempt_cases: Vec<LeanAccountRotationAttemptCase>,
-    pub account_rotation_observe_cases: Vec<LeanAccountRotationObserveCase>,
     pub mcp_health_cases: Vec<LeanMcpHealthCase>,
     pub backend_health_cases: Vec<LeanBackendHealthCase>,
     pub backend_probe_schedule_cases: Vec<LeanBackendProbeScheduleCase>,
@@ -632,6 +625,8 @@ pub struct LeanContractSnapshot {
     pub lifecycle_hook_effect_cases: Vec<LeanLifecycleHookEffectCase>,
     pub lifecycle_hook_stage_cases: Vec<LeanLifecycleHookStageCase>,
     pub lifecycle_hook_must_commit_cases: Vec<LeanLifecycleHookMustCommitCase>,
+    pub lifecycle_hook_rerun_cases: Vec<LeanLifecycleHookRerunCase>,
+    pub lifecycle_hook_goal_resume_cases: Vec<LeanLifecycleHookGoalResumeCase>,
     pub lifecycle_hook_combine_cases: Vec<LeanLifecycleHookCombineCase>,
     pub lifecycle_hook_gate_cases: Vec<LeanLifecycleHookGateCase>,
     pub lifecycle_hook_queue_scope_cases: Vec<LeanLifecycleHookQueueScopeCase>,
@@ -639,6 +634,9 @@ pub struct LeanContractSnapshot {
     pub lifecycle_hook_owed_delivery_cases: LeanLifecycleHookOwedDeliveryCases,
     pub lifecycle_hook_admit_cases: Vec<LeanLifecycleHookAdmitCase>,
     pub lifecycle_hook_grant_cases: Vec<LeanLifecycleHookGrantCase>,
+    pub lifecycle_hook_supersede_cases: Vec<LeanLifecycleHookSupersedeCase>,
+    pub lifecycle_hook_goal_halt_cases: Vec<LeanLifecycleHookGoalHaltCase>,
+    pub lifecycle_hook_history_cases: Vec<LeanLifecycleHookHistoryCase>,
     pub follow_up_hooks: Vec<String>,
     pub coverage_ledger: Vec<LeanCoverageEntry>,
     pub feature_surface_requirements: Vec<LeanFeatureSurfaceRequirement>,
@@ -796,13 +794,6 @@ pub struct LeanIdentityClientAgentCreationCase {
     pub grants: String,
     pub expected_route: String,
     pub expected_publication: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGrantSetCase {
-    pub set: String,
-    pub permissions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2780,7 +2771,6 @@ pub struct LeanLifecycleTransitionCase {
     pub boundary: Option<String>,
 }
 
-mod account_rotation;
 mod background_transcript;
 mod canonical_execution;
 mod canonical_output;
@@ -2795,10 +2785,10 @@ mod durable_reduction;
 mod eval;
 mod event_delivery;
 pub mod family;
+mod hook_decisions;
 mod hooks;
 mod optimization;
 mod prompt_assembly;
-mod publish_if;
 mod reduction_engine;
 mod rendered_capture;
 mod request_execution_lease;
@@ -2816,7 +2806,6 @@ pub mod families {
     include!(concat!(env!("OUT_DIR"), "/families.rs"));
 }
 
-pub use account_rotation::*;
 pub use background_transcript::*;
 pub use canonical_execution::*;
 pub use canonical_output::*;
@@ -2830,10 +2819,10 @@ pub use composed_invariants::*;
 pub use durable_reduction::*;
 pub use eval::*;
 pub use event_delivery::*;
+pub use hook_decisions::*;
 pub use hooks::*;
 pub use optimization::*;
 pub use prompt_assembly::*;
-pub use publish_if::*;
 pub use reduction_engine::*;
 pub use rendered_capture::*;
 pub use request_execution_lease::*;
@@ -3010,6 +2999,14 @@ pub fn lean_lifecycle_hook_must_commit_cases() -> &'static [LeanLifecycleHookMus
     &lean_contract_snapshot().lifecycle_hook_must_commit_cases
 }
 
+pub fn lean_lifecycle_hook_rerun_cases() -> &'static [LeanLifecycleHookRerunCase] {
+    &lean_contract_snapshot().lifecycle_hook_rerun_cases
+}
+
+pub fn lean_lifecycle_hook_goal_resume_cases() -> &'static [LeanLifecycleHookGoalResumeCase] {
+    &lean_contract_snapshot().lifecycle_hook_goal_resume_cases
+}
+
 pub fn lean_lifecycle_hook_combine_cases() -> &'static [LeanLifecycleHookCombineCase] {
     &lean_contract_snapshot().lifecycle_hook_combine_cases
 }
@@ -3036,6 +3033,18 @@ pub fn lean_lifecycle_hook_admit_cases() -> &'static [LeanLifecycleHookAdmitCase
 
 pub fn lean_lifecycle_hook_grant_cases() -> &'static [LeanLifecycleHookGrantCase] {
     &lean_contract_snapshot().lifecycle_hook_grant_cases
+}
+
+pub fn lean_lifecycle_hook_supersede_cases() -> &'static [LeanLifecycleHookSupersedeCase] {
+    &lean_contract_snapshot().lifecycle_hook_supersede_cases
+}
+
+pub fn lean_lifecycle_hook_goal_halt_cases() -> &'static [LeanLifecycleHookGoalHaltCase] {
+    &lean_contract_snapshot().lifecycle_hook_goal_halt_cases
+}
+
+pub fn lean_lifecycle_hook_history_cases() -> &'static [LeanLifecycleHookHistoryCase] {
+    &lean_contract_snapshot().lifecycle_hook_history_cases
 }
 
 pub fn lean_request_execution_lease_cases() -> &'static [LeanRequestExecutionLeaseCase] {
@@ -3075,18 +3084,6 @@ pub fn lean_runtime_reconcile_case(name: &str) -> &'static LeanRuntimeReconcileC
         .unwrap_or_else(|| panic!("Lean runtime-reconcile case {name:?} was not emitted"))
 }
 
-pub fn lean_apply_reconcile_cases() -> &'static [LeanApplyReconcileCase] {
-    &lean_contract_snapshot().apply_reconcile_cases
-}
-
-pub fn lean_apply_reconcile_case(name: &str) -> &'static LeanApplyReconcileCase {
-    lean_contract_snapshot()
-        .apply_reconcile_cases
-        .iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("Lean apply-reconcile case {name:?} was not emitted"))
-}
-
 pub fn lean_eval_outcome_cases() -> &'static [LeanEvalOutcomeCase] {
     &lean_contract_snapshot().eval_outcome_cases
 }
@@ -3097,10 +3094,6 @@ pub fn lean_eval_document_capture_cases() -> &'static [LeanEvalDocumentCaptureCa
 
 pub fn lean_optimization_cases() -> &'static LeanOptimizationCases {
     &lean_contract_snapshot().optimization_cases
-}
-
-pub fn lean_publish_if_cases() -> &'static [LeanPublishIfCase] {
-    &lean_contract_snapshot().publish_if_cases
 }
 
 pub fn lean_tool_policy_cases() -> &'static [LeanToolPolicyCase] {

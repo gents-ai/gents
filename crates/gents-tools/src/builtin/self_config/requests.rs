@@ -31,10 +31,7 @@ pub fn anchored_request(
     request
 }
 #[cfg(any(test, feature = "test-fixtures"))]
-pub fn agent_request(
-    core: &SelfConfigCore,
-    patch: SelfConfigPatch,
-) -> ApplyRequest<'static> {
+pub fn agent_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<'static> {
     let id = core.agent_did().to_owned();
     let mut request = ApplyRequest::new(SelfConfigTarget::Agent, patch);
     request.resolve_unique = Box::new(move |_| Ok(id.clone()));
@@ -65,8 +62,14 @@ fn fence_profile_pick(request: &mut ApplyRequest<'static>) {
                     .map(ToOwned::to_owned),
             };
             let next_backend = ops::profile_backend_id(txn, owner, next).await?;
-            ops::guard_backend_choice_in_txn(txn, owner, current_backend.as_deref(), &next_backend)
-                .await
+            gents_inference::operations::admit_backend_choice_in_txn(
+                txn,
+                owner,
+                current_backend.as_deref(),
+                &next_backend,
+            )
+            .await?;
+            Ok(())
         })
     });
 }
@@ -142,10 +145,7 @@ fn stored_host_root(stored: &serde_json::Map<String, serde_json::Value>) -> Opti
         .root
 }
 
-pub fn tools_request(
-    core: &SelfConfigCore,
-    patch: SelfConfigPatch,
-) -> ApplyRequest<'static> {
+pub fn tools_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<'static> {
     let mut request = anchored_request(SelfConfigTarget::Tools, "tools_id", patch);
     let ceiling_root = core.process_ceiling().root.clone();
     let node_did = core.node_did().to_owned();
@@ -184,153 +184,78 @@ pub fn tools_request(
     request
 }
 /// Refuses a Tools write that newly selects a plugin this node has not
-/// installed (Lean `Configuration.pluginReferencesAvailable`). The runtime
-/// cannot build a tool surface that names one, so every agent that selects
-/// these Tools would be unavailable from its next request, the caller
-/// included when they are its own (#1796). A selection already stored is left
-/// alone, so Tools that hold one can still be edited, and a pin is not
-/// checked: an install moves a pin to its replacement before it publishes it.
-pub(super) fn refuse_uninstalled_plugins<F>(
+/// installed or that silently drops a stored setting (Lean
+/// `SelfConfig.ToolsSave.outcome`), for every agent the write targets. The
+/// refusals are the ones `tools_operation::admit_tools_save` raises for any
+/// client; here they are spelled as the config tool's calls. The sharing rule
+/// is admitted by `protect_working_agent` from the anchored agent's referrers.
+pub(super) fn refuse_unadmitted_tools_save<F>(
     mut request: ApplyRequest<'static>,
+    held: OperatorGrants,
+    allow_drop: BTreeSet<String>,
     installed: F,
 ) -> ApplyRequest<'static>
 where
     F: Fn(&str) -> Result<()> + Send + Sync + 'static,
 {
-    fn selected(document: &serde_json::Map<String, Value>) -> BTreeSet<&str> {
-        document
-            .get("integrations")
-            .and_then(|integrations| integrations.get("plugins"))
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|entry| entry.get("plugin")?.as_str())
-            .collect()
-    }
-    let guard = request.guard;
-    request.guard = Box::new(move |anchor, stored, merged| {
-        guard(anchor, stored, merged)?;
-        let before = selected(stored);
-        for plugin in selected(merged).difference(&before) {
-            if let Err(error) = installed(plugin) {
-                return Err(command::CommandGuidance {
-                    message: format!(
-                        "nothing was changed: these Tools would select plugin {plugin}, which is not installed on this node ({error:#}). An agent whose Tools select a plugin that is not installed cannot load its tools and fails its next request. Install the pack that ships {plugin}, then select it with pack wire, which pins the installed digest and writes its job block"
-                    ),
-                    next_call: json!({"argv":["pack","preview","install","<PACK>"]}),
-                }
-                .into());
-            }
-        }
-        Ok(())
-    });
-    request
-}
-
-pub(super) fn refuse_silent_tools_drops(
-    mut request: ApplyRequest<'static>,
-    allow_drop: BTreeSet<String>,
-) -> ApplyRequest<'static> {
+    use gents_protocol::operations::document::OperationActor;
+    use gents_protocol::operations::tools::ToolsOperationError;
     let groups = request
         .patch
         .iter()
         .map(|(field, _)| field.clone())
-        .filter(|field| !allow_drop.contains(field))
         .collect::<Vec<_>>();
-    let guard = request.guard;
-    request.guard = Box::new(move |anchor, stored, merged| {
-        guard(anchor, stored, merged)?;
-        let mut dropped = Vec::new();
-        for group in &groups {
-            dropped_settings(
-                group,
-                stored.get(group).unwrap_or(&Value::Null),
-                merged.get(group).unwrap_or(&Value::Null),
-                &mut dropped,
-            );
-        }
-        if dropped.is_empty() {
-            return Ok(());
-        }
-        let mut groups = dropped
-            .iter()
-            .map(|path| path.split(['.', ' ']).next().unwrap_or_default())
-            .collect::<Vec<_>>();
-        groups.dedup();
-        bail!(
-            "this would drop existing settings from your own Tools: {}. Send them back in set (see [\"tools\",\"get\"]), or to drop them on purpose add options.allow-drop = {:?}",
-            dropped.join(", "),
-            groups.join(",")
-        )
+    let validate = request.validate;
+    request.validate = Box::new(move |txn, anchor, stored, merged| {
+        let validation = validate(txn, anchor, stored, merged);
+        let admitted = tools_operation::admit_tools_save(
+            &tools_operation::ToolsActor {
+                actor: OperationActor::Agent,
+                agent_held: held.clone(),
+                holds_catalog: true,
+                installed: Some(&installed),
+            },
+            tools_operation::ToolsCandidate {
+                groups: &groups,
+                allow_drop: &allow_drop,
+                shared_acknowledged: true,
+                stored: Some(stored),
+                merged,
+                agents: &[],
+                own_control: Ok(()),
+            },
+        );
+        Box::pin(async move {
+            validation.await?;
+            match admitted? {
+                Ok(()) => Ok(()),
+                Err(ToolsOperationError::DropsSettings { dropped, groups }) => bail!(
+                    "this would drop existing settings from your own Tools: {}. Send them back in set (see [\"tools\",\"get\"]), or to drop them on purpose add options.allow-drop = {:?}",
+                    dropped.join(", "),
+                    groups.join(",")
+                ),
+                Err(ToolsOperationError::PluginNotInstalled { plugin, reason }) => {
+                    Err(command::CommandGuidance {
+                        message: format!(
+                            "nothing was changed: these Tools would select plugin {plugin}, which is not installed on this node ({reason}). An agent whose Tools select a plugin that is not installed cannot load its tools and fails its next request. Install the pack that ships {plugin}, then select it with pack wire, which pins the installed digest and writes its job block"
+                        ),
+                        next_call: json!({"argv":["pack","preview","install","<PACK>"]}),
+                    }
+                    .into())
+                }
+                Err(other) => Err(other.into()),
+            }
+        })
     });
     request
 }
 
-fn dropped_settings(path: &str, before: &Value, after: &Value, out: &mut Vec<String>) {
-    match (before, after) {
-        (Value::Null, _) => {}
-        (Value::Object(before), Value::Object(after)) => {
-            for (key, value) in before {
-                dropped_settings(
-                    &format!("{path}.{key}"),
-                    value,
-                    after.get(key).unwrap_or(&Value::Null),
-                    out,
-                );
-            }
-        }
-        (Value::Array(before), Value::Array(after)) => {
-            for item in before.iter().filter(|item| !after.contains(item)) {
-                // A plugin selection is its coordinate: the same plugin at
-                // another digest is a moved pin, and only what that entry
-                // itself loses is dropped.
-                let kept = (path == "integrations.plugins")
-                    .then(|| item.get("plugin").filter(|plugin| plugin.is_string()))
-                    .flatten()
-                    .and_then(|plugin| {
-                        after
-                            .iter()
-                            .find(|candidate| candidate.get("plugin") == Some(plugin))
-                            .map(|candidate| (plugin, candidate))
-                    });
-                match kept {
-                    Some((plugin, candidate)) => {
-                        dropped_settings(&format!("{path} item {plugin}"), item, candidate, out)
-                    }
-                    None => out.push(format!("{path} item {item}")),
-                }
-            }
-        }
-        (_, Value::Null) => out.push(path.to_owned()),
-        _ => {}
-    }
-}
 pub fn profile_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
-    let mut request = anchored_request(
+    anchored_request(
         SelfConfigTarget::InferenceProfile,
         "inference_profile_id",
         patch,
-    );
-    fence_profile_backend(&mut request);
-    request
-}
-fn fence_profile_backend(request: &mut ApplyRequest<'static>) {
-    request.validate = Box::new(|txn, _, stored, merged| {
-        Box::pin(async move {
-            let Some(next) = merged.get("backend_id").and_then(Value::as_str) else {
-                return Ok(());
-            };
-            let current = stored.get("backend_id").and_then(Value::as_str);
-            if current == Some(next) {
-                return Ok(());
-            }
-            let owner = merged
-                .get("node_did")
-                .and_then(Value::as_str)
-                .context("profile is missing node_did")?;
-            ops::guard_backend_choice_in_txn(txn, owner, current, next).await
-        })
-    });
+    )
 }
 pub fn profile_create_request(
     owner: String,
@@ -347,7 +272,6 @@ pub fn profile_create_request(
         merged.insert("node_did".into(), json!(owner));
         Ok(())
     });
-    fence_profile_backend(&mut request);
     request
 }
 pub fn profile_target_request(
@@ -376,16 +300,6 @@ pub fn profile_target_request(
 }
 pub fn backend_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
     let mut request = anchored_request(SelfConfigTarget::InferenceBackend, "backend_id", patch);
-    request.validate = Box::new(move |_, _, stored, merged| {
-        let merged = merged.clone();
-        let stored = stored.clone();
-        Box::pin(async move {
-            let backend: gents_documents::InferenceBackend =
-                decode_merged("InferenceBackend", &merged)?;
-            guard_backend_auth(&stored, &merged)?;
-            backend.validate()
-        })
-    });
     request.guard = Box::new(|_, _, merged| {
         anyhow::ensure!(
             merged.get("enabled").and_then(Value::as_bool) != Some(false),
@@ -429,34 +343,6 @@ pub(super) fn local_backend_create_request(
         merged.insert("node_did".into(), json!(owner));
         Ok(())
     });
-    request.validate = Box::new(move |_, _, _, merged| {
-        let merged = merged.clone();
-        Box::pin(async move {
-            let backend: gents_documents::InferenceBackend =
-                decode_merged("InferenceBackend", &merged)?;
-            anyhow::ensure!(
-                backend.provider_kind == gents_inference::backends::provider::BackendProviderKind::OpenAiCompatible
-                    && matches!(
-                        backend.auth,
-                        gents_documents::BackendAuth::Unauthenticated
-                    ),
-                "model-facing backend creation is limited to unauthenticated OpenAI-compatible local servers"
-            );
-            anyhow::ensure!(
-                backend.enabled,
-                "a newly created local backend must be enabled for discovery"
-            );
-            backend.validate()
-        })
-    });
-    request
-}
-pub(super) fn mcp_service_request(
-    service_id: String,
-    patch: SelfConfigPatch,
-) -> ApplyRequest<'static> {
-    let mut request = ApplyRequest::new(SelfConfigTarget::ToolServiceRegistry, patch);
-    request.resolve_unique = Box::new(move |_| Ok(service_id.clone()));
     request
 }
 pub(super) fn automation_request(
@@ -529,42 +415,5 @@ pub(super) fn automation_target(kind: &str) -> Result<SelfConfigTarget> {
         _ => {
             bail!("unknown automation kind {kind:?}; use task, schedule, trigger, or event_source")
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_moved_plugin_pin_is_a_replacement_and_a_removed_selection_is_a_drop() {
-        let dropped = |before: Value, after: Value| {
-            let mut out = Vec::new();
-            dropped_settings("integrations", &before, &after, &mut out);
-            out
-        };
-        let pinned = |digest: &str| json!({"plugin": "node/engine", "digest": digest});
-        let other = json!({"plugin": "node/other"});
-        assert_eq!(
-            dropped(
-                json!({"plugins": [pinned("sha256:a"), other]}),
-                json!({"plugins": [other, pinned("sha256:b")]}),
-            ),
-            Vec::<String>::new()
-        );
-        assert_eq!(
-            dropped(
-                json!({"plugins": [pinned("sha256:a"), other]}),
-                json!({"plugins": [pinned("sha256:b")]}),
-            ),
-            ["integrations.plugins item {\"plugin\":\"node/other\"}"]
-        );
-        assert_eq!(
-            dropped(
-                json!({"plugins": [{"plugin": "node/engine", "digest": "sha256:a", "job": {}}]}),
-                json!({"plugins": [pinned("sha256:b")]}),
-            ),
-            ["integrations.plugins item \"node/engine\".job"]
-        );
     }
 }

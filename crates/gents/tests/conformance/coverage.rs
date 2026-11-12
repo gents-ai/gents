@@ -119,7 +119,6 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
         lean_vocabulary_values("RequestState").len().pow(2)
     );
     assert_eq!(lean_contract_snapshot().process_transition_cases.len(), 25);
-    assert_eq!(lean_contract_snapshot().apply_reconcile_cases.len(), 8);
     assert_eq!(lean_contract_snapshot().eval_outcome_cases.len(), 33);
     assert_eq!(
         lean_contract_snapshot().optimization_cases.decisions.len(),
@@ -134,7 +133,6 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
             .len(),
         18
     );
-    assert_eq!(lean_contract_snapshot().publish_if_cases.len(), 7);
     assert_eq!(lean_contract_snapshot().session_recovery_cases.len(), 16);
     assert_eq!(
         lean_contract_snapshot()

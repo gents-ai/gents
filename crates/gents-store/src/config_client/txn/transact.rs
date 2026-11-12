@@ -13,11 +13,11 @@ use super::{
     embedded_phase_timeout, retry, ConfigApplyTxn, ConfigClientError, Result, TransactionFailure,
     EMBEDDED_TRANSACTION_CALLBACK_TIMEOUT,
 };
-use crate::config_client::RerunNote;
 use crate::config_client::write_telemetry::{
     ConflictSource, RetryOwner, RollbackStatus, WriteAttemptOrdinal, WriteBackend, WriteMode,
     WriteOperation, WriteOutcome,
 };
+use crate::config_client::RerunNote;
 
 #[derive(Debug)]
 pub struct TransactionFinalityError<E> {
@@ -94,23 +94,8 @@ impl TransactionMode {
         }
     }
 
-    const fn retries_generic_errors(self) -> bool {
+    const fn idempotent(self) -> bool {
         matches!(self, Self::Idempotent(_))
-    }
-
-    fn retries_callback_error<E>(self, error: &E) -> bool
-    where
-        E: TransactionFailure + ?Sized,
-    {
-        matches!(self, Self::Idempotent(_))
-            && !error
-                .config_client_error()
-                .is_some_and(|error| crate::graphql::is_storage_full(error))
-            && retry::is_transaction_storage_failure(error)
-    }
-
-    fn retries_begin_error(self, error: &ConfigClientError) -> bool {
-        self.retries_callback_error(error)
     }
 
     const fn observes_conflicts(self) -> bool {
@@ -125,11 +110,52 @@ impl TransactionMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Deserialize), serde(rename_all = "snake_case"))]
+enum AttemptStage {
+    Begin,
+    Callback,
+    Commit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Deserialize), serde(rename_all = "snake_case"))]
+enum AttemptFailure {
+    Conflict,
+    Storage,
+    StorageFull,
+    Rejection,
+}
+
+impl AttemptFailure {
+    fn of_access(error: &ConfigClientError) -> Self {
+        if error.transaction_conflict().is_some() {
+            Self::Conflict
+        } else if crate::graphql::is_storage_full(error) {
+            Self::StorageFull
+        } else if error.is_storage_failure() {
+            Self::Storage
+        } else {
+            Self::Rejection
+        }
+    }
+
+    fn of_callback<E>(error: &E) -> Self
+    where
+        E: TransactionFailure + ?Sized,
+    {
+        error
+            .config_client_error()
+            .map_or(Self::Rejection, Self::of_access)
+    }
+}
+
 struct TransactionAttemptFailure<E> {
     error: E,
+    stage: AttemptStage,
+    failure: AttemptFailure,
     conflict_source: Option<ConflictSource>,
     rollback: RollbackStatus,
-    retry_generic: bool,
     confirmed_abort: bool,
 }
 
@@ -141,26 +167,62 @@ pub(crate) fn client_signed_write_may_retry(
     !dispatched || (confirmed_abort && replay_authorized)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, derive(serde::Serialize), serde(rename_all = "snake_case"))]
 enum FailureDisposition {
     Observe,
-    Retry(std::time::Duration),
+    Retry,
     Fail,
+}
+
+fn repeatable(mode: TransactionMode, stage: AttemptStage, failure: AttemptFailure) -> bool {
+    match (stage, failure) {
+        (_, AttemptFailure::StorageFull) | (AttemptStage::Begin, AttemptFailure::Conflict) => false,
+        (_, AttemptFailure::Conflict) => true,
+        (AttemptStage::Commit, _) | (_, AttemptFailure::Storage) => mode.idempotent(),
+        (_, AttemptFailure::Rejection) => false,
+    }
 }
 
 fn failure_disposition(
     mode: TransactionMode,
-    conflict: Option<ConflictSource>,
-    retry_generic: bool,
-    attempt: u32,
-    max_attempts: u32,
+    stage: AttemptStage,
+    failure: AttemptFailure,
+    dispatched: bool,
+    confirmed_abort: bool,
+    attempts_remain: bool,
 ) -> FailureDisposition {
-    if conflict.is_some() && mode.observes_conflicts() {
+    let conflict = failure == AttemptFailure::Conflict;
+    if stage != AttemptStage::Begin && conflict && mode.observes_conflicts() {
         FailureDisposition::Observe
-    } else if attempt < max_attempts && (conflict.is_some() || retry_generic) {
-        FailureDisposition::Retry(retry::transaction_backoff(attempt - 1))
+    } else if attempts_remain
+        && repeatable(mode, stage, failure)
+        && client_signed_write_may_retry(
+            dispatched,
+            confirmed_abort && conflict,
+            matches!(mode, TransactionMode::SignedConflictRebuild),
+        )
+    {
+        FailureDisposition::Retry
     } else {
         FailureDisposition::Fail
     }
+}
+
+fn rerun_honoured(
+    mode: TransactionMode,
+    discarded: bool,
+    poisoned: bool,
+    dispatched: bool,
+) -> bool {
+    mode.reruns()
+        && discarded
+        && !poisoned
+        && client_signed_write_may_retry(
+            dispatched,
+            discarded,
+            matches!(mode, TransactionMode::SignedConflictRebuild),
+        )
 }
 
 pub(super) fn transact_owned<'a, T, E, F, B>(
@@ -221,27 +283,34 @@ where
             };
             let mut txn = match begin(operation, cancellation_rollback_scheduled).await {
                 Ok(txn) => txn,
-                Err(error) if mode.retries_begin_error(&error) && attempt < max_attempts => {
-                    let backoff = retry::transaction_backoff(attempt - 1);
-                    telemetry.record(AttemptReport {
-                        outcome: WriteOutcome::Retrying,
-                        conflict_source: ConflictSource::None,
-                        backoff: Some(backoff),
-                        affected_documents: Some(0),
-                        rollback: RollbackStatus::NotNeeded,
-                    });
-                    tokio::time::sleep(backoff).await;
-                    continue;
-                }
                 Err(error) => {
+                    let retry = failure_disposition(
+                        mode,
+                        AttemptStage::Begin,
+                        AttemptFailure::of_access(&error),
+                        false,
+                        false,
+                        attempt < max_attempts,
+                    ) == FailureDisposition::Retry;
+                    let backoff = retry.then(|| retry::transaction_backoff(attempt - 1));
                     telemetry.record(AttemptReport {
-                        outcome: WriteOutcome::Failed,
+                        outcome: if retry {
+                            WriteOutcome::Retrying
+                        } else {
+                            WriteOutcome::Failed
+                        },
                         conflict_source: ConflictSource::None,
-                        backoff: None,
+                        backoff,
                         affected_documents: Some(0),
                         rollback: RollbackStatus::NotNeeded,
                     });
-                    return Err(error.into());
+                    match backoff {
+                        Some(backoff) => {
+                            tokio::time::sleep(backoff).await;
+                            continue;
+                        }
+                        None => return Err(error.into()),
+                    }
                 }
             };
             txn.rerun_notes = rerun_notes.clone();
@@ -352,8 +421,8 @@ where
                                 return Err(E::from(txn.unconfirmed_relationships(error)));
                             }
                             Err(TransactionAttemptFailure {
-                                retry_generic: mode.retries_generic_errors()
-                                    && !crate::graphql::is_storage_full(&error),
+                                stage: AttemptStage::Commit,
+                                failure: AttemptFailure::of_access(&error),
                                 conflict_source: retry::classified_transaction_conflict(&error),
                                 error: E::from(error),
                                 rollback,
@@ -364,15 +433,13 @@ where
                     }
                 }
                 Err(error) => {
-                    let retry_generic = mode.retries_callback_error(&error);
                     let rollback = if txn.rollback_inner().await.is_ok() {
                         RollbackStatus::Succeeded
                     } else {
                         RollbackStatus::Scheduled
                     };
                     let rerun = error
-                        .config_client_error()
-                        .and_then(ConfigClientError::rerun_requested)
+                        .rerun_requested()
                         .filter(|note| !rerun_notes.contains(note))
                         .cloned();
                     if let Some(note) = rerun {
@@ -381,15 +448,12 @@ where
                         // attempt discarded, and a client-signed write already
                         // sent may be signed again only where conflict
                         // rebuilds are authorized.
-                        if mode.reruns()
-                            && discarded
-                            && !txn.embedded_poisoned()
-                            && client_signed_write_may_retry(
-                                txn.client_signed_write_dispatched.load(Ordering::Acquire),
-                                discarded,
-                                matches!(mode, TransactionMode::SignedConflictRebuild),
-                            )
-                        {
+                        if rerun_honoured(
+                            mode,
+                            discarded,
+                            txn.embedded_poisoned(),
+                            txn.client_signed_write_dispatched.load(Ordering::Acquire),
+                        ) {
                             telemetry.record(AttemptReport {
                                 outcome: WriteOutcome::Retrying,
                                 conflict_source: ConflictSource::None,
@@ -404,10 +468,11 @@ where
                         }
                     }
                     Err(TransactionAttemptFailure {
+                        stage: AttemptStage::Callback,
+                        failure: AttemptFailure::of_callback(&error),
                         conflict_source: retry::classified_transaction_conflict(&error),
                         error,
                         rollback,
-                        retry_generic,
                         confirmed_abort: matches!(rollback, RollbackStatus::Succeeded),
                     })
                 }
@@ -418,9 +483,10 @@ where
             };
             let TransactionAttemptFailure {
                 error,
+                stage,
+                failure,
                 conflict_source,
                 rollback,
-                retry_generic,
                 confirmed_abort,
             } = failure;
             if txn.embedded_poisoned() {
@@ -439,14 +505,14 @@ where
             if sibling_contention {
                 max_attempts = max_attempts.max(retry::REQUEST_SIBLING_MAX_ATTEMPTS);
             }
-            if !client_signed_write_may_retry(
+            match failure_disposition(
+                mode,
+                stage,
+                failure,
                 txn.client_signed_write_dispatched.load(Ordering::Acquire),
-                confirmed_abort && conflict_source.is_some(),
-                matches!(mode, TransactionMode::SignedConflictRebuild),
+                confirmed_abort,
+                attempt < max_attempts,
             ) {
-                max_attempts = attempt;
-            }
-            match failure_disposition(mode, conflict_source, retry_generic, attempt, max_attempts) {
                 FailureDisposition::Observe => {
                     telemetry.record(AttemptReport {
                         outcome: WriteOutcome::ConflictObserved,
@@ -457,11 +523,11 @@ where
                     });
                     return Ok(TransactionOutcome::ConflictObserved);
                 }
-                FailureDisposition::Retry(backoff) => {
+                FailureDisposition::Retry => {
                     let backoff = if sibling_contention {
                         retry::request_sibling_backoff(attempt - 1)
                     } else {
-                        backoff
+                        retry::transaction_backoff(attempt - 1)
                     };
                     telemetry.record(AttemptReport {
                         outcome: WriteOutcome::Retrying,
@@ -502,12 +568,70 @@ pub(super) fn expect_committed<T>(outcome: TransactionOutcome<T>) -> T {
 
 #[cfg(test)]
 mod conformance {
-    use super::client_signed_write_may_retry;
+    use gents_lean_vocab::families;
+
+    use super::{
+        client_signed_write_may_retry, failure_disposition, rerun_honoured, AttemptFailure,
+        AttemptStage, FailureDisposition, IdempotentTransactionRetry, TransactionMode,
+    };
+
+    #[derive(Debug, Clone, Copy, serde::Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum Mode {
+        ConflictRetry,
+        SignedConflictRebuild,
+        SingleAttempt,
+        Idempotent,
+        IdempotentFiveAttempts,
+        ObserveConflict,
+    }
+
+    impl Mode {
+        fn production(self) -> TransactionMode {
+            match self {
+                Self::ConflictRetry => TransactionMode::ConflictRetry,
+                Self::SignedConflictRebuild => TransactionMode::SignedConflictRebuild,
+                Self::SingleAttempt => TransactionMode::SingleAttempt,
+                Self::Idempotent => {
+                    TransactionMode::Idempotent(IdempotentTransactionRetry::Standard)
+                }
+                Self::IdempotentFiveAttempts => {
+                    TransactionMode::Idempotent(IdempotentTransactionRetry::FiveAttempts)
+                }
+                Self::ObserveConflict => TransactionMode::ObserveConflict,
+            }
+        }
+    }
 
     #[test]
     fn client_signed_write_retries_match_the_lean_model() {
-        gents_lean_vocab::families::identity_configuration_client_signed_write_may_retry::replay(
-            |i| client_signed_write_may_retry(i.dispatched, i.confirmed_abort, i.replay_authorized),
-        );
+        families::identity_configuration_client_signed_write_may_retry::replay(|i| {
+            client_signed_write_may_retry(i.dispatched, i.confirmed_abort, i.replay_authorized)
+        });
+    }
+
+    #[test]
+    fn failed_attempt_dispositions_match_the_lean_model() {
+        families::transaction_replay_disposition::replay::<
+            FailureDisposition,
+            AttemptFailure,
+            Mode,
+            AttemptStage,
+        >(|i| {
+            failure_disposition(
+                i.mode.production(),
+                i.stage,
+                i.failure,
+                i.dispatched,
+                i.confirmed_abort,
+                i.attempts_remain,
+            )
+        });
+        families::transaction_replay_rerun_honoured::replay::<Mode>(|i| {
+            rerun_honoured(i.mode.production(), i.discarded, i.poisoned, i.dispatched)
+        });
+        families::transaction_replay_mode_max_attempts::replay::<Mode>(|i| {
+            u64::from(i.mode.production().max_attempts())
+        });
     }
 }

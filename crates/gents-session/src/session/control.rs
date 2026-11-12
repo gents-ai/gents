@@ -1,6 +1,52 @@
 use anyhow::{Context, Result};
 use defra_node::Node as EmbeddedNode;
+use gents_protocol::operations::session::ResumeBlocker;
 use std::sync::Arc;
+
+#[derive(thiserror::Error)]
+pub enum SessionControlError {
+    #[error("session control requires exact session and node identity")]
+    IdentityRequired,
+    #[error("session control is supported only on this node; remote control is unavailable")]
+    RemoteNode { node_did: String },
+    #[error("cannot control a missing or differently scoped session")]
+    SessionNotFound { session_id: String },
+    #[error("session resume actor unavailable")]
+    ActorUnavailable,
+    #[error("session resume requires a managed Agent signer")]
+    ManagedSignerRequired,
+    #[error("{blocker}; retry resume after it settles")]
+    ResumeBlocked {
+        session_id: String,
+        blocker: ResumeBlocker,
+    },
+    #[error("cannot verify retained process ownership before resume; retry after runtime recovery")]
+    ProcessOwnershipUnverifiable {
+        session_id: String,
+        #[source]
+        source: anyhow::Error,
+    },
+    #[error(transparent)]
+    Access(#[from] gents_store::config_client::ConfigClientError),
+    #[error(transparent)]
+    Failed(#[from] anyhow::Error),
+}
+
+impl gents_store::config_client::TransactionFailure for SessionControlError {
+    fn config_client_error(&self) -> Option<&gents_store::config_client::ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::Failed(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Debug for SessionControlError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, formatter)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct SessionStopReceipt {
@@ -16,15 +62,15 @@ pub async fn stop_session_with_access(
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-) -> Result<SessionStopReceipt> {
-    anyhow::ensure!(
-        !session_id.trim().is_empty() && !node_did.trim().is_empty(),
-        "session stop requires exact session and node identity"
-    );
-    anyhow::ensure!(
-        node.node_identity_did() == Some(node_did),
-        "session stop is supported only on this node; remote control is unavailable"
-    );
+) -> Result<SessionStopReceipt, SessionControlError> {
+    if session_id.trim().is_empty() || node_did.trim().is_empty() {
+        return Err(SessionControlError::IdentityRequired);
+    }
+    if node.node_identity_did() != Some(node_did) {
+        return Err(SessionControlError::RemoteNode {
+            node_did: node_did.to_owned(),
+        });
+    }
     let node_did = node_did.to_owned();
     let session_id = session_id.to_owned();
     let requester_did = requester_did.map(str::to_owned);
@@ -42,7 +88,9 @@ pub async fn stop_session_with_access(
                         requester_did.as_deref(),
                     )
                     .await?
-                    .context("cannot stop a missing or differently scoped session")?;
+                    .ok_or_else(|| SessionControlError::SessionNotFound {
+                        session_id: session_id.clone(),
+                    })?;
                 let stopped_at = chrono::Utc::now().to_rfc3339();
                 let response = {
                     use gents_protocol::document_query::{
@@ -62,11 +110,14 @@ pub async fn stop_session_with_access(
                     )
                     .await?
                 };
-                anyhow::ensure!(
-                    response.pointer("/data/update_AgentSession/0/_docID")
-                        == Some(&serde_json::Value::String(owner.doc_id.clone())),
-                    "session stop latch was not committed to the selected session"
-                );
+                if response.pointer("/data/update_AgentSession/0/_docID")
+                    != Some(&serde_json::Value::String(owner.doc_id.clone()))
+                {
+                    return Err(anyhow::anyhow!(
+                        "session stop latch was not committed to the selected session"
+                    )
+                    .into());
+                }
                 let drained_request_ids =
                     crate::request::lifecycle::queue::drain_all_pending_session_requests_in_txn(
                         txn,
@@ -127,15 +178,15 @@ pub async fn resume_session_with_access(
     session_id: &str,
     requester_did: Option<&str>,
     executions: Arc<dyn SessionExecutionWitness>,
-) -> Result<()> {
-    anyhow::ensure!(
-        !session_id.trim().is_empty() && !node_did.trim().is_empty(),
-        "session resume requires exact session and node identity"
-    );
-    anyhow::ensure!(
-        node.node_identity_did() == Some(node_did),
-        "session resume is supported only on this node; remote control is unavailable"
-    );
+) -> Result<(), SessionControlError> {
+    if session_id.trim().is_empty() || node_did.trim().is_empty() {
+        return Err(SessionControlError::IdentityRequired);
+    }
+    if node.node_identity_did() != Some(node_did) {
+        return Err(SessionControlError::RemoteNode {
+            node_did: node_did.to_owned(),
+        });
+    }
     let node_did = node_did.to_owned();
     let session_id = session_id.to_owned();
     let requester_did = requester_did.map(str::to_owned);
@@ -145,12 +196,14 @@ pub async fn resume_session_with_access(
         None => {
             let actor = access
                 .actor_did()
-                .context("session resume actor unavailable")?;
-            anyhow::ensure!(
-                node.node_identity_did() == Some(actor.as_str()),
-                "session resume requires a managed Agent signer"
-            );
-            Arc::new(gents_store::identity::RegisteredIdentity::from_registered_did(actor, None)?)
+                .ok_or(SessionControlError::ActorUnavailable)?;
+            if node.node_identity_did() != Some(actor.as_str()) {
+                return Err(SessionControlError::ManagedSignerRequired);
+            }
+            Arc::new(
+                gents_store::identity::RegisteredIdentity::from_registered_did(actor, None)
+                    .map_err(anyhow::Error::from)?,
+            )
         }
     };
     access
@@ -169,7 +222,9 @@ pub async fn resume_session_with_access(
                         requester_did.as_deref(),
                     )
                     .await?
-                    .context("cannot resume a missing or differently scoped session")?;
+                    .ok_or_else(|| SessionControlError::SessionNotFound {
+                        session_id: session_id.clone(),
+                    })?;
                 ensure_session_executions_settled_in_txn(
                     txn,
                     &node_did,
@@ -196,11 +251,14 @@ pub async fn resume_session_with_access(
                     )
                     .await?
                 };
-                anyhow::ensure!(
-                    response.pointer("/data/update_AgentSession/0/_docID")
-                        == Some(&serde_json::Value::String(owner.doc_id.clone())),
-                    "session resume latch was not cleared on the selected session"
-                );
+                if response.pointer("/data/update_AgentSession/0/_docID")
+                    != Some(&serde_json::Value::String(owner.doc_id.clone()))
+                {
+                    return Err(anyhow::anyhow!(
+                        "session resume latch was not cleared on the selected session"
+                    )
+                    .into());
+                }
                 stage_session_resume_in_txn(txn, identity.as_ref(), &node_did, &session_id).await
             })
         })
@@ -214,12 +272,15 @@ pub(crate) async fn stage_session_resume_in_txn(
     identity: &dyn gents_store::identity::NodeIdentity,
     node_did: &str,
     session_id: &str,
-) -> Result<()> {
-    anyhow::ensure!(
-        !session_request_unsettled_in_txn(txn, node_did, session_id).await?,
-        "session work is still settling; retry resume after the interrupted request terminates"
-    );
-    crate::request::hooks::points::session_resume(txn, identity, node_did, session_id).await
+) -> Result<(), SessionControlError> {
+    if session_request_unsettled_in_txn(txn, node_did, session_id).await? {
+        return Err(SessionControlError::ResumeBlocked {
+            session_id: session_id.to_owned(),
+            blocker: ResumeBlocker::Requests,
+        });
+    }
+    crate::request::hooks::points::session_resume(txn, identity, node_did, session_id).await?;
+    Ok(())
 }
 
 /// Whether any request of the session is an execution that has not settled
@@ -262,7 +323,11 @@ async fn ensure_session_executions_settled_in_txn(
     session_id: &str,
     requester_did: Option<&str>,
     executions: &Arc<dyn SessionExecutionWitness>,
-) -> Result<()> {
+) -> Result<(), SessionControlError> {
+    let blocked = |blocker| SessionControlError::ResumeBlocked {
+        session_id: session_id.to_owned(),
+        blocker,
+    };
     let scope = gents_protocol::session::session_scope_filter(node_did, session_id, requester_did);
     let unsettled = session_tool_call_exists_in_txn(
         txn,
@@ -271,12 +336,13 @@ async fn ensure_session_executions_settled_in_txn(
         ),
     )
     .await?;
-    anyhow::ensure!(!unsettled, "session-owned request or tool execution is still settling; retry agent_resume after agent_session_read reports completion");
+    if unsettled {
+        return Err(blocked(ResumeBlocker::ToolCalls));
+    }
 
-    anyhow::ensure!(
-        !session_doc_exists_in_txn(txn, &scope, executions.active_tool_call_doc_ids()).await?,
-        "session-owned background execution is still active; retry agent_resume after it settles"
-    );
+    if session_doc_exists_in_txn(txn, &scope, executions.active_tool_call_doc_ids()).await? {
+        return Err(blocked(ResumeBlocker::BackgroundExecutions));
+    }
     let witness = Arc::clone(executions);
     let unexited = tokio::task::spawn_blocking(move || {
         Ok::<_, anyhow::Error>(
@@ -292,17 +358,16 @@ async fn ensure_session_executions_settled_in_txn(
     })
     .await
     .context("inspecting retained process ownership before resume")?
-    .context(
-        "cannot verify retained process ownership before resume; retry after runtime recovery",
-    )?;
-    anyhow::ensure!(
-        !session_doc_exists_in_txn(txn, &scope, unexited).await?,
-        "session-owned process has not been observed exited; retry agent_resume after settlement"
-    );
-    anyhow::ensure!(
-        !session_doc_exists_in_txn(txn, &scope, executions.in_flight_job_row_ids()).await?,
-        "session-owned plugin job is still executing; retry agent_resume after its step settles"
-    );
+    .map_err(|source| SessionControlError::ProcessOwnershipUnverifiable {
+        session_id: session_id.to_owned(),
+        source,
+    })?;
+    if session_doc_exists_in_txn(txn, &scope, unexited).await? {
+        return Err(blocked(ResumeBlocker::Processes));
+    }
+    if session_doc_exists_in_txn(txn, &scope, executions.in_flight_job_row_ids()).await? {
+        return Err(blocked(ResumeBlocker::PluginJobs));
+    }
     Ok(())
 }
 

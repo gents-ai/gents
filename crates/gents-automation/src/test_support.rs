@@ -1,3 +1,5 @@
+pub mod goal_hook;
+
 use std::sync::Arc;
 
 use anyhow::Result;

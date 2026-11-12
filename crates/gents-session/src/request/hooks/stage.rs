@@ -33,9 +33,13 @@ pub enum HookError {
         operation: String,
     },
     #[error(
-        "no lifecycle plugins are attached to this node, or installed for this process's GraphQL transactions; the runtime was composed without them"
+        "no lifecycle plugins are attached to this node; start it through gents::runtime::node_start, which composes it"
     )]
     NotInstalled,
+    #[error(
+        "this GraphQL access carries no lifecycle plugins; build its endpoint with gents::runtime::lifecycle_hooks::compose_endpoint"
+    )]
+    EndpointNotComposed,
     #[error("lifecycle plugin declared an unreadable query: {0}")]
     Query(String),
     #[error(
@@ -61,6 +65,14 @@ pub enum HookError {
     /// A declared revision read failed; the caller sees the read's own error.
     #[error(transparent)]
     Revisions(anyhow::Error),
+    /// Lean `Hooks.out_of_bound_history_is_not_answered`.
+    #[error(
+        "lifecycle plugin {plugin} declared a history read of {collection}, which is answered only for a collection its manifest declares history for and that it owns, or for a document the event names"
+    )]
+    UnboundedHistory {
+        plugin: &'static str,
+        collection: String,
+    },
     #[error("lifecycle plugin declared the unknown core read {0}")]
     UnknownRead(String),
     /// A declared named core read failed; the caller sees the read's own error.
@@ -88,14 +100,20 @@ pub struct ApplyFailure {
 }
 
 /// Lean `Hooks.Host`: what core supplies. `select` answers a declared query
-/// from the transaction, `allowed` is document ACP for the transaction's
+/// of the plugin with `manifest`, at an event that names `named`, from the
+/// transaction, `allowed` is document ACP for the transaction's
 /// actor, `actor` is that actor, and `apply` applies one plugin's validated
 /// effects in the order returned, all or none (Lean `Hooks.applyEffects`).
 #[async_trait::async_trait]
 pub trait Host: Send + Sync {
     fn actor(&self) -> Option<String>;
 
-    async fn select(&self, query: &Query) -> Result<Vec<Row>, HookError>;
+    async fn select(
+        &self,
+        manifest: &Manifest,
+        named: &[DocRef],
+        query: &Query,
+    ) -> Result<Vec<Row>, HookError>;
 
     async fn allowed(&self, access: Access, doc: &DocRef) -> Result<bool, HookError>;
 
@@ -115,7 +133,7 @@ where
 {
     let mut rows = Vec::new();
     for query in plugin.reads(event) {
-        rows.push(host.select(&query).await?);
+        rows.push(host.select(plugin.manifest(), &[], &query).await?);
     }
     Ok(rows)
 }

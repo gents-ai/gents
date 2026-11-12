@@ -7,6 +7,7 @@ import Proofs.Store.StorageObservation
 import Proofs.Store.StorageWriteGate
 import Proofs.Store.NativeCompletion
 import Proofs.Store.NativeClaimLifetime
+import Proofs.Inference.Operations
 import Proofs.Inference.Scheduling
 import Proofs.Session.Request
 import Proofs.Session.RequestExecutionLease
@@ -38,7 +39,9 @@ import Proofs.Session.Compaction
 import Proofs.Session.PromptAssembly
 import Proofs.Shared.RenderedCapture
 import Proofs.Session.DurableLineage
+import Proofs.Session.Operations
 import Proofs.Clients.QueuedSteering
+import Proofs.Clients.OperationsDelivery
 import Proofs.Runtime.RuntimeReconcile
 import Proofs.P2P.PairingReconcile
 import Proofs.Documents.ScopeTemplates
@@ -95,6 +98,8 @@ import Proofs.Tools.SelfConfig
 import Proofs.Tools.SelfConfig.Selection
 import Proofs.Tools.Identity
 import Proofs.Documents.Skills
+import Proofs.Documents.DocumentOperations
+import Proofs.Tools.SelfConfig.ToolsSave
 import Proofs.Tools.EditMatch
 import Proofs.Automation.EventDelivery
 import Proofs.Conformance.EventDelivery

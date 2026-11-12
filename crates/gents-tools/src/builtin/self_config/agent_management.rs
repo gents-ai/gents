@@ -8,8 +8,9 @@ use gents_documents::{Agent, AgentContext, BashTools, BuiltInTools, FileTools, H
 use gents_protocol::agent_identity::{AgentAdmissionFacts, AgentIdentityBinding};
 use gents_protocol::operations::agent::{
     AgentCreateInput, AgentCreateOperation, AgentOperationError, AgentOperationKind, AgentOutcome,
-    AgentReceipt, NextCall,
+    AgentReceipt,
 };
+use gents_protocol::operations::NextCall;
 use gents_session::session::output_render::Ordered;
 use gents_store::config_client::{ConfigAccess, ConfigClientError, TransactionFailure};
 
@@ -150,6 +151,20 @@ async fn admission_facts(
         }
     };
     Ok(AdmissionFacts::Observed(facts))
+}
+
+/// Whether whoever `access` signs for holds the agent catalog
+/// (`nodes manage_agents`) on `node_did`, as native ACP answers.
+pub async fn holds_agent_catalog(access: &ConfigAccess, node_did: &str) -> Result<bool> {
+    Ok(
+        match admission_facts(access, node_did, &[])
+            .await
+            .map_err(anyhow::Error::from)?
+        {
+            AdmissionFacts::Observed(facts) => facts.catalog,
+            AdmissionFacts::Unrestricted => true,
+        },
+    )
 }
 
 /// Lean `SelfConfig.Actor` from the facts, and the catalog's default.

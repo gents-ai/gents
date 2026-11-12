@@ -222,264 +222,114 @@ fn transport_addresses_equivalent(left: &str, right: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use gents_lean_vocab::families::pairing_owned_diff_cases as family;
+
+    use super::super::templates::{equality_filter, filter_conditions};
     use super::*;
 
-    fn s(xs: &[&str]) -> BTreeSet<String> {
-        xs.iter().map(|x| x.to_string()).collect()
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum LiveForm {
+        Scalar,
+        Predicate,
     }
 
-    fn filter(field: &str, value: &str) -> PairingFilters {
-        let mut f = PairingFilters::new();
-        f.insert(
-            "AgentRequest".to_string(),
-            super::super::templates::equality_filter(field, value),
-        );
-        f
+    #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum OpKind {
+        Install,
+        Teardown,
     }
 
-    #[test]
-    fn live_scalar_equality_is_equivalent_to_rich_predicate_projection() {
-        let pairing_filter = filter("did", "did:key:phone");
-        let desired = PairingDesired {
-            replicator_addresses: s(&["addr1"]),
-            replicator_filter: pairing_filter.clone(),
-            ..Default::default()
-        };
-        let actual = PairingActual {
-            replicator_addresses: s(&["addr1"]),
-            replicator_filters: BTreeMap::from([(
-                "addr1".to_string(),
-                BTreeMap::from([(
-                    "AgentRequest".to_string(),
-                    defra_p2p_adapter::ReplicationFilter::eq(
-                        "did",
-                        serde_json::json!("did:key:phone"),
-                    ),
-                )]),
-            )]),
-            ..Default::default()
-        };
-        let applied = PairingApplied {
-            replicator_addresses: s(&["addr1"]),
-            replicator_filter: pairing_filter,
-        };
-
-        assert!(compute_owned_pairing_diff(&desired, &actual, &applied).is_empty());
+    fn texts(addresses: &[family::Address]) -> BTreeSet<String> {
+        addresses
+            .iter()
+            .map(|address| address.text.clone())
+            .collect()
     }
 
-    #[test]
-    fn live_scalar_equality_with_wrong_value_reinstalls() {
-        let pairing_filter = filter("did", "did:key:phone");
-        let desired = PairingDesired {
-            replicator_addresses: s(&["addr1"]),
-            replicator_filter: pairing_filter.clone(),
-            ..Default::default()
-        };
-        let actual = PairingActual {
-            replicator_addresses: s(&["addr1"]),
-            replicator_filters: BTreeMap::from([(
-                "addr1".to_string(),
-                BTreeMap::from([(
-                    "AgentRequest".to_string(),
-                    defra_p2p_adapter::ReplicationFilter::eq(
-                        "did",
-                        serde_json::json!("did:key:someone-else"),
-                    ),
-                )]),
-            )]),
-            ..Default::default()
-        };
-        let applied = PairingApplied {
-            replicator_addresses: s(&["addr1"]),
-            replicator_filter: pairing_filter,
-        };
+    fn filters(scopes: &[family::Scope]) -> PairingFilters {
+        scopes
+            .iter()
+            .map(|scope| {
+                (
+                    scope.collection.clone(),
+                    equality_filter(&scope.field, &scope.value),
+                )
+            })
+            .collect()
+    }
 
-        assert_eq!(
-            compute_owned_pairing_diff(&desired, &actual, &applied),
-            vec![
-                DiffOp::TeardownReplicator("addr1".into()),
-                DiffOp::InstallReplicator("addr1".into()),
-            ]
-        );
+    fn reported(live: &family::LiveScope<LiveForm>) -> defra_p2p_adapter::ReplicationFilter {
+        let scope = &live.scope;
+        match live.form {
+            LiveForm::Scalar => defra_p2p_adapter::ReplicationFilter::eq(
+                scope.field.as_str(),
+                serde_json::Value::String(scope.value.clone()),
+            ),
+            LiveForm::Predicate => defra_p2p_adapter::ReplicationFilter::predicate(
+                filter_conditions(&equality_filter(&scope.field, &scope.value))
+                    .expect("an equality scope has conditions"),
+            ),
+        }
     }
 
     #[test]
-    fn identity_only_live_observation_does_not_churn_dialable_route() {
-        let peer = "6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb";
-        let desired_address = format!("127.0.0.1:56091/p2p/{peer}");
-        let desired = PairingDesired {
-            replicator_addresses: s(&[&desired_address]),
-            ..Default::default()
-        };
-        let actual = PairingActual {
-            replicator_addresses: s(&[&desired_address]),
-            replicator_observed_addresses: BTreeMap::from([(
-                desired_address.clone(),
-                s(&[&format!("iroh://{peer}")]),
-            )]),
-            ..Default::default()
-        };
-        let applied = PairingApplied {
-            replicator_addresses: s(&[&desired_address]),
-            ..Default::default()
-        };
-
-        assert!(compute_owned_pairing_diff(&desired, &actual, &applied).is_empty());
-    }
-
-    #[test]
-    fn stale_dialable_live_observation_reinstalls_same_peer_route() {
-        let peer = "6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb";
-        let stale_address = format!("127.0.0.1:56090/p2p/{peer}");
-        let desired_address = format!("127.0.0.1:56091/p2p/{peer}");
-        let desired = PairingDesired {
-            replicator_addresses: s(&[&desired_address]),
-            ..Default::default()
-        };
-        let actual = PairingActual {
-            replicator_addresses: s(&[&desired_address]),
-            replicator_observed_addresses: BTreeMap::from([(
-                desired_address.clone(),
-                s(&[&stale_address]),
-            )]),
-            ..Default::default()
-        };
-        let applied = PairingApplied {
-            replicator_addresses: s(&[&desired_address]),
-            ..Default::default()
-        };
-
-        assert_eq!(
-            compute_owned_pairing_diff(&desired, &actual, &applied),
-            vec![
-                DiffOp::TeardownReplicator(desired_address.clone()),
-                DiffOp::InstallReplicator(desired_address),
-            ]
-        );
-    }
-
-    #[test]
-    fn changing_scoped_did_reinstalls_replicator() {
-        let desired = PairingDesired {
-            replicator_addresses: s(&["addr1"]),
-            replicator_filter: filter("node_did", "did:key:bob"),
-            ..Default::default()
-        };
-        let actual = PairingActual {
-            replicator_addresses: s(&["addr1"]),
-            ..Default::default()
-        };
-        let applied = PairingApplied {
-            replicator_addresses: s(&["addr1"]),
-            replicator_filter: filter("node_did", "did:key:alice"),
-        };
-        assert_eq!(
-            compute_owned_pairing_diff(&desired, &actual, &applied),
-            vec![
-                DiffOp::TeardownReplicator("addr1".into()),
-                DiffOp::InstallReplicator("addr1".into()),
-            ]
-        );
-    }
-
-    #[test]
-    fn unchanged_filter_does_not_reinstall_replicator() {
-        let f = filter("node_did", "did:key:bob");
-        let desired = PairingDesired {
-            replicator_addresses: s(&["addr1"]),
-            replicator_filter: f.clone(),
-            ..Default::default()
-        };
-        let actual = PairingActual {
-            replicator_addresses: s(&["addr1"]),
-            replicator_filters: BTreeMap::from([(
-                "addr1".to_string(),
-                to_replication_filters(&f).expect("representable filter"),
-            )]),
-            ..Default::default()
-        };
-        let applied = PairingApplied {
-            replicator_addresses: s(&["addr1"]),
-            replicator_filter: f,
-        };
-        assert!(compute_owned_pairing_diff(&desired, &actual, &applied).is_empty());
-    }
-
-    #[test]
-    fn changed_replicator_collections_reinstall_replicator() {
-        let desired = PairingDesired {
-            replicator_addresses: s(&["addr1"]),
-            replicator_collections: s(&["Network", "AgentRequest"]),
-            ..Default::default()
-        };
-        let actual = PairingActual {
-            replicator_addresses: s(&["addr1"]),
-            replicator_collections: BTreeMap::from([("addr1".to_string(), s(&["AgentRequest"]))]),
-            ..Default::default()
-        };
-        let applied = PairingApplied {
-            replicator_addresses: s(&["addr1"]),
-            ..Default::default()
-        };
-        assert_eq!(
-            compute_owned_pairing_diff(&desired, &actual, &applied),
-            vec![
-                DiffOp::TeardownReplicator("addr1".into()),
-                DiffOp::InstallReplicator("addr1".into()),
-            ]
-        );
-    }
-
-    #[test]
-    fn matching_replicator_collections_do_not_reinstall() {
-        let desired = PairingDesired {
-            replicator_addresses: s(&["addr1"]),
-            replicator_collections: s(&["Network"]),
-            ..Default::default()
-        };
-        let actual = PairingActual {
-            replicator_addresses: s(&["addr1"]),
-            replicator_collections: BTreeMap::from([("addr1".to_string(), s(&["Network"]))]),
-            ..Default::default()
-        };
-        let applied = PairingApplied {
-            replicator_addresses: s(&["addr1"]),
-            ..Default::default()
-        };
-        assert!(compute_owned_pairing_diff(&desired, &actual, &applied).is_empty());
-    }
-
-    #[test]
-    fn unobservable_replicator_collections_do_not_reinstall() {
-        let desired = PairingDesired {
-            replicator_addresses: s(&["addr1"]),
-            ..Default::default()
-        };
-        let actual = PairingActual {
-            replicator_addresses: s(&["addr1"]),
-            ..Default::default()
-        };
-        let applied = PairingApplied {
-            replicator_addresses: s(&["addr1"]),
-            ..Default::default()
-        };
-        assert!(compute_owned_pairing_diff(&desired, &actual, &applied).is_empty());
-    }
-
-    #[test]
-    fn owned_diff_tears_down_only_applied_extras() {
-        let desired = PairingDesired::default();
-        let actual = PairingActual {
-            replicator_addresses: s(&["/ip4/manual/p2p/p", "/ip4/managed/p2p/p"]),
-            ..Default::default()
-        };
-        let applied = PairingApplied {
-            replicator_addresses: s(&["/ip4/managed/p2p/p"]),
-            ..Default::default()
-        };
-        assert_eq!(
-            compute_owned_pairing_diff(&desired, &actual, &applied),
-            vec![DiffOp::TeardownReplicator("/ip4/managed/p2p/p".into())]
-        );
+    fn owned_pairing_diff_matches_lean() {
+        family::replay::<LiveForm, OpKind>(|input| {
+            let desired = PairingDesired {
+                replicator_addresses: texts(&input.desired.routes),
+                replicator_collections: input.desired.collections.iter().cloned().collect(),
+                replicator_filter: filters(&input.desired.filter),
+                template_ids: BTreeSet::new(),
+            };
+            let applied = PairingApplied {
+                replicator_addresses: texts(&input.applied.routes),
+                replicator_filter: filters(&input.applied.filter),
+            };
+            let mut actual = PairingActual::default();
+            for route in &input.live {
+                let address = route.address.text.clone();
+                actual.replicator_addresses.insert(address.clone());
+                if let Some(collections) = &route.collections {
+                    actual
+                        .replicator_collections
+                        .insert(address.clone(), collections.iter().cloned().collect());
+                }
+                if route.filter_unobserved {
+                    actual.replicator_filters_unobserved.insert(address.clone());
+                }
+                if let Some(scopes) = &route.filter {
+                    actual.replicator_filters.insert(
+                        address.clone(),
+                        scopes
+                            .iter()
+                            .map(|live| (live.scope.collection.clone(), reported(live)))
+                            .collect(),
+                    );
+                }
+                if let Some(observed) = &route.observed {
+                    actual
+                        .replicator_observed_addresses
+                        .insert(address, texts(observed));
+                }
+            }
+            family::Output {
+                ops: compute_owned_pairing_diff(&desired, &actual, &applied)
+                    .into_iter()
+                    .map(|op| match op {
+                        DiffOp::InstallReplicator(address) => family::Op {
+                            kind: OpKind::Install,
+                            address,
+                        },
+                        DiffOp::TeardownReplicator(address) => family::Op {
+                            kind: OpKind::Teardown,
+                            address,
+                        },
+                    })
+                    .collect(),
+                live_matches: owned_pairing_live_matches(&desired, &actual, &applied),
+            }
+        });
     }
 }

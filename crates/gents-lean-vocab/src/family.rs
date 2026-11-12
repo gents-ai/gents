@@ -4,7 +4,6 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// The checked-in wire shapes `build.rs` generates the family types from.
 const CHECKED_IN_SCHEMA: &str = include_str!("../families.schema.json");
 
 #[derive(Debug, Deserialize)]
@@ -49,9 +48,6 @@ fn assert_shape_is_checked_in(kind: &str, key: &str) {
     );
 }
 
-/// Checks that the production enum and the Lean enum have the same wire names:
-/// every Lean name decodes into the production enum, and `all` encodes to
-/// exactly the Lean names.
 pub fn replay_vocabulary<T>(key: &str, all: &[T])
 where
     T: Serialize + DeserializeOwned + PartialEq + std::fmt::Debug,
@@ -78,21 +74,66 @@ where
     assert_eq!(all.len(), lean.len(), "vocabulary {key} repeats a value");
 }
 
-/// Decodes each Lean input into the owner's types, runs the owner and compares
-/// its encoded result with the model's.
+pub struct Case<I, O> {
+    pub input: I,
+    key: String,
+    raw_input: Value,
+    expected: Value,
+    output: std::marker::PhantomData<fn(O)>,
+}
+
+impl<I, O> Case<I, O>
+where
+    O: Serialize,
+{
+    pub fn check(&self, actual: O) {
+        let actual = serde_json::to_value(actual).expect("family output encodes");
+        assert_eq!(
+            actual, self.expected,
+            "family {} input {}",
+            self.key, self.raw_input
+        );
+    }
+}
+
+pub fn cases<I, O>(key: &str) -> Vec<Case<I, O>>
+where
+    I: DeserializeOwned,
+{
+    assert_shape_is_checked_in("functions", key);
+    let family = &crate::lean_contract_snapshot().families[key];
+    assert!(!family.cases.is_empty(), "family {key} has no cases");
+    family
+        .cases
+        .iter()
+        .map(|case| Case {
+            input: serde_json::from_value(case.input.clone())
+                .unwrap_or_else(|error| panic!("family {key} input {}: {error}", case.input)),
+            key: key.to_owned(),
+            raw_input: case.input.clone(),
+            expected: case.expected.clone(),
+            output: std::marker::PhantomData,
+        })
+        .collect()
+}
+
+pub fn recode<T, U>(value: &T) -> U
+where
+    T: Serialize,
+    U: DeserializeOwned,
+{
+    let wire = serde_json::to_value(value).expect("family value encodes");
+    serde_json::from_value(wire.clone())
+        .unwrap_or_else(|error| panic!("family value {wire} does not recode: {error}"))
+}
+
 pub fn replay<I, O>(key: &str, run: impl Fn(&I) -> O)
 where
     I: DeserializeOwned,
     O: Serialize,
 {
-    assert_shape_is_checked_in("functions", key);
-    let family = &crate::lean_contract_snapshot().families[key];
-    assert!(!family.cases.is_empty(), "family {key} has no cases");
-    for case in &family.cases {
-        let input: I = serde_json::from_value(case.input.clone())
-            .unwrap_or_else(|error| panic!("family {key} input {}: {error}", case.input));
-        let actual = serde_json::to_value(run(&input)).expect("family output encodes");
-        assert_eq!(actual, case.expected, "family {key} input {}", case.input);
+    for case in cases::<I, O>(key) {
+        case.check(run(&case.input));
     }
 }
 
@@ -104,9 +145,23 @@ mod tests {
 
     const SCHEMA_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/families.schema.json");
 
+    fn render(schema: &BTreeMap<&str, BTreeMap<&str, Value>>) -> String {
+        let kinds: Vec<String> = schema
+            .iter()
+            .map(|(kind, families)| {
+                let families: Vec<String> = families
+                    .iter()
+                    .map(|(key, shape)| format!("  {key:?}: {shape}"))
+                    .collect();
+                format!(" {kind:?}: {{\n{}\n }}", families.join(",\n"))
+            })
+            .collect();
+        format!("{{\n{}\n}}\n", kinds.join(",\n"))
+    }
+
     #[test]
     fn family_schema_is_current() {
-        let live = serde_json::to_string_pretty(&live_schema()).unwrap() + "\n";
+        let live = render(&live_schema());
         if std::env::var_os("GENTS_WRITE_FAMILY_SCHEMA").is_some() {
             fs::write(SCHEMA_PATH, &live).unwrap();
             return;

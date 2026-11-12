@@ -101,10 +101,13 @@ impl ServedRuntimeHome {
 
     /// The User's endpoint in the shape `ClientCore::operator_access` builds.
     pub fn user_endpoint(&self) -> GraphqlEndpoint {
-        GraphqlEndpoint::as_principal(self.graphql(), self.user.did())
-            .with_client_signing_capability(self.user.client_signing_capability().unwrap())
-            .unwrap()
-            .with_client_signed_agent_creates()
+        gents::runtime::lifecycle_hooks::compose_endpoint(
+            GraphqlEndpoint::as_principal(self.graphql(), self.user.did())
+                .with_client_signing_capability(self.user.client_signing_capability().unwrap())
+                .unwrap()
+                .with_client_signed_agent_creates(),
+        )
+        .unwrap()
     }
 
     pub fn user_access(&self) -> ConfigAccess {

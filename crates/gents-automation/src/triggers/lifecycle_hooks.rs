@@ -212,6 +212,7 @@ pub fn register(registry: &mut Registry) {
             name: "triggers",
             owns: Vec::new(),
             bound: FIRES_PER_REQUEST,
+            history: Vec::new(),
         },
     }));
     registry

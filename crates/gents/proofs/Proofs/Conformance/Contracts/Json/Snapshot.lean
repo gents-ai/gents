@@ -1,11 +1,13 @@
 import Proofs.Conformance.Functions.Automation
 import Proofs.Conformance.Functions.Clients
+import Proofs.Conformance.Functions.Inference
 import Proofs.Conformance.Functions.Runtime
 import Proofs.Conformance.Functions.Session
 import Proofs.Conformance.Functions.ToolCalls
 import Proofs.Conformance.Functions.Tools
 import Proofs.Conformance.Functions.Shared
 import Proofs.Conformance.Functions.Store
+import Proofs.Conformance.Pack
 import Proofs.Conformance.StorageWriteGate
 import Proofs.Conformance.StorageWriteGateAdmission
 import Proofs.Conformance.StorageWriteGateStreamWaiter
@@ -46,7 +48,11 @@ import Proofs.Store.Identity.EnrollmentGrantConformance
 import Proofs.Store.Identity.ClientAgentCreation
 import Proofs.Store.Identity.AgentBlockSigning
 import Proofs.ToolCalls.Identity.ClientAgentJournal
-import Proofs.Store.Identity.NodeFileRequests
+import Proofs.Conformance.Identity.NodeFileRequests
+import Proofs.Conformance.PairingOwnedDiff
+import Proofs.Conformance.PairingDataPlane
+import Proofs.Conformance.PairingTick
+import Proofs.Conformance.SchemaObligations
 import Proofs.Store.Identity.MailboxAccess
 import Proofs.Store.Identity.WorkspaceAndFileRequests
 import Proofs.Store.Identity.PackPlacementReaders
@@ -85,7 +91,12 @@ import Proofs.Conformance.FileReviewRoutes
 import Proofs.Conformance.FileInventory
 import Proofs.Conformance.TaskHooks
 import Proofs.Conformance.Hooks
+import Proofs.Conformance.HookDecisions
 import Proofs.Conformance.StoreEncryptionUpgrade
+import Proofs.Conformance.TransactionReplay
+import Proofs.Conformance.SubscriptionStream
+import Proofs.Conformance.ReceiptRecovery
+import Proofs.Conformance.HomeRetirement
 import Proofs.Conformance.Contracts.Json.Core
 import Proofs.Conformance.Contracts.Json.Runtime
 import Proofs.Conformance.Contracts.Json.CatalogRefresh
@@ -125,6 +136,7 @@ import Proofs.Conformance.Contracts.Json.CompactionProjectionJoin
 import Proofs.Conformance.Contracts.Json.CompactionCanonicalProjection
 import Proofs.Conformance.CompletionRetry.Contracts
 import Proofs.Conformance.AccountRotation.Contracts
+import Proofs.Conformance.AccountStore
 import Proofs.Conformance.Triggers.Contracts
 import Proofs.Conformance.EventGroups
 import Proofs.Conformance.ClientShell.Contracts
@@ -556,6 +568,10 @@ def snapshotRequestCasesJson : String :=
       ++ Conformance.HooksContracts.stageCasesJson ++ ","
     ++ "\"lifecycle_hook_must_commit_cases\":"
       ++ Conformance.HooksContracts.mustCommitCasesJson ++ ","
+    ++ "\"lifecycle_hook_rerun_cases\":"
+      ++ Conformance.HooksContracts.rerunCasesJson ++ ","
+    ++ "\"lifecycle_hook_goal_resume_cases\":"
+      ++ Conformance.HooksContracts.goalResumeCasesJson ++ ","
     ++ "\"lifecycle_hook_combine_cases\":"
       ++ Conformance.HooksContracts.combineCasesJson ++ ","
     ++ "\"lifecycle_hook_gate_cases\":"
@@ -570,6 +586,12 @@ def snapshotRequestCasesJson : String :=
       ++ Conformance.HooksContracts.admitCasesJson ++ ","
     ++ "\"lifecycle_hook_grant_cases\":"
       ++ Conformance.HooksContracts.grantCasesJson ++ ","
+    ++ "\"lifecycle_hook_supersede_cases\":"
+      ++ Conformance.HookDecisions.supersedeCasesJson ++ ","
+    ++ "\"lifecycle_hook_goal_halt_cases\":"
+      ++ Conformance.HookDecisions.goalHaltCasesJson ++ ","
+    ++ "\"lifecycle_hook_history_cases\":"
+      ++ Conformance.HookDecisions.historyCasesJson ++ ","
 
 def snapshotSessionCasesJson : String :=
   ""
@@ -656,8 +678,6 @@ def snapshotIdentityCasesJson : String :=
   ""
     ++ "\"identity_publication_cases\":"
       ++ Identity.PublicationConformance.casesJson ++ ","
-    ++ "\"identity_grant_set_cases\":"
-      ++ Identity.GrantSetsConformance.setCasesJson ++ ","
     ++ "\"identity_grant_recipient_cases\":"
       ++ Identity.GrantSetsConformance.recipientCasesJson ++ ","
     ++ "\"identity_delegation_cases\":"
@@ -700,7 +720,6 @@ def snapshotIdentityCasesJson : String :=
     ++ "\"workspace_publication_cases\":" ++ Identity.WorkspaceAndFileRequests.workspacePublicationCasesJson ++ ","
     ++ "\"workspace_quickstart_cases\":" ++ Identity.WorkspaceAndFileRequests.workspaceQuickstartCasesJson ++ ","
     ++ "\"mailbox_native_policy\":" ++ Identity.MailboxAccess.nativeCasesJson ++ ","
-    ++ "\"node_file_request_access_cases\":" ++ Identity.NodeFileRequests.requestAccessCasesJson ++ ","
     ++ "\"callback_workspace_actor_cases\":" ++ Identity.WorkspaceAndFileRequests.callbackActorCasesJson ++ ","
     ++ "\"session_input_edit_native_discovery_cases\":" ++ Identity.SessionInputEdit.discoveryCasesJson ++ ","
     ++ "\"session_input_edit_native_claim_cases\":" ++ Identity.SessionInputEdit.claimCasesJson ++ ","
@@ -827,16 +846,12 @@ def snapshotClientCasesJson : String :=
       ++ jsonArray (runtimeReconcileCases.map runtimeReconcileCaseJson) ++ ","
     ++ "\"client_agent_readiness_cases\":"
       ++ jsonArray (clientAgentReadinessCases.map clientAgentReadinessCaseJson) ++ ","
-    ++ "\"apply_reconcile_cases\":"
-      ++ ApplyReconcile.ContractCases.applyReconcileCasesJson ++ ","
     ++ "\"eval_outcome_cases\":"
       ++ Conformance.Eval.evalOutcomeCasesJson ++ ","
     ++ "\"eval_document_capture_cases\":"
       ++ Conformance.Eval.evalDocumentCaptureCasesJson ++ ","
     ++ "\"optimization_cases\":"
       ++ Conformance.Optimization.optimizationCasesJson ++ ","
-    ++ "\"publish_if_cases\":"
-      ++ ApplyReconcile.ContractCases.publishIfCasesJson ++ ","
     ++ "\"tool_policy_cases\":"
       ++ toolPolicyCasesJson ++ ","
     ++ "\"application_write_cases\":" ++ applicationWriteCasesJson ++ ","
@@ -925,12 +940,6 @@ def snapshotRuntimeCasesJson : String :=
     ++ "\"backend_resumed_turn_cases\":" ++ Conformance.BackendWake.resumedTurnCasesJson ++ ","
     ++ "\"completion_retry_cases\":"
       ++ CompletionRetry.Contracts.casesJson ++ ","
-    ++ "\"account_rotation_select_cases\":"
-      ++ AccountRotation.Contracts.selectCasesJson ++ ","
-    ++ "\"account_rotation_attempt_cases\":"
-      ++ AccountRotation.Contracts.attemptCasesJson ++ ","
-    ++ "\"account_rotation_observe_cases\":"
-      ++ AccountRotation.Contracts.observeCasesJson ++ ","
     ++ "\"boundaries\":"
       ++ boundariesJson ++ ","
     ++ "\"deviations\":"

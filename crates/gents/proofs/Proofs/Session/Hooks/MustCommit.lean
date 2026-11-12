@@ -283,4 +283,42 @@ theorem refused_staging_lags_core (host : Host Core Q Doc Val Op)
     · simp [refused]
   simp [mustCommit, transition, stageDropping, none]
 
+/-- How an error travels from a must-commit point to the store's transaction
+owner: an application error's added context, an owner variant with its own
+message and the error as its source, an owner variant that forwards display
+and `source()` past what it wraps (`#[error(transparent)]`), or a rendering of
+the error into new text. -/
+inductive Carrier where
+  | context
+  | sourced
+  | transparent
+  | stringified
+  deriving DecidableEq, Repr
+
+/-- Whether the transaction owner still finds a must-commit point's request to
+run the transition again (`stageDropping`'s native premise) after the error
+travelled `path`, outermost last.
+
+Decision 2026-11-11, maintainer-approved: the request rides one level below
+the store's error (`RerunRequest` as the source of
+`ConfigClientError::RerunRequested`), so a transparent owner variant, which
+hides only the error it wraps, cannot hide it; owner enums answer the store's
+classifier (`TransactionFailure::rerun_requested`) from their own variants.
+Only rendering the error into text loses it, and no path from
+`request.terminal.stage` or `control.session.halt` to the transaction owner
+renders it. -/
+def rerunSurvives (path : List Carrier) : Bool :=
+  path.all (· != .stringified)
+
+theorem rerun_survives_every_owner_wrapping (path : List Carrier)
+    (kept : Carrier.stringified ∉ path) : rerunSurvives path = true := by
+  simp only [rerunSurvives, List.all_eq_true, bne_iff_ne, ne_eq]
+  intro carrier member same
+  exact kept (same ▸ member)
+
+theorem stringified_rerun_is_lost (path : List Carrier)
+    (rendered : Carrier.stringified ∈ path) : rerunSurvives path = false := by
+  simp only [rerunSurvives, List.all_eq_false]
+  exact ⟨_, rendered, by simp⟩
+
 end Hooks

@@ -57,13 +57,10 @@ impl ConfigCommandTool {
                 );
                 let patch = parse_patch(&rest, target)?;
                 let mut request = match target {
-                    SelfConfigTarget::Tools => refuse_uninstalled_plugins(
-                        refuse_silent_tools_drops(tools_request(&core, patch), allow_drop),
-                        {
-                            let plugins = self.plugins.clone();
-                            move |plugin: &str| plugins.installed_record(plugin).map(|_| ())
-                        },
-                    ),
+                    SelfConfigTarget::Tools => refuse_unadmitted_tools_save(tools_request(&core, patch), core.held_grants().clone(), allow_drop, {
+                        let plugins = self.plugins.clone();
+                        move |plugin: &str| plugins.installed_record(plugin).map(|_| ())
+                    }),
                     SelfConfigTarget::InferenceBackend => backend_request(patch),
                     _ => unreachable!("bound resource"),
                 };
@@ -145,26 +142,41 @@ impl ConfigCommandTool {
         if verb == "discover" {
             anyhow::ensure!(argv.len() == 2, "backend discover requires one BACKEND_ID");
             let backend_id = &argv[1];
-            let matches = gents_inference::backends::registry::list_enabled_backends_for_agent(
-                &self.node,
+            let access = self.core.access()?;
+            let refused =
+                |error: gents_protocol::operations::inference::InferenceOperationError| {
+                    let next = error.recovery(
+                        gents_protocol::operations::inference::InferenceDocument::Backend,
+                        "discover",
+                    );
+                    patch::inference_refusal(false, &error, next)
+                };
+            let target = match gents_inference::operations::discovery_target(
+                &access,
                 &self.node_did,
+                backend_id,
             )
-            .await?
-            .into_iter()
-            .filter(|backend| backend.backend_id == *backend_id)
-            .collect::<Vec<_>>();
-            anyhow::ensure!(
-                matches.len() == 1,
-                "no unique enabled backend with ID {backend_id:?}; inspect config backend list"
-            );
-            let backend = &matches[0];
-            if backend.provider_kind
-                != gents_inference::backends::provider::BackendProviderKind::OpenAiCompatible
-                || !matches!(backend.auth, gents_documents::BackendAuth::Unauthenticated)
+            .await
             {
-                let observation = self
-                    .backend_observation_view(backend_id, backend.provider_kind)
-                    .await?;
+                Ok(target) => target,
+                Err(error) => return refused(error),
+            };
+            let contacts = target.answer()
+                == gents_protocol::operations::inference::DiscoveryAnswer::ContactsProvider;
+            if contacts {
+                self.execution.enter_mutation();
+            }
+            let discovery = match target.resolve(&access).await {
+                Ok(discovery) => discovery,
+                Err(error) => return refused(error),
+            };
+            let backend = &discovery.backend;
+            let observation = gents_inference::backends::registry::scoped_observation_view(
+                discovery.observation.as_ref(),
+                &self.node_did,
+                backend.provider_kind,
+            )?;
+            if !contacts {
                 return ordered! {
                     "backend_id": backend_id,
                     "refreshed": false,
@@ -176,15 +188,6 @@ impl ConfigCommandTool {
                 }
                 .pretty();
             }
-            self.execution.enter_mutation();
-            let observation =
-                gents_inference::backends::registry::discover_shared_backend(&self.node, backend)
-                    .await?;
-            let observation = gents_inference::backends::registry::scoped_observation_view(
-                Some(&observation),
-                &self.node_did,
-                backend.provider_kind,
-            )?;
             return ordered! {
                 "backend_id": backend_id,
                 "refreshed": true,

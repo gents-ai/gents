@@ -394,15 +394,13 @@ impl PairingStateStore for GraphqlPairingStateStore {
             .map(|row| {
                 data_plane_desired_from_pairing_row(row, &entry.endpoint, self.identity.did())
             })
-            .transpose()?
-            .flatten();
+            .transpose()?;
         let data_plane = first_row::<PairingStateRow>(&response, "DataPlanePairingDesired")?
             .and_then(|row| local_data_plane_row(row, &entry, self.identity.did()))
             .map(|row| {
                 data_plane_desired_from_pairing_row(row, &entry.endpoint, self.identity.did())
             })
-            .transpose()?
-            .flatten();
+            .transpose()?;
         Ok(LoadedPairingDesired {
             state: merge_layered_desired(
                 self.identity.did(),

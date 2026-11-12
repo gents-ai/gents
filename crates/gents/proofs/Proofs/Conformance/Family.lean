@@ -13,8 +13,18 @@ wire name: the name its `conformance_vocabulary` function gives it, or
 `wireName` of the constructor when it has none. -/
 inductive Schema where
   | bool
+  | nat
+  | string
+  | option (item : Schema)
+  | list (item : Schema)
   | enum (name : String) (values : List (String × String))
   | struct (name : String) (fields : List (String × Schema))
+
+/-- A family whose inputs are chosen by hand because its domain is not finite.
+Its key, wire shape, JSON and snapshot entry are derived like a function's. -/
+structure Family (ι ο : Type) where
+  inputs : List ι
+  model : ι → ο
 
 /-- camelCase to snake_case; a run of capitals is one word (`MCPHealth` is
 `mcp_health`). -/
@@ -34,14 +44,22 @@ def wireKey (declaration : Name) : String :=
 
 partial def Schema.wire : Schema → Json
   | .bool => "bool"
+  | .nat => "nat"
+  | .string => "string"
+  | .option item => Json.mkObj [("option", item.wire)]
+  | .list item => Json.mkObj [("list", item.wire)]
   | .enum name values =>
       Json.mkObj [("enum", name), ("values", Json.arr (values.map (Json.str ·.2)).toArray)]
   | .struct name fields =>
       Json.mkObj [("struct", name), ("fields", Json.arr (fields.map fun (field, schema) =>
         Json.arr #[Json.str (wireName field), schema.wire]).toArray)]
 
-/-- Rewrites derived `ToJson` output to wire names. -/
+/-- Rewrites derived `ToJson` output to wire names. Derived `ToJson` omits an
+absent optional field; here it is an explicit `null`, so a decoder can require
+every field. -/
 partial def Schema.encode : Schema → Json → Json
+  | .option item, value => if value.isNull then value else item.encode value
+  | .list item, .arr values => Json.arr (values.map item.encode)
   | .enum _ values, .str value => Json.str ((values.lookup value).getD value)
   | .struct _ fields, value =>
       Json.mkObj (fields.map fun (field, schema) =>
@@ -86,11 +104,26 @@ private def enumSchemaTerm (name : Name) (constructors : List Name) : MetaM (TSy
     `(($(quote constructor.getString!), $wire))
   `(Schema.enum $(quote name.getString!) [$values,*])
 
-private def schemaTerm (type : Expr) : MetaM (TSyntax `term) := do
+private partial def schemaTerm (type : Expr) : MetaM (TSyntax `term) := do
   let type ← whnfR type
-  if type.isConstOf ``Bool then return ← `(Schema.bool)
-  let (name, constructors) ← enumConstructors type
-  enumSchemaTerm name constructors
+  match type with
+  | .const ``Bool _ => `(Schema.bool)
+  | .const ``Nat _ => `(Schema.nat)
+  | .const ``String _ => `(Schema.string)
+  | .app (.const ``Option _) item => do `(Schema.option $(← schemaTerm item))
+  | .app (.const ``List _) item => do `(Schema.list $(← schemaTerm item))
+  | .const name _ =>
+      if isStructure (← getEnv) name then
+        let constructor := getStructureCtor (← getEnv) name
+        let fields ← forallTelescope constructor.type fun parameters _ =>
+          parameters.mapM fun parameter => do
+            let field := (← parameter.fvarId!.getUserName).toString
+            `(($(quote field), $(← schemaTerm (← inferType parameter))))
+        `(Schema.struct $(quote name.getString!) [$fields,*])
+      else
+        let (name, constructors) ← enumConstructors type
+        enumSchemaTerm name constructors
+  | other => throwError "conformance type {other} has no wire shape"
 
 /-- Every value of a finite type, in declaration order. -/
 private def allTerm (type : Expr) : MetaM (TSyntax `term) := do
@@ -144,11 +177,44 @@ private def familyTerm (declaration : Name) : TermElabM (TSyntax `term) := do
       , ("output", Schema.wire $output)
       , ("cases", Json.arr (List.toArray $cases)) ])
 
-/-- The snapshot entries of every `conformance_function` in the import closure. -/
+def Family.json {ι ο : Type} [ToJson ι] [ToJson ο]
+    (input output : Schema) (family : Family ι ο) : Json :=
+  Json.mkObj
+    [ ("input", input.wire)
+    , ("output", output.wire)
+    , ("cases", Json.arr (family.inputs.map fun i => Json.mkObj
+        [ ("input", input.encode (toJson i))
+        , ("expected", output.encode (toJson (family.model i))) ]).toArray) ]
+
+initialize familyExtension : SimplePersistentEnvExtension Name (Array Name) ←
+  registerSimplePersistentEnvExtension
+    { addEntryFn := Array.push
+    , addImportedFn := fun imported => imported.foldl (· ++ ·) #[] }
+
+syntax (name := conformanceFamily) "conformance_family" : attr
+
+initialize registerBuiltinAttribute {
+  name := `conformanceFamily
+  descr := "replays this hand-chosen family against its production owner"
+  add := fun declaration _ _ => modifyEnv (familyExtension.addEntry · declaration) }
+
+private def explicitFamilyTerm (declaration : Name) : TermElabM (TSyntax `term) := do
+  let type ← whnfR (← getConstInfo declaration).type
+  let (``Family, #[input, output]) := type.getAppFnArgs
+    | throwError "{declaration} is not a conformance family"
+  `(Family.json $(← schemaTerm input) $(← schemaTerm output) $(mkIdent declaration))
+
+/-- The snapshot entries of every `conformance_function` and
+`conformance_family` in the import closure. A family's key drops a leading
+`Conformance` namespace. -/
 elab "conformance_families%" : term => do
   let declarations := (functionExtension.getState (← getEnv)).qsort Name.lt
-  let entries ← declarations.mapM fun declaration => do
+  let functions ← declarations.mapM fun declaration => do
     `(($(quote (wireKey declaration)), $(← familyTerm declaration)))
+  let explicit ← ((familyExtension.getState (← getEnv)).qsort Name.lt).mapM fun declaration => do
+    let key := wireKey (declaration.replacePrefix `Conformance .anonymous)
+    `(($(quote key), $(← explicitFamilyTerm declaration)))
+  let entries := functions ++ explicit
   elabTerm (← `(Json.mkObj [$entries,*])) (some (mkConst ``Json))
 
 /-- The wire names of every enum with a `conformance_vocabulary`. The key ends

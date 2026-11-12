@@ -235,6 +235,100 @@ pub struct LeanLifecycleHookMustCommitted {
     pub dropped: Vec<bool>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LeanGoalResumeStatus {
+    Active,
+    Paused,
+    Complete,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanGoalResumeGoal {
+    pub goal: u64,
+    pub status: LeanGoalResumeStatus,
+    pub root: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanGoalResumeReference {
+    pub goal: u64,
+    pub root: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanGoalResumeRequest {
+    pub id: u64,
+    pub terminal: bool,
+    pub trigger: Option<u64>,
+    pub reference: Option<LeanGoalResumeReference>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanGoalResumeCreate {
+    pub id: u64,
+    pub trigger: Option<u64>,
+    pub reference: Option<LeanGoalResumeReference>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LeanGoalResumeDecision {
+    Refuse {
+        reason: String,
+    },
+    Proceed {
+        goal: Option<LeanGoalResumeGoal>,
+        #[serde(default)]
+        create: Option<LeanGoalResumeCreate>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LeanGoalResumeResult {
+    Ok {
+        goals: Vec<LeanGoalResumeGoal>,
+        requests: Vec<LeanGoalResumeRequest>,
+    },
+    Error {
+        refusal: LeanLifecycleHookRefusal,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanLifecycleHookGoalResumeCase {
+    pub name: String,
+    pub goal: LeanGoalResumeGoal,
+    pub requests: Vec<LeanGoalResumeRequest>,
+    pub next: u64,
+    pub restage: LeanGoalResumeDecision,
+    pub bind: Option<LeanGoalResumeDecision>,
+    pub result: LeanGoalResumeResult,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LeanLifecycleHookCarrier {
+    Context,
+    Sourced,
+    Transparent,
+    Stringified,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeanLifecycleHookRerunCase {
+    pub name: String,
+    pub path: Vec<LeanLifecycleHookCarrier>,
+    pub rerun: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanLifecycleHookMustCommitCase {

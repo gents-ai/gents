@@ -4,9 +4,6 @@ import Lean
 namespace Identity.GrantSetsConformance
 open Lean Identity.GrantSets
 
-def setCasesJson : String := (toJson (all.map fun set =>
-  Json.mkObj [("set", toJson set.name), ("permissions", toJson set.permissions)])).compress
-
 def recipients : List Recipient := [.initUser, .enrolledUser, .defaultAgent, .agent]
 
 def recipientCasesJson : String := (toJson (recipients.map fun r =>

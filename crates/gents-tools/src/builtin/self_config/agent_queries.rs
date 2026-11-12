@@ -161,8 +161,13 @@ pub(super) async fn guard_agent_profile_choice(
         None => None,
     };
     let next_backend = ops::profile_backend_id(txn, node_did, next_profile).await?;
-    ops::guard_backend_choice_in_txn(txn, node_did, current_backend.as_deref(), &next_backend)
-        .await?;
+    gents_inference::operations::admit_backend_choice_in_txn(
+        txn,
+        node_did,
+        current_backend.as_deref(),
+        &next_backend,
+    )
+    .await?;
     let source = match clone_from {
         Some(id) => ops::read_owned_doc(txn, SelfConfigTarget::Agent, node_did, id).await?,
         None => None,

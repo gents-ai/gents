@@ -277,37 +277,6 @@ fn resolve_expands_tilde_and_takes_relative_paths_from_the_workdir() {
 }
 
 #[test]
-fn resolve_never_reaches_the_gents_home_or_a_folder_holding_it() {
-    let world = world();
-    for path in ["~/gents-home", "~/gents-home/plugins", "~"] {
-        let error = resolved(&world, path).unwrap_err();
-        assert!(error.contains("gents home"), "{path}: {error}");
-    }
-}
-
-#[test]
-fn the_workdir_is_read_only_and_the_list_adds_folders() {
-    let world = world();
-    let work = world.root.join("work");
-    let scope = Scope::load(&world.gents, Some(&work), Some(&world.root)).unwrap();
-    assert_eq!(scope.granted(&work.join("a.txt")), Some(BindAccess::Read));
-    assert_eq!(scope.granted(&world.root.join("docs/x.pdf")), None);
-
-    add(&world.gents, &world.root.join("docs"), BindAccess::Read).unwrap();
-    add(&world.gents, &work, BindAccess::ReadWrite).unwrap();
-    let scope = Scope::load(&world.gents, Some(&work), Some(&world.root)).unwrap();
-    assert_eq!(
-        scope.granted(&world.root.join("docs/x.pdf")),
-        Some(BindAccess::Read)
-    );
-    assert_eq!(
-        scope.granted(&work.join("sub")),
-        Some(BindAccess::ReadWrite)
-    );
-    assert_eq!(scope.granted(&world.root.join("outside/o.txt")), None);
-}
-
-#[test]
 fn dot_dot_and_symlinks_resolve_before_the_scope_check() {
     let world = world();
     let work = world.root.join("work");
@@ -354,38 +323,6 @@ fn a_queued_answer_cannot_remember_a_different_canonical_target() {
     );
 }
 
-#[test]
-fn the_list_adds_replaces_and_removes_folders() {
-    let world = world();
-    let docs = world.root.join("docs");
-    assert!(list(&world.gents).unwrap().is_empty());
-    add(&world.gents, &docs, BindAccess::Read).unwrap();
-    add(&world.gents, &docs, BindAccess::ReadWrite).unwrap();
-    assert_eq!(
-        list(&world.gents).unwrap(),
-        vec![AllowedDir {
-            path: docs.clone(),
-            access: BindAccess::ReadWrite
-        }]
-    );
-    assert!(add(
-        &world.gents,
-        &world.root.join("docs/missing.pdf"),
-        BindAccess::Read
-    )
-    .is_err());
-    let file = add(
-        &world.gents,
-        &world.root.join("docs/x.pdf"),
-        BindAccess::Read,
-    )
-    .unwrap();
-    assert_eq!(file.path, world.root.join("docs/x.pdf"));
-    assert!(remove(&world.gents, &file.path).unwrap());
-    assert!(remove(&world.gents, &docs).unwrap());
-    assert!(!remove(&world.gents, &docs).unwrap());
-}
-
 #[cfg(unix)]
 #[test]
 fn a_file_binds_alone_through_a_hard_link_not_a_copy() {
@@ -429,64 +366,6 @@ fn the_recheck_catches_a_binding_whose_target_was_swapped() {
 }
 
 #[test]
-fn a_working_folder_that_is_the_root_the_home_or_holds_either_is_not_allowed() {
-    let world = world();
-    let user_home = world.root.join("docs");
-    let gents_home = world.gents.clone();
-    for broad in [
-        PathBuf::from("/"),
-        user_home.clone(),
-        world.root.clone(),
-        user_home.parent().unwrap().to_path_buf(),
-    ] {
-        let scope = Scope::load(&gents_home, Some(&broad), Some(&user_home)).unwrap();
-        assert_eq!(
-            scope.granted(&user_home.join("x.pdf")),
-            None,
-            "{} must not be auto-allowed",
-            broad.display()
-        );
-        assert_eq!(scope.granted(&world.root.join("outside/o.txt")), None);
-    }
-    let work = world.root.join("work");
-    let scope = Scope::load(&gents_home, Some(&work), Some(&user_home)).unwrap();
-    assert_eq!(scope.granted(&work.join("a.txt")), Some(BindAccess::Read));
-    let own_folder = Scope::load(&gents_home, Some(&work.join("sub")), None).unwrap();
-    assert_eq!(own_folder.granted(&work.join("a.txt")), None);
-}
-
-#[test]
-fn an_allowed_file_does_not_authorize_its_parent_or_sibling() {
-    let world = world();
-    let file = world.root.join("work/a.txt");
-    add(&world.gents, &file, BindAccess::Read).unwrap();
-    let scope = Scope::load(&world.gents, None, Some(&world.root)).unwrap();
-    assert_eq!(scope.granted(&file), Some(BindAccess::Read));
-    assert_eq!(scope.granted(file.parent().unwrap()), None);
-    assert_eq!(scope.granted(&world.root.join("work/b.txt")), None);
-}
-
-#[test]
-fn persisted_allowances_apply_the_same_breadth_rules_as_working_folders() {
-    let world = world();
-    for path in [Path::new("/"), world.root.as_path(), world.gents.as_path()] {
-        assert!(
-            add(&world.gents, path, BindAccess::Read).is_err(),
-            "{}",
-            path.display()
-        );
-    }
-    save(
-        &world.gents,
-        vec![AllowedDir {
-            path: world.root.clone(),
-            access: BindAccess::Read,
-        }],
-    )
-    .unwrap();
-    assert!(Scope::load(&world.gents, None, Some(&world.root)).is_err());
-}
-#[test]
 fn concurrent_grants_keep_other_paths_and_the_widest_approval() {
     let home = tempfile::tempdir().unwrap();
     let outside = tempfile::tempdir().unwrap();
@@ -512,4 +391,181 @@ fn concurrent_grants_keep_other_paths_and_the_widest_approval() {
     assert!(grants
         .iter()
         .all(|grant| grant.access == BindAccess::ReadWrite));
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ListAction {
+    Add,
+    GrantAtLeast,
+    Remove,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ListOutcome {
+    Granted,
+    Refused,
+    Removed,
+    Absent,
+}
+
+fn modelled_path(world: &World, components: &[String]) -> PathBuf {
+    match components.split_first() {
+        None => PathBuf::from("/"),
+        Some((first, rest)) => {
+            assert_eq!(
+                first, "tmp",
+                "a modelled path is the root or inside the world"
+            );
+            rest.iter()
+                .fold(world.root.clone(), |path, part| path.join(part))
+        }
+    }
+}
+
+fn modelled_components(world: &World, path: &Path) -> Vec<String> {
+    let inside = path.strip_prefix(&world.root).expect("a path of the world");
+    std::iter::once("tmp".to_owned())
+        .chain(
+            inside
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy().into_owned()),
+        )
+        .collect()
+}
+
+fn modelled_world(
+    world: &World,
+    gents_home: &[String],
+    present: &[Vec<String>],
+    named: &[&Vec<String>],
+) {
+    assert_eq!(modelled_path(world, gents_home), world.gents);
+    for path in present {
+        assert!(modelled_path(world, path).exists(), "{path:?} exists");
+    }
+    for path in named {
+        assert_eq!(
+            modelled_path(world, path).exists(),
+            present.contains(path),
+            "the model knows whether {path:?} exists"
+        );
+    }
+}
+
+#[test]
+fn the_allowed_list_conforms_to_the_model() {
+    use gents_lean_vocab::families::pack_allowed_list as family;
+
+    family::replay::<BindAccess, ListAction, ListOutcome>(|input| {
+        let world = world();
+        let named: Vec<&Vec<String>> = input.steps.iter().map(|step| &step.path).collect();
+        modelled_world(
+            &world,
+            &input.world.gents_home,
+            &input.world.present,
+            &named,
+        );
+        let outcomes = input
+            .steps
+            .iter()
+            .map(|step| {
+                let path = modelled_path(&world, &step.path);
+                let granted = |result: Result<AllowedDir>| match result {
+                    Ok(_) => ListOutcome::Granted,
+                    Err(_) => ListOutcome::Refused,
+                };
+                match step.action {
+                    ListAction::Add => granted(add(&world.gents, &path, step.access)),
+                    ListAction::GrantAtLeast => {
+                        granted(grant_at_least(&world.gents, &path, step.access))
+                    }
+                    ListAction::Remove => {
+                        if remove(&world.gents, &path).unwrap() {
+                            ListOutcome::Removed
+                        } else {
+                            ListOutcome::Absent
+                        }
+                    }
+                }
+            })
+            .collect();
+        family::AllowedListResult {
+            outcomes,
+            entries: list(&world.gents)
+                .unwrap()
+                .into_iter()
+                .map(|entry| family::Entry {
+                    path: modelled_components(&world, &entry.path),
+                    access: entry.access,
+                })
+                .collect(),
+        }
+    });
+}
+
+#[test]
+fn the_allowed_scope_conforms_to_the_model() {
+    use gents_lean_vocab::families::pack_allowed_scope as family;
+
+    family::replay::<BindAccess>(|input| {
+        let world = world();
+        let named: Vec<&Vec<String>> = input
+            .entries
+            .iter()
+            .map(|entry| &entry.path)
+            .chain(&input.workdir)
+            .chain(&input.targets)
+            .collect();
+        modelled_world(
+            &world,
+            &input.world.gents_home,
+            &input.world.present,
+            &named,
+        );
+        let user_home = input
+            .world
+            .user_home
+            .as_ref()
+            .map(|home| modelled_path(&world, home));
+        let workdir = input.workdir.as_ref().map(|dir| modelled_path(&world, dir));
+        save(
+            &world.gents,
+            input
+                .entries
+                .iter()
+                .map(|entry| AllowedDir {
+                    path: modelled_path(&world, &entry.path),
+                    access: entry.access,
+                })
+                .collect(),
+        )
+        .unwrap();
+        let scope = Scope::load(&world.gents, workdir.as_deref(), user_home.as_deref());
+        let targets: Vec<PathBuf> = input
+            .targets
+            .iter()
+            .map(|target| modelled_path(&world, target))
+            .collect();
+        family::AllowedScopeResult {
+            loads: scope.is_ok(),
+            granted: scope.map_or_else(
+                |_| Vec::new(),
+                |scope| targets.iter().map(|target| scope.granted(target)).collect(),
+            ),
+            reachable: targets
+                .iter()
+                .map(|target| {
+                    resolve(
+                        &target.display().to_string(),
+                        None,
+                        user_home.as_deref(),
+                        &world.gents,
+                    )
+                    .is_ok()
+                })
+                .collect(),
+        }
+    });
 }

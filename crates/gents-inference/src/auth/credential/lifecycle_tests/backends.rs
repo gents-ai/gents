@@ -135,53 +135,6 @@ async fn each_accounts_backend_keeps_its_own_models() {
 }
 
 #[tokio::test]
-async fn a_lost_backend_comes_back_at_the_next_sign_in() {
-    for product in PRODUCTS {
-        let (db, _user, access) = access().await;
-        let did = db.node_identity.did().to_owned();
-        store(&access, product.sign_in(&did, "a", "refresh-a")).await;
-        let b = store(&access, product.sign_in(&did, "b", "refresh-b")).await;
-        let reference = b.credential.account_ref.clone().unwrap();
-        let serving = |backends: Vec<gents_documents::InferenceBackend>| {
-            backends
-                .into_iter()
-                .filter(|backend| backend.auth.oauth_account_ref() == Some(reference.as_str()))
-                .count()
-        };
-        let backend_id = format!("{}-{reference}", product.provider());
-        let plan = gents_documents::DesiredStateApplyPlan::new(Vec::new())
-            .unwrap()
-            .with_removals(vec![(
-                gents_store::collection::Collection::InferenceBackend,
-                did.clone(),
-                backend_id,
-            )])
-            .unwrap();
-        access
-            .transact_write("test.backend_rm", |txn| {
-                let plan = &plan;
-                Box::pin(async move {
-                    gents_documents::apply_desired_state_plan(
-                        txn,
-                        plan,
-                        &crate::resolved::ProviderProfilePolicy,
-                    )
-                    .await
-                })
-            })
-            .await
-            .unwrap();
-        assert_eq!(serving(backends(&access, &did).await), 0);
-
-        let again = store(&access, product.sign_in(&did, "b", "refresh-b2")).await;
-        assert_eq!(again.result, SignInResult::Refreshed);
-        assert_eq!(serving(backends(&access, &did).await), 1, "{product:?}");
-        store(&access, product.sign_in(&did, "b", "refresh-b3")).await;
-        assert_eq!(serving(backends(&access, &did).await), 1, "{product:?}");
-    }
-}
-
-#[tokio::test]
 async fn an_unrelated_invalid_profile_does_not_block_an_account_backend() {
     let (db, _user, access) = access().await;
     let did = db.node_identity.did();

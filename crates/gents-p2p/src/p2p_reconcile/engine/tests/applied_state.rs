@@ -193,6 +193,7 @@ async fn applied_pairing_is_runtime_owned_and_deferred_until_node_exists() -> an
         gents_protocol::schemas::ENROLLMENT_OPERATOR_NONCE,
         gents_protocol::schemas::ENROLLMENT_RENEWAL_POLICY,
         gents_protocol::schemas::NETWORK_ADMIN_PIN,
+        gents_protocol::schemas::OWED_DELIVERY,
     ] {
         node.add_collection(schema).await?;
     }
