@@ -165,3 +165,18 @@ fn merge_json_values(left: serde_json::Value, right: serde_json::Value) -> serde
         (_, right) => right,
     }
 }
+
+#[cfg(test)]
+mod candidate_conformance {
+    #[test]
+    fn generated_optional_parameters_merge_complete_json_values() {
+        gents_lean_vocab::families::completion_parameters_merge_optional_params::replay(|input| {
+            let parse = |value: &String| serde_json::from_str(value).unwrap();
+            super::merge_optional_params(
+                input.left.as_ref().map(parse),
+                input.right.as_ref().map(parse),
+            )
+            .map(|value| value.to_string())
+        });
+    }
+}
