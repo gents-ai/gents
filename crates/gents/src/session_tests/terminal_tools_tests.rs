@@ -6,7 +6,8 @@ use gents_store::graphql::escape_graphql_string;
 #[tokio::test]
 async fn generated_plugin_child_request_accounting_matches_execution_owner() {
     let snapshot = gents_lean_vocab::lean_contract_snapshot();
-    let cases = snapshot.plugin_resource_cases["tool_effect_accounting"]
+    let cases = snapshot
+        .plugin_resource_tool_effect_accounting_cases
         .as_array()
         .unwrap();
     for case in cases {

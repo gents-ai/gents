@@ -1623,51 +1623,51 @@ def caseCoverage : List CoverageEntry :=
       "SelfConfigSelectionCases")
       "self-config" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_model_slot_cases"
       "PluginModelSlotCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_budget_cases"
       "PluginResourceCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_network_cases"
       "PluginNetworkCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_call_access_cases"
       "PluginCallAccessCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_invocation_cases"
       "PluginInvocationCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_publication_cases"
       "ToolPolicy.PluginPublication")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_receipt_cases"
       "PluginReceiptCases")
       "tool-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_child_admission_cases"
       "PluginChildAdmissionCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_tool_effect_cases"
       "PluginEffectCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_tool_effect_terminal_cases"
       "PluginEffectTerminalCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_tool_effect_accounting_cases"
       "PluginEffectAccountingCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_tool_call_cases"
       "PluginToolCallCases")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
@@ -1732,11 +1732,11 @@ def caseCoverage : List CoverageEntry :=
       "PluginDataCases")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_scratch_cases"
       "PluginScratchCases")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "plugin_resource_cases"
+      "plugin_resource_host_import_cases"
       "PluginHostImportCases")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
