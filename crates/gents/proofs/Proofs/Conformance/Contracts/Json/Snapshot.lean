@@ -1,3 +1,4 @@
+import Proofs.Conformance.ToolSurfaceArtifact
 import Proofs.Conformance.WorkspaceFileConsent
 import Proofs.Conformance.AuthoringFileMode
 import Proofs.Conformance.DiscoveryFieldVisibility
