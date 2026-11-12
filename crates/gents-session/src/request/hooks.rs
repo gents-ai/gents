@@ -4,6 +4,8 @@
 
 pub mod claim;
 pub mod delivery;
+#[cfg(test)]
+mod decision_conformance;
 pub mod effect;
 pub mod hook;
 pub(crate) mod native;

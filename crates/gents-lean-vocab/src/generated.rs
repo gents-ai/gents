@@ -297,10 +297,6 @@ pub fn lean_lifecycle_hook_grant_cases() -> &'static [LeanLifecycleHookGrantCase
     &lean_contract_snapshot().lifecycle_hook_grant_cases
 }
 
-pub fn lean_lifecycle_hook_history_cases() -> &'static [LeanLifecycleHookHistoryCase] {
-    &lean_contract_snapshot().lifecycle_hook_history_cases
-}
-
 pub fn lean_lifecycle_hook_must_commit_cases() -> &'static [LeanLifecycleHookMustCommitCase] {
     &lean_contract_snapshot().lifecycle_hook_must_commit_cases
 }
@@ -3332,7 +3328,6 @@ pub struct LeanContractSnapshot {
     pub lifecycle_hook_grant_cases: Vec<LeanLifecycleHookGrantCase>,
     pub lifecycle_hook_supersede_cases: Vec<LeanLifecycleHookSupersedeCase>,
     pub lifecycle_hook_goal_halt_cases: Vec<LeanLifecycleHookGoalHaltCase>,
-    pub lifecycle_hook_history_cases: Vec<LeanLifecycleHookHistoryCase>,
     pub follow_up_hooks: Vec<String>,
     pub coverage_ledger: Vec<LeanCoverageEntry>,
     pub feature_surface_requirements: Vec<LeanFeatureSurfaceRequirement>,
@@ -5894,13 +5889,6 @@ pub struct LeanHeldClientSignerCase {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanHistoryRead {
-    pub collection: String,
-    pub doc: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanHookAttempt {
     pub hook_id: String,
     pub result: LeanCommandResult,
@@ -6907,17 +6895,6 @@ pub struct LeanLifecycleHookHaltedSession {
     pub owner: Option<String>,
     pub latched_at: Option<String>,
     pub current: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanLifecycleHookHistoryCase {
-    pub name: String,
-    pub owns: Vec<String>,
-    pub history: Vec<String>,
-    pub named: Vec<LeanLifecycleHookRef>,
-    pub read: LeanHistoryRead,
-    pub permitted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

@@ -2,6 +2,7 @@ import Proofs.Session.Hooks.Supersede
 import Proofs.Session.Hooks.History
 import Proofs.Automation.Hooks.GoalHalt
 import Proofs.Conformance.ContractTypes
+import Proofs.Conformance.Family
 
 namespace Conformance.HookDecisions
 open Hooks
@@ -235,16 +236,37 @@ def historyCases : List HistoryCase :=
     , history := ["AgentSession"], named := [⟨"AgentRequest", "request-1"⟩]
     , read := ⟨"AgentSession", some "request-1"⟩ } ]
 
-private def historyCaseJson (c : HistoryCase) : String :=
-  "{\"name\":" ++ jsonString c.name ++ ",\"owns\":" ++ jsonStringArray c.owns ++
-    ",\"history\":" ++ jsonStringArray c.history ++
-    ",\"named\":" ++ jsonArray (c.named.map fun ref =>
-      "{\"collection\":" ++ jsonString ref.collection ++ ",\"doc\":" ++ jsonString ref.doc ++ "}") ++
-    ",\"read\":{\"collection\":" ++ jsonString c.read.collection ++
-      ",\"doc\":" ++ optionJson c.read.doc ++ "}" ++
-    ",\"permitted\":" ++ boolJson (historyPermitted ⟨"plugin", c.owns, 0⟩ c.history c.named c.read) ++
-    "}"
+structure HistoryRefWire where
+  collection : String
+  doc : String
+  deriving Lean.ToJson
 
-def historyCasesJson : String := jsonArray (historyCases.map historyCaseJson)
+structure HistoryReadWire where
+  collection : String
+  doc : Option String
+  deriving Lean.ToJson
+
+structure HistoryInput where
+  name : String
+  owns : List String
+  history : List String
+  named : List HistoryRefWire
+  read : HistoryReadWire
+  deriving Lean.ToJson
+
+structure HistoryOutput where
+  permitted : Bool
+  deriving Lean.ToJson
+
+@[conformance_family]
+def history : Family HistoryInput HistoryOutput where
+  inputs := historyCases.map fun c =>
+    { name := c.name, owns := c.owns, history := c.history
+      named := c.named.map fun ref => { collection := ref.collection, doc := ref.doc }
+      read := { collection := c.read.collection, doc := c.read.doc } }
+  model := fun i =>
+    { permitted := historyPermitted ⟨"plugin", i.owns, 0⟩ i.history
+        (i.named.map fun ref => (⟨ref.collection, ref.doc⟩ : Ref String))
+        (⟨i.read.collection, i.read.doc⟩ : HistoryRead String) }
 
 end Conformance.HookDecisions

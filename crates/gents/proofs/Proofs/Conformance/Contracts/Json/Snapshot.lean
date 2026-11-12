@@ -610,8 +610,6 @@ def snapshotRequestCasesJson : String :=
       ++ Conformance.HookDecisions.supersedeCasesJson ++ ","
     ++ "\"lifecycle_hook_goal_halt_cases\":"
       ++ Conformance.HookDecisions.goalHaltCasesJson ++ ","
-    ++ "\"lifecycle_hook_history_cases\":"
-      ++ Conformance.HookDecisions.historyCasesJson ++ ","
 
 def snapshotSessionCasesJson : String :=
   ""

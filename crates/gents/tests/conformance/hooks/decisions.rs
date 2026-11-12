@@ -1,14 +1,11 @@
 use gents_automation::goal::lifecycle_hooks::{halt_verdict, HaltVerdict};
 use gents_automation::goal::GoalState;
 use gents_lean_vocab::{
-    lean_lifecycle_hook_goal_halt_cases, lean_lifecycle_hook_history_cases,
-    lean_lifecycle_hook_supersede_cases, LeanGoalHaltVerdict, LeanSupersedeAncestry,
+    lean_lifecycle_hook_goal_halt_cases, lean_lifecycle_hook_supersede_cases, LeanGoalHaltVerdict, LeanSupersedeAncestry,
     LeanSupersedeLink, LeanSupersedeReference, LeanSupersedeStale,
 };
 use gents_protocol::goal_status::GoalStatus;
 use gents_protocol::request_input::GoalAssignmentInput;
-use gents_session::request::hooks::effect::{DocRef, Manifest, OwnedCollection};
-use gents_session::request::hooks::hook::{history_permitted, Query};
 use gents_session::request::hooks::supersede::{
     Ancestry, BrokenLink, ParentFacts, PendingFacts, Retirement, Selector,
 };
@@ -128,48 +125,6 @@ fn generated_lifecycle_hook_goal_halt_cases_drive_the_halt_verdict() {
                 &case.halt.text,
             ),
             verdict(&case.verdict),
-            "{}",
-            case.name
-        );
-    }
-}
-
-#[test]
-fn generated_lifecycle_hook_history_cases_drive_the_history_bound() {
-    let cases = lean_lifecycle_hook_history_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let leak = |text: &str| -> &'static str { Box::leak(text.to_owned().into_boxed_str()) };
-        let manifest = Manifest {
-            name: "plugin",
-            owns: case
-                .owns
-                .iter()
-                .map(|collection| OwnedCollection {
-                    name: leak(collection),
-                    schema: None,
-                    grants: &[],
-                })
-                .collect(),
-            bound: 0,
-            history: case
-                .history
-                .iter()
-                .map(|collection| leak(collection))
-                .collect(),
-        };
-        let named = case
-            .named
-            .iter()
-            .map(|named| DocRef::new(named.collection.clone(), named.doc.clone()))
-            .collect::<Vec<_>>();
-        let mut query = Query::select(case.read.collection.clone(), "status").revisions("");
-        if let Some(doc) = &case.read.doc {
-            query = query.eq("_docID", doc.clone());
-        }
-        assert_eq!(
-            history_permitted(&manifest, &named, &query),
-            case.permitted,
             "{}",
             case.name
         );

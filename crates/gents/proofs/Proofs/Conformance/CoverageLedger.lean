@@ -1328,8 +1328,8 @@ def caseCoverage : List CoverageEntry :=
       "Production halt_verdict, with its RFC 3339 parsing, decides every case. The Goal write and outcome settlement PauseOnHalt stages for a pause verdict are not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
-      "lifecycle_hook_history_cases"
-      "LifecycleHookHistoryCases"
+      "family"
+      "hook_decisions_history"
       "Production history_permitted decides every case. The DefraDB host's refusal of an out-of-bound revision read before answering it is not driven by these cases.")
       "lifecycle-hooks" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
