@@ -1,6 +1,9 @@
 use super::{fake_llm, support::Attachment, ChatAction};
 use anyhow::{ensure, Context, Result};
-use gents_protocol::{goal_control::SessionGoalControl, row::AgentRequestRow};
+use gents_protocol::{
+    goal_control::{GoalControlOutcome, GoalOperation, SessionGoalControl},
+    row::AgentRequestRow,
+};
 use gents_store::{
     config_client::ConfigAccess, graphql::escape_graphql_string, identity::NodeIdentity,
 };
@@ -198,6 +201,7 @@ pub async fn verify(
         .as_str()
         .context("Goal session agent")?;
     let mut initial_request = None;
+    let mut resumed_request = None;
     for row in controls {
         let signed: SessionGoalControl =
             serde_json::from_str(row["intent_json"].as_str().context("signed command")?)?;
@@ -234,7 +238,27 @@ pub async fn verify(
             );
             initial_request = Some(first.request_id.clone());
         }
+        if matches!(&signed.operation, GoalOperation::Resume {}) {
+            if let GoalControlOutcome::Applied {
+                request_id: Some(request),
+                ..
+            } = &receipt.outcome
+            {
+                resumed_request = Some(request.clone());
+            }
+        }
     }
+    let resumed_request = resumed_request.context("resumed Goal request receipt")?;
+    ensure!(
+        gents::support::live_inference::wait_for_request_terminal(
+            &access,
+            &resumed_request,
+            Duration::from_secs(30),
+        )
+        .await
+            == "completed"
+    );
+    let value = access.execute(&query).await?;
     let requests: Vec<AgentRequestRow> =
         serde_json::from_value(value["data"]["AgentRequest"].clone())?;
     ensure!(
