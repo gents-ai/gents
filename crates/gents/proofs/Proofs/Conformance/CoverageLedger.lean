@@ -1063,16 +1063,24 @@ def caseCoverage : List CoverageEntry :=
       boundaryBackendHealthAdmissionFreshnessId)
       "backend-health" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "backend_health_cases"
-      "BackendHealthAdmissionCases")
+      "family"
+      "backend_health_admission_admission")
+      "backend-health" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "backend_health_admission_display")
       "backend-health" [Surface.operatorUi]
   , tagged (consumerCoverage
       "backend_health_cases"
       "BackendHealthTransitionCases")
       "backend-health" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "backend_probe_schedule_cases"
-      "BackendProbeScheduleCases")
+      "family"
+      "backend_probe_schedule_select")
+      "backend-health" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "backend_probe_schedule_field_edit")
       "backend-health" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "family"

@@ -8,6 +8,12 @@ import Proofs.Conformance.UsageWrite
 import Proofs.Conformance.InferenceObservationRegistry
 import Proofs.Conformance.EagerStreaming
 import Proofs.Conformance.BackendHealthRetention
+import Proofs.Conformance.BackendProbeSchedule
+import Proofs.Conformance.BackendHealthAdmission
+import Proofs.Conformance.CaptureScope
+import Proofs.Conformance.InferenceSlotAccounting
+import Proofs.Conformance.FleetSlotAccounting
+import Proofs.Conformance.Identity.AgentBaseline
 import Proofs.Conformance.InferenceDroppedPermit
 import Proofs.Conformance.EventSourceCursor
 import Proofs.Conformance.Identity.AgentTargetAccess
@@ -344,9 +350,6 @@ def snapshotCaptureTailJson : String :=
     ++ "\"backend_health_cases\":"
       ++ jsonArray
         (Proofs.BackendHealth.transitionCases.map backendHealthCaseJson) ++ ","
-    ++ "\"backend_probe_schedule_cases\":"
-      ++ jsonArray
-        (Proofs.BackendHealth.scheduleCases.map backendProbeScheduleCaseJson) ++ ","
 
 def snapshotCoverageTailJson : String :=
   ""

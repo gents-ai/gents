@@ -10,6 +10,30 @@ structure ProbeConfiguration where
   enabled : Bool
   deriving DecidableEq, BEq, Repr
 
+/-- The backend fields an operator edits. -/
+inductive BackendField where
+  | provider
+  | wireApi
+  | endpoint
+  | auth
+  | connectTimeout
+  | discoveryTimeout
+  | name
+  | tags
+  | capacity
+  | queueCapacity
+  deriving DecidableEq, Repr
+
+/-- Connection and discovery inputs advance the probe revision; labels and
+admission limits do not, so editing them never triggers an off-cycle probe. -/
+def BackendField.revisesProbe : BackendField → Bool
+  | .provider | .wireApi | .endpoint | .auth | .connectTimeout | .discoveryTimeout => true
+  | .name | .tags | .capacity | .queueCapacity => false
+
+/-- One enabled backend at revision zero, after an edit of `field`. -/
+def editedConfiguration (field : BackendField) : ProbeConfiguration :=
+  { backendId := 0, revision := if field.revisesProbe then 1 else 0, enabled := true }
+
 def shouldProbe (known : List ProbeConfiguration) (current : ProbeConfiguration)
     (periodic : Bool) : Bool :=
   current.enabled && (periodic || !known.contains current)
