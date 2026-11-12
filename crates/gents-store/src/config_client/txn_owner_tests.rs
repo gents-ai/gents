@@ -702,6 +702,11 @@ async fn cancelled_after_begin_trace(steps: usize) -> Vec<NativeObservation> {
     let native_outstanding = in_flight(&tracker);
     let abandoned = registry_abandoned(&node, &handle).await;
     let events = std::mem::take(&mut *lock(&events));
+    assert_eq!(
+        events.len(),
+        1,
+        "a cancelled transaction reports its outcome once: {events:?}"
+    );
     let caller = events
         .last()
         .and_then(|event| event.get("outcome"))

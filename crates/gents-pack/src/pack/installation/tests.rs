@@ -840,11 +840,9 @@ async fn plugin_store_notices_match_the_lean_record_model() {
             .as_array()
             .unwrap()
             .is_empty();
-        let listed = list_installed_packs(&access, OWNER)
-            .await
-            .unwrap()
-            .iter()
-            .any(|pack| pack.coordinate == "acme/demo");
+        let installed = list_installed_packs(&access, OWNER).await.unwrap();
+        assert!(installed.len() <= 1, "{installed:?}");
+        let listed = installed.iter().any(|pack| pack.coordinate == "acme/demo");
         let removed = remove_pack(
             &access,
             OWNER,
