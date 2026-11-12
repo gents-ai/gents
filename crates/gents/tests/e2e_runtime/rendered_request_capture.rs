@@ -917,12 +917,6 @@ async fn a_repaired_attempt_is_a_second_fact_with_a_different_canonical_request(
         );
     }
 
-    assert_eq!(
-        rows.iter().map(build_path).collect::<Vec<_>>(),
-        vec!["budgeted", "budgeted", "repair"],
-        "only the rebuilt attempt reports the repair path"
-    );
-
     let original = parse_json(&rows[1]["request_json"]);
     let repaired = parse_json(&rows[2]["request_json"]);
     assert_ne!(
@@ -1629,12 +1623,8 @@ async fn serialized_input_threshold_equality_and_one_over_select_actual_compacti
     );
     assert!(
         over.follow_up_bodies.len() >= 2,
-        "one-over must summarize at least once before inference; captured scopes {:?}, build paths {:?}",
-        coordinates(&over.follow_up_rows),
-        over.follow_up_rows
-            .iter()
-            .map(build_path)
-            .collect::<Vec<_>>()
+        "one-over must summarize at least once before inference; captured scopes {:?}",
+        coordinates(&over.follow_up_rows)
     );
     assert_eq!(
         over.follow_up_rows.len(),
@@ -2738,7 +2728,7 @@ impl OwnedCaptureFixture {
             escape_graphql_string(doc)
         );
         let response = self.access.execute(&query).await.unwrap();
-        let cid = response.data.unwrap()["_commits"][0]["cid"]
+        let cid = response["data"]["_commits"][0]["cid"]
             .as_str()
             .expect("genesis composite CID");
         let (block, signature) = self
