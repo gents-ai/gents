@@ -105,12 +105,45 @@ enum Expr {
         field: &'static str,
         operator: &'static str,
     },
+    Contains {
+        field: &'static str,
+        value: Value,
+    },
+    Nested {
+        field: &'static str,
+        inner: Box<Expr>,
+    },
     Group {
         operator: &'static str,
         members: Vec<Expr>,
     },
     Not(Box<Expr>),
 }
+
+pub struct JsonPath<C, K> {
+    field: Field<C, kind::Json>,
+    path: &'static [&'static str],
+    kind: PhantomData<fn() -> K>,
+}
+
+impl<C, K> JsonPath<C, K> {
+    pub const fn new(field: Field<C, kind::Json>, path: &'static [&'static str]) -> Self {
+        assert!(!path.is_empty(), "JSON path must have a leaf");
+        Self {
+            field,
+            path,
+            kind: PhantomData,
+        }
+    }
+}
+
+impl<C, K> Clone for JsonPath<C, K> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<C, K> Copy for JsonPath<C, K> {}
 
 /// A filter over collection `C`.
 #[derive(Debug, Clone, PartialEq)]
@@ -146,6 +179,49 @@ impl<C> Filter<C> {
         V: Scalar<K>,
     {
         Self::compare(field, "_eq", value)
+    }
+
+    fn json_compare<K, V>(path: JsonPath<C, K>, operator: &'static str, value: V) -> Self
+    where
+        K: Kind,
+        V: Scalar<K>,
+    {
+        for name in path.path {
+            crate::graphql::validate_graphql_name(name)
+                .expect("JSON path keys are declared GraphQL names");
+        }
+        let (leaf, parents) = path.path.split_last().expect("JSON path has a leaf");
+        let mut expr = Expr::Compare {
+            field: leaf,
+            operator,
+            variable_type: K::GRAPHQL.to_owned(),
+            value: value.into_json(),
+        };
+        for field in parents.iter().rev() {
+            expr = Expr::Nested {
+                field,
+                inner: Box::new(expr),
+            };
+        }
+        Self::wrap(Expr::Nested {
+            field: path.field.name(),
+            inner: Box::new(expr),
+        })
+    }
+
+    pub fn json_eq<K, V>(path: JsonPath<C, K>, value: V) -> Self
+    where
+        K: Kind,
+        V: Scalar<K>,
+    {
+        Self::json_compare(path, "_eq", value)
+    }
+
+    pub fn json_like<V>(path: JsonPath<C, kind::Str>, pattern: V) -> Self
+    where
+        V: Scalar<kind::Str>,
+    {
+        Self::json_compare(path, "_like", pattern)
     }
 
     pub fn ne<K, V>(field: Field<C, K>, value: V) -> Self
@@ -206,6 +282,16 @@ impl<C> Filter<C> {
         Self::wrap(Expr::Null {
             field: field.name(),
             operator: "_ne",
+        })
+    }
+
+    pub fn contains<V>(field: Field<C, kind::StrList>, value: V) -> Self
+    where
+        V: Scalar<kind::Str>,
+    {
+        Self::wrap(Expr::Contains {
+            field: field.name(),
+            value: value.into_json(),
         })
     }
 
@@ -332,6 +418,15 @@ fn render_expr(expr: &Expr, variables: &mut Variables, out: &mut String) {
         Expr::Null { field, operator } => {
             write!(out, "{field}: {{{operator}: null}}").expect("write to string");
         }
+        Expr::Contains { field, value } => {
+            let reference = variables.bind("String", value.clone());
+            write!(out, "{field}: {{_any: {{_eq: {reference}}}}}").expect("write to string");
+        }
+        Expr::Nested { field, inner } => {
+            write!(out, "{field}: {{").expect("write to string");
+            render_expr(inner, variables, out);
+            out.push('}');
+        }
         Expr::Group { operator, members } if *operator == "_and" && distinct_leaves(members) => {
             for (index, member) in members.iter().enumerate() {
                 if index > 0 {
@@ -367,7 +462,10 @@ fn distinct_leaves(members: &[Expr]) -> bool {
     let mut fields = Vec::with_capacity(members.len());
     for member in members {
         let field = match member {
-            Expr::Compare { field, .. } | Expr::Null { field, .. } => *field,
+            Expr::Compare { field, .. }
+            | Expr::Null { field, .. }
+            | Expr::Contains { field, .. }
+            | Expr::Nested { field, .. } => *field,
             Expr::Group { .. } | Expr::Not(_) => return false,
         };
         if fields.contains(&field) {
@@ -409,6 +507,13 @@ pub struct Selection<C> {
 }
 
 impl<C> Selection<C> {
+    pub fn all() -> Self
+    where
+        C: gents_schemas::SelectFields,
+    {
+        C::select_fields(Self::new())
+    }
+
     pub fn doc_id() -> Self {
         Self::owned("_docID")
     }
@@ -430,6 +535,17 @@ impl<C> Selection<C> {
         self
     }
 
+    pub fn nested<T>(mut self, field: Field<C, kind::Relation<T>>, selection: Selection<T>) -> Self
+    where
+        T: Collection,
+    {
+        if !self.body.is_empty() {
+            self.body.push(' ');
+        }
+        write!(self.body, "{} {{ {} }}", field.name(), selection.body).expect("write to string");
+        self
+    }
+
     pub fn new() -> Self {
         Self {
             body: String::new(),
@@ -444,6 +560,12 @@ impl<C> Default for Selection<C> {
     }
 }
 
+impl<C> gents_schemas::FieldSelection<C> for Selection<C> {
+    fn field<K>(self, field: Field<C, K>) -> Self {
+        Selection::field(self, field)
+    }
+}
+
 /// A read of collection `C`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Query<C> {
@@ -453,6 +575,7 @@ pub struct Query<C> {
     limit: Option<u64>,
     offset: Option<u64>,
     selection: Selection<C>,
+    count: bool,
 }
 
 impl<C> Query<C>
@@ -467,7 +590,31 @@ where
             limit: None,
             offset: None,
             selection,
+            count: false,
         }
+    }
+
+    pub fn count() -> Self {
+        Self::select(Selection::new()).counted()
+    }
+
+    pub fn select_fields(mut self, selection: Selection<C>) -> Self {
+        self.selection = selection;
+        self.count = false;
+        self
+    }
+
+    pub fn counted(mut self) -> Self {
+        self.order.clear();
+        self.limit = None;
+        self.offset = None;
+        self.selection = Selection::new();
+        self.count = true;
+        self
+    }
+
+    pub fn is_count(&self) -> bool {
+        self.count
     }
 
     pub fn filter(mut self, filter: Filter<C>) -> Self {
@@ -522,6 +669,14 @@ where
         if let Some(offset) = self.offset {
             let reference = variables.bind("Int", Value::from(offset));
             arguments.push(format!("offset: {reference}"));
+        }
+        if self.count {
+            return format!(
+                "{}: COUNT({}: {{{}}})",
+                alias.unwrap_or(C::NAME),
+                C::NAME,
+                arguments.join(", ")
+            );
         }
         let arguments = if arguments.is_empty() {
             String::new()

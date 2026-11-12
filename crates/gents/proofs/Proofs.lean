@@ -1,4 +1,5 @@
 import Proofs.Store.StorageFailure
+import Proofs.Store.Views
 import Proofs.Store.Identity.RelationshipReplay
 import Proofs.Shared.Basic
 import Proofs.Automation.Process
