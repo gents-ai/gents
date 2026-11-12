@@ -168,10 +168,10 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
 
     let behavior_doc_id =
         gents_documents::load_agent_record(node.as_ref(), identity.did(), &default_agent_did)
-        .await
-        .unwrap()
-        .expect("agent record")
-        .0;
+            .await
+            .unwrap()
+            .expect("agent record")
+            .0;
 
     assert!(
         apply_control_update(identity.did(), "Tools", &tools_doc_id, &mut view,)
@@ -357,52 +357,10 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
 }
 
 #[tokio::test]
-async fn skill_crud_mutations_round_trip() {
-    let (db, user, access, _binding) =
-        crate::test_support::root::signed_test_node("skill-crud").await;
-    grant_delete_permissions(&db, &user).await;
-    seed_automation(
-        &access,
-        vec![(
-            gents_store::collection::Collection::Skill,
-            serde_json::json!({
-                "skill_id": "s1", "node_did": db.node_identity.did(),
-                "name": "S", "tool_refs": ["read_file"], "enabled": true,
-            }),
-        )],
-    )
-    .await;
-    let doc = find_owned_doc(&access, "Skill", "skill_id", "s1").await;
-    patch_desired_document(
-        &access,
-        gents_store::collection::Collection::Skill,
-        db.node_identity.did(),
-        "s1",
-        serde_json::json!({"enabled": false}),
-    )
-    .await;
-    let response = access
-        .execute(r#"{ Skill(filter: { skill_id: { _eq: "s1" } }) { skill_id enabled } }"#)
-        .await
-        .unwrap();
-    assert_eq!(
-        response["data"]["Skill"][0]["enabled"].as_bool(),
-        Some(false),
-        "disable must persist"
-    );
-    delete_signed_document(&access, gents_store::collection::Collection::Skill, &doc).await;
-    let response = access
-        .execute(r#"{ Skill(filter: { skill_id: { _eq: "s1" } }) { _docID } }"#)
-        .await
-        .unwrap();
-    assert!(response["data"]["Skill"].as_array().unwrap().is_empty());
-}
-
-#[tokio::test]
 async fn apply_control_update_hot_reloads_skill() {
     let (db, user, access, _binding) =
         crate::test_support::root::signed_test_node("document-view-skill-reload").await;
-    grant_delete_permissions(&db, &user).await;
+    grant_delete_permissions(&db.node, db.node_identity.as_ref(), &user).await;
     let node = db.node.clone();
     let identity = db.node_identity.clone();
 
@@ -573,174 +531,6 @@ async fn resolve_quarantines_behavior_with_missing_local_agent_target() {
         "quarantine reason must name the missing target agent, got: {}",
         reason.diagnostic
     );
-}
-
-fn signed_schema(collection: gents_store::collection::Collection) -> &'static str {
-    let name = collection.graphql_type();
-    gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
-        .iter()
-        .zip(gents_protocol::schemas::RUNTIME_ALL)
-        .chain(
-            gents_protocol::schemas::ALL_COLLECTION_NAMES
-                .iter()
-                .zip(gents_protocol::schemas::ALL),
-        )
-        .find_map(|(schema_name, schema)| (*schema_name == name).then_some(*schema))
-        .expect("fixture collection has a bundled schema")
-}
-
-async fn find_owned_doc(
-    access: &gents_store::config_client::ConfigAccess,
-    name: &str,
-    field: &str,
-    value: &str,
-) -> String {
-    let response = access
-        .execute(&format!(
-            r#"{{ {name}(filter: {{ {field}: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-            escape_graphql_string(value)
-        ))
-        .await
-        .unwrap();
-    response["data"][name][0]["_docID"]
-        .as_str()
-        .unwrap()
-        .to_owned()
-}
-
-async fn update_signed_document(
-    access: &gents_store::config_client::ConfigAccess,
-    collection: gents_store::collection::Collection,
-    doc_id: &str,
-    input: serde_json::Value,
-) {
-    let name = collection.graphql_type();
-    let doc_id = escape_graphql_string(doc_id);
-    access
-        .transact_write("test.update_replicated_configuration", |txn| {
-            let input = &input;
-            let doc_id = &doc_id;
-            Box::pin(async move {
-                txn.execute_client_signed_update(
-                    &format!(r#"mutation($input: {name}MutationInputArg!) {{ update_{name}(docID: "{doc_id}", input: $input) {{ _docID }} }}"#),
-                    &serde_json::json!({"input": input}),
-                    signed_schema(collection),
-                ).await
-            })
-        })
-        .await
-        .unwrap();
-}
-
-async fn delete_signed_document(
-    access: &gents_store::config_client::ConfigAccess,
-    collection: gents_store::collection::Collection,
-    doc_id: &str,
-) {
-    access
-        .transact_write("test.delete_replicated_configuration", |txn| {
-            Box::pin(async move {
-                txn.delete_configuration_document(collection.graphql_type(), doc_id)
-                    .await
-            })
-        })
-        .await
-        .unwrap();
-}
-
-async fn grant_delete_permissions(db: &crate::support::TestDb, user: &dyn NodeIdentity) {
-    use gents_store::config_client::{ConfigAccess, NodePermission};
-    let admin = ConfigAccess::local_as(
-        db.node.clone(),
-        identity::Did::new(db.node_identity.did()).unwrap(),
-    );
-    let target = identity::Did::new(user.did()).unwrap();
-    for permission in [
-        NodePermission::DocumentDelete,
-        NodePermission::DacRelationDelete,
-    ] {
-        admin
-            .grant_node_permission(&target, permission)
-            .await
-            .unwrap();
-    }
-}
-
-async fn patch_desired_document(
-    access: &gents_store::config_client::ConfigAccess,
-    collection: gents_store::collection::Collection,
-    node_did: &str,
-    id: &str,
-    patch: serde_json::Value,
-) {
-    use gents_documents::apply_desired_state_plan;
-    use gents_documents::{
-        read_desired_state_record_in_txn, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
-    access
-        .transact_write("test.patch_desired_document", |txn| {
-            let patch = &patch;
-            Box::pin(async move {
-                let (_, mut value) =
-                    read_desired_state_record_in_txn(txn, collection, node_did, id)
-                        .await?
-                        .expect("fixture configuration exists");
-                value
-                    .as_object_mut()
-                    .unwrap()
-                    .extend(patch.as_object().unwrap().clone());
-                let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-                    collection,
-                    add: value.clone(),
-                    update: value,
-                }])?;
-                apply_desired_state_plan(
-                    txn,
-                    &plan,
-                    &gents_inference::resolved::ProviderProfilePolicy,
-                )
-                .await
-            })
-        })
-        .await
-        .unwrap();
-}
-
-async fn seed_automation(
-    access: &gents_store::config_client::ConfigAccess,
-    documents: Vec<(gents_store::collection::Collection, serde_json::Value)>,
-) {
-    for (collection, input) in documents {
-        let name = collection.graphql_type();
-        let node_did = input["node_did"].as_str().unwrap();
-        let response = access
-            .execute(&format!(
-                r#"{{ Node(filter: {{ node_did: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
-                escape_graphql_string(node_did)
-            ))
-            .await
-            .unwrap();
-        let node_doc = response["data"]["Node"][0]["_docID"].as_str().unwrap();
-        let schema = signed_schema(collection);
-        let created = access
-            .transact_write("test.replicated_automation", |txn| {
-                let input = &input;
-                Box::pin(async move {
-                    txn.execute_client_signed_create(
-                        &format!("mutation($input: {name}MutationInputArg!) {{ create_{name}(input: $input) {{ _docID }} }}"),
-                        &serde_json::json!({"input": input}),
-                        schema,
-                    ).await
-                })
-            })
-            .await
-            .expect("seed replicated automation document");
-        let doc = gents_store::graphql::created_doc_id(&created, name).unwrap();
-        access
-            .add_resource_relationship(name, &doc, "parent", "nodes", node_doc)
-            .await
-            .unwrap();
-    }
 }
 
 async fn create_task_bound(
@@ -1934,9 +1724,13 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
             chrono::Utc::now(),
         )
     };
-    store_sign_in(&user_access, sign_in("a"), None).await.unwrap();
-    let b = store_sign_in(&user_access, sign_in("b"), None).await.unwrap();
-    let b_ref =b.credential.account_ref.clone().expect("b has a reference");
+    store_sign_in(&user_access, sign_in("a"), None)
+        .await
+        .unwrap();
+    let b = store_sign_in(&user_access, sign_in("b"), None)
+        .await
+        .unwrap();
+    let b_ref = b.credential.account_ref.clone().expect("b has a reference");
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
@@ -2046,11 +1840,15 @@ async fn an_account_pool_agent_follows_its_enabled_accounts() {
     let pool = gents_documents::BackendAuth::NodeOAuthPool {
         allow_overage: false,
     };
-    let a = store_sign_in(&user_access, sign_in("a"), None).await.unwrap();
+    let a = store_sign_in(&user_access, sign_in("a"), None)
+        .await
+        .unwrap();
     let a_id = a.credential.credential_id.clone();
     assert_eq!(pool_with(pool.clone()).await, vec![a_id.clone()]);
 
-    let b = store_sign_in(&user_access, sign_in("b"), None).await.unwrap();
+    let b = store_sign_in(&user_access, sign_in("b"), None)
+        .await
+        .unwrap();
     let b_id = b.credential.credential_id.clone();
     let grown = pool_with(pool.clone()).await;
     assert_eq!(grown.len(), 2, "a sign-in joins the pool: {grown:?}");
@@ -2100,8 +1898,12 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
             chrono::Utc::now(),
         )
     };
-    store_sign_in(&user_access, sign_in("a"), None).await.unwrap();
-    let b = store_sign_in(&user_access, sign_in("b"), None).await.unwrap();
+    store_sign_in(&user_access, sign_in("a"), None)
+        .await
+        .unwrap();
+    let b = store_sign_in(&user_access, sign_in("b"), None)
+        .await
+        .unwrap();
     let b_backend = format!(
         "{}-{}",
         gents_inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
@@ -2544,3 +2346,5 @@ async fn unavailable_agent_scan_identity_follows_lean_candidates() {
     }
     node.shutdown().await.unwrap();
 }
+
+use gents_inference::test_support::document_fixtures::*;

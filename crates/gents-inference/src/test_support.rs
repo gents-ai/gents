@@ -201,3 +201,5 @@ pub fn resolved_agent(
         oauth_pool: Vec::new(),
     }
 }
+
+pub mod document_fixtures;
