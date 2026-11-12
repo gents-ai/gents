@@ -2900,7 +2900,6 @@ pub struct LeanContractSnapshot {
     pub durable_observation_cases: Vec<LeanDurableObservationCase>,
     pub plugin_target_resolution_cases: Vec<LeanPluginTargetResolutionCase>,
     pub goal_request_assignment_cases: Vec<LeanGoalRequestAssignmentCase>,
-    pub goal_wake_receipt_cases: Vec<LeanGoalWakeReceiptCase>,
     pub goal_tool_context_cases: Vec<LeanGoalToolContextCase>,
     pub goal_input_binding_cases: Vec<LeanGoalInputBindingCase>,
     pub goal_fresh_session_input_cases: Vec<LeanGoalFreshSessionInputCase>,
@@ -5807,75 +5806,6 @@ pub struct LeanGoalWakeAncestryCaseRowsItemRequest {
     pub request: u64,
     pub sequence: u64,
     pub session: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalWakeReceiptCase {
-    pub captured: Vec<u64>,
-    pub claim: LeanGoalWakeReceiptCaseClaim,
-    pub current: Vec<u64>,
-    pub name: String,
-    pub notifications: Vec<LeanGoalWakeReceiptCaseNotificationsItem>,
-    pub prior: Vec<LeanGoalWakeReceiptCasePriorItem>,
-    pub retry_parent: Option<u64>,
-    pub superseded_origins: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalWakeReceiptCaseClaim {
-    pub cutoff: u64,
-    pub scope: LeanGoalWakeReceiptCaseClaimScope,
-    pub wake: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalWakeReceiptCaseClaimScope {
-    pub goal: Option<u64>,
-    pub kind: String,
-    pub root: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalWakeReceiptCaseNotificationsItem {
-    pub message: u64,
-    pub scope: LeanGoalWakeReceiptCaseNotificationsItemScope,
-    pub sequence: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalWakeReceiptCaseNotificationsItemScope {
-    pub goal: Option<u64>,
-    pub kind: String,
-    pub root: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalWakeReceiptCasePriorItem {
-    pub claim: LeanGoalWakeReceiptCasePriorItemClaim,
-    pub create_goal: bool,
-    pub state: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalWakeReceiptCasePriorItemClaim {
-    pub cutoff: u64,
-    pub scope: LeanGoalWakeReceiptCasePriorItemClaimScope,
-    pub wake: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanGoalWakeReceiptCasePriorItemClaimScope {
-    pub goal: Option<u64>,
-    pub kind: String,
-    pub root: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
