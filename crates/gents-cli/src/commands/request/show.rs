@@ -3,14 +3,15 @@ use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
 use gents_protocol::row::AgentRequestRow;
-use gents_store::{config_client::ConfigAccess, graphql::escape_graphql_string};
+use gents_store::config_client::ConfigAccess;
 use serde_json::Value;
 
 use crate::cli::args::RequestShowArgs;
 use crate::cli::output_format::OutputFormat;
-use crate::request_helpers::{observe_canonical_request_output, request_output_envelope};
-use crate::{post_graphql, print_json, resolve_request_id};
-use gents_service::home_state::resolve_graphql_endpoint;
+use crate::operation_failure::OperationFailure;
+use crate::request_helpers::{request_output_envelope, request_ref};
+use crate::{print_json, resolve_request_id};
+use gents_service::home_state::{resolve_graphql_endpoint, resolve_node_did};
 
 use super::show_text::render_request_show_text;
 use super::show_tools::{
@@ -24,9 +25,10 @@ use super::show_views::{
 
 pub(crate) async fn request_show(args: RequestShowArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
+    let node_did = resolve_node_did(args.home.as_deref(), args.node_did.as_deref())?;
     let request_id =
         resolve_request_id(args.request_id.as_deref(), args.request_id_flag.as_deref())?;
-    let snapshot = load_request_show_snapshot(&graphql, &request_id).await?;
+    let snapshot = load_request_show_snapshot(&graphql, &node_did, &request_id).await?;
     match args.output.ensure_supported(
         "utils debug request show",
         &[OutputFormat::Text, OutputFormat::Json],
@@ -46,44 +48,28 @@ pub(crate) async fn request_show(args: RequestShowArgs) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone, Default)]
-struct RequestShowSchema {
-    agent_request: BTreeSet<String>,
-    agent_tool_call: BTreeSet<String>,
-}
-
 async fn load_request_show_snapshot(
     graphql: &GraphqlEndpoint,
+    node_did: &str,
     request_id: &str,
 ) -> Result<RequestShowSnapshot> {
-    let schema = load_request_show_schema(graphql).await;
-    let request_response = post_graphql(graphql, &request_show_request_query(request_id, &schema))
-        .await
-        .with_context(|| format!("loading AgentRequest {request_id}"))?;
-    let request_rows = request_response
-        .pointer("/data/AgentRequest")
-        .and_then(Value::as_array)
-        .context("debug request show query omitted rows")?;
-    anyhow::ensure!(
-        request_rows.len() == 1,
-        "request {request_id} is missing or ambiguous"
-    );
-    let request_row = request_rows[0].clone();
-    let canonical_request: AgentRequestRow = serde_json::from_value(request_row.clone())
-        .with_context(|| format!("decoding AgentRequest {request_id}"))?;
+    let access = ConfigAccess::Graphql(graphql.clone());
+    let canonical_request =
+        gents_session::operations::request::get(&access, &request_ref(node_did, request_id))
+            .await
+            .map_err(OperationFailure::from)?;
+    let request_row = serde_json::to_value(&canonical_request)?;
 
-    let output = observe_canonical_request_output(graphql, &canonical_request).await?;
+    let output =
+        gents_session::session::observe_request_output(&access, &canonical_request).await?;
     let envelope = request_output_envelope(&canonical_request, output)?;
 
-    let tool_response = post_graphql(
-        graphql,
-        &request_show_tool_calls_query(&canonical_request, &schema)?,
-    )
-    .await
-    .with_context(|| format!("loading AgentToolCall rows for {request_id}"))?;
-    let tool_rows = value_array(&tool_response, "/data/AgentToolCall");
+    let tool_response = access
+        .read(&request_show_tool_calls_query(&canonical_request)?)
+        .await
+        .with_context(|| format!("loading AgentToolCall rows for {request_id}"))?;
+    let tool_rows = gents_protocol::document_query::rows(&tool_response, "AgentToolCall").to_vec();
 
-    let access = ConfigAccess::Graphql(graphql.clone());
     let child_requests =
         gents_session::session::caused::started_by_request(&access, &canonical_request)
             .await
@@ -178,105 +164,17 @@ async fn load_request_show_snapshot(
     })
 }
 
-async fn load_request_show_schema(graphql: &GraphqlEndpoint) -> RequestShowSchema {
-    RequestShowSchema {
-        agent_request: load_graphql_type_fields(graphql, "AgentRequest").await,
-        agent_tool_call: load_graphql_type_fields(graphql, "AgentToolCall").await,
-    }
-}
-
-async fn load_graphql_type_fields(graphql: &GraphqlEndpoint, type_name: &str) -> BTreeSet<String> {
-    let query = format!(
-        r#"{{
-            __type(name: "{type_name}") {{
-                fields {{ name }}
-            }}
-        }}"#
-    );
-    let Ok(response) = post_graphql(graphql, &query).await else {
-        return BTreeSet::new();
-    };
-    response
-        .pointer("/data/__type/fields")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|field| field.get("name").and_then(Value::as_str))
-        .map(ToOwned::to_owned)
-        .collect()
-}
-
-fn request_show_request_query(request_id: &str, schema: &RequestShowSchema) -> String {
-    let mut fields = vec![
-        "_docID",
-        "requester_did",
-        "request_id",
-        "node_did",
-        "agent_did",
-        "session_id",
-        "lifecycle_state",
-        "backend_id",
-        "execution_origin",
-        "failure_reason",
-        "retry_count",
-        "max_retries",
-        "max_total_tokens",
-        "input",
-        "created_at",
-        "claimed_at",
-        "deadline",
-        "terminalized_at",
-        "valid_until",
-        "interrupt_requested_at",
-        "retry_parent_request",
-        "retry_root_request",
-        "superseded_by_request",
-        "caused_by_parent_request_id",
-        "caused_by_parent_tool_call_id",
-        "caused_by_trigger_id",
-        "caused_by_trigger_kind",
-        "caused_by_correlation",
-        "caused_by_trigger_context",
-        "caused_by_source_doc_id",
-        "request_hop",
-    ];
-    append_optional_fields(
-        &mut fields,
-        &schema.agent_request,
-        &[
-            "cancel_cause",
-            "terminal_output",
-            "execution_generation",
-            "execution_lease_secs",
-            "execution_lease_expires_at",
-            "workspace_id",
-            "workspace_authority",
-            "workspace_owner_node_did",
-            "workspace_seal_hash",
-        ],
-    );
-    let fields = fields.join("\n                ");
-    format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }}
-            ) {{
-                {fields}
-            }}
-        }}"#,
-        request_id = escape_graphql_string(request_id),
-    )
-}
-
 fn request_show_tool_calls_query(
     request: &AgentRequestRow,
-    schema: &RequestShowSchema,
-) -> Result<String> {
+) -> Result<gents_protocol::document_query::Rendered> {
+    use gents_protocol::document_query::{
+        fields::agent_tool_call as fields, session_scope, Direction, Filter, Query, Selection,
+    };
     let request_doc_id = request
         .doc_id
         .as_deref()
         .context("debug request show missing physical identity")?;
-    let scope = gents_protocol::session::session_scope_filter(
+    let scope = session_scope(
         request
             .node_did
             .as_deref()
@@ -287,43 +185,11 @@ fn request_show_tool_calls_query(
             .context("debug request show missing session")?,
         request.requester_did.as_deref(),
     );
-    let mut fields = vec![
-        "tool_call_key",
-        "request_id",
-        "session_id",
-        "message_sequence",
-        "tool_name",
-        "tool_call_id",
-        "status",
-        "lifecycle_state",
-        "started_at",
-        "deadline_at",
-        "completed_at",
-        "await_mode",
-    ];
-    append_optional_fields(&mut fields, &schema.agent_tool_call, &["cancel_cause"]);
-    let fields = fields.join("\n                ");
-    Ok(format!(
-        r#"{{
-            AgentToolCall(
-                filter: {{ {scope}, request_doc_id: {{ _eq: "{request_doc_id}" }} }},
-                order: {{ started_at: ASC }}
-            ) {{
-                {fields}
-            }}
-        }}"#,
-        request_doc_id = escape_graphql_string(request_doc_id),
+    Ok(Query::select(Selection::owned(
+        "tool_call_key request_id session_id message_sequence tool_name tool_call_id status \
+         lifecycle_state started_at deadline_at completed_at await_mode cancel_cause",
     ))
-}
-
-fn append_optional_fields(
-    fields: &mut Vec<&'static str>,
-    available_fields: &BTreeSet<String>,
-    optional_fields: &[&'static str],
-) {
-    for field in optional_fields {
-        if available_fields.contains(*field) {
-            fields.push(field);
-        }
-    }
+    .filter(scope.and(Filter::eq(fields::REQUEST_DOC_ID, request_doc_id)))
+    .order_by(fields::STARTED_AT, Direction::Asc)
+    .render())
 }
