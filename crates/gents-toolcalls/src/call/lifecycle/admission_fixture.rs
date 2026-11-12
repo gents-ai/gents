@@ -474,7 +474,7 @@ pub(crate) async fn claimed_signed_request_with_trigger_correlation(
     claimed_signed_request_create(node, identity, create).await
 }
 
-pub(crate) async fn claimed_signed_request_create(
+pub async fn claimed_signed_request_create(
     node: &Arc<EmbeddedNode>,
     identity: &dyn NodeIdentity,
     create: gents_protocol::request_admission::AgentRequestCreate,
