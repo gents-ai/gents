@@ -648,7 +648,6 @@ def snapshotSessionCasesJson : String :=
     ++ "\"session_document_reference_encoding\":" ++ sessionDocumentReferenceEncodingJson ++ ","
     ++ "\"session_document_retry_cases\":" ++ sessionDocumentRetryCasesJson ++ ","
     ++ "\"session_document_projection_cases\":" ++ sessionDocumentProjectionCasesJson ++ ","
-    ++ "\"session_document_selection_cases\":" ++ sessionDocumentSelectionCasesJson ++ ","
     ++ "\"session_document_fork_cases\":" ++ sessionDocumentForkCasesJson ++ ","
     ++ "\"plugin_job_opening_cases\":" ++ pluginJobOpeningCasesJson ++ ","
     ++ "\"session_reply_preview_cases\":" ++ Conformance.SessionReplyPreview.casesJson ++ ","

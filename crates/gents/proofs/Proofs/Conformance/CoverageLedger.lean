@@ -2524,8 +2524,10 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage "family" "contracts_edit_anchor_fork_unreached"
       "model-production-gap: the served fork fixture publishes user-text turns only; edit anchors in histories with assistant, tool-result or empty user messages, duplicate keys or absent anchors are not built by a production scenario.")
       "request-lifecycle" [Surface.runtimeInternal]
-  , tagged (consumerCoverage "session_document_selection_cases" "SessionDocumentCases")
+  , tagged (consumerCoverage "family" "contracts_session_selection")
       "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "family" "contracts_session_selection_client_store")
+      "client-shell" [Surface.runtimeInternal]
   , tagged (consumerCoverage "session_document_fork_cases" "SessionDocumentCases")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage "family" "contracts_archive_transition")

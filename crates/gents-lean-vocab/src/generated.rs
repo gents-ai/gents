@@ -3030,7 +3030,6 @@ pub struct LeanContractSnapshot {
     pub callback_transition_case_count: usize,
     pub callback_transition_cases: Vec<LeanCallbackTransitionCase>,
     pub session_document_reference_encoding: String,
-    pub session_document_selection_cases: Vec<serde_json::Value>,
     pub session_document_projection_cases: Vec<serde_json::Value>,
     pub session_document_retry_cases: Vec<serde_json::Value>,
     pub session_document_fork_cases: Vec<serde_json::Value>,

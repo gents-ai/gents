@@ -348,59 +348,64 @@ async fn same_second_claim_after_completion_becomes_the_observed_head() {
 /// query and head selection over DefraDB.
 #[tokio::test]
 async fn generated_selection_cases_drive_the_native_request_head() {
-    let cases = &gents_lean_vocab::lean_contract_snapshot().session_document_selection_cases;
-    assert!(cases.len() >= 13);
     let base = chrono::DateTime::parse_from_rfc3339("2030-01-01T00:00:00Z").unwrap();
-    let seconds = |value: &serde_json::Value| {
-        (base + chrono::Duration::seconds(value.as_i64().unwrap())).to_rfc3339()
+    let seconds =
+        |value: u64| (base + chrono::Duration::seconds(i64::try_from(value).unwrap())).to_rfc3339();
+    let millis = |value: Option<u64>| {
+        value.map(|ms| {
+            (base + chrono::Duration::milliseconds(i64::try_from(ms).unwrap())).to_rfc3339()
+        })
     };
-    let millis = |value: &serde_json::Value| {
-        value
-            .as_i64()
-            .map(|ms| (base + chrono::Duration::milliseconds(ms)).to_rfc3339())
-    };
-    let did = |kind: &str, value: &serde_json::Value| {
-        value.as_u64().map(|n| format!("did:test:{kind}-{n}"))
-    };
-    let request_id = |value: &serde_json::Value| format!("{:08}", value.as_u64().unwrap());
-    for (index, case) in cases.iter().enumerate() {
+    let did = |kind: &str, value: Option<u64>| value.map(|n| format!("did:test:{kind}-{n}"));
+    let request_id = |value: u64| format!("{value:08}");
+    for case in gents_lean_vocab::families::contracts_session_selection::cases::<String>() {
         let node_db = gents_inference::test_support::test_db(
             "generated-selection-cases-drive-the-nati",
             crate::test_support::no_lifecycle_plugins(),
         )
         .await;
         let node = node_db.node.clone();
-        let case = case.clone();
-        let expected = case["selected"].get("request_id").map(request_id);
+        let input = case.input.clone();
         let selected = ConfigAccess::transact_local_idempotent(
             &node, None, IdempotentTransactionRetry::Standard, "test.session.generated_selection",
             |txn| {
-                let case = case.clone();
+                let input = input.clone();
                 Box::pin(async move {
-                    for row in case["requests"].as_array().unwrap() {
+                    for row in &input.requests {
                         txn.execute_with_variables(
                             "mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }",
                             &serde_json::json!({"input": {
-                                "request_id": request_id(&row["request_id"]),
-                                "purpose": row["purpose"], "node_did": did("node", &row["scope"]["node"]),
-                                "session_id": format!("session-{}", row["scope"]["session"]),
-                                "requester_did": did("requester", &row["scope"]["requester"]),
-                                "agent_did": format!("agent-{}", row["agent"]), "content": "prompt",
-                                "created_at": seconds(&row["created_at"]),
-                                "terminalized_at": millis(&row["terminalized_at"]),
-                                "lifecycle_state": row["state"]}}),
+                                "request_id": request_id(row.request_id),
+                                "purpose": row.purpose, "node_did": did("node", Some(row.scope.node)),
+                                "session_id": format!("session-{}", row.scope.session),
+                                "requester_did": did("requester", row.scope.requester),
+                                "agent_did": format!("agent-{}", row.agent), "content": "prompt",
+                                "created_at": seconds(row.created_at),
+                                "terminalized_at": millis(row.terminalized_at),
+                                "lifecycle_state": row.state}}),
                         ).await?;
                     }
-                    let scope = case["requester_scoped"].as_bool().unwrap()
-                        .then(|| did("requester", &case["requester"]));
+                    let scope = input.requester_scoped
+                        .then(|| did("requester", input.requester));
                     let latest = load_latest_request_in_txn(
-                        txn, &did("node", &case["node"]).unwrap(),
-                        &format!("session-{}", case["session"]), scope.as_ref().map(Option::as_deref),
+                        txn, &did("node", Some(input.node)).unwrap(),
+                        &format!("session-{}", input.session), scope.as_ref().map(Option::as_deref),
                     ).await?;
                     Ok::<_, anyhow::Error>(latest.map(|fact| fact.observed.request_id))
                 })
             },
         ).await.unwrap();
-        assert_eq!(selected, expected, "case {index}: {}", case["name"]);
+        let selected = selected.map(|id| {
+            case.input
+                .requests
+                .iter()
+                .find(|row| request_id(row.request_id) == id)
+                .unwrap()
+                .clone()
+        });
+        case.check(
+            gents_lean_vocab::families::contracts_session_selection::SelectionOutput { selected },
+        );
+        node.shutdown().await.expect("shut down test node");
     }
 }

@@ -215,13 +215,6 @@ private def historyJson (h : SessionFork.History) : Json := Json.mkObj
       ("sequence", toJson c.sequence), ("through_sequence", toJson c.throughSequence)])),
    ("closures", toJson (h.closures.map fun c => Json.mkObj
      [("doc_id", toJson c.id), ("session", toJson c.session), ("logical", toJson c.logical)]))]
-private def selectionJson (name : String) (rows : List AgentSession.RequestFact)
-    (node session : Nat) (requester : Option (Option Nat)) : Json := Json.mkObj
-  [("name", toJson name), ("requests", toJson (rows.map requestJson)),
-   ("node", toJson node), ("session", toJson session),
-   ("requester_scoped", toJson requester.isSome),
-   ("requester", toJson (requester.getD none)),
-   ("selected", (AgentSession.latest rows node session requester).map requestJson |>.getD Json.null)]
 private def forkJson (name : String) (source : SessionFork.History)
     (target : AgentSession.Scope) (cut : Nat) (authorized idle coherent : Bool) : Json :=
   let authorization : SessionFork.SourceAuthorization :=
@@ -524,21 +517,77 @@ def sessionDocumentProjectionCasesJson : String :=
         [{ completedRequest with scope := { completedRequest.scope with requester := some 99 } }],
       refreshJson "wrong_agent_current_row_noop" newerRequest [{ completedRequest with agent:= 99 }]] ++ Conformance.RuntimeInput.cases)).compress
 
-def sessionDocumentSelectionCasesJson : String :=
-  (toJson [
-      selectionJson "timestamp_tie_forward" [old, newerRequest] 1 10 none,
-      selectionJson "timestamp_tie_reverse" [newerRequest, old] 1 10 none,
-      selectionJson "newer_title_preserves_normal_head" [titleRequest, old] 1 10 none,
-      selectionJson "title_only_has_no_public_head" [titleRequest] 1 10 none,
-      selectionJson "absent_requester_exact" [old] 1 10 (some none),
-      selectionJson "foreign_agent" [old] 9 10 none,
-      selectionJson "foreign_session" [old] 1 9 none,
-      selectionJson "same_second_claim_after_completion" [finishedPredecessor, sameSecondClaim] 1 10 none,
-      selectionJson "same_second_claim_after_completion_reverse" [sameSecondClaim, finishedPredecessor] 1 10 none,
-      selectionJson "same_second_later_terminalization" [finishedPredecessor, sameSecondCompletion] 1 10 none,
-      selectionJson "same_second_later_terminalization_reverse" [sameSecondCompletion, finishedPredecessor] 1 10 none,
-      selectionJson "same_second_live_outranks_later_refusal" [sameSecondClaim, sameSecondRefusal] 1 10 none,
-      selectionJson "earlier_second_live_loses" [{ sameSecondClaim with createdAt := 1 }, finishedPredecessor] 1 10 none]).compress
+structure RequestWire where
+  purpose : String
+  scope : AgentSession.Scope
+  agent : Nat
+  createdAt : Nat
+  docId : Nat
+  requestId : Nat
+  state : RequestState
+  terminalizedAt : Option Nat
+  deriving ToJson
+
+def RequestWire.ofModel (r : AgentSession.RequestFact) : RequestWire :=
+  { purpose := r.purpose.toWire, scope := r.scope, agent := r.agent, createdAt := r.createdAt
+    docId := r.observed.docId, requestId := r.observed.requestId, state := r.observed.state
+    terminalizedAt := r.terminalizedAt }
+
+def RequestWire.toModel (w : RequestWire) : AgentSession.RequestFact :=
+  { purpose := (RequestPurpose.fromWire? w.purpose).getD .normal, scope := w.scope, agent := w.agent
+    createdAt := w.createdAt, observed := ⟨w.docId, w.requestId, w.state⟩
+    terminalizedAt := w.terminalizedAt }
+
+structure SelectionInput where
+  name : String
+  requests : List RequestWire
+  node : Nat
+  session : Nat
+  requesterScoped : Bool
+  requester : Option Nat
+  deriving ToJson
+
+structure SelectionOutput where
+  selected : Option RequestWire
+  deriving ToJson
+
+def selectionInput (name : String) (rows : List AgentSession.RequestFact)
+    (node session : Nat) (requester : Option (Option Nat)) : SelectionInput :=
+  { name, requests := rows.map RequestWire.ofModel, node, session
+    requesterScoped := requester.isSome, requester := requester.getD none }
+
+def selectionInputs : List SelectionInput :=
+  [ selectionInput "timestamp_tie_forward" [old, newerRequest] 1 10 none,
+    selectionInput "timestamp_tie_reverse" [newerRequest, old] 1 10 none,
+    selectionInput "newer_title_preserves_normal_head" [titleRequest, old] 1 10 none,
+    selectionInput "title_only_has_no_public_head" [titleRequest] 1 10 none,
+    selectionInput "absent_requester_exact" [old] 1 10 (some none),
+    selectionInput "foreign_agent" [old] 9 10 none,
+    selectionInput "foreign_session" [old] 1 9 none,
+    selectionInput "same_second_claim_after_completion" [finishedPredecessor, sameSecondClaim] 1 10 none,
+    selectionInput "same_second_claim_after_completion_reverse" [sameSecondClaim, finishedPredecessor] 1 10 none,
+    selectionInput "same_second_later_terminalization" [finishedPredecessor, sameSecondCompletion] 1 10 none,
+    selectionInput "same_second_later_terminalization_reverse" [sameSecondCompletion, finishedPredecessor] 1 10 none,
+    selectionInput "same_second_live_outranks_later_refusal" [sameSecondClaim, sameSecondRefusal] 1 10 none,
+    selectionInput "earlier_second_live_loses" [{ sameSecondClaim with createdAt := 1 }, finishedPredecessor] 1 10 none ]
+
+def selectionOutcome (i : SelectionInput) : SelectionOutput :=
+  { selected := (AgentSession.latest (i.requests.map RequestWire.toModel) i.node i.session
+      (if i.requesterScoped then some i.requester else none)).map RequestWire.ofModel }
+
+@[conformance_family]
+def sessionSelection : Family SelectionInput SelectionOutput where
+  inputs := selectionInputs
+  model := selectionOutcome
+
+/-- The desktop client store keeps request rows without their terminalization
+time and selects within one node's session, so it replays the title-purpose
+selections, whose rows differ only in purpose and creation time. -/
+@[conformance_family]
+def sessionSelectionClientStore : Family SelectionInput SelectionOutput where
+  inputs := selectionInputs.filter fun i =>
+    i.name ∈ ["newer_title_preserves_normal_head", "title_only_has_no_public_head"]
+  model := selectionOutcome
 
 structure EditMessage where
   key : String
