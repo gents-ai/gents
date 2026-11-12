@@ -112,7 +112,7 @@ async fn request_interrupt_waits_until_running_request_is_terminal() -> Result<(
         let status = tokio::process::Command::new("mkfifo").arg(&fifo).status().await?;
         ensure!(status.success(), "could not create held-read FIFO");
         let arguments = serde_json::json!({"command":"cat","args":[path_text(&fifo)?]});
-        let prompt = format!("Call bash_unrestricted with exactly these arguments: {arguments}. Wait for its result, then acknowledge briefly.");
+        let prompt = format!("Call bash_unrestricted directly with exactly these arguments: {arguments}. Do not call spawn_process or any other tool. Wait for its result, then acknowledge briefly.");
         let submitted = live.json(&["utils", "debug", "request", "submit", "--graphql", &live.graphql,
             "--node-did", &live.node, "--content", &prompt, "--no-wait"]).await?;
         let request = submitted["request_id"].as_str().context("request id")?;

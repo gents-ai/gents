@@ -26,7 +26,7 @@ async fn start_paused_goal(
         "command": format!("IFS= read -r line < '{}'; printf 'goal fixture released'", fifo.display()),
         "args": [],
     });
-    let hold = format!("Call bash_unrestricted exactly once with these arguments: {args}. Wait for the result, then acknowledge briefly without calling any other tool.");
+    let hold = format!("Call bash_unrestricted directly, exactly once, with these arguments: {args}. Do not call spawn_process or any other tool. Wait for the result, then acknowledge briefly.");
     let started = live
         .json(&[
             "automation",
