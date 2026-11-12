@@ -9,6 +9,7 @@ pub(super) mod agents;
 mod args;
 mod authoring;
 mod automation;
+mod automation_inventory;
 mod cleanup;
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod contracts;
@@ -25,6 +26,8 @@ pub mod help;
 pub(super) mod help;
 mod inference;
 mod inventory;
+mod inference_inventory;
+mod mcp_views;
 mod observe;
 mod pack;
 mod patch;

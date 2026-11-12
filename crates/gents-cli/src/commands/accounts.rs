@@ -145,12 +145,25 @@ pub(crate) struct Snapshot {
 pub(crate) async fn snapshot(access: &ConfigAccess, node_did: &str) -> Result<Snapshot> {
     let accounts = gents_inference::auth::credential::list_accounts(access, node_did).await?;
     let (backends, profiles) = access
-        .transact_write("accounts.config", |txn| {
+        .transact_readonly("accounts.config", |txn| {
             Box::pin(async move {
-                Ok::<_, anyhow::Error>((
-                    gents_documents::list_inference_backends_in_txn(txn, node_did).await?,
-                    gents_documents::list_inference_profiles_in_txn(txn, node_did).await?,
-                ))
+                let backends = txn
+                    .read_view(&gents_inference::views::backends::BackendList::new(
+                        node_did,
+                    ))
+                    .await?
+                    .into_iter()
+                    .map(|row| row.metadata.into_backend().map_err(anyhow::Error::from))
+                    .collect::<Result<Vec<_>>>()?;
+                let profiles = txn
+                    .read_view(&gents_inference::views::profiles::ProfileList::new(
+                        node_did,
+                    ))
+                    .await?
+                    .into_iter()
+                    .map(|row| row.profile)
+                    .collect();
+                Ok::<_, anyhow::Error>((backends, profiles))
             })
         })
         .await?;

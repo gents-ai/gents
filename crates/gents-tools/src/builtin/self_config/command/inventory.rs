@@ -18,10 +18,23 @@ impl ConfigCommandTool {
                 "self_config.account_inventory",
                 |txn| {
                     Box::pin(async move {
-                        Ok::<_, anyhow::Error>((
-                            gents_documents::list_inference_backends_in_txn(txn, node_did).await?,
-                            gents_documents::list_inference_profiles_in_txn(txn, node_did).await?,
-                        ))
+                        let backends = txn
+                            .read_view(&gents_inference::views::backends::BackendList::new(
+                                node_did,
+                            ))
+                            .await?
+                            .into_iter()
+                            .map(|row| row.metadata.into_backend().map_err(anyhow::Error::from))
+                            .collect::<Result<Vec<_>>>()?;
+                        let profiles = txn
+                            .read_view(&gents_inference::views::profiles::ProfileList::new(
+                                node_did,
+                            ))
+                            .await?
+                            .into_iter()
+                            .map(|row| row.profile)
+                            .collect();
+                        Ok::<_, anyhow::Error>((backends, profiles))
                     })
                 },
             )
@@ -118,143 +131,128 @@ impl ConfigCommandTool {
             (1..=50).contains(&limit),
             "--limit must be between 1 and 50"
         );
-        let (collection, id_field, fields) = match target {
-            SelfConfigTarget::InferenceProfile => (
-                "InferenceProfile",
-                "profile_id",
-                "profile_id display_name description backend_id model_name reasoning_effort service_tier context_window max_output_tokens sampling_id execution_id",
-            ),
-            SelfConfigTarget::InferenceBackend => (
-                "InferenceBackendMetadata",
-                "backend_id",
-                "backend_id name provider_kind openai_wire_api endpoint claude_platform connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled",
-            ),
-            _ => (
-                target.collection_name(),
-                target.unique_field(),
-                "",
-            ),
-        };
-        let all_fields = target
-            .all_fields()
-            .iter()
-            .copied()
-            .filter(|field| {
-                matches!(
-                    target,
-                    SelfConfigTarget::AgentTarget | SelfConfigTarget::InferenceExecution
-                ) || *field == target.unique_field()
-                    || [
-                        "display_name",
-                        "name",
-                        "description",
-                        "enabled",
-                        "tags",
-                        "context_id",
-                        "tools_id",
-                        "inference_profile_id",
-                        "backend_id",
-                        "model_name",
-                        "sampling_id",
-                        "execution_id",
-                        "retry_policy_id",
-                        "compaction_id",
-                        "agent_did",
-                        "agent_did",
-                        "task_id",
-                        "source_collection",
-                    ]
-                    .contains(field)
-            })
-            .collect::<Vec<_>>()
-            .join(" ");
-        let fields = if fields.is_empty() {
-            all_fields.as_str()
-        } else {
-            fields
-        };
-        let owner = escape_graphql_string(&self.node_did);
-        let query =
-            format!("{{ {collection}(filter: {{node_did: {{_eq: \"{owner}\"}}}}) {{{fields}}} }}");
-        let (mut selected, total, truncated) = gents_store::config_client::ConfigAccess::transact_local_readonly(
-            &self.node,
-            Some(self.core.identity()?),
-            "self_config.inference_inventory",
-            |txn| {
-                let query = query.clone();
-                Box::pin(async move {
-                    let response = txn.execute(&query).await?;
-                    let mut rows = response
-                        .get("data")
-                        .and_then(|data| data.get(collection))
-                        .and_then(Value::as_array)
-                        .context("inventory query returned no rows array")?
-                        .clone();
-                    rows.sort_by(|left, right| {
-                        left.get(id_field)
-                            .and_then(Value::as_str)
-                            .cmp(&right.get(id_field).and_then(Value::as_str))
-                    });
-                    let total = rows.len();
-                    let mut selected = rows
-                        .into_iter()
-                        .filter(|row| {
-                            row.get(id_field)
-                                .and_then(Value::as_str)
-                                .is_some_and(|id| cursor.is_none_or(|cursor| id > cursor))
-                        })
-                        .take(limit + 1)
-                        .collect::<Vec<_>>();
-                    let truncated = selected.len() > limit;
-                    selected.truncate(limit);
-                    if target == SelfConfigTarget::InferenceBackend {
-                        for row in &mut selected {
-                            let backend_id = row.get("backend_id").and_then(Value::as_str)
-                                .context("backend row has no backend_id")?;
-                            let observation = gents_inference::backends::registry::lookup_backend_observation_in_txn(
-                                txn, &self.node_did, backend_id,
-                            ).await?;
-                            let provider_kind = serde_json::from_value(
-                                row.get("provider_kind")
-                                    .cloned()
-                                    .context("backend row has no provider_kind")?,
-                            )
-                            .context("decoding backend provider_kind")?;
-                            let view = gents_inference::backends::registry::scoped_observation_view(
-                                observation.as_ref(),
-                                &self.node_did,
-                                provider_kind,
-                            )?;
-                            let object = row.as_object_mut().context("backend row must be an object")?;
-                            for field in ["catalog", "probe_status", "last_probe"] {
-                                object.insert(field.into(), view[field].clone());
-                            }
+        if matches!(
+            target,
+            SelfConfigTarget::Task
+                | SelfConfigTarget::Trigger
+                | SelfConfigTarget::Schedule
+                | SelfConfigTarget::EventSource
+        ) {
+            return self.automation_inventory(target, limit, cursor).await;
+        }
+        if target == SelfConfigTarget::ToolServiceRegistry {
+            return self.mcp_inventory(limit, cursor).await;
+        }
+        if matches!(
+            target,
+            SelfConfigTarget::InferenceProfile
+                | SelfConfigTarget::InferenceBackend
+                | SelfConfigTarget::InferenceSampling
+                | SelfConfigTarget::InferenceExecution
+                | SelfConfigTarget::InferenceRetryPolicy
+        ) {
+            return self.typed_inference_inventory(target, limit, cursor).await;
+        }
+        let (mut selected, total) =
+            gents_store::config_client::ConfigAccess::transact_local_readonly(
+                &self.node,
+                Some(self.core.identity()?),
+                "self_config.configuration_inventory",
+                |txn| {
+                    Box::pin(async move {
+                        macro_rules! read {
+                            ($view:expr) => {{
+                                let all = txn.read_view(&$view).await?;
+                                let total = all.len();
+                                let mut view = $view.limit((limit + 1) as u64);
+                                if let Some(cursor) = cursor {
+                                    view = view.after(cursor);
+                                }
+                                let rows = txn.read_view(&view).await?;
+                                let rows = rows
+                                    .into_iter()
+                                    .map(serde_json::to_value)
+                                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                                Ok::<_, anyhow::Error>((rows, total))
+                            }};
                         }
-                    }
-                    Ok::<_, anyhow::Error>((selected, total, truncated))
-                })
-            },
-        )
-        .await?;
-        if target == SelfConfigTarget::InferenceExecution {
+                        use gents_documents::views::config;
+                        match target {
+                            SelfConfigTarget::Agent => read!(
+                                gents_documents::views::agents::AgentList::new(&self.node_did)
+                            ),
+                            SelfConfigTarget::AgentContext => {
+                                read!(config::AgentContextList::new(&self.node_did))
+                            }
+                            SelfConfigTarget::Compaction => {
+                                read!(config::CompactionConfigList::new(&self.node_did))
+                            }
+                            SelfConfigTarget::Tools => {
+                                read!(config::ToolsList::new(&self.node_did))
+                            }
+                            SelfConfigTarget::AgentTarget => {
+                                read!(config::AgentTargetList::new(&self.node_did))
+                            }
+                            SelfConfigTarget::DatastoreToolSurface => {
+                                read!(config::DatastoreToolSurfaceList::new(&self.node_did))
+                            }
+                            SelfConfigTarget::Skill => {
+                                read!(config::SkillList::new(&self.node_did))
+                            }
+                            SelfConfigTarget::Page => read!(config::PageList::new(&self.node_did)),
+                            SelfConfigTarget::PluginSource => {
+                                read!(config::PluginSourceList::new(&self.node_did))
+                            }
+                            _ => unreachable!(
+                                "specialized inventory dispatched before configuration views"
+                            ),
+                        }
+                    })
+                },
+            )
+            .await?;
+        let truncated = selected.len() > limit;
+        selected.truncate(limit);
+        if target != SelfConfigTarget::AgentTarget {
             for row in &mut selected {
-                let effective = super::read::execution_settings(Some(row))?;
-                row.as_object_mut()
-                    .context("execution row must be an object")?
-                    .insert("effective".into(), effective);
+                if let Some(fields) = row.as_object_mut() {
+                    fields.retain(|field, _| {
+                        field == target.unique_field()
+                            || matches!(
+                                field.as_str(),
+                                "display_name"
+                                    | "name"
+                                    | "description"
+                                    | "enabled"
+                                    | "tags"
+                                    | "context_id"
+                                    | "tools_id"
+                                    | "inference_profile_id"
+                                    | "backend_id"
+                                    | "model_name"
+                                    | "sampling_id"
+                                    | "execution_id"
+                                    | "retry_policy_id"
+                                    | "compaction_id"
+                                    | "agent_did"
+                                    | "task_id"
+                                    | "source_collection"
+                            )
+                    });
+                }
             }
         }
         let next_cursor = truncated
             .then(|| {
                 selected
-                    .last()?
-                    .get(id_field)?
-                    .as_str()
+                    .last()
+                    .and_then(|row| row.get(target.unique_field()))
+                    .and_then(Value::as_str)
                     .map(ToOwned::to_owned)
             })
             .flatten();
         ordered! {
-            "resource": collection,
+            "resource": target.collection_name(),
             "items": selected,
             "page": json!({
                 "limit": limit,
@@ -263,7 +261,7 @@ impl ConfigCommandTool {
                 "truncated": truncated,
                 "next_cursor": next_cursor,
             }),
-            "note": "Inventory is read-only and does not rebind any agent. Backend credentials are excluded.",
+            "note": "Inventory is read-only and does not rebind any agent.",
         }
         .pretty()
     }

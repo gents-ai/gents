@@ -3,7 +3,6 @@ use gents_documents::operations::delete;
 use gents_protocol::operations::document::{DocumentDeleteError, OperationActor};
 use gents_protocol::operations::inference::InferenceDocument;
 use gents_store::collection::Collection;
-use gents_store::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
 use super::inference_failure::InferenceFailure;
@@ -11,7 +10,7 @@ use crate::cli::output_format::OutputFormat;
 use crate::cli::{ConfigListArgs, ConfigShowArgs};
 use crate::config_writes::ConfigAccess;
 use crate::request_helpers::resolve_dual_id;
-use crate::{graphql_rows, print_json, resolve_config_access};
+use crate::{print_json, resolve_config_access};
 
 #[derive(Clone, Copy)]
 pub(crate) struct ConfigDocumentSpec {
@@ -261,66 +260,157 @@ pub(crate) async fn query_collection(
     node_did: &str,
     id: Option<&str>,
 ) -> Result<Vec<Value>> {
-    let mut filter = format!(
-        r#"node_did: {{ _eq: "{}" }}"#,
-        escape_graphql_string(node_did)
-    );
-    if let Some(id) = id {
-        filter.push_str(&format!(
-            r#", {}: {{ _eq: "{}" }}"#,
-            spec.collection.unique_field(),
-            escape_graphql_string(id)
-        ));
+    if spec.collection == Collection::Agent {
+        let mut view = gents_documents::views::agents::AgentList::new(node_did);
+        if let Some(id) = id {
+            view = view.agent_did(id);
+        }
+        return access
+            .read_view(&view)
+            .await?
+            .into_iter()
+            .map(|row| {
+                let enabled = row.agent.enabled;
+                let mut value = serde_json::to_value(row)?;
+                value["enabled"] = Value::Bool(enabled);
+                Ok(value)
+            })
+            .collect();
     }
     let rows = if spec.collection == Collection::InferenceBackend {
+        let mut view = gents_inference::views::backends::BackendList::new(node_did);
+        if let Some(id) = id {
+            view = view.backend_id(id);
+        }
         access
-            .transact_readonly("cli.config.backend.read", |txn| {
-                Box::pin(async move {
-                    if let Some(id) = id {
-                        let record = gents_documents::read_desired_state_record_in_txn(
-                            txn,
-                            Collection::InferenceBackend,
-                            node_did,
-                            id,
-                        )
-                        .await?;
-                        return record
-                            .into_iter()
-                            .map(|(doc_id, mut row)| {
-                                row.as_object_mut()
-                                    .context("backend must be an object")?
-                                    .insert("_docID".into(), Value::String(doc_id));
-                                Ok(row)
-                            })
-                            .collect::<Result<Vec<_>>>();
-                    }
-                    gents_documents::list_inference_backends_in_txn(txn, node_did)
-                        .await?
-                        .into_iter()
-                        .map(|backend| {
-                            let doc_id = backend
-                                .physical_doc_id
-                                .clone()
-                                .context("backend has no physical ID")?;
-                            let mut row = serde_json::to_value(backend)?;
-                            row.as_object_mut()
-                                .context("backend must be an object")?
-                                .insert("_docID".into(), Value::String(doc_id));
-                            Ok(row)
-                        })
-                        .collect::<Result<Vec<_>>>()
-                })
-            })
+            .read_view(&view)
             .await?
+            .into_iter()
+            .map(|row| {
+                let doc_id = row
+                    .metadata
+                    .physical_doc_id
+                    .clone()
+                    .context("backend has no physical ID")?;
+                let mut value = serde_json::to_value(row.metadata.into_backend()?)?;
+                value
+                    .as_object_mut()
+                    .context("backend must be an object")?
+                    .insert("_docID".into(), Value::String(doc_id));
+                Ok(value)
+            })
+            .collect::<Result<Vec<_>>>()?
+    } else if spec.collection == Collection::InferenceProfile {
+        let mut view = gents_inference::views::profiles::ProfileList::new(node_did);
+        if let Some(id) = id {
+            view = view.profile_id(id);
+        }
+        access
+            .read_view(&view)
+            .await?
+            .into_iter()
+            .map(serde_json::to_value)
+            .collect::<std::result::Result<Vec<_>, _>>()?
+    } else if spec.collection == Collection::InferenceSampling {
+        let mut view = gents_inference::views::settings::SamplingList::new(node_did);
+        if let Some(id) = id {
+            view = view.id(id);
+        }
+        access
+            .read_view(&view)
+            .await?
+            .into_iter()
+            .map(serde_json::to_value)
+            .collect::<std::result::Result<Vec<_>, _>>()?
+    } else if spec.collection == Collection::InferenceExecution {
+        let mut view = gents_inference::views::settings::ExecutionList::new(node_did);
+        if let Some(id) = id {
+            view = view.id(id);
+        }
+        access
+            .read_view(&view)
+            .await?
+            .into_iter()
+            .map(serde_json::to_value)
+            .collect::<std::result::Result<Vec<_>, _>>()?
+    } else if spec.collection == Collection::InferenceRetryPolicy {
+        let mut view = gents_inference::views::settings::RetryPolicyList::new(node_did);
+        if let Some(id) = id {
+            view = view.id(id);
+        }
+        access
+            .read_view(&view)
+            .await?
+            .into_iter()
+            .map(serde_json::to_value)
+            .collect::<std::result::Result<Vec<_>, _>>()?
     } else {
-        let fields = gents_documents::config_projection(spec.collection, None)?
-            .0
-            .join(" ");
-        let query = format!(
-            "{{ {}(filter: {{ {filter} }}) {{ _docID {fields} }} }}",
-            spec.collection.graphql_type()
-        );
-        graphql_rows(access, spec.collection.graphql_type(), &query).await?
+        use gents_documents::views::{config, tasks};
+        macro_rules! read {
+            ($view:expr) => {{
+                access
+                    .read_view(&$view)
+                    .await?
+                    .into_iter()
+                    .map(serde_json::to_value)
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+            }};
+        }
+        macro_rules! config {
+            ($view:ty) => {{
+                let mut view = <$view>::new(node_did);
+                if let Some(id) = id {
+                    view = view.id(id);
+                }
+                read!(view)
+            }};
+        }
+        match spec.collection {
+            Collection::Node => config!(config::NodeList),
+            Collection::DefaultAgentSelection => config!(config::DefaultAgentSelectionList),
+            Collection::AgentContext => config!(config::AgentContextList),
+            Collection::Compaction => config!(config::CompactionConfigList),
+            Collection::Tools => config!(config::ToolsList),
+            Collection::AgentTarget => config!(config::AgentTargetList),
+            Collection::DatastoreToolSurface => config!(config::DatastoreToolSurfaceList),
+            Collection::Skill => config!(config::SkillList),
+            Collection::Page => config!(config::PageList),
+            Collection::PluginSource => config!(config::PluginSourceList),
+            Collection::ToolServiceRegistry => read!(gents_tools::mcp::views::ServiceInventory {
+                node_did,
+                service_id: id,
+                enabled_only: false,
+            }),
+            Collection::Task => {
+                let mut view = tasks::TaskList::new(node_did);
+                if let Some(id) = id {
+                    view = view.task_id(id);
+                }
+                read!(view)
+            }
+            Collection::Trigger => {
+                let mut view = tasks::TriggerList::new(node_did);
+                if let Some(id) = id {
+                    view = view.trigger_ids(vec![id.to_owned()]);
+                }
+                read!(view)
+            }
+            Collection::Schedule => {
+                let mut view = tasks::ScheduleList::new(node_did);
+                if let Some(id) = id {
+                    view = view.schedule_ids(vec![id.to_owned()]);
+                }
+                read!(view)
+            }
+            Collection::EventSource => {
+                let mut view = tasks::EventSourceList::new(node_did);
+                if let Some(id) = id {
+                    view = view.event_source_ids(vec![id.to_owned()]);
+                }
+                read!(view)
+            }
+            collection => anyhow::bail!("no configuration view for {}", collection.graphql_type()),
+        }
     };
     let mut ids = std::collections::BTreeSet::new();
     for row in &rows {
@@ -353,9 +443,7 @@ pub(crate) async fn query_collection_sorted(
     spec: ConfigDocumentSpec,
     node_did: &str,
 ) -> Result<Vec<Value>> {
-    let mut rows = query_collection(access, spec, node_did, None).await?;
-    sort_rows(&mut rows, spec.collection.unique_field());
-    Ok(rows)
+    query_collection(access, spec, node_did, None).await
 }
 
 pub(crate) async fn load_one(
@@ -374,15 +462,6 @@ pub(crate) async fn load_one(
                 spec.collection.graphql_type()
             )
         })
-}
-
-fn sort_rows(rows: &mut [Value], id_field: &str) {
-    rows.sort_by(|a, b| {
-        a.get(id_field)
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .cmp(b.get(id_field).and_then(Value::as_str).unwrap_or_default())
-    });
 }
 
 fn print_list_table(spec: ConfigDocumentSpec, rows: &[Value]) {
