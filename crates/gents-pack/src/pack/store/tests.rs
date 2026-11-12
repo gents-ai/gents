@@ -316,7 +316,7 @@ async fn pack_removal_releases_the_archives_the_model_releases() {
         for (ordinal, pack) in script.referenced.iter().enumerate() {
             let (_, header) = modelled_pack(&as_pack(pack));
             let record: crate::pack::HomePackInstall = serde_json::from_value(serde_json::json!({
-                "coordinate": format!("gents/referencing-{ordinal}"),
+                "coordinate": format!("gents/referencing_{ordinal}"),
                 "version": pack.version.text,
                 "digest": header.digest,
                 "kind": "assets",
