@@ -24,15 +24,9 @@ use gents_lean_vocab::families::hooks_contracts_owed_derive::{self as owed_deriv
 use gents_lean_vocab::families::hooks_contracts_owed_prune::{self as owed_prune};
 use gents_lean_vocab::families::hooks_contracts_owed_trace::{self as owed_trace};
 use gents_lean_vocab::families::hooks_contracts_prepared_admission::{self as admission};
+use gents_lean_vocab::families::hooks_contracts_queue_partition::{self as queue_partition};
 use gents_lean_vocab::families::hooks_contracts_refusable_staging::{self as staging};
 use gents_lean_vocab::families::hooks_contracts_verdict_combination::{self as combination};
-use gents_lean_vocab::{
-    
-    lean_lifecycle_hook_queue_scope_cases, LeanLifecycleHookAccess, LeanLifecycleHookChoice, LeanLifecycleHookDecision,
-    LeanLifecycleHookEffect, LeanLifecycleHookPartition,
-    LeanLifecycleHookQueueScopeResult, LeanLifecycleHookRefusal, LeanLifecycleHookRow, LeanLifecycleHookScopeAnswer,
-    LeanLifecycleHookScopeKey, LeanLifecycleHookScript, LeanLifecycleHookWorld,
-};
 use serde_json::Value;
 
 /// The filter field naming the plugin a declared read belongs to, so the
@@ -58,61 +52,6 @@ fn manifest(name: &str, owns: &[String], bound: usize) -> Manifest {
             .collect(),
         bound,
         history: Vec::new(),
-    }
-}
-
-fn access(lean: LeanLifecycleHookAccess) -> Access {
-    match lean {
-        LeanLifecycleHookAccess::Create => Access::Create,
-        LeanLifecycleHookAccess::Update => Access::Update,
-        LeanLifecycleHookAccess::Delete => Access::Delete,
-    }
-}
-
-fn effect(lean: &LeanLifecycleHookEffect) -> Effect {
-    match lean {
-        LeanLifecycleHookEffect::Create {
-            collection,
-            doc,
-            value,
-        } => Effect::Write(Write::Create {
-            doc: DocRef::new(collection, doc),
-            value: Value::String(value.clone()),
-            grants: Vec::new(),
-        }),
-        LeanLifecycleHookEffect::Update {
-            collection,
-            doc,
-            expected,
-            value,
-        } => Effect::Write(Write::Update {
-            doc: DocRef::new(collection, doc),
-            expected: *expected,
-            value: Value::String(value.clone()),
-            conflict: None,
-        }),
-        LeanLifecycleHookEffect::Delete {
-            collection,
-            doc,
-            expected,
-        } => Effect::Write(Write::Delete {
-            doc: DocRef::new(collection, doc),
-            expected: *expected,
-            conflict: None,
-        }),
-        LeanLifecycleHookEffect::Core { op } => Effect::Core(CoreOp::new(op, Value::Null)),
-    }
-}
-
-fn effects(lean: &[LeanLifecycleHookEffect]) -> Vec<Effect> {
-    lean.iter().map(effect).collect()
-}
-
-fn row(lean: &LeanLifecycleHookRow) -> Row {
-    Row {
-        doc: DocRef::new(&lean.collection, &lean.doc),
-        revision: lean.revision,
-        value: Value::String(lean.value.clone()),
     }
 }
 
@@ -154,32 +93,6 @@ impl StoreDouble {
             unreadable: unreadable.to_vec(),
             failed_operation: Mutex::new(None),
         }
-    }
-
-    fn new(world: &LeanLifecycleHookWorld, core: Vec<String>, unreadable: &[String]) -> Self {
-        Self {
-            state: Mutex::new(Snapshot {
-                core,
-                rows: world.rows.iter().map(row).collect(),
-            }),
-            denied: world
-                .denied
-                .iter()
-                .map(|denial| {
-                    (
-                        access(denial.access),
-                        DocRef::new(&denial.collection, &denial.doc),
-                    )
-                })
-                .collect(),
-            failing_ops: world.failing_ops.clone(),
-            unreadable: unreadable.to_vec(),
-            failed_operation: Mutex::new(None),
-        }
-    }
-
-    fn of(world: &LeanLifecycleHookWorld) -> Self {
-        Self::new(world, world.core.clone(), &[])
     }
 
     fn snapshot(&self) -> Snapshot {
@@ -291,31 +204,6 @@ impl StoreDouble {
         }
     }
 
-    fn refusal(&self, error: &HookError) -> LeanLifecycleHookRefusal {
-        match error {
-            HookError::Refused { plugin, reason } => LeanLifecycleHookRefusal::Refused {
-                plugin: (*plugin).to_owned(),
-                reason: reason.clone(),
-            },
-            HookError::Invalid { plugin, .. } | HookError::GateEffects { plugin } => {
-                LeanLifecycleHookRefusal::Invalid {
-                    plugin: (*plugin).to_owned(),
-                }
-            }
-            HookError::Conflict { plugin, .. } => LeanLifecycleHookRefusal::Conflict {
-                plugin: (*plugin).to_owned(),
-            },
-            HookError::Operation(_) => LeanLifecycleHookRefusal::Conflict {
-                plugin: self
-                    .failed_operation
-                    .lock()
-                    .unwrap()
-                    .expect("a failed core operation records its plugin")
-                    .to_owned(),
-            },
-            other => panic!("the model has no refusal for {other:?}"),
-        }
-    }
 }
 
 #[async_trait::async_trait]
@@ -418,36 +306,6 @@ where
             effects: effects.clone(),
         }
     }
-}
-
-fn plugin<L, V, F>(script: &LeanLifecycleHookScript<L>, value: F) -> Plugin<(), V>
-where
-    V: Clone + Send + Sync + 'static,
-    F: Fn(&L) -> V,
-{
-    let choice =
-        |choice: &LeanLifecycleHookChoice<L>| (value(&choice.value), effects(&choice.effects));
-    let decision = match &script.decision {
-        LeanLifecycleHookDecision::Refuse { reason } => Scripted::Refuse(reason.clone()),
-        LeanLifecycleHookDecision::Proceed {
-            value: chosen,
-            effects: listed,
-        } => Scripted::Proceed(value(chosen), effects(listed)),
-        LeanLifecycleHookDecision::ByShown {
-            count,
-            matching,
-            otherwise,
-        } => Scripted::ByShown {
-            count: *count,
-            matching: choice(matching),
-            otherwise: choice(otherwise),
-        },
-    };
-    Arc::new(ScriptedHook {
-        manifest: manifest(&script.name, &script.owns, script.bound),
-        reads: script.reads.clone(),
-        decision,
-    })
 }
 
 fn effect_of(wire: &effect_commit::EffectWire) -> Effect {
@@ -922,32 +780,42 @@ fn opaque_key(key: &str) -> gents_protocol::goal::RequestAssignmentScope {
 
 /// A Lean answer list is aligned with the requests asked; production answers
 /// are by physical request.
-fn scope_answers(asked: &[String], lean: &[LeanLifecycleHookScopeAnswer]) -> ScopeAnswers {
-    let mut answers = ScopeAnswers::default();
-    for (doc, answer) in asked.iter().zip(lean) {
-        match answer {
-            LeanLifecycleHookScopeAnswer::Unanswered => {}
-            LeanLifecycleHookScopeAnswer::Keyed { key } => {
-                answers.insert(doc.clone(), ScopeAnswer::Keyed(opaque_key(key)));
-            }
-            LeanLifecycleHookScopeAnswer::Failed { reason } => {
-                answers.insert(
+fn scope_answers(asked: &[String], answers: &[staging::AnswerWire]) -> ScopeAnswers {
+    let mut scoped = ScopeAnswers::default();
+    for (doc, answer) in asked.iter().zip(answers) {
+        match answer.kind.as_str() {
+            "unanswered" => {}
+            "keyed" => {
+                scoped.insert(
                     doc.clone(),
-                    ScopeAnswer::Failed(ScopeFailure::of(&anyhow::anyhow!(reason.clone()))),
+                    ScopeAnswer::Keyed(opaque_key(
+                        answer.key.as_deref().expect("a keyed answer has its key"),
+                    )),
                 );
             }
+            "failed" => {
+                scoped.insert(
+                    doc.clone(),
+                    ScopeAnswer::Failed(ScopeFailure::of(&anyhow::anyhow!(answer
+                        .reason
+                        .clone()
+                        .expect("a failed answer has its reason")))),
+                );
+            }
+            other => panic!("the model has no scope answer {other}"),
         }
     }
-    answers
+    scoped
 }
 
-fn partition_of(scope: anyhow::Result<Partition>) -> LeanLifecycleHookPartition {
+fn partition_of(scope: anyhow::Result<Partition>) -> queue_partition::PartitionWire {
     match scope {
-        Ok(partition) => LeanLifecycleHookPartition::Ok {
+        Ok(partition) => queue_partition::PartitionWire {
+            kind: "ok".to_owned(),
             partition: partition
                 .keys()
                 .iter()
-                .map(|(plugin, key)| LeanLifecycleHookScopeKey {
+                .map(|(plugin, key)| queue_partition::ScopeKeyWire {
                     plugin: (*plugin).to_owned(),
                     key: match key {
                         gents_protocol::goal::RequestAssignmentScope::Unresolved {
@@ -957,61 +825,66 @@ fn partition_of(scope: anyhow::Result<Partition>) -> LeanLifecycleHookPartition 
                     },
                 })
                 .collect(),
+            refusal: None,
         },
         Err(error) => {
             let refused = error
                 .downcast_ref::<ScopeRefused>()
                 .unwrap_or_else(|| panic!("a request failure is a ScopeRefused: {error:?}"));
-            LeanLifecycleHookPartition::Error {
-                refusal: LeanLifecycleHookRefusal::Refused {
-                    plugin: refused.plugin.to_owned(),
-                    reason: error.to_string(),
-                },
+            queue_partition::PartitionWire {
+                kind: "error".to_owned(),
+                partition: Vec::new(),
+                refusal: Some(queue_partition::RefusalWire {
+                    kind: "refused".to_owned(),
+                    plugin: Some(refused.plugin.to_owned()),
+                    reason: Some(error.to_string()),
+                }),
             }
         }
     }
 }
 
 #[tokio::test]
-async fn generated_lifecycle_hook_queue_scope_cases_drive_the_queue_partition() {
-    let cases = lean_lifecycle_hook_queue_scope_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let host = StoreDouble::of(&case.world);
+async fn queue_partition_follows_the_lean_model() {
+    for case in gents_lean_vocab::families::hooks_contracts_queue_partition::cases() {
+        let input = &case.input;
+        let host = host_of(&input.world, None, &[]);
         let initial = host.snapshot();
-        let plugins: Vec<Plugin<(), ScopeAnswers>> = case
-            .plugins
+        let scripts: Vec<staging::ScriptWire> = gents_lean_vocab::family::recode(&input.plugins);
+        let plugins: Vec<Plugin<(), ScopeAnswers>> = scripts
             .iter()
-            .map(|script| plugin(script, |answers| scope_answers(&case.asked, answers)))
+            .map(|script| scripted(script, |value| scope_answers(&input.asked, &value.answers)))
             .collect();
-        let answered = gate(&host, &plugins, &()).await;
-        match (answered, &case.result) {
-            (Ok(answers), LeanLifecycleHookQueueScopeResult::Ok { scopes }) => {
+        let result = match gate(&host, &plugins, &()).await {
+            Ok(answers) => {
                 let named: Vec<(&'static str, ScopeAnswers)> = plugins
                     .iter()
                     .map(|plugin| plugin.manifest().name)
                     .zip(answers)
                     .collect();
-                let partitions: Vec<LeanLifecycleHookPartition> = case
-                    .asked
-                    .iter()
-                    .map(|doc| partition_of(partition(&named, doc)))
-                    .collect();
-                assert_eq!(&partitions, scopes, "{}: partitions", case.name);
+                queue_partition::QueueScopeResultWire {
+                    kind: "ok".to_owned(),
+                    scopes: input
+                        .asked
+                        .iter()
+                        .map(|doc| partition_of(partition(&named, doc)))
+                        .collect(),
+                    refusal: None,
+                }
             }
-            (Err(error), LeanLifecycleHookQueueScopeResult::Error { refusal }) => {
-                assert_eq!(&host.refusal(&error), refusal, "{}: {error:?}", case.name);
-            }
-            (actual, expected) => {
-                panic!("{}: answered {actual:?}, model {expected:?}", case.name)
-            }
-        }
+            Err(error) => queue_partition::QueueScopeResultWire {
+                kind: "error".to_owned(),
+                scopes: Vec::new(),
+                refusal: Some(gents_lean_vocab::family::recode(&host.refusal_wire(&error))),
+            },
+        };
         assert_eq!(
             host.snapshot(),
             initial,
             "{}: a returned-value point writes nothing",
-            case.name
+            input.name
         );
+        case.check(queue_partition::QueueScopeOutput { result });
     }
 }
 

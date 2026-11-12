@@ -95,46 +95,10 @@ private def coreOp (name : String) : HookEffect := .core name
 
 private def boolJson (value : Bool) : String := if value then "true" else "false"
 
-private def refFields (target : Ref String) : String :=
-  "\"collection\":" ++ jsonString target.collection ++ ",\"doc\":" ++ jsonString target.doc
-
-private def rowJson (entry : HookRow) : String :=
-  "{" ++ refFields entry.ref ++ ",\"revision\":" ++ toString entry.revision ++
-    ",\"value\":" ++ jsonString entry.value ++ "}"
-
 private def accessString : Access → String
   | .create => "create"
   | .update => "update"
   | .delete => "delete"
-
-private def effectJson : HookEffect → String
-  | .write (.create target value) =>
-      "{\"kind\":\"create\"," ++ refFields target ++ ",\"value\":" ++ jsonString value ++ "}"
-  | .write (.update target expected value) =>
-      "{\"kind\":\"update\"," ++ refFields target ++ ",\"expected\":" ++ toString expected ++
-        ",\"value\":" ++ jsonString value ++ "}"
-  | .write (.delete target expected) =>
-      "{\"kind\":\"delete\"," ++ refFields target ++ ",\"expected\":" ++ toString expected ++ "}"
-  | .core op => "{\"kind\":\"core\",\"op\":" ++ jsonString op ++ "}"
-
-private def effectsJson (effects : List HookEffect) : String :=
-  jsonArray (effects.map effectJson)
-
-private def stateJson (state : HookState) : String :=
-  "{\"core\":" ++ jsonStringArray state.core ++
-    ",\"rows\":" ++ jsonArray (state.docs.map rowJson) ++ "}"
-
-private def worldJson (world : World) : String :=
-  "{\"rows\":" ++ jsonArray (world.rows.map rowJson) ++
-    ",\"core\":" ++ jsonStringArray world.core ++
-    ",\"denied\":" ++ jsonArray (world.denied.map fun entry =>
-      "{\"access\":" ++ jsonString (accessString entry.1) ++ "," ++ refFields entry.2 ++ "}") ++
-    ",\"failing_ops\":" ++ jsonStringArray world.failingOps ++ "}"
-
-private def manifestJson (manifest : Manifest) : String :=
-  "{\"name\":" ++ jsonString manifest.name ++
-    ",\"owns\":" ++ jsonStringArray manifest.owns ++
-    ",\"bound\":" ++ toString manifest.bound ++ "}"
 
 private def refusalJson : Refusal → String
   | .core => "{\"kind\":\"core\"}"
@@ -143,36 +107,6 @@ private def refusalJson : Refusal → String
         ",\"reason\":" ++ jsonString reason ++ "}"
   | .invalid plugin => "{\"kind\":\"invalid\",\"plugin\":" ++ jsonString plugin ++ "}"
   | .conflict plugin => "{\"kind\":\"conflict\",\"plugin\":" ++ jsonString plugin ++ "}"
-
-private def choiceJson {V : Type} (valueJson : V → String) (choice : V × List HookEffect) :
-    String :=
-  "{\"value\":" ++ valueJson choice.1 ++ ",\"effects\":" ++ effectsJson choice.2 ++ "}"
-
-private def decisionJson {V : Type} (valueJson : V → String) : Decision V → String
-  | .refuse reason => "{\"kind\":\"refuse\",\"reason\":" ++ jsonString reason ++ "}"
-  | .proceed value effects =>
-      "{\"kind\":\"proceed\",\"value\":" ++ valueJson value ++
-        ",\"effects\":" ++ effectsJson effects ++ "}"
-  | .byShown count matching otherwise =>
-      "{\"kind\":\"by_shown\",\"count\":" ++ toString count ++
-        ",\"matching\":" ++ choiceJson valueJson matching ++
-        ",\"otherwise\":" ++ choiceJson valueJson otherwise ++ "}"
-
-private def scriptJson {V : Type} (valueJson : V → String) (script : Script V) : String :=
-  "{\"name\":" ++ jsonString script.name ++
-    ",\"owns\":" ++ jsonStringArray script.owns ++
-    ",\"bound\":" ++ toString script.bound ++
-    ",\"reads\":" ++ jsonStringArray script.reads ++
-    ",\"decision\":" ++ decisionJson valueJson script.decision ++ "}"
-
-private def verdictJson : ClaimVerdict → String
-  | .allow => "{\"kind\":\"allow\"}"
-  | .leaveQueued => "{\"kind\":\"leave_queued\"}"
-  | .retire reason successor =>
-      "{\"kind\":\"retire\",\"reason\":" ++ jsonString reason ++
-        ",\"successor\":{\"request_id\":" ++ jsonString successor.request ++
-        ",\"request_doc_id\":" ++ jsonString successor.doc ++ "}}"
-  | .reject reason => "{\"kind\":\"reject\",\"reason\":" ++ jsonString reason ++ "}"
 
 /-! Effect validation and application: `Hooks.valid` and `Hooks.commit`. -/
 
@@ -1153,33 +1087,67 @@ def queueScopeCases : List QueueScopeCase :=
     , plugins := [goalsScope.deciding (.proceed [keyed "goal-a"] [create "Goal" "g1" "x"]), lanes]
     , asked := ["r1"] } ]
 
-private def answerJson : QueueScope.Answer String → String
-  | .unanswered => "{\"kind\":\"unanswered\"}"
-  | .keyed key => "{\"kind\":\"keyed\",\"key\":" ++ jsonString key ++ "}"
-  | .failed reason => "{\"kind\":\"failed\",\"reason\":" ++ jsonString reason ++ "}"
+def AnswerWire.ofModel : QueueScope.Answer String → AnswerWire
+  | .unanswered => ⟨"unanswered", none, none⟩
+  | .keyed key => ⟨"keyed", some key, none⟩
+  | .failed reason => ⟨"failed", none, some reason⟩
 
-private def answersJson (answers : ScopeAnswers) : String :=
-  jsonArray (answers.map answerJson)
+def AnswerWire.toModel (wire : AnswerWire) : QueueScope.Answer String :=
+  match wire.kind, wire.key, wire.reason with
+  | "keyed", some key, _ => .keyed key
+  | "failed", _, some reason => .failed reason
+  | _, _, _ => .unanswered
 
-private def partitionJson : Except Refusal (List (String × String)) → String
-  | .ok keys =>
-      "{\"kind\":\"ok\",\"partition\":" ++ jsonArray (keys.map fun entry =>
-        "{\"plugin\":" ++ jsonString entry.1 ++ ",\"key\":" ++ jsonString entry.2 ++ "}") ++ "}"
-  | .error refusal => "{\"kind\":\"error\",\"refusal\":" ++ refusalJson refusal ++ "}"
+def ValueWire.ofAnswers (answers : ScopeAnswers) : ValueWire :=
+  ⟨none, none, answers.map AnswerWire.ofModel⟩
 
-private def queueScopeResultJson :
-    Except Refusal (List (Except Refusal (List (String × String)))) → String
-  | .ok scopes => "{\"kind\":\"ok\",\"scopes\":" ++ jsonArray (scopes.map partitionJson) ++ "}"
-  | .error refusal => "{\"kind\":\"error\",\"refusal\":" ++ refusalJson refusal ++ "}"
+def ValueWire.toAnswers (wire : ValueWire) : ScopeAnswers :=
+  wire.answers.map AnswerWire.toModel
 
-private def queueScopeCaseJson (c : QueueScopeCase) : String :=
-  "{\"name\":" ++ jsonString c.name ++
-    ",\"world\":" ++ worldJson c.world ++
-    ",\"plugins\":" ++ jsonArray (c.plugins.map (scriptJson answersJson)) ++
-    ",\"asked\":" ++ jsonStringArray c.asked ++
-    ",\"result\":" ++ queueScopeResultJson c.result ++ "}"
+structure ScopeKeyWire where
+  plugin : String
+  key : String
+  deriving ToJson
 
-def queueScopeCasesJson : String := jsonArray (queueScopeCases.map queueScopeCaseJson)
+structure PartitionWire where
+  kind : String
+  partition : List ScopeKeyWire
+  refusal : Option RefusalWire
+  deriving ToJson
+
+def PartitionWire.ofModel : Except Refusal (List (String × String)) → PartitionWire
+  | .ok keys => ⟨"ok", keys.map fun entry => ⟨entry.1, entry.2⟩, none⟩
+  | .error refusal => ⟨"error", [], some (RefusalWire.ofModel refusal)⟩
+
+structure QueueScopeInput where
+  name : String
+  world : WorldWire
+  plugins : List ScriptWire
+  asked : List String
+  deriving ToJson
+
+structure QueueScopeResultWire where
+  kind : String
+  scopes : List PartitionWire
+  refusal : Option RefusalWire
+  deriving ToJson
+
+structure QueueScopeOutput where
+  result : QueueScopeResultWire
+  deriving ToJson
+
+@[conformance_family]
+def queuePartition : Family QueueScopeInput QueueScopeOutput where
+  inputs := queueScopeCases.map fun c =>
+    { name := c.name, world := WorldWire.ofModel c.world
+    , plugins := c.plugins.map (ScriptWire.ofModel ValueWire.ofAnswers), asked := c.asked }
+  model := fun i =>
+    let c : QueueScopeCase :=
+      { name := i.name, world := i.world.toModel
+      , plugins := i.plugins.map (ScriptWire.toModel ValueWire.toAnswers), asked := i.asked }
+    { result := match c.result with
+        | .ok scopes => ⟨"ok", scopes.map PartitionWire.ofModel, none⟩
+        | .error refusal => ⟨"error", [], some (RefusalWire.ofModel refusal)⟩ }
 
 /-! The delivery record: `Hooks.Delivery.publish`, `deliver` and `pending`. -/
 
