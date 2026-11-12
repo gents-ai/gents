@@ -837,15 +837,15 @@ def caseCoverage : List CoverageEntry :=
       "AgentRequestAdmissionCases")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "causal_hop_contract"
+      "causal_hop_step_cases"
       "CausalHopContract")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "causal_hop_contract"
+      "causal_hop_session_target_cases"
       "SessionTargetAuthorityCases")
       "request-lifecycle" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "causal_hop_contract"
+      "causal_hop_session_list_cases"
       "SessionListEntryCases")
       "request-lifecycle" [Surface.agentFacing]
   , tagged (followUpCoverage

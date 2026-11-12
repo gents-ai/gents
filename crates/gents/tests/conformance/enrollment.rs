@@ -10,7 +10,7 @@ use gents_protocol::request_admission::{
 };
 
 use gents_lean_vocab::{
-    lean_agent_request_admission_cases, lean_causal_hop_contract, lean_enrollment_cases,
+    lean_agent_request_admission_cases, lean_contract_snapshot, lean_enrollment_cases,
     lean_enrollment_digest_cases, lean_enrollment_durable_projection_cases,
     lean_enrollment_encoding_cases, LeanEnrollmentTraceStep,
 };
@@ -108,13 +108,13 @@ fn generated_causal_hop_cases_match_native_materializer() {
         next_request_hop, request_hop_within_bound, RequestHopCapObservation, RequestHopCause,
     };
 
-    let contract = lean_causal_hop_contract();
-    assert_eq!(contract.default_max_request_hop, None);
+    let contract = lean_contract_snapshot();
+    assert_eq!(contract.causal_hop_default_max_request_hop, None);
     assert!(contract
-        .cap_observation_cases
+        .causal_hop_cap_observation_cases
         .iter()
         .any(|case| !case.visible));
-    for case in &contract.cap_observation_cases {
+    for case in &contract.causal_hop_cap_observation_cases {
         let observation = if case.visible {
             RequestHopCapObservation::Visible(case.cap)
         } else {
@@ -140,8 +140,8 @@ fn generated_causal_hop_cases_match_native_materializer() {
         "continuation" => RequestHopCause::Continuation,
         other => panic!("unknown Lean causal-hop cause {other:?}"),
     };
-    assert!(!contract.step_cases.is_empty());
-    for case in &contract.step_cases {
+    assert!(!contract.causal_hop_step_cases.is_empty());
+    for case in &contract.causal_hop_step_cases {
         let hop = next_request_hop(cause(&case.cause, case.cause_hop), case.own_predecessor_hop);
         assert_eq!(hop, case.expected_hop, "{}", case.name);
         assert_eq!(
@@ -151,8 +151,8 @@ fn generated_causal_hop_cases_match_native_materializer() {
             case.name
         );
     }
-    assert!(!contract.chain_cases.is_empty());
-    for chain in &contract.chain_cases {
+    assert!(!contract.causal_hop_chain_cases.is_empty());
+    for chain in &contract.causal_hop_chain_cases {
         let mut hop = 0;
         let mut hops = Vec::new();
         let mut admitted = Vec::new();
@@ -171,8 +171,8 @@ fn generated_causal_hop_cases_match_native_materializer() {
         assert_eq!(hops, chain.expected_hops, "{}", chain.name);
         assert_eq!(admitted, chain.expected_admitted, "{}", chain.name);
     }
-    assert!(!contract.call_cases.is_empty());
-    for call in &contract.call_cases {
+    assert!(!contract.causal_hop_call_cases.is_empty());
+    for call in &contract.causal_hop_call_cases {
         let (mut a, mut b) = (0, 0);
         let mut hops = Vec::new();
         for event in &call.events {
@@ -193,8 +193,8 @@ fn generated_causal_hop_cases_match_native_materializer() {
         assert_eq!(hops, call.expected_hops, "{}", call.name);
         assert_eq!(admitted, call.expected_admitted, "{}", call.name);
     }
-    assert!(!contract.interrupt_cases.is_empty());
-    for case in &contract.interrupt_cases {
+    assert!(!contract.causal_hop_interrupt_cases.is_empty());
+    for case in &contract.causal_hop_interrupt_cases {
         assert_eq!(
             gents_session::session::message::agent_interrupt_allowed(
                 &case.caller_session,
