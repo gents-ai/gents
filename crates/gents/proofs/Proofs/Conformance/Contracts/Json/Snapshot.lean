@@ -13,6 +13,10 @@ import Proofs.Conformance.InferenceDroppedPermit
 import Proofs.Conformance.EventSourceCursor
 import Proofs.Conformance.Identity.AgentTargetAccess
 import Proofs.Conformance.Identity.WorkspaceCompletion
+import Proofs.Conformance.SessionObservation
+import Proofs.Conformance.SourceBoundary
+import Proofs.Conformance.LateDelivery
+import Proofs.Conformance.WorkspaceProvision
 import Proofs.Conformance.Identity.ReceiverGrant
 import Proofs.Conformance.Identity.WorkspaceRoot
 import Proofs.Conformance.Identity.WorkspaceAndFileRequests

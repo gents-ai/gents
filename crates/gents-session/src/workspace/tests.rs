@@ -171,88 +171,87 @@ fn workspace_creation_rejects_foreign_repository_owner_before_effects() {
 }
 
 #[test]
-fn existing_target_mismatch_does_not_overwrite_or_cleanup() {
-    let fx = Fixture::new();
-    let dest = fx.parent().join("foreign");
-    fs::create_dir_all(&dest).unwrap();
-    fs::write(dest.join("keep-me.txt"), "untouched\n").unwrap();
-
-    let mut docs = MemoryWorkspaceDocuments::default();
-    let action = fx.action("foreign", "unit-1", "topic-foreign");
-    let planned = workspace_host_path(
-        &fx.repo,
-        &action.workspace_id,
-        &action.branch,
-        Some(&fx.repo),
-    )
-    .unwrap();
-    if let Some(parent) = planned.parent() {
-        fs::create_dir_all(parent).unwrap();
-    }
-    fs::rename(&dest, &planned).unwrap();
-    fs::write(planned.join("keep-me.txt"), "untouched\n").unwrap();
-
-    let plan = emit_create_workspace_plan(action);
-    let mut journal = Vec::new();
-    let err = execute_create_workspace_plan(
-        &plan,
-        &mut journal,
-        &mut fx.ctx(&mut docs, git_worktree_caps()),
-    )
-    .expect_err("mismatch must fail");
-    assert!(err.identity_mismatch(), "{err}");
-    assert_eq!(
-        err.outcome()
-            .map(|outcome| outcome.workspace.lifecycle_state.as_str()),
-        Some("provisionFailed")
-    );
-    assert_eq!(
-        fs::read_to_string(planned.join("keep-me.txt")).unwrap(),
-        "untouched\n"
-    );
-    assert!(
-        !planned.join("README.md").exists(),
-        "mismatch must not check out the repo over the leftover"
-    );
-    let stored = docs
-        .load_isolated_workspace("foreign")
-        .unwrap()
-        .expect("ProvisionFailed row");
-    assert_eq!(stored.lifecycle_state, "provisionFailed");
-    assert!(!stored.dirty_base_on_replicated_row());
-}
-
-#[test]
-fn matching_ready_workspace_is_not_overwritten_by_identity_mismatch_retry() {
-    let fx = Fixture::new();
-    let mut docs = MemoryWorkspaceDocuments::default();
-    let original = fx.action("ws-stable", "unit-1", "topic-stable");
-    let plan = emit_create_workspace_plan(original.clone());
-    let mut journal = Vec::new();
-    let first = execute_create_workspace_plan(
-        &plan,
-        &mut journal,
-        &mut fx.ctx(&mut docs, git_worktree_caps()),
-    )
-    .expect("provision");
-    let dest = PathBuf::from(&first.placement.host_path);
-    let readme = fs::read_to_string(dest.join("README.md")).unwrap();
-
-    let mut mismatched = original;
-    mismatched.work_unit_id = "unit-OTHER".into();
-    let plan = emit_create_workspace_plan(mismatched);
-    let mut journal = Vec::new();
-    let err = execute_create_workspace_plan(
-        &plan,
-        &mut journal,
-        &mut fx.ctx(&mut docs, git_worktree_caps()),
-    )
-    .expect_err("identity mismatch");
-    assert!(err.identity_mismatch(), "{err}");
-    assert_eq!(fs::read_to_string(dest.join("README.md")).unwrap(), readme);
-    let stored = docs.load_isolated_workspace("ws-stable").unwrap().unwrap();
-    assert_eq!(stored.lifecycle_state, "ready");
-    assert_eq!(stored.work_unit_id, "unit-1");
+fn workspace_creation_matches_the_lean_provision_model() {
+    gents_lean_vocab::families::workspace_provision_create::replay::<String, String>(|input| {
+        let fx = Fixture::new();
+        let other = fx.parent().join("other-ceiling");
+        fs::create_dir_all(&other).unwrap();
+        let mut docs = MemoryWorkspaceDocuments::default();
+        let unit = |n: u64| format!("unit-{n}");
+        let planned = |action: &CreateWorkspaceAction| {
+            workspace_host_path(
+                &fx.repo,
+                &action.workspace_id,
+                &action.branch,
+                Some(&fx.repo),
+            )
+            .unwrap()
+        };
+        if let Some(prior) = input.prior_work_unit {
+            let action = fx.action("ws-provision", &unit(prior), "topic-provision");
+            execute_create_workspace_plan(
+                &emit_create_workspace_plan(action),
+                &mut Vec::new(),
+                &mut fx.ctx(&mut docs, git_worktree_caps()),
+            )
+            .expect("prior creation");
+        }
+        let action = fx.action("ws-provision", &unit(input.work_unit), "topic-provision");
+        let dest = planned(&action);
+        if input.target == "foreign" {
+            fs::create_dir_all(&dest).unwrap();
+            fs::write(dest.join("keep-me.txt"), "untouched\n").unwrap();
+        }
+        let mut ctx = fx.ctx(&mut docs, git_worktree_caps());
+        if input.ceiling_escapes {
+            ctx.ceiling = Some(&other);
+        }
+        let result = execute_create_workspace_plan(
+            &emit_create_workspace_plan(action),
+            &mut Vec::new(),
+            &mut ctx,
+        );
+        let (result, identity_mismatch, outcome_state) = match &result {
+            Ok(outcome) => (
+                "ready",
+                false,
+                Some(outcome.workspace.lifecycle_state.clone()),
+            ),
+            Err(HostExecuteError::Denied { .. }) => ("denied", false, None),
+            Err(error) => (
+                "failed",
+                error.identity_mismatch(),
+                error
+                    .outcome()
+                    .map(|outcome| outcome.workspace.lifecycle_state.clone()),
+            ),
+        };
+        let stored = docs.load_isolated_workspace("ws-provision").unwrap();
+        let readme = fs::read_to_string(dest.join("README.md")).ok();
+        let keep = fs::read_to_string(dest.join("keep-me.txt")).ok();
+        let target = match (readme.as_deref(), keep.as_deref()) {
+            (None, None) if !dest.exists() => "absent",
+            (None, Some("untouched\n")) => "foreign",
+            (Some("hello\n"), None) => "checkout",
+            other => panic!("unmodeled destination contents {other:?}"),
+        };
+        gents_lean_vocab::families::workspace_provision_create::ProvisionOutput {
+            result: result.to_owned(),
+            identity_mismatch,
+            outcome_state,
+            stored_state: stored.as_ref().map(|row| row.lifecycle_state.clone()),
+            stored_work_unit: stored.as_ref().map(|row| {
+                row.work_unit_id
+                    .strip_prefix("unit-")
+                    .and_then(|n| n.parse().ok())
+                    .expect("modeled work unit")
+            }),
+            target: target.to_owned(),
+            row_carries_dirty_base: stored
+                .as_ref()
+                .is_some_and(|row| row.dirty_base_on_replicated_row()),
+        }
+    });
 }
 
 #[test]
@@ -355,23 +354,6 @@ fn make_worktree_clones_artifacts_git_worktree_does_not() {
     let git_dest = PathBuf::from(&git_out.placement.host_path);
     assert!(!git_dest.join("target").exists());
     assert!(!git_dest.join("crates/gents/proofs/.lake").exists());
-}
-
-#[test]
-fn destination_escaping_ceiling_is_denied() {
-    let fx = Fixture::new();
-    let other = fx.parent().join("other-ceiling");
-    fs::create_dir_all(&other).unwrap();
-    let mut docs = MemoryWorkspaceDocuments::default();
-    let action = fx.action("ws-escape", "unit-1", "topic-escape");
-    let plan = emit_create_workspace_plan(action);
-    let mut journal = Vec::new();
-    let mut ctx = fx.ctx(&mut docs, git_worktree_caps());
-    ctx.ceiling = Some(&other);
-    let err =
-        execute_create_workspace_plan(&plan, &mut journal, &mut ctx).expect_err("ceiling escape");
-    assert!(matches!(err, HostExecuteError::Denied { .. }), "{err}");
-    assert!(docs.workspaces.is_empty());
 }
 
 #[test]
@@ -1639,9 +1621,10 @@ fn exact_owned_executable_bit_change_seals_and_integrates() {
 fn generated_workspace_receipt_cases_recover_without_checkout_or_reapplying() {
     let cases = &gents_lean_vocab::lean_contract_snapshot().workspace_path_capability_cases;
     let mut exercised = 0;
-    for case in cases.iter().filter(|case| {
-        matches!(case.operation.as_str(), "replay_seal" | "replay_integrate")
-    }) {
+    for case in cases
+        .iter()
+        .filter(|case| matches!(case.operation.as_str(), "replay_seal" | "replay_integrate"))
+    {
         exercised += 1;
         let name = case.name.as_str();
         let fx = Fixture::new();
