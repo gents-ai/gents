@@ -77,3 +77,26 @@ pub fn pack_job_block_admissible(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod conformance {
+    use super::*;
+
+    #[test]
+    fn job_block_admissible_matches_lean() {
+        gents_lean_vocab::families::plugin_job_pack_block_admission::replay::<
+            DynamicMode,
+            InstalledVia,
+        >(|i| {
+            gents_lean_vocab::families::plugin_job_pack_block_admission::PackBlockOutput {
+                admissible: job_block_admissible(
+                    i.via,
+                    &i.closure,
+                    &i.block.targets_from,
+                    &i.block.trusted,
+                    i.block.dynamic,
+                ),
+            }
+        });
+    }
+}

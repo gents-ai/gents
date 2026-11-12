@@ -1691,16 +1691,40 @@ def caseCoverage : List CoverageEntry :=
       "PluginJobKeyCases")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "plugin_job_authority_cases"
-      "PluginJobAuthorityCases")
+      "family"
+      "plugin_job_provenance_read")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "plugin_job_wire_cases"
-      "PluginJobWireCases")
+      "family"
+      "plugin_job_install_record")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "plugin_job_wire_cases"
-      "PluginJobWireCases")
+      "family"
+      "plugin_job_installer_authority")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_script_origin")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_pack_block_admission")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_policy_validity")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_target_wiring")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_published_read_deferral")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "family"
+      "plugin_job_wire_sample")
       "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "plugin_job_lineage_cases"

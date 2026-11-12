@@ -83,22 +83,6 @@ impl LeanPluginJobControlCase {
     }
 }
 
-impl LeanPluginJobAuthorityCase {
-    pub fn name(&self) -> &str {
-        match self {
-            Self::Provenance { name, .. }
-            | Self::Install { name, .. }
-            | Self::Installer { name, .. }
-            | Self::Origin { name, .. }
-            | Self::PackJobBlock { name, .. }
-            | Self::PolicyValid { name, .. }
-            | Self::ConsentedDynamic { name, .. }
-            | Self::WireTargetsFrom { name, .. }
-            | Self::PublishedRead { name, .. } => name,
-        }
-    }
-}
-
 /// `plugin_resource_host_import_cases`: whether the `gents` imports are
 /// linked for a plugin and what `run_script` answers.
 #[derive(Debug, Deserialize)]

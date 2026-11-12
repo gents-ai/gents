@@ -100,6 +100,68 @@ pub fn effective_ceiling(block: Option<&PluginJobSettings>) -> JobCeiling {
 mod conformance {
     use super::*;
 
+    fn lean_policy(
+        policy: &gents_lean_vocab::families::plugin_job_policy_validity::PolicyWire<DynamicMode>,
+    ) -> JobPolicy {
+        JobPolicy {
+            dynamic: policy.mode,
+            dynamic_targets: policy.dynamic_targets.clone(),
+            trusted_packs: policy.trusted_packs.clone(),
+        }
+    }
+
+    #[test]
+    fn policy_valid_matches_lean() {
+        gents_lean_vocab::families::plugin_job_policy_validity::replay::<DynamicMode>(|i| {
+            gents_lean_vocab::families::plugin_job_policy_validity::PolicyValidOutput {
+                valid: policy_valid(&i.agent_targets, &lean_policy(&i.policy)),
+            }
+        });
+    }
+
+    #[test]
+    fn wire_targets_from_matches_lean() {
+        fn ids(
+            targets: &[gents_lean_vocab::families::plugin_job_target_wiring::TargetWire],
+        ) -> Vec<String> {
+            targets
+                .iter()
+                .map(|target| format!("{}@{}", target.agent, target.node))
+                .collect()
+        }
+        fn targets(
+            ids: Vec<String>,
+        ) -> Vec<gents_lean_vocab::families::plugin_job_target_wiring::TargetWire> {
+            ids.into_iter()
+                .map(|id| {
+                    let (agent, node) = id.split_once('@').expect("a wired target id");
+                    gents_lean_vocab::families::plugin_job_target_wiring::TargetWire {
+                        node: node.to_owned(),
+                        agent: agent.to_owned(),
+                    }
+                })
+                .collect()
+        }
+        gents_lean_vocab::families::plugin_job_target_wiring::replay::<DynamicMode>(|i| {
+            let (policy, job, caller) = wire_targets_from(
+                &i.pack,
+                &ids(&i.pack_targets),
+                lean_policy(&gents_lean_vocab::family::recode(&i.policy)),
+                &ids(&i.job_targets),
+                &ids(&i.caller_targets),
+            );
+            gents_lean_vocab::families::plugin_job_target_wiring::WiringOutput {
+                policy: gents_lean_vocab::families::plugin_job_target_wiring::PolicyWire {
+                    mode: policy.dynamic,
+                    dynamic_targets: policy.dynamic_targets,
+                    trusted_packs: policy.trusted_packs,
+                },
+                job_targets: targets(job),
+                caller_targets: targets(caller),
+            }
+        });
+    }
+
     #[test]
     fn consented_dynamic_matches_lean() {
         gents_lean_vocab::families::plugin_job_consented_dynamic::replay(|i| {

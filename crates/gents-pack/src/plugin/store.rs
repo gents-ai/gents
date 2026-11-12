@@ -735,3 +735,22 @@ mod tests {
 #[cfg(test)]
 #[path = "store_guard_tests.rs"]
 mod store_guard_tests;
+
+#[cfg(test)]
+mod published_read_conformance {
+    use super::*;
+
+    #[test]
+    fn a_staged_publication_defers_the_published_read_as_lean_models() {
+        gents_lean_vocab::families::plugin_job_published_read_deferral::replay(|i| {
+            let home = tempfile::tempdir().expect("plugin home");
+            let _stage = i
+                .publication_in_progress
+                .then(|| try_lock_store(home.path()).expect("stage lock"));
+            let result = read_published_record(home.path(), "fixture", "absent");
+            gents_lean_vocab::families::plugin_job_published_read_deferral::PublishedReadOutput {
+                deferred: matches!(result, Err(PublishedPluginReadError::Busy)),
+            }
+        });
+    }
+}

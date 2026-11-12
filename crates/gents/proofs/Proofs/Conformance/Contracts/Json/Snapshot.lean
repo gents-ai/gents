@@ -1033,8 +1033,6 @@ def snapshotPluginCasesJson : String :=
     ++ "\"plugin_job_adoption_cases\":" ++ Conformance.PluginJob.adoptionCasesJson ++ ","
     ++ "\"plugin_job_key_cases\":" ++ Conformance.PluginJob.keyCasesJson ++ ","
     ++ "\"plugin_job_control_cases\":" ++ Conformance.PluginJob.controlCasesJson ++ ","
-    ++ "\"plugin_job_authority_cases\":" ++ Conformance.PluginJob.authorityCasesJson ++ ","
-    ++ "\"plugin_job_wire_cases\":" ++ Conformance.PluginJob.wireCasesJson ++ ","
     ++ "\"plugin_job_lineage_cases\":" ++ Conformance.PluginJob.lineageCasesJson ++ ","
     ++ "\"plugin_job_recovery_cases\":" ++ Conformance.PluginJob.recoveryCasesJson ++ ","
     ++ "\"plugin_job_wake_cases\":" ++ Conformance.PluginJob.wakeCasesJson ++ ","

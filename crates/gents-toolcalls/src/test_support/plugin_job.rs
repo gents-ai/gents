@@ -325,10 +325,6 @@ pub fn job_policy(p: &LeanPluginJobPolicy) -> JobPolicy {
     }
 }
 
-pub fn target_ids(targets: &[LeanPluginJobTarget]) -> Vec<String> {
-    targets.iter().map(wire_id).collect()
-}
-
 pub fn context(
     c: &LeanPluginJobContext,
     _job: &LeanPluginJobRow,

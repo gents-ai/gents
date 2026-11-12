@@ -385,10 +385,6 @@ pub fn lean_plugin_job_adoption_cases() -> &'static [LeanPluginJobAdoptionCase] 
     &lean_contract_snapshot().plugin_job_adoption_cases
 }
 
-pub fn lean_plugin_job_authority_cases() -> &'static [LeanPluginJobAuthorityCase] {
-    &lean_contract_snapshot().plugin_job_authority_cases
-}
-
 pub fn lean_plugin_job_control_cases() -> &'static [LeanPluginJobControlCase] {
     &lean_contract_snapshot().plugin_job_control_cases
 }
@@ -407,10 +403,6 @@ pub fn lean_plugin_job_recovery_cases() -> &'static [LeanPluginJobRecoveryCase] 
 
 pub fn lean_plugin_job_wake_cases() -> &'static [LeanPluginJobWakeCase] {
     &lean_contract_snapshot().plugin_job_wake_cases
-}
-
-pub fn lean_plugin_job_wire_cases() -> &'static [LeanPluginJobWireCase] {
-    &lean_contract_snapshot().plugin_job_wire_cases
 }
 
 pub fn lean_plugin_reference_cases() -> &'static [serde_json::Value] {
@@ -2955,8 +2947,6 @@ pub struct LeanContractSnapshot {
     pub plugin_job_adoption_cases: Vec<LeanPluginJobAdoptionCase>,
     pub plugin_job_key_cases: Vec<LeanPluginJobKeyCase>,
     pub plugin_job_control_cases: Vec<LeanPluginJobControlCase>,
-    pub plugin_job_authority_cases: Vec<LeanPluginJobAuthorityCase>,
-    pub plugin_job_wire_cases: Vec<LeanPluginJobWireCase>,
     pub plugin_job_lineage_cases: Vec<LeanPluginJobLineageCase>,
     pub plugin_job_recovery_cases: Vec<LeanPluginJobRecoveryCase>,
     pub plugin_job_wake_cases: Vec<LeanPluginJobWakeCase>,
@@ -8124,12 +8114,6 @@ pub struct LeanPluginJobAddressSplit {
     pub tool_call_id: String,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobAdmissibleExpected {
-    pub admissible: bool,
-}
-
 /// `Conformance.PluginJob.admissionCases`: one `admitStep` row, its context,
 /// job and step output as the model holds them, and the verdict
 /// `settleStep` computes from them.
@@ -8184,72 +8168,6 @@ pub enum LeanPluginJobAdoptionCase {
         name: String,
         address: String,
         expected: Box<LeanPluginJobAddressExpected>,
-    },
-}
-
-/// `Conformance.PluginJob.authorityCasesJson`, tagged by `kind`: provenance
-/// reads, install records, call origin, pack-shipped job
-/// blocks, `Policy.valid` and `wireTargetsFrom`.
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum LeanPluginJobAuthorityCase {
-    Provenance {
-        name: String,
-        pack_kind: String,
-        record: Box<LeanPluginJobRecord>,
-        expected: Box<LeanPluginJobProvenanceExpected>,
-    },
-    Install {
-        name: String,
-        prior: Box<LeanPluginJobRecord>,
-        pack_kind: String,
-        explicit: bool,
-        via: String,
-        expected: Box<LeanPluginJobInstallExpected>,
-    },
-    Installer {
-        name: String,
-        via: String,
-        pack_authority: bool,
-        expected: Box<LeanPluginJobProvenanceExpected>,
-    },
-    Origin {
-        name: String,
-        call: LeanPluginJobCall,
-        expected: Box<LeanPluginJobOriginExpected>,
-    },
-    PackJobBlock {
-        name: String,
-        via: String,
-        closure: Vec<String>,
-        block: Box<LeanPluginJobPackBlock>,
-        expected: Box<LeanPluginJobAdmissibleExpected>,
-    },
-    PolicyValid {
-        name: String,
-        agent_targets: Vec<String>,
-        policy: Box<LeanPluginJobPolicy>,
-        expected: Box<LeanPluginJobValidExpected>,
-    },
-    ConsentedDynamic {
-        name: String,
-        consent: bool,
-        mode: String,
-        expected: LeanPluginJobModeExpected,
-    },
-    PublishedRead {
-        name: String,
-        publication_in_progress: bool,
-        expected: LeanPluginJobPublishedReadExpected,
-    },
-    WireTargetsFrom {
-        name: String,
-        pack: String,
-        pack_targets: Vec<LeanPluginJobTarget>,
-        policy: Box<LeanPluginJobPolicy>,
-        job_targets: Vec<LeanPluginJobTarget>,
-        caller_targets: Vec<LeanPluginJobTarget>,
-        expected: Box<LeanPluginJobWireTargetsExpected>,
     },
 }
 
@@ -8641,13 +8559,6 @@ pub struct LeanPluginJobHostPinExpected {
     pub pin: LeanPluginJobPin,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobInstallExpected {
-    pub record: LeanPluginJobRecord,
-    pub provenance: String,
-}
-
 /// `Conformance.PluginJob.keyCasesJson`: one spawn key, the message numbers
 /// probed, and the strings the Lean encoders and `decodeRetryKey?` produce.
 #[derive(Debug, Deserialize)]
@@ -8714,12 +8625,6 @@ pub struct LeanPluginJobMessageKey {
     pub key: String,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobModeExpected {
-    pub mode: String,
-}
-
 /// What a kill observes about the request one child caused
 /// (`Recovery.KillObservation`'s contract spelling).
 #[derive(Debug, Deserialize)]
@@ -8734,12 +8639,6 @@ pub struct LeanPluginJobObservation {
 pub struct LeanPluginJobOpeningCase {
     pub commits: bool,
     pub name: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobOriginExpected {
-    pub origin: String,
 }
 
 /// A step output, tagged by `kind`; the sibling riders follow the variant.
@@ -8768,14 +8667,6 @@ pub enum LeanPluginJobOutput {
         interrupts: Vec<String>,
         extras: LeanPluginJobExtras,
     },
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobPackBlock {
-    pub targets_from: Vec<String>,
-    pub trusted: Vec<String>,
-    pub dynamic: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -8816,30 +8707,9 @@ pub struct LeanPluginJobProcessScope {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct LeanPluginJobProvenanceExpected {
-    pub provenance: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobPublishedReadExpected {
-    pub deferred: bool,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct LeanPluginJobReceiptDecisions {
     pub terminal_decision: String,
     pub late_decision: String,
-}
-
-/// `kind` is `absent`, `legacy` or `written`; only `written` carries `via`.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobRecord {
-    pub kind: String,
-    #[serde(default)]
-    pub via: Option<String>,
 }
 
 /// `Conformance.PluginJob.recoveryCasesJson`: plugin-job rows, the registered
@@ -9028,12 +8898,6 @@ pub struct LeanPluginJobToolCall {
     pub await_mode: String,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobValidExpected {
-    pub valid: bool,
-}
-
 /// `Conformance.PluginJob.wakeCasesJson`: the step in flight on a row, a wake
 /// or immediate step of a row, and `ExecutionIdentity.wakeOutcome`.
 #[derive(Debug, Deserialize)]
@@ -9066,29 +8930,6 @@ pub struct LeanPluginJobWireBinding {
     pub target: LeanPluginJobTarget,
 }
 
-/// `Conformance.PluginJob.wireCasesJson`: one sample in the protocol's own
-/// spelling, which the consumer decodes strictly into the `kind`'s type.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobWireCase {
-    pub name: String,
-    pub kind: LeanPluginJobWireKind,
-    pub value: serde_json::Value,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[expect(
-    clippy::enum_variant_names,
-    reason = "variants mirror the Lean wire kind names"
-)]
-pub enum LeanPluginJobWireKind {
-    JobStepInput,
-    JobStepOutput,
-    JobView,
-    JobOutcome,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeanPluginJobWireRecoveryTrace {
@@ -9097,14 +8938,6 @@ pub struct LeanPluginJobWireRecoveryTrace {
     pub read: LeanPluginJobDurableRead,
     pub before: LeanPluginJobRecoveryRow,
     pub after: LeanPluginJobRecoveryRow,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LeanPluginJobWireTargetsExpected {
-    pub policy: LeanPluginJobPolicy,
-    pub job_targets: Vec<LeanPluginJobTarget>,
-    pub caller_targets: Vec<LeanPluginJobTarget>,
 }
 
 #[derive(Debug, Deserialize)]
