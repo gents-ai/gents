@@ -1,7 +1,5 @@
 mod support;
 
-#[path = "e2e_runtime/adapter_projection_external_fixtures.rs"]
-mod adapter_projection_external_fixtures;
 #[path = "e2e_runtime/client_submission_contention.rs"]
 mod client_submission_contention;
 #[path = "e2e_runtime/completion_retry_tape.rs"]
