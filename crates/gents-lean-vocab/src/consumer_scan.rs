@@ -271,10 +271,16 @@ pub fn consumer_sites(
             let Some(key) = family.strip_prefix(&prefix) else {
                 break;
             };
-            let calls: usize = ["::replay(", "::replay::<", "::cases(", "::cases::<", " as family;"]
-                .iter()
-                .map(|site| source.matches(&format!("families::{key}{site}")).count())
-                .sum();
+            let calls: usize = [
+                "::replay(",
+                "::replay::<",
+                "::cases(",
+                "::cases::<",
+                " as family;",
+            ]
+            .iter()
+            .map(|site| source.matches(&format!("families::{key}{site}")).count())
+            .sum();
             found.extend((1..=calls).map(|call| format!("{relative}#{call}")));
         }
     }
