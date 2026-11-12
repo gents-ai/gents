@@ -63,7 +63,7 @@ describe("a message that answers a question", () => {
       answer: { option_ids: ["blue", "red"], free_text: "Blue for links" },
     });
     expect(screen.getByTestId("question-answer")).toHaveTextContent(
-      "Answered “Which colour should the button be?”",
+      /^Answered\s*Which colour should the button be\?/,
     );
     expect(
       screen.getAllByTestId("question-answer-choice").map((c) => c.textContent),

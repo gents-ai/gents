@@ -4,6 +4,7 @@
    agent reads; it shows only when the question isn't among the loaded rows. */
 
 import { useMemo, type ReactNode } from "react";
+import { Check } from "lucide-react";
 import type { QuestionReplyView } from "@source-inc/gents-desktop-client";
 import { useSessionFacts } from "@/hooks/useSelectedSession";
 import { filedQuestion } from "./FiledQuestion";
@@ -31,32 +32,33 @@ export function AnswerText({
   );
   const text = answer.free_text?.trim();
   return (
-    <span data-testid="question-answer" className="grid gap-1.5">
-      <span className="text-xs text-muted-foreground">
-        Answered{" "}
-        <span className="text-foreground/80" title={question.prompt}>
-          “{question.prompt}”
+    <span data-testid="question-answer" className="grid gap-3 py-0.5">
+      <span className="grid gap-1">
+        <span className="text-xs font-medium text-muted-foreground">Answered</span>
+        <span className="break-words text-sm text-muted-foreground">
+          {question.prompt}
         </span>
       </span>
       {answer.skip ? (
-        <span className="text-muted-foreground">Skipped</span>
+        <span className="text-sm text-muted-foreground italic">Skipped</span>
       ) : (
-        <>
+        <span className="grid gap-2">
           {chosen.length > 0 && (
-            <span className="flex flex-wrap gap-1">
+            <span className="flex flex-wrap gap-1.5">
               {chosen.map((label, i) => (
                 <span
                   key={i}
                   data-testid="question-answer-choice"
-                  className="rounded-md border border-border bg-background/60 px-2 py-0.5 text-sm"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background/60 px-2.5 py-1 text-sm text-foreground"
                 >
+                  <Check aria-hidden className="size-3.5 text-brand" />
                   {label}
                 </span>
               ))}
             </span>
           )}
-          {text && <span className="whitespace-pre-wrap">{text}</span>}
-        </>
+          {text && <span className="whitespace-pre-wrap break-words">{text}</span>}
+        </span>
       )}
     </span>
   );
