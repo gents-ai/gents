@@ -123,7 +123,7 @@ impl LiveCli {
             .context("backend id")?;
         let mut backend = target.backend(&node);
         backend.backend_id = backend_id.into();
-        backend.max_concurrent = 4;
+        backend.max_concurrent = Some(4);
         let mut profile = target.profile(&node);
         profile.profile_id = inference_profile_id_from_init(&init)?;
         profile.backend_id = backend_id.into();
