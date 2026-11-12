@@ -436,8 +436,44 @@ impl Terminal {
         self.answer(INFERENCE_QUESTION, LOCAL_PROVIDER).await?;
         self.answer("Server base URL", endpoint).await?;
         self.answer("part of a name", model).await?;
-        self.answer("Temperature", "").await?;
-        self.answer("Top-p", "").await
+        let deadline = Instant::now() + RUNTIME_UP;
+        let prompts = ["Reasoning effort", "Temperature", "Top-p", SHELL_UP];
+        loop {
+            let next = {
+                let transcript = self.transcript.lock().expect("transcript lock");
+                prompts
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, prompt)| {
+                        transcript[self.cursor..]
+                            .windows(prompt.len())
+                            .position(|window| window == prompt.as_bytes())
+                            .map(|offset| (offset, index))
+                    })
+                    .min()
+            };
+            if let Some((offset, index)) = next {
+                if prompts[index] == SHELL_UP {
+                    return Ok(());
+                }
+                self.cursor += offset + prompts[index].len();
+                self.send("\r")?;
+                continue;
+            }
+            ensure!(
+                !self.drained.load(Ordering::SeqCst),
+                "setup closed before opening the shell: {}",
+                self.transcript()
+            );
+            tokio::time::timeout_at(deadline, self.changes.notified())
+                .await
+                .with_context(|| {
+                    format!(
+                        "setup did not finish its model settings: {}",
+                        self.transcript()
+                    )
+                })?;
+        }
     }
 
     /// Every question `init` needs, for a setup that fails before it reaches the model.
