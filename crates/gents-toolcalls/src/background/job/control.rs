@@ -931,7 +931,7 @@ mod tests {
         let cases = &gents_lean_vocab::lean_contract_snapshot().plugin_job_commit_kill_cases;
         assert!(!cases.is_empty());
         for (index, case) in cases.iter().enumerate() {
-            let cause = match case["cause"].as_str().unwrap() {
+            let cause = match case.cause.as_str() {
                 "stop" => KillCause::Stop,
                 "pause" => KillCause::Pause,
                 "deadline" => KillCause::Deadline,
@@ -949,19 +949,23 @@ mod tests {
             let committed = read_step_row(&access, &doc).await.unwrap();
             assert_eq!(committed.children.len(), 1);
             let killed = kill(&access, &mut admission.tool, cause).await.unwrap();
-            assert_eq!(
-                serde_json::to_value(killed.row.state).unwrap(),
-                case["row_state"]
-            );
+            assert_eq!(serde_json::to_value(killed.row.state).unwrap(), case.row_state);
             let kills = killed
                 .killed
                 .iter()
                 .map(|(key, action)| {
                     let key = gents_protocol::job::keys::decode_job_retry_key(key).unwrap();
-                    json!({"slot": key.0, "action": action})
+                    gents_lean_vocab::LeanPluginJobCommitKillCaseKillsItem {
+                        slot: key.0,
+                        action: serde_json::to_value(action)
+                            .unwrap()
+                            .as_str()
+                            .unwrap()
+                            .to_owned(),
+                    }
                 })
                 .collect::<Vec<_>>();
-            assert_eq!(serde_json::to_value(kills).unwrap(), case["kills"]);
+            assert_eq!(kills, case.kills);
             assert!(interrupted(&admission, &child).await, "{cause:?}");
             finish(admission).await;
         }
